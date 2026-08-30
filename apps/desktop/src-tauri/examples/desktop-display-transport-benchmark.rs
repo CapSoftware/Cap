@@ -244,8 +244,12 @@ async fn main() {
     tokio::time::sleep(Duration::from_millis(startup_delay_ms)).await;
 
     let layers_rx = start_renderer_layers_creation(&render_constants, &project);
+    let force_ffmpeg_for_editor = cfg!(target_os = "windows")
+        || std::env::var_os("CAP_EDITOR_FORCE_FFMPEG_DECODER").is_some();
     let segment_medias =
-        match cap_editor::create_segments(&recording_meta, meta.as_ref(), false).await {
+        match cap_editor::create_segments(&recording_meta, meta.as_ref(), force_ffmpeg_for_editor)
+            .await
+        {
             Ok(segments) => Arc::new(segments),
             Err(e) => {
                 eprintln!("Failed to create segments: {e}");
@@ -298,6 +302,8 @@ async fn main() {
                 let _ = frame_tx.send(bytes);
                 ws_frame
             }
+            #[cfg(target_os = "macos")]
+            EditorFrameOutput::Surface(_) => return,
         };
         frame_watch_tx.send(Some(Arc::new(ws_frame))).ok();
     });

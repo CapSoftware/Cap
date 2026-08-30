@@ -5,9 +5,13 @@ import { Storage } from "@cap/web-backend/src/Storage/index";
 import { type User, Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
-import { FatalError } from "workflow";
+import { FatalError, sleep } from "workflow";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota-cache";
+import {
+	createMediaServerCapacityError,
+	isMediaServerCapacityError,
+} from "@/lib/media-server-backpressure";
 import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -66,12 +70,6 @@ function getRetryDelay(attempt: number) {
 
 async function waitForRetry(delayMs: number): Promise<void> {
 	await new Promise((resolve) => setTimeout(resolve, delayMs));
-}
-
-async function waitBeforeMuxRetry(delayMs: number): Promise<void> {
-	"use step";
-
-	await waitForRetry(delayMs);
 }
 
 function getErrorMessage(error: unknown) {
@@ -146,11 +144,7 @@ export async function finalizeDesktopRecordingWorkflow(
 			return { success: true };
 		}
 
-		for (
-			let attempt = 0;
-			attempt < MEDIA_SERVER_START_MAX_ATTEMPTS;
-			attempt++
-		) {
+		for (let attempt = 0; ; attempt++) {
 			try {
 				await markMuxProcessing(videoId);
 				const jobId = await startDesktopSegmentsMuxJob(videoId, userId);
@@ -159,14 +153,15 @@ export async function finalizeDesktopRecordingWorkflow(
 				return { success: true, jobId };
 			} catch (error) {
 				if (
-					attempt >= MEDIA_SERVER_START_MAX_ATTEMPTS - 1 ||
-					!isRetryableMuxError(error)
+					!isRetryableMuxError(error) ||
+					(attempt >= MEDIA_SERVER_START_MAX_ATTEMPTS - 1 &&
+						!isMediaServerCapacityError(error))
 				) {
 					throw error;
 				}
 
 				await markMuxRetrying(videoId, getErrorMessage(error));
-				await waitBeforeMuxRetry(getRetryDelay(attempt));
+				await sleep(getRetryDelay(attempt));
 
 				if (await isDesktopRecordingFinalized(videoId)) {
 					await queueFinalizedRecordingTranscription(videoId, userId);
@@ -174,8 +169,6 @@ export async function finalizeDesktopRecordingWorkflow(
 				}
 			}
 		}
-
-		throw new Error("Segment muxing did not complete");
 	} catch (error) {
 		const errorMessage = getErrorMessage(error);
 		await markMuxError(videoId, errorMessage);
@@ -552,9 +545,15 @@ async function startDesktopSegmentsMuxJob(
 			},
 		);
 		const errorText = await response.text().catch(() => "");
-		throw new Error(
-			`Failed to start segment muxing: ${response.status} ${errorText}`,
-		);
+		const message = `Failed to start segment muxing: ${response.status} ${errorText}`;
+		if (response.status === 503 && isMediaServerCapacityError(message)) {
+			throw createMediaServerCapacityError({
+				response,
+				message,
+				videoId,
+			});
+		}
+		throw new Error(message);
 	}
 
 	const result = (await response.json()) as { jobId?: string };

@@ -1412,6 +1412,10 @@ async fn create_segment_pipeline(
         base_inputs.capture_target,
         screen_capture::ScreenCaptureTarget::CameraOnly
     );
+    #[cfg(target_os = "linux")]
+    let custom_cursor_capture = custom_cursor_capture && !screen_capture::prefers_wayland_portal();
+    #[cfg(target_os = "linux")]
+    let mut start_time = start_time;
 
     let (screen, system_audio, cursor_display) = if camera_only {
         #[cfg(target_os = "linux")]
@@ -1536,6 +1540,10 @@ async fn create_segment_pipeline(
         );
 
         let (capture_source, system_audio) = screen_config.to_sources().await?;
+        #[cfg(target_os = "linux")]
+        {
+            start_time = Timestamps::now();
+        }
 
         let screen = ScreenCaptureMethod::make_studio_mode_pipeline(
             capture_source,
@@ -1729,8 +1737,12 @@ async fn create_segment_pipeline(
                 let cursor_display = cursor_display.ok_or(CreateSegmentPipelineError::NoDisplay)?;
 
                 let cursor = spawn_cursor_recorder(
-                    cursor_crop_bounds,
-                    cursor_display,
+                    crate::cursor::CursorCaptureTarget {
+                        crop_bounds: cursor_crop_bounds,
+                        display: cursor_display,
+                        #[cfg(target_os = "linux")]
+                        window: base_inputs.capture_target.window(),
+                    },
                     cursors_dir.to_path_buf(),
                     prev_cursors,
                     next_cursors_id,

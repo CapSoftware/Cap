@@ -1,0 +1,461 @@
+//! The app-wide recording session.
+//!
+//! Unit 1 kept the recording lifecycle on `MainWindow`; the controls bar makes
+//! that untenable -- two windows now read and drive the same state. The session
+//! is a plain gpui entity installed as a global, observed by both windows; all
+//! engine work runs on tokio via `gpui_tokio` and lands back here with
+//! `cx.notify()`.
+
+use std::time::{Duration, Instant};
+
+use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorageMonitor};
+use gpui::{App, AppContext as _, Context, Entity, Global, Task};
+
+use crate::recording::{self, ActiveRecording, StartConfig};
+
+/// `Idle -> Starting -> Recording -> Stopping -> Idle`; pause is a flag on
+/// `Recording`, matching the `recording`/`paused` variants of the Tauri bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    Idle,
+    Starting,
+    Recording { paused: bool },
+    Stopping,
+}
+
+pub struct RecordingSession {
+    pub phase: Phase,
+    active: Option<ActiveRecording>,
+    /// Why the last start attempt failed, for the main window to surface.
+    pub error: Option<String>,
+    pub storage_warning: bool,
+    pub storage_notice: Option<String>,
+    stopped_for_low_storage: bool,
+    stopped_elapsed: Option<Duration>,
+    /// The config of the live (or last) recording, kept for restart.
+    last_config: Option<StartConfig>,
+    /// True while the controls bar window is open, so the main window knows to
+    /// fall back to its in-window overlay when the bar failed to open.
+    pub controls_open: bool,
+    /// Mirror of the recording-scoped mic mute flag (the engine zeroes the
+    /// payloads; the flag itself lives on the live recording's mic lock and
+    /// resets with every new session).
+    pub mic_muted: bool,
+    /// The project dir of the studio recording that just stopped cleanly.
+    /// Taken by the phase observer to honour `postStudioRecordingBehaviour`
+    /// (`openEditor` by default) the way the Tauri app does.
+    pub finished_studio: Option<std::path::PathBuf>,
+    /// `EditorRecordingTarget` (`src-tauri/src/windows.rs:3679-3697`): the
+    /// open editor project a "Record a new clip" capture must land back in.
+    /// Set by the editor's record modal (`setEditorRecordingTarget`,
+    /// `ClipsSidebar.tsx:444`), cleared when its picker is cancelled, and
+    /// *taken* -- never merely read -- by the phase observer when the session
+    /// comes back to rest, exactly the way `apply_post_studio_editor_behaviour`
+    /// and the stop-cleanup fallback both `take()` it
+    /// (`src-tauri/src/recording.rs:3231-3287`) so a stale target can never
+    /// leak into the next recording.
+    editor_recording_target: Option<std::path::PathBuf>,
+    started_at: Option<Instant>,
+    paused_accum: Duration,
+    paused_since: Option<Instant>,
+    storage_monitor: Option<Task<()>>,
+}
+
+struct SessionGlobal(Entity<RecordingSession>);
+impl Global for SessionGlobal {}
+
+impl RecordingSession {
+    pub fn init(cx: &mut App) -> Entity<Self> {
+        let session = cx.new(|_| Self {
+            phase: Phase::Idle,
+            active: None,
+            error: None,
+            storage_warning: false,
+            storage_notice: None,
+            stopped_for_low_storage: false,
+            stopped_elapsed: None,
+            last_config: None,
+            controls_open: false,
+            mic_muted: false,
+            finished_studio: None,
+            editor_recording_target: None,
+            started_at: None,
+            paused_accum: Duration::ZERO,
+            paused_since: None,
+            storage_monitor: None,
+        });
+        cx.set_global(SessionGlobal(session.clone()));
+        session
+    }
+
+    pub fn global(cx: &App) -> Entity<Self> {
+        cx.global::<SessionGlobal>().0.clone()
+    }
+
+    /// True while a recording is in flight. Tolerates the global not being
+    /// installed yet (reporting idle) so callers can gate on it from windows
+    /// that may open before the session exists.
+    pub fn recording_in_flight(cx: &App) -> bool {
+        cx.has_global::<SessionGlobal>()
+            && cx.global::<SessionGlobal>().0.read(cx).phase != Phase::Idle
+    }
+
+    /// Elapsed recording time, excluding paused stretches -- what the bar's
+    /// timer shows.
+    pub fn elapsed(&self) -> Duration {
+        if let Some(elapsed) = self.stopped_elapsed {
+            return elapsed;
+        }
+        let Some(started_at) = self.started_at else {
+            return Duration::ZERO;
+        };
+        let paused = self.paused_accum
+            + self
+                .paused_since
+                .map(|since| since.elapsed())
+                .unwrap_or_default();
+        started_at.elapsed().saturating_sub(paused)
+    }
+
+    pub fn is_paused(&self) -> bool {
+        matches!(self.phase, Phase::Recording { paused: true })
+    }
+
+    /// The live (or last) recording's mode -- the bar exposes mic mute for
+    /// instant recordings only (studio records the mic as an editable track,
+    /// where muted spans would silently bake zeros in).
+    pub fn mode(&self) -> Option<crate::recording::RecordingMode> {
+        self.last_config.as_ref().map(|config| config.mode)
+    }
+
+    /// Whether the live recording actually has a microphone attached.
+    pub fn has_microphone(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|active| active.mic_mute.is_some())
+    }
+
+    /// Flip the recording-scoped mic mute. No-op without a live mic.
+    pub fn toggle_mic_mute(&mut self, cx: &mut Context<Self>) {
+        let Some(mute) = self
+            .active
+            .as_ref()
+            .and_then(|active| active.mic_mute.clone())
+        else {
+            return;
+        };
+        self.mic_muted = !self.mic_muted;
+        mute.store(self.mic_muted, std::sync::atomic::Ordering::Relaxed);
+        cx.notify();
+    }
+
+    /// `set_editor_recording_target` (`src-tauri/src/lib.rs:3166-3172`):
+    /// arm (or disarm) the editor project the next studio recording appends
+    /// into. No phase guard here -- the guard lives at the call sites, the way
+    /// the Tauri command is a bare state write.
+    pub fn set_editor_recording_target(&mut self, target: Option<std::path::PathBuf>) {
+        self.editor_recording_target = target;
+    }
+
+    /// `EditorRecordingTarget::current`.
+    pub fn editor_recording_target(&self) -> Option<std::path::PathBuf> {
+        self.editor_recording_target.clone()
+    }
+
+    /// `EditorRecordingTarget::take` -- the consuming read both finish paths
+    /// use, so the target clears no matter how the recording ended.
+    pub fn take_editor_recording_target(&mut self) -> Option<std::path::PathBuf> {
+        self.editor_recording_target.take()
+    }
+
+    pub fn set_controls_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.controls_open != open {
+            self.controls_open = open;
+            cx.notify();
+        }
+    }
+
+    pub fn start(&mut self, config: StartConfig, cx: &mut Context<Self>) {
+        if self.phase != Phase::Idle {
+            return;
+        }
+        self.storage_monitor = None;
+        self.phase = Phase::Starting;
+        self.error = None;
+        self.storage_warning = false;
+        self.storage_notice = None;
+        self.stopped_for_low_storage = false;
+        self.stopped_elapsed = None;
+        self.last_config = Some(config.clone());
+        cx.notify();
+
+        let task = gpui_tokio::Tokio::spawn(cx, recording::start(config));
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(Ok(active)) => {
+                        tracing::info!(dir = %active.project_dir.display(), "recording started");
+                        let project_dir = active.project_dir.clone();
+                        this.active = Some(active);
+                        this.phase = Phase::Recording { paused: false };
+                        // A fresh mic lock always starts unmuted.
+                        this.mic_muted = false;
+                        this.started_at = Some(Instant::now());
+                        this.paused_accum = Duration::ZERO;
+                        this.paused_since = None;
+                        this.monitor_storage(project_dir, cx);
+                    }
+                    Ok(Err(error)) => {
+                        tracing::error!("recording failed to start: {error:#}");
+                        this.error = Some(format!("{error:#}"));
+                        this.phase = Phase::Idle;
+                    }
+                    Err(join_error) => {
+                        tracing::error!("recording start task died: {join_error}");
+                        this.error = Some("Recording task failed.".into());
+                        this.phase = Phase::Idle;
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn monitor_storage(&mut self, project_dir: std::path::PathBuf, cx: &mut Context<Self>) {
+        self.storage_monitor = None;
+        let task = cx.spawn(async move |this, cx| {
+            let mut check_failed = false;
+            let mut storage_monitor = RecordingStorageMonitor::default();
+            loop {
+                cx.background_executor().timer(Duration::from_secs(2)).await;
+                let is_current = |session: &Self| {
+                    matches!(session.phase, Phase::Recording { .. })
+                        && session
+                            .active
+                            .as_ref()
+                            .is_some_and(|active| active.project_dir == project_dir)
+                };
+                if !this.update(cx, |this, _| is_current(this)).unwrap_or(false) {
+                    return;
+                }
+                let path = project_dir.clone();
+                let (next_monitor, result) = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let result = storage_monitor.sample(&path);
+                        (storage_monitor, result)
+                    })
+                    .await;
+                storage_monitor = next_monitor;
+                let storage = match result {
+                    Ok(storage) => {
+                        check_failed = false;
+                        storage
+                    }
+                    Err(error) => {
+                        if !check_failed {
+                            tracing::warn!(%error, "Could not check recording storage");
+                            check_failed = true;
+                        }
+                        continue;
+                    }
+                };
+                if !this
+                    .update(cx, |this, cx| {
+                        if !is_current(this) {
+                            return false;
+                        }
+                        match storage.status() {
+                            DiskSpaceStatus::Exhausted => {
+                                this.storage_warning = true;
+                                this.stopped_for_low_storage = true;
+                                this.storage_notice =
+                                    Some("Low storage. Stopping and saving your recording…".into());
+                                this.stop(cx);
+                                false
+                            }
+                            status => {
+                                let warning = status == DiskSpaceStatus::Low;
+                                if warning != this.storage_warning {
+                                    this.storage_warning = warning;
+                                    cx.notify();
+                                }
+                                true
+                            }
+                        }
+                    })
+                    .unwrap_or(false)
+                {
+                    return;
+                }
+            }
+        });
+        self.storage_monitor = Some(task);
+    }
+
+    pub fn stop(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.phase, Phase::Recording { .. }) {
+            return;
+        }
+        self.storage_monitor = None;
+        let Some(active) = self.active.take() else {
+            return;
+        };
+        let instant_share_url = active.instant_share_url().map(ToString::to_string);
+        let low_storage = self.stopped_for_low_storage;
+        if let Some(link) = &instant_share_url
+            && !low_storage
+            && !crate::store::GeneralSettings::load().disable_auto_open_links
+        {
+            let separator = if link.contains('?') { '&' } else { '?' };
+            cx.open_url(&format!("{link}{separator}recordingStopped=1"));
+        }
+        self.stopped_elapsed = Some(self.elapsed());
+        self.phase = Phase::Stopping;
+        cx.notify();
+
+        let task = gpui_tokio::Tokio::spawn(cx, active.stop(low_storage));
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(Ok(project_dir)) => {
+                        // The completion affordance is Recents now: the main
+                        // window comes back with this recording at the head of
+                        // the carousel, thumbnail and all. Stop used to reveal
+                        // the bundle in Finder as a stand-in; the Tauri app
+                        // never does that, so it goes with the placeholder it
+                        // was standing in for.
+                        tracing::info!(dir = %project_dir.display(), "recording finished");
+                        if low_storage {
+                            this.storage_notice = Some("Recording stopped because storage is low. Your recording was saved.".into());
+                        }
+                        if this.mode() == Some(crate::recording::RecordingMode::Studio) && !low_storage {
+                            this.finished_studio = Some(project_dir);
+                        } else if let Some(link) = instant_share_url {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        tracing::error!("recording failed to stop cleanly: {error:#}");
+                        this.storage_notice = low_storage.then(|| "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.".into());
+                        this.error = Some(format!("{error:#}"));
+                    }
+                    Err(join_error) => {
+                        tracing::error!("recording stop task died: {join_error}");
+                        this.storage_notice = low_storage.then(|| "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.".into());
+                        this.error = Some("Stop task failed.".into());
+                    }
+                }
+                this.finish(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn toggle_pause(&mut self, cx: &mut Context<Self>) {
+        let Phase::Recording { paused } = self.phase else {
+            return;
+        };
+        let Some(active) = self.active.as_ref() else {
+            return;
+        };
+
+        // Optimistic flip; the actor call is fire-and-logged. The Tauri app
+        // does the same through its mutation -- there is no rollback UI.
+        self.phase = Phase::Recording { paused: !paused };
+        if paused {
+            if let Some(since) = self.paused_since.take() {
+                self.paused_accum += since.elapsed();
+            }
+        } else {
+            self.paused_since = Some(Instant::now());
+        }
+        cx.notify();
+
+        let control = if paused {
+            active.resume_handle()
+        } else {
+            active.pause_handle()
+        };
+        gpui_tokio::Tokio::spawn(cx, async move {
+            if let Err(error) = control.await {
+                tracing::error!("pause/resume failed: {error:#}");
+            }
+        })
+        .detach();
+    }
+
+    /// Cancel the live recording and delete its project directory (the bar's
+    /// trash button).
+    pub fn delete(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.phase, Phase::Recording { .. }) {
+            return;
+        }
+        self.storage_monitor = None;
+        let Some(active) = self.active.take() else {
+            return;
+        };
+        self.phase = Phase::Stopping;
+        cx.notify();
+
+        let task = gpui_tokio::Tokio::spawn(cx, active.cancel_and_delete());
+        cx.spawn(async move |this, cx| {
+            if let Ok(Err(error)) = task.await {
+                tracing::error!("delete recording: {error:#}");
+            }
+            this.update(cx, |this, cx| this.finish(cx)).ok();
+        })
+        .detach();
+    }
+
+    /// The bar's restart button: throw away the live recording and immediately
+    /// start a new one with the same config.
+    pub fn restart(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.phase, Phase::Recording { .. }) {
+            return;
+        }
+        self.storage_monitor = None;
+        let Some(active) = self.active.take() else {
+            return;
+        };
+        let Some(config) = self.last_config.clone() else {
+            return;
+        };
+        self.phase = Phase::Starting;
+        self.started_at = None;
+        cx.notify();
+
+        let task = gpui_tokio::Tokio::spawn(cx, active.cancel_and_delete());
+        cx.spawn(async move |this, cx| {
+            if let Ok(Err(error)) = task.await {
+                tracing::error!("restart: discarding old recording: {error:#}");
+            }
+            this.update(cx, |this, cx| {
+                // Restart bypasses the Idle guard in `start` by construction:
+                // we are in `Starting` and `start` would bail, so inline the
+                // same transition.
+                this.phase = Phase::Idle;
+                this.start(config, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn finish(&mut self, cx: &mut Context<Self>) {
+        self.storage_monitor = None;
+        self.phase = Phase::Idle;
+        self.mic_muted = false;
+        self.storage_warning = false;
+        self.stopped_elapsed = None;
+        self.started_at = None;
+        self.paused_accum = Duration::ZERO;
+        self.paused_since = None;
+        cx.notify();
+    }
+}

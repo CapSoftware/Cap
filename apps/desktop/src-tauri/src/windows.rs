@@ -163,6 +163,8 @@ fn hide_recording_windows(app: &AppHandle, restore_target_select_overlays: bool)
                     focus_manager.remember_overlay_for_restore(label);
                 }
                 hide_overlay(&window);
+            } else if matches!(id, CapWindowId::Main) {
+                crate::hide_main_window(app);
             } else {
                 let _ = window.hide();
             }
@@ -397,7 +399,11 @@ pub(crate) async fn restore_main_window_inputs(app: &AppHandle) {
                 None
             }
         })
-        .unwrap_or(None);
+        .unwrap_or(None)
+        // A remembered camera that isn't connected must not run the init/retry
+        // loop below: it would flash the preview window and toast an error on
+        // every main-window reveal while the device is away.
+        .filter(crate::is_camera_available);
 
     if let Some(camera_id) = camera_to_restore {
         emit_camera_preview_clear(app);
@@ -1511,7 +1517,7 @@ impl ShowCapWindow {
                 init_target_mode: Some(target_mode),
             } = self
             {
-                window.hide().ok();
+                crate::hide_main_window(app);
                 emit_app_event(
                     app,
                     RequestSetTargetMode {
@@ -2040,9 +2046,7 @@ impl ShowCapWindow {
                 window
             }
             Self::Upgrade => {
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.hide();
-                }
+                crate::hide_main_window(app);
 
                 let window = self
                     .window_builder(app, "/upgrade")
@@ -2076,9 +2080,7 @@ impl ShowCapWindow {
                 window
             }
             Self::ModeSelect => {
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.hide();
-                }
+                crate::hide_main_window(app);
 
                 let window = self
                     .window_builder(app, "/mode-select")
@@ -2112,9 +2114,7 @@ impl ShowCapWindow {
                 window
             }
             Self::Onboarding => {
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.hide();
-                }
+                crate::hide_main_window(app);
 
                 let width = (cursor_monitor.width * 0.58).clamp(860.0, 1080.0);
                 let height = (width * 0.72).clamp(690.0, 780.0);

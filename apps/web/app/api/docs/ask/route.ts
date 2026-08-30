@@ -1,13 +1,13 @@
-import { serverEnv } from "@cap/env";
+import { streamText } from "ai";
 import type { NextRequest } from "next/server";
+import { isAiConfigured } from "@/lib/ai/provider";
+import { runWithAiProviders } from "@/lib/ai/run";
 import { buildDocsAskContext, buildDocsAskSystemPrompt } from "@/lib/docs-ask";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { getAllDocs } from "@/utils/docs";
 
 export const dynamic = "force-dynamic";
 
-const ASK_MODEL = "claude-sonnet-5";
-const ASK_MAX_TOKENS = 800;
 const MAX_QUESTION_LENGTH = 500;
 const MAX_HISTORY_TURNS = 6;
 const MAX_HISTORY_CONTENT_LENGTH = 4000;
@@ -56,28 +56,12 @@ function parseHistory(value: unknown): HistoryTurn[] {
 		.slice(-MAX_HISTORY_TURNS * 2);
 }
 
-function extractDeltaText(data: string): string | null {
-	try {
-		const event = JSON.parse(data) as {
-			type?: unknown;
-			delta?: { type?: unknown; text?: unknown };
-		};
-		if (
-			event.type === "content_block_delta" &&
-			event.delta?.type === "text_delta" &&
-			typeof event.delta.text === "string"
-		) {
-			return event.delta.text;
-		}
-	} catch {
-		return null;
-	}
-	return null;
+function toStreamError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error));
 }
 
 export async function POST(request: NextRequest) {
-	const key = serverEnv().ANTHROPIC_API_KEY;
-	if (!key) {
+	if (!isAiConfigured("chat-streaming")) {
 		return Response.json(
 			{ error: "Ask AI is not available right now. Try searching instead." },
 			{ status: 503 },
@@ -139,63 +123,78 @@ export async function POST(request: NextRequest) {
 		context,
 	});
 
-	const upstream = await fetch("https://api.anthropic.com/v1/messages", {
-		method: "POST",
-		headers: {
-			"x-api-key": key,
-			"anthropic-version": "2023-06-01",
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({
-			model: ASK_MODEL,
-			max_tokens: ASK_MAX_TOKENS,
-			stream: true,
+	const upstream = await runWithAiProviders("chat-streaming", (selection) => {
+		const result = streamText({
+			model: selection.model(),
 			system,
 			messages: [...history, { role: "user", content: trimmedQuestion }],
-		}),
-		signal: AbortSignal.timeout(60_000),
+			maxOutputTokens: selection.defaultMaxOutputTokens,
+			abortSignal: AbortSignal.timeout(60_000),
+		});
+
+		const reader = result.fullStream.getReader();
+		const buffered: string[] = [];
+
+		// Read ahead to the first text delta so provider setup failures fall
+		// through to the next provider before any bytes reach the client.
+		// Once streaming has started, mid-stream breaks behave as before.
+		const readAhead = async () => {
+			while (buffered.length === 0) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				if (value.type === "error") throw toStreamError(value.error);
+				if (value.type === "abort")
+					throw new Error(value.reason ?? "docs-ask stream aborted");
+				if (value.type === "text-delta" && value.text)
+					buffered.push(value.text);
+			}
+			if (buffered.length === 0) {
+				// A completion with no visible text (eg. thinking consumed the
+				// whole token budget) is a failure — let the chain try the next
+				// provider rather than streaming an empty answer.
+				throw new Error("docs-ask stream produced no text");
+			}
+			return { reader, buffered };
+		};
+
+		return readAhead();
 	}).catch((error) => {
-		console.error("docs-ask upstream fetch failed", error);
+		console.error("docs-ask upstream error", error);
 		return null;
 	});
 
-	if (!upstream || !upstream.ok || !upstream.body) {
-		const detail = upstream ? await upstream.text().catch(() => "") : "fetch";
-		console.error("docs-ask upstream error", upstream?.status, detail);
+	if (!upstream) {
 		return Response.json(
 			{ error: "Ask AI is having trouble right now. Try again shortly." },
 			{ status: 502 },
 		);
 	}
 
-	const upstreamBody = upstream.body;
 	const encoder = new TextEncoder();
-	const decoder = new TextDecoder();
-	let buffer = "";
 
 	const stream = new ReadableStream<Uint8Array>({
 		start(controller) {
-			const reader = upstreamBody.getReader();
+			for (const text of upstream.buffered) {
+				controller.enqueue(encoder.encode(text));
+			}
 			const pump = (): Promise<void> =>
-				reader.read().then(({ done, value }) => {
+				upstream.reader.read().then(({ done, value }) => {
 					if (done) {
 						controller.close();
 						return;
 					}
-					buffer += decoder.decode(value, { stream: true });
-					const lines = buffer.split("\n");
-					buffer = lines.pop() ?? "";
-					for (const line of lines) {
-						if (!line.startsWith("data:")) continue;
-						const text = extractDeltaText(line.slice(5).trim());
-						if (text) controller.enqueue(encoder.encode(text));
+					if (value.type === "error") throw toStreamError(value.error);
+					if (value.type === "abort")
+						throw new Error(value.reason ?? "docs-ask stream aborted");
+					if (value.type === "text-delta" && value.text) {
+						controller.enqueue(encoder.encode(value.text));
 					}
 					return pump();
 				});
 			return pump().catch((error) => controller.error(error));
 		},
 		cancel(reason) {
-			upstreamBody.cancel(reason).catch(() => undefined);
+			upstream.reader.cancel(reason).catch(() => undefined);
 		},
 	});
 

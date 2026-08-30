@@ -2048,6 +2048,15 @@ fn estimate_video_frame_duration_ns(video_info: &VideoInfo) -> u64 {
     1_000_000_000 / fps as u64
 }
 
+fn static_video_tail_timestamp(
+    last_timestamp: Duration,
+    stopped_at: Duration,
+    frame_duration: Duration,
+) -> Option<Duration> {
+    let final_timestamp = stopped_at.saturating_sub(frame_duration);
+    (final_timestamp > last_timestamp.saturating_add(frame_duration)).then_some(final_timestamp)
+}
+
 /// Span of the video timestamps actually sent to the muxer, used to report
 /// the real encoded media duration. Capture is VFR (static screens, dropped
 /// frames), so `frame_count / fps` under-reports the duration by the length
@@ -2131,6 +2140,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let mut drift_tracker = VideoDriftTracker::new();
         let mut source_clock = SourceClockState::new("video");
         let mut dropped_during_pause: u64 = 0;
+        let mut last_frame = None;
+        let mut first_frame_offset = None;
 
         let res = stop_token
             .run_until_cancelled(async {
@@ -2197,6 +2208,10 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         }
                     };
 
+                    if first_frame_offset.is_none() {
+                        first_frame_offset = Some(remap.duration().saturating_sub(total_pause_duration));
+                    }
+
                     if anomaly_tracker.take_resync_flag() {
                         info!(
                             raw_duration_ms = raw_duration.as_millis(),
@@ -2224,9 +2239,11 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         );
                     }
 
+                    let duplicate = frame.duplicate();
                     if let Err(e) = muxer.lock().await.send_video_frame(frame, duration) {
                         return Err(video_mux_send_error(frame_count, e));
                     }
+                    last_frame = duplicate;
                 }
 
                 info!("mux-video stream ended (rx closed)");
@@ -2235,6 +2252,10 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
             .await;
 
         let was_cancelled = res.is_none();
+        let stopped_at = timestamps
+            .instant()
+            .elapsed()
+            .saturating_sub(shared_pause.total_pause_duration());
 
         if was_cancelled {
             info!("mux-video cancelled, draining remaining frames from channel");
@@ -2304,13 +2325,20 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             }
                         };
 
+                        if first_frame_offset.is_none() {
+                            first_frame_offset = Some(
+                                remap.duration().saturating_sub(shared_pause.total_pause_duration()),
+                            );
+                        }
+
                         let _ = anomaly_tracker.take_resync_flag();
                         let duration =
                             drift_tracker.calculate_timestamp(raw_duration, wall_clock_elapsed);
                         timestamp_span.record(duration);
 
+                        let duplicate = frame.duplicate();
                         match muxer.lock().await.send_video_frame(frame, duration) {
-                            Ok(()) => {}
+                            Ok(()) => last_frame = duplicate,
                             Err(e) => {
                                 warn!("Error processing drained frame: {e}");
                                 skipped += 1;
@@ -2342,6 +2370,41 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         }
 
         let final_pause_duration = shared_pause.total_pause_duration();
+        // Video PTS begin at the first frame, which may arrive minutes after a portal request starts.
+        let video_stopped_at = stopped_at.saturating_sub(first_frame_offset.unwrap_or(stopped_at));
+
+        if was_cancelled
+            && !shared_pause.check().0
+            && let Some(mut frame) = last_frame
+            && let Some((_, last_timestamp)) = timestamp_span.get()
+            && let Some(final_timestamp) = static_video_tail_timestamp(
+                last_timestamp,
+                video_stopped_at,
+                Duration::from_nanos(frame_duration_ns),
+            )
+        {
+            let penultimate_timestamp =
+                final_timestamp.saturating_sub(Duration::from_nanos(frame_duration_ns));
+            if penultimate_timestamp > last_timestamp
+                && let Some(final_frame) = frame.duplicate()
+            {
+                muxer
+                    .lock()
+                    .await
+                    .send_video_frame(frame, penultimate_timestamp)
+                    .map_err(|error| video_mux_send_error(frame_count + 1, error))?;
+                timestamp_span.record(penultimate_timestamp);
+                frame_count += 1;
+                frame = final_frame;
+            }
+            muxer
+                .lock()
+                .await
+                .send_video_frame(frame, final_timestamp)
+                .map_err(|error| video_mux_send_error(frame_count + 1, error))?;
+            timestamp_span.record(final_timestamp);
+            frame_count += 1;
+        }
 
         if dropped_during_pause > 0 {
             debug!(
@@ -3383,6 +3446,13 @@ pub trait AudioSource: Send + 'static {
 
 pub trait VideoFrame: Send + 'static {
     fn timestamp(&self) -> Timestamp;
+
+    fn duplicate(&self) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        None
+    }
 }
 
 pub trait Muxer: Send + 'static {
@@ -5044,6 +5114,125 @@ mod tests {
         }
     }
 
+    mod static_video_finalization {
+        use super::*;
+
+        #[derive(Clone, Copy)]
+        struct StaticFrame {
+            timestamp: Timestamp,
+        }
+
+        impl VideoFrame for StaticFrame {
+            fn timestamp(&self) -> Timestamp {
+                self.timestamp
+            }
+
+            fn duplicate(&self) -> Option<Self> {
+                Some(*self)
+            }
+        }
+
+        struct ObservedMuxer {
+            timestamps: Arc<std::sync::Mutex<Vec<Duration>>>,
+        }
+
+        impl Muxer for ObservedMuxer {
+            type Config = Arc<std::sync::Mutex<Vec<Duration>>>;
+
+            async fn setup(
+                timestamps: Self::Config,
+                _output_path: PathBuf,
+                _video_config: Option<VideoInfo>,
+                _audio_config: Option<AudioInfo>,
+                _pause_flag: Arc<AtomicBool>,
+                _tasks: &mut TaskPool,
+            ) -> anyhow::Result<Self> {
+                Ok(Self { timestamps })
+            }
+
+            fn finish(&mut self, _timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+                Ok(Ok(()))
+            }
+        }
+
+        impl VideoMuxer for ObservedMuxer {
+            type VideoFrame = StaticFrame;
+
+            fn send_video_frame(
+                &mut self,
+                _frame: Self::VideoFrame,
+                timestamp: Duration,
+            ) -> anyhow::Result<()> {
+                self.timestamps.lock().unwrap().push(timestamp);
+                Ok(())
+            }
+        }
+
+        impl AudioMuxer for ObservedMuxer {
+            fn send_audio_frame(
+                &mut self,
+                _frame: AudioFrame,
+                _timestamp: Duration,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        async fn record_static_capture(startup_delay: Duration) -> (Vec<Duration>, Duration) {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let clock = Timestamps::now();
+            tokio::time::sleep(startup_delay).await;
+            let (sender, receiver) = flume::bounded(4);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = OutputPipeline::builder(temp_dir.path().join("static.mp4"))
+                .with_video::<ChannelVideoSource<StaticFrame>>(ChannelVideoSourceConfig::new(
+                    VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 16, 16, 30),
+                    receiver,
+                ))
+                .with_timestamps(clock)
+                .build::<ObservedMuxer>(sent.clone())
+                .await
+                .unwrap();
+
+            let first_frame_at = Instant::now();
+            sender
+                .send_async(StaticFrame {
+                    timestamp: Timestamp::Instant(first_frame_at),
+                })
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(180)).await;
+            let capture_duration = first_frame_at.elapsed();
+            pipeline.stop().await.unwrap();
+
+            let timestamps = sent.lock().unwrap().clone();
+            (timestamps, capture_duration)
+        }
+
+        #[tokio::test]
+        async fn static_capture_finishes_with_two_nominally_spaced_frames() {
+            let (timestamps, _) = record_static_capture(Duration::ZERO).await;
+            assert_eq!(timestamps.len(), 3);
+            let final_frame = timestamps[timestamps.len() - 1];
+            let penultimate_frame = timestamps[timestamps.len() - 2];
+            assert_eq!(
+                final_frame.saturating_sub(penultimate_frame),
+                Duration::from_nanos(33_333_333)
+            );
+            assert!(final_frame > Duration::from_millis(100));
+        }
+
+        #[tokio::test]
+        async fn static_tail_excludes_source_initialization_delay() {
+            let (timestamps, capture_duration) =
+                record_static_capture(Duration::from_secs(1)).await;
+            assert_eq!(timestamps.first(), Some(&Duration::ZERO));
+            let final_frame = *timestamps.last().unwrap();
+            assert!(final_frame > capture_duration.saturating_sub(Duration::from_millis(100)));
+            assert!(final_frame < capture_duration.saturating_add(Duration::from_millis(250)));
+        }
+    }
+
     mod blocking_thread_finish {
         use super::*;
 
@@ -6204,6 +6393,42 @@ mod tests {
             let (first, last) = span.get().expect("span should be set");
             assert_eq!(first, Duration::from_millis(100));
             assert_eq!(last, Duration::from_millis(4000));
+        }
+
+        #[test]
+        fn static_video_tail_covers_the_final_capture_gap() {
+            assert_eq!(
+                static_video_tail_timestamp(
+                    Duration::from_millis(80),
+                    Duration::from_secs(3),
+                    Duration::from_millis(16),
+                ),
+                Some(Duration::from_millis(2984))
+            );
+        }
+
+        #[test]
+        fn active_video_does_not_gain_a_redundant_tail_frame() {
+            assert_eq!(
+                static_video_tail_timestamp(
+                    Duration::from_millis(2980),
+                    Duration::from_secs(3),
+                    Duration::from_millis(16),
+                ),
+                None
+            );
+        }
+
+        #[test]
+        fn video_tail_never_precedes_the_last_frame() {
+            assert_eq!(
+                static_video_tail_timestamp(
+                    Duration::from_millis(100),
+                    Duration::from_millis(10),
+                    Duration::from_millis(16),
+                ),
+                None
+            );
         }
     }
 }

@@ -1082,6 +1082,17 @@ fn get_audio_stream_info(input: &avformat::context::Input) -> Option<(usize, Aud
     Some((stream_index, audio_info))
 }
 
+fn reference_video_frame(frame: &ffmpeg::frame::Video) -> ffmpeg::frame::Video {
+    let mut referenced = ffmpeg::frame::Video::empty();
+    let status = unsafe { ffmpeg::ffi::av_frame_ref(referenced.as_mut_ptr(), frame.as_ptr()) };
+
+    if status < 0 {
+        frame.clone()
+    } else {
+        referenced
+    }
+}
+
 fn transcode_video(
     app: &AppHandle,
     source_path: &Path,
@@ -1240,7 +1251,7 @@ fn transcode_video(
                     scaled_frame.set_pts(video_frame.pts());
                     scaled_frame
                 } else {
-                    video_frame.clone()
+                    reference_video_frame(&video_frame)
                 };
 
                 video_encoder
@@ -1306,10 +1317,10 @@ fn transcode_video(
                 scaled_frame.set_pts(video_frame.pts());
                 scaled_frame
             } else {
-                video_frame.clone()
+                reference_video_frame(&video_frame)
             }
         } else {
-            video_frame.clone()
+            reference_video_frame(&video_frame)
         };
 
         video_encoder
@@ -2214,6 +2225,43 @@ mod tests {
                 .to_path(target_project.path())
                 .is_file()
         );
+    }
+
+    #[test]
+    fn imported_video_frames_share_reference_counted_pixel_storage() {
+        let mut source = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUV420P, 16, 12);
+        source.set_pts(Some(417));
+        source.data_mut(0)[..4].copy_from_slice(&[11, 22, 33, 44]);
+        let original = source.data(0).as_ptr();
+
+        let referenced = reference_video_frame(&source);
+
+        assert_eq!(referenced.data(0).as_ptr(), original);
+        assert_eq!(referenced.format(), ffmpeg::format::Pixel::YUV420P);
+        assert_eq!((referenced.width(), referenced.height()), (16, 12));
+        assert_eq!(referenced.pts(), Some(417));
+        let buffer = unsafe { (*source.as_ptr()).buf[0] };
+        assert!(!buffer.is_null());
+        assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(buffer) }, 2);
+
+        drop(source);
+
+        assert_eq!(&referenced.data(0)[..4], &[11, 22, 33, 44]);
+        let retained = unsafe { (*referenced.as_ptr()).buf[0] };
+        assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(retained) }, 1);
+    }
+
+    #[test]
+    fn imported_video_frame_references_preserve_non_yuv_formats() {
+        let mut source = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 12, 8);
+        source.set_pts(Some(93));
+
+        let referenced = reference_video_frame(&source);
+
+        assert_eq!(referenced.data(0).as_ptr(), source.data(0).as_ptr());
+        assert_eq!(referenced.format(), ffmpeg::format::Pixel::BGRA);
+        assert_eq!((referenced.width(), referenced.height()), (12, 8));
+        assert_eq!(referenced.pts(), Some(93));
     }
 
     #[test]

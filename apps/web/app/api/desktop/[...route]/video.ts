@@ -58,6 +58,8 @@ function mergeUserOrganizationSelections(
 		.map(({ createdAt, ...organization }) => organization);
 }
 
+app.get("/new-id", (c) => c.json({ id: nanoId() }));
+
 app.get(
 	"/create",
 	zValidator(
@@ -72,6 +74,7 @@ app.get(
 				.optional(),
 			isScreenshot: z.coerce.boolean().default(false),
 			videoId: z.string().optional(),
+			createWithId: z.coerce.boolean().default(false),
 			name: z.string().optional(),
 			durationInSecs: stringOrNumberOptional,
 			width: stringOrNumberOptional,
@@ -91,6 +94,7 @@ app.get(
 				recordingMode,
 				isScreenshot,
 				videoId,
+				createWithId,
 				name,
 				durationInSecs,
 				width,
@@ -99,6 +103,11 @@ app.get(
 				orgId,
 			} = c.req.valid("query");
 			const user = c.get("user");
+			if (
+				createWithId &&
+				(!videoId || !/^[0-9abcdefghjkmnpqrstvwxyz]{15}$/.test(videoId))
+			)
+				return c.json({ error: "invalid_video_id" }, { status: 400 });
 
 			const isCapPro = userIsPro(user);
 
@@ -109,6 +118,7 @@ app.get(
 				recordingMode,
 				isScreenshot,
 				videoId,
+				createWithId,
 				userId: user.id,
 				durationInSecs,
 				height,
@@ -261,7 +271,9 @@ app.get(
 				videoOrgId = userOrganizations[0].id;
 			}
 
-			const idToUse = Video.VideoId.make(nanoId());
+			const idToUse = Video.VideoId.make(
+				createWithId && videoId ? videoId : nanoId(),
+			);
 
 			const videoName =
 				name ??

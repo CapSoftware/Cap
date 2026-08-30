@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.5.9"
+version = "0.6.0"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -153,6 +153,7 @@ parakeet-rs = "0.3.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libappindicator = "0.9.0"
+notify-rust = "4.11"
 
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [

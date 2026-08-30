@@ -6,6 +6,7 @@ use super::oop_muxer::{
     MuxerSubprocessConfig, MuxerSubprocessError, RespawningMuxerSubprocess, VideoStreamInit,
     resolve_muxer_binary,
 };
+use super::win::reference_video_frame;
 use crate::{
     AudioFrame, AudioMuxer, Muxer, SharedPauseState, TaskPool, VideoMuxer, screen_capture,
 };
@@ -465,7 +466,7 @@ impl WindowsOOPFragmentedM4SMuxer {
                     let (ffmpeg_frame, timestamp) = match video_rx.recv_timeout(frame_interval) {
                         Ok(Some((frame, ts))) => match frame.as_ffmpeg() {
                             Ok(f) => {
-                                last_ffmpeg_frame = Some(f.clone());
+                                last_ffmpeg_frame = Some(reference_video_frame(&f));
                                 last_timestamp = Some(ts);
                                 (Some(f), ts)
                             }
@@ -476,7 +477,7 @@ impl WindowsOOPFragmentedM4SMuxer {
                                         let new_ts = last_ts.saturating_add(frame_interval);
                                         last_timestamp = Some(new_ts);
                                         duplicated_frames += 1;
-                                        (Some(f.clone()), new_ts)
+                                        (Some(reference_video_frame(f)), new_ts)
                                     }
                                     _ => (None, Duration::ZERO),
                                 }
@@ -524,7 +525,7 @@ impl WindowsOOPFragmentedM4SMuxer {
                                     let new_ts = last_ts.saturating_add(frame_interval);
                                     last_timestamp = Some(new_ts);
                                     duplicated_frames += 1;
-                                    (Some(f.clone()), new_ts)
+                                    (Some(reference_video_frame(f)), new_ts)
                                 }
                                 _ => continue,
                             }
@@ -712,5 +713,30 @@ impl VideoMuxer for WindowsOOPFragmentedM4SMuxer {
 impl AudioMuxer for WindowsOOPFragmentedM4SMuxer {
     fn send_audio_frame(&mut self, _frame: AudioFrame, _timestamp: Duration) -> anyhow::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reference_video_frame;
+
+    #[test]
+    fn out_of_process_fragment_frames_reuse_reference_counted_pixels() {
+        let mut original = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 16, 12);
+        original.set_pts(Some(173));
+        original.data_mut(0)[0] = 84;
+        let retained = reference_video_frame(&original);
+        let replay = reference_video_frame(&retained);
+
+        assert_eq!(retained.data(0).as_ptr(), original.data(0).as_ptr());
+        assert_eq!(replay.data(0).as_ptr(), original.data(0).as_ptr());
+        assert_eq!(replay.pts(), Some(173));
+        let buffer = unsafe { (*original.as_ptr()).buf[0] };
+        assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(buffer) }, 3);
+
+        drop(original);
+        drop(retained);
+
+        assert_eq!(replay.data(0)[0], 84);
     }
 }

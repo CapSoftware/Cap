@@ -4,7 +4,13 @@ import { createMemo, createRoot, For } from "solid-js";
 
 import { useEditorContext } from "../context";
 import { useTimelineContext } from "./context";
-import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
+import {
+	SegmentContent,
+	SegmentHandle,
+	SegmentLabel,
+	SegmentRoot,
+	TrackRoot,
+} from "./Track";
 
 export type KeyboardSegmentDragState =
 	| { type: "idle" }
@@ -156,6 +162,16 @@ export function KeyboardTrack(props: {
 					const segmentWidth = () =>
 						Math.min(segment.end, totalDuration()) - segment.start;
 
+					// Truncation degrades gracefully, so the same row serves both the
+					// full and compact tiers; it just clips against a smaller box.
+					const keysLabel = () => (
+						<div class="flex gap-1 justify-center items-center font-mono text-[10px] text-gray-1 dark:text-gray-12">
+							<span class="truncate max-w-full opacity-80">
+								{segment.displayText || "⌨"}
+							</span>
+						</div>
+					);
+
 					return (
 						<SegmentRoot
 							data-keyboard-segment
@@ -166,6 +182,7 @@ export function KeyboardTrack(props: {
 								isSelected() ? "border-sky-7" : "border-transparent",
 							)}
 							innerClass="ring-sky-6"
+							title={segment.displayText || "Keyboard"}
 							segment={{
 								start: segment.start,
 								end: Math.min(segment.end, totalDuration()),
@@ -240,13 +257,16 @@ export function KeyboardTrack(props: {
 									},
 								)}
 							>
-								<div class="flex flex-col gap-0.5 justify-center items-center text-xs text-gray-1 dark:text-gray-12 w-full min-w-0 overflow-hidden">
-									<div class="flex gap-1 items-center text-[10px] w-full min-w-0 justify-center font-mono">
-										<span class="truncate max-w-full opacity-80">
-											{segment.displayText || "⌨"}
+								<SegmentLabel
+									compactAt={24}
+									full={keysLabel}
+									compact={keysLabel}
+									glyph={() => (
+										<span class="font-mono text-[10px] text-gray-1 opacity-80 dark:text-gray-12">
+											⌨
 										</span>
-									</div>
-								</div>
+									)}
+								/>
 							</SegmentContent>
 							<SegmentHandle
 								position="end"

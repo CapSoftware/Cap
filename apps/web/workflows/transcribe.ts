@@ -161,6 +161,18 @@ export async function transcribeVideoWorkflow(
 
 		await saveTranscription(videoId, userId, videoData.video, transcription);
 	} catch (error) {
+		if (
+			error instanceof Error &&
+			error.message.toLowerCase().includes("no spoken audio")
+		) {
+			await markNoAudio(videoId);
+			await cleanupTempAudio(videoId, userId, videoData.video);
+			return {
+				success: true,
+				message: "Video has no spoken audio - skipped transcription",
+			};
+		}
+
 		await markError(videoId);
 		await cleanupTempAudio(videoId, userId, videoData.video);
 		throw error;
@@ -782,9 +794,14 @@ async function transcribeWithAssemblyAI(
 	);
 
 	if (transcript.status === "error") {
-		throw new Error(
-			`AssemblyAI transcription failed (id=${transcript.id}, language=${language}): ${transcript.error ?? "Unknown error"}`,
-		);
+		const transcriptError = transcript.error ?? "Unknown error";
+		const message = `AssemblyAI transcription failed (id=${transcript.id}, language=${language}): ${transcriptError}`;
+
+		if (transcriptError.toLowerCase().includes("no spoken audio")) {
+			throw new FatalError(message);
+		}
+
+		throw new Error(message);
 	}
 
 	// One paid pass produces both artifacts: the immutable word transcript (in

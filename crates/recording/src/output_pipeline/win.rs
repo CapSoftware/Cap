@@ -28,6 +28,17 @@ fn get_muxer_buffer_size() -> usize {
         .unwrap_or(DEFAULT_MUXER_BUFFER_SIZE)
 }
 
+pub(super) fn reference_video_frame(frame: &ffmpeg::frame::Video) -> ffmpeg::frame::Video {
+    let mut reference = ffmpeg::frame::Video::empty();
+    let status = unsafe { ffmpeg::ffi::av_frame_ref(reference.as_mut_ptr(), frame.as_ptr()) };
+
+    if status >= 0 {
+        reference
+    } else {
+        frame.clone()
+    }
+}
+
 struct FrameDropTracker {
     drops_in_window: u32,
     frames_in_window: u32,
@@ -185,13 +196,13 @@ impl Muxer for WindowsMuxer {
 
                 let encoder = (|| {
                     let fallback = |reason: Option<String>| {
-                        use tracing::{error, info};
+                        use tracing::{info, warn};
 
                         encoder_preferences.force_software_only();
                         if let Some(reason) = reason.as_ref() {
-                            error!("Falling back to software H264 encoder: {reason}");
+                            warn!(%reason, "Media Foundation H264 unavailable; using FFmpeg");
                         } else {
-                            info!("Falling back to software H264 encoder");
+                            info!("Using FFmpeg H264 encoder");
                         }
 
                         let fallback_width = if output_size.Width > 0 {
@@ -222,7 +233,12 @@ impl Muxer for WindowsMuxer {
                             .map_err(|e| anyhow!("ScreenSoftwareEncoder/{e}"))
                     };
 
-                    if encoder_preferences.should_force_software() {
+                    if encoder_preferences.should_force_software()
+                        || matches!(
+                            cap_frame_converter::detect_primary_gpu().map(|gpu| gpu.vendor),
+                            Some(cap_frame_converter::GpuVendor::Amd)
+                        )
+                    {
                         return fallback(None);
                     }
 
@@ -421,7 +437,7 @@ impl Muxer for WindowsMuxer {
                         }
                     }
                     either::Right(mut encoder) => {
-                        trace!("Running software encoder with frame pacing");
+                        trace!("Running FFmpeg encoder with frame pacing");
                         let frame_interval = Duration::from_secs_f64(1.0 / config.frame_rate as f64);
                         let mut last_ffmpeg_frame: Option<ffmpeg::frame::Video> = None;
                         let mut first_timestamp: Option<Duration> = None;
@@ -433,12 +449,17 @@ impl Muxer for WindowsMuxer {
                                     last_timestamp = Some(timestamp);
                                     match frame.as_ffmpeg() {
                                         Ok(f) => {
-                                            last_ffmpeg_frame = Some(f.clone());
+                                            last_ffmpeg_frame = Some(reference_video_frame(&f));
                                             (Some(f), timestamp)
                                         }
                                         Err(e) => {
                                             warn!("Failed to convert frame: {e:?}");
-                                            (last_ffmpeg_frame.clone(), timestamp)
+                                            (
+                                                last_ffmpeg_frame
+                                                    .as_ref()
+                                                    .map(reference_video_frame),
+                                                timestamp,
+                                            )
                                         }
                                     }
                                 }
@@ -451,7 +472,12 @@ impl Muxer for WindowsMuxer {
                                     if let Some(last_ts) = last_timestamp {
                                         let new_ts = last_ts.saturating_add(frame_interval);
                                         last_timestamp = Some(new_ts);
-                                        (last_ffmpeg_frame.clone(), new_ts)
+                                        (
+                                            last_ffmpeg_frame
+                                                .as_ref()
+                                                .map(reference_video_frame),
+                                            new_ts,
+                                        )
                                     } else {
                                         continue;
                                     }
@@ -528,6 +554,53 @@ impl Muxer for WindowsMuxer {
         output.write_trailer()?;
 
         Ok(audio_result.map_err(Into::into))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reference_video_frame;
+
+    #[test]
+    fn retained_software_frame_shares_pixels_and_survives_original() {
+        let mut original = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 16, 12);
+        original.set_pts(Some(417));
+        original.data_mut(0)[..4].copy_from_slice(&[11, 22, 33, 44]);
+
+        let retained = reference_video_frame(&original);
+
+        assert_eq!(retained.data(0).as_ptr(), original.data(0).as_ptr());
+        assert_eq!(retained.format(), original.format());
+        assert_eq!(retained.width(), original.width());
+        assert_eq!(retained.height(), original.height());
+        assert_eq!(retained.pts(), Some(417));
+        let buffer = unsafe { (*original.as_ptr()).buf[0] };
+        assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(buffer) }, 2);
+
+        drop(original);
+
+        assert_eq!(&retained.data(0)[..4], &[11, 22, 33, 44]);
+        let retained_buffer = unsafe { (*retained.as_ptr()).buf[0] };
+        assert_eq!(
+            unsafe { ffmpeg::ffi::av_buffer_get_ref_count(retained_buffer) },
+            1
+        );
+    }
+
+    #[test]
+    fn repeated_static_software_frames_reuse_retained_pixels() {
+        let original = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 16, 12);
+        let retained = reference_video_frame(&original);
+        let pointer = retained.data(0).as_ptr();
+        let buffer = unsafe { (*retained.as_ptr()).buf[0] };
+
+        for _ in 0..8 {
+            let replay = reference_video_frame(&retained);
+            assert_eq!(replay.data(0).as_ptr(), pointer);
+            assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(buffer) }, 3);
+            drop(replay);
+            assert_eq!(unsafe { ffmpeg::ffi::av_buffer_get_ref_count(buffer) }, 2);
+        }
     }
 }
 
@@ -739,11 +812,9 @@ impl Muxer for WindowsCameraMuxer {
                     let fallback = |reason: Option<String>| {
                         encoder_preferences.force_software_only();
                         if let Some(reason) = reason.as_ref() {
-                            error!(
-                                "Falling back to software H264 encoder for camera: {reason}"
-                            );
+                            warn!(%reason, "Media Foundation camera H264 unavailable; using FFmpeg");
                         } else {
-                            info!("Using software H264 encoder for camera");
+                            info!("Using FFmpeg H264 encoder for camera");
                         }
 
                         let mut output_guard = match output.lock() {
@@ -763,7 +834,12 @@ impl Muxer for WindowsCameraMuxer {
                             .map_err(|e| anyhow!("CameraSoftwareEncoder/{e}"))
                     };
 
-                    if encoder_preferences.should_force_software() {
+                    if encoder_preferences.should_force_software()
+                        || matches!(
+                            cap_frame_converter::detect_primary_gpu().map(|gpu| gpu.vendor),
+                            Some(cap_frame_converter::GpuVendor::Amd)
+                        )
+                    {
                         return fallback(None);
                     }
 
@@ -963,7 +1039,7 @@ impl Muxer for WindowsCameraMuxer {
                     }
                     either::Right(mut encoder) => {
                         info!(
-                            "Windows camera encoder started (software) with frame pacing: {}x{} -> {}x{} @ {}fps",
+                            "Windows camera encoder started (FFmpeg) with frame pacing: {}x{} -> {}x{} @ {}fps",
                             video_config.width,
                             video_config.height,
                             output_width,
@@ -1037,14 +1113,14 @@ impl Muxer for WindowsCameraMuxer {
                             frame_count += 1;
                             if frame_count.is_multiple_of(30) {
                                 debug!(
-                                    "Windows camera encoder (software): processed {} frames",
+                                    "Windows camera encoder (FFmpeg): processed {} frames",
                                     frame_count
                                 );
                             }
                         }
 
                         info!(
-                            "Windows camera encoder finished (software): {} frames encoded",
+                            "Windows camera encoder finished (FFmpeg): {} frames encoded",
                             frame_count
                         );
                         Ok(())

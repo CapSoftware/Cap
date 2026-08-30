@@ -534,7 +534,7 @@ impl CaptionsLayer {
             active.segment.start,
             effective_end,
             segment_fade,
-        );
+        ) * uniforms.takeover_overlay_fade();
         if fade_opacity <= 0.0 {
             self.current_text = None;
             return;

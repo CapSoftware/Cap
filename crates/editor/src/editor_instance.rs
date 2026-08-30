@@ -14,7 +14,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 use tokio::sync::{Mutex, watch};
@@ -92,6 +92,11 @@ pub struct EditorInstance {
     pub render_constants: Arc<RenderVideoConstants>,
     playback_active: watch::Sender<bool>,
     playback_active_rx: watch::Receiver<bool>,
+    // Guards playback_active against a restart race: the event pump of a
+    // replaced playback receives its Stop after the successor already sent
+    // true, and without the epoch check that late Stop would flip the watch
+    // to false while the new playback is running.
+    playback_epoch: AtomicU64,
     pub state: Arc<Mutex<EditorState>>,
     on_state_change: Box<dyn Fn(&EditorState) + Send + Sync + 'static>,
     pub preview_tx: watch::Sender<Option<PreviewFrameInstruction>>,
@@ -125,6 +130,24 @@ impl EditorInstance {
         .await
     }
 
+    pub async fn new_with_frame_format(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        frame_format: editor::EditorFrameFormat,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_with_audio_output_and_frame_format(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            frame_format,
+            Arc::new(crate::AudioOutput::new()),
+        )
+        .await
+    }
+
     /// Like [`EditorInstance::new`] but with a caller-provided audio output,
     /// letting harnesses substitute a headless sink while everything else
     /// (decoders, renderer, playback) runs the production path.
@@ -134,6 +157,67 @@ impl EditorInstance {
         frame_cb: editor::EditorFrameCallback,
         shared_device: Option<SharedWgpuDevice>,
         audio_output: Arc<crate::AudioOutput>,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_with_audio_output_and_frame_format(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            editor::EditorFrameFormat::Rgba,
+            audio_output,
+        )
+        .await
+    }
+
+    pub async fn new_with_audio_output_and_frame_format(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        frame_format: editor::EditorFrameFormat,
+        audio_output: Arc<crate::AudioOutput>,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_inner(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            frame_format,
+            audio_output,
+            None,
+        )
+        .await
+    }
+
+    pub async fn new_with_preloaded_recordings(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        frame_format: editor::EditorFrameFormat,
+        audio_output: Arc<crate::AudioOutput>,
+        recordings: Arc<ProjectRecordingsMeta>,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_inner(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            frame_format,
+            audio_output,
+            Some(recordings),
+        )
+        .await
+    }
+
+    async fn new_inner(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        frame_format: editor::EditorFrameFormat,
+        audio_output: Arc<crate::AudioOutput>,
+        preloaded_recordings: Option<Arc<ProjectRecordingsMeta>>,
     ) -> Result<Arc<Self>, String> {
         if !project_path.exists() {
             return Err(format!("Video path {} not found!", project_path.display()));
@@ -307,10 +391,30 @@ impl EditorInstance {
             audio_output.prewarm();
         }
 
-        let recordings = Arc::new(ProjectRecordingsMeta::new(
-            &recording_meta.project_path,
-            meta.as_ref(),
-        )?);
+        let music_cache = Arc::new(std::sync::Mutex::new(crate::MusicTracks::new()));
+        if has_music {
+            let project = project.clone();
+            let project_path = project_path.clone();
+            let cache = Arc::clone(&music_cache);
+            tokio::task::spawn_blocking(move || {
+                let mut cache = cache
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                drop(crate::load_music_tracks(
+                    &project,
+                    &project_path,
+                    &mut cache,
+                ));
+            });
+        }
+
+        let recordings = match preloaded_recordings {
+            Some(recordings) => recordings,
+            None => Arc::new(ProjectRecordingsMeta::new(
+                &recording_meta.project_path,
+                meta.as_ref(),
+            )?),
+        };
 
         let render_constants = if let Some(shared) = shared_device {
             let rc = RenderVideoConstants::new_with_device(
@@ -339,10 +443,11 @@ impl EditorInstance {
             .map_err(|e| format!("Segment setup task failed: {e}"))??;
         let layers_rx = editor::finish_renderer_layers_creation(layers_rx).await;
 
-        let renderer = Arc::new(editor::Renderer::spawn(
+        let renderer = Arc::new(editor::Renderer::spawn_with_format(
             render_constants.clone(),
             frame_cb,
             layers_rx,
+            frame_format,
         )?);
 
         let (preview_tx, preview_rx) = watch::channel(None);
@@ -362,12 +467,13 @@ impl EditorInstance {
             preview_tx,
             project_config: watch::channel(project),
             segment_medias: Arc::new(segments),
-            music_cache: Arc::new(std::sync::Mutex::new(crate::MusicTracks::new())),
+            music_cache,
             meta: recording_meta,
             playback_active: playback_active_tx,
             playback_active_rx,
             export_preview_active: AtomicBool::new(false),
             export_active: AtomicBool::new(false),
+            playback_epoch: AtomicU64::new(0),
             runtime_handle: tokio::runtime::Handle::current(),
             audio_output,
         });
@@ -435,7 +541,7 @@ impl EditorInstance {
     pub async fn start_playback(self: &Arc<Self>, fps: u32, resolution_base: XY<u32>) {
         let music = self.load_music_tracks().await;
 
-        let (mut handle, prev) = {
+        let (mut handle, prev, epoch) = {
             let mut state = self.state.lock().await;
 
             let start_frame_number = state.playhead_position;
@@ -460,13 +566,14 @@ impl EditorInstance {
                 }
             };
 
+            let epoch = self.playback_epoch.fetch_add(1, Ordering::SeqCst) + 1;
             if let Err(e) = self.playback_active.send(true) {
                 tracing::warn!(%e, "failed to send playback_active=true");
             }
 
             let prev = state.playback_task.replace(playback_handle.clone());
 
-            (playback_handle, prev)
+            (playback_handle, prev, epoch)
         };
 
         let this = self.clone();
@@ -483,7 +590,9 @@ impl EditorInstance {
                         .await;
                     }
                     playback::PlaybackEvent::Stop => {
-                        if let Err(e) = this.playback_active.send(false) {
+                        if this.playback_epoch.load(Ordering::SeqCst) == epoch
+                            && let Err(e) = this.playback_active.send(false)
+                        {
                             tracing::warn!(%e, "failed to send playback_active=false");
                         }
                         return;
@@ -495,6 +604,24 @@ impl EditorInstance {
         if let Some(prev) = prev {
             prev.stop();
         }
+    }
+
+    /// True while a playback engine is live. Epoch-guarded against restart
+    /// races, so a false here means the engine genuinely stopped -- end of
+    /// timeline, warmup abort, or error -- not a stop/start transition.
+    pub fn playback_watch(&self) -> watch::Receiver<bool> {
+        self.playback_active_rx.clone()
+    }
+
+    /// Live-seek the running playback. Returns false when no engine is
+    /// running (or it died before the seek landed); the caller decides
+    /// whether that means a plain playhead move or a restart.
+    pub async fn seek_playback(&self, frame_number: u32) -> bool {
+        let state = self.state.lock().await;
+        state
+            .playback_task
+            .as_ref()
+            .is_some_and(|handle| handle.seek(frame_number))
     }
 
     fn spawn_preview_renderer(

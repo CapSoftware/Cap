@@ -24,6 +24,8 @@ const nextConfig = {
 		"/api/tools/loom-download": ffmpegTracingIncludes,
 		"/api/og": ["./lib/og/fonts/*.ttf"],
 		"/api/video/og": ["./lib/og/fonts/*.ttf", ...ffmpegTracingIncludes],
+		"/dashboard/settings/organization/billing": ["./lib/baa/*.pdf"],
+		"/api/settings/billing/baa/download": ["./lib/baa/*.pdf"],
 	},
 	transpilePackages: [
 		"@cap/ui",

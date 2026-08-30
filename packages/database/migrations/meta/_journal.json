@@ -274,6 +274,13 @@
 			"when": 1785892430217,
 			"tag": "0038_mean_ozymandias",
 			"breakpoints": true
+		},
+		{
+			"idx": 39,
+			"version": "5",
+			"when": 1787096888361,
+			"tag": "0039_magical_vermin",
+			"breakpoints": true
 		}
 	]
 }

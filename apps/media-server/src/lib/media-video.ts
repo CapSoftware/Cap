@@ -21,6 +21,12 @@ import {
 
 const PROCESS_TIMEOUT_PER_SECOND_MS = 20_000;
 const MAX_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+// HLS/DASH sources are pulled as many sequential segment requests rather than
+// one streamed fetch, so per-request overhead scales with video length. A
+// flat 10-minute budget is enough for typical short recordings but not for a
+// long (e.g. 60+ minute) manifest with 1000+ segments.
+const STREAMING_DOWNLOAD_TIMEOUT_PER_SECOND_MS = 5_000;
+const MAX_STREAMING_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 const THUMBNAIL_TIMEOUT_MS = 60_000;
 const PREVIEW_GIF_TIMEOUT_MS = 30_000;
 const PROBE_H264_LEVEL_TIMEOUT_MS = 10_000;
@@ -68,6 +74,7 @@ export interface VideoProcessingOptions {
 	crf?: number;
 	preset?: "ultrafast" | "fast" | "medium" | "slow";
 	remuxOnly?: boolean;
+	normalizeH264Level?: boolean;
 	timeoutMs?: number;
 }
 
@@ -143,6 +150,7 @@ const DEFAULT_OPTIONS: Required<VideoProcessingOptions> = {
 	crf: 23,
 	preset: "medium",
 	remuxOnly: false,
+	normalizeH264Level: false,
 	timeoutMs: PROCESS_TIMEOUT_MS,
 };
 
@@ -1107,6 +1115,49 @@ export function buildStreamingDownloadFfmpegArgs(
 	];
 }
 
+export async function estimateMaterializedStreamingDurationSeconds(
+	dirPath: string,
+): Promise<number | null> {
+	let longestDuration = 0;
+
+	for (const entry of await readdir(dirPath)) {
+		if (!entry.endsWith(".m3u8") && !entry.endsWith(".mpd")) continue;
+		const content = await file(join(dirPath, entry)).text();
+
+		if (entry.endsWith(".mpd")) {
+			const durationAttribute = content.match(
+				/\bmediaPresentationDuration\s*=\s*["']([^"']+)["']/i,
+			)?.[1];
+			const duration = parseIsoDurationSeconds(durationAttribute);
+			if (duration) longestDuration = Math.max(longestDuration, duration);
+			continue;
+		}
+
+		let playlistDuration = 0;
+		for (const match of content.matchAll(/^#EXTINF:([\d.]+)/gm)) {
+			const segmentDuration = Number(match[1]);
+			if (Number.isFinite(segmentDuration) && segmentDuration > 0) {
+				playlistDuration += segmentDuration;
+			}
+		}
+		longestDuration = Math.max(longestDuration, playlistDuration);
+	}
+
+	return longestDuration > 0 ? longestDuration : null;
+}
+
+function getStreamingDownloadTimeoutMs(durationSeconds: number | null): number {
+	if (!durationSeconds) return DOWNLOAD_TIMEOUT_MS;
+
+	return Math.min(
+		MAX_STREAMING_DOWNLOAD_TIMEOUT_MS,
+		Math.max(
+			DOWNLOAD_TIMEOUT_MS,
+			Math.ceil(durationSeconds * STREAMING_DOWNLOAD_TIMEOUT_PER_SECOND_MS),
+		),
+	);
+}
+
 async function downloadStreamingVideoToTemp(
 	videoUrl: string,
 	abortSignal?: AbortSignal,
@@ -1126,6 +1177,9 @@ async function downloadStreamingVideoToTemp(
 			manifestDir,
 			abortSignal,
 		);
+		const durationSeconds =
+			await estimateMaterializedStreamingDurationSeconds(manifestDir);
+		const downloadTimeoutMs = getStreamingDownloadTimeoutMs(durationSeconds);
 
 		await runFfmpegCommand(
 			buildStreamingDownloadFfmpegArgs(
@@ -1133,7 +1187,7 @@ async function downloadStreamingVideoToTemp(
 				tempFile.path,
 				ffmpegHlsCapabilities,
 			),
-			DOWNLOAD_TIMEOUT_MS,
+			downloadTimeoutMs,
 			abortSignal,
 		);
 
@@ -1424,6 +1478,13 @@ export async function processVideo(
 			? await probeH264Level(inputPath, abortSignal)
 			: null;
 	const targetH264Level = pickMobileSafeH264Level(metadata, opts);
+	const normalizeH264Level =
+		opts.normalizeH264Level &&
+		metadata.videoCodec === "h264" &&
+		sourceH264Level !== null &&
+		sourceH264Level > targetH264Level.value &&
+		metadata.width <= opts.maxWidth &&
+		metadata.height <= opts.maxHeight;
 	const videoTranscode = remuxOnly
 		? false
 		: needsVideoTranscode(metadata, opts, sourceH264Level);
@@ -1447,7 +1508,14 @@ export async function processVideo(
 		inputPath,
 	];
 
-	if (videoTranscode) {
+	if (normalizeH264Level) {
+		ffmpegArgs.push(
+			"-c:v",
+			"copy",
+			"-bsf:v",
+			`h264_metadata=level=${targetH264Level.ffmpegValue}`,
+		);
+	} else if (videoTranscode) {
 		ffmpegArgs.push(
 			"-c:v",
 			"libx264",

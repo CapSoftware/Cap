@@ -2,6 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockDb = vi.fn();
 const mockStart = vi.fn();
+const serverEnvMock = vi.hoisted(() =>
+	vi.fn<() => Record<string, string | undefined>>(() => ({
+		GROQ_API_KEY: "test-key",
+	})),
+);
 
 vi.mock("@cap/database", () => ({
 	db: mockDb,
@@ -17,7 +22,7 @@ vi.mock("@cap/database/schema", () => ({
 }));
 
 vi.mock("@cap/env", () => ({
-	serverEnv: () => ({ GROQ_API_KEY: "test-key" }),
+	serverEnv: serverEnvMock,
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -70,10 +75,25 @@ const video = {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	serverEnvMock.mockReturnValue({ GROQ_API_KEY: "test-key" });
 	mockStart.mockResolvedValue({ runId: "run-1" });
 });
 
 describe("startAiGeneration", () => {
+	it("fails fast when no AI provider is configured", async () => {
+		serverEnvMock.mockReturnValue({});
+
+		const { startAiGeneration } = await import("@/lib/generate-ai");
+		const result = await startAiGeneration("video-1" as never, "user-1");
+
+		expect(result).toEqual({
+			success: false,
+			message: "No AI provider configured",
+		});
+		expect(mockDb).not.toHaveBeenCalled();
+		expect(mockStart).not.toHaveBeenCalled();
+	});
+
 	it("starts after atomically claiming the current video version", async () => {
 		mockDb
 			.mockReturnValueOnce(makeSelectChain(video))

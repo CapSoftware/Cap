@@ -343,7 +343,7 @@ impl KeyboardLayer {
             active.segment.start,
             active.segment.end,
             segment_fade,
-        );
+        ) * uniforms.takeover_overlay_fade();
 
         if fade_opacity <= 0.0 {
             return;

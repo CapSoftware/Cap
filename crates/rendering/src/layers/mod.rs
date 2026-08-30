@@ -1,8 +1,11 @@
+mod animated_gradient;
 mod background;
 mod blur;
 mod camera;
 mod camera3d;
 mod captions;
+mod click_ripple;
+mod color_grade;
 mod cursor;
 mod display;
 mod frame;
@@ -62,11 +65,14 @@ pub(crate) fn new_font_system() -> glyphon::FontSystem {
     glyphon::FontSystem::new_with_locale_and_db(locale.clone(), db.clone())
 }
 
+pub use animated_gradient::*;
 pub use background::*;
 pub use blur::*;
 pub use camera::*;
 pub use camera3d::*;
 pub use captions::*;
+pub use click_ripple::*;
+pub use color_grade::*;
 pub use cursor::*;
 pub use display::*;
 pub use frame::*;

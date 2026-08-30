@@ -7,9 +7,7 @@ import {
 	createRoot,
 	createSignal,
 	Index,
-	Match,
 	Show,
-	Switch,
 } from "solid-js";
 import { produce } from "solid-js/store";
 import { useEditorContext } from "../context";
@@ -19,17 +17,15 @@ import {
 	fitCamera3DMotionToSegment,
 	hasCamera3DMotion,
 } from "../three-d";
-import {
-	useSegmentContext,
-	useTimelineContext,
-	useTrackContext,
-} from "./context";
+import { useTimelineContext, useTrackContext } from "./context";
 import {
 	SegmentContent,
 	SegmentHandle,
+	SegmentLabel,
 	SegmentRoot,
 	TrackRoot,
 	useSegmentTranslateX,
+	useSegmentVisibleBox,
 	useSegmentWidth,
 	useSetPreviewTime,
 } from "./Track";
@@ -367,6 +363,9 @@ export function ThreeDTrack(props: {
 						const camera3dSegments = () =>
 							project.timeline?.camera3dSegments ?? [];
 
+						const motionLabel = () =>
+							hasCamera3DMotion(segment()) ? "Motion" : "Still";
+
 						// Double-clicking a handle expands the segment as far as it can go
 						// in that direction (up to the neighbouring segment / timeline edge).
 						const fillStart = () => {
@@ -541,6 +540,7 @@ export function ThreeDTrack(props: {
 									isSelected() ? "border-gray-12" : "border-transparent",
 								)}
 								innerClass="ring-red-5"
+								title={`3D Perspective · ${motionLabel()}`}
 								segment={segment()}
 								onMouseDown={(e) => {
 									e.stopPropagation();
@@ -649,33 +649,20 @@ export function ThreeDTrack(props: {
 									)}
 								>
 									{(() => {
-										const ctx = useSegmentContext();
+										const visibleBox = useSegmentVisibleBox();
 
 										return (
-											<Switch>
-												<Match when={ctx.width() < 40}>
-													<div class="flex justify-center items-center">
-														<IconLucideRotate3d class="size-3.5 text-gray-1 dark:text-gray-12" />
-													</div>
-												</Match>
-												<Match when={ctx.width() < 100}>
-													<div class="flex gap-1 items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
-														<IconLucideRotate3d class="size-3" />
-														<span>3D</span>
-													</div>
-												</Match>
-												<Match when={true}>
+											<SegmentLabel
+												full={() => (
 													<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
 														<span class="opacity-70">
-															{ctx.width() >= 140 ? "3D Perspective" : "3D"}
+															{visibleBox().width >= 140
+																? "3D Perspective"
+																: "3D"}
 														</span>
 														<div class="flex gap-1 items-center text-md">
 															<IconLucideRotate3d class="size-3.5" />
-															<span>
-																{hasCamera3DMotion(segment())
-																	? "Motion"
-																	: "Still"}
-															</span>
+															<span>{motionLabel()}</span>
 															{/* Presentation only: the arrow says the shot
 															    moves from its start pose to its end pose. */}
 															<Show when={hasCamera3DMotion(segment())}>
@@ -683,8 +670,19 @@ export function ThreeDTrack(props: {
 															</Show>
 														</div>
 													</div>
-												</Match>
-											</Switch>
+												)}
+												compact={() => (
+													<div class="flex gap-1 items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
+														<IconLucideRotate3d class="size-3" />
+														<span>3D</span>
+													</div>
+												)}
+												glyph={() => (
+													<div class="flex justify-center items-center">
+														<IconLucideRotate3d class="size-3.5 text-gray-1 dark:text-gray-12" />
+													</div>
+												)}
+											/>
 										);
 									})()}
 								</SegmentContent>

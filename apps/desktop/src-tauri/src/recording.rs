@@ -49,6 +49,7 @@ use std::{
 use tauri::{AppHandle, Manager, path::BaseDirectory};
 use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
+use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
 use tracing::*;
 
@@ -1154,6 +1155,14 @@ fn notify_recording_start_failed(app: &AppHandle, error: &str) {
     .emit(app);
 }
 
+fn recording_start_mode_error(mode: RecordingMode, authenticated: bool) -> Option<&'static str> {
+    match mode {
+        RecordingMode::Instant if !authenticated => Some("Please sign in to use instant recording"),
+        RecordingMode::Screenshot => Some("Use take_screenshot for screenshots"),
+        RecordingMode::Studio | RecordingMode::Instant => None,
+    }
+}
+
 #[derive(Serialize, Type)]
 pub enum RecordingAction {
     Started,
@@ -1515,6 +1524,17 @@ pub async fn start_recording(
         }
     }
 
+    let instant_auth = if matches!(inputs.mode, RecordingMode::Instant) {
+        AuthStore::get(&app).ok().flatten()
+    } else {
+        None
+    };
+    if let Some(error) = recording_start_mode_error(inputs.mode, instant_auth.is_some()) {
+        state_mtx.write().await.clear_pending_recording();
+        notify_recording_start_failed(&app, error);
+        return Err(error.to_string());
+    }
+
     macro_rules! pending_try {
         ($expr:expr, $map_err:expr) => {
             match $expr {
@@ -1625,7 +1645,7 @@ pub async fn start_recording(
 
     let (video_upload_info, instant_mode_max_resolution) = match inputs.mode {
         RecordingMode::Instant => {
-            let Some(auth) = AuthStore::get(&app).ok().flatten() else {
+            let Some(auth) = instant_auth else {
                 let error = "Please sign in to use instant recording".to_string();
                 state_mtx.write().await.clear_pending_recording();
                 notify_recording_start_failed(&app, &error);
@@ -1817,6 +1837,29 @@ pub async fn start_recording(
                 )
             };
 
+            // A remembered camera that isn't connected must not abort the
+            // recording (camera-only mode excepted, where it's required):
+            // degrade to no-camera and tell the user once.
+            let selected_camera_id = match selected_camera_id {
+                Some(id)
+                    if !matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly)
+                        && !crate::is_camera_available(&id) =>
+                {
+                    warn!(
+                        camera = %camera_id_label(&id),
+                        "Selected camera is not connected; recording without camera"
+                    );
+                    let _ = crate::NewNotification {
+                        title: "Recording without camera".to_string(),
+                        body: "The selected camera is not connected, so this recording won't include it.".to_string(),
+                        is_error: true,
+                    }
+                    .emit(&app_handle);
+                    None
+                }
+                other => other,
+            };
+
             let camera_feed = lock_selected_camera(
                 &camera_feed_actor,
                 selected_camera_id,
@@ -1900,7 +1943,34 @@ pub async fn start_recording(
 
             let (done_fut, health_rx) = loop {
                 let actor_result: Result<InProgressRecording, anyhow::Error> = async {
-                    let selected_mic_label = state.selected_mic_label.clone();
+                    // Resolve the remembered microphone against the connected
+                    // devices (fuzzy-matching Bluetooth profile renames like the
+                    // reconnect watcher does). A missing microphone must not
+                    // abort the recording: degrade and tell the user once.
+                    let selected_mic_label = match state.selected_mic_label.clone() {
+                        Some(label) => {
+                            let matched = crate::find_mic_by_label_or_fuzzy(
+                                &microphone::MicrophoneFeed::list_names(),
+                                &label,
+                            );
+                            if matched.is_none() {
+                                warn!(
+                                    mic = %label,
+                                    "Selected microphone is not connected; recording without microphone"
+                                );
+                                let _ = crate::NewNotification {
+                                    title: "Recording without microphone".to_string(),
+                                    body: format!(
+                                        "Microphone '{label}' is not connected, so this recording won't include it."
+                                    ),
+                                    is_error: true,
+                                }
+                                .emit(&app_handle);
+                            }
+                            matched
+                        }
+                        None => None,
+                    };
                     let selected_mic_settings = selected_mic_label
                         .as_ref()
                         .and_then(|label| state.microphone_settings_for_label(label));
@@ -3651,10 +3721,13 @@ async fn finalize_studio_recording(
     Ok(())
 }
 
+pub const DEFAULT_AUTO_ZOOM_AMOUNT: f64 = 2.0;
+
 fn generate_zoom_segments_from_clicks_impl(
     mut clicks: Vec<CursorClickEvent>,
     _moves: Vec<CursorMoveEvent>,
     max_duration: f64,
+    zoom_amount: f64,
 ) -> Vec<ZoomSegment> {
     const MS_PER_SECOND: f64 = 1000.0;
     const START_MIN_MS: f64 = 1.0;
@@ -3663,7 +3736,6 @@ fn generate_zoom_segments_from_clicks_impl(
     const CLICK_END_CLAMP_PADDING_MS: f64 = 800.0;
     const TRAILING_CLICK_IGNORE_MS: f64 = 1000.0;
     const MERGE_GAP_MS: f64 = 2500.0;
-    const AUTO_ZOOM_AMOUNT: f64 = 2.0;
 
     if max_duration <= 0.0 {
         return Vec::new();
@@ -3719,7 +3791,7 @@ fn generate_zoom_segments_from_clicks_impl(
         .map(|(start, end)| ZoomSegment {
             start: start.round() / MS_PER_SECOND,
             end: end.round() / MS_PER_SECOND,
-            amount: AUTO_ZOOM_AMOUNT,
+            amount: zoom_amount,
             mode: ZoomMode::Auto,
             glide_direction: GlideDirection::None,
             glide_speed: 0.5,
@@ -3734,6 +3806,7 @@ fn generate_zoom_segments_from_clicks_impl(
 pub fn generate_zoom_segments_from_clicks(
     recording: &studio_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
+    zoom_amount: f64,
 ) -> Vec<ZoomSegment> {
     // Build a temporary RecordingMeta so we can use the common implementation
     let recording_meta = RecordingMeta {
@@ -3745,7 +3818,7 @@ pub fn generate_zoom_segments_from_clicks(
         upload: None,
     };
 
-    generate_zoom_segments_for_project(&recording_meta, recordings)
+    generate_zoom_segments_for_project(&recording_meta, recordings, zoom_amount)
 }
 
 /// Generates zoom segments from clicks for an existing project.
@@ -3753,6 +3826,7 @@ pub fn generate_zoom_segments_from_clicks(
 pub fn generate_zoom_segments_for_project(
     recording_meta: &RecordingMeta,
     recordings: &ProjectRecordingsMeta,
+    zoom_amount: f64,
 ) -> Vec<ZoomSegment> {
     let RecordingMetaInner::Studio(studio_meta) = &recording_meta.inner else {
         return Vec::new();
@@ -3785,7 +3859,12 @@ pub fn generate_zoom_segments_for_project(
         }
     }
 
-    generate_zoom_segments_from_clicks_impl(all_clicks, all_moves, recordings.duration())
+    generate_zoom_segments_from_clicks_impl(
+        all_clicks,
+        all_moves,
+        recordings.duration(),
+        zoom_amount,
+    )
 }
 
 fn project_config_from_recording(
@@ -3802,6 +3881,19 @@ fn project_config_from_recording(
 
     let using_default_config = default_config.is_none();
     let mut config = default_config.unwrap_or_default();
+    if using_default_config {
+        let library = app
+            .store("store")
+            .ok()
+            .and_then(|store| store.get("animated_gradients"))
+            .and_then(|value| serde_json::from_value(value).ok());
+        apply_animated_gradient_default(
+            &mut config,
+            library.as_ref(),
+            using_default_config,
+            capture_target,
+        );
+    }
     config.cursor.size = cap_project::CursorConfiguration::default().size;
     apply_recording_presentation_defaults(
         app,
@@ -3849,7 +3941,13 @@ fn project_config_from_recording(
         .collect::<Vec<_>>();
 
     let zoom_segments = if settings.auto_zoom_on_clicks {
-        generate_zoom_segments_from_clicks(completed_recording, recordings)
+        generate_zoom_segments_from_clicks(
+            completed_recording,
+            recordings,
+            settings
+                .default_zoom_amount
+                .unwrap_or(DEFAULT_AUTO_ZOOM_AMOUNT),
+        )
     } else {
         Vec::new()
     };
@@ -3918,6 +4016,24 @@ fn apply_recording_presentation_defaults(
         using_default_config,
         default_wallpaper_path,
     );
+}
+
+fn apply_animated_gradient_default(
+    config: &mut ProjectConfiguration,
+    library: Option<&cap_project::AnimatedGradientLibrary>,
+    using_default_config: bool,
+    capture_target: Option<&ScreenCaptureTarget>,
+) {
+    if using_default_config
+        && !matches!(capture_target, Some(ScreenCaptureTarget::CameraOnly))
+        && let Some(library) = library
+        && library.selected
+        && let Some(gradient) = &library.last_used
+    {
+        config.background.source = cap_project::BackgroundSource::AnimatedGradient {
+            config: gradient.normalized(),
+        };
+    }
 }
 
 const DEFAULT_SCREEN_RECORDING_BACKGROUND_ROUNDING_PERCENT: f64 = 7.5;
@@ -4174,6 +4290,91 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[test]
+    fn animated_gradient_default_is_remembered_without_overwriting_explicit_presets() {
+        let library = cap_project::AnimatedGradientLibrary {
+            selected: true,
+            last_used: Some(cap_project::AnimatedGradientConfig::from_seed(42)),
+            ..Default::default()
+        };
+        let mut project = ProjectConfiguration::default();
+        apply_animated_gradient_default(&mut project, Some(&library), false, None);
+        assert!(matches!(
+            project.background.source,
+            cap_project::BackgroundSource::Color { .. }
+        ));
+        apply_animated_gradient_default(&mut project, Some(&library), true, None);
+        apply_screen_recording_presentation_defaults(
+            &mut project,
+            None,
+            true,
+            Some("wallpaper.jpg".into()),
+        );
+        let cap_project::BackgroundSource::AnimatedGradient { config } = project.background.source
+        else {
+            panic!("Expected remembered gradient");
+        };
+        assert_eq!(Some(config), library.last_used);
+        assert_eq!(project.background.padding, 10.0);
+    }
+
+    #[test]
+    fn deselected_or_missing_animated_gradient_keeps_recording_defaults() {
+        let mut project = ProjectConfiguration::default();
+        let library = cap_project::AnimatedGradientLibrary {
+            last_used: Some(cap_project::AnimatedGradientConfig::default()),
+            ..Default::default()
+        };
+        apply_animated_gradient_default(&mut project, Some(&library), true, None);
+        apply_animated_gradient_default(&mut project, None, true, None);
+        assert!(matches!(
+            project.background.source,
+            cap_project::BackgroundSource::Color { .. }
+        ));
+    }
+
+    #[test]
+    fn animated_gradient_default_preserves_camera_only_presentation() {
+        let library = cap_project::AnimatedGradientLibrary {
+            selected: true,
+            last_used: Some(cap_project::AnimatedGradientConfig::default()),
+            ..Default::default()
+        };
+        let mut project = ProjectConfiguration::default();
+        let original = serde_json::to_value(&project.background).unwrap();
+        apply_animated_gradient_default(
+            &mut project,
+            Some(&library),
+            true,
+            Some(&ScreenCaptureTarget::CameraOnly),
+        );
+        assert_eq!(serde_json::to_value(project.background).unwrap(), original);
+    }
+
+    #[test]
+    fn recording_start_preflight_requires_authentication_for_instant_recordings() {
+        assert_eq!(
+            recording_start_mode_error(RecordingMode::Instant, false),
+            Some("Please sign in to use instant recording")
+        );
+        assert_eq!(
+            recording_start_mode_error(RecordingMode::Instant, true),
+            None
+        );
+    }
+
+    #[test]
+    fn recording_start_preflight_preserves_studio_and_rejects_screenshot_modes() {
+        assert_eq!(
+            recording_start_mode_error(RecordingMode::Studio, false),
+            None
+        );
+        assert_eq!(
+            recording_start_mode_error(RecordingMode::Screenshot, true),
+            Some("Use take_screenshot for screenshots")
+        );
+    }
+
     fn click_event_with_state(time_ms: f64, down: bool) -> CursorClickEvent {
         CursorClickEvent {
             active_modifiers: vec![],
@@ -4222,8 +4423,12 @@ mod tests {
 
     #[test]
     fn skips_trailing_stop_click() {
-        let segments =
-            generate_zoom_segments_from_clicks_impl(vec![click_event(11_900.0)], vec![], 12.0);
+        let segments = generate_zoom_segments_from_clicks_impl(
+            vec![click_event(11_900.0)],
+            vec![],
+            12.0,
+            DEFAULT_AUTO_ZOOM_AMOUNT,
+        );
 
         assert!(
             segments.is_empty(),
@@ -4240,7 +4445,8 @@ mod tests {
             move_event(1_940.0, 0.74, 0.78),
         ];
 
-        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0);
+        let segments =
+            generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0, DEFAULT_AUTO_ZOOM_AMOUNT);
 
         assert!(
             !segments.is_empty(),
@@ -4268,7 +4474,12 @@ mod tests {
             move_event(19_364.0, 0.44, 0.95),
         ];
 
-        let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 19.436_667);
+        let segments = generate_zoom_segments_from_clicks_impl(
+            clicks,
+            moves,
+            19.436_667,
+            DEFAULT_AUTO_ZOOM_AMOUNT,
+        );
 
         assert_eq!(segments.len(), 2);
         assert_eq!(segments[0].start, 1.971);
@@ -4281,7 +4492,8 @@ mod tests {
     fn extends_segment_until_after_mouse_up() {
         let clicks = vec![click_event(1_000.0), click_up_event(2_500.0)];
 
-        let segments = generate_zoom_segments_from_clicks_impl(clicks, vec![], 10.0);
+        let segments =
+            generate_zoom_segments_from_clicks_impl(clicks, vec![], 10.0, DEFAULT_AUTO_ZOOM_AMOUNT);
 
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].start, 0.7);
@@ -4292,7 +4504,8 @@ mod tests {
     fn clamps_zoom_end_before_recording_end() {
         let clicks = vec![click_event(8_999.0), click_event(9_000.0)];
 
-        let segments = generate_zoom_segments_from_clicks_impl(clicks, vec![], 10.0);
+        let segments =
+            generate_zoom_segments_from_clicks_impl(clicks, vec![], 10.0, DEFAULT_AUTO_ZOOM_AMOUNT);
 
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].start, 8.699);
@@ -4309,7 +4522,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let segments = generate_zoom_segments_from_clicks_impl(Vec::new(), jitter_moves, 15.0);
+        let segments = generate_zoom_segments_from_clicks_impl(
+            Vec::new(),
+            jitter_moves,
+            15.0,
+            DEFAULT_AUTO_ZOOM_AMOUNT,
+        );
 
         assert!(
             segments.is_empty(),

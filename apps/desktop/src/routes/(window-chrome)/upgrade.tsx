@@ -1,8 +1,9 @@
 import { Button } from "@cap/ui-solid";
 import { createMutation, useQueryClient } from "@tanstack/solid-query";
 import { getCurrentWindow, Window } from "@tauri-apps/api/window";
-import { type Accessor, createSignal, Show } from "solid-js";
+import { type Accessor, createResource, createSignal, Show } from "solid-js";
 import { generalSettingsStore } from "~/store";
+import { getPresentmentCurrencySymbol } from "~/utils/currency";
 import { getProPlanId } from "~/utils/plans";
 import { createLicenseQuery } from "~/utils/queries";
 import { createRive } from "~/utils/rive";
@@ -38,6 +39,9 @@ export default function Page() {
 	const signIn = createSignInMutation();
 	const license = createLicenseQuery();
 	const [openLicenseDialog, setOpenLicenseDialog] = createSignal(false);
+	const [currencySymbol] = createResource(getPresentmentCurrencySymbol);
+	// Both plans are billed in the same presentment currency.
+	const symbol = () => currencySymbol() ?? "$";
 
 	const resetLicense = createMutation(() => ({
 		mutationFn: async () => {
@@ -366,7 +370,8 @@ export default function Page() {
 										</div>
 										<div class="flex flex-col justify-center items-center">
 											<h3 class="text-4xl leading-6">
-												{isCommercialAnnual() ? "$29" : "$58"}
+												{symbol()}
+												{isCommercialAnnual() ? "29" : "58"}
 												<span class="text-gray-11 text-[16px]">.00 /</span>
 											</h3>
 											{isCommercialAnnual() && (
@@ -388,7 +393,7 @@ export default function Page() {
 												Switch to {isCommercialAnnual() ? "lifetime" : "yearly"}
 												:{" "}
 												<span class="font-medium">
-													{isCommercialAnnual() ? "$58" : "$29"}
+													{`${symbol()}${isCommercialAnnual() ? "58" : "29"}`}
 												</span>
 											</p>
 										</div>
@@ -471,7 +476,8 @@ export default function Page() {
 										</div>
 										<div class="flex flex-col justify-center items-center">
 											<h3 class="text-4xl leading-6 text-gray-1">
-												{isProAnnual() ? "$8.16" : "$12"}
+												{symbol()}
+												{isProAnnual() ? "8.16" : "12"}
 												<span class="text-gray-10 text-[16px]">.00 /</span>
 											</h3>
 											{isProAnnual() && (
@@ -493,8 +499,8 @@ export default function Page() {
 												Switch to {isProAnnual() ? "monthly" : "yearly"}:{" "}
 												<span class="font-medium">
 													{isProAnnual()
-														? "$12 per user, billed monthly"
-														: "$8.16 per user, billed annually"}
+														? `${symbol()}12 per user, billed monthly`
+														: `${symbol()}8.16 per user, billed annually`}
 												</span>
 											</p>
 										</div>

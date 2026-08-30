@@ -255,7 +255,7 @@ export const selfHostedScreenRecordingContent: SeoPageContent = {
 		{
 			question: "Is self-hosted Cap suitable for HIPAA compliance?",
 			answer:
-				"Cap with self-hosted AWS S3 storage (covered under your AWS BAA) can support HIPAA-compliant recording workflows. With self-hosted storage, no recording content passes through Cap's servers, keeping PHI within your HIPAA-covered infrastructure. AI auto-captions can be disabled if your policies restrict external audio transcription. See our dedicated HIPAA-compliant screen recording guide for full details.",
+				"Yes. Cap is HIPAA compliant, and self-hosting adds an extra layer of control. With self-hosted AWS S3 storage (covered under your AWS BAA), no recording content passes through Cap's servers, keeping PHI within your HIPAA-covered infrastructure. AI auto-captions can be disabled if your policies restrict external audio transcription. See our dedicated HIPAA-compliant screen recording guide for full details.",
 		},
 		{
 			question:
@@ -271,9 +271,11 @@ export const selfHostedScreenRecordingContent: SeoPageContent = {
 	],
 
 	video: {
-		url: "/videos/cap-demo.mp4",
-		thumbnail: "/videos/cap-demo-thumbnail.png",
-		alt: "Cap self-hosted screen recording demo showing S3 storage configuration and instant sharing",
+		iframe: {
+			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
+			title:
+				"Cap self-hosted screen recording demo showing S3 storage configuration and instant sharing",
+		},
 	},
 
 	cta: {

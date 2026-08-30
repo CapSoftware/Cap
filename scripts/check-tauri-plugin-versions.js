@@ -30,6 +30,75 @@ function parseVersion(version) {
 	};
 }
 
+export function parseDesktopTauriVersions(pnpmLock, cargoLock) {
+	const versions = {};
+	let insideDesktop = false;
+	let currentPackage = null;
+
+	for (const line of pnpmLock.split("\n")) {
+		if (/^ {2}\S/.test(line)) {
+			if (insideDesktop) break;
+			insideDesktop = /^ {2}apps\/desktop:\s*$/.test(line);
+			currentPackage = null;
+			continue;
+		}
+		if (!insideDesktop) continue;
+
+		const packageMatch = line.match(
+			/^ {6}['"]?(@tauri-apps\/(?:api|cli))['"]?:\s*$/,
+		);
+		if (packageMatch) {
+			currentPackage = packageMatch[1];
+			continue;
+		}
+		if (!currentPackage) continue;
+
+		const versionMatch = line.match(/^ {8}version:\s*['"]?([^'"\s(]+)/);
+		if (versionMatch) {
+			versions[currentPackage] = versionMatch[1];
+			currentPackage = null;
+		}
+	}
+
+	const rustVersion = cargoLock.match(
+		/^name = "tauri"\r?\nversion = "([^"]+)"/m,
+	)?.[1];
+	for (const packageName of ["@tauri-apps/api", "@tauri-apps/cli"]) {
+		if (!versions[packageName]) {
+			throw new Error(`Missing ${packageName} in apps/desktop pnpm lockfile`);
+		}
+	}
+	if (!rustVersion) throw new Error('Missing "tauri" package in Cargo.lock');
+
+	return {
+		api: versions["@tauri-apps/api"],
+		cli: versions["@tauri-apps/cli"],
+		rust: rustVersion,
+	};
+}
+
+export function compareTauriRuntimeVersions(versions) {
+	return [
+		["@tauri-apps/api", versions.api],
+		["@tauri-apps/cli", versions.cli],
+	].map(([jsName, jsVersion]) => {
+		const jsParsed = parseVersion(jsVersion);
+		const rustParsed = parseVersion(versions.rust);
+		const jsMajorMinor = `${jsParsed.major}.${jsParsed.minor}`;
+		const rustMajorMinor = `${rustParsed.major}.${rustParsed.minor}`;
+		return {
+			jsName,
+			rustName: "tauri",
+			jsVersion,
+			rustVersion: versions.rust,
+			jsMajorMinor,
+			rustMajorMinor,
+			majorMinor: jsMajorMinor,
+			matching: jsMajorMinor === rustMajorMinor,
+		};
+	});
+}
+
 // Parse pnpm-lock.yaml to extract Tauri plugin versions
 function parsePnpmLock(lockfilePath) {
 	const content = fs.readFileSync(lockfilePath, "utf8");
@@ -220,6 +289,10 @@ function main() {
 		// Parse both lockfiles
 		const jsPlugins = parsePnpmLock(pnpmLockPath);
 		const rustPlugins = parseCargoLock(cargoLockPath);
+		const runtimeVersions = parseDesktopTauriVersions(
+			fs.readFileSync(pnpmLockPath, "utf8"),
+			fs.readFileSync(cargoLockPath, "utf8"),
+		);
 
 		console.log(`Found ${Object.keys(jsPlugins).length} JS Tauri plugins`);
 		console.log(
@@ -240,6 +313,9 @@ function main() {
 
 		// Compare versions
 		const results = compareVersions(jsPlugins, rustPlugins);
+		for (const runtime of compareTauriRuntimeVersions(runtimeVersions)) {
+			results[runtime.matching ? "matching" : "mismatched"].push(runtime);
+		}
 
 		// Report results
 		if (results.matching.length > 0) {
@@ -334,4 +410,4 @@ Exit codes:
 	process.exit(0);
 }
 
-main();
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) main();

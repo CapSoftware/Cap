@@ -47,11 +47,12 @@ function isHttpUrl(path: string): boolean {
 
 async function hasHttpNetworkFailure(path: string): Promise<boolean> {
 	try {
-		await probeFetch(path, {
-			method: "HEAD",
+		const response = await probeFetch(path, {
+			headers: { Range: "bytes=0-0" },
 			signal: AbortSignal.timeout(10_000),
 		});
-		return false;
+		await response.body?.cancel();
+		return !response.ok;
 	} catch {
 		return true;
 	}

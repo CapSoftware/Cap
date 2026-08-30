@@ -9,6 +9,13 @@ struct Uniforms {
     screen_bounds: vec4<f32>,
     motion_vector_strength: vec4<f32>,
     rotation_params: vec4<f32>,
+    // Screen grade, identity when the cursor opts out.
+    // (exposure stops, contrast, saturation, temperature).
+    color_adjust_a: vec4<f32>,
+    // (tint, fade, split_tone, vignette).
+    color_adjust_b: vec4<f32>,
+    // (grain amount, grain seed, grade-active flag, unused).
+    grain_params: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -116,6 +123,81 @@ fn screen_bounds_mask(frag_pos: vec2<f32>) -> f32 {
     return clamp(inside + 0.5, 0.0, 1.0);
 }
 
+fn grain_hash(p: vec2<f32>) -> f32 {
+    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// Must stay in sync with composite-video-frame.wgsl and color-grade.wgsl.
+// This pipeline blends premultiplied (One, OneMinusSrcAlpha), so the color
+// is lifted to straight alpha before grading and re-premultiplied after —
+// otherwise the grade's additive terms (fade, split tone, grain) bleed into
+// the transparent parts of the motion smear.
+fn apply_color_grade(color: vec4<f32>, frag_pos: vec2<f32>) -> vec4<f32> {
+    if uniforms.grain_params.z < 0.5 || color.a < 0.001 {
+        return color;
+    }
+
+    let exposure = uniforms.color_adjust_a.x;
+    let contrast = uniforms.color_adjust_a.y;
+    let saturation = uniforms.color_adjust_a.z;
+    let temperature = uniforms.color_adjust_a.w;
+    let tint = uniforms.color_adjust_b.x;
+    let fade = uniforms.color_adjust_b.y;
+    let split_tone = uniforms.color_adjust_b.z;
+    let vignette = uniforms.color_adjust_b.w;
+    let grain = uniforms.grain_params.x;
+
+    // Exposure in stops.
+    var rgb = (color.rgb / color.a) * exp2(exposure);
+
+    // White balance, multiplicative so black stays black.
+    rgb = rgb * vec3<f32>(
+        1.0 + 0.10 * temperature + 0.04 * tint,
+        1.0 - 0.07 * tint,
+        1.0 - 0.10 * temperature + 0.04 * tint,
+    );
+
+    // Contrast around mid gray.
+    rgb = (rgb - vec3<f32>(0.5)) * (1.0 + contrast) + vec3<f32>(0.5);
+
+    // Saturation via luma mix (-1 = grayscale).
+    let luma = dot(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.2126, 0.7152, 0.0722));
+    rgb = mix(vec3<f32>(luma), rgb, 1.0 + saturation);
+
+    // Split tone: teal shadows / orange highlights, luma-banded.
+    let shadow_w = 1.0 - smoothstep(0.2, 0.65, luma);
+    let highlight_w = smoothstep(0.35, 0.8, luma);
+    rgb += split_tone * (
+        shadow_w * vec3<f32>(-0.06, 0.02, 0.08) +
+        highlight_w * vec3<f32>(0.08, 0.02, -0.06)
+    );
+
+    // Film fade: raised blacks, gently dulled highlights.
+    rgb = rgb * (1.0 - 0.18 * fade) + vec3<f32>(0.09 * fade);
+
+    // Always the frame-wide vignette field, matching the layers underneath.
+    if vignette > 0.0 {
+        let r = length((frag_pos / uniforms.output_size.xy - vec2<f32>(0.5)) * 2.0);
+        rgb = rgb * (1.0 - vignette * 0.65 * smoothstep(0.5, 1.5, r));
+    }
+
+    // Midtone-peaked monochrome grain.
+    if grain > 0.0 {
+        let seed = uniforms.grain_params.y;
+        let noise = grain_hash(frag_pos + vec2<f32>(seed * 17.0, seed * 29.0));
+        let graded_luma = dot(
+            clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)),
+            vec3<f32>(0.2126, 0.7152, 0.0722)
+        );
+        let response = 0.25 + 0.75 * (1.0 - abs(2.0 * graded_luma - 1.0));
+        rgb += (noise - 0.5) * grain * 0.35 * response;
+    }
+
+    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * color.a, color.a);
+}
+
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let velocity_uv = cursor_velocity_uv();
@@ -124,7 +206,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let base_color = sample_cursor(input.uv);
 
     if (length(velocity_uv) < 0.005 || blur_strength < 0.001) {
-        return base_color * opacity;
+        return apply_color_grade(base_color * opacity, input.position.xy);
     }
 
     // 21-tap box along the motion vector, output fully blurred: the amount
@@ -143,5 +225,5 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     color /= kernel_size;
-    return color * opacity;
+    return apply_color_grade(color * opacity, input.position.xy);
 }

@@ -142,6 +142,34 @@ function stubStorage() {
 	);
 }
 
+describe("GET /new-id", () => {
+	let app: typeof import("@/app/api/desktop/[...route]/video")["app"];
+
+	beforeEach(async () => {
+		vi.clearAllMocks();
+		resetMockDb();
+		stubStorage();
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		const mod = await import("@/app/api/desktop/[...route]/video");
+		app = mod.app;
+	});
+
+	it("allocates an ID without creating a video", async () => {
+		const response = await app.request("https://cap.test/new-id");
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			id: expect.stringMatching(/^[0-9abcdefghjkmnpqrstvwxyz]{15}$/),
+		});
+		expect(mockDb.insert).not.toHaveBeenCalled();
+	});
+});
+
 describe("GET /create", () => {
 	let app: typeof import("@/app/api/desktop/[...route]/video")["app"];
 
@@ -340,5 +368,49 @@ describe("GET /create", () => {
 			orgId: "org-2",
 			ownerId: "user-1",
 		});
+	});
+
+	it("creates a missing video with an explicitly reserved ID", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([
+				{ id: "org-1", name: "Acme", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([{ count: 5 }]);
+
+		const response = await app.request(
+			"https://cap.test/create?videoId=0123456789abcde&createWithId=true",
+		);
+
+		expect(response.status).toBe(200);
+		expect(insertedValues(schema.videos)).toMatchObject({
+			id: "0123456789abcde",
+			ownerId: "user-1",
+		});
+		expect(await response.json()).toMatchObject({ id: "0123456789abcde" });
+	});
+
+	it("rejects an invalid client-selected video ID", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+
+		const response = await app.request(
+			"https://cap.test/create?videoId=not-valid&createWithId=true",
+		);
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({ error: "invalid_video_id" });
+		expect(mockDb.insert).not.toHaveBeenCalled();
 	});
 });

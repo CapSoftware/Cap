@@ -4,16 +4,20 @@ import { buildEnv } from "@cap/env";
 import { Button, Dialog, DialogContent, Switch } from "@cap/ui";
 import NumberFlow from "@number-flow/react";
 import { useMutation } from "@tanstack/react-query";
+import { useCurrency } from "hooks/useCurrency";
 import {
 	BarChart3,
+	Clock,
+	Cloud,
 	Database,
 	Globe,
 	Headphones,
-	Infinity,
+	Infinity as InfinityIcon,
+	Link2,
 	Lock,
+	Mic,
 	Minus,
 	Plus,
-	Share2,
 	Shield,
 	ShieldCheck,
 	Sparkles,
@@ -21,9 +25,10 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useRouter } from "next/navigation";
-import { memo, useState } from "react";
+import { memo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useStripeContext } from "@/app/Layout/StripeContext";
+import { PRICING } from "@/data/pricing";
 import { Fit, Layout, useRive } from "@/lib/rive";
 
 interface UpgradeModalProps {
@@ -61,6 +66,85 @@ const modalVariants = {
 	},
 };
 
+const ANNUAL_SAVINGS_PERCENT = Math.round(
+	(1 - PRICING.pro.annualPerMonth / PRICING.pro.monthly) * 100,
+);
+
+const iconStyling = "text-blue-500 size-4";
+
+const PRO_FEATURES = [
+	{
+		icon: <Link2 className={iconStyling} />,
+		title: "Unlimited shareable links",
+		description: "No monthly limit, every video is instantly shareable",
+	},
+	{
+		icon: <Clock className={iconStyling} />,
+		title: "Unlimited recording length",
+		description: "The 5 minute free recording cap is removed",
+	},
+	{
+		icon: <Cloud className={iconStyling} />,
+		title: "Unlimited cloud storage",
+		description: "Keep every recording, forever",
+	},
+	{
+		icon: <Sparkles className={iconStyling} />,
+		title: "Cap AI",
+		description: "Automatic titles, summaries, chapters & more",
+	},
+	{
+		icon: <Globe className={iconStyling} />,
+		title: "Custom domain",
+		description: "Share videos from your own domain",
+	},
+	{
+		icon: <Lock className={iconStyling} />,
+		title: "Password protected videos",
+		description: "Control exactly who can watch",
+	},
+	{
+		icon: <BarChart3 className={iconStyling} />,
+		title: "Analytics",
+		description: "Views, engagement and viewer insights",
+	},
+	{
+		icon: <Video className={iconStyling} />,
+		title: "Upload & import videos",
+		description: "Upload existing files or import straight from Loom",
+	},
+	{
+		icon: <Mic className={iconStyling} />,
+		title: "Audio & video comments",
+		description: "Viewers reply on the timeline with voice or camera",
+	},
+	{
+		icon: <Database className={iconStyling} />,
+		title: "Custom storage",
+		description: "Connect your own Google Drive or S3 bucket",
+	},
+	{
+		icon: <InfinityIcon className={iconStyling} />,
+		title: "Unlimited views",
+		description: "No limits on video views",
+	},
+	{
+		icon: <Shield className={iconStyling} />,
+		title: "Commercial license",
+		description: "Desktop app commercial license included",
+	},
+	{
+		icon: <ShieldCheck className={iconStyling} />,
+		title: "SOC 2, ISO 27001 & HIPAA",
+		description: "Independently audited security & compliance",
+	},
+	{
+		icon: <Headphones className={iconStyling} />,
+		title: "Priority support",
+		description: "Get help when you need it",
+	},
+];
+
 const UpgradeModalImpl = ({
 	open,
 	onOpenChange,
@@ -69,82 +153,15 @@ const UpgradeModalImpl = ({
 	dismissible = true,
 }: UpgradeModalProps) => {
 	const stripeCtx = useStripeContext();
-	const [isAnnual, setIsAnnual] = useState(true);
+	const { currency } = useCurrency();
+	const [isAnnual, setIsAnnual] = useState(false);
 	const [proQuantity, setProQuantity] = useState(1);
+	const upgradeButtonRef = useRef<HTMLButtonElement>(null);
 	const { push } = useRouter();
 
-	const pricePerUser = isAnnual ? 8.16 : 12;
+	const pricePerUser = isAnnual ? PRICING.pro.yearlyTotal : PRICING.pro.monthly;
 	const totalPrice = pricePerUser * proQuantity;
 	const billingText = isAnnual ? "billed annually" : "billed monthly";
-
-	useRive({
-		src: "/rive/main.riv",
-		artboard: "cap-pro-modal",
-		animations: ["animation"],
-		layout: new Layout({
-			fit: Fit.Cover,
-		}),
-		autoplay: true,
-	});
-
-	const iconStyling = "text-blue-500 size-[18px]";
-	const proFeatures = [
-		{
-			icon: <Globe className={iconStyling} />,
-			title: "Custom domain",
-			description: "Connect your own domain to Cap",
-		},
-		{
-			icon: <Share2 className={iconStyling} />,
-			title: "Unlimited sharing",
-			description: "Cloud storage & shareable links",
-		},
-		{
-			icon: <Sparkles className={iconStyling} />,
-			title: "Cap AI",
-			description: "Automatic video chapters, summaries & more",
-		},
-		{
-			icon: <Lock className={iconStyling} />,
-			title: "Password protected videos",
-			description: "Enhanced security for your content",
-		},
-		{
-			icon: <Database className={iconStyling} />,
-			title: "Custom storage",
-			description: "Connect your own Google Drive or S3 bucket",
-		},
-		{
-			icon: <Shield className={iconStyling} />,
-			title: "Commercial license",
-			description: "Commercial license for desktop app automatically included",
-		},
-		{
-			icon: <Video className={iconStyling} />,
-			title: "Upload videos",
-			description: "Upload custom videos directly to Cap",
-		},
-		{
-			icon: <Infinity className={iconStyling} />,
-			title: "Unlimited views",
-			description: "No limits on video views",
-		},
-		{
-			icon: <BarChart3 className={iconStyling} />,
-			title: "Analytics",
-			description: "Video viewing insights",
-		},
-		{
-			icon: <Headphones className={iconStyling} />,
-			title: "Priority support",
-			description: "Get help when you need it",
-		},
-		{
-			icon: <ShieldCheck className={iconStyling} />,
-			title: "SOC 2 Type II & ISO 27001",
-			description: "Independently audited security & compliance",
-		},
-	];
 
 	const proCheckoutMutation = useMutation({
 		mutationFn: async () => {
@@ -175,11 +192,6 @@ const UpgradeModalImpl = ({
 				onOpenChange(false);
 			}
 
-			if (data.subscription === true) {
-				toast.success("You are already on the Cap Pro plan");
-				onOpenChange(false);
-			}
-
 			await onCheckout?.();
 
 			if (data.url) {
@@ -203,8 +215,30 @@ const UpgradeModalImpl = ({
 				onInteractOutside={(event) => {
 					if (!dismissible) event.preventDefault();
 				}}
+				// Land focus on the upgrade CTA so Space/Enter proceed natively
+				// (Radix would otherwise focus the close button, where Space would
+				// dismiss the dialog we just advertised a Space shortcut in).
+				onOpenAutoFocus={(event) => {
+					event.preventDefault();
+					upgradeButtonRef.current?.focus();
+				}}
+				onKeyDown={(event) => {
+					if (event.code !== "Space") return;
+					// Focused controls keep their native Space behavior (switch
+					// toggle, stepper, close); the shortcut only fires from inert
+					// targets so it never double-activates.
+					const target = event.target as HTMLElement | null;
+					if (
+						target?.closest(
+							"button, a, input, textarea, select, [role='switch'], [contenteditable]",
+						)
+					)
+						return;
+					event.preventDefault();
+					if (!proCheckoutMutation.isPending) proCheckoutMutation.mutate();
+				}}
 				className={[
-					"sm:max-w-[1100px] w-[calc(100%-20px)] custom-scroll bg-gray-2 border border-gray-4 overflow-y-auto md:overflow-hidden max-h-[90vh] p-0",
+					"sm:max-w-[1100px] w-[calc(100%-20px)] custom-scroll bg-gray-2 border border-gray-4 overflow-y-auto max-h-[90vh] p-0",
 					dismissible ? "" : "[&>button:last-child]:hidden",
 				].join(" ")}
 			>
@@ -218,17 +252,17 @@ const UpgradeModalImpl = ({
 							exit="exit"
 						>
 							<div className="flex relative flex-col flex-1 justify-between items-end self-stretch border-r-0 border-b md:border-b-0 md:border-r border-gray-4">
-								<div className="h-[275px] border-b border-gray-4 w-full overflow-hidden">
+								<div className="h-36 md:h-[275px] border-b border-gray-4 w-full overflow-hidden">
 									<ProRiveArt />
 								</div>
-								<div className="flex relative flex-col flex-1 justify-center items-center py-6 w-full">
+								<div className="flex relative flex-col flex-1 justify-center items-center px-4 py-6 w-full">
 									<div className="flex flex-col items-center">
-										<h1 className="text-3xl font-medium text-gray-12">
+										<h1 className="text-2xl font-medium sm:text-3xl text-gray-12">
 											Upgrade to Cap Pro
 										</h1>
 									</div>
-									<p className="mt-1 text-lg text-center text-gray-11">
-										You can cancel anytime. Early adopter pricing locked in.
+									<p className="mt-1 text-base text-center sm:text-lg text-gray-11">
+										You can cancel anytime.
 									</p>
 
 									<div className="flex flex-col items-center mt-3 mb-4 w-full">
@@ -238,7 +272,7 @@ const UpgradeModalImpl = ({
 												className="text-3xl font-medium tabular-nums text-gray-12"
 												format={{
 													style: "currency",
-													currency: "USD",
+													currency: currency.toUpperCase(),
 												}}
 											/>
 											<span className="mb-2 ml-2 text-gray-11">
@@ -257,13 +291,23 @@ const UpgradeModalImpl = ({
 											</span>
 										</div>
 
-										<div className="flex flex-col gap-6 justify-evenly items-center mt-8 w-full max-w-md sm:gap-10 sm:flex-row">
+										<div className="flex flex-col gap-6 justify-evenly items-center mt-6 w-full max-w-md sm:gap-8 sm:flex-row">
 											<div className="flex gap-3 items-center">
 												<span className="text-gray-12">Annual billing</span>
 												<Switch
 													checked={isAnnual}
 													onCheckedChange={() => setIsAnnual(!isAnnual)}
 												/>
+												<span
+													className={[
+														"rounded-full px-2 py-0.5 text-[11px] font-semibold transition-colors",
+														isAnnual
+															? "bg-blue-500/10 text-blue-500"
+															: "bg-gray-4 text-gray-10",
+													].join(" ")}
+												>
+													Save {ANNUAL_SAVINGS_PERCENT}%
+												</span>
 											</div>
 
 											<div className="flex items-center">
@@ -296,23 +340,35 @@ const UpgradeModalImpl = ({
 									</div>
 
 									<Button
+										ref={upgradeButtonRef}
 										variant="blue"
 										type="button"
+										aria-keyshortcuts="Space"
 										onClick={(e) => {
 											e.preventDefault();
 											proCheckoutMutation.mutate();
 										}}
-										className="mt-5 w-full max-w-sm h-14 text-lg"
+										className="flex-col gap-1.5 mt-5 w-full max-w-sm h-16 text-base"
 										disabled={proCheckoutMutation.isPending}
 									>
-										{proCheckoutMutation.isPending
-											? "Loading..."
-											: "Upgrade to Cap Pro"}
+										{proCheckoutMutation.isPending ? (
+											"Loading..."
+										) : (
+											<>
+												<span className="leading-none">Upgrade to Cap Pro</span>
+												<span className="hidden gap-1 items-center sm:flex text-[10px] font-normal text-white/70">
+													or,
+													<kbd className="flex justify-center items-center px-1 rounded border bg-white/15 border-white/25 h-[14px] text-[9px] font-medium text-white/80">
+														spacebar
+													</kbd>
+												</span>
+											</>
+										)}
 									</Button>
 									{dismissible && (
 										<button
 											type="button"
-											className="mt-2 w-full max-w-sm h-14 text-base rounded-xl hover:underline text-gray-11 hover:text-gray-12"
+											className="mt-2 w-full max-w-sm h-10 text-base rounded-xl hover:underline text-gray-11 hover:text-gray-12"
 											onClick={() => onOpenChange(false)}
 										>
 											Skip
@@ -321,22 +377,21 @@ const UpgradeModalImpl = ({
 								</div>
 							</div>
 
-							<div className="flex flex-1 justify-center items-center self-stretch p-8 bg-transparent md:bg-gray-3">
-								<div className="grid grid-cols-1 gap-8 md:grid-cols-2">
-									{proFeatures.map((feature, index) => (
-										<div
-											key={index.toString()}
-											className="flex flex-col justify-center items-center"
-										>
-											<div className="mb-3.5 bg-gray-5 rounded-full size-10 flex items-center justify-center">
+							<div className="flex flex-1 justify-center items-center self-stretch p-5 bg-transparent sm:p-6 md:p-8 md:bg-gray-3">
+								<div className="grid grid-cols-1 gap-x-8 gap-y-4 w-full sm:grid-cols-2 md:gap-y-5">
+									{PRO_FEATURES.map((feature) => (
+										<div key={feature.title} className="flex gap-3 items-start">
+											<div className="flex justify-center items-center rounded-lg bg-gray-5 shrink-0 size-8">
 												{feature.icon}
 											</div>
-											<h3 className="text-base font-medium text-center text-gray-12">
-												{feature.title}
-											</h3>
-											<p className="text-sm text-center text-gray-11">
-												{feature.description}
-											</p>
+											<div className="min-w-0">
+												<h3 className="text-sm font-medium text-gray-12">
+													{feature.title}
+												</h3>
+												<p className="mt-0.5 text-xs leading-relaxed text-gray-11">
+													{feature.description}
+												</p>
+											</div>
 										</div>
 									))}
 								</div>

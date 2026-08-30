@@ -7,8 +7,9 @@ use tracing::error;
 use wgpu::{BindGroup, FilterMode, include_wgsl, util::DeviceExt};
 
 use crate::{
-    Coord, DecodedSegmentFrames, FrameSpace, ProjectUniforms, RenderVideoConstants,
-    STANDARD_CURSOR_HEIGHT, zoom::InterpolatedZoom,
+    Coord, DecodedSegmentFrames, FrameSpace, ProjectUniforms, RawDisplayUVSpace,
+    RenderVideoConstants, STANDARD_CURSOR_HEIGHT, composite_frame::ColorGradeUniformParams,
+    zoom::InterpolatedZoom,
 };
 
 const CURSOR_CLICK_DURATION: f64 = 0.13;
@@ -272,10 +273,11 @@ impl CursorLayer {
         constants: &RenderVideoConstants,
         cursor_id: &str,
         use_svg: bool,
+        cursor_type: &CursorType,
     ) -> Option<CursorTexture> {
         let mut loaded_cursor = None;
 
-        let cursor_shape = match &constants.recording_meta.inner {
+        let recorded_shape = match &constants.recording_meta.inner {
             RecordingMetaInner::Studio(studio) => match studio.as_ref() {
                 StudioRecordingMeta::MultipleSegments {
                     inner:
@@ -287,6 +289,20 @@ impl CursorLayer {
                 _ => None,
             },
             _ => None,
+        };
+
+        // An explicit family cross-maps the recorded shape into it (and
+        // stands in with its arrow for recordings that carry no shape info at
+        // all, e.g. Linux PNG-only captures), so SVG assets are the only
+        // possible source and `use_svg` no longer applies.
+        let (cursor_shape, use_svg) = match cursor_type.family() {
+            Some(family) => (
+                Some(
+                    recorded_shape.map_or_else(|| family.arrow(), |shape| shape.in_family(family)),
+                ),
+                true,
+            ),
+            None => (recorded_shape, use_svg),
         };
 
         if let Some(cursor_shape) = cursor_shape
@@ -315,7 +331,12 @@ impl CursorLayer {
         loaded_cursor
     }
 
-    fn preload_cursor_textures(&mut self, constants: &RenderVideoConstants, use_svg: bool) {
+    fn preload_cursor_textures(
+        &mut self,
+        constants: &RenderVideoConstants,
+        use_svg: bool,
+        cursor_type: &CursorType,
+    ) {
         let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta else {
             return;
         };
@@ -326,7 +347,8 @@ impl CursorLayer {
 
         for cursor_id in cursors.keys() {
             if !self.cursors.contains_key(cursor_id)
-                && let Some(texture) = Self::load_cursor_texture(constants, cursor_id, use_svg)
+                && let Some(texture) =
+                    Self::load_cursor_texture(constants, cursor_id, use_svg, cursor_type)
             {
                 self.cursors.insert(cursor_id.clone(), texture);
             }
@@ -349,7 +371,7 @@ impl CursorLayer {
         }
 
         self.prev_is_svg_assets_enabled = Some(use_svg);
-        self.preload_cursor_textures(constants, use_svg);
+        self.preload_cursor_textures(constants, use_svg, cursor_type);
         self.cursor_assets_preloaded = true;
     }
 
@@ -440,9 +462,13 @@ impl CursorLayer {
 
         let cursor_type = uniforms.project.cursor.cursor_type().clone();
 
+        // The family a cursor id resolves to is baked into its texture, so a
+        // type change has to evict every cached sprite, not just the circle.
         if self.prev_cursor_type.as_ref() != Some(&cursor_type) {
             self.prev_cursor_type = Some(cursor_type.clone());
             self.circle_cursor = None;
+            self.cursors.clear();
+            self.cursor_assets_preloaded = false;
         }
 
         if self.prev_is_svg_assets_enabled != Some(uniforms.project.cursor.use_svg) {
@@ -458,7 +484,11 @@ impl CursorLayer {
             self.circle_cursor.as_ref().unwrap()
         } else {
             if !self.cursor_assets_preloaded {
-                self.preload_cursor_textures(constants, uniforms.project.cursor.use_svg);
+                self.preload_cursor_textures(
+                    constants,
+                    uniforms.project.cursor.use_svg,
+                    &cursor_type,
+                );
                 self.cursor_assets_preloaded = true;
             }
             if !self.cursors.contains_key(&interpolated_cursor.cursor_id)
@@ -466,6 +496,7 @@ impl CursorLayer {
                     constants,
                     &interpolated_cursor.cursor_id,
                     uniforms.project.cursor.use_svg,
+                    &cursor_type,
                 )
             {
                 self.cursors
@@ -511,28 +542,118 @@ impl CursorLayer {
             })
         };
 
-        let hotspot = Coord::<FrameSpace>::new(size.coord * cursor_texture.hotspot);
-
-        // Calculate position without hotspot first
-        let position = interpolated_cursor.position.to_frame_space(
-            &constants.options,
-            &uniforms.project,
+        let (position_size, cursor_opacity) = CursorPlacement {
+            constants,
+            uniforms,
             resolution_base,
+            zoom,
+        }
+        .map(
+            interpolated_cursor.position.coord,
+            size,
+            cursor_texture.hotspot,
+            cursor_opacity,
+        );
+
+        let cursor_grade = if uniforms.project.color_correction.grade_cursor {
+            uniforms.screen_color_grade
+        } else {
+            ColorGradeUniformParams::IDENTITY
+        };
+
+        let cursor_uniforms = CursorUniforms {
+            position_size,
+            output_size: [
+                uniforms.output_size.0 as f32,
+                uniforms.output_size.1 as f32,
+                0.0,
+                0.0,
+            ],
+            screen_bounds: uniforms.display.target_bounds,
+            motion_vector_strength: [
+                scaled_motion.x,
+                scaled_motion.y,
+                // Pure on/off gate: the amount is baked into the smear
+                // length (scaled_motion), never an opacity mix.
+                if cursor_strength > f32::EPSILON {
+                    1.0
+                } else {
+                    0.0
+                },
+                cursor_opacity,
+            ],
+            rotation_params: [
+                0.0,
+                uniforms.project.cursor.base_rotation,
+                uniforms.cursor_x_axis_tilt_radians,
+                0.0,
+            ],
+            color_adjust_a: cursor_grade.color_adjust_a,
+            color_adjust_b: cursor_grade.color_adjust_b,
+            grain_params: cursor_grade.grain_params,
+        };
+
+        constants.queue.write_buffer(
+            &self.statics.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[cursor_uniforms]),
+        );
+
+        self.bind_group = Some(
+            self.statics
+                .create_bind_group(&constants.device, &cursor_texture.texture),
+        );
+    }
+
+    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(bind_group) = &self.bind_group {
+            pass.set_pipeline(&self.statics.render_pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
+            pass.draw(0..4, 0..1);
+        }
+    }
+}
+
+/// The cursor sprite's output-rect chain: frame space minus hotspot -> zoomed
+/// frame space -> split-screen pane remap -> text-takeover affine. The click
+/// ripple has to land in exactly the same place as the sprite it sits under,
+/// so both go through here.
+pub(crate) struct CursorPlacement<'a> {
+    pub constants: &'a RenderVideoConstants,
+    pub uniforms: &'a ProjectUniforms,
+    pub resolution_base: XY<u32>,
+    pub zoom: &'a InterpolatedZoom,
+}
+
+impl CursorPlacement<'_> {
+    pub(crate) fn map(
+        &self,
+        position_uv: XY<f64>,
+        size: Coord<FrameSpace>,
+        hotspot_frac: XY<f64>,
+        opacity: f32,
+    ) -> ([f32; 4], f32) {
+        let hotspot = Coord::<FrameSpace>::new(size.coord * hotspot_frac);
+
+        let position = Coord::<RawDisplayUVSpace>::new(position_uv).to_frame_space(
+            &self.constants.options,
+            &self.uniforms.project,
+            self.resolution_base,
         ) - hotspot;
 
         // Transform to zoomed space
         let zoomed_position = position.to_zoomed_frame_space(
-            &constants.options,
-            &uniforms.project,
-            resolution_base,
-            zoom,
+            &self.constants.options,
+            &self.uniforms.project,
+            self.resolution_base,
+            self.zoom,
         );
 
         let zoomed_size = (position + size).to_zoomed_frame_space(
-            &constants.options,
-            &uniforms.project,
-            resolution_base,
-            zoom,
+            &self.constants.options,
+            &self.uniforms.project,
+            self.resolution_base,
+            self.zoom,
         ) - zoomed_position;
 
         // In split-screen the screen only occupies a half-rect, so remap the
@@ -541,14 +662,15 @@ impl CursorLayer {
         // same factor. The cursor shader's screen_bounds clip already follows
         // uniforms.display.target_bounds (the morphing half), so a cursor that
         // lands outside the visible crop is confined automatically.
-        let position_size = match &uniforms.split {
+        let position_size = match &self.uniforms.split {
             Some(split) if split.factor > 0.001 => {
-                let screen_size = constants.options.screen_size;
-                let crop = ProjectUniforms::get_crop(&constants.options, &uniforms.project);
+                let screen_size = self.constants.options.screen_size;
+                let crop =
+                    ProjectUniforms::get_crop(&self.constants.options, &self.uniforms.project);
                 let display_size = ProjectUniforms::display_size(
-                    &constants.options,
-                    &uniforms.project,
-                    resolution_base,
+                    &self.constants.options,
+                    &self.uniforms.project,
+                    self.resolution_base,
                 );
 
                 let scrop = split.screen.crop;
@@ -559,8 +681,8 @@ impl CursorLayer {
                 let target_h = starget[3] - starget[1];
 
                 let cursor_px = [
-                    cursor_uv.x as f32 * screen_size.x as f32,
-                    cursor_uv.y as f32 * screen_size.y as f32,
+                    position_uv.x as f32 * screen_size.x as f32,
+                    position_uv.y as f32 * screen_size.y as f32,
                 ];
                 let tip = [
                     starget[0] + (cursor_px[0] - scrop[0]) / crop_w * target_w,
@@ -594,53 +716,34 @@ impl CursorLayer {
             ],
         };
 
-        let cursor_uniforms = CursorUniforms {
-            position_size,
-            output_size: [
-                uniforms.output_size.0 as f32,
-                uniforms.output_size.1 as f32,
-                0.0,
-                0.0,
-            ],
-            screen_bounds: uniforms.display.target_bounds,
-            motion_vector_strength: [
-                scaled_motion.x,
-                scaled_motion.y,
-                // Pure on/off gate: the amount is baked into the smear
-                // length (scaled_motion), never an opacity mix.
-                if cursor_strength > f32::EPSILON {
-                    1.0
-                } else {
-                    0.0
-                },
-                cursor_opacity,
-            ],
-            rotation_params: [
-                0.0,
-                uniforms.project.cursor.base_rotation,
-                uniforms.cursor_x_axis_tilt_radians,
-                0.0,
-            ],
+        // A text takeover relocates the display card by a uniform scale +
+        // translate (the takeover target preserves the card's aspect), so the
+        // cursor follows with the same affine map — and fades with the card
+        // when a Fullscreen takeover hides it.
+        let (position_size, opacity) = match &self.uniforms.takeover {
+            Some(takeover) if takeover.t > 0.001 => {
+                let from_w = (takeover.from[2] - takeover.from[0]).max(f32::EPSILON);
+                let scale = (takeover.to[2] - takeover.to[0]) / from_w;
+                let mapped = [
+                    takeover.to[0] + (position_size[0] - takeover.from[0]) * scale,
+                    takeover.to[1] + (position_size[1] - takeover.from[1]) * scale,
+                    position_size[2] * scale,
+                    position_size[3] * scale,
+                ];
+                let t = takeover.t;
+                (
+                    [
+                        crate::lerp_f32(position_size[0], mapped[0], t),
+                        crate::lerp_f32(position_size[1], mapped[1], t),
+                        crate::lerp_f32(position_size[2], mapped[2], t),
+                        crate::lerp_f32(position_size[3], mapped[3], t),
+                    ],
+                    opacity * takeover.overlay_fade,
+                )
+            }
+            _ => (position_size, opacity),
         };
-
-        constants.queue.write_buffer(
-            &self.statics.uniform_buffer,
-            0,
-            bytemuck::cast_slice(&[cursor_uniforms]),
-        );
-
-        self.bind_group = Some(
-            self.statics
-                .create_bind_group(&constants.device, &cursor_texture.texture),
-        );
-    }
-
-    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
-        if let Some(bind_group) = &self.bind_group {
-            pass.set_pipeline(&self.statics.render_pipeline);
-            pass.set_bind_group(0, bind_group, &[]);
-            pass.draw(0..4, 0..1);
-        }
+        (position_size, opacity)
     }
 }
 
@@ -662,7 +765,7 @@ fn composite_cursor_layer(dst: &mut [f32; 4], src: [f32; 4]) {
     dst[3] = out_a;
 }
 
-fn cursor_height_px(
+pub(crate) fn cursor_height_px(
     source_screen_height: f32,
     crop_height: f32,
     display_frame_height: f32,
@@ -714,6 +817,11 @@ pub struct CursorUniforms {
     screen_bounds: [f32; 4],
     motion_vector_strength: [f32; 4],
     rotation_params: [f32; 4],
+    /// Screen grade (see `ColorGradeUniformParams`); identity when the
+    /// cursor opts out.
+    color_adjust_a: [f32; 4],
+    color_adjust_b: [f32; 4],
+    grain_params: [f32; 4],
 }
 
 fn compute_cursor_idle_opacity(

@@ -26,6 +26,12 @@ struct Uniforms {
     // the uniform rounding; the display squares its top corners against
     // decorative frame chrome with (0, 0, 1, 1).
     corner_radii: vec4<f32>,
+    // (exposure stops, contrast, saturation, temperature).
+    color_adjust_a: vec4<f32>,
+    // (tint, fade, split_tone, vignette).
+    color_adjust_b: vec4<f32>,
+    // (grain amount, grain seed, grade-active flag, full-frame vignette flag).
+    grain_params: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -129,6 +135,83 @@ fn rounded_rect_coverage(p: vec2<f32>, b: vec2<f32>, r: f32, rounding_type: f32)
         anti_alias_width
     );
     return coverage * 0.25;
+}
+
+// Sin-free hash so grain stays stable across GPU drivers.
+fn grain_hash(p: vec2<f32>) -> f32 {
+    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// Must stay in sync with color-grade.wgsl and cursor.wgsl. Runs once per
+// output pixel after motion-blur resolve; ungraded layers skip everything in
+// a single coherent uniform branch.
+fn apply_color_grade(color: vec4<f32>, target_uv: vec2<f32>, frag_pos: vec2<f32>) -> vec4<f32> {
+    if uniforms.grain_params.z < 0.5 {
+        return color;
+    }
+
+    let exposure = uniforms.color_adjust_a.x;
+    let contrast = uniforms.color_adjust_a.y;
+    let saturation = uniforms.color_adjust_a.z;
+    let temperature = uniforms.color_adjust_a.w;
+    let tint = uniforms.color_adjust_b.x;
+    let fade = uniforms.color_adjust_b.y;
+    let split_tone = uniforms.color_adjust_b.z;
+    let vignette = uniforms.color_adjust_b.w;
+    let grain = uniforms.grain_params.x;
+
+    // Exposure in stops.
+    var rgb = color.rgb * exp2(exposure);
+
+    // White balance, multiplicative so black stays black.
+    rgb = rgb * vec3<f32>(
+        1.0 + 0.10 * temperature + 0.04 * tint,
+        1.0 - 0.07 * tint,
+        1.0 - 0.10 * temperature + 0.04 * tint,
+    );
+
+    // Contrast around mid gray.
+    rgb = (rgb - vec3<f32>(0.5)) * (1.0 + contrast) + vec3<f32>(0.5);
+
+    // Saturation via luma mix (-1 = grayscale).
+    let luma = dot(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(0.2126, 0.7152, 0.0722));
+    rgb = mix(vec3<f32>(luma), rgb, 1.0 + saturation);
+
+    // Split tone: teal shadows / orange highlights, luma-banded.
+    let shadow_w = 1.0 - smoothstep(0.2, 0.65, luma);
+    let highlight_w = smoothstep(0.35, 0.8, luma);
+    rgb += split_tone * (
+        shadow_w * vec3<f32>(-0.06, 0.02, 0.08) +
+        highlight_w * vec3<f32>(0.08, 0.02, -0.06)
+    );
+
+    // Film fade: raised blacks, gently dulled highlights.
+    rgb = rgb * (1.0 - 0.18 * fade) + vec3<f32>(0.09 * fade);
+
+    if vignette > 0.0 {
+        var vig_uv = target_uv;
+        if uniforms.grain_params.w > 0.5 {
+            vig_uv = frag_pos / uniforms.output_size;
+        }
+        let r = length((vig_uv - vec2<f32>(0.5)) * 2.0);
+        rgb = rgb * (1.0 - vignette * 0.65 * smoothstep(0.5, 1.5, r));
+    }
+
+    // Midtone-peaked monochrome grain.
+    if grain > 0.0 {
+        let seed = uniforms.grain_params.y;
+        let noise = grain_hash(frag_pos + vec2<f32>(seed * 17.0, seed * 29.0));
+        let graded_luma = dot(
+            clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)),
+            vec3<f32>(0.2126, 0.7152, 0.0722)
+        );
+        let response = 0.25 + 0.75 * (1.0 - abs(2.0 * graded_luma - 1.0));
+        rgb += (noise - 0.5) * grain * 0.35 * response;
+    }
+
+    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
 }
 
 fn composite_source_over(foreground: vec4<f32>, background: vec4<f32>) -> vec4<f32> {
@@ -256,7 +339,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let zoom_amount = uniforms.motion_blur_params.z;
 
     if !blur_active {
-        return composite_source_over(base_color, shadow_color);
+        return composite_source_over(apply_color_grade(base_color, target_uv, p), shadow_color);
     }
 
     // Screen Studio semantics: the user amount is baked into the LENGTH of
@@ -270,7 +353,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     if blur_mode < 1.5 {
         let velocity_uv = uniforms.motion_blur_vector;
         if length(velocity_uv) < 1e-5 {
-            return composite_source_over(base_color, shadow_color);
+            return composite_source_over(apply_color_grade(base_color, target_uv, p), shadow_color);
         }
 
         // 21-tap box along [0, +v]: matches the reference directional filter
@@ -291,14 +374,17 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         if out_alpha <= 0.0001 || alpha_sum <= 0.0001 {
             return shadow_color;
         }
-        return composite_source_over(vec4(accum / alpha_sum, out_alpha), shadow_color);
+        return composite_source_over(
+            apply_color_grade(vec4(accum / alpha_sum, out_alpha), target_uv, p),
+            shadow_color
+        );
     }
 
     let zoom_center = uniforms.motion_blur_zoom_center;
     let dir = zoom_center - target_uv;
     let center_dist = length(dir);
     if center_dist < 1e-4 || zoom_amount < 1e-4 {
-        return composite_source_over(base_color, shadow_color);
+        return composite_source_over(apply_color_grade(base_color, target_uv, p), shadow_color);
     }
 
     // Radial blur toward the scale origin: ray length grows with distance
@@ -332,7 +418,10 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     if out_alpha <= 0.0001 {
         return shadow_color;
     }
-    return composite_source_over(vec4(accum / alpha_sum, out_alpha), shadow_color);
+    return composite_source_over(
+        apply_color_grade(vec4(accum / alpha_sum, out_alpha), target_uv, p),
+        shadow_color
+    );
 }
 
 fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {

@@ -10,6 +10,7 @@ import { useTimelineContext } from "./context";
 import {
 	SegmentContent,
 	SegmentHandle,
+	SegmentLabel,
 	SegmentRoot,
 	TrackRoot,
 	useSetPreviewTime,
@@ -456,6 +457,7 @@ export function AudioTrack(props: {
 								!segment.enabled && "opacity-50",
 							)}
 							innerClass="ring-emerald-8"
+							title={segment.name || "Audio"}
 							segment={segment}
 							onMouseDown={(e) => {
 								e.stopPropagation();
@@ -527,12 +529,24 @@ export function AudioTrack(props: {
 									},
 								)}
 							>
-								<div class="flex z-10 gap-1.5 items-center w-full min-w-0 text-xs text-white/95 drop-shadow-sm">
-									<IconLucideMusic class="size-3 shrink-0 opacity-90" />
-									<span class="max-w-full font-medium truncate">
-										{segment.name || "Audio"}
-									</span>
-								</div>
+								<SegmentLabel
+									compactAt={24}
+									full={() => (
+										<div class="flex z-10 gap-1.5 items-center max-w-full text-xs text-white/95 drop-shadow-sm">
+											<IconLucideMusic class="size-3 shrink-0 opacity-90" />
+											<span class="max-w-full font-medium truncate">
+												{segment.name || "Audio"}
+											</span>
+										</div>
+									)}
+									compact={() => (
+										<div class="flex z-10 items-center max-w-full text-xs text-white/95 drop-shadow-sm">
+											<span class="max-w-full font-medium truncate">
+												{segment.name || "Audio"}
+											</span>
+										</div>
+									)}
+								/>
 							</SegmentContent>
 							<SegmentHandle
 								position="end"

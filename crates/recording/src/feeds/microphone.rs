@@ -984,13 +984,26 @@ fn stream_config_with_latency(
     device_name: Option<&str>,
 ) -> (cpal::StreamConfig, Option<u32>) {
     let mut stream_config: cpal::StreamConfig = config.clone().into();
-    let buffer_size_frames = desired_buffer_size_frames(config, device_name);
+    let buffer_size_frames = if uses_default_microphone_buffer(device_name) {
+        None
+    } else {
+        desired_buffer_size_frames(config, device_name)
+    };
 
     if let Some(frames) = buffer_size_frames {
         stream_config.buffer_size = BufferSize::Fixed(frames);
     }
 
     (stream_config, buffer_size_frames)
+}
+
+fn uses_default_microphone_buffer(device_name: Option<&str>) -> bool {
+    cfg!(target_os = "linux")
+        && device_name.is_some_and(|name| {
+            ["default", "pulse", "pipewire"]
+                .iter()
+                .any(|backend| name.eq_ignore_ascii_case(backend))
+        })
 }
 
 fn desired_buffer_size_frames(
@@ -1687,6 +1700,17 @@ mod tests {
             estimate_rate(48_000, 480, Duration::from_millis(10)),
             Some(48_000)
         );
+    }
+
+    #[test]
+    fn virtual_linux_microphones_use_the_backend_buffer_size() {
+        let linux = cfg!(target_os = "linux");
+
+        assert_eq!(uses_default_microphone_buffer(Some("default")), linux);
+        assert_eq!(uses_default_microphone_buffer(Some("PULSE")), linux);
+        assert_eq!(uses_default_microphone_buffer(Some("PipeWire")), linux);
+        assert!(!uses_default_microphone_buffer(Some("USB Microphone")));
+        assert!(!uses_default_microphone_buffer(None));
     }
 
     #[test]

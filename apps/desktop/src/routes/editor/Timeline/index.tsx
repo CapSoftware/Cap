@@ -1,5 +1,8 @@
 import { createElementBounds } from "@solid-primitives/bounds";
-import { createEventListener } from "@solid-primitives/event-listener";
+import {
+	createEventListener,
+	createEventListenerMap,
+} from "@solid-primitives/event-listener";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { platform } from "@tauri-apps/plugin-os";
@@ -49,6 +52,7 @@ import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
 import { type KeyboardSegmentDragState, KeyboardTrack } from "./KeyboardTrack";
 import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
+import { Minimap } from "./Minimap";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
 import { type ThreeDSegmentDragState, ThreeDTrack } from "./ThreeDTrack";
@@ -812,8 +816,44 @@ export function Timeline(props: {
 		};
 	}
 
-	async function handleUpdatePlayhead(e: MouseEvent) {
+	function timelineTimeFromClientX(clientX: number) {
 		const metrics = getTimelineContentMetrics();
+		if (!metrics) return null;
+		const rawTime =
+			secsPerPixel() * (clientX - metrics.left) + transform().position;
+		// Snap to the very start when the cursor lands within a few pixels
+		// of the timeline origin so hitting exactly 0:00 isn't a battle
+		const snappedTime = rawTime / secsPerPixel() <= START_SNAP_PX ? 0 : rawTime;
+		return Math.min(Math.max(0, snappedTime), totalDuration());
+	}
+
+	async function seekPlayheadTo(newTime: number) {
+		// If playing, some backends require restart to seek reliably
+		if (editorState.playing) {
+			try {
+				await commands.stopPlayback();
+
+				// Round to nearest frame to prevent off-by-one drift
+				const targetFrame = Math.round(newTime * FPS);
+				await commands.seekTo(targetFrame);
+
+				// If the user paused during these async ops, bail out without restarting
+				if (!editorState.playing) {
+					setEditorState("playbackTime", newTime);
+					return;
+				}
+
+				await commands.startPlayback(FPS, previewResolutionBase());
+				setEditorState("playing", true);
+			} catch (err) {
+				console.error("Failed to seek during playback:", err);
+			}
+		}
+
+		setEditorState("playbackTime", newTime);
+	}
+
+	async function handleUpdatePlayhead(e: MouseEvent) {
 		if (
 			zoomSegmentDragState.type !== "moving" &&
 			sceneSegmentDragState.type !== "moving" &&
@@ -824,39 +864,100 @@ export function Timeline(props: {
 			keyboardSegmentDragState.type !== "moving" &&
 			threeDSegmentDragState.type !== "moving"
 		) {
-			if (!metrics) return;
-			const rawTime =
-				secsPerPixel() * (e.clientX - metrics.left) + transform().position;
-			// Snap to the very start when the cursor lands within a few pixels
-			// of the timeline origin so hitting exactly 0:00 isn't a battle
-			const snappedTime =
-				rawTime / secsPerPixel() <= START_SNAP_PX ? 0 : rawTime;
-			const newTime = Math.min(Math.max(0, snappedTime), totalDuration());
-
-			// If playing, some backends require restart to seek reliably
-			if (editorState.playing) {
-				try {
-					await commands.stopPlayback();
-
-					// Round to nearest frame to prevent off-by-one drift
-					const targetFrame = Math.round(newTime * FPS);
-					await commands.seekTo(targetFrame);
-
-					// If the user paused during these async ops, bail out without restarting
-					if (!editorState.playing) {
-						setEditorState("playbackTime", newTime);
-						return;
-					}
-
-					await commands.startPlayback(FPS, previewResolutionBase());
-					setEditorState("playing", true);
-				} catch (err) {
-					console.error("Failed to seek during playback:", err);
-				}
-			}
-
-			setEditorState("playbackTime", newTime);
+			const newTime = timelineTimeFromClientX(e.clientX);
+			if (newTime === null) return;
+			await seekPlayheadTo(newTime);
 		}
+	}
+
+	function beginRulerScrub(downEvent: MouseEvent) {
+		if (downEvent.button !== 0) return;
+		downEvent.stopPropagation();
+
+		let lastClientX = downEvent.clientX;
+		let seekInFlight = false;
+		let seekQueued = false;
+		let panRafId: number | null = null;
+
+		const contentEdges = () => {
+			const metrics = getTimelineContentMetrics();
+			if (!metrics || metrics.width <= 0) return null;
+			return { left: metrics.left, right: metrics.left + metrics.width };
+		};
+
+		// While playing, each seek is a stop/seek/restart round-trip, so scrub
+		// updates are coalesced to one in-flight seek with the latest position
+		// applied once it settles.
+		const applyScrub = () => {
+			const edges = contentEdges();
+			const clientX = edges
+				? Math.min(Math.max(lastClientX, edges.left), edges.right)
+				: lastClientX;
+			const newTime = timelineTimeFromClientX(clientX);
+			if (newTime === null) return;
+			if (seekInFlight) {
+				seekQueued = true;
+				return;
+			}
+			seekInFlight = true;
+			void seekPlayheadTo(newTime).finally(() => {
+				seekInFlight = false;
+				if (seekQueued) {
+					seekQueued = false;
+					applyScrub();
+				}
+			});
+		};
+
+		const stepEdgePan = () => {
+			panRafId = null;
+			const edges = contentEdges();
+			if (!edges) return;
+			const overshoot =
+				lastClientX < edges.left
+					? lastClientX - edges.left
+					: lastClientX > edges.right
+						? lastClientX - edges.right
+						: 0;
+			if (overshoot === 0) return;
+			const panPx =
+				Math.sign(overshoot) * Math.min(Math.abs(overshoot) * 0.2, 12);
+			transform().setPosition(transform().position + panPx * secsPerPixel());
+			applyScrub();
+			panRafId = requestAnimationFrame(stepEdgePan);
+		};
+
+		const ensureEdgePan = () => {
+			if (panRafId === null) panRafId = requestAnimationFrame(stepEdgePan);
+		};
+
+		applyScrub();
+		ensureEdgePan();
+
+		createRoot((dispose) => {
+			onCleanup(() => {
+				if (panRafId !== null) {
+					cancelAnimationFrame(panRafId);
+					panRafId = null;
+				}
+			});
+			createEventListenerMap(window, {
+				mousemove: (event) => {
+					lastClientX = event.clientX;
+					applyScrub();
+					ensureEdgePan();
+				},
+				mouseup: () => {
+					batch(() => {
+						setEditorState("timeline", "selection", null);
+						setEditorState("timeline", "audioPicker", null);
+						setEditorState("timeline", "camera3dSetup", null);
+					});
+					dispose();
+				},
+				blur: () => dispose(),
+			});
+		});
 	}
 
 	createEventListener(window, "keydown", (e) => {
@@ -915,6 +1016,36 @@ export function Timeline(props: {
 			setEditorState("timeline", "selection", null);
 			setEditorState("timeline", "audioPicker", null);
 			setEditorState("timeline", "camera3dSetup", null);
+		} else if (
+			e.code === "KeyA" &&
+			(e.metaKey || e.ctrlKey) &&
+			!e.shiftKey &&
+			!e.altKey
+		) {
+			// Cmd/Ctrl+A expands the current selection to every segment on the
+			// same track.
+			const selection = editorState.timeline.selection;
+			if (!selection || selection.type === "transition") return;
+
+			const timeline = project.timeline;
+			const segmentCount = {
+				clip: timeline?.segments.length ?? 0,
+				zoom: timeline?.zoomSegments?.length ?? 0,
+				scene: timeline?.sceneSegments?.length ?? 0,
+				mask: timeline?.maskSegments?.length ?? 0,
+				caption: timeline?.captionSegments?.length ?? 0,
+				keyboard: timeline?.keyboardSegments?.length ?? 0,
+				text: timeline?.textSegments?.length ?? 0,
+				audio: timeline?.audioSegments?.length ?? 0,
+				"3d": timeline?.camera3dSegments?.length ?? 0,
+			}[selection.type];
+			if (!segmentCount) return;
+
+			e.preventDefault();
+			setEditorState("timeline", "selection", {
+				type: selection.type,
+				indices: Array.from({ length: segmentCount }, (_, i) => i),
+			});
 		}
 	});
 
@@ -1076,6 +1207,17 @@ export function Timeline(props: {
 				}}
 			>
 				<div
+					class="absolute z-30"
+					style={{
+						top: "2px",
+						left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
+						right: `${TIMELINE_PADDING}px`,
+						height: "12px",
+					}}
+				>
+					<Minimap />
+				</div>
+				<div
 					class="relative z-20"
 					style={{ height: `${TIMELINE_HEADER_HEIGHT}px` }}
 				>
@@ -1092,10 +1234,20 @@ export function Timeline(props: {
 							onAdd={handleAddTrack}
 						/>
 					</div>
+					{/* Scrub surface for the ruler. It reaches START_SNAP_PX left of
+					    the timeline origin so the snap-to-zero zone always places the
+					    playhead instead of hitting the "Add track" trigger beneath. */}
+					<div
+						class="absolute inset-y-0 right-0 z-40"
+						style={{ left: `${TRACK_GUTTER - START_SNAP_PX}px` }}
+						onMouseDown={beginRulerScrub}
+					/>
 				</div>
 				<Show
 					when={
-						!editorState.playing && editorState.previewTime !== null
+						!editorState.playing &&
+						editorState.previewTime !== null &&
+						editorState.timeline.splitPreview === null
 							? { time: editorState.previewTime }
 							: null
 					}
@@ -1141,6 +1293,27 @@ export function Timeline(props: {
 				>
 					<div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
 				</div>
+				<Show when={split() ? editorState.timeline.splitPreview : null}>
+					{(preview) => (
+						<div
+							class={cx(
+								"absolute bottom-0 z-20 w-px pointer-events-none",
+								preview().snapped ? "bg-blue-9" : "bg-gray-10/70",
+							)}
+							style={{
+								left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
+								top: `${PLAYHEAD_TOP_OFFSET}px`,
+								transform: `translateX(${
+									(preview().time - transform().position) / secsPerPixel()
+								}px)`,
+							}}
+						>
+							<Show when={preview().snapped}>
+								<div class="absolute top-0 left-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] bg-blue-9" />
+							</Show>
+						</div>
+					)}
+				</Show>
 				<div
 					class="relative flex-1 min-h-0"
 					style={{

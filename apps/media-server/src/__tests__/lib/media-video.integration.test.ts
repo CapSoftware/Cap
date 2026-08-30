@@ -15,6 +15,7 @@ import { probeVideo } from "../../lib/media-probe";
 import {
 	buildStreamingDownloadFfmpegArgs,
 	copyFileToMp4,
+	estimateMaterializedStreamingDurationSeconds,
 	generatePreviewGif,
 	generateThumbnail,
 	getFfmpegHlsCapabilities,
@@ -63,6 +64,25 @@ function readH264Level(filePath: string): number {
 		.trim();
 
 	return Number.parseInt(output, 10);
+}
+
+function readDecodedStreamHash(filePath: string, stream: "v" | "a") {
+	return execFileSync("ffmpeg", [
+		"-hide_banner",
+		"-v",
+		"error",
+		"-i",
+		filePath,
+		"-map",
+		`0:${stream}:0`,
+		"-f",
+		"hash",
+		"-hash",
+		"sha256",
+		"-",
+	])
+		.toString()
+		.trim();
 }
 
 afterAll(() => {
@@ -731,6 +751,60 @@ describe("processVideo integration tests", () => {
 		}
 	}, 120000);
 
+	test("normalizes repeated unsafe h264 parameter sets without recompressing video or audio", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-lossless-h264-level-"));
+		try {
+			const highLevelPath = join(workDir, "high-level.mp4");
+			execFileSync("ffmpeg", [
+				"-hide_banner",
+				"-loglevel",
+				"error",
+				"-y",
+				"-i",
+				TEST_VIDEO_WITH_AUDIO,
+				"-c:v",
+				"libx264",
+				"-level:v",
+				"6.2",
+				"-x264-params",
+				"repeat-headers=1",
+				"-c:a",
+				"copy",
+				highLevelPath,
+			]);
+
+			const metadata = await probeVideo(`file://${highLevelPath}`);
+			const originalVideoHash = readDecodedStreamHash(highLevelPath, "v");
+			const originalAudioHash = readDecodedStreamHash(highLevelPath, "a");
+			const expectedLevel = pickMobileSafeH264Level(metadata, {
+				maxWidth: metadata.width,
+				maxHeight: metadata.height,
+			});
+
+			expect(readH264Level(highLevelPath)).toBe(62);
+
+			const tempFile = await processVideo(highLevelPath, metadata, {
+				maxWidth: metadata.width,
+				maxHeight: metadata.height,
+				normalizeH264Level: true,
+			});
+			tempFiles.push(tempFile.path);
+
+			expect(readH264Level(tempFile.path)).toBe(expectedLevel.value);
+			expect(readDecodedStreamHash(tempFile.path, "v")).toBe(originalVideoHash);
+			expect(readDecodedStreamHash(tempFile.path, "a")).toBe(originalAudioHash);
+
+			const outputMetadata = await probeVideo(`file://${tempFile.path}`);
+			expect(outputMetadata.width).toBe(metadata.width);
+			expect(outputMetadata.height).toBe(metadata.height);
+			expect(outputMetadata.duration).toBeCloseTo(metadata.duration, 2);
+
+			await tempFile.cleanup();
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	}, 120000);
+
 	test("transcodes raw webm input into a valid mp4 output", async () => {
 		const workDir = mkdtempSync(join(tmpdir(), "cap-webm-transcode-"));
 		try {
@@ -766,6 +840,42 @@ describe("processVideo integration tests", () => {
 });
 
 describe("ffmpeg-backed media utilities integration tests", () => {
+	test("estimates streaming duration from local manifests without probing remote segments", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-manifest-duration-"));
+		try {
+			writeFileSync(
+				join(workDir, "video.m3u8"),
+				"#EXTM3U\n#EXTINF:10.5,\nvideo-1.ts\n#EXTINF:8.25,\nvideo-2.ts\n",
+			);
+			writeFileSync(
+				join(workDir, "audio.m3u8"),
+				"#EXTM3U\n#EXTINF:7.0,\naudio-1.ts\n#EXTINF:8.0,\naudio-2.ts\n",
+			);
+
+			expect(await estimateMaterializedStreamingDurationSeconds(workDir)).toBe(
+				18.75,
+			);
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	});
+
+	test("estimates streaming duration from a DASH presentation attribute", async () => {
+		const workDir = mkdtempSync(join(tmpdir(), "cap-mpd-duration-"));
+		try {
+			writeFileSync(
+				join(workDir, "video.mpd"),
+				'<MPD mediaPresentationDuration="PT1M30.5S"></MPD>',
+			);
+
+			expect(await estimateMaterializedStreamingDurationSeconds(workDir)).toBe(
+				90.5,
+			);
+		} finally {
+			rmSync(workDir, { recursive: true, force: true });
+		}
+	});
+
 	test("uses only legacy HLS options when newer FFmpeg options are unavailable", () => {
 		const capabilities = parseFfmpegHlsCapabilities(`
 			-allowed_extensions <string>

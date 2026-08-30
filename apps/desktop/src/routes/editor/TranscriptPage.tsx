@@ -90,6 +90,7 @@ export function TranscriptPanel() {
 			project.timeline?.segments ?? [],
 			recordingSegments(),
 			project.timeline?.transitions ?? [],
+			project.timeline?.textSegments,
 		),
 	);
 
@@ -189,6 +190,7 @@ export function TranscriptPanel() {
 				project.timeline?.transitions ?? [],
 				undefined,
 				"incoming",
+				project.timeline?.textSegments,
 			) ?? outputStart;
 		const end = start + defaultDuration;
 		const text = "New caption";
@@ -273,6 +275,7 @@ export function TranscriptPanel() {
 			project.timeline?.transitions ?? [],
 			undefined,
 			"incoming",
+			project.timeline?.textSegments,
 		);
 		if (sourceTime === null) return -1;
 
@@ -298,6 +301,7 @@ export function TranscriptPanel() {
 				project.timeline?.segments ?? [],
 				recordingSegments(),
 				project.timeline?.transitions ?? [],
+				project.timeline?.textSegments,
 			);
 			if (outputTime === null) return;
 			if (editorState.playing) {

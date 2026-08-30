@@ -24,7 +24,10 @@ use std::{
     io,
     path::{Path, PathBuf},
     pin::pin,
-    sync::{Arc, Mutex, PoisonError},
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 use tauri::{AppHandle, Manager, ipc::Channel};
@@ -59,6 +62,27 @@ const MAX_CHUNK_SIZE: u64 = 15 * 1024 * 1024;
 const NETWORK_RECOVERY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CONNECTIVITY_PROBE_INITIAL_DELAY: Duration = Duration::from_secs(2);
 const CONNECTIVITY_PROBE_MAX_DELAY: Duration = Duration::from_secs(30);
+
+static ACTIVE_UPLOADS: AtomicUsize = AtomicUsize::new(0);
+
+struct ActiveUploadGuard<'a>(&'a AtomicUsize);
+
+impl<'a> ActiveUploadGuard<'a> {
+    fn new(active: &'a AtomicUsize) -> Self {
+        active.fetch_add(1, Ordering::AcqRel);
+        Self(active)
+    }
+}
+
+impl Drop for ActiveUploadGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+pub(crate) fn upload_session_active() -> bool {
+    ACTIVE_UPLOADS.load(Ordering::Acquire) > 0
+}
 
 fn is_google_drive_resumable_url(url: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(url) else {
@@ -134,6 +158,7 @@ pub async fn upload_video(
     meta: S3VideoMeta,
     channel: Option<Channel<UploadProgress>>,
 ) -> Result<UploadedItem, AuthedApiError> {
+    let _active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
     info!("Uploading video {video_id}...");
 
     let start = Instant::now();
@@ -283,6 +308,7 @@ pub async fn upload_screenshot_bytes(
     video_id: Option<String>,
     organization_id: Option<String>,
 ) -> Result<UploadedItem, AuthedApiError> {
+    let _active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
     let s3_config = create_or_get_video(app, true, video_id, None, None, organization_id).await?;
     let subpath = screenshot_upload_subpath(content_type);
     let total_size = image_bytes.len() as u64;
@@ -312,6 +338,7 @@ pub async fn upload_screenshot_file(
     video_id: Option<String>,
     organization_id: Option<String>,
 ) -> Result<UploadedItem, AuthedApiError> {
+    let _active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
     let content_type = screenshot_content_type_from_path(&file_path);
     let s3_config = create_or_get_video(app, true, video_id, None, None, organization_id).await?;
     let subpath = screenshot_upload_subpath(content_type);
@@ -583,6 +610,7 @@ impl InstantMultipartUpload {
         recording_dir: PathBuf,
         realtime_video_done: Option<Receiver<()>>,
     ) -> Result<Option<S3VideoMeta>, AuthedApiError> {
+        let _active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
         let video_id = pre_created_video.id.clone();
         debug!("Initiating multipart upload for {video_id}...");
 
@@ -1109,6 +1137,7 @@ impl SegmentUploader {
     ) -> Result<u64, AuthedApiError> {
         use cap_enc_ffmpeg::segmented_stream::SegmentMediaType;
 
+        let _active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
         info!("Starting segment uploader for {video_id}");
 
         let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
@@ -2550,6 +2579,34 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn active_upload_guards_track_overlapping_sessions() {
+        let active = AtomicUsize::new(0);
+        let first = ActiveUploadGuard::new(&active);
+        let second = ActiveUploadGuard::new(&active);
+
+        assert_eq!(active.load(Ordering::Acquire), 2);
+        drop(first);
+        assert_eq!(active.load(Ordering::Acquire), 1);
+        drop(second);
+        assert_eq!(active.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn dropping_an_upload_future_releases_its_session() {
+        let active = AtomicUsize::new(0);
+        let mut upload = Box::pin(async {
+            let _guard = ActiveUploadGuard::new(&active);
+            std::future::pending::<()>().await;
+        });
+
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(std::future::Future::poll(upload.as_mut(), &mut context).is_pending());
+        assert_eq!(active.load(Ordering::Acquire), 1);
+        drop(upload);
+        assert_eq!(active.load(Ordering::Acquire), 0);
+    }
 
     #[test]
     fn screenshot_upload_subpath_matches_content_type() {

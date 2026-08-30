@@ -4,7 +4,13 @@ import { createMemo, createRoot, For } from "solid-js";
 
 import { useEditorContext } from "../context";
 import { useTimelineContext } from "./context";
-import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
+import {
+	SegmentContent,
+	SegmentHandle,
+	SegmentLabel,
+	SegmentRoot,
+	TrackRoot,
+} from "./Track";
 
 export type CaptionSegmentDragState =
 	| { type: "idle" }
@@ -164,6 +170,16 @@ export function CaptionsTrack(props: {
 					const segmentWidth = () =>
 						Math.min(segment.end, totalDuration()) - segment.start;
 
+					// Truncation degrades gracefully, so the same row serves both the
+					// full and compact tiers; it just clips against a smaller box.
+					const captionLabel = () => (
+						<div class="flex gap-1 justify-center items-center text-[10px] text-gray-1 dark:text-gray-12">
+							<span class="truncate max-w-full opacity-80">
+								{segment.text || "Caption"}
+							</span>
+						</div>
+					);
+
 					return (
 						<SegmentRoot
 							data-caption-segment
@@ -174,6 +190,7 @@ export function CaptionsTrack(props: {
 								isSelected() ? "border-green-7" : "border-transparent",
 							)}
 							innerClass="ring-green-6"
+							title={segment.text || "Caption"}
 							segment={{
 								start: segment.start,
 								end: Math.min(segment.end, totalDuration()),
@@ -248,13 +265,11 @@ export function CaptionsTrack(props: {
 									},
 								)}
 							>
-								<div class="flex flex-col gap-0.5 justify-center items-center text-xs text-gray-1 dark:text-gray-12 w-full min-w-0 overflow-hidden">
-									<div class="flex gap-1 items-center text-[10px] w-full min-w-0 justify-center">
-										<span class="truncate max-w-full opacity-80">
-											{segment.text || "Caption"}
-										</span>
-									</div>
-								</div>
+								<SegmentLabel
+									compactAt={24}
+									full={captionLabel}
+									compact={captionLabel}
+								/>
 							</SegmentContent>
 							<SegmentHandle
 								position="end"

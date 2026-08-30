@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use cap_audio::AudioData;
 use cap_project::ProjectConfiguration;
@@ -6,7 +6,7 @@ use tracing::warn;
 
 use crate::{
     SegmentMedia,
-    audio::{AudioSegment, AudioSegmentTrack, MusicTracks},
+    audio::{AudioSegment, AudioSegmentTrack, MUSIC_SILENCE_DB, MusicTracks},
 };
 
 fn resolve_music_path(project_path: &Path, path: &str) -> std::path::PathBuf {
@@ -34,22 +34,47 @@ pub fn load_music_tracks(
         return result;
     };
 
+    let mut ranges: HashMap<&str, (usize, usize)> = HashMap::new();
+    let sample_rate = AudioData::SAMPLE_RATE as f64;
+
     for segment in &timeline.audio_segments {
-        if result.contains_key(&segment.path) {
+        if !segment.enabled || segment.end <= segment.start || segment.volume_db <= MUSIC_SILENCE_DB
+        {
             continue;
         }
 
-        if let Some(data) = cache.get(&segment.path) {
-            result.insert(segment.path.clone(), Arc::clone(data));
+        let trim_start = (segment.trim_start.max(0.0) * sample_rate).round() as usize;
+        let start = (segment.start * sample_rate).round() as i64;
+        let end = (segment.end * sample_rate).round() as i64;
+        let duration = end.saturating_sub(start).max(0) as usize;
+        if duration == 0 {
             continue;
         }
 
-        let resolved = resolve_music_path(project_path, &segment.path);
-        match AudioData::from_file(&resolved) {
+        let trim_end = trim_start.saturating_add(duration);
+        ranges
+            .entry(segment.path.as_str())
+            .and_modify(|(source_start, source_end)| {
+                *source_start = (*source_start).min(trim_start);
+                *source_end = (*source_end).max(trim_end);
+            })
+            .or_insert((trim_start, trim_end));
+    }
+
+    for (path, (source_start, source_end)) in ranges {
+        if let Some(data) = cache.get(path)
+            && data.covers_source_range(source_start, source_end)
+        {
+            result.insert(path.to_string(), Arc::clone(data));
+            continue;
+        }
+
+        let resolved = resolve_music_path(project_path, path);
+        match AudioData::from_file_range(&resolved, source_start, source_end) {
             Ok(data) => {
                 let data = Arc::new(data);
-                cache.insert(segment.path.clone(), Arc::clone(&data));
-                result.insert(segment.path.clone(), data);
+                cache.insert(path.to_string(), Arc::clone(&data));
+                result.insert(path.to_string(), data);
             }
             Err(error) => {
                 warn!(

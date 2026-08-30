@@ -43,6 +43,7 @@ import {
 	getDashboardData,
 	type OrganizationSettings,
 } from "@/app/(org)/dashboard/dashboard-data";
+import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
 import { createNotification } from "@/lib/Notification";
 import {
@@ -55,6 +56,8 @@ import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
+import { resolveShareWebUrl } from "@/lib/share-web-url";
+import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import {
 	isIframelyCrawlerUserAgent,
 	isSocialCrawlerUserAgent,
@@ -234,6 +237,13 @@ export async function generateMetadata(
 	const shouldAdvertiseIframelyPlayer =
 		isIframelyCrawlerUserAgent(requestUserAgent) &&
 		(await getPublicShareVideo(videoId).catch(() => null)) !== null;
+	// Share pages also serve verified custom domains. Metadata has to point at
+	// the host the visitor used, or Slack drops the preview image.
+	const webUrl = await resolveShareWebUrl(headersList);
+	const ogImageUrl = new URL(
+		`/api/video/og?videoId=${videoId}`,
+		webUrl,
+	).toString();
 
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
@@ -252,7 +262,8 @@ export async function generateMetadata(
 							videoId,
 							name: video.name,
 							sourceType: video.source.type,
-							webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+							webUrl,
+							canonicalWebUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
 							advertiseIframelyPlayer: shouldAdvertiseIframelyPlayer,
 						}),
 						robots: canRenderSocialPreview
@@ -268,16 +279,7 @@ export async function generateMetadata(
 					title: "Cap: This video is restricted",
 					description: "This video has restricted access.",
 					openGraph: {
-						images: [
-							{
-								url: new URL(
-									`/api/video/og?videoId=${videoId}`,
-									buildEnv.NEXT_PUBLIC_WEB_URL,
-								).toString(),
-								width: 1200,
-								height: 630,
-							},
-						],
+						images: [{ url: ogImageUrl, width: 1200, height: 630 }],
 					},
 					robots: "noindex, nofollow",
 				}),
@@ -286,27 +288,13 @@ export async function generateMetadata(
 					title: "Cap: Password Protected Video",
 					description: "This video is password protected.",
 					openGraph: {
-						images: [
-							{
-								url: new URL(
-									`/api/video/og?videoId=${videoId}`,
-									buildEnv.NEXT_PUBLIC_WEB_URL,
-								).toString(),
-								width: 1200,
-								height: 630,
-							},
-						],
+						images: [{ url: ogImageUrl, width: 1200, height: 630 }],
 					},
 					twitter: {
 						card: "summary_large_image",
 						title: "Cap: Password Protected Video",
 						description: "This video is password protected.",
-						images: [
-							new URL(
-								`/api/video/og?videoId=${videoId}`,
-								buildEnv.NEXT_PUBLIC_WEB_URL,
-							).toString(),
-						],
+						images: [ogImageUrl],
 					},
 					robots: "noindex, nofollow",
 				}),
@@ -506,6 +494,24 @@ async function AuthorizedContent({
 		: Promise.resolve(null);
 
 	const sharedSpacesPromise = getSharedSpacesForVideo(videoId);
+
+	const ownerIsPro = userIsPro(video.owner);
+
+	// Fail-open: a broken count must never take the share page down.
+	const overShareLimitPromise = ownerIsPro
+		? Promise.resolve(false)
+		: isVideoOverShareableLinkLimit({
+				id: videoId,
+				ownerId: video.owner.id,
+				createdAt: video.createdAt,
+				isScreenshot: video.isScreenshot,
+			}).catch((error) => {
+				console.error(
+					`[ShareVideoPage] Shareable link quota check failed for ${videoId}:`,
+					error,
+				);
+				return false;
+			});
 
 	const aiGenerationEnabledPromise = db()
 		.select({
@@ -750,6 +756,7 @@ async function AuthorizedContent({
 		canManageSharePageBranding,
 		canDownloadVideo,
 		videoHasEdits,
+		ownerIsOverShareLimit,
 	] = await Promise.all([
 		spacesDataPromise,
 		sharedSpacesPromise,
@@ -762,6 +769,7 @@ async function AuthorizedContent({
 		canManageSharePageBrandingPromise,
 		canDownloadVideoPromise,
 		videoHasEditsPromise,
+		overShareLimitPromise,
 	]);
 
 	const rules = resolveEffectiveVideoRules({
@@ -774,7 +782,7 @@ async function AuthorizedContent({
 		!video.isScreenshot &&
 		Boolean(env.ASSEMBLY_API_KEY) &&
 		!rules.settings.disableTranscript;
-	const aiProviderAvailable = Boolean(env.GROQ_API_KEY || env.OPENAI_API_KEY);
+	const aiProviderAvailable = isAiConfigured();
 
 	if (
 		transcriptionGenerationAvailable &&
@@ -812,10 +820,11 @@ async function AuthorizedContent({
 		return {
 			...video,
 			hasActiveUpload,
+			ownerIsOverShareLimit,
 			owner: {
 				id: video.owner.id,
 				name: video.owner.name,
-				isPro: userIsPro(video.owner),
+				isPro: ownerIsPro,
 				image: video.owner.image
 					? yield* imageUploads.resolveImageUrl(video.owner.image)
 					: null,

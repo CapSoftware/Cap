@@ -210,7 +210,7 @@ fn exit_requested_prevents_user_exit_when_already_exiting() {
     let prevented = Arc::new(AtomicBool::new(false));
     let prevented_flag = prevented.clone();
 
-    let decision = handle_exit_requested(true, false, false, move || {
+    let decision = handle_exit_requested(true, false, false, false, move || {
         prevented_flag.store(true, Ordering::Release);
     });
 
@@ -223,7 +223,7 @@ fn exit_requested_allows_runtime_exit_when_already_exiting() {
     let prevented = Arc::new(AtomicBool::new(false));
     let prevented_flag = prevented.clone();
 
-    let decision = handle_exit_requested(true, false, true, move || {
+    let decision = handle_exit_requested(true, false, true, false, move || {
         prevented_flag.store(true, Ordering::Release);
     });
 
@@ -236,7 +236,7 @@ fn exit_requested_allows_runtime_exit_when_export_cancel_is_draining() {
     let prevented = Arc::new(AtomicBool::new(false));
     let prevented_flag = prevented.clone();
 
-    let decision = handle_exit_requested(true, true, true, move || {
+    let decision = handle_exit_requested(true, true, true, false, move || {
         prevented_flag.store(true, Ordering::Release);
     });
 
@@ -249,10 +249,36 @@ fn exit_requested_prevents_runtime_exit_during_export() {
     let prevented = Arc::new(AtomicBool::new(false));
     let prevented_flag = prevented.clone();
 
-    let decision = handle_exit_requested(false, true, true, move || {
+    let decision = handle_exit_requested(false, true, true, false, move || {
         prevented_flag.store(true, Ordering::Release);
     });
 
     assert_eq!(decision, ExitRequestDecision::ExportActive);
     assert!(prevented.load(Ordering::Acquire));
+}
+
+#[test]
+fn exit_requested_allows_runtime_restart_without_starting_cleanup() {
+    let prevented = Arc::new(AtomicBool::new(false));
+    let prevented_flag = prevented.clone();
+
+    let decision = handle_exit_requested(false, false, true, true, move || {
+        prevented_flag.store(true, Ordering::Release);
+    });
+
+    assert_eq!(decision, ExitRequestDecision::AllowRuntimeRestart);
+    assert!(!prevented.load(Ordering::Acquire));
+}
+
+#[test]
+fn exit_requested_allows_unpreventable_runtime_restart_during_export() {
+    let prevented = Arc::new(AtomicBool::new(false));
+    let prevented_flag = prevented.clone();
+
+    let decision = handle_exit_requested(false, true, true, true, move || {
+        prevented_flag.store(true, Ordering::Release);
+    });
+
+    assert_eq!(decision, ExitRequestDecision::AllowRuntimeRestart);
+    assert!(!prevented.load(Ordering::Acquire));
 }

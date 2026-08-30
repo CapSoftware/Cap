@@ -19,7 +19,6 @@ import {
 	PhysicalPosition,
 } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
-import { relaunch } from "@tauri-apps/plugin-process";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
@@ -55,6 +54,7 @@ import {
 	type MicrophoneWithDetails,
 } from "~/utils/devices";
 import { clientEnv } from "~/utils/env";
+import { hideCurrentWindow } from "~/utils/hide-window";
 import {
 	importImageFromPicker,
 	importVideoFromPicker,
@@ -86,6 +86,7 @@ import {
 	type UploadProgress,
 } from "~/utils/tauri";
 import { openTeleprompter } from "~/utils/teleprompter";
+import { restartAfterUpdate } from "~/utils/updater";
 import IconCapLogoFull from "~icons/cap/logo-full";
 import IconCapLogoFullDark from "~icons/cap/logo-full-dark";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
@@ -139,6 +140,19 @@ const findCamera = (cameras: CameraWithDetails[], id: DeviceOrModelID) => {
 		return "DeviceID" in id
 			? id.DeviceID === c.device_id
 			: id.ModelID === c.model_id;
+	});
+};
+
+// Must stay in sync with find_mic_by_label_or_fuzzy in src-tauri: Bluetooth
+// mics can reappear under a slightly different name (profile switch), and the
+// backend accepts case-insensitive containment in either direction.
+const findMicrophone = (microphones: MicrophoneWithDetails[], name: string) => {
+	const exact = microphones.find((m) => m.name === name);
+	if (exact) return exact;
+	const nameLower = name.toLowerCase();
+	return microphones.find((m) => {
+		const deviceLower = m.name.toLowerCase();
+		return deviceLower.includes(nameLower) || nameLower.includes(deviceLower);
 	});
 };
 
@@ -1728,6 +1742,7 @@ export default function () {
 }
 
 let hasChecked = false;
+const [installingUpdate, setInstallingUpdate] = createSignal(false);
 function createUpdateCheck() {
 	if (import.meta.env.DEV) return;
 
@@ -1786,17 +1801,21 @@ function createUpdateReadyToast() {
 					<div class="flex gap-2 items-center">
 						<button
 							type="button"
-							class="px-2.5 py-1 text-xs font-medium rounded-lg transition-colors bg-blue-9 text-white hover:bg-blue-10"
+							disabled={installingUpdate()}
+							class="px-2.5 py-1 text-xs font-medium rounded-lg transition-colors bg-blue-9 text-white hover:bg-blue-10 disabled:cursor-not-allowed disabled:opacity-60"
 							onClick={() => {
-								toast.dismiss(t.id);
-								const install = update.installed
-									? Promise.resolve(null)
-									: commands.updatesDownloadAndInstall();
-								// On Windows the NSIS installer restarts Cap itself, so the
-								// relaunch call is unreachable there; that matches update.tsx.
-								install
-									.then(() => relaunch())
-									.catch((e) => console.error("Failed to install update:", e));
+								if (installingUpdate()) return;
+								setInstallingUpdate(true);
+								restartAfterUpdate()
+									.catch((error) => {
+										console.error("Failed to install update:", error);
+										toast.error(
+											typeof error === "string"
+												? error
+												: "Unable to restart Cap safely.",
+										);
+									})
+									.finally(() => setInstallingUpdate(false));
 							}}
 						>
 							{update.installed ? "Restart now" : "Install and restart"}
@@ -2011,7 +2030,7 @@ function Page() {
 		if (pickerActive && !hasHidden && !recording) {
 			setHasHiddenMainWindowForPicker(true);
 			setShouldRevealMainWindowAfterPicker(!editorPicker);
-			void getCurrentWindow().hide();
+			void hideCurrentWindow();
 		} else if (pickerActive && hasHidden) {
 			setShouldRevealMainWindowAfterPicker(!editorPicker);
 		} else if (recording) {
@@ -2652,7 +2671,7 @@ function Page() {
 	createEffect(() => {
 		if (!microphoneMenuOpen() || !openMicrophoneSettingsWhenReady()) return;
 		const mic = rawOptions.micName
-			? devices.microphones.find((m) => m.name === rawOptions.micName)
+			? findMicrophone(devices.microphones, rawOptions.micName)
 			: undefined;
 		if (!mic) return;
 		setMicrophoneInitialSettings(mic);
@@ -2690,7 +2709,20 @@ function Page() {
 			return findCamera(devices.cameras, rawOptions.cameraID);
 		},
 		micName: () =>
-			devices.microphones.find((m) => m.name === rawOptions.micName),
+			rawOptions.micName != null
+				? findMicrophone(devices.microphones, rawOptions.micName)
+				: undefined,
+		// Selected-but-unplugged devices (e.g. undocked laptop): the selection is
+		// remembered, the row shows "Not connected", and the effects below
+		// re-apply the device when it reappears.
+		cameraDisconnected: () =>
+			rawOptions.cameraID != null &&
+			!devices.isPending &&
+			!findCamera(devices.cameras, rawOptions.cameraID),
+		micDisconnected: () =>
+			rawOptions.micName != null &&
+			!devices.isPending &&
+			!findMicrophone(devices.microphones, rawOptions.micName),
 		target: (): ScreenCaptureTarget | undefined => {
 			switch (rawOptions.captureTarget.variant) {
 				case "display": {
@@ -2717,6 +2749,62 @@ function Page() {
 			}
 		},
 	};
+
+	// Re-apply a remembered device when it reappears (e.g. plugging back into a
+	// dock). The mount-time restore quick-fails while the device is away, so
+	// without this the row would claim a device the backend isn't using.
+	let micPresence: { name: string; present: boolean } | undefined;
+	createEffect(() => {
+		const name = rawOptions.micName;
+		if (name == null || devices.isPending) {
+			micPresence = undefined;
+			return;
+		}
+		const matched = findMicrophone(devices.microphones, name);
+		// Mid-recording device changes are the backend watcher's job; keep the
+		// last idle observation so the reclaim runs once the recording ends.
+		if (isRecording()) return;
+		const previous = micPresence;
+		micPresence = { name, present: !!matched };
+		const reappeared = previous?.present === false && previous.name === name;
+		if (matched && (reappeared || matched.name !== name)) {
+			// The feed rejects non-exact labels, so a fuzzy match (Bluetooth
+			// rename) must be applied under the connected device's name. The
+			// stored selection converges only after the backend accepts it,
+			// keeping a failed call from retriggering this effect.
+			const matchedName = matched.name;
+			commands
+				.setMicInput(matchedName)
+				.then(() => {
+					if (rawOptions.micName === name && matchedName !== name)
+						setOptions("micName", matchedName);
+				})
+				.catch((error) =>
+					console.error("Failed to restore reconnected microphone:", error),
+				);
+		}
+	});
+
+	let cameraPresence: { key: string; present: boolean } | undefined;
+	createEffect(() => {
+		const id = rawOptions.cameraID;
+		if (id == null || devices.isPending) {
+			cameraPresence = undefined;
+			return;
+		}
+		const key = JSON.stringify(id);
+		const present = !!findCamera(devices.cameras, id);
+		if (isRecording()) return;
+		const previous = cameraPresence;
+		cameraPresence = { key, present };
+		if (present && previous?.present === false && previous.key === key) {
+			commands
+				.setCameraInput(id, false)
+				.catch((error) =>
+					console.error("Failed to restore reconnected camera:", error),
+				);
+		}
+	});
 
 	const toggleTargetMode = async (
 		mode: "display" | "window" | "area" | "camera",
@@ -2840,7 +2928,7 @@ function Page() {
 			await shell.open(link);
 		}
 
-		await getCurrentWindow().hide();
+		await hideCurrentWindow();
 	};
 
 	const openScreenshot = async (screenshot: ScreenshotWithPath) => {
@@ -2875,6 +2963,7 @@ function Page() {
 					value={options.camera() ?? null}
 					selectedLabel={rawOptions.cameraLabel}
 					isSelected={rawOptions.cameraID != null}
+					disconnected={options.cameraDisconnected()}
 					onChange={(c) => {
 						if (!c) {
 							setOptions("cameraLabel", null);
@@ -2903,6 +2992,7 @@ function Page() {
 					disabled={enableDeviceQueries() && devices.isPending}
 					options={devices.microphones.map((m) => m.name)}
 					value={rawOptions.micName ?? null}
+					disconnected={options.micDisconnected()}
 					onChange={(v) => setMicInput.mutate(v)}
 					permissions={currentPermissions()}
 					onOpen={() => openMicrophoneMenu(null)}
@@ -3140,7 +3230,7 @@ function Page() {
 								type="button"
 								onClick={async () => {
 									await commands.showWindow({ Settings: { page: "general" } });
-									getCurrentWindow().hide();
+									hideCurrentWindow();
 								}}
 								class="flex items-center justify-center size-5 focus:outline-hidden"
 							>
@@ -3328,7 +3418,7 @@ function Page() {
 										await commands.showWindow({
 											Settings: { page: "recordings" },
 										});
-										getCurrentWindow().hide();
+										hideCurrentWindow();
 									}}
 									uploadProgress={uploadProgress}
 									reuploadingPaths={reuploadingPaths()}
@@ -3352,7 +3442,7 @@ function Page() {
 										await commands.showWindow({
 											Settings: { page: "screenshots" },
 										});
-										getCurrentWindow().hide();
+										hideCurrentWindow();
 									}}
 								/>
 							) : variant === "camera" ? (

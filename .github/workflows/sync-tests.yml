@@ -23,6 +23,8 @@ on:
       - "crates/enc-mediafoundation/**"
       - "crates/timestamp/**"
       - "crates/rendering/**"
+      - "crates/editor/**"
+      - "crates/audio/**"
       - "crates/media-info/**"
       - ".github/workflows/sync-tests.yml"
 
@@ -118,6 +120,13 @@ jobs:
           # --nocapture so a WARP-adapter notch skip prints instead of
           # looking identical to a pass in the CI log.
           cargo test --locked -p cap-rendering -- --nocapture
+
+      - name: Editor audio playback and export regressions
+        shell: bash
+        run: |
+          cargo test --locked -p cap-editor --lib audio::tests::
+          cargo test --locked -p cap-editor --lib audio_output::tests::
+          cargo test --locked -p cap-editor --lib playback::tests::
 
       # Real encoders + DASH muxer + remux/validation over full instant-mode
       # scenarios: pause/resume excision, stall-recovery bursts with

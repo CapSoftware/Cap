@@ -10,23 +10,20 @@ import {
 	createRoot,
 	createSignal,
 	Index,
-	Match,
 	Show,
-	Switch,
 } from "solid-js";
 import { produce } from "solid-js/store";
+import { generalSettingsStore } from "~/store";
 import { commands } from "~/utils/tauri";
 import { useEditorContext } from "../context";
-import {
-	useSegmentContext,
-	useTimelineContext,
-	useTrackContext,
-} from "./context";
+import { useTimelineContext, useTrackContext } from "./context";
 import {
 	SegmentContent,
 	SegmentHandle,
+	SegmentLabel,
 	SegmentRoot,
 	TrackRoot,
+	useSegmentVisibleBox,
 	useSetPreviewTime,
 } from "./Track";
 
@@ -56,6 +53,7 @@ export function ZoomTrack(props: {
 
 	const { duration, secsPerPixel } = useTimelineContext();
 	const setPreviewTime = useSetPreviewTime();
+	const generalSettings = generalSettingsStore.createQuery();
 
 	const [creatingSegmentViaDrag, setCreatingSegmentViaDrag] =
 		createSignal(false);
@@ -225,7 +223,7 @@ export function ZoomTrack(props: {
 									zoomSegments.splice(index, 0, {
 										start: baseSegment.start,
 										end: Math.max(minEndTime, endTime),
-										amount: 1.5,
+										amount: generalSettings.data?.defaultZoomAmount ?? 1.5,
 										mode: "auto",
 									});
 
@@ -346,6 +344,9 @@ export function ZoomTrack(props: {
 							const amount = segment().amount;
 							return `${amount.toFixed(1)}x`;
 						};
+
+						const zoomModeLabel = () =>
+							segment().mode === "auto" ? "Automatic Zoom" : "Manual Zoom";
 
 						const zoomSegments = () => project.timeline?.zoomSegments ?? [];
 
@@ -525,6 +526,7 @@ export function ZoomTrack(props: {
 									isSelected() ? "border-gray-12" : "border-transparent",
 								)}
 								innerClass="ring-red-5"
+								title={`${zoomModeLabel()} · ${zoomPercentage()}`}
 								segment={segment()}
 								onMouseDown={(e) => {
 									e.stopPropagation();
@@ -538,6 +540,58 @@ export function ZoomTrack(props: {
 
 										projectActions.splitZoomSegment(i, splitTime);
 									}
+								}}
+								onContextMenu={async (e: MouseEvent) => {
+									e.preventDefault();
+									e.stopPropagation();
+
+									// Right-clicking an unselected segment selects it first,
+									// so the menu always acts on what's highlighted.
+									const selection = editorState.timeline.selection;
+									const targetIndices =
+										selection?.type === "zoom" && selection.indices.includes(i)
+											? [...selection.indices]
+											: [i];
+									if (
+										targetIndices.length === 1 &&
+										!selectedZoomIndices()?.has(i)
+									)
+										setEditorState("timeline", "selection", {
+											type: "zoom",
+											indices: [i],
+										});
+
+									// `Array` here is effect's module, so derive the index
+									// list from the segments themselves.
+									const allIndices = (project.timeline?.zoomSegments ?? []).map(
+										(_, idx) => idx,
+									);
+
+									const menu = await Menu.new({
+										id: "zoom-segment-options",
+										items: [
+											{
+												id: "selectAllZoomSegments",
+												text: "Select all zoom segments",
+												enabled: allIndices.length > 1,
+												action: () =>
+													setEditorState("timeline", "selection", {
+														type: "zoom",
+														indices: allIndices,
+													}),
+											},
+											{
+												id: "deleteZoomSegments",
+												text:
+													targetIndices.length > 1
+														? `Delete ${targetIndices.length} zoom segments`
+														: "Delete zoom segment",
+												action: () =>
+													projectActions.deleteZoomSegments(targetIndices),
+											},
+										],
+									});
+									menu.popup();
 								}}
 							>
 								<SegmentHandle
@@ -637,28 +691,15 @@ export function ZoomTrack(props: {
 									)}
 								>
 									{(() => {
-										const ctx = useSegmentContext();
+										const visibleBox = useSegmentVisibleBox();
 
 										return (
-											<Switch>
-												<Match when={ctx.width() < 40}>
-													<div class="flex justify-center items-center">
-														<IconLucideSearch class="size-3.5 text-gray-1 dark:text-gray-12" />
-													</div>
-												</Match>
-												<Match when={ctx.width() < 100}>
-													<div class="flex gap-1 items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
-														<IconLucideSearch class="size-3" />
-														<span>{zoomPercentage()}</span>
-													</div>
-												</Match>
-												<Match when={true}>
+											<SegmentLabel
+												full={() => (
 													<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
 														<span class="opacity-70">
-															{ctx.width() >= 140
-																? segment().mode === "auto"
-																	? "Automatic Zoom"
-																	: "Manual Zoom"
+															{visibleBox().width >= 140
+																? zoomModeLabel()
 																: "Zoom"}
 														</span>
 														<div class="flex gap-1 items-center text-md">
@@ -666,8 +707,19 @@ export function ZoomTrack(props: {
 															{zoomPercentage()}
 														</div>
 													</div>
-												</Match>
-											</Switch>
+												)}
+												compact={() => (
+													<div class="flex gap-1 items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
+														<IconLucideSearch class="size-3" />
+														<span>{zoomPercentage()}</span>
+													</div>
+												)}
+												glyph={() => (
+													<div class="flex justify-center items-center">
+														<IconLucideSearch class="size-3.5 text-gray-1 dark:text-gray-12" />
+													</div>
+												)}
+											/>
 										);
 									})()}
 								</SegmentContent>

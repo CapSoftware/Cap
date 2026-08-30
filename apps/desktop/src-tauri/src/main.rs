@@ -9,6 +9,20 @@ use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 const TOKIO_WORKER_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    if let Some(config) = cap_utils::linux_package::appimage_alsa_config_path() {
+        // Configure ALSA before starting threads or handing off to a bundled child process.
+        unsafe {
+            std::env::set_var("ALSA_CONFIG_PATH", config);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Err(error) = cap_cli_install::appimage::dispatch_cli() {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     if std::env::var_os("ORT_DYLIB_PATH").is_none()
         && let Some(path) = cap_camera_effects::onnx_runtime_library_path()

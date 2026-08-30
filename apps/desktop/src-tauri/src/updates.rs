@@ -15,6 +15,8 @@ const UPDATE_ENDPOINT: &str =
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(60);
 const CHECK_INTERVAL: Duration = Duration::from_secs(2 * 60 * 60);
 const BUSY_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
+const UPDATE_BUSY_ERROR: &str =
+    "Finish your recording, export, or upload before updating or restarting Cap.";
 
 #[derive(Serialize, Deserialize, Type, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +57,7 @@ struct PendingUpdate {
 pub struct UpdatesState {
     pending: Mutex<Option<PendingUpdate>>,
     announced_version: Mutex<Option<String>>,
+    install: Mutex<()>,
     notify: Notify,
 }
 
@@ -66,22 +69,25 @@ fn current_channel(app: &AppHandle) -> UpdateChannel {
         .unwrap_or_default()
 }
 
-// Mirrors `updaterTarget()` in src/utils/updater.ts; the plugin's built-in
-// target reports "macos"/"linux" while CrabNebula releases are keyed on
-// "darwin-*" / "linux-*-deb".
-fn updater_target() -> String {
+fn updater_target() -> Result<String, String> {
     let arch = if cfg!(target_arch = "aarch64") {
         "aarch64"
     } else {
         "x86_64"
     };
 
-    if cfg!(target_os = "macos") {
-        format!("darwin-{arch}")
-    } else if cfg!(target_os = "linux") {
-        format!("linux-{arch}-deb")
-    } else {
-        format!("windows-{arch}")
+    #[cfg(target_os = "linux")]
+    {
+        cap_utils::linux_package::updater_target(arch)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let platform = if cfg!(target_os = "macos") {
+            "darwin"
+        } else {
+            "windows"
+        };
+        Ok(format!("{platform}-{arch}"))
     }
 }
 
@@ -100,7 +106,7 @@ async fn check_channel(
 ) -> Result<Option<Update>, String> {
     let builder = app
         .updater_builder()
-        .target(updater_target())
+        .target(updater_target()?)
         .endpoints(vec![endpoint(channel)?])
         .map_err(|e| e.to_string())?;
 
@@ -202,7 +208,7 @@ async fn download_with_progress(app: &AppHandle, update: &Update) -> Result<Vec<
 }
 
 async fn is_busy(app: &AppHandle) -> bool {
-    if crate::export::export_session_active() {
+    if crate::export::export_session_active() || crate::upload::upload_session_active() {
         return true;
     }
 
@@ -228,6 +234,11 @@ pub async fn updates_check(app: AppHandle) -> Result<Option<UpdateCheckResult>, 
 #[specta::specta]
 pub async fn updates_download_and_install(app: AppHandle) -> Result<(), String> {
     let state = app.state::<UpdatesState>();
+    let _install = state.install.lock().await;
+
+    if is_busy(&app).await {
+        return Err(UPDATE_BUSY_ERROR.to_string());
+    }
 
     let pending = match state.pending.lock().await.clone() {
         Some(pending) => pending,
@@ -250,6 +261,10 @@ pub async fn updates_download_and_install(app: AppHandle) -> Result<(), String> 
     }
 
     let bytes = download_with_progress(&app, &pending.update).await?;
+
+    if is_busy(&app).await {
+        return Err(UPDATE_BUSY_ERROR.to_string());
+    }
 
     info!("Installing update {}", pending.version);
     pending.update.install(bytes).map_err(|e| e.to_string())?;
@@ -318,6 +333,11 @@ pub fn spawn_background_loop(app: AppHandle) {
             }
 
             let installed = if cfg!(target_os = "macos") {
+                let _install = state.install.lock().await;
+                if is_busy(&app).await {
+                    delay = BUSY_RETRY_DELAY;
+                    continue;
+                }
                 let already_installed = state
                     .pending
                     .lock()

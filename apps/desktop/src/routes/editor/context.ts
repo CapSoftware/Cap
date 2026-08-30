@@ -38,6 +38,7 @@ import {
 } from "~/utils/socket";
 import {
 	type ClipSpeedAudioMode,
+	type ColorCorrectionConfiguration,
 	commands,
 	type EditorPreviewQuality,
 	events,
@@ -74,6 +75,7 @@ import {
 	transitionsAfterClipDelete,
 	transitionsAfterClipSplit,
 } from "./clip-transitions";
+import { normalizeColorCorrection } from "./colorCorrection";
 import type { MaskSegment } from "./masks";
 import type { SnapGuide } from "./snapping";
 import type { TextSegment } from "./text";
@@ -91,6 +93,11 @@ import {
 	sceneWithShotCount,
 	setMotion,
 } from "./three-d";
+import {
+	heldTimeBefore,
+	holdWindows,
+	totalHeldDuration,
+} from "./timeline-holds";
 import {
 	getUsedTrackCount,
 	normalizeTrackSegments,
@@ -225,6 +232,7 @@ export type EditorProjectConfiguration = Omit<
 	timeline?: EditorTimelineConfiguration | null;
 	captions: EditorCaptionsData | null;
 	hiddenTextSegments?: number[];
+	colorCorrection: ColorCorrectionConfiguration;
 };
 
 function withCornerDefaults<
@@ -306,6 +314,7 @@ export function normalizeProject(
 		captions,
 		background: withCornerDefaults(config.background),
 		camera: withCornerDefaults(config.camera),
+		colorCorrection: normalizeColorCorrection(config.colorCorrection),
 	};
 }
 
@@ -507,6 +516,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						const timeline = project.timeline;
 						if (!timeline) return;
 						const segments = timeline.segments;
+						// The click position is in held-output time; clip offsets
+						// live in the gapless recording-flow domain.
+						time -= heldTimeBefore(holdWindows(timeline.textSegments), time);
 						const offsets = clipTimelineOffsets(
 							segments,
 							timeline.transitions ?? [],
@@ -1367,7 +1379,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				? clipTimelineDuration(
 						project.timeline.segments,
 						project.timeline.transitions ?? [],
-					)
+					) + totalHeldDuration(holdWindows(project.timeline.textSegments))
 				: props.editorInstance.recordingDuration;
 
 		type State = {
@@ -1428,6 +1440,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			},
 			timeline: {
 				interactMode: "seek" as "seek" | "split",
+				splitPreview: null as null | { time: number; snapped: boolean },
 				selection: null as
 					| null
 					| { type: "zoom"; indices: number[] }
@@ -1643,7 +1656,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 								`${transition.segmentIndex}|${transition.type}|${transition.duration}`,
 						)
 						.join(",");
-					return `${captionsSig}@@${timelineSig}@@${transitionSig}`;
+					// Fullscreen-text holds shift the projected track's output
+					// times, so moving/resizing one must re-derive too.
+					const holdSig = holdWindows(timeline.textSegments)
+						.map(([start, end]) => `${start}|${end}`)
+						.join(",");
+					return `${captionsSig}@@${timelineSig}@@${transitionSig}@@${holdSig}`;
 				},
 				() => {
 					const timeline = project.timeline;
@@ -1655,6 +1673,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						captionRecordingSegments,
 						timeline.captionSegments ?? [],
 						timeline.transitions ?? [],
+						timeline.textSegments,
 					);
 					setProject(
 						"timeline",

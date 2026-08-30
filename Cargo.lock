@@ -1435,7 +1435,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.5.9"
+version = "0.6.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1485,6 +1485,7 @@ dependencies = [
  "lz4_flex",
  "md5",
  "nix 0.29.0",
+ "notify-rust",
  "objc",
  "objc2 0.6.2",
  "objc2-app-kit 0.3.1",
@@ -1884,6 +1885,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "windows 0.60.0",
  "workspace-hack",
  "x11rb",

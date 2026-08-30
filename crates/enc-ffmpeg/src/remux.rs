@@ -43,6 +43,8 @@ pub enum RemuxError {
     NoFragments,
     #[error("Fragment not found: {0}")]
     FragmentNotFound(PathBuf),
+    #[error("Fragment path cannot be written to an FFmpeg concat list: {0}")]
+    InvalidConcatPath(PathBuf),
     #[error("No audio stream found")]
     NoAudioStream,
     #[error("Opus encoder error: {0}")]
@@ -65,22 +67,42 @@ pub fn concatenate_video_fragments(fragments: &[PathBuf], output: &Path) -> Resu
     }
 
     let concat_list_path = output.with_extension("concat.txt");
-    {
-        let mut file = std::fs::File::create(&concat_list_path)?;
-        for fragment in fragments {
-            writeln!(
-                file,
-                "file '{}'",
-                fragment.to_string_lossy().replace('\'', "'\\''")
-            )?;
-        }
-    }
+    write_concat_list(fragments, &concat_list_path)?;
 
     let result = concatenate_with_concat_demuxer(&concat_list_path, output);
 
     let _ = std::fs::remove_file(&concat_list_path);
 
     result
+}
+
+fn concat_fragment_entry(fragment: &Path, concat_list: &Path) -> Result<String, RemuxError> {
+    let fragment = std::path::absolute(fragment)?;
+    let concat_list = std::path::absolute(concat_list)?;
+    let directory = concat_list.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Concat list has no parent directory",
+        )
+    })?;
+    let relative = fragment.strip_prefix(directory).ok();
+    let reference = relative.unwrap_or(&fragment);
+    let text = reference
+        .to_str()
+        .filter(|text| !text.contains(['\r', '\n']))
+        .ok_or_else(|| RemuxError::InvalidConcatPath(fragment.clone()))?;
+    let prefix = if relative.is_some() { "./" } else { "" };
+
+    Ok(format!("file '{prefix}{}'\n", text.replace('\'', "'\\''")))
+}
+
+fn write_concat_list(fragments: &[PathBuf], concat_list: &Path) -> Result<(), RemuxError> {
+    let entries = fragments
+        .iter()
+        .map(|fragment| concat_fragment_entry(fragment, concat_list))
+        .collect::<Result<Vec<_>, _>>()?;
+    std::fs::write(concat_list, entries.concat())?;
+    Ok(())
 }
 
 fn open_input_with_format(
@@ -96,7 +118,13 @@ fn open_input_with_format(
             return Err(RemuxError::ConcatDemuxerNotFound);
         }
 
-        let path_cstr = CString::new(path.to_string_lossy().as_bytes()).map_err(|_| {
+        let path_text = path.to_str().ok_or_else(|| {
+            RemuxError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "FFmpeg input path is not valid UTF-8",
+            ))
+        })?;
+        let path_cstr = CString::new(path_text).map_err(|_| {
             RemuxError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "Invalid path",
@@ -221,16 +249,7 @@ pub fn concatenate_audio_to_ogg(fragments: &[PathBuf], output: &Path) -> Result<
     }
 
     let concat_list_path = output.with_extension("concat.txt");
-    {
-        let mut file = std::fs::File::create(&concat_list_path)?;
-        for fragment in fragments {
-            writeln!(
-                file,
-                "file '{}'",
-                fragment.to_string_lossy().replace('\'', "'\\''")
-            )?;
-        }
-    }
+    write_concat_list(fragments, &concat_list_path)?;
 
     let result = transcode_audio_to_ogg(&concat_list_path, output);
 
@@ -955,9 +974,184 @@ fn merge_video_audio_inner(
 
 #[cfg(test)]
 mod tests {
-    use super::build_seek_probe_positions;
-    use super::probe_video_pts_ladder;
-    use std::time::Duration;
+    use super::{
+        build_seek_probe_positions, concat_fragment_entry, concatenate_audio_to_ogg,
+        concatenate_video_fragments, probe_video_pts_ladder, write_concat_list,
+    };
+    use std::{path::Path, time::Duration};
+
+    #[test]
+    fn concat_entries_resolve_fragments_from_the_list_directory() {
+        assert_eq!(
+            concat_fragment_entry(
+                Path::new("recording/segment/audio.m4a"),
+                Path::new("recording/segment/audio.concat.txt"),
+            )
+            .unwrap(),
+            "file './audio.m4a'\n"
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let fragment = directory.path().join("input.m4a");
+        let list = directory.path().join("other/output.concat.txt");
+        assert_eq!(
+            concat_fragment_entry(&fragment, &list).unwrap(),
+            format!("file '{}'\n", fragment.display())
+        );
+    }
+
+    #[test]
+    fn concat_entries_escape_apostrophes_without_changing_parent_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("parent 'quoted'");
+        assert_eq!(
+            concat_fragment_entry(
+                &parent.join("fragment 'quoted'.m4a"),
+                &parent.join("output.concat.txt"),
+            )
+            .unwrap(),
+            concat!(r"file './fragment '\''quoted'\''.m4a'", "\n")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concat_relative_entries_cannot_be_interpreted_as_url_schemes() {
+        assert_eq!(
+            concat_fragment_entry(
+                Path::new("recording/https:fragment.m4a"),
+                Path::new("recording/output.concat.txt"),
+            )
+            .unwrap(),
+            "file './https:fragment.m4a'\n"
+        );
+    }
+
+    #[test]
+    fn unrepresentable_concat_entries_fail_before_creating_the_list() {
+        let directory = tempfile::tempdir().unwrap();
+        let list = directory.path().join("output.concat.txt");
+        for name in ["fragment\nname.m4a", "fragment\rname.m4a"] {
+            assert!(write_concat_list(&[directory.path().join(name)], &list).is_err());
+            assert!(!list.exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concat_entries_reject_non_unicode_names_without_lossy_conversion() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let fragment =
+            Path::new("recording").join(OsString::from_vec(b"fragment-\xff.m4a".to_vec()));
+        assert!(matches!(
+            concat_fragment_entry(&fragment, Path::new("recording/output.concat.txt")),
+            Err(super::RemuxError::InvalidConcatPath(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concat_entries_preserve_symlink_spelling() {
+        let directory = tempfile::tempdir().unwrap();
+        let actual = directory.path().join("actual");
+        std::fs::create_dir(&actual).unwrap();
+        std::fs::write(actual.join("fragment.m4a"), []).unwrap();
+        let alias = directory.path().join("alias");
+        std::os::unix::fs::symlink(&actual, &alias).unwrap();
+
+        assert_eq!(
+            concat_fragment_entry(
+                &alias.join("fragment.m4a"),
+                &directory.path().join("output.concat.txt"),
+            )
+            .unwrap(),
+            "file './alias/fragment.m4a'\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concat_input_rejects_non_unicode_paths_explicitly() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let path = std::path::PathBuf::from(OsString::from_vec(b"input-\xff.concat.txt".to_vec()));
+        assert!(matches!(
+            super::open_input_with_format(&path, "concat", ffmpeg::Dictionary::new()),
+            Err(super::RemuxError::Io(error))
+                if error.kind() == std::io::ErrorKind::InvalidInput
+        ));
+    }
+
+    fn encode_test_audio(directory: &Path) -> std::path::PathBuf {
+        use crate::fragmented_audio::FragmentedAudioFile;
+        use cap_media_info::AudioInfo;
+        use ffmpeg::{ChannelLayout, format::Sample, format::sample::Type};
+
+        let path = directory.join("fragment.m4a");
+        let info = AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 1);
+        let mut output = FragmentedAudioFile::init(path.clone(), info).unwrap();
+        for block in 0..10 {
+            let mut frame =
+                ffmpeg::frame::Audio::new(Sample::F32(Type::Packed), 1024, ChannelLayout::MONO);
+            frame.set_rate(48_000);
+            frame.set_pts(Some(block * 1024));
+            for (index, value) in frame.data_mut(0)[..1024 * 4]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let position = (block * 1024) as f32 + index as f32;
+                let sample = 0.25 * (position * 440.0 * std::f32::consts::TAU / 48_000.0).sin();
+                value.copy_from_slice(&sample.to_ne_bytes());
+            }
+            output
+                .queue_frame(
+                    frame,
+                    Duration::from_secs_f64(block as f64 * 1024.0 / 48_000.0),
+                )
+                .unwrap();
+        }
+        output.finish().unwrap().unwrap();
+        path
+    }
+
+    fn assert_concat_roundtrip(parent_name: &str) {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join(parent_name);
+        std::fs::create_dir(&parent).unwrap();
+        let timestamps: Vec<_> = (0..12)
+            .map(|frame| Duration::from_nanos(frame * 1_000_000_000 / 30))
+            .collect();
+        let first = encode_test_mp4(&parent, &timestamps);
+        let second = parent.join("second.mp4");
+        std::fs::copy(&first, &second).unwrap();
+        let output = parent.join("combined.mp4");
+        concatenate_video_fragments(&[first, second], &output).unwrap();
+        let mut input = ffmpeg::format::input(&output).unwrap();
+        assert_eq!(input.packets().count(), 24);
+        assert!(!output.with_extension("concat.txt").exists());
+
+        let first = encode_test_audio(&parent.join("audio-input"));
+        let second = parent.join("audio-input/second.m4a");
+        std::fs::copy(&first, &second).unwrap();
+        let output = parent.join("combined.ogg");
+        concatenate_audio_to_ogg(&[first, second], &output).unwrap();
+        let input = ffmpeg::format::input(&output).unwrap();
+        let duration = input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE);
+        assert!((0.35..0.6).contains(&duration), "duration={duration}");
+        assert!(!output.with_extension("concat.txt").exists());
+    }
+
+    #[test]
+    fn concat_audio_and_video_with_quoted_parent_directories() {
+        assert_concat_roundtrip("recording 'quoted' λ");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concat_audio_and_video_with_newline_parent_directories() {
+        assert_concat_roundtrip("recording\n");
+    }
 
     /// Encodes a small mp4 whose frames are stamped with the given
     /// timestamps, mirroring how recordings reach disk.

@@ -92,7 +92,10 @@ impl MainWindowRecordingStartBehaviour {
                 #[cfg(windows)]
                 return window.minimize();
                 #[cfg(not(windows))]
-                window.hide()
+                {
+                    crate::hide_main_window(window.app_handle());
+                    Ok(())
+                }
             }
             Self::Minimise => window.minimize(),
         }
@@ -194,6 +197,8 @@ pub struct GeneralSettingsStore {
     pub enable_native_camera_preview: bool,
     #[serde(default = "default_true")]
     pub auto_zoom_on_clicks: bool,
+    #[serde(default)]
+    pub default_zoom_amount: Option<f64>,
     /// `None` until [`init`] seeds it from whether this machine has a notched
     /// display. From then on it is the user's preference and nothing re-reads
     /// the hardware, so moving between machines can't silently flip it.
@@ -247,6 +252,11 @@ pub struct GeneralSettingsStore {
     pub camera_blur_disabled_by_crash: Option<String>,
     #[serde(default)]
     pub update_channel: UpdateChannel,
+    /// Run the experimental gpui-native app (`cap-gpui`) *instead of* this one:
+    /// while enabled, startup hands off to it and exits, and the native app's
+    /// own Experimental page hands back. See `gpui_app.rs`.
+    #[serde(default)]
+    pub enable_gpui_app: bool,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -328,6 +338,7 @@ impl Default for GeneralSettingsStore {
             // Keep aligned with the field's serde `default_true`: auto zooms
             // are on by default, matching configs that never stored the key.
             auto_zoom_on_clicks: true,
+            default_zoom_amount: None,
             macbook_notch_overlay: None,
             capture_keyboard_events: cap_recording::DEFAULT_CAPTURE_KEYBOARD_EVENTS,
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
@@ -350,6 +361,7 @@ impl Default for GeneralSettingsStore {
             previous_recordings_paths: Vec::new(),
             camera_blur_disabled_by_crash: None,
             update_channel: UpdateChannel::Stable,
+            enable_gpui_app: false,
         }
     }
 }
