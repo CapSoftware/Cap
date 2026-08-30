@@ -2257,6 +2257,8 @@ const RECOVERY_INPUTS: [&str; 4] = [
 
 struct RecoveryLock {
     _file: std::fs::File,
+    #[cfg(unix)]
+    owner_pid: libc::pid_t,
 }
 
 impl RecoveryLock {
@@ -2301,12 +2303,30 @@ impl RecoveryLock {
                 return Err(std::io::Error::last_os_error().into());
             }
         }
-        let lock = Self { _file: file };
+        let lock = Self {
+            _file: file,
+            #[cfg(unix)]
+            owner_pid: unsafe { libc::getpid() },
+        };
         if let Err(error) = reconcile_recovery_publication(project) {
             warn!(path = %project.display(), %error, "Interrupted recovery publication requires attention; all files retained");
             return Err(error);
         }
         Ok(lock)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RecoveryLock {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+
+        // CLOEXEC still leaves a fork-to-exec window that can outlive this guard.
+        if self.owner_pid == unsafe { libc::getpid() }
+            && unsafe { libc::flock(self._file.as_raw_fd(), libc::LOCK_UN) } != 0
+        {
+            warn!(error = %std::io::Error::last_os_error(), "Failed to release recovery lock");
+        }
     }
 }
 
@@ -3948,6 +3968,69 @@ mod transactional_recovery_tests {
         assert!(dir.path().join(".recovery.lock").exists());
         let reacquired = RecoveryLock::acquire(dir.path()).unwrap();
         drop(reacquired);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_lock_release_does_not_wait_for_inherited_descriptor() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = RecoveryLock::acquire(dir.path()).unwrap();
+        let inherited = lock._file.try_clone().unwrap();
+        assert!(RecoveryLock::acquire(dir.path()).is_err());
+        drop(lock);
+        let reacquired = RecoveryLock::acquire(dir.path()).unwrap();
+        drop(inherited);
+        assert!(RecoveryLock::acquire(dir.path()).is_err());
+        drop(reacquired);
+        assert!(RecoveryLock::acquire(dir.path()).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_lock_inherited_guard_drop_does_not_unlock_parent() {
+        fn reap_child(pid: libc::pid_t) -> std::io::Result<Option<i32>> {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let mut status = 0;
+                match unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) } {
+                    waited if waited == pid => return Ok(Some(status)),
+                    -1 => {
+                        let error = std::io::Error::last_os_error();
+                        if error.kind() != std::io::ErrorKind::Interrupted {
+                            return Err(error);
+                        }
+                    }
+                    _ => {}
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Ok(None);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let lock = RecoveryLock::acquire(dir.path()).unwrap();
+        let pid = unsafe { libc::fork() };
+        if pid == 0 {
+            // Only async-signal-safe operations may run in a child forked from the test harness.
+            drop(lock);
+            unsafe { libc::_exit(0) };
+        }
+        assert!(pid >= 0, "fork failed: {}", std::io::Error::last_os_error());
+        let status = match reap_child(pid).unwrap() {
+            Some(status) => status,
+            None => {
+                let killed = unsafe { libc::kill(pid, libc::SIGKILL) };
+                let reaped = reap_child(pid);
+                panic!("Forked lock probe timed out: kill={killed}, reap={reaped:?}");
+            }
+        };
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(libc::WEXITSTATUS(status), 0);
+        assert!(RecoveryLock::acquire(dir.path()).is_err());
+        drop(lock);
+        assert!(RecoveryLock::acquire(dir.path()).is_ok());
     }
 
     #[test]
