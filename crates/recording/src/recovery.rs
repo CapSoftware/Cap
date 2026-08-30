@@ -63,7 +63,20 @@ enum RecoveryPurpose {
     Finalize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VideoValidation {
+    Full,
+    Bounded,
+}
+
 impl RecoveryPurpose {
+    fn video_validation(self, status: Option<StudioRecordingStatus>) -> VideoValidation {
+        match (self, status) {
+            (Self::Finalize, Some(StudioRecordingStatus::NeedsRemux)) => VideoValidation::Bounded,
+            _ => VideoValidation::Full,
+        }
+    }
+
     fn success_message(self) -> &'static str {
         match self {
             Self::Recover => "Successfully recovered recording",
@@ -897,6 +910,8 @@ impl RecoveryManager {
                 "Recording metadata changed".into(),
             ));
         }
+        let video_validation =
+            purpose.video_validation(current.studio_meta().map(|studio| studio.status()));
         Self::require_recoverable_tracks(recording)?;
         let workspace = project.join(format!(".recovery-{}", uuid::Uuid::new_v4()));
         create_private_recovery_dir(&workspace)?;
@@ -921,8 +936,8 @@ impl RecoveryManager {
                 .ok_or(RecoveryError::NoRecoverableSegments)?;
             Self::require_recoverable_tracks(&staged_recording)?;
             Self::require_local_fragments(&staged_recording)?;
-            Self::validate_staged_inputs(&staged_recording)?;
-            let recovered = Self::finalize_staged(&staged_recording, purpose)?;
+            Self::validate_staged_inputs(&staged_recording, video_validation)?;
+            let recovered = Self::finalize_staged(&staged_recording, purpose, video_validation)?;
             let config = ProjectConfiguration::load(&staged)?;
             config
                 .validate()
@@ -958,25 +973,35 @@ impl RecoveryManager {
         })
     }
 
-    fn validate_staged_inputs(recording: &IncompleteRecording) -> Result<(), RecoveryError> {
+    fn validate_staged_inputs(
+        recording: &IncompleteRecording,
+        video_validation: VideoValidation,
+    ) -> Result<(), RecoveryError> {
         for segment in &recording.recoverable_segments {
             validate_recovery_video_inputs(
                 &segment.display_fragments,
                 segment.display_init_segment.as_deref(),
                 &recording.project_path,
+                video_validation,
             )?;
             let display_dir = recording.project_path.join(format!(
                 "content/segments/segment-{}/display",
                 segment.index
             ));
             for (_, init, fragments) in Self::collect_respawn_groups(&display_dir, None) {
-                validate_recovery_video_inputs(&fragments, Some(&init), &recording.project_path)?;
+                validate_recovery_video_inputs(
+                    &fragments,
+                    Some(&init),
+                    &recording.project_path,
+                    video_validation,
+                )?;
             }
             if let Some(fragments) = &segment.camera_fragments {
                 validate_recovery_video_inputs(
                     fragments,
                     segment.camera_init_segment.as_deref(),
                     &recording.project_path,
+                    video_validation,
                 )?;
             }
             for path in segment
@@ -1086,6 +1111,7 @@ impl RecoveryManager {
     fn finalize_staged(
         recording: &IncompleteRecording,
         purpose: RecoveryPurpose,
+        video_validation: VideoValidation,
     ) -> Result<RecoveredRecording, RecoveryError> {
         Self::require_no_track_failure(&recording.project_path)?;
         if recording.recoverable_segments.is_empty() {
@@ -1287,7 +1313,11 @@ impl RecoveryManager {
             let dir = recording
                 .project_path
                 .join(format!("content/segments/segment-{}", segment.index));
-            validate_recovered_track(&dir.join("display.mp4"), ffmpeg::media::Type::Video)?;
+            validate_recovery_track(
+                &dir.join("display.mp4"),
+                ffmpeg::media::Type::Video,
+                video_validation,
+            )?;
             for (fragments, name, kind) in [
                 (
                     segment.camera_fragments.as_ref(),
@@ -1306,7 +1336,7 @@ impl RecoveryManager {
                 ),
             ] {
                 if fragments.is_some() {
-                    validate_recovered_track(&dir.join(name), kind)?;
+                    validate_recovery_track(&dir.join(name), kind, video_validation)?;
                 }
             }
         }
@@ -1424,6 +1454,7 @@ impl RecoveryManager {
                 &video.fragments,
                 video.init_segment.as_deref(),
                 &workspace,
+                VideoValidation::Full,
             )?;
             Self::finalize_instant_staged(&display, &audio, &final_output)?;
             validate_recovered_track(&final_output, ffmpeg::media::Type::Video)?;
@@ -1478,6 +1509,7 @@ impl RecoveryManager {
             audio_info.init_segment.as_deref(),
             parent,
             ffmpeg::media::Type::Audio,
+            VideoValidation::Full,
         )?;
         std::fs::create_dir_all(parent)?;
         let stem = output
@@ -2126,8 +2158,15 @@ fn validate_recovery_video_inputs(
     fragments: &[PathBuf],
     init: Option<&Path>,
     workspace: &Path,
+    video_validation: VideoValidation,
 ) -> Result<(), RecoveryError> {
-    validate_recovery_track_inputs(fragments, init, workspace, ffmpeg::media::Type::Video)
+    validate_recovery_track_inputs(
+        fragments,
+        init,
+        workspace,
+        ffmpeg::media::Type::Video,
+        video_validation,
+    )
 }
 
 fn validate_recovery_track_inputs(
@@ -2135,6 +2174,7 @@ fn validate_recovery_track_inputs(
     init: Option<&Path>,
     workspace: &Path,
     kind: ffmpeg::media::Type,
+    video_validation: VideoValidation,
 ) -> Result<(), RecoveryError> {
     if fragments.is_empty() {
         return Err(RecoveryError::NoRecoverableSegments);
@@ -2150,11 +2190,11 @@ fn validate_recovery_track_inputs(
         }
         output.sync_all()?;
         drop(output);
-        validate_recovered_track(&path, kind)?;
+        validate_recovery_track(&path, kind, video_validation)?;
         std::fs::remove_file(path)?;
     } else {
         for path in fragments {
-            validate_recovered_track(path, kind)?;
+            validate_recovery_track(path, kind, video_validation)?;
         }
     }
     Ok(())
@@ -2806,6 +2846,14 @@ fn publish_recovery_with(
 }
 
 fn validate_recovered_track(path: &Path, kind: ffmpeg::media::Type) -> Result<(), RecoveryError> {
+    validate_recovery_track(path, kind, VideoValidation::Full)
+}
+
+fn validate_recovery_track(
+    path: &Path,
+    kind: ffmpeg::media::Type,
+    video_validation: VideoValidation,
+) -> Result<(), RecoveryError> {
     let validate = || -> Result<(), String> {
         let mut input = ffmpeg::format::input(path).map_err(|error| error.to_string())?;
         let stream = input
@@ -2834,6 +2882,12 @@ fn validate_recovered_track(path: &Path, kind: ffmpeg::media::Type) -> Result<()
             }
             if packet.is_corrupt() {
                 return Err("Corrupt packet".into());
+            }
+            if decoded
+                && kind == ffmpeg::media::Type::Video
+                && video_validation == VideoValidation::Bounded
+            {
+                continue;
             }
             decoder
                 .send_packet(&packet)
@@ -2887,10 +2941,53 @@ fn replace_file(src: &Path, dst: &Path) -> Result<(), RecoveryError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        RecoveryManager, replace_file, start_time_or_display_fallback, valid_recovered_audio,
+        RecoveryManager, RecoveryPurpose, StudioRecordingStatus, VideoValidation, replace_file,
+        start_time_or_display_fallback, valid_recovered_audio, validate_recovery_track,
     };
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn only_clean_finalization_uses_bounded_video_validation() {
+        for status in [
+            None,
+            Some(StudioRecordingStatus::InProgress),
+            Some(StudioRecordingStatus::NeedsRemux),
+            Some(StudioRecordingStatus::Complete),
+            Some(StudioRecordingStatus::Failed {
+                error: "capture failed".into(),
+            }),
+        ] {
+            assert_eq!(
+                RecoveryPurpose::Recover.video_validation(status.clone()),
+                VideoValidation::Full
+            );
+            let expected = if matches!(status, Some(StudioRecordingStatus::NeedsRemux)) {
+                VideoValidation::Bounded
+            } else {
+                VideoValidation::Full
+            };
+            assert_eq!(RecoveryPurpose::Finalize.video_validation(status), expected);
+        }
+    }
+
+    #[test]
+    fn bounded_video_validation_rejects_empty_and_unplayable_media() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("display.mp4");
+        for bytes in [b"".as_slice(), b"invalid video".as_slice()] {
+            fs::write(&path, bytes).unwrap();
+            assert!(
+                validate_recovery_track(
+                    &path,
+                    ffmpeg::media::Type::Video,
+                    VideoValidation::Bounded
+                )
+                .is_err()
+            );
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+    }
 
     fn complete_m4s_fragment() -> Vec<u8> {
         let mut fragment = Vec::new();

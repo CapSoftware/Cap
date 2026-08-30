@@ -1689,8 +1689,14 @@ fn complete_recovery_fixture() -> TestRecording {
 #[test]
 fn recovery_and_finalize_retain_every_known_track_on_success() {
     test_utils::init_tracing();
-    for finalize in [false, true] {
+    for (finalize, status) in [
+        (false, StudioRecordingStatus::InProgress),
+        (false, StudioRecordingStatus::NeedsRemux),
+        (true, StudioRecordingStatus::InProgress),
+        (true, StudioRecordingStatus::NeedsRemux),
+    ] {
         let recording = complete_recovery_fixture();
+        assert!(set_fixture_status(recording.path(), status));
         let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
         let recovered = if finalize {
             RecoveryManager::finalize(&incomplete)
@@ -1865,6 +1871,17 @@ fn recovery_rejects_later_corrupt_video_even_when_first_frame_decodes() {
     }
     std::fs::write(&combined, control).unwrap();
     assert!(probe_video_can_decode(&combined).unwrap());
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    let before = recovery_input_bytes(recording.path());
+    assert!(RecoveryManager::recover(&incomplete).is_err());
+    assert_eq!(recovery_input_bytes(recording.path()), before);
+    assert!(RecoveryManager::finalize(&incomplete).is_err());
+    assert_eq!(recovery_input_bytes(recording.path()), before);
+
+    assert!(set_fixture_status(
+        recording.path(),
+        StudioRecordingStatus::NeedsRemux
+    ));
     let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
     let before = recovery_input_bytes(recording.path());
     assert!(RecoveryManager::recover(&incomplete).is_err());

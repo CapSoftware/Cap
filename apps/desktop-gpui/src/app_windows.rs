@@ -3489,28 +3489,18 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
     }
     let key = editor_key(&project_path);
 
-    if let Some(handle) = cx
+    if cx
         .global::<AppWindows>()
         .editors
         .iter()
-        .find(|(path, _)| path == &key)
-        .map(|(_, handle)| *handle)
+        .any(|(path, _)| path == &key)
     {
         tracing::info!(
             path = %key.display(),
             "editor already open for this project; focusing it"
         );
-        let native = handle
-            .update(cx, |_, window, _| platform::native_window(window))
-            .ok()
-            .flatten();
-        cx.spawn(async move |_| {
-            if let Some(native) = &native {
-                platform::show_native(native);
-            }
-        })
-        .detach();
         hide_main_and_park_camera_preview(cx);
+        reveal_editor_window(&key, cx);
         return;
     }
 
@@ -3589,6 +3579,7 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
         .ok();
 
     hide_main_and_park_camera_preview(cx);
+    reveal_editor_window(&key, cx);
     load_editor_project(key, handle, cx);
 }
 
@@ -4391,8 +4382,10 @@ fn reveal_editor_window(project_path: &Path, cx: &mut App) {
             platform::show_native(native);
         }
         cx.update(|cx| {
+            cx.activate(true);
             handle
                 .update(cx, |_, window, cx| {
+                    window.activate_window();
                     platform::kick_display_link(window);
                     cx.notify();
                     window.refresh();
