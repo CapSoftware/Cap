@@ -8572,7 +8572,9 @@ mod build_scope_tests {
         .await
         .unwrap();
         probe.cancel.cancel();
-        let error = pipeline.stop().await.unwrap_err();
+        let Err(error) = pipeline.stop().await else {
+            panic!("video stop should fail");
+        };
         assert!(format!("{error:#}").contains("video stop fault"));
         assert_eq!(probe.alive.load(Ordering::Acquire), 0);
     }
@@ -8704,9 +8706,12 @@ mod build_scope_tests {
         });
         ready.await.unwrap();
         assert!(!task.is_finished());
+        assert!(scope.idle_report().is_none());
         release.send(()).unwrap();
         let error = task.await.unwrap().unwrap_err();
         assert!(format!("{error:#}").contains("StartCapture failed"));
+        let report = scope.idle_report().expect("cleanup should be joined");
+        assert!(report.quiescent);
     }
 
     #[tokio::test]

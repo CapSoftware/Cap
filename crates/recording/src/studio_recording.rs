@@ -4158,7 +4158,7 @@ mod tests {
             recording_dir: temp.path().to_owned(),
             terminal: Arc::new(WindowsStudioTerminal::default()),
             actor_ref: actor_ref.clone(),
-            capture_target: ScreenCaptureTarget::CameraOnly,
+            capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
             done_fut,
         };
         let report = handle.stop_with_intent(StudioStopIntent::Preserve).await;
@@ -4260,7 +4260,7 @@ mod tests {
             recording_dir.join("content/segments"),
             recording_dir.join("content/cursors"),
             RecordingBaseInputs {
-                capture_target: ScreenCaptureTarget::CameraOnly,
+                capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
@@ -4310,12 +4310,11 @@ mod tests {
             let (actor, screen_tx) = failing_requested_actor(temp.path(), role).await;
             let completion = actor.completion_tx.subscribe();
             let actor = Actor::spawn(actor);
-            let result = if cancel {
-                actor.ask(Cancel).await
+            if cancel {
+                assert!(actor.ask(Cancel).await.is_err());
             } else {
-                actor.ask(Stop).await.map(|_| ())
-            };
-            assert!(result.is_err());
+                assert!(actor.ask(Stop).await.is_err());
+            }
             assert!(completion.borrow().as_ref().is_some_and(Result::is_err));
             assert!(matches!(
                 RecordingMeta::load_for_project(temp.path())
@@ -4349,7 +4348,7 @@ mod tests {
                 recording_dir: temp.path().to_owned(),
                 terminal: Arc::new(WindowsStudioTerminal::default()),
                 actor_ref: actor_ref.clone(),
-                capture_target: ScreenCaptureTarget::CameraOnly,
+                capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
                 done_fut,
             };
             let report = handle.stop_with_intent(first).await;
@@ -4502,7 +4501,7 @@ mod windows_cancel_tests {
             PathBuf::new(),
             PathBuf::new(),
             RecordingBaseInputs {
-                capture_target: ScreenCaptureTarget::CameraOnly,
+                capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,

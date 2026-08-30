@@ -4022,9 +4022,7 @@ mod recording_reconnect_ownership_tests {
 #[cfg(all(test, windows))]
 mod recording_subscription_tests {
     use super::*;
-    use crate::output_pipeline::{
-        AudioFrame, AudioMuxer, Muxer, OutputPipeline, TaskPool, new_health_channel,
-    };
+    use crate::output_pipeline::{AudioFrame, AudioMuxer, Muxer, OutputPipeline, TaskPool};
 
     fn config() -> SupportedStreamConfig {
         SupportedStreamConfig::new(
@@ -4078,7 +4076,7 @@ mod recording_subscription_tests {
 
     fn attach(subscription: Arc<RecordingSubscription>) -> AttachRecordingSubscription {
         let (sender, _receiver) = flume::bounded(4);
-        let (health_tx, _health_rx) = new_health_channel();
+        let (health_tx, _health_rx) = tokio::sync::mpsc::channel(4);
         AttachRecordingSubscription {
             subscription,
             sender,
