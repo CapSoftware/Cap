@@ -26,6 +26,9 @@ on:
       - "crates/editor/**"
       - "crates/audio/**"
       - "crates/media-info/**"
+      - "crates/project/**"
+      - "scripts/recording-reliability.py"
+      - "scripts/test-recording-reliability.py"
       - ".github/workflows/sync-tests.yml"
 
 concurrency:
@@ -67,6 +70,11 @@ jobs:
         with:
           node-version: 24
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
       - name: Native dependencies
         env:
           RUST_TARGET_TRIPLE: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-gnu' || runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'aarch64-apple-darwin' }}
@@ -76,6 +84,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+
+      - name: Recording metadata and harness regression tests
+        shell: bash
+        run: |
+          cargo test --locked -p cap-project --lib
+          python -B scripts/test-recording-reliability.py
 
       - name: Install software Vulkan driver (Linux)
         if: runner.os == 'Linux'
