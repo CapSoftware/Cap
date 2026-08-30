@@ -4066,10 +4066,10 @@ mod transactional_recovery_tests {
         child.0.kill().unwrap();
         child.0.wait().unwrap();
         let recovered = RecoveryLock::acquire(directory.path()).unwrap();
+        drop(recovered);
         assert_eq!(
             std::fs::read(directory.path().join(".recovery.lock")).unwrap(),
             b""
         );
-        drop(recovered);
     }
 }
