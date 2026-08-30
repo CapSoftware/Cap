@@ -913,7 +913,7 @@ impl ActiveRecording {
                     if let Err(error) = &metadata_result {
                         tracing::warn!(%error, "Could not mark the instant recording as stopped");
                     }
-                    let completed = stopped?;
+                    let mut completed = stopped?;
                     metadata_result?;
                     let project_path = completed.project_path.clone();
                     let upload = instant_upload
@@ -924,16 +924,25 @@ impl ActiveRecording {
                     let display_dir = project_path.join("content/display");
                     let audio_dir = project_path.join("content/audio");
                     let output_path = project_path.join("content/output.mp4");
+                    let completion = completed.clean_completion.take();
                     if display_dir.is_dir() {
                         let muxed = output_path.clone();
                         let project_path = project_path.clone();
                         tokio::task::spawn_blocking(move || {
                             ensure_finalization_storage(&project_path)?;
-                            cap_recording::recovery::RecoveryManager::finalize_instant_output(
-                                &display_dir,
-                                &audio_dir,
-                                &muxed,
-                            )
+                            match completion {
+                                Some(completion) => cap_recording::recovery::RecoveryManager::finalize_completed_instant_output(
+                                    &display_dir,
+                                    &audio_dir,
+                                    &muxed,
+                                    completion,
+                                ),
+                                None => cap_recording::recovery::RecoveryManager::finalize_instant_output(
+                                    &display_dir,
+                                    &audio_dir,
+                                    &muxed,
+                                ),
+                            }
                             .map_err(anyhow::Error::from)
                         })
                         .await
@@ -2938,6 +2947,7 @@ mod tests {
                                 sample_rate: Some(48_000),
                             },
                             health: cap_recording::RecordingHealth::Healthy,
+                            clean_completion: None,
                         };
                         let video = cap_project::VideoUploadInfo {
                             id: "test".into(),

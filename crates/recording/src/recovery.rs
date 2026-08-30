@@ -1409,6 +1409,29 @@ impl RecoveryManager {
         audio_dir: &Path,
         output: &Path,
     ) -> Result<PathBuf, RecoveryError> {
+        Self::finalize_instant_output_with_completion(display_dir, audio_dir, output, None)
+    }
+
+    pub fn finalize_completed_instant_output(
+        display_dir: &Path,
+        audio_dir: &Path,
+        output: &Path,
+        completion: crate::instant_recording::CleanInstantRecording,
+    ) -> Result<PathBuf, RecoveryError> {
+        Self::finalize_instant_output_with_completion(
+            display_dir,
+            audio_dir,
+            output,
+            Some(completion.into_parts()),
+        )
+    }
+
+    fn finalize_instant_output_with_completion(
+        display_dir: &Path,
+        audio_dir: &Path,
+        output: &Path,
+        completion: Option<(PathBuf, bool)>,
+    ) -> Result<PathBuf, RecoveryError> {
         let content = output
             .parent()
             .ok_or_else(|| RecoveryError::Validation("Instant output has no parent".into()))?;
@@ -1425,10 +1448,33 @@ impl RecoveryManager {
                 "Instant tracks must be in project content".into(),
             ));
         }
+        let (video_validation, completed_audio) = match completion {
+            Some((completed_project, expected_audio)) => {
+                if completed_project != project {
+                    return Err(RecoveryError::Validation(
+                        "Instant completion belongs to another recording".into(),
+                    ));
+                }
+                if display_dir != content.join("display")
+                    || audio_dir != content.join("audio")
+                    || output != content.join("output.mp4")
+                {
+                    return Err(RecoveryError::Validation(
+                        "Instant completion must use the recorded track and output paths".into(),
+                    ));
+                }
+                (VideoValidation::Bounded, expected_audio)
+            }
+            None => (VideoValidation::Full, false),
+        };
+        let staging_durability = match video_validation {
+            VideoValidation::Full => RecoveryCopyDurability::Durable,
+            VideoValidation::Bounded => RecoveryCopyDurability::Deferred,
+        };
         Self::require_no_track_failure(project)?;
         let _lock = RecoveryLock::acquire(project)?;
         let before = recovery_snapshot(project)?;
-        let mut expected_audio = audio_dir.try_exists()?;
+        let mut expected_audio = completed_audio || audio_dir.try_exists()?;
         if project.join("recording-meta.json").try_exists()? {
             let meta = RecordingMeta::load_for_project(project)
                 .map_err(|error| RecoveryError::Validation(error.to_string()))?;
@@ -1456,7 +1502,7 @@ impl RecoveryManager {
         create_private_recovery_dir(&workspace)?;
         let staged = workspace.join("content");
         let result = (|| {
-            copy_recovery_input(content, &staged)?;
+            copy_recovery_input_with_durability(content, &staged, staging_durability)?;
             validate_recovery_manifests(&staged)?;
             let display = staged.join(
                 display_dir
@@ -1489,10 +1535,10 @@ impl RecoveryManager {
                 &video.fragments,
                 video.init_segment.as_deref(),
                 &workspace,
-                VideoValidation::Full,
+                video_validation,
             )?;
             Self::finalize_instant_staged(&display, &audio, &final_output)?;
-            validate_recovered_track(&final_output, ffmpeg::media::Type::Video)?;
+            validate_recovery_track(&final_output, ffmpeg::media::Type::Video, video_validation)?;
             if expected_audio {
                 validate_recovered_track(&final_output, ffmpeg::media::Type::Audio)?;
             }
@@ -3083,6 +3129,67 @@ mod tests {
                 .is_err()
             );
             assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn completed_instant_audio_requirement_preserves_inputs_when_audio_is_missing() {
+        let directory = tempdir().unwrap();
+        let project = directory.path();
+        let display = project.join("content/display");
+        fs::create_dir_all(&display).unwrap();
+        fs::write(display.join("init.mp4"), b"original video init").unwrap();
+        let output = project.join("content/output.mp4");
+        fs::write(&output, b"original output").unwrap();
+        let before = super::recovery_snapshot(project).unwrap();
+
+        let error = RecoveryManager::finalize_instant_output_with_completion(
+            &display,
+            &project.join("content/audio"),
+            &output,
+            Some((project.to_path_buf(), true)),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("Missing required Instant audio"));
+        assert_eq!(super::recovery_snapshot(project).unwrap(), before);
+        assert!(fs::read_dir(project).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".recovery-")
+        }));
+    }
+
+    #[test]
+    fn completed_instant_rejects_other_paths_in_the_same_project_without_mutation() {
+        let directory = tempdir().unwrap();
+        let project = directory.path();
+        let content = project.join("content");
+        fs::create_dir(&content).unwrap();
+        fs::write(content.join("original.mp4"), b"original output").unwrap();
+        let before = super::recovery_snapshot(project).unwrap();
+
+        for (display, audio, output) in [
+            ("other", "audio", "output.mp4"),
+            ("display", "other", "output.mp4"),
+            ("display", "audio", "original.mp4"),
+        ] {
+            let error = RecoveryManager::finalize_instant_output_with_completion(
+                &content.join(display),
+                &content.join(audio),
+                &content.join(output),
+                Some((project.to_path_buf(), false)),
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("must use the recorded track and output paths")
+            );
+            assert_eq!(super::recovery_snapshot(project).unwrap(), before);
+            assert_eq!(fs::read_dir(project).unwrap().count(), 1);
         }
     }
 

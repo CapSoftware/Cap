@@ -986,8 +986,10 @@ async fn finalize_after_stop_trigger<T>(
     finalized
 }
 
-async fn finalize_completed(completed: CompletedRecording) -> Result<CompletedRecording, String> {
-    match &completed {
+async fn finalize_completed(
+    mut completed: CompletedRecording,
+) -> Result<CompletedRecording, String> {
+    match &mut completed {
         CompletedRecording::Studio(recording) => {
             let project_path = recording.project_path.clone();
             tokio::task::spawn_blocking(move || {
@@ -998,7 +1000,7 @@ async fn finalize_completed(completed: CompletedRecording) -> Result<CompletedRe
             .map_err(|e| format!("Failed to finalize recording: {e}"))?;
         }
         CompletedRecording::Instant(recording) => {
-            finalize_instant_output(recording.project_path.clone()).await?;
+            finalize_instant_output(recording).await?;
             persist_instant_recording_meta(recording)?;
         }
     }
@@ -1006,7 +1008,11 @@ async fn finalize_completed(completed: CompletedRecording) -> Result<CompletedRe
     Ok(completed)
 }
 
-async fn finalize_instant_output(project_path: PathBuf) -> Result<(), String> {
+async fn finalize_instant_output(
+    recording: &mut instant_recording::CompletedRecording,
+) -> Result<(), String> {
+    let completion = recording.clean_completion.take();
+    let project_path = recording.project_path.clone();
     let output_path = project_path.join("content/output.mp4");
     let audio_dir = project_path.join("content/audio");
     if std::fs::metadata(&output_path)
@@ -1018,12 +1024,20 @@ async fn finalize_instant_output(project_path: PathBuf) -> Result<(), String> {
     }
 
     let display_dir = project_path.join("content/display");
-    tokio::task::spawn_blocking(move || {
-        cap_recording::recovery::RecoveryManager::finalize_instant_output(
+    tokio::task::spawn_blocking(move || match completion {
+        Some(completion) => {
+            cap_recording::recovery::RecoveryManager::finalize_completed_instant_output(
+                &display_dir,
+                &audio_dir,
+                &output_path,
+                completion,
+            )
+        }
+        None => cap_recording::recovery::RecoveryManager::finalize_instant_output(
             &display_dir,
             &audio_dir,
             &output_path,
-        )
+        ),
     })
     .await
     .map_err(|e| format!("instant recording finalize task failed: {e}"))?

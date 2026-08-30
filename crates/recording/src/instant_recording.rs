@@ -35,6 +35,9 @@ use std::{
 };
 use tracing::*;
 
+mod completion;
+pub use completion::CleanInstantRecording;
+
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Joined covers this attempt's capture/output work, not shared preview feeds or physical device shutdown.
@@ -489,12 +492,15 @@ impl Message<Stop> for Actor {
             }
         }
 
-        let segments_dir =
+        let (segments_dir, completion_audio) =
             replace_with::replace_with_or_abort_and_return(&mut self.state, |state| {
                 let result = match &state {
                     ActorState::Recording { pipeline, .. }
-                    | ActorState::Paused { pipeline, .. } => pipeline.segments_dir.clone(),
-                    ActorState::Stopped => self.output_dir.clone(),
+                    | ActorState::Paused { pipeline, .. } => (
+                        pipeline.segments_dir.clone(),
+                        Some(pipeline.audio.is_some()),
+                    ),
+                    ActorState::Stopped => (self.output_dir.clone(), None),
                 };
                 (result, state)
             });
@@ -534,6 +540,13 @@ impl Message<Stop> for Actor {
             }
         };
 
+        // Only successfully finished segmented mux workers certify this output, not device shutdown.
+        let clean_completion = completion_audio
+            .filter(|_| has_segments && segments_dir == self.recording_dir.join("content/display"))
+            .map(|expected_audio| {
+                CleanInstantRecording::new(self.recording_dir.clone(), expected_audio)
+            });
+
         Ok(CompletedRecording {
             project_path: self.recording_dir.clone(),
             meta: InstantRecordingMeta::Complete {
@@ -542,6 +555,7 @@ impl Message<Stop> for Actor {
             },
             display_source: self.capture_target.clone(),
             health,
+            clean_completion,
         })
     }
 }
@@ -633,6 +647,7 @@ pub struct CompletedRecording {
     pub display_source: ScreenCaptureTarget,
     pub meta: InstantRecordingMeta,
     pub health: crate::RecordingHealth,
+    pub clean_completion: Option<CleanInstantRecording>,
 }
 
 struct ScreenPipelineInput {
