@@ -69,6 +69,12 @@ enum VideoValidation {
     Bounded,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecoveryCopyDurability {
+    Durable,
+    Deferred,
+}
+
 impl RecoveryPurpose {
     fn video_validation(self, status: Option<StudioRecordingStatus>) -> VideoValidation {
         match (self, status) {
@@ -913,6 +919,10 @@ impl RecoveryManager {
         }
         let video_validation =
             purpose.video_validation(current.studio_meta().map(|studio| studio.status()));
+        let staging_durability = match video_validation {
+            VideoValidation::Full => RecoveryCopyDurability::Durable,
+            VideoValidation::Bounded => RecoveryCopyDurability::Deferred,
+        };
         Self::require_recoverable_tracks(recording)?;
         let workspace = project.join(format!(".recovery-{}", uuid::Uuid::new_v4()));
         create_private_recovery_dir(&workspace)?;
@@ -922,7 +932,11 @@ impl RecoveryManager {
             for name in RECOVERY_INPUTS {
                 let source = project.join(name);
                 if source.try_exists()? {
-                    copy_recovery_input(&source, &staged.join(name))?;
+                    copy_recovery_input_with_durability(
+                        &source,
+                        &staged.join(name),
+                        staging_durability,
+                    )?;
                 }
             }
             if recovery_snapshot(&staged)? != before || recovery_snapshot(project)? != before {
@@ -2236,7 +2250,9 @@ fn validate_recovery_track_inputs(
         for source in std::iter::once(init).chain(fragments.iter().map(PathBuf::as_path)) {
             std::io::copy(&mut std::fs::File::open(source)?, &mut output)?;
         }
-        output.sync_all()?;
+        if video_validation == VideoValidation::Full {
+            output.sync_all()?;
+        }
         drop(output);
         validate_recovery_track(&path, kind, video_validation)?;
         std::fs::remove_file(path)?;
@@ -2350,13 +2366,25 @@ fn reject_recovery_link(metadata: &std::fs::Metadata) -> Result<(), RecoveryErro
 }
 
 fn copy_recovery_input(source: &Path, destination: &Path) -> Result<(), RecoveryError> {
+    copy_recovery_input_with_durability(source, destination, RecoveryCopyDurability::Durable)
+}
+
+fn copy_recovery_input_with_durability(
+    source: &Path,
+    destination: &Path,
+    durability: RecoveryCopyDurability,
+) -> Result<(), RecoveryError> {
     let metadata = source.symlink_metadata()?;
     reject_recovery_link(&metadata)?;
     if metadata.is_dir() {
         std::fs::create_dir(destination)?;
         for entry in std::fs::read_dir(source)? {
             let entry = entry?;
-            copy_recovery_input(&entry.path(), &destination.join(entry.file_name()))?;
+            copy_recovery_input_with_durability(
+                &entry.path(),
+                &destination.join(entry.file_name()),
+                durability,
+            )?;
         }
     } else if metadata.is_file() {
         let mut input = std::fs::File::open(source)?;
@@ -2365,7 +2393,9 @@ fn copy_recovery_input(source: &Path, destination: &Path) -> Result<(), Recovery
             .create_new(true)
             .open(destination)?;
         std::io::copy(&mut input, &mut output)?;
-        output.sync_all()?;
+        if durability == RecoveryCopyDurability::Durable {
+            output.sync_all()?;
+        }
     } else {
         return Err(RecoveryError::Validation(format!(
             "Unsupported recovery input: {}",
@@ -3953,9 +3983,16 @@ mod transactional_recovery_tests {
         let destination = dir.path().join("occupied");
         std::fs::write(&source, b"original").unwrap();
         std::fs::write(&destination, b"existing").unwrap();
-        assert!(copy_recovery_input(&source, &destination).is_err());
-        assert_eq!(std::fs::read(&source).unwrap(), b"original");
-        assert_eq!(std::fs::read(&destination).unwrap(), b"existing");
+        for durability in [
+            RecoveryCopyDurability::Durable,
+            RecoveryCopyDurability::Deferred,
+        ] {
+            assert!(
+                copy_recovery_input_with_durability(&source, &destination, durability).is_err()
+            );
+            assert_eq!(std::fs::read(&source).unwrap(), b"original");
+            assert_eq!(std::fs::read(&destination).unwrap(), b"existing");
+        }
     }
 
     #[test]
