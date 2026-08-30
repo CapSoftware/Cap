@@ -1448,6 +1448,111 @@ fn finalize_to_progressive_mp4_includes_respawn_fragments() {
 }
 
 #[test]
+fn finalize_needs_remux_progressive_display_rejects_invalid_respawn_without_mutation() {
+    test_utils::init_tracing();
+    let recording = TestRecording::new().unwrap();
+    let display = recording.create_display_dir(0).unwrap();
+    write_synthetic_fragments(&display, 180, Duration::from_secs(2));
+    let progressive = recording.create_segment_dir(0).unwrap().join("display.mp4");
+    RecoveryManager::finalize_to_progressive_mp4(&display, &progressive).unwrap();
+    std::fs::remove_dir_all(&display).unwrap();
+    let respawn = display.join("respawn-1");
+    std::fs::create_dir_all(&respawn).unwrap();
+    write_synthetic_fragments(&respawn, 180, Duration::from_secs(2));
+    assert_valid_synthetic_fragments(&respawn);
+    std::fs::write(respawn.join("init.mp4"), b"invalid respawn init").unwrap();
+    recording
+        .write_recording_meta(StudioRecordingStatus::NeedsRemux)
+        .unwrap();
+
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    let segment = &incomplete.recoverable_segments[0];
+    assert_eq!(segment.display_fragments, vec![progressive]);
+    assert!(segment.display_init_segment.is_none());
+    let before = recovery_input_bytes(recording.path());
+
+    assert!(RecoveryManager::finalize(&incomplete).is_err());
+    assert_eq!(recovery_input_bytes(recording.path()), before);
+}
+
+#[test]
+fn finalize_needs_remux_includes_validated_respawn_groups() {
+    test_utils::init_tracing();
+    let recording = TestRecording::new().unwrap();
+    let display = recording.create_display_dir(0).unwrap();
+    let respawn = display.join("respawn-1");
+    std::fs::create_dir_all(&respawn).unwrap();
+    for directory in [&display, &respawn] {
+        let mut encoder = SegmentedVideoEncoder::init(
+            directory.to_path_buf(),
+            synthetic_video_info(),
+            SegmentedVideoEncoderConfig {
+                segment_duration: Duration::from_secs(2),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for index in 0..180 {
+            encoder
+                .queue_frame(
+                    make_synthetic_video_frame(320, 240),
+                    Duration::from_nanos(index * 1_000_000_000 / 30),
+                )
+                .unwrap();
+        }
+        encoder.finish().unwrap();
+    }
+    assert_valid_synthetic_fragments(&display);
+    assert_valid_synthetic_fragments(&respawn);
+    let control = TempDir::new().unwrap();
+    let control_display = control.path().join("display");
+    copy_dir_recursive(&display, &control_display).unwrap();
+    let legacy_output = control.path().join("legacy.mp4");
+    RecoveryManager::finalize_to_progressive_mp4(&control_display, &legacy_output).unwrap();
+    let legacy_duration = cap_enc_ffmpeg::remux::get_media_duration(&legacy_output).unwrap();
+    recording
+        .write_recording_meta(StudioRecordingStatus::NeedsRemux)
+        .unwrap();
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    assert!(
+        incomplete.recoverable_segments[0]
+            .display_init_segment
+            .is_some()
+    );
+    let before = recovery_input_bytes(recording.path());
+
+    let recovered = RecoveryManager::finalize(&incomplete).unwrap();
+    assert!(matches!(
+        recovered.meta.status(),
+        StudioRecordingStatus::Complete
+    ));
+    let output = recording
+        .path()
+        .join("content/segments/segment-0/display.mp4");
+    assert!(probe_video_can_decode(&output).unwrap());
+    probe_video_seek_points(&output, 8).unwrap();
+    let duration = cap_enc_ffmpeg::remux::get_media_duration(&output).unwrap();
+    assert!(
+        (11.5..=12.5).contains(&duration.as_secs_f64()),
+        "validated duration {duration:?}, legacy duration {legacy_duration:?}"
+    );
+    assert_eq!(duration, legacy_duration);
+    let backup = std::fs::read_dir(recording.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.join("original-segments").is_dir())
+        .unwrap();
+    for (path, bytes) in &before {
+        if let Ok(relative) = path.strip_prefix("content/segments") {
+            assert_eq!(
+                &std::fs::read(backup.join("original-segments").join(relative)).unwrap(),
+                bytes
+            );
+        }
+    }
+}
+
+#[test]
 fn finalize_to_progressive_mp4_rescues_pending_tmp_fragments_in_respawn_dir() {
     test_utils::init_tracing();
 

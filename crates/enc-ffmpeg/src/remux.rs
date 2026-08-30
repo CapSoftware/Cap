@@ -3,7 +3,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     ptr,
-    sync::atomic::{AtomicI32, Ordering},
+    sync::atomic::{AtomicI32, AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -13,6 +13,7 @@ use ffmpeg::{ChannelLayout, codec as avcodec, format as avformat, packet::Mut as
 use crate::audio::opus::{OpusEncoder, OpusEncoderError};
 
 static ORIGINAL_LOG_LEVEL: AtomicI32 = AtomicI32::new(-1);
+static VALIDATED_AGGREGATE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const SEEK_PROBE_PACKET_LIMIT: usize = 240;
 const SEEK_PROBE_PADDING_US: i64 = 250_000;
 
@@ -53,6 +54,8 @@ pub enum RemuxError {
     AudioInfo(#[from] AudioInfoError),
     #[error("Concat demuxer not found")]
     ConcatDemuxerNotFound,
+    #[error("Video validation failed: {0}")]
+    VideoValidation(&'static str),
 }
 
 pub fn concatenate_video_fragments(fragments: &[PathBuf], output: &Path) -> Result<(), RemuxError> {
@@ -153,55 +156,68 @@ fn open_input_with_format(
     }
 }
 
-fn remux_streams(
-    ictx: &mut avformat::context::Input,
-    octx: &mut avformat::context::Output,
-) -> Result<(), RemuxError> {
-    let mut stream_mapping: Vec<Option<usize>> = Vec::new();
-    let mut output_stream_index = 0usize;
+struct StreamRemuxer {
+    stream_mapping: Vec<Option<usize>>,
+    last_dts: Vec<i64>,
+    dts_offset: Vec<i64>,
+}
 
-    for input_stream in ictx.streams() {
-        let codec_params = input_stream.parameters();
-        let medium = codec_params.medium();
+impl StreamRemuxer {
+    fn new(
+        ictx: &avformat::context::Input,
+        octx: &mut avformat::context::Output,
+    ) -> Result<Self, RemuxError> {
+        let mut stream_mapping = Vec::new();
+        let mut output_stream_index = 0usize;
 
-        if medium == ffmpeg::media::Type::Video || medium == ffmpeg::media::Type::Audio {
-            stream_mapping.push(Some(output_stream_index));
-            output_stream_index += 1;
+        for input_stream in ictx.streams() {
+            let codec_params = input_stream.parameters();
+            let medium = codec_params.medium();
 
-            let mut output_stream = octx.add_stream(None)?;
-            output_stream.set_parameters(codec_params);
-            unsafe {
-                (*output_stream.as_mut_ptr()).time_base = (*input_stream.as_ptr()).time_base;
+            if medium == ffmpeg::media::Type::Video || medium == ffmpeg::media::Type::Audio {
+                stream_mapping.push(Some(output_stream_index));
+                output_stream_index += 1;
+
+                let mut output_stream = octx.add_stream(None)?;
+                output_stream.set_parameters(codec_params);
+                unsafe {
+                    (*output_stream.as_mut_ptr()).time_base = (*input_stream.as_ptr()).time_base;
+                }
+            } else {
+                stream_mapping.push(None);
             }
-        } else {
-            stream_mapping.push(None);
         }
+
+        octx.write_header()?;
+
+        Ok(Self {
+            stream_mapping,
+            last_dts: vec![i64::MIN; output_stream_index],
+            dts_offset: vec![0; output_stream_index],
+        })
     }
 
-    octx.write_header()?;
-
-    let mut last_dts: Vec<i64> = vec![i64::MIN; output_stream_index];
-    let mut dts_offset: Vec<i64> = vec![0; output_stream_index];
-
-    for (input_stream, packet) in ictx.packets() {
-        let input_stream_index = input_stream.index();
-
-        if let Some(Some(output_index)) = stream_mapping.get(input_stream_index) {
+    fn write_packet(
+        &mut self,
+        mut packet: ffmpeg::Packet,
+        input_time_base: ffmpeg::Rational,
+        octx: &mut avformat::context::Output,
+    ) -> Result<(), RemuxError> {
+        if let Some(Some(output_index)) = self.stream_mapping.get(packet.stream()) {
             let output_index = *output_index;
-            let mut packet = packet;
-            let input_time_base = input_stream.time_base();
             let output_time_base = octx.stream(output_index).unwrap().time_base();
 
             packet.rescale_ts(input_time_base, output_time_base);
 
             let current_dts = packet.dts().unwrap_or(0);
 
-            if last_dts[output_index] != i64::MIN && current_dts <= last_dts[output_index] {
-                dts_offset[output_index] = last_dts[output_index] - current_dts + 1;
+            if self.last_dts[output_index] != i64::MIN && current_dts <= self.last_dts[output_index]
+            {
+                self.dts_offset[output_index] = self.last_dts[output_index] - current_dts + 1;
             }
 
-            let adjusted_dts = current_dts + dts_offset[output_index];
-            let adjusted_pts = packet.pts().map(|pts| pts + dts_offset[output_index]);
+            let adjusted_dts = current_dts + self.dts_offset[output_index];
+            let adjusted_pts = packet.pts().map(|pts| pts + self.dts_offset[output_index]);
 
             unsafe {
                 (*packet.as_mut_ptr()).dts = adjusted_dts;
@@ -210,17 +226,106 @@ fn remux_streams(
                 }
             }
 
-            last_dts[output_index] = adjusted_dts;
+            self.last_dts[output_index] = adjusted_dts;
 
             packet.set_stream(output_index);
             packet.set_position(-1);
 
             packet.write_interleaved(octx)?;
         }
+        Ok(())
+    }
+}
+
+fn remux_streams(
+    ictx: &mut avformat::context::Input,
+    octx: &mut avformat::context::Output,
+) -> Result<(), RemuxError> {
+    let mut remuxer = StreamRemuxer::new(ictx, octx)?;
+    for (input_stream, packet) in ictx.packets() {
+        remuxer.write_packet(packet, input_stream.time_base(), octx)?;
     }
 
     octx.write_trailer()?;
 
+    Ok(())
+}
+
+fn remux_streams_validated_with_reader(
+    ictx: &mut avformat::context::Input,
+    octx: &mut avformat::context::Output,
+    mut read_packet: impl FnMut(
+        &mut ffmpeg::Packet,
+        &mut avformat::context::Input,
+    ) -> Result<(), ffmpeg::Error>,
+) -> Result<(), RemuxError> {
+    let stream = ictx
+        .streams()
+        .best(ffmpeg::media::Type::Video)
+        .ok_or(RemuxError::VideoValidation("No video stream found"))?;
+    let video_index = stream.index();
+    let context = avcodec::Context::from_parameters(stream.parameters())?;
+    let codec = ffmpeg::decoder::find(context.id())
+        .ok_or(RemuxError::VideoValidation("Video decoder unavailable"))?;
+    let mut decoder = context.decoder();
+    decoder.check(avcodec::decoder::Check::EXPLODE | avcodec::decoder::Check::CRC);
+    let mut decoder = decoder.open_as(codec)?;
+    let mut frame = unsafe { ffmpeg::Frame::empty() };
+    let mut decoded = false;
+    let mut remuxer = StreamRemuxer::new(ictx, octx)?;
+
+    loop {
+        let mut packet = ffmpeg::Packet::empty();
+        match read_packet(&mut packet, ictx) {
+            Ok(()) => {}
+            Err(ffmpeg::Error::Eof) => break,
+            Err(error) => return Err(error.into()),
+        }
+        if packet.stream() == video_index {
+            if packet.is_corrupt() {
+                return Err(RemuxError::VideoValidation("Corrupt video packet"));
+            }
+            if !decoded {
+                decoder.send_packet(&packet)?;
+                loop {
+                    match decoder.receive_frame(&mut frame) {
+                        Ok(()) if !frame.is_corrupt() => decoded = true,
+                        Ok(()) => {
+                            return Err(RemuxError::VideoValidation("Corrupt decoded video frame"));
+                        }
+                        Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => {
+                            break;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+            }
+        }
+        let input_time_base = ictx
+            .stream(packet.stream())
+            .ok_or(ffmpeg::Error::StreamNotFound)?
+            .time_base();
+        remuxer.write_packet(packet, input_time_base, octx)?;
+    }
+
+    decoder.send_eof()?;
+    loop {
+        match decoder.receive_frame(&mut frame) {
+            Ok(()) if !frame.is_corrupt() => decoded = true,
+            Ok(()) => {
+                return Err(RemuxError::VideoValidation("Corrupt decoded video frame"));
+            }
+            Err(ffmpeg::Error::Eof) => break,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    if !decoded {
+        return Err(RemuxError::VideoValidation(
+            "Video contains no decoded frames",
+        ));
+    }
+
+    octx.write_trailer()?;
     Ok(())
 }
 
@@ -339,7 +444,7 @@ pub fn probe_video_seek_points(path: &Path, sample_count: usize) -> Result<(), S
 }
 
 fn probe_video_can_decode_inner(path: &Path) -> Result<bool, String> {
-    let input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
+    let mut input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
 
     let input_stream = input
         .streams()
@@ -355,8 +460,6 @@ fn probe_video_can_decode_inner(path: &Path) -> Result<bool, String> {
         .map_err(|e| format!("Failed to create video decoder: {e}"))?;
 
     let stream_index = input_stream.index();
-
-    let mut input = avformat::input(path).map_err(|e| format!("Failed to reopen file: {e}"))?;
 
     let mut frame = ffmpeg::frame::Video::empty();
     let mut packets_tried = 0;
@@ -755,6 +858,77 @@ pub fn concatenate_m4s_segments_with_init(
     result
 }
 
+pub fn concatenate_m4s_segments_with_init_validated(
+    init_path: &Path,
+    segments: &[PathBuf],
+    output: &Path,
+) -> Result<(), RemuxError> {
+    concatenate_m4s_segments_with_init_validated_with_reader(
+        init_path,
+        segments,
+        output,
+        ffmpeg::Packet::read,
+    )
+}
+
+fn concatenate_m4s_segments_with_init_validated_with_reader(
+    init_path: &Path,
+    segments: &[PathBuf],
+    output: &Path,
+    read_packet: impl FnMut(
+        &mut ffmpeg::Packet,
+        &mut avformat::context::Input,
+    ) -> Result<(), ffmpeg::Error>,
+) -> Result<(), RemuxError> {
+    if segments.is_empty() {
+        return Err(RemuxError::NoFragments);
+    }
+    for path in std::iter::once(init_path).chain(segments.iter().map(PathBuf::as_path)) {
+        if !path.exists() {
+            return Err(RemuxError::FragmentNotFound(path.to_path_buf()));
+        }
+    }
+
+    let sequence = VALIDATED_AGGREGATE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let combined_path = output.with_extension(format!(
+        "validated-combined-{}-{sequence}.mp4",
+        std::process::id()
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut combined_file = options.open(&combined_path)?;
+    let result = (|| {
+        for path in std::iter::once(init_path).chain(segments.iter().map(PathBuf::as_path)) {
+            let mut source = std::fs::File::open(path)?;
+            std::io::copy(&mut source, &mut combined_file)?;
+        }
+        drop(combined_file);
+
+        let mut ictx = avformat::input(&combined_path)?;
+        let mut octx = avformat::output(output)?;
+        remux_streams_validated_with_reader(&mut ictx, &mut octx, read_packet)
+    })();
+    let cleanup = std::fs::remove_file(&combined_path);
+    match result {
+        Ok(()) => cleanup.map_err(Into::into),
+        Err(error) => {
+            if let Err(cleanup_error) = cleanup {
+                tracing::warn!(
+                    "failed to remove validated combined file {}: {}",
+                    combined_path.display(),
+                    cleanup_error
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
 fn remux_to_regular_mp4(input_path: &Path, output_path: &Path) -> Result<(), RemuxError> {
     let mut ictx = avformat::input(input_path)?;
     let mut octx = avformat::output(output_path)?;
@@ -976,9 +1150,242 @@ fn merge_video_audio_inner(
 mod tests {
     use super::{
         build_seek_probe_positions, concat_fragment_entry, concatenate_audio_to_ogg,
-        concatenate_video_fragments, probe_video_pts_ladder, write_concat_list,
+        concatenate_m4s_segments_with_init, concatenate_m4s_segments_with_init_validated,
+        concatenate_m4s_segments_with_init_validated_with_reader, concatenate_video_fragments,
+        probe_video_pts_ladder, write_concat_list,
     };
-    use std::{path::Path, time::Duration};
+    use std::{
+        path::{Path, PathBuf},
+        time::Duration,
+    };
+
+    fn encode_test_segments(directory: &Path) -> (PathBuf, Vec<PathBuf>) {
+        use crate::segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig};
+
+        ffmpeg::init().unwrap();
+        let mut encoder = SegmentedVideoEncoder::init(
+            directory.to_path_buf(),
+            cap_media_info::VideoInfo {
+                pixel_format: cap_media_info::Pixel::NV12,
+                width: 320,
+                height: 240,
+                time_base: ffmpeg::Rational(1, 1_000_000),
+                frame_rate: ffmpeg::Rational(30, 1),
+            },
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+        for index in 0..320 {
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
+            frame.data_mut(0).fill(32 + (index % 192) as u8);
+            frame.data_mut(1).fill(128);
+            encoder
+                .queue_frame(frame, Duration::from_micros(index * 1_000_000 / 30))
+                .unwrap();
+        }
+        encoder.finish().unwrap();
+        let segments: Vec<_> = encoder
+            .completed_segments()
+            .iter()
+            .map(|segment| segment.path.clone())
+            .collect();
+        assert!(segments.len() >= 2);
+        (encoder.init_segment_path(), segments)
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct TestVideoPacket {
+        pts: Option<i64>,
+        dts: Option<i64>,
+        duration: i64,
+        data: Vec<u8>,
+    }
+
+    fn video_packet_contents(path: &Path) -> (ffmpeg::Rational, Vec<TestVideoPacket>) {
+        let mut input = ffmpeg::format::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let index = stream.index();
+        let time_base = stream.time_base();
+        let mut packets = Vec::new();
+        loop {
+            let mut packet = ffmpeg::Packet::empty();
+            match packet.read(&mut input) {
+                Ok(()) => {}
+                Err(ffmpeg::Error::Eof) => break,
+                Err(error) => panic!("Failed to read video packet: {error}"),
+            }
+            if packet.stream() == index {
+                packets.push(TestVideoPacket {
+                    pts: packet.pts(),
+                    dts: packet.dts(),
+                    duration: packet.duration(),
+                    data: packet.data().unwrap().to_vec(),
+                });
+            }
+        }
+        (time_base, packets)
+    }
+
+    fn decoded_video_frame_count(path: &Path) -> usize {
+        let mut input = ffmpeg::format::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let index = stream.index();
+        let mut decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frame = ffmpeg::frame::Video::empty();
+        let mut count = 0;
+        for (stream, packet) in input.packets() {
+            if stream.index() != index {
+                continue;
+            }
+            decoder.send_packet(&packet).unwrap();
+            loop {
+                match decoder.receive_frame(&mut frame) {
+                    Ok(()) => {
+                        assert!(!frame.is_corrupt());
+                        count += 1;
+                    }
+                    Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => {
+                        break;
+                    }
+                    Err(error) => panic!("Failed to decode video frame: {error}"),
+                }
+            }
+        }
+        decoder.send_eof().unwrap();
+        loop {
+            match decoder.receive_frame(&mut frame) {
+                Ok(()) => {
+                    assert!(!frame.is_corrupt());
+                    count += 1;
+                }
+                Err(ffmpeg::Error::Eof) => break,
+                Err(error) => panic!("Failed to drain video decoder: {error}"),
+            }
+        }
+        count
+    }
+
+    fn assert_no_validated_aggregate(directory: &Path) {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            assert!(
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".validated-combined-")
+            );
+        }
+    }
+
+    #[test]
+    fn validated_m4s_concat_preserves_packets_timestamps_and_all_frames() {
+        let directory = tempfile::tempdir().unwrap();
+        let (init, segments) = encode_test_segments(&directory.path().join("source"));
+        let output = directory.path().join("validated.mp4");
+        let legacy = directory.path().join("legacy.mp4");
+        concatenate_m4s_segments_with_init(&init, &segments, &legacy).unwrap();
+        concatenate_m4s_segments_with_init_validated(&init, &segments, &output).unwrap();
+
+        assert_eq!(
+            video_packet_contents(&output),
+            video_packet_contents(&legacy)
+        );
+        assert_eq!(decoded_video_frame_count(&output), 320);
+        assert!(super::probe_video_can_decode(&output).unwrap());
+        super::probe_video_seek_points(&output, 8).unwrap();
+        assert_no_validated_aggregate(directory.path());
+    }
+
+    #[test]
+    fn validated_m4s_concat_rejects_undecodable_payload_and_retains_sources() {
+        let directory = tempfile::tempdir().unwrap();
+        let (init, segments) = encode_test_segments(&directory.path().join("source"));
+        let init_bytes = std::fs::read(&init).unwrap();
+        let mut damaged_segments = Vec::new();
+        for segment in &segments {
+            let mut bytes = std::fs::read(segment).unwrap();
+            let mut position = 0;
+            let mut payloads = 0;
+            while position < bytes.len() {
+                let size =
+                    u32::from_be_bytes(bytes[position..position + 4].try_into().unwrap()) as usize;
+                assert!(size >= 8 && size <= bytes.len() - position);
+                if &bytes[position + 4..position + 8] == b"mdat" {
+                    bytes[position + 8..position + size].fill(0);
+                    payloads += 1;
+                }
+                position += size;
+            }
+            assert!(payloads > 0);
+            std::fs::write(segment, &bytes).unwrap();
+            damaged_segments.push(bytes);
+        }
+        let output = directory.path().join("invalid.mp4");
+        assert!(concatenate_m4s_segments_with_init_validated(&init, &segments, &output).is_err());
+        assert_eq!(std::fs::read(&init).unwrap(), init_bytes);
+        for (segment, expected) in segments.iter().zip(damaged_segments) {
+            assert_eq!(std::fs::read(segment).unwrap(), expected);
+        }
+        assert_no_validated_aggregate(directory.path());
+    }
+
+    #[test]
+    fn validated_m4s_concat_rejects_late_packet_read_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let (init, segments) = encode_test_segments(&directory.path().join("source"));
+        let output = directory.path().join("read-error.mp4");
+        let mut packets_read = 0;
+        let result = concatenate_m4s_segments_with_init_validated_with_reader(
+            &init,
+            &segments,
+            &output,
+            |packet, input| match packet.read(input) {
+                Ok(()) => {
+                    packets_read += 1;
+                    Ok(())
+                }
+                Err(ffmpeg::Error::Eof) => Err(ffmpeg::Error::InvalidData),
+                Err(error) => Err(error),
+            },
+        );
+        assert_eq!(packets_read, 320);
+        assert!(matches!(
+            result,
+            Err(super::RemuxError::Ffmpeg(ffmpeg::Error::InvalidData))
+        ));
+        assert_no_validated_aggregate(directory.path());
+    }
+
+    #[test]
+    fn validated_m4s_concat_rejects_corrupt_packets_after_valid_frames() {
+        let directory = tempfile::tempdir().unwrap();
+        let (init, segments) = encode_test_segments(&directory.path().join("source"));
+        let output = directory.path().join("corrupt-packet.mp4");
+        let mut packets_read = 0;
+        let result = concatenate_m4s_segments_with_init_validated_with_reader(
+            &init,
+            &segments,
+            &output,
+            |packet, input| {
+                packet.read(input)?;
+                packets_read += 1;
+                if packets_read == 160 {
+                    packet.set_flags(packet.flags() | ffmpeg::packet::Flags::CORRUPT);
+                }
+                Ok(())
+            },
+        );
+        assert_eq!(packets_read, 160);
+        assert!(matches!(
+            result,
+            Err(super::RemuxError::VideoValidation("Corrupt video packet"))
+        ));
+        assert_no_validated_aggregate(directory.path());
+    }
 
     #[test]
     fn concat_entries_resolve_fragments_from_the_list_directory() {

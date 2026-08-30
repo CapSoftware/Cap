@@ -5,9 +5,10 @@ use std::{
 
 use cap_enc_ffmpeg::fragmented_mp4::tail_is_complete;
 use cap_enc_ffmpeg::remux::{
-    concatenate_audio_to_ogg, concatenate_m4s_segments_with_init, concatenate_video_fragments,
-    get_media_duration, get_video_fps, merge_video_audio, probe_media_valid,
-    probe_video_can_decode, probe_video_seek_points, remux_file,
+    concatenate_audio_to_ogg, concatenate_m4s_segments_with_init,
+    concatenate_m4s_segments_with_init_validated, concatenate_video_fragments, get_media_duration,
+    get_video_fps, merge_video_audio, probe_media_valid, probe_video_can_decode,
+    probe_video_seek_points, remux_file,
 };
 use cap_project::{
     AudioMeta, Cursors, MultipleSegment, MultipleSegments, ProjectConfiguration, RecordingMeta,
@@ -1010,25 +1011,32 @@ impl RecoveryManager {
         video_validation: VideoValidation,
     ) -> Result<(), RecoveryError> {
         for segment in &recording.recoverable_segments {
-            validate_recovery_video_inputs(
-                &segment.display_fragments,
-                segment.display_init_segment.as_deref(),
-                &recording.project_path,
-                video_validation,
-            )?;
-            let display_dir = recording.project_path.join(format!(
-                "content/segments/segment-{}/display",
-                segment.index
-            ));
-            for (_, init, fragments) in Self::collect_respawn_groups(&display_dir, None) {
+            if video_validation == VideoValidation::Full || segment.display_init_segment.is_none() {
                 validate_recovery_video_inputs(
-                    &fragments,
-                    Some(&init),
+                    &segment.display_fragments,
+                    segment.display_init_segment.as_deref(),
                     &recording.project_path,
                     video_validation,
                 )?;
             }
-            if let Some(fragments) = &segment.camera_fragments {
+            let display_dir = recording.project_path.join(format!(
+                "content/segments/segment-{}/display",
+                segment.index
+            ));
+            if video_validation == VideoValidation::Full || segment.display_init_segment.is_none() {
+                for (_, init, fragments) in Self::collect_respawn_groups(&display_dir, None) {
+                    validate_recovery_video_inputs(
+                        &fragments,
+                        Some(&init),
+                        &recording.project_path,
+                        video_validation,
+                    )?;
+                }
+            }
+            if let Some(fragments) = &segment.camera_fragments
+                && (video_validation == VideoValidation::Full
+                    || segment.camera_init_segment.is_none())
+            {
                 validate_recovery_video_inputs(
                     fragments,
                     segment.camera_init_segment.as_deref(),
@@ -1168,7 +1176,7 @@ impl RecoveryManager {
                     finalization_info!("Moving single display fragment to {:?}", display_output);
                     std::fs::rename(source, &display_output)?;
                 }
-                Self::validate_required_video(&display_output, "display")?;
+                Self::validate_required_video(&display_output, "display", video_validation)?;
                 if display_dir.exists()
                     && let Err(e) = std::fs::remove_dir_all(&display_dir)
                 {
@@ -1176,13 +1184,20 @@ impl RecoveryManager {
                 }
             } else if !segment.display_fragments.is_empty() {
                 let finalize_result = if display_dir.exists() {
-                    Self::finalize_to_progressive_mp4(&display_dir, &display_output).map(|_| ())
+                    Self::finalize_to_progressive_mp4_with_validation(
+                        &display_dir,
+                        &display_output,
+                        None,
+                        video_validation,
+                    )
+                    .map(|_| ())
                 } else {
                     Self::finalize_fragments_to_progressive_mp4(
                         &segment.display_fragments,
                         segment.display_init_segment.as_deref(),
                         &display_output,
                         "display",
+                        video_validation,
                     )
                 };
 
@@ -1225,13 +1240,14 @@ impl RecoveryManager {
                     if camera_frags[0] != camera_output {
                         std::fs::rename(&camera_frags[0], &camera_output)?;
                     }
-                    Self::validate_required_video(&camera_output, "camera")?;
+                    Self::validate_required_video(&camera_output, "camera", video_validation)?;
                 } else {
                     Self::finalize_fragments_to_progressive_mp4(
                         camera_frags,
                         segment.camera_init_segment.as_deref(),
                         &camera_output,
                         "camera",
+                        video_validation,
                     )?;
                 }
                 let camera_dir = segment_dir.join("camera");
@@ -1348,11 +1364,13 @@ impl RecoveryManager {
             let dir = recording
                 .project_path
                 .join(format!("content/segments/segment-{}", segment.index));
-            validate_recovery_track(
-                &dir.join("display.mp4"),
-                ffmpeg::media::Type::Video,
-                video_validation,
-            )?;
+            if video_validation == VideoValidation::Full {
+                validate_recovery_track(
+                    &dir.join("display.mp4"),
+                    ffmpeg::media::Type::Video,
+                    video_validation,
+                )?;
+            }
             for (fragments, name, kind) in [
                 (
                     segment.camera_fragments.as_ref(),
@@ -1370,7 +1388,10 @@ impl RecoveryManager {
                     ffmpeg::media::Type::Audio,
                 ),
             ] {
-                if fragments.is_some() {
+                if fragments.is_some()
+                    && (kind != ffmpeg::media::Type::Video
+                        || video_validation == VideoValidation::Full)
+                {
                     validate_recovery_track(&dir.join(name), kind, video_validation)?;
                 }
             }
@@ -1531,14 +1552,22 @@ impl RecoveryManager {
             }
             Self::rescue_pending_tmp_fragments(&display, None);
             let video = Self::find_complete_fragments_with_init(&display);
-            validate_recovery_video_inputs(
-                &video.fragments,
-                video.init_segment.as_deref(),
-                &workspace,
-                video_validation,
-            )?;
-            Self::finalize_instant_staged(&display, &audio, &final_output)?;
-            validate_recovery_track(&final_output, ffmpeg::media::Type::Video, video_validation)?;
+            if video_validation == VideoValidation::Full || video.init_segment.is_none() {
+                validate_recovery_video_inputs(
+                    &video.fragments,
+                    video.init_segment.as_deref(),
+                    &workspace,
+                    video_validation,
+                )?;
+            }
+            Self::finalize_instant_staged(&display, &audio, &final_output, video_validation)?;
+            if video_validation == VideoValidation::Full {
+                validate_recovery_track(
+                    &final_output,
+                    ffmpeg::media::Type::Video,
+                    video_validation,
+                )?;
+            }
             if expected_audio {
                 validate_recovered_track(&final_output, ffmpeg::media::Type::Audio)?;
             }
@@ -1571,9 +1600,15 @@ impl RecoveryManager {
         display_dir: &Path,
         audio_dir: &Path,
         output: &Path,
+        video_validation: VideoValidation,
     ) -> Result<PathBuf, RecoveryError> {
         if !audio_dir.exists() {
-            return Self::finalize_to_progressive_mp4(display_dir, output);
+            return Self::finalize_to_progressive_mp4_with_validation(
+                display_dir,
+                output,
+                None,
+                video_validation,
+            );
         }
 
         Self::rescue_pending_tmp_fragments(audio_dir, None);
@@ -1602,7 +1637,12 @@ impl RecoveryManager {
         let merged_output = parent.join(format!("{stem}.merged.mp4"));
 
         let result = (|| {
-            Self::finalize_to_progressive_mp4(display_dir, &video_output)?;
+            Self::finalize_to_progressive_mp4_with_validation(
+                display_dir,
+                &video_output,
+                None,
+                video_validation,
+            )?;
             Self::finalize_audio_fragments_to_progressive_mp4(
                 &audio_info.fragments,
                 audio_info.init_segment.as_deref(),
@@ -1611,7 +1651,7 @@ impl RecoveryManager {
             )?;
             merge_video_audio(&video_output, &audio_output, &merged_output)
                 .map_err(RecoveryError::MediaMerge)?;
-            Self::validate_required_video(&merged_output, "display")?;
+            Self::validate_required_video(&merged_output, "display", video_validation)?;
             replace_file(&merged_output, output)?;
             Ok(output.to_path_buf())
         })();
@@ -1630,6 +1670,20 @@ impl RecoveryManager {
         output: &Path,
         health_tx: Option<&HealthSender>,
     ) -> Result<PathBuf, RecoveryError> {
+        Self::finalize_to_progressive_mp4_with_validation(
+            fragmented_dir,
+            output,
+            health_tx,
+            VideoValidation::Full,
+        )
+    }
+
+    fn finalize_to_progressive_mp4_with_validation(
+        fragmented_dir: &Path,
+        output: &Path,
+        health_tx: Option<&HealthSender>,
+        video_validation: VideoValidation,
+    ) -> Result<PathBuf, RecoveryError> {
         Self::rescue_pending_tmp_fragments(fragmented_dir, health_tx);
 
         let info = Self::find_complete_fragments_with_init(fragmented_dir);
@@ -1645,6 +1699,7 @@ impl RecoveryManager {
                 info.init_segment.as_deref(),
                 output,
                 "display",
+                video_validation,
             )?;
             return Ok(output.to_path_buf());
         }
@@ -1663,6 +1718,7 @@ impl RecoveryManager {
             info.init_segment.as_deref(),
             &main_tmp,
             "display",
+            video_validation,
         )?;
         temp_paths.push(main_tmp.clone());
         group_outputs.push(main_tmp);
@@ -1674,6 +1730,7 @@ impl RecoveryManager {
                 Some(init.as_path()),
                 &group_tmp,
                 &format!("display respawn-{n}"),
+                video_validation,
             )?;
             temp_paths.push(group_tmp.clone());
             group_outputs.push(group_tmp);
@@ -1693,7 +1750,7 @@ impl RecoveryManager {
         }
 
         concat_result?;
-        Self::validate_required_video(output, "display")?;
+        Self::validate_required_video(output, "display", video_validation)?;
 
         Ok(output.to_path_buf())
     }
@@ -1703,6 +1760,7 @@ impl RecoveryManager {
         init_segment: Option<&Path>,
         output: &Path,
         label: &str,
+        video_validation: VideoValidation,
     ) -> Result<(), RecoveryError> {
         if fragments.is_empty() {
             return Err(RecoveryError::NoRecoverableSegments);
@@ -1714,8 +1772,15 @@ impl RecoveryManager {
                 fragments.len(),
                 output
             );
-            concatenate_m4s_segments_with_init(init_path, fragments, output)
-                .map_err(RecoveryError::VideoConcat)?;
+            match video_validation {
+                VideoValidation::Bounded => {
+                    concatenate_m4s_segments_with_init_validated(init_path, fragments, output)
+                }
+                VideoValidation::Full => {
+                    concatenate_m4s_segments_with_init(init_path, fragments, output)
+                }
+            }
+            .map_err(RecoveryError::VideoConcat)?;
         } else {
             finalization_info!(
                 "Concatenating {} {label} fragments to {:?}",
@@ -1725,7 +1790,7 @@ impl RecoveryManager {
             concatenate_video_fragments(fragments, output).map_err(RecoveryError::VideoConcat)?;
         }
 
-        Self::validate_required_video(output, label)?;
+        Self::validate_required_video(output, label, video_validation)?;
         Ok(())
     }
 
@@ -1759,10 +1824,16 @@ impl RecoveryManager {
         Ok(())
     }
 
-    fn validate_required_video(path: &Path, label: &str) -> Result<(), RecoveryError> {
+    fn validate_required_video(
+        path: &Path,
+        label: &str,
+        video_validation: VideoValidation,
+    ) -> Result<(), RecoveryError> {
         finalization_info!("Validating finalized {} video: {:?}", label, path);
 
-        Self::ensure_video_decodes(path, label)?;
+        if video_validation == VideoValidation::Full {
+            Self::ensure_video_decodes(path, label)?;
+        }
 
         if let Err(seek_error) = probe_video_seek_points(path, EXPORT_SEEK_PROBE_SAMPLE_COUNT) {
             finalization_info!(
@@ -1771,6 +1842,9 @@ impl RecoveryManager {
                 seek_error
             );
             Self::normalize_recovered_video(path, label)?;
+        }
+        if video_validation == VideoValidation::Bounded {
+            validate_recovery_track(path, ffmpeg::media::Type::Video, video_validation)?;
         }
 
         Ok(())
