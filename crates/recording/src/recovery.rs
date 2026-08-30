@@ -2358,7 +2358,6 @@ fn copy_recovery_input(source: &Path, destination: &Path) -> Result<(), Recovery
 fn recovery_snapshot(
     project: &Path,
 ) -> Result<std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>, RecoveryError> {
-    use sha2::Digest;
     fn visit(
         root: &Path,
         path: &Path,
@@ -2376,7 +2375,7 @@ fn recovery_snapshot(
                 visit(root, &entry?.path(), entries)?;
             }
         } else if metadata.is_file() {
-            let mut digest = sha2::Sha256::new();
+            let mut digest = blake3::Hasher::new();
             use std::io::Read;
             let mut input = std::fs::File::open(path)?;
             let mut buffer = [0_u8; 65536];
@@ -2387,7 +2386,7 @@ fn recovery_snapshot(
                 }
                 digest.update(&buffer[..count]);
             }
-            let _ = entries.insert(relative, Some(digest.finalize().to_vec()));
+            let _ = entries.insert(relative, Some(digest.finalize().as_bytes().to_vec()));
         } else {
             return Err(RecoveryError::Validation(format!(
                 "Unsupported recovery input: {}",
@@ -3405,8 +3404,6 @@ mod transactional_recovery_tests {
 
     #[test]
     fn interrupted_rollback_reconciles_and_relaunches_at_every_rename_boundary() {
-        use sha2::Digest;
-
         for had_config in [false, true] {
             for failure in 2..=4 {
                 let last_rollback = match failure {
@@ -3449,10 +3446,10 @@ mod transactional_recovery_tests {
                             if let (Ok(relative), Some(bytes)) =
                                 (path.strip_prefix("content/segments"), bytes)
                             {
-                                let actual_digest = sha2::Sha256::digest(
-                                    std::fs::read(raw.join(relative)).unwrap(),
-                                )
-                                .to_vec();
+                                let actual_digest =
+                                    blake3::hash(&std::fs::read(raw.join(relative)).unwrap())
+                                        .as_bytes()
+                                        .to_vec();
                                 assert_eq!(&actual_digest, bytes);
                             }
                         }
@@ -4012,7 +4009,19 @@ mod transactional_recovery_tests {
     fn recovery_source_snapshot_detects_bytes_and_whole_segment_changes() {
         let (_temporary, project, _workspace) = publication_fixture();
         let before = recovery_snapshot(&project).unwrap();
-        std::fs::write(project.join("content/segments/raw.m4s"), b"different raw").unwrap();
+        let raw = project.join("content/segments/raw.m4s");
+        let modified = std::fs::metadata(&raw).unwrap().modified().unwrap();
+        std::fs::write(&raw, b"modified raw").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&raw)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(&raw).unwrap().modified().unwrap(),
+            modified
+        );
         assert_ne!(recovery_snapshot(&project).unwrap(), before);
         std::fs::write(project.join("content/segments/raw.m4s"), b"original raw").unwrap();
         assert_eq!(recovery_snapshot(&project).unwrap(), before);

@@ -51,6 +51,7 @@ either = "1.13.0"
 tracing-subscriber = { version = "0.3.19" }
 relative-path = "1.9.3"
 tokio-util = "0.7.15"
+blake3 = "1.8.2"
 sha2 = "0.10.9"
 hex = "0.4.3"
 ringbuf = "0.4.8"
