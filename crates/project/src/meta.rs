@@ -228,6 +228,18 @@ impl RecordingMeta {
                 .map_err(Either::Right)?;
         }
         prepare(temporary.as_file_mut(), meta.as_bytes()).map_err(Either::Right)?;
+        #[cfg(windows)]
+        {
+            // tempfile 3.23 lacks Rust's Windows rename fallback for open readers.
+            let (file, path) = temporary
+                .keep()
+                .map_err(|error| Either::Right(error.error))?;
+            let mut path = tempfile::TempPath::from_path(path);
+            std::fs::rename(&path, &meta_path).map_err(Either::Right)?;
+            path.disable_cleanup(true);
+            drop(file);
+        }
+        #[cfg(not(windows))]
         drop(
             temporary
                 .persist(&meta_path)
