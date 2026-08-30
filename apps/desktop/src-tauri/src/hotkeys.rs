@@ -95,6 +95,7 @@ fn clean_capture_shortcut() -> Shortcut {
     Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::F9)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn existing_clean_capture_stop(store: &HotkeysStore) -> Result<bool, String> {
     let shortcut = clean_capture_shortcut();
     let mut existing_stop = false;

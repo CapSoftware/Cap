@@ -59,7 +59,9 @@ impl SavedWindow {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StopRoute {
+    #[cfg(any(target_os = "linux", test))]
     Tray,
+    #[cfg(any(target_os = "linux", test))]
     Portal,
 }
 
@@ -82,7 +84,9 @@ struct Lease {
 impl StopRoute {
     fn index(self) -> usize {
         match self {
+            #[cfg(any(target_os = "linux", test))]
             Self::Tray => 0,
+            #[cfg(any(target_os = "linux", test))]
             Self::Portal => 1,
         }
     }
