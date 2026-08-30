@@ -28,6 +28,7 @@ on:
       - "crates/media-info/**"
       - "crates/project/**"
       - "scripts/recording-reliability.py"
+      - "scripts/recording-reliability-owned-process.cs"
       - "scripts/test-recording-reliability.py"
       - ".github/workflows/sync-tests.yml"
 
@@ -90,6 +91,11 @@ jobs:
         run: |
           cargo test --locked -p cap-project --lib
           python -B scripts/test-recording-reliability.py
+
+      - name: Compile recording process supervisor (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Type -Path scripts/recording-reliability-owned-process.cs
 
       - name: Install software Vulkan driver (Linux)
         if: runner.os == 'Linux'

@@ -93,6 +93,19 @@ Track Stop request → capture acknowledgement → local output ready → editor
 
 The adjacent `recording-reliability.py` is the portable entry point for clean local recording checks. It requires explicit binaries, an explicit screen/window target and a fresh output root. It records executable hashes and keeps recordings and failure logs. It must not sign applications, discover or delete the user's production library, start development servers, reset devices, change permissions or upload real user recordings.
 
+For example, with a moving test fixture already visible and an explicitly selected capture window:
+
+```sh
+python3 -B scripts/recording-reliability.py \
+  --cap /absolute/path/to/cap \
+  --ffmpeg /absolute/path/to/ffmpeg \
+  --ffprobe /absolute/path/to/ffprobe \
+  --root /absolute/path/to/new-run-directory \
+  --head SOURCE_COMMIT --window WINDOW_ID --mode both --duration 12
+```
+
+On Windows use `python` and add `--windows-job-source scripts/recording-reliability-owned-process.cs`. The bundled supervisor starts the child suspended, assigns it to an owned Job Object before resuming, and confines timeout cleanup to that job. The Python runner verifies its hash and treats forced cleanup as a failed operation. No system process names are used as kill targets. To compare builds, provide `--baseline-cap`, `--baseline-head` and `--iterations 2`; source identities are supplied assertions, while executable hashes are independently measured. Use `--system-audio` only with a known audible stimulus. Exit code 2 means required coverage remains pending, not that the whole workflow passed.
+
 Run the same assertion schema on all three OSes. A VM proves its guest capture and filesystem paths, not every physical microphone/camera/GPU. Missing devices, silent stimuli, unavailable editor controls or inaccessible cloud environments are `PENDING`, not `PASS`. Requested audio must be present and demonstrably non-silent; A/V synchronization needs an independently measurable flash/tone or equivalent stimulus, not just container timestamps.
 
 | Scenario family | Required evidence |
