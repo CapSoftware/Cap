@@ -41,6 +41,8 @@ use tokio::{
 };
 use tokio_util::io::ReaderStream;
 use tracing::{Span, debug, error, info, info_span, instrument, trace, warn};
+
+pub(crate) mod resume;
 use tracing_futures::Instrument;
 
 pub struct UploadedItem {
@@ -733,12 +735,16 @@ pub struct SegmentUploader {
     pub handle: tokio::task::JoinHandle<Result<(), AuthedApiError>>,
 }
 
+type SegmentUploadTasks =
+    futures::stream::FuturesUnordered<tokio::task::JoinHandle<Result<(), AuthedApiError>>>;
+
 struct SegmentUploadState {
     uploaded_video_segments: std::collections::HashMap<u32, f64>,
     uploaded_audio_segments: std::collections::HashMap<u32, f64>,
     video_init_uploaded: bool,
     audio_init_uploaded: bool,
     failed_segments: Vec<FailedSegmentInfo>,
+    worker_error: Option<String>,
     total_bytes_uploaded: u64,
 }
 
@@ -761,6 +767,7 @@ impl SegmentUploadState {
             video_init_uploaded: false,
             audio_init_uploaded: false,
             failed_segments: Vec::new(),
+            worker_error: None,
             total_bytes_uploaded: 0,
         }
     }
@@ -793,6 +800,85 @@ impl SegmentUploadState {
         let mut manifest = self.to_manifest();
         manifest.is_complete = true;
         manifest
+    }
+
+    fn record_worker_failure(&mut self, error: String) {
+        warn!(%error, "Segment upload worker failed");
+        if self.worker_error.is_none() {
+            self.worker_error = Some(error);
+        }
+    }
+
+    fn record_task_result(
+        &mut self,
+        result: Result<Result<(), AuthedApiError>, tokio::task::JoinError>,
+    ) {
+        let error = match result {
+            Ok(Ok(())) => return,
+            Ok(Err(error)) => error.to_string(),
+            Err(error) => format!("Segment upload task did not complete: {error}"),
+        };
+        self.record_worker_failure(error);
+    }
+
+    fn completed_manifest(&self) -> Result<SegmentUploadManifest, AuthedApiError> {
+        if let Some(error) = &self.worker_error {
+            return Err(error.clone().into());
+        }
+        if !self.failed_segments.is_empty() {
+            return Err(format!(
+                "Segment upload is incomplete: {} required segment uploads failed",
+                self.failed_segments.len()
+            )
+            .into());
+        }
+        let manifest = self.to_complete_manifest();
+        if !manifest.has_video_content() {
+            return Err("Segment upload completed without video segments".into());
+        }
+        Ok(manifest)
+    }
+}
+
+async fn publish_completed_segments<T, F, Fut>(
+    state: &Mutex<SegmentUploadState>,
+    publish: F,
+) -> Result<T, AuthedApiError>
+where
+    F: FnOnce(SegmentUploadManifest) -> Fut,
+    Fut: std::future::Future<Output = Result<T, AuthedApiError>>,
+{
+    let manifest = state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .completed_manifest()?;
+    publish(manifest).await
+}
+
+async fn drain_segment_upload_tasks(
+    state: &Mutex<SegmentUploadState>,
+    tasks: &mut SegmentUploadTasks,
+) {
+    while let Some(result) = tasks.next().await {
+        state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .record_task_result(result);
+    }
+}
+
+async fn cancel_segment_prefetch_tasks(
+    tasks: &mut futures::stream::FuturesUnordered<tokio::task::JoinHandle<()>>,
+) {
+    for task in tasks.iter() {
+        task.abort();
+    }
+    while let Some(result) = tasks.next().await {
+        if let Err(error) = result
+            && !error.is_cancelled()
+        {
+            warn!(%error, "Optional segment URL prefetch failed");
+        }
     }
 }
 
@@ -955,15 +1041,36 @@ impl SegmentUploader {
         const FILE_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
         const DATA_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 
+        Self::read_segment_data_with_timeouts(
+            file_path,
+            subpath,
+            expected_size,
+            FILE_WAIT_TIMEOUT,
+            DATA_WAIT_TIMEOUT,
+        )
+        .await
+    }
+
+    async fn read_segment_data_with_timeouts(
+        file_path: &Path,
+        subpath: &str,
+        expected_size: u64,
+        file_wait_timeout: Duration,
+        data_wait_timeout: Duration,
+    ) -> Result<Bytes, AuthedApiError> {
+        if expected_size == 0 {
+            return Err(format!("segment_upload/{subpath}: expected segment size is zero").into());
+        }
+
         let start = Instant::now();
         let actual_path = loop {
             if file_path.exists() {
                 break file_path.to_path_buf();
             }
-            if start.elapsed() > FILE_WAIT_TIMEOUT {
+            if start.elapsed() >= file_wait_timeout {
                 return Err(format!(
                     "segment_upload/timeout/{subpath}: file not found after {:?} ({})",
-                    FILE_WAIT_TIMEOUT,
+                    file_wait_timeout,
                     file_path.display()
                 )
                 .into());
@@ -980,22 +1087,16 @@ impl SegmentUploader {
                 )
             })?;
 
-            let size_ok = expected_size == 0 || data.len() as u64 >= expected_size;
-            if !data.is_empty() && size_ok {
+            if data.len() as u64 == expected_size {
                 break data;
             }
 
-            if start.elapsed() > DATA_WAIT_TIMEOUT {
-                if data.is_empty() {
-                    warn!(
-                        subpath,
-                        path = %actual_path.display(),
-                        "Segment file still empty after {:?}, skipping upload",
-                        DATA_WAIT_TIMEOUT
-                    );
-                    return Ok(Bytes::new());
-                }
-                break data;
+            if data.len() as u64 > expected_size || start.elapsed() >= data_wait_timeout {
+                return Err(format!(
+                    "segment_upload/{subpath}: expected {expected_size} bytes, found {}",
+                    data.len()
+                )
+                .into());
             }
 
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1155,25 +1256,23 @@ impl SegmentUploader {
         });
         project_meta
             .save_for_project()
-            .map_err(|e| error!("Failed to save recording meta: {e}"))
-            .ok();
+            .map_err(|error| format!("Failed to persist resumable segment upload: {error}"))?;
 
         let state = Arc::new(Mutex::new(SegmentUploadState::new()));
         let semaphore = Arc::new(tokio::sync::Semaphore::new(6));
         let read_semaphore = Arc::new(tokio::sync::Semaphore::new(12));
         let consecutive_failures = Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let mut in_flight = futures::stream::FuturesUnordered::<
-            tokio::task::JoinHandle<Result<(), AuthedApiError>>,
-        >::new();
+        let mut in_flight = SegmentUploadTasks::new();
+        let mut prefetch_tasks = futures::stream::FuturesUnordered::new();
 
         let url_cache = Arc::new(PresignedUrlCache::new());
         {
             let cache = url_cache.clone();
             let app = app.clone();
             let vid = video_id.clone();
-            tokio::spawn(async move {
+            prefetch_tasks.push(tokio::spawn(async move {
                 cache.prefetch(&app, &vid, 20).await;
-            });
+            }));
         }
 
         let manifest_dirty = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1262,7 +1361,18 @@ impl SegmentUploader {
                         }
                     }
                 })
-                .map_err(|e| format!("Failed to spawn bridge thread: {e}"))?
+                .map_err(|e| format!("Failed to spawn bridge thread: {e}"))
+        };
+
+        let bridge_handle = match bridge_handle {
+            Ok(handle) => handle,
+            Err(error) => {
+                manifest_shutdown.store(true, std::sync::atomic::Ordering::Release);
+                manifest_notify.notify_one();
+                let _ = manifest_handle.await;
+                cancel_segment_prefetch_tasks(&mut prefetch_tasks).await;
+                return Err(error.into());
+            }
         };
 
         use futures::StreamExt as _;
@@ -1273,9 +1383,7 @@ impl SegmentUploader {
             tokio::select! {
                 biased;
                 Some(join_result) = in_flight.next(), if !in_flight.is_empty() => {
-                    if let Ok(Err(e)) = join_result {
-                        warn!("Segment upload task error: {e}");
-                    }
+                    state.lock().unwrap_or_else(|error| error.into_inner()).record_task_result(join_result);
                 }
                 maybe_event = async_segment_rx.recv() => {
                     let Some(event) = maybe_event else {
@@ -1327,7 +1435,6 @@ impl SegmentUploader {
                         );
 
                         let file_data = match file_result {
-                            Ok(data) if data.is_empty() => return Ok(()),
                             Ok(data) => data,
                             Err(e) => {
                                 let prev = failures_clone
@@ -1450,9 +1557,9 @@ impl SegmentUploader {
                         let app_ref = app.clone();
                         let vid_ref = video_id.clone();
                         let from = event.index + 1;
-                        tokio::spawn(async move {
+                        prefetch_tasks.push(tokio::spawn(async move {
                             cache.extend_prefetch(&app_ref, &vid_ref, from, 20).await;
-                        });
+                        }));
                     }
 
                     if consecutive_failures.load(std::sync::atomic::Ordering::Relaxed) >= CONSECUTIVE_FAILURE_LIMIT {
@@ -1466,18 +1573,24 @@ impl SegmentUploader {
             }
         }
 
-        while let Some(join_result) = in_flight.next().await {
-            if let Ok(Err(e)) = join_result {
-                warn!("Segment upload task error: {e}");
-            }
-        }
+        drain_segment_upload_tasks(&state, &mut in_flight).await;
 
-        let _ = bridge_handle.join();
+        if bridge_handle.join().is_err() {
+            state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .record_worker_failure("Segment upload bridge did not complete".to_string());
+        }
 
         manifest_shutdown.store(true, std::sync::atomic::Ordering::Release);
         manifest_dirty.store(true, std::sync::atomic::Ordering::Release);
         manifest_notify.notify_one();
-        manifest_handle.await.ok();
+        let manifest_result = manifest_handle.await;
+        state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .record_task_result(manifest_result.map(|()| Ok(())));
+        cancel_segment_prefetch_tasks(&mut prefetch_tasks).await;
 
         let failed = {
             let s = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -1494,7 +1607,6 @@ impl SegmentUploader {
                     Self::read_segment_data(&seg.file_path, &seg.subpath, seg.expected_size).await;
 
                 let file_data = match file_data {
-                    Ok(data) if data.is_empty() => continue,
                     Ok(data) => data,
                     Err(e) => {
                         warn!(
@@ -1548,136 +1660,108 @@ impl SegmentUploader {
             }
         }
 
-        {
-            let s = state.lock().unwrap_or_else(|e| e.into_inner());
-            if !s.failed_segments.is_empty() {
-                let missing: Vec<_> = s
-                    .failed_segments
-                    .iter()
-                    .map(|f| f.subpath.as_str())
-                    .collect();
-                error!(
-                    count = s.failed_segments.len(),
-                    segments = ?missing,
-                    "Completing upload with missing segments - video may have gaps"
-                );
+        let completion_state = state.as_ref();
+        publish_completed_segments(completion_state, |final_manifest| async move {
+            {
+                let mut manifest_err: Option<AuthedApiError> = None;
+                for attempt in 0..3u32 {
+                    match Self::upload_manifest(&app, &video_id, &final_manifest, &url_cache).await
+                    {
+                        Ok(()) => {
+                            manifest_err = None;
+                            break;
+                        }
+                        Err(e) => {
+                            warn!(
+                                attempt = attempt + 1,
+                                "Failed to upload final manifest: {e}"
+                            );
+                            manifest_err = Some(e);
+                            if attempt < 2 {
+                                tokio::time::sleep(Duration::from_millis(
+                                    1000 * (1 << attempt) as u64,
+                                ))
+                                .await;
+                            }
+                        }
+                    }
+                }
+                if let Some(e) = manifest_err {
+                    error!("All attempts to upload final manifest failed for {video_id}");
+
+                    // Leave the UploadMeta::SegmentUpload written at upload start in
+                    // place so resume_uploads retries this recording on next launch.
+                    emit_upload_complete(&app, &video_id);
+
+                    return Err(format!("segment_upload/final_manifest: {e}").into());
+                }
             }
-        }
 
-        let final_manifest = state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .to_complete_manifest();
-        if !final_manifest.has_video_content() {
-            let error = format!("Segment upload completed without video segments for {video_id}");
-            error!(video_id, "Segment upload completed without video segments");
+            {
+                let mut signal_ok = false;
+                for attempt in 0..3u32 {
+                    match api::signal_recording_complete(&app, &video_id).await {
+                        Ok(()) => {
+                            signal_ok = true;
+                            break;
+                        }
+                        Err(e) => {
+                            warn!(
+                                attempt = attempt + 1,
+                                "Failed to signal recording complete: {e}"
+                            );
+                            if attempt < 2 {
+                                tokio::time::sleep(Duration::from_millis(
+                                    1000 * (1 << attempt) as u64,
+                                ))
+                                .await;
+                            }
+                        }
+                    }
+                }
+                if !signal_ok {
+                    error!("All attempts to signal recording complete failed for {video_id}");
 
-            if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir) {
-                meta.upload = Some(UploadMeta::Failed {
-                    error: error.clone(),
-                });
-                if let Err(err) = meta.save_for_project() {
-                    warn!("Failed to save failed segment upload metadata: {err}");
+                    if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir) {
+                        meta.upload = Some(UploadMeta::SegmentUpload {
+                            video_id: video_id.clone(),
+                            pre_created_video: pre_created_video.clone(),
+                            recording_dir: recording_dir.clone(),
+                        });
+                        meta.save_for_project().ok();
+                    }
+
+                    emit_upload_complete(&app, &video_id);
+
+                    return Err(format!(
+                        "Failed to signal recording complete for {video_id} after 3 attempts"
+                    )
+                    .into());
                 }
             }
 
             emit_upload_complete(&app, &video_id);
 
-            return Err(error.into());
-        }
-        {
-            let mut manifest_err: Option<AuthedApiError> = None;
-            for attempt in 0..3u32 {
-                match Self::upload_manifest(&app, &video_id, &final_manifest, &url_cache).await {
-                    Ok(()) => {
-                        manifest_err = None;
-                        break;
-                    }
-                    Err(e) => {
-                        warn!(
-                            attempt = attempt + 1,
-                            "Failed to upload final manifest: {e}"
-                        );
-                        manifest_err = Some(e);
-                        if attempt < 2 {
-                            tokio::time::sleep(Duration::from_millis(1000 * (1 << attempt) as u64))
-                                .await;
-                        }
-                    }
-                }
-            }
-            if let Some(e) = manifest_err {
-                error!("All attempts to upload final manifest failed for {video_id}");
-
-                // Leave the UploadMeta::SegmentUpload written at upload start in
-                // place so resume_uploads retries this recording on next launch.
-                emit_upload_complete(&app, &video_id);
-
-                return Err(format!("segment_upload/final_manifest: {e}").into());
-            }
-        }
-
-        {
-            let mut signal_ok = false;
-            for attempt in 0..3u32 {
-                match api::signal_recording_complete(&app, &video_id).await {
-                    Ok(()) => {
-                        signal_ok = true;
-                        break;
-                    }
-                    Err(e) => {
-                        warn!(
-                            attempt = attempt + 1,
-                            "Failed to signal recording complete: {e}"
-                        );
-                        if attempt < 2 {
-                            tokio::time::sleep(Duration::from_millis(1000 * (1 << attempt) as u64))
-                                .await;
-                        }
-                    }
-                }
-            }
-            if !signal_ok {
-                error!("All attempts to signal recording complete failed for {video_id}");
-
-                if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir) {
-                    meta.upload = Some(UploadMeta::SegmentUpload {
-                        video_id: video_id.clone(),
-                        pre_created_video: pre_created_video.clone(),
-                        recording_dir: recording_dir.clone(),
-                    });
-                    meta.save_for_project().ok();
-                }
-
-                emit_upload_complete(&app, &video_id);
-
-                return Err(format!(
-                    "Failed to signal recording complete for {video_id} after 3 attempts"
-                )
-                .into());
-            }
-        }
-
-        emit_upload_complete(&app, &video_id);
-
-        let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+            let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
             format!("Error reading project meta from {recording_dir:?} for upload complete: {err}")
         })?;
-        project_meta.upload = Some(UploadMeta::Complete);
-        project_meta
-            .save_for_project()
-            .map_err(|err| format!("Error saving project meta for {recording_dir:?}: {err}"))?;
+            project_meta.upload = Some(UploadMeta::Complete);
+            project_meta
+                .save_for_project()
+                .map_err(|err| format!("Error saving project meta for {recording_dir:?}: {err}"))?;
 
-        let _ = app.clipboard().write_text(pre_created_video.link.clone());
+            let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
-        let total_bytes = state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .total_bytes_uploaded;
+            let total_bytes = completion_state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .total_bytes_uploaded;
 
-        info!(total_bytes, "Segment upload complete for {video_id}");
+            info!(total_bytes, "Segment upload complete for {video_id}");
 
-        Ok(total_bytes)
+            Ok(total_bytes)
+        })
+        .await
     }
 }
 
@@ -2146,6 +2230,24 @@ fn multipart_uploader(
     .instrument(Span::current())
 }
 
+async fn read_exact_upload_chunk(
+    file_path: &Path,
+    offset: u64,
+    chunk_size: usize,
+) -> io::Result<Bytes> {
+    if chunk_size == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Upload chunk must contain bytes",
+        ));
+    }
+    let mut file = File::open(file_path).await?;
+    file.seek(std::io::SeekFrom::Start(offset)).await?;
+    let mut buffer = vec![0u8; chunk_size];
+    file.read_exact(&mut buffer).await?;
+    Ok(Bytes::from(buffer))
+}
+
 #[instrument(skip(app, failed_chunks))]
 async fn retry_failed_chunks(
     app: &AppHandle,
@@ -2166,24 +2268,9 @@ async fn retry_failed_chunks(
             "Retrying failed chunk upload"
         );
 
-        let mut file = File::open(file_path)
+        let chunk = read_exact_upload_chunk(file_path, failed.offset, failed.chunk_size)
             .await
-            .map_err(|e| format!("retry/part/{}/open: {e}", failed.part_number))?;
-        file.seek(std::io::SeekFrom::Start(failed.offset))
-            .await
-            .map_err(|e| format!("retry/part/{}/seek: {e}", failed.part_number))?;
-
-        let mut buf = vec![0u8; failed.chunk_size];
-        let mut total_read = 0;
-        while total_read < failed.chunk_size {
-            match file.read(&mut buf[total_read..]).await {
-                Ok(0) => break,
-                Ok(n) => total_read += n,
-                Err(e) => return Err(format!("retry/part/{}/read: {e}", failed.part_number).into()),
-            }
-        }
-
-        let chunk = Bytes::from(buf);
+            .map_err(|error| format!("retry/part/{}/read: {error}", failed.part_number))?;
 
         let md5_sum = use_md5_hashes.then(|| base64::encode(md5::compute(&chunk).0));
 
@@ -2634,13 +2721,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn multipart_retry_reads_exact_file_range_without_padding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("output.mp4");
+        let data = b"init-video-fragment-final";
+        std::fs::write(&path, data).unwrap();
+
+        let chunk = read_exact_upload_chunk(&path, 5, 14).await.unwrap();
+        assert_eq!(chunk.as_ref(), &data[5..19]);
+
+        for (offset, size) in [(5, data.len()), (data.len() as u64, 1)] {
+            let error = read_exact_upload_chunk(&path, offset, size)
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+        }
+        assert_eq!(
+            read_exact_upload_chunk(&path, 0, 0)
+                .await
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(
+            read_exact_upload_chunk(&path, 0, 1)
+                .await
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+    }
+
+    #[tokio::test]
     async fn read_segment_data_returns_existing_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("segment_001.m4s");
         std::fs::write(&path, b"fake segment data 12345").unwrap();
 
-        let result =
-            SegmentUploader::read_segment_data(&path, "segments/video/segment_001.m4s", 0).await;
+        let result = SegmentUploader::read_segment_data(
+            &path,
+            "segments/video/segment_001.m4s",
+            b"fake segment data 12345".len() as u64,
+        )
+        .await;
 
         let data = result.unwrap();
         assert_eq!(data.as_ref(), b"fake segment data 12345");
@@ -2658,8 +2783,12 @@ mod tests {
         });
 
         let start = Instant::now();
-        let result =
-            SegmentUploader::read_segment_data(&path, "segments/video/segment_002.m4s", 0).await;
+        let result = SegmentUploader::read_segment_data(
+            &path,
+            "segments/video/segment_002.m4s",
+            b"delayed segment data".len() as u64,
+        )
+        .await;
         let elapsed = start.elapsed();
 
         let data = result.unwrap();
@@ -2690,28 +2819,54 @@ mod tests {
             std::fs::write(&path_clone, b"full segment data here!").unwrap();
         });
 
-        let result =
-            SegmentUploader::read_segment_data(&path, "segments/video/segment_003.m4s", 20).await;
+        let result = SegmentUploader::read_segment_data(
+            &path,
+            "segments/video/segment_003.m4s",
+            b"full segment data here!".len() as u64,
+        )
+        .await;
 
         let data = result.unwrap();
-        assert!(data.len() >= 20);
+        assert_eq!(data.as_ref(), b"full segment data here!");
     }
 
     #[tokio::test]
-    async fn read_segment_data_returns_empty_bytes_for_empty_file_after_timeout() {
+    async fn read_segment_data_rejects_empty_short_oversized_and_unknown_size() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("segment_empty.m4s");
-        std::fs::write(&path, b"").unwrap();
+        let path = dir.path().join("segment.m4s");
+        for (bytes, expected_size) in [
+            (b"".as_slice(), 5),
+            (b"tiny".as_slice(), 5),
+            (b"too long".as_slice(), 5),
+            (b"valid".as_slice(), 0),
+        ] {
+            std::fs::write(&path, bytes).unwrap();
+            let result = SegmentUploader::read_segment_data_with_timeouts(
+                &path,
+                "segments/video/segment.m4s",
+                expected_size,
+                Duration::ZERO,
+                Duration::ZERO,
+            )
+            .await;
+            assert!(result.is_err(), "accepted {bytes:?} for {expected_size}");
+        }
+    }
 
-        let result = tokio::time::timeout(
-            Duration::from_secs(35),
-            SegmentUploader::read_segment_data(&path, "segments/video/segment_empty.m4s", 0),
-        )
-        .await
-        .unwrap();
-
-        let data = result.unwrap();
-        assert!(data.is_empty());
+    #[tokio::test]
+    async fn read_segment_data_rejects_missing_and_unreadable_input() {
+        let dir = tempfile::tempdir().unwrap();
+        for path in [dir.path().join("missing.m4s"), dir.path().to_path_buf()] {
+            let result = SegmentUploader::read_segment_data_with_timeouts(
+                &path,
+                "segments/video/segment.m4s",
+                5,
+                Duration::ZERO,
+                Duration::ZERO,
+            )
+            .await;
+            assert!(result.is_err());
+        }
     }
 
     #[tokio::test]
@@ -2726,8 +2881,12 @@ mod tests {
         });
 
         let start = Instant::now();
-        let result =
-            SegmentUploader::read_segment_data(&path, "segments/video/segment_fast.m4s", 0).await;
+        let result = SegmentUploader::read_segment_data(
+            &path,
+            "segments/video/segment_fast.m4s",
+            b"fast poll data".len() as u64,
+        )
+        .await;
         let elapsed = start.elapsed();
 
         assert!(result.is_ok());
@@ -3066,6 +3225,167 @@ mod tests {
             speedup > 1.5,
             "expected at least 1.5x speedup, got {speedup:.2}x (old={old_duration:?}, new={new_duration:?})"
         );
+    }
+
+    fn upload_state_with_video() -> SegmentUploadState {
+        let mut state = SegmentUploadState::new();
+        state.video_init_uploaded = true;
+        state.uploaded_video_segments.insert(1, 3.0);
+        state
+    }
+
+    #[tokio::test]
+    async fn failed_required_segment_prevents_all_completion_side_effects() {
+        use cap_enc_ffmpeg::segmented_stream::SegmentMediaType;
+
+        for (media_type, is_init) in [
+            (SegmentMediaType::Video, true),
+            (SegmentMediaType::Video, false),
+            (SegmentMediaType::Audio, true),
+            (SegmentMediaType::Audio, false),
+        ] {
+            let mut state = upload_state_with_video();
+            state.failed_segments.push(FailedSegmentInfo {
+                subpath: "required segment".to_string(),
+                file_path: PathBuf::from("required.m4s"),
+                is_init,
+                media_type,
+                index: 2,
+                duration: 3.0,
+                expected_size: 7,
+            });
+            let state = Mutex::new(state);
+            let published = AtomicUsize::new(0);
+            let result = publish_completed_segments(&state, |_| async {
+                published.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .await;
+            assert!(result.is_err());
+            assert_eq!(published.load(Ordering::SeqCst), 0);
+            assert_eq!(state.lock().unwrap().failed_segments.len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_required_segment_retry_restores_completion() {
+        let mut state = upload_state_with_video();
+        state.failed_segments.push(FailedSegmentInfo {
+            subpath: "segments/video/segment_002.m4s".to_string(),
+            file_path: PathBuf::from("segment_002.m4s"),
+            is_init: false,
+            media_type: cap_enc_ffmpeg::segmented_stream::SegmentMediaType::Video,
+            index: 2,
+            duration: 3.0,
+            expected_size: 7,
+        });
+        assert!(state.completed_manifest().is_err());
+        state.uploaded_video_segments.insert(2, 3.0);
+        state.failed_segments.clear();
+        let published = AtomicUsize::new(0);
+        let result = publish_completed_segments(&Mutex::new(state), |manifest| {
+            assert!(manifest.is_complete);
+            assert_eq!(manifest.video_segments.len(), 2);
+            published.fetch_add(1, Ordering::SeqCst);
+            async { Ok(()) }
+        })
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(published.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn missing_video_and_publication_errors_do_not_become_success() {
+        let result: Result<(), AuthedApiError> =
+            publish_completed_segments(&Mutex::new(SegmentUploadState::new()), |_| async {
+                panic!("an empty upload must not publish")
+            })
+            .await;
+        assert!(result.is_err());
+
+        let result: Result<(), AuthedApiError> =
+            publish_completed_segments(&Mutex::new(upload_state_with_video()), |_| async {
+                Err("injected manifest failure".into())
+            })
+            .await;
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("injected manifest failure")
+        );
+    }
+
+    #[tokio::test]
+    async fn panicked_and_cancelled_upload_workers_block_completion() {
+        for cancel in [false, true] {
+            let task: tokio::task::JoinHandle<Result<(), AuthedApiError>> = if cancel {
+                let task = tokio::spawn(std::future::pending());
+                task.abort();
+                task
+            } else {
+                tokio::spawn(async { panic!("injected segment worker panic") })
+            };
+            let mut state = upload_state_with_video();
+            state.record_task_result(task.await);
+            let result: Result<(), AuthedApiError> =
+                publish_completed_segments(&Mutex::new(state), |_| async {
+                    panic!("a failed worker must not publish")
+                })
+                .await;
+            assert!(result.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_upload_worker_does_not_skip_joining_other_owned_work() {
+        let state = Mutex::new(upload_state_with_video());
+        let mut tasks = SegmentUploadTasks::new();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        tasks.push(tokio::spawn(async {
+            Err("injected upload failure".into())
+        }));
+        tasks.push(tokio::spawn(async move {
+            entered_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            Ok(())
+        }));
+        entered_rx.await.unwrap();
+        let mut drain = Box::pin(drain_segment_upload_tasks(&state, &mut tasks));
+        assert!(futures::poll!(&mut drain).is_pending());
+        release_tx.send(()).unwrap();
+        drain.await;
+        assert!(tasks.is_empty());
+        let result: Result<(), AuthedApiError> = publish_completed_segments(&state, |_| async {
+            panic!("a failed upload must not publish after its workers are joined")
+        })
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn optional_prefetch_panic_does_not_block_successful_media_completion() {
+        let mut tasks = futures::stream::FuturesUnordered::new();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        tasks.push(tokio::spawn(async move {
+            entered_tx.send(()).unwrap();
+            panic!("injected optional URL prefetch panic");
+        }));
+        entered_rx.await.unwrap();
+        assert!(tasks.iter().all(tokio::task::JoinHandle::is_finished));
+        cancel_segment_prefetch_tasks(&mut tasks).await;
+        assert!(tasks.is_empty());
+
+        let published = AtomicUsize::new(0);
+        let result =
+            publish_completed_segments(&Mutex::new(upload_state_with_video()), |_| async {
+                published.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(published.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

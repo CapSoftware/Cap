@@ -7165,7 +7165,6 @@ fn reopen_main_window(app: &AppHandle) {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn instant_upload_may_resume(inner: &RecordingMetaInner) -> bool {
     !matches!(
         inner,
@@ -7175,7 +7174,6 @@ fn instant_upload_may_resume(inner: &RecordingMetaInner) -> bool {
     )
 }
 
-#[cfg(target_os = "linux")]
 fn load_instant_resume_candidate(path: &std::path::Path) -> Result<Option<RecordingMeta>, String> {
     let mut meta = RecordingMeta::load_for_project(path).map_err(|error| error.to_string())?;
     if matches!(
@@ -7203,10 +7201,7 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
         let path = entry.path();
         if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
             // Load recording meta to check for in-progress recordings
-            #[cfg(target_os = "linux")]
             let candidate = load_instant_resume_candidate(&path);
-            #[cfg(not(target_os = "linux"))]
-            let candidate = RecordingMeta::load_for_project(&path).map(Some);
             if let Ok(Some(mut meta)) = candidate {
                 let mut needs_save = false;
 
@@ -7237,11 +7232,9 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                     error!("Failed to save recording meta for {path:?}: {err}");
                 }
 
-                #[cfg(target_os = "linux")]
                 if !instant_upload_may_resume(&meta.inner) {
                     continue;
                 }
-                #[cfg(target_os = "linux")]
                 let required_audio = matches!(
                     &meta.inner,
                     RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
@@ -7339,105 +7332,45 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                             pre_created_video,
                             recording_dir,
                         } => {
-                            info!(video_id = video_id, "Resuming segment upload on restart");
-                            let content_dir = recording_dir.join("content");
-                            let display_dir = content_dir.join("display");
-                            let audio_dir = content_dir.join("audio");
-
-                            let (segment_tx, segment_rx) = std::sync::mpsc::channel::<
-                                cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent,
-                            >();
-
-                            use cap_enc_ffmpeg::segmented_stream::{
-                                SegmentCompletedEvent, SegmentMediaType,
-                            };
-
-                            fn read_durations_from_manifest(
-                                dir: &std::path::Path,
-                            ) -> std::collections::HashMap<u32, f64> {
-                                let manifest_path = dir.join("manifest.json");
-                                let mut map = std::collections::HashMap::new();
-                                if let Ok(text) = std::fs::read_to_string(&manifest_path)
-                                    && let Ok(v) = serde_json::from_str::<serde_json::Value>(&text)
-                                    && let Some(segments) =
-                                        v.get("segments").and_then(|s| s.as_array())
-                                {
-                                    for seg in segments {
-                                        if let Some(index) =
-                                            seg.get("index").and_then(|i| i.as_u64())
-                                            && let Some(duration) =
-                                                seg.get("duration").and_then(|d| d.as_f64())
-                                            && seg
-                                                .get("is_complete")
-                                                .and_then(|c| c.as_bool())
-                                                .unwrap_or(false)
-                                        {
-                                            map.insert(index as u32, duration);
-                                        }
-                                    }
-                                }
-                                map
+                            let same_recording = recording_dir
+                                .canonicalize()
+                                .ok()
+                                .zip(path.canonicalize().ok())
+                                .is_some_and(|(stored, current)| stored == current);
+                            if !same_recording
+                                || !matches!(
+                                    &meta.inner,
+                                    RecordingMetaInner::Instant(
+                                        InstantRecordingMeta::Complete { .. }
+                                    )
+                                )
+                            {
+                                warn!(
+                                    video_id,
+                                    "Incomplete or relocated recording upload retained for recovery"
+                                );
+                                continue;
                             }
-
-                            let scan_and_send = |dir: &std::path::Path,
-                                                 media_type: SegmentMediaType,
-                                                 tx: &std::sync::mpsc::Sender<
-                                SegmentCompletedEvent,
-                            >| {
-                                if !dir.exists() {
-                                    return;
-                                }
-                                let durations = read_durations_from_manifest(dir);
-                                let init_path = dir.join("init.mp4");
-                                if init_path.exists()
-                                    && let Ok(meta) = std::fs::metadata(&init_path)
-                                {
-                                    let _ = tx.send(SegmentCompletedEvent {
-                                        path: init_path,
-                                        index: 0,
-                                        duration: 0.0,
-                                        file_size: meta.len(),
-                                        is_init: true,
-                                        media_type,
-                                    });
-                                }
-                                if let Ok(entries) = std::fs::read_dir(dir) {
-                                    let mut segments: Vec<_> = entries
-                                        .filter_map(|e| e.ok())
-                                        .filter(|e| {
-                                            e.path().extension().is_some_and(|ext| ext == "m4s")
-                                        })
-                                        .collect();
-                                    segments.sort_by_key(|e| e.file_name());
-                                    for entry in segments {
-                                        let path = entry.path();
-                                        if let Some(name) =
-                                            path.file_name().and_then(|n| n.to_str())
-                                            && let Some(idx_str) = name
-                                                .strip_prefix("segment_")
-                                                .and_then(|s| s.strip_suffix(".m4s"))
-                                            && let Ok(index) = idx_str.parse::<u32>()
-                                        {
-                                            let file_size = std::fs::metadata(&path)
-                                                .map(|m| m.len())
-                                                .unwrap_or(0);
-                                            let duration =
-                                                durations.get(&index).copied().unwrap_or(3.0);
-                                            let _ = tx.send(SegmentCompletedEvent {
-                                                path,
-                                                index,
-                                                duration,
-                                                file_size,
-                                                is_init: false,
-                                                media_type,
-                                            });
-                                        }
-                                    }
+                            let events = match upload::resume::collect_segment_events(
+                                &recording_dir,
+                                required_audio,
+                            ) {
+                                Ok(events) => events,
+                                Err(error) => {
+                                    warn!(video_id, %error, "Invalid segment upload retained locally for recovery");
+                                    continue;
                                 }
                             };
-
-                            scan_and_send(&display_dir, SegmentMediaType::Video, &segment_tx);
-                            scan_and_send(&audio_dir, SegmentMediaType::Audio, &segment_tx);
+                            info!(
+                                video_id = video_id,
+                                "Resuming validated segment upload on restart"
+                            );
+                            let (segment_tx, segment_rx) = std::sync::mpsc::channel();
+                            for event in events {
+                                if let Err(error) = segment_tx.send(event) {
+                                    warn!(video_id, %error, "Could not queue resumed segment upload");
+                                }
+                            }
                             drop(segment_tx);
 
                             #[cfg(target_os = "linux")]
@@ -8583,7 +8516,7 @@ mod typescript_bindings_tests {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod instant_resume_safety_tests {
     use super::*;
     fn project(tag: &str, inner: InstantRecordingMeta) -> PathBuf {
