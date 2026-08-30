@@ -1129,6 +1129,21 @@ impl Pipeline {
         #[cfg(any(target_os = "linux", windows))]
         self.stopping
             .store(true, std::sync::atomic::Ordering::Release);
+        #[cfg(target_os = "macos")]
+        let (screen, microphone, camera, system_audio) = {
+            let (microphone, camera, (screen, system_audio)) = futures::join!(
+                OptionFuture::from(self.microphone.map(|s| s.stop())),
+                OptionFuture::from(self.camera.map(|s| s.stop())),
+                async {
+                    // These sources share a capturer; only the first stop awaits its native acknowledgement.
+                    let system_audio =
+                        OptionFuture::from(self.system_audio.map(|s| s.stop())).await;
+                    (self.screen.stop().await, system_audio)
+                }
+            );
+            (screen, microphone, camera, system_audio)
+        };
+        #[cfg(not(target_os = "macos"))]
         let (screen, microphone, camera, system_audio) = futures::join!(
             self.screen.stop(),
             OptionFuture::from(self.microphone.map(|s| s.stop())),
@@ -3575,6 +3590,162 @@ mod tests {
 
         assert!(screen_stopped_while_audio_waited);
         assert!(finished.microphone.is_some());
+    }
+
+    #[cfg(target_os = "macos")]
+    mod macos_stop_order_tests {
+        use super::*;
+
+        struct AudioFinalizer(bool);
+
+        impl Muxer for AudioFinalizer {
+            type Config = bool;
+
+            async fn setup(
+                fail: bool,
+                _: PathBuf,
+                _: Option<VideoInfo>,
+                _: Option<cap_media_info::AudioInfo>,
+                _: Arc<std::sync::atomic::AtomicBool>,
+                _: &mut TaskPool,
+            ) -> anyhow::Result<Self> {
+                Ok(Self(fail))
+            }
+
+            fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
+                Ok(if self.0 {
+                    Err(anyhow!("system audio finalization failed"))
+                } else {
+                    Ok(())
+                })
+            }
+        }
+
+        impl AudioMuxer for AudioFinalizer {
+            fn send_audio_frame(
+                &mut self,
+                _: crate::output_pipeline::AudioFrame,
+                _: Duration,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
+        async fn assert_stop_order(fail_system_audio: bool) -> FinishedPipeline {
+            let directory = tempfile::tempdir().unwrap();
+            let timestamps = Timestamps::now();
+            let (screen_tx, screen_rx) = flume::bounded(4);
+            let (camera_tx, camera_rx) = flume::bounded(4);
+            let screen = OutputPipeline::builder(directory.path().join("display.mp4"))
+                .with_video::<ChannelVideoSource<TestVideoFrame>>(ChannelVideoSourceConfig::new(
+                    test_video_info(),
+                    screen_rx,
+                ))
+                .with_timestamps(timestamps)
+                .build::<SuccessfulVideoMuxer>(())
+                .await
+                .unwrap();
+            let camera = OutputPipeline::builder(directory.path().join("camera.mp4"))
+                .with_video::<ChannelVideoSource<TestVideoFrame>>(ChannelVideoSourceConfig::new(
+                    test_video_info(),
+                    camera_rx,
+                ))
+                .with_timestamps(timestamps)
+                .build::<SuccessfulVideoMuxer>(())
+                .await
+                .unwrap();
+            let screen_stop = screen.cancel_token();
+            let camera_stop = camera.cancel_token();
+            for sender in [&screen_tx, &camera_tx] {
+                sender
+                    .send_async(TestVideoFrame {
+                        timestamp: Timestamp::Instant(timestamps.instant()),
+                    })
+                    .await
+                    .unwrap();
+            }
+
+            let microphone_started = Arc::new(tokio::sync::Notify::new());
+            let microphone_release = Arc::new(tokio::sync::Notify::new());
+            let microphone = OutputPipeline::builder(directory.path().join("microphone.ogg"))
+                .with_audio_source::<DelayedStopAudioSource>((
+                    microphone_started.clone(),
+                    microphone_release.clone(),
+                ))
+                .with_timestamps(timestamps)
+                .build::<SuccessfulVideoMuxer>(())
+                .await
+                .unwrap();
+            let system_audio_started = Arc::new(tokio::sync::Notify::new());
+            let system_audio_release = Arc::new(tokio::sync::Notify::new());
+            let system_audio = OutputPipeline::builder(directory.path().join("system-audio.ogg"))
+                .with_audio_source::<DelayedStopAudioSource>((
+                    system_audio_started.clone(),
+                    system_audio_release.clone(),
+                ))
+                .with_timestamps(timestamps)
+                .build::<AudioFinalizer>(fail_system_audio)
+                .await
+                .unwrap();
+            let pipeline = Pipeline {
+                start_time: timestamps,
+                screen,
+                microphone: Some(microphone),
+                camera: Some(camera),
+                system_audio: Some(system_audio),
+                cursor: None,
+                track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+                watcher_task: None,
+            };
+
+            let stopping = tokio::spawn(pipeline.stop());
+            tokio::time::timeout(Duration::from_secs(2), async {
+                futures::join!(
+                    system_audio_started.notified(),
+                    microphone_started.notified(),
+                    camera_stop.cancelled()
+                );
+            })
+            .await
+            .unwrap();
+            drop(camera_tx);
+            assert!(!screen_stop.is_cancelled());
+            assert!(!stopping.is_finished());
+
+            system_audio_release.notify_one();
+            tokio::time::timeout(Duration::from_secs(2), screen_stop.cancelled())
+                .await
+                .unwrap();
+            drop(screen_tx);
+            assert!(!stopping.is_finished());
+            microphone_release.notify_one();
+            let finished = tokio::time::timeout(Duration::from_secs(2), stopping)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert!(finished.microphone.is_some());
+            assert!(finished.camera.is_some());
+            finished
+        }
+
+        #[tokio::test]
+        async fn system_audio_stop_precedes_screen_without_blocking_other_tracks() {
+            let finished = assert_stop_order(false).await;
+            assert!(finished.system_audio.is_some());
+            assert!(finished.track_failures.is_empty());
+        }
+
+        #[tokio::test]
+        async fn failed_system_audio_stop_still_stops_screen_and_preserves_failure() {
+            let finished = assert_stop_order(true).await;
+            assert!(finished.system_audio.is_none());
+            assert_eq!(finished.track_failures.len(), 1);
+            let failure = &finished.track_failures[0];
+            assert_eq!(failure.track, RecordingTrackKind::SystemAudio);
+            assert_eq!(failure.stage, TrackFailureStage::Stop);
+            assert!(failure.error.contains("system audio finalization failed"));
+        }
     }
 
     fn test_finished_output_pipeline() -> FinishedOutputPipeline {
