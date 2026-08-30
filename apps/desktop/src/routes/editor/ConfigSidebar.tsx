@@ -372,6 +372,7 @@ const getCurrentDesktopBackgroundLabel = () => {
 type WallpaperOption = {
 	id: string;
 	url: string;
+	thumbnailUrl: string;
 	rawPath: string;
 	label?: string;
 };
@@ -1878,6 +1879,7 @@ function BackgroundConfig(props: {
 			return {
 				id,
 				url: convertFileSrc(path),
+				thumbnailUrl: convertFileSrc(path.replace(/\.jpg$/, "-thumbnail.jpg")),
 				rawPath: path,
 			} satisfies WallpaperOption;
 		});
@@ -1890,6 +1892,7 @@ function BackgroundConfig(props: {
 		return {
 			id: CURRENT_DESKTOP_BACKGROUND_ID,
 			url: convertFileSrc(path),
+			thumbnailUrl: convertFileSrc(path),
 			rawPath: path,
 			label: getCurrentDesktopBackgroundLabel(),
 		};
@@ -2152,7 +2155,7 @@ function BackgroundConfig(props: {
 			source.path
 		) {
 			const selected = selectedWallpaper();
-			if (selected?.url) imageSrc = selected.url;
+			if (selected?.thumbnailUrl) imageSrc = selected.thumbnailUrl;
 		}
 
 		return (
@@ -2527,7 +2530,7 @@ function BackgroundConfig(props: {
 											<KRadioGroup.ItemInput class="peer" />
 											<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition not-data-checked:ring-offset-1 not-data-checked:ring-offset-gray-200 not-data-checked:hover:ring-1 not-data-checked:hover:ring-gray-400 data-checked:ring-2 data-checked:ring-gray-500 data-checked:ring-offset-2 data-checked:ring-offset-gray-200">
 												<img
-													src={photo.url}
+													src={photo.thumbnailUrl}
 													loading="eager"
 													class="object-cover w-full h-full"
 													alt="Wallpaper option"
@@ -2548,7 +2551,7 @@ function BackgroundConfig(props: {
 														<KRadioGroup.ItemInput class="peer" />
 														<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg border border-gray-5 data-checked:border-blue-9 data-checked:ring-2 data-checked:ring-blue-9 peer-focus-visible:border-2 peer-focus-visible:border-blue-9">
 															<img
-																src={photo.url}
+																src={photo.thumbnailUrl}
 																alt="Wallpaper option"
 																class="object-cover w-full h-full"
 																loading="lazy"
