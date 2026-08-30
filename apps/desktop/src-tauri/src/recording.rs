@@ -2598,7 +2598,7 @@ async fn start_recording_prepared(
                             &app,
                             &state_mtx,
                             Some(&project_file_path),
-                            false,
+                            StudioTerminalAction::Stop,
                             Some(error),
                         )
                         .await;
@@ -3220,12 +3220,20 @@ where
     finish(report.result).await
 }
 
+#[cfg(any(target_os = "linux", windows))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StudioTerminalAction {
+    Stop,
+    Discard,
+    Restart,
+}
+
 #[cfg(target_os = "linux")]
 async fn control_studio_recording(
     app: &AppHandle,
     state: &Arc<tokio::sync::RwLock<App>>,
     expected_directory: Option<&Path>,
-    discard: bool,
+    action: StudioTerminalAction,
     failure: Option<String>,
 ) -> Option<Result<(), String>> {
     let (handle, directory, target_name, capture_target, generation) = {
@@ -3246,6 +3254,7 @@ async fn control_studio_recording(
             crate::clean_capture::owner(app, &common.recording_dir),
         )
     };
+    let discard = action != StudioTerminalAction::Stop;
     let intent = if discard {
         studio_recording::StudioStopIntent::Discard
     } else {
@@ -3298,8 +3307,14 @@ async fn control_studio_recording(
                     }
                     .emit(app);
                 }
-                let cleanup =
-                    handle_recording_end(app.clone(), completed, &mut state, directory).await;
+                let cleanup = handle_recording_end_inner(
+                    app.clone(),
+                    completed,
+                    &mut state,
+                    directory,
+                    action == StudioTerminalAction::Restart,
+                )
+                .await;
                 match error {
                     Some(error) => Err(error),
                     None => cleanup,
@@ -3339,7 +3354,7 @@ async fn control_studio_recording(
     app: &AppHandle,
     state: &Arc<tokio::sync::RwLock<App>>,
     expected_directory: Option<&Path>,
-    discard: bool,
+    action: StudioTerminalAction,
     failure: Option<String>,
 ) -> Option<Result<(), String>> {
     let (handle, directory, target_name, capture_target, generation) = {
@@ -3360,6 +3375,7 @@ async fn control_studio_recording(
             crate::clean_capture::owner(app, &common.recording_dir),
         )
     };
+    let discard = action != StudioTerminalAction::Stop;
     let intent = if discard {
         studio_recording::StudioStopIntent::Discard
     } else {
@@ -3401,7 +3417,14 @@ async fn control_studio_recording(
                     capture_target,
                 })
             };
-            handle_recording_end(app.clone(), completed, &mut state, directory).await
+            handle_recording_end_inner(
+                app.clone(),
+                completed,
+                &mut state,
+                directory,
+                action == StudioTerminalAction::Restart,
+            )
+            .await
         },
     )
     .await;
@@ -3436,7 +3459,9 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
         return Ok(());
     }
     #[cfg(any(target_os = "linux", windows))]
-    if let Some(result) = control_studio_recording(&app, &state, None, false, None).await {
+    if let Some(result) =
+        control_studio_recording(&app, &state, None, StudioTerminalAction::Stop, None).await
+    {
         return result;
     }
     let mut state = state.write().await;
@@ -3521,16 +3546,56 @@ pub async fn restart_recording(
             }
         };
         if let Some((inputs, directory, generation)) = current {
-            control_studio_recording(&app, &state, Some(&directory), true, None)
+            return complete_studio_restart(async move {
+                let state = app.state::<crate::ArcLock<App>>();
+                let target = EditorRecordingTarget::get(&app);
+                restart_with_editor_target(
+                    &target,
+                    async {
+                        control_studio_recording(
+                            &app,
+                            &state,
+                            Some(&directory),
+                            StudioTerminalAction::Restart,
+                            None,
+                        )
+                        .await
+                        .ok_or("Studio recording changed before restart")??;
+                        Ok(())
+                    },
+                    async {
+                        #[cfg(target_os = "linux")]
+                        if let Some(generation) = generation {
+                            crate::clean_capture::wait_restored(&app, generation).await?;
+                        }
+                        #[cfg(windows)]
+                        let _ = generation;
+                        Ok(())
+                    },
+                    || Box::pin(start_recording(app.clone(), app.state(), inputs)),
+                    |expected, cleanup_completed| {
+                        let app = &app;
+                        let state = &state;
+                        let target = &target;
+                        async move {
+                            let state = state.read().await;
+                            if let Some(editor_path) = take_failed_restart_editor_target(
+                                target,
+                                expected.as_deref(),
+                                cleanup_completed
+                                    && matches!(state.recording_state, RecordingState::None),
+                            ) && let Some(window) = editor_window_for_path(app, &editor_path)
+                            {
+                                let _ = window.unminimize();
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    },
+                )
                 .await
-                .ok_or("Studio recording changed before restart")??;
-            #[cfg(target_os = "linux")]
-            if let Some(generation) = generation {
-                crate::clean_capture::wait_restored(&app, generation).await?;
-            }
-            #[cfg(windows)]
-            let _ = generation;
-            return Box::pin(start_recording(app, state, inputs)).await;
+            })
+            .await;
         }
     }
     if crate::clean_capture::phase(&app) == Some(crate::clean_capture::Phase::Recording) {
@@ -3597,6 +3662,80 @@ pub async fn restart_recording(
     start_recording(app.clone(), state, inputs).await
 }
 
+#[cfg(any(target_os = "linux", windows, test))]
+async fn complete_studio_restart(
+    restart: impl std::future::Future<Output = Result<RecordingAction, String>> + Send + 'static,
+) -> Result<RecordingAction, String> {
+    tokio::spawn(restart)
+        .await
+        .map_err(|error| format!("Recording restart task failed: {error}"))?
+}
+
+#[cfg(any(target_os = "linux", windows, test))]
+async fn restart_with_editor_target<C, R, S, F>(
+    target: &EditorRecordingTarget,
+    cleanup: C,
+    restore: R,
+    start: impl FnOnce() -> S,
+    on_failure: impl FnOnce(Option<PathBuf>, bool) -> F,
+) -> Result<RecordingAction, String>
+where
+    C: std::future::Future<Output = Result<(), String>>,
+    R: std::future::Future<Output = Result<(), String>>,
+    S: std::future::Future<Output = Result<RecordingAction, String>>,
+    F: std::future::Future<Output = ()>,
+{
+    let expected = target.0.lock().unwrap().clone();
+    let cleanup_result = cleanup.await;
+    let cleanup_completed = cleanup_result.is_ok();
+    let result = match cleanup_result {
+        Ok(()) => match restore.await {
+            Ok(()) => {
+                let unchanged = *target.0.lock().unwrap() == expected;
+                if unchanged {
+                    start().await
+                } else {
+                    Err("Recording editor target changed before restart".into())
+                }
+            }
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    };
+    if !matches!(&result, Ok(RecordingAction::Started)) {
+        on_failure(expected, cleanup_completed).await;
+    }
+    result
+}
+
+#[cfg(any(target_os = "linux", windows, test))]
+fn take_failed_restart_editor_target(
+    target: &EditorRecordingTarget,
+    expected: Option<&Path>,
+    recording_cleared: bool,
+) -> Option<PathBuf> {
+    if !recording_cleared {
+        return None;
+    }
+    let mut current = target.0.lock().unwrap();
+    if current.as_deref() == expected {
+        current.take()
+    } else {
+        None
+    }
+}
+
+fn take_editor_target_after_recording(
+    target: &EditorRecordingTarget,
+    preserve: bool,
+) -> Option<PathBuf> {
+    if preserve {
+        None
+    } else {
+        target.0.lock().unwrap().take()
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app, state))]
@@ -3606,7 +3745,9 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
         return linux_instant::control(app, attempt, true).await;
     }
     #[cfg(any(target_os = "linux", windows))]
-    if let Some(result) = control_studio_recording(&app, &state, None, true, None).await {
+    if let Some(result) =
+        control_studio_recording(&app, &state, None, StudioTerminalAction::Discard, None).await
+    {
         return result;
     }
     if crate::clean_capture::phase(&app) == Some(crate::clean_capture::Phase::Recording) {
@@ -3890,6 +4031,16 @@ async fn handle_recording_end(
     app: &mut App,
     recording_dir: PathBuf,
 ) -> Result<(), String> {
+    handle_recording_end_inner(handle, recording, app, recording_dir, false).await
+}
+
+async fn handle_recording_end_inner(
+    handle: AppHandle,
+    recording: Result<CompletedRecording, String>,
+    app: &mut App,
+    recording_dir: PathBuf,
+    preserve_editor_target: bool,
+) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Some(InProgressRecording::Studio {
         handle: studio,
@@ -4119,8 +4270,10 @@ async fn handle_recording_end(
     // Using `take()` (not `current()`) here is deliberate: it restores the
     // editor window AND clears any stale target so it can't leak into the next
     // recording session.
-    if let Some(editor_path) = EditorRecordingTarget::take(&handle)
-        && let Some(editor_window) = editor_window_for_path(&handle, &editor_path)
+    if let Some(editor_path) = take_editor_target_after_recording(
+        &EditorRecordingTarget::get(&handle),
+        preserve_editor_target,
+    ) && let Some(editor_window) = editor_window_for_path(&handle, &editor_path)
     {
         editor_took_foreground = true;
         let _ = editor_window.unminimize();
@@ -7460,6 +7613,238 @@ pub(crate) mod linux_instant {
             synthetic_success_effects(&healthy, &attempted_copies, false, true).unwrap();
             assert_eq!(attempted_copies.lock().unwrap().len(), 1);
         }
+    }
+}
+
+#[cfg(test)]
+mod editor_recording_restart_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    fn editor_target(path: &str) -> EditorRecordingTarget {
+        EditorRecordingTarget(Arc::new(Mutex::new(Some(PathBuf::from(path)))))
+    }
+
+    #[tokio::test]
+    async fn successful_restart_keeps_destination_through_terminal_cleanup() {
+        let target = editor_target("original.cap");
+        let result = restart_with_editor_target(
+            &target,
+            async {
+                assert!(take_editor_target_after_recording(&target, true).is_none());
+                Ok(())
+            },
+            async { Ok(()) },
+            || async {
+                assert_eq!(
+                    target.0.lock().unwrap().as_deref(),
+                    Some(Path::new("original.cap"))
+                );
+                Ok(RecordingAction::Started)
+            },
+            |_, _| async { panic!("successful restart must retain the destination") },
+        )
+        .await;
+        assert!(matches!(result, Ok(RecordingAction::Started)));
+        assert_eq!(
+            take_editor_target_after_recording(&target, false),
+            Some(PathBuf::from("original.cap"))
+        );
+        assert!(target.0.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_replacement_start_clears_only_its_editor_destination() {
+        let target = editor_target("original.cap");
+        let restored = Mutex::new(None);
+        let result = restart_with_editor_target(
+            &target,
+            async { Ok(()) },
+            async { Ok(()) },
+            || async { Err("requested microphone unavailable".into()) },
+            |expected, cleanup_completed| {
+                let target = &target;
+                let restored = &restored;
+                async move {
+                    *restored.lock().unwrap() = take_failed_restart_editor_target(
+                        target,
+                        expected.as_deref(),
+                        cleanup_completed,
+                    );
+                }
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(
+            *restored.lock().unwrap(),
+            Some(PathBuf::from("original.cap"))
+        );
+        assert!(target.0.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_old_stop_keeps_active_editor_ownership() {
+        let target = editor_target("original.cap");
+        let result = restart_with_editor_target(
+            &target,
+            async { Err("Studio cleanup is unconfirmed".into()) },
+            async { panic!("controls cannot restore before confirmed cleanup") },
+            || async { panic!("replacement cannot start before confirmed cleanup") },
+            |expected, cleanup_completed| {
+                let target = &target;
+                async move {
+                    assert!(
+                        take_failed_restart_editor_target(
+                            target,
+                            expected.as_deref(),
+                            cleanup_completed
+                        )
+                        .is_none()
+                    );
+                }
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(
+            target.0.lock().unwrap().as_deref(),
+            Some(Path::new("original.cap"))
+        );
+    }
+
+    #[tokio::test]
+    async fn replaced_editor_destination_cancels_restart_without_consuming_new_target() {
+        let target = editor_target("original.cap");
+        let result = restart_with_editor_target(
+            &target,
+            async {
+                *target.0.lock().unwrap() = Some(PathBuf::from("replacement.cap"));
+                Ok(())
+            },
+            async { Ok(()) },
+            || async { panic!("a different editor now owns recording") },
+            |expected, cleanup_completed| {
+                let target = &target;
+                async move {
+                    assert!(
+                        take_failed_restart_editor_target(
+                            target,
+                            expected.as_deref(),
+                            cleanup_completed
+                        )
+                        .is_none()
+                    );
+                }
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(
+            target.0.lock().unwrap().as_deref(),
+            Some(Path::new("replacement.cap"))
+        );
+    }
+
+    #[tokio::test]
+    async fn losing_restart_cannot_clear_the_winners_target_after_recording_state_is_cleared() {
+        let target = editor_target("original.cap");
+        let result = restart_with_editor_target(
+            &target,
+            async { Err("Studio terminal completion is stale".into()) },
+            async { panic!("the losing restart cannot restore controls") },
+            || async { panic!("the losing restart cannot start another recording") },
+            |expected, cleanup_completed| {
+                let target = &target;
+                async move {
+                    let recording_cleared = true;
+                    assert!(
+                        take_failed_restart_editor_target(
+                            target,
+                            expected.as_deref(),
+                            cleanup_completed && recording_cleared,
+                        )
+                        .is_none()
+                    );
+                }
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(
+            target.0.lock().unwrap().as_deref(),
+            Some(Path::new("original.cap"))
+        );
+    }
+
+    #[tokio::test]
+    async fn restoration_failure_clears_the_owned_target_before_any_replacement_start() {
+        let target = editor_target("original.cap");
+        let result = restart_with_editor_target(
+            &target,
+            async { Ok(()) },
+            async { Err("Recording controls could not be restored".into()) },
+            || async { panic!("replacement cannot start before controls are restored") },
+            |expected, cleanup_completed| {
+                let target = &target;
+                async move {
+                    assert_eq!(
+                        take_failed_restart_editor_target(
+                            target,
+                            expected.as_deref(),
+                            cleanup_completed,
+                        ),
+                        Some(PathBuf::from("original.cap")),
+                    );
+                }
+            },
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(target.0.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn caller_cancellation_does_not_abandon_restart_after_old_capture_stops() {
+        let target = editor_target("original.cap");
+        let retained = target.clone();
+        let (entered, entry) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let (finished, finish) = tokio::sync::oneshot::channel();
+        let caller = tokio::spawn(async move {
+            complete_studio_restart(async move {
+                let result = restart_with_editor_target(
+                    &target,
+                    async {
+                        assert!(take_editor_target_after_recording(&target, true).is_none());
+                        entered.send(()).unwrap();
+                        released.await.unwrap();
+                        Ok(())
+                    },
+                    async { Ok(()) },
+                    || async { Ok(RecordingAction::Started) },
+                    |_, _| async {
+                        panic!("owned replacement must finish after caller cancellation")
+                    },
+                )
+                .await;
+                finished.send(()).unwrap();
+                result
+            })
+            .await
+        });
+        entry.await.unwrap();
+        caller.abort();
+        assert!(matches!(caller.await, Err(error) if error.is_cancelled()));
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), finish)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            retained.0.lock().unwrap().as_deref(),
+            Some(Path::new("original.cap"))
+        );
     }
 }
 
