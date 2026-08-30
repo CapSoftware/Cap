@@ -166,6 +166,8 @@ pub enum QueueFrameError {
 pub enum FinishError {
     #[error("FFmpeg: {0}")]
     FFmpeg(#[from] ffmpeg::Error),
+    #[error("IO: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 pub struct SegmentedVideoEncoderConfig {
@@ -207,7 +209,7 @@ impl SegmentedVideoEncoder {
         #[cfg(not(target_os = "windows"))]
         let manifest_path_str = manifest_path.to_string_lossy().to_string();
 
-        let mut output = format::output_as(&manifest_path_str, "dash")?;
+        let mut output = super::dash_output::create(&manifest_path_str)?;
 
         let init_seg_str = INIT_SEGMENT_NAME;
         let media_seg_str = "segment_$Number%03d$.m4s";
@@ -494,13 +496,12 @@ impl SegmentedVideoEncoder {
     }
 
     pub fn finish(&mut self) -> Result<(), FinishError> {
-        if let Err(e) = self.encoder.flush(&mut self.output) {
-            tracing::warn!("Video encoder flush warning: {e}");
-        }
-
-        if let Err(e) = self.output.write_trailer() {
-            tracing::warn!("Video write_trailer warning: {e}");
-        }
+        let flush_result = self.encoder.flush(&mut self.output).inspect_err(|error| {
+            tracing::warn!(%error, "Video encoder flush failed");
+        });
+        let trailer_result = self.output.write_trailer().inspect_err(|error| {
+            tracing::warn!(%error, "Video trailer publication failed");
+        });
 
         self.try_notify_init_segment();
         self.finalize_pending_tmp_files();
@@ -508,7 +509,15 @@ impl SegmentedVideoEncoder {
 
         self.collect_orphaned_segments();
 
-        self.finalize_manifest();
+        if let Err(error) = flush_result.and(trailer_result) {
+            self.write_in_progress_manifest();
+            return Err(error.into());
+        }
+        if let Err(error) = super::dash_output::verify_final_manifest(&self.base_path) {
+            self.write_in_progress_manifest();
+            return Err(error.into());
+        }
+        self.finalize_manifest()?;
 
         Ok(())
     }
@@ -650,7 +659,7 @@ impl SegmentedVideoEncoder {
         self.completed_segments.sort_by_key(|s| s.index);
     }
 
-    fn finalize_manifest(&self) {
+    fn finalize_manifest(&self) -> std::io::Result<()> {
         let total_duration: Duration = self.completed_segments.iter().map(|s| s.duration).sum();
 
         let manifest = Manifest {
@@ -679,12 +688,7 @@ impl SegmentedVideoEncoder {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        if let Err(e) = atomic_write_json(&manifest_path, &manifest) {
-            tracing::warn!(
-                "Failed to write final manifest to {}: {e}",
-                manifest_path.display()
-            );
-        }
+        atomic_write_json(&manifest_path, &manifest)
     }
 
     pub fn completed_segments(&self) -> &[VideoSegmentInfo] {
@@ -834,6 +838,50 @@ mod tests {
             (manifest["total_duration"].as_f64().unwrap() - durations.iter().sum::<f64>()).abs()
                 <= 1e-5
         );
+    }
+
+    #[test]
+    fn failed_dash_manifest_publication_retains_video_without_claiming_completion() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let base_path = directory.path().to_path_buf();
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path.clone(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+        for i in 0..120 {
+            encoder
+                .queue_frame(
+                    create_test_frame(320, 240),
+                    Duration::from_micros(i * 33_320),
+                )
+                .unwrap();
+        }
+        let retained_segments: Vec<_> = encoder
+            .completed_segments()
+            .iter()
+            .map(|segment| (segment.path.clone(), std::fs::read(&segment.path).unwrap()))
+            .collect();
+        assert!(!retained_segments.is_empty());
+        let manifest_path = base_path.join("dash_manifest.mpd");
+        if manifest_path.exists() {
+            std::fs::remove_file(&manifest_path).unwrap();
+        }
+        std::fs::create_dir(&manifest_path).unwrap();
+
+        assert!(encoder.finish().is_err());
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(base_path.join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["is_complete"], false);
+        assert!(!encoder.completed_segments().is_empty());
+        assert!(encoder.init_segment_path().is_file());
+        for (path, bytes) in retained_segments {
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
+        }
     }
 
     #[test]

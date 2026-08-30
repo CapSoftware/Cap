@@ -127,6 +127,8 @@ pub enum QueueFrameError {
 pub enum FinishError {
     #[error("FFmpeg: {0}")]
     FFmpeg(#[from] ffmpeg::Error),
+    #[error("IO: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 impl DashAudioSegmentEncoder {
@@ -144,7 +146,7 @@ impl DashAudioSegmentEncoder {
         #[cfg(not(target_os = "windows"))]
         let manifest_path_str = manifest_path.to_string_lossy().to_string();
 
-        let mut output = format::output_as(&manifest_path_str, "dash")?;
+        let mut output = super::dash_output::create(&manifest_path_str)?;
 
         let init_seg_str = INIT_SEGMENT_NAME;
         let media_seg_str = "segment_$Number%03d$.m4s";
@@ -368,13 +370,12 @@ impl DashAudioSegmentEncoder {
     }
 
     pub fn finish(&mut self) -> Result<(), FinishError> {
-        if let Err(e) = self.encoder.flush(&mut self.output) {
-            tracing::warn!("Audio encoder flush warning: {e}");
-        }
-
-        if let Err(e) = self.output.write_trailer() {
-            tracing::warn!("Audio write_trailer warning: {e}");
-        }
+        let flush_result = self.encoder.flush(&mut self.output).inspect_err(|error| {
+            tracing::warn!(%error, "Audio encoder flush failed");
+        });
+        let trailer_result = self.output.write_trailer().inspect_err(|error| {
+            tracing::warn!(%error, "Audio trailer publication failed");
+        });
 
         self.try_notify_init_segment();
         self.finalize_pending_tmp_files();
@@ -382,7 +383,15 @@ impl DashAudioSegmentEncoder {
 
         self.collect_orphaned_segments();
 
-        self.finalize_manifest();
+        if let Err(error) = flush_result.and(trailer_result) {
+            self.write_in_progress_manifest();
+            return Err(error.into());
+        }
+        if let Err(error) = super::dash_output::verify_final_manifest(&self.base_path) {
+            self.write_in_progress_manifest();
+            return Err(error.into());
+        }
+        self.finalize_manifest()?;
 
         Ok(())
     }
@@ -486,7 +495,7 @@ impl DashAudioSegmentEncoder {
         self.completed_segments.sort_by_key(|s| s.index);
     }
 
-    fn finalize_manifest(&self) {
+    fn finalize_manifest(&self) -> std::io::Result<()> {
         let total_duration: Duration = self.completed_segments.iter().map(|s| s.duration).sum();
 
         let manifest = Manifest {
@@ -514,12 +523,7 @@ impl DashAudioSegmentEncoder {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        if let Err(e) = atomic_write_json(&manifest_path, &manifest) {
-            tracing::warn!(
-                "Failed to write final audio manifest to {}: {e}",
-                manifest_path.display()
-            );
-        }
+        atomic_write_json(&manifest_path, &manifest)
     }
 
     pub fn completed_segments(&self) -> &[AudioSegmentInfo] {
@@ -636,6 +640,52 @@ mod tests {
             assert!((segment["duration"].as_f64().unwrap() - duration).abs() < 1e-6);
         }
         assert!((manifest["total_duration"].as_f64().unwrap() - 2.496).abs() < 1e-6);
+    }
+
+    #[test]
+    fn failed_dash_manifest_publication_retains_audio_without_claiming_completion() {
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let base_path = directory.path().to_path_buf();
+        let mut encoder = DashAudioSegmentEncoder::init(
+            base_path.clone(),
+            test_audio_info(),
+            DashAudioSegmentEncoderConfig {
+                segment_duration: Duration::from_secs(1),
+            },
+        )
+        .unwrap();
+        for i in 0..60 {
+            encoder
+                .queue_frame(
+                    create_test_audio_frame(1024, i * 1024),
+                    Duration::from_secs_f64((i * 1024) as f64 / 48_000.0),
+                )
+                .unwrap();
+        }
+        let retained_segments: Vec<_> = encoder
+            .completed_segments()
+            .iter()
+            .map(|segment| (segment.path.clone(), std::fs::read(&segment.path).unwrap()))
+            .collect();
+        assert!(!retained_segments.is_empty());
+        let manifest_path = base_path.join("dash_manifest.mpd");
+        if manifest_path.exists() {
+            std::fs::remove_file(&manifest_path).unwrap();
+        }
+        std::fs::create_dir(&manifest_path).unwrap();
+
+        assert!(encoder.finish().is_err());
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(base_path.join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["is_complete"], false);
+        assert!(!encoder.completed_segments().is_empty());
+        assert!(encoder.init_segment_path().is_file());
+        for (path, bytes) in retained_segments {
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
+        }
     }
 
     #[test]
