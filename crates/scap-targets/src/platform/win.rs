@@ -36,14 +36,13 @@ use windows::{
                 SHGetFileInfoW,
             },
             WindowsAndMessaging::{
-                DI_FLAGS, DestroyIcon, DrawIconEx, EnumChildWindows, EnumWindows, GCLP_HICON,
-                GW_HWNDNEXT, GWL_EXSTYLE, GWL_STYLE, GetClassLongPtrW, GetClassNameW,
-                GetClientRect, GetCursorPos, GetDesktopWindow, GetIconInfo,
-                GetLayeredWindowAttributes, GetWindow, GetWindowLongPtrW, GetWindowLongW,
-                GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-                HICON, ICONINFO, IsIconic, IsWindowVisible, PrivateExtractIconsW, SendMessageW,
-                WM_GETICON, WS_CHILD, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-                WS_EX_TRANSPARENT, WindowFromPoint,
+                DI_FLAGS, DestroyIcon, DrawIconEx, EnumWindows, GCLP_HICON, GW_HWNDNEXT,
+                GWL_EXSTYLE, GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect,
+                GetCursorPos, GetIconInfo, GetLayeredWindowAttributes, GetWindow,
+                GetWindowLongPtrW, GetWindowLongW, GetWindowRect, GetWindowTextLengthW,
+                GetWindowTextW, GetWindowThreadProcessId, HICON, ICONINFO, IsIconic,
+                IsWindowVisible, PrivateExtractIconsW, SendMessageW, WM_GETICON, WS_CHILD,
+                WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WindowFromPoint,
             },
         },
     },
@@ -329,8 +328,7 @@ impl WindowImpl {
         };
 
         unsafe {
-            let _ = EnumChildWindows(
-                Some(GetDesktopWindow()),
+            let _ = EnumWindows(
                 Some(enum_windows_proc),
                 LPARAM(std::ptr::addr_of_mut!(context) as isize),
             );
