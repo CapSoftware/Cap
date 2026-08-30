@@ -5,6 +5,7 @@ use specta::Type;
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
+    io::Write,
     path::{Path, PathBuf},
 };
 use tracing::{debug, info, warn};
@@ -186,9 +187,52 @@ impl RecordingMeta {
     }
 
     pub fn save_for_project(&self) -> Result<(), Either<serde_json::Error, std::io::Error>> {
-        let meta_path = &self.project_path.join("recording-meta.json");
-        let meta = serde_json::to_string_pretty(&self).map_err(Either::Left)?;
-        std::fs::write(meta_path, meta).map_err(Either::Right)?;
+        self.save_for_project_with(|file, bytes| {
+            file.write_all(bytes)?;
+            file.sync_all()
+        })
+    }
+
+    fn save_for_project_with(
+        &self,
+        prepare: impl FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+    ) -> Result<(), Either<serde_json::Error, std::io::Error>> {
+        let meta = serde_json::to_string_pretty(self).map_err(Either::Left)?;
+        let meta_path = self.project_path.join("recording-meta.json");
+        let permissions = match std::fs::symlink_metadata(&meta_path) {
+            Ok(metadata) if !metadata.is_file() => {
+                return Err(Either::Right(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Recording metadata must be a regular file",
+                )));
+            }
+            Ok(metadata) if metadata.permissions().readonly() => {
+                return Err(Either::Right(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Recording metadata is read-only",
+                )));
+            }
+            Ok(metadata) => Some(metadata.permissions()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(Either::Right(error)),
+        };
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".recording-meta-")
+            .suffix(".json.tmp")
+            .tempfile_in(&self.project_path)
+            .map_err(Either::Right)?;
+        if let Some(permissions) = permissions {
+            temporary
+                .as_file()
+                .set_permissions(permissions)
+                .map_err(Either::Right)?;
+        }
+        prepare(temporary.as_file_mut(), meta.as_bytes()).map_err(Either::Right)?;
+        drop(
+            temporary
+                .persist(&meta_path)
+                .map_err(|error| Either::Right(error.error))?,
+        );
         Ok(())
     }
 
@@ -727,6 +771,191 @@ impl MultipleSegment {
 
     pub fn mic_device_id(&self) -> Option<&str> {
         self.mic.as_ref().and_then(|m| m.device_id.as_deref())
+    }
+}
+
+#[cfg(test)]
+mod metadata_save_tests {
+    use super::*;
+    use std::io::Read;
+
+    const LEGACY_METADATA: &str = r#"{"platform":"MacOS","pretty_name":"Cap 0.5.9 recording","sharing":null,"segments":[{"display":{"path":"content/segments/segment-0/display.mp4","fps":30,"start_time":0.0}}],"cursors":{},"status":{"status":"NeedsRemux"}}"#;
+
+    fn recording(project: &Path) -> RecordingMeta {
+        let mut meta: RecordingMeta = serde_json::from_str(LEGACY_METADATA).unwrap();
+        meta.project_path = project.to_path_buf();
+        meta
+    }
+
+    fn assert_no_temporary_metadata(project: &Path) {
+        assert!(std::fs::read_dir(project).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".recording-meta-")
+        }));
+    }
+
+    #[test]
+    fn new_metadata_preserves_legacy_serialization_and_loads() {
+        let project = tempfile::tempdir().unwrap();
+        let meta = recording(project.path());
+        meta.save_for_project().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("recording-meta.json")).unwrap(),
+            serde_json::to_string_pretty(&meta).unwrap()
+        );
+        let loaded = RecordingMeta::load_for_project(project.path()).unwrap();
+        assert_eq!(
+            serde_json::to_value(loaded).unwrap(),
+            serde_json::to_value(meta).unwrap()
+        );
+        assert_no_temporary_metadata(project.path());
+    }
+
+    #[test]
+    fn replacing_metadata_does_not_modify_the_previous_file() {
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("recording-meta.json");
+        std::fs::write(&path, LEGACY_METADATA).unwrap();
+        let mut previous = std::fs::File::open(&path).unwrap();
+        let mut meta = recording(project.path());
+        meta.pretty_name = "Finished recording".into();
+
+        meta.save_for_project().unwrap();
+
+        let mut previous_bytes = String::new();
+        previous.read_to_string(&mut previous_bytes).unwrap();
+        assert_eq!(previous_bytes, LEGACY_METADATA);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            serde_json::to_string_pretty(&meta).unwrap()
+        );
+        assert_eq!(
+            RecordingMeta::load_for_project(project.path())
+                .unwrap()
+                .pretty_name,
+            "Finished recording"
+        );
+        assert_no_temporary_metadata(project.path());
+    }
+
+    #[test]
+    fn failed_staged_write_or_sync_preserves_previous_metadata() {
+        for partial_write in [true, false] {
+            let project = tempfile::tempdir().unwrap();
+            let path = project.path().join("recording-meta.json");
+            std::fs::write(&path, LEGACY_METADATA).unwrap();
+            let mut meta = recording(project.path());
+            meta.pretty_name = "Must not be published".into();
+            let failure = if partial_write {
+                "injected incomplete write"
+            } else {
+                "injected file sync failure"
+            };
+
+            let result = meta.save_for_project_with(|file, bytes| {
+                let count = if partial_write {
+                    bytes.len() / 2
+                } else {
+                    bytes.len()
+                };
+                file.write_all(&bytes[..count])?;
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), LEGACY_METADATA);
+                Err(std::io::Error::other(failure))
+            });
+
+            assert!(matches!(result, Err(Either::Right(error)) if error.to_string() == failure));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), LEGACY_METADATA);
+            assert_eq!(
+                RecordingMeta::load_for_project(project.path())
+                    .unwrap()
+                    .pretty_name,
+                "Cap 0.5.9 recording"
+            );
+            assert_no_temporary_metadata(project.path());
+        }
+    }
+
+    #[test]
+    fn non_file_metadata_destination_is_preserved() {
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("recording-meta.json");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("retained"), b"original").unwrap();
+
+        assert!(recording(project.path()).save_for_project().is_err());
+
+        assert_eq!(std::fs::read(path.join("retained")).unwrap(), b"original");
+        assert_no_temporary_metadata(project.path());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn denied_metadata_replacement_preserves_previous_metadata() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("recording-meta.json");
+        std::fs::write(&path, LEGACY_METADATA).unwrap();
+        let mut locked = None;
+        let result = recording(project.path()).save_for_project_with(|file, bytes| {
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            locked = Some(
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(0)
+                    .open(&path)?,
+            );
+            Ok(())
+        });
+
+        assert!(locked.is_some());
+        drop(locked);
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), LEGACY_METADATA);
+        assert_no_temporary_metadata(project.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_replacement_preserves_existing_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("recording-meta.json");
+        std::fs::write(&path, LEGACY_METADATA).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        recording(project.path()).save_for_project().unwrap();
+
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_metadata_and_its_target_are_preserved() {
+        let project = tempfile::tempdir().unwrap();
+        let target = project.path().join("original.json");
+        let path = project.path().join("recording-meta.json");
+        std::fs::write(&target, LEGACY_METADATA).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+
+        assert!(recording(project.path()).save_for_project().is_err());
+
+        assert!(
+            std::fs::symlink_metadata(path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(target).unwrap(), LEGACY_METADATA);
+        assert_no_temporary_metadata(project.path());
     }
 }
 
