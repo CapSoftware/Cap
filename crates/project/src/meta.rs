@@ -398,13 +398,49 @@ impl StudioRecordingMeta {
                         .is_none_or(|failures| !failures.is_empty())
                 })
             });
-        if failed {
+        if failed && self.legacy_omitted_track_failures(&diagnostics).is_none() {
             return Err(
                 "This recording retains a requested-track failure or incomplete diagnostics. Its original files are preserved. Open the recording folder to inspect them."
                     .into(),
             );
         }
         Ok(())
+    }
+
+    pub fn legacy_omitted_track_failures(
+        &self,
+        diagnostics: &serde_json::Value,
+    ) -> Option<Vec<(usize, &'static str)>> {
+        let Self::MultipleSegments { inner } = self else {
+            return None;
+        };
+        if !matches!(
+            inner.status,
+            Some(StudioRecordingStatus::Complete | StudioRecordingStatus::NeedsRemux)
+        ) || diagnostics.get("version")?.as_u64()? != 1
+        {
+            return None;
+        }
+
+        let mut omitted = Vec::new();
+        for segment in diagnostics.get("segments")?.as_array()? {
+            let index = usize::try_from(segment.get("segmentIndex")?.as_u64()?).ok()?;
+            let recorded = inner.segments.get(index)?;
+            for failure in segment.get("trackFailures")?.as_array()? {
+                if !matches!(failure.get("stage")?.as_str()?, "runtime" | "stop") {
+                    return None;
+                }
+                failure.get("error")?.as_str()?;
+                let track = match failure.get("track")?.as_str()? {
+                    "microphone" if recorded.mic.is_none() => "microphone",
+                    "camera" if recorded.camera.is_none() => "camera",
+                    "systemAudio" if recorded.system_audio.is_none() => "systemAudio",
+                    _ => return None,
+                };
+                omitted.push((index, track));
+            }
+        }
+        Some(omitted)
     }
 
     pub fn camera_path(&self) -> Option<RelativePathBuf> {
@@ -957,7 +993,9 @@ mod display_notch_tests {
 
 #[cfg(test)]
 mod ordinary_media_access_tests {
-    use super::{Cursors, MultipleSegments, StudioRecordingMeta, StudioRecordingStatus};
+    use super::{
+        Cursors, MultipleSegments, RecordingMeta, StudioRecordingMeta, StudioRecordingStatus,
+    };
 
     fn studio(status: Option<StudioRecordingStatus>) -> StudioRecordingMeta {
         StudioRecordingMeta::MultipleSegments {
@@ -987,6 +1025,118 @@ mod ordinary_media_access_tests {
         assert_eq!(std::fs::read(media).unwrap(), b"incomplete original media");
         assert_eq!(std::fs::read(config).unwrap(), b"original config");
         assert_eq!(serde_json::to_vec(&meta).unwrap(), before);
+    }
+
+    fn legacy_optional_failure() -> (StudioRecordingMeta, serde_json::Value) {
+        let recording: RecordingMeta = serde_json::from_str(
+            r#"{"platform":"MacOS","pretty_name":"Cap recording","sharing":null,"segments":[{"display":{"path":"content/segments/segment-0/display.mp4","fps":30,"start_time":0.0}}],"cursors":{},"status":{"status":"Complete"}}"#,
+        )
+        .unwrap();
+        let diagnostics = serde_json::json!({
+            "version": 1,
+            "segments": [{
+                "segmentIndex": 0,
+                "start": 10.0,
+                "end": 20.0,
+                "trackFailures": [{
+                    "track": "microphone",
+                    "stage": "runtime",
+                    "error": "microphone writer failed"
+                }]
+            }]
+        });
+        (recording.studio_meta().unwrap().clone(), diagnostics)
+    }
+
+    #[test]
+    fn released_059_omitted_optional_failures_remain_accessible() {
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("recording-diagnostics.json");
+        for status in [
+            StudioRecordingStatus::Complete,
+            StudioRecordingStatus::NeedsRemux,
+        ] {
+            for track in ["microphone", "camera", "systemAudio"] {
+                let (mut meta, mut diagnostics) = legacy_optional_failure();
+                let StudioRecordingMeta::MultipleSegments { inner } = &mut meta else {
+                    unreachable!();
+                };
+                inner.status = Some(status.clone());
+                diagnostics["segments"][0]["trackFailures"][0]["track"] = track.into();
+                let raw = serde_json::to_vec(&diagnostics).unwrap();
+                std::fs::write(&path, &raw).unwrap();
+                let original_meta = serde_json::to_vec(&meta).unwrap();
+                assert!(meta.ensure_ordinary_media_access(project.path()).is_ok());
+                assert_eq!(std::fs::read(&path).unwrap(), raw);
+                assert_eq!(serde_json::to_vec(&meta).unwrap(), original_meta);
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_diagnostics_do_not_override_failed_or_uncertain_status() {
+        let project = tempfile::tempdir().unwrap();
+        for status in [
+            None,
+            Some(StudioRecordingStatus::InProgress),
+            Some(StudioRecordingStatus::Failed {
+                error: "requested microphone failed".into(),
+            }),
+        ] {
+            let (mut meta, diagnostics) = legacy_optional_failure();
+            let StudioRecordingMeta::MultipleSegments { inner } = &mut meta else {
+                unreachable!();
+            };
+            inner.status = status;
+            std::fs::write(
+                project.path().join("recording-diagnostics.json"),
+                serde_json::to_vec(&diagnostics).unwrap(),
+            )
+            .unwrap();
+            assert!(meta.ensure_ordinary_media_access(project.path()).is_err());
+        }
+    }
+
+    #[test]
+    fn current_or_unresolved_failures_cannot_use_legacy_compatibility() {
+        let project = tempfile::tempdir().unwrap();
+        for (pointer, value) in [
+            ("/version", serde_json::json!(2)),
+            ("/version", serde_json::json!(0)),
+            ("/segments/0/segmentIndex", serde_json::json!(1)),
+            (
+                "/segments/0/trackFailures/0/track",
+                serde_json::json!("display"),
+            ),
+            (
+                "/segments/0/trackFailures/0/track",
+                serde_json::json!("unknown"),
+            ),
+            ("/segments/0/trackFailures/0/stage", serde_json::Value::Null),
+            ("/segments/0/trackFailures/0/error", serde_json::Value::Null),
+        ] {
+            let (meta, mut diagnostics) = legacy_optional_failure();
+            *diagnostics.pointer_mut(pointer).unwrap() = value;
+            std::fs::write(
+                project.path().join("recording-diagnostics.json"),
+                serde_json::to_vec(&diagnostics).unwrap(),
+            )
+            .unwrap();
+            assert!(meta.ensure_ordinary_media_access(project.path()).is_err());
+        }
+
+        let (meta, diagnostics) = legacy_optional_failure();
+        let mut raw_meta = serde_json::to_value(&meta).unwrap();
+        raw_meta["segments"][0]["mic"] = serde_json::json!({
+            "path": "content/segments/segment-0/audio-input.ogg"
+        });
+        let meta: StudioRecordingMeta = serde_json::from_value(raw_meta).unwrap();
+        std::fs::write(
+            project.path().join("recording-diagnostics.json"),
+            serde_json::to_vec(&diagnostics).unwrap(),
+        )
+        .unwrap();
+        assert!(meta.ensure_ordinary_media_access(project.path()).is_err());
     }
 
     #[test]

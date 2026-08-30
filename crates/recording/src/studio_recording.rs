@@ -1086,7 +1086,7 @@ fn build_recording_failure_diagnostics(
         None
     } else {
         Some(RecordingFailureDiagnostics {
-            version: 1,
+            version: 2,
             segments: segments.to_vec(),
         })
     }
@@ -3907,7 +3907,7 @@ mod tests {
         assert_eq!(
             diagnostics,
             Some(RecordingFailureDiagnostics {
-                version: 1,
+                version: 2,
                 segments: vec![SegmentFailureDiagnostics {
                     segment_index: 2,
                     start: 10.0,

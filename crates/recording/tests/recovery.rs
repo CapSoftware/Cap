@@ -1686,6 +1686,118 @@ fn complete_recovery_fixture() -> TestRecording {
     recording
 }
 
+fn legacy_omitted_microphone_fixture(version: u32) -> TestRecording {
+    let recording = complete_recovery_fixture();
+    let meta_path = recording.path().join("recording-meta.json");
+    let mut meta: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&meta_path).unwrap()).unwrap();
+    let _ = meta["segments"][0].as_object_mut().unwrap().remove("mic");
+    meta["status"] = serde_json::json!({ "status": "NeedsRemux" });
+    std::fs::write(meta_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+    std::fs::write(
+        recording.path().join("recording-diagnostics.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "version": version,
+            "segments": [{
+                "segmentIndex": 0,
+                "start": 0.0,
+                "end": 6.0,
+                "trackFailures": [{
+                    "track": "microphone",
+                    "stage": "stop",
+                    "error": "microphone writer failed"
+                }]
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        recording
+            .path()
+            .join("content/segments/segment-0/audio-input.m4a"),
+        b"discarded optional microphone media from 0.5.9",
+    )
+    .unwrap();
+    recording
+}
+
+#[test]
+fn legacy_059_finalization_preserves_discarded_optional_track_in_backup() {
+    test_utils::init_tracing();
+    for finalize in [false, true] {
+        let recording = legacy_omitted_microphone_fixture(1);
+        let before = recovery_input_bytes(recording.path());
+        if finalize {
+            assert!(RecoveryManager::remux_if_needed(recording.path()).unwrap());
+        } else {
+            let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+            RecoveryManager::recover(&incomplete).unwrap();
+        }
+        let meta = RecordingMeta::load_for_project(recording.path()).unwrap();
+        let studio = meta.studio_meta().unwrap();
+        assert!(matches!(studio.status(), StudioRecordingStatus::Complete));
+        studio
+            .ensure_ordinary_media_access(recording.path())
+            .unwrap();
+        let StudioRecordingMeta::MultipleSegments { inner } = studio else {
+            unreachable!();
+        };
+        let segment = &inner.segments[0];
+        assert!(segment.mic.is_none());
+        assert!(segment.camera.is_some());
+        assert!(segment.system_audio.is_some());
+        assert!(probe_video_can_decode(&segment.display.path.to_path(recording.path())).unwrap());
+
+        let backup = std::fs::read_dir(recording.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.join("original-segments").is_dir())
+            .unwrap();
+        for (path, bytes) in &before {
+            if let Ok(relative) = path.strip_prefix("content/segments") {
+                assert_eq!(
+                    &std::fs::read(backup.join("original-segments").join(relative)).unwrap(),
+                    bytes
+                );
+            }
+        }
+        assert_eq!(
+            std::fs::read(backup.join("original-recording-meta.json")).unwrap(),
+            before[Path::new("recording-meta.json")]
+        );
+        assert_eq!(
+            std::fs::read(recording.path().join("recording-diagnostics.json")).unwrap(),
+            before[Path::new("recording-diagnostics.json")]
+        );
+    }
+}
+
+#[test]
+fn current_omitted_track_failure_cannot_use_legacy_recovery() {
+    test_utils::init_tracing();
+    let recording = legacy_omitted_microphone_fixture(2);
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    let before = recovery_input_bytes(recording.path());
+    assert!(RecoveryManager::recover(&incomplete).is_err());
+    assert!(RecoveryManager::remux_if_needed(recording.path()).is_err());
+    assert_eq!(recovery_input_bytes(recording.path()), before);
+}
+
+#[test]
+fn legacy_optional_failure_does_not_bypass_retained_display_validation() {
+    test_utils::init_tracing();
+    let recording = legacy_omitted_microphone_fixture(1);
+    let display = recording.path().join("content/segments/segment-0/display");
+    let fragments = list_m4s_segments(&display);
+    std::fs::write(&fragments[0], b"corrupt display media").unwrap();
+    let incomplete = RecoveryManager::inspect_recording(recording.path()).unwrap();
+    let before = recovery_input_bytes(recording.path());
+    assert!(RecoveryManager::recover(&incomplete).is_err());
+    assert!(RecoveryManager::remux_if_needed(recording.path()).is_err());
+    assert_eq!(recovery_input_bytes(recording.path()), before);
+}
+
 #[test]
 fn recovery_and_finalize_retain_every_known_track_on_success() {
     test_utils::init_tracing();

@@ -124,9 +124,10 @@ impl RecoveryManager {
     fn require_no_track_failure(project_path: &Path) -> Result<(), RecoveryError> {
         if let Ok(meta) = RecordingMeta::load_for_project(project_path)
             && let Some(studio) = meta.studio_meta()
-            && let StudioRecordingStatus::Failed { error } = studio.status()
         {
-            return Err(RecoveryError::RequiredTrackFailure(error));
+            return studio
+                .ensure_ordinary_media_access(project_path)
+                .map_err(RecoveryError::RequiredTrackFailure);
         }
         let path = project_path.join("recording-diagnostics.json");
         let raw = match std::fs::read(&path) {
@@ -929,9 +930,26 @@ impl RecoveryManager {
                     "Recording changed while copying".into(),
                 ));
             }
-            validate_recovery_manifests(&staged.join("content"))?;
             let staged_meta = RecordingMeta::load_for_project(&staged)
                 .map_err(|error| RecoveryError::Validation(error.to_string()))?;
+            for (index, track) in legacy_omitted_tracks(&staged_meta, &staged)? {
+                let segment = staged.join(format!("content/segments/segment-{index}"));
+                for suffix in ["", ".mp4", ".m4a", ".ogg", ".mp3"] {
+                    let path = segment.join(format!("{track}{suffix}"));
+                    let metadata = match path.symlink_metadata() {
+                        Ok(metadata) => metadata,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) => return Err(error.into()),
+                    };
+                    reject_recovery_link(&metadata)?;
+                    if metadata.is_dir() {
+                        std::fs::remove_dir_all(&path)?;
+                    } else {
+                        std::fs::remove_file(&path)?;
+                    }
+                }
+            }
+            validate_recovery_manifests(&staged.join("content"))?;
             let staged_recording = Self::analyze_incomplete(&staged, &staged_meta)
                 .ok_or(RecoveryError::NoRecoverableSegments)?;
             Self::require_recoverable_tracks(&staged_recording)?;
@@ -1045,6 +1063,7 @@ impl RecoveryManager {
                 "Recovery requires segmented Studio metadata".into(),
             ));
         };
+        let legacy_omitted = legacy_omitted_tracks(&recording.meta, &recording.project_path)?;
         let mut indexes = std::collections::BTreeSet::new();
         for segment in &recording.recoverable_segments {
             if !indexes.insert(segment.index) || segment.display_fragments.is_empty() {
@@ -1076,7 +1095,9 @@ impl RecoveryManager {
                 let present = ["", ".mp4", ".m4a", ".ogg", ".mp3"]
                     .iter()
                     .any(|suffix| dir.join(format!("{name}{suffix}")).exists());
-                if (known || present) && fragments.is_none_or(Vec::is_empty) {
+                let legacy_discarded = legacy_omitted.contains(&(segment.index as usize, name));
+                if (known || (present && !legacy_discarded)) && fragments.is_none_or(Vec::is_empty)
+                {
                     return Err(RecoveryError::Validation(format!(
                         "Missing or invalid {name} in segment {}",
                         segment.index
@@ -2167,6 +2188,33 @@ fn validate_recovery_video_inputs(
         ffmpeg::media::Type::Video,
         video_validation,
     )
+}
+
+fn legacy_omitted_tracks(
+    meta: &RecordingMeta,
+    project_path: &Path,
+) -> Result<Vec<(usize, &'static str)>, RecoveryError> {
+    let raw = match std::fs::read(project_path.join("recording-diagnostics.json")) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let diagnostics = serde_json::from_slice(&raw)?;
+    Ok(meta
+        .studio_meta()
+        .and_then(|studio| studio.legacy_omitted_track_failures(&diagnostics))
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(index, track)| {
+            let name = match track {
+                "microphone" => "audio-input",
+                "camera" => "camera",
+                "systemAudio" => "system_audio",
+                _ => return None,
+            };
+            Some((index, name))
+        })
+        .collect())
 }
 
 fn validate_recovery_track_inputs(
