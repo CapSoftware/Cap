@@ -109,6 +109,7 @@ fn existing_clean_capture_stop(store: &HotkeysStore) -> Result<bool, String> {
     Ok(existing_stop)
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) fn reserve_clean_capture_stop(app: &AppHandle) -> Result<bool, String> {
     let shortcut = clean_capture_shortcut();
     let state = app.state::<HotkeysState>();

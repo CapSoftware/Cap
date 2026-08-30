@@ -154,11 +154,13 @@ pub struct PresentationBroker {
     pending: Arc<Mutex<Option<PendingPresentation>>>,
 }
 
+#[cfg(target_os = "linux")]
 struct PendingGuard {
     pending: Arc<Mutex<Option<PendingPresentation>>>,
     nonce: String,
 }
 
+#[cfg(target_os = "linux")]
 impl Drop for PendingGuard {
     fn drop(&mut self) {
         let mut pending = self.pending.lock().unwrap();

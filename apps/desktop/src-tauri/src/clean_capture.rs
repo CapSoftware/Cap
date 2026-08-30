@@ -655,6 +655,7 @@ pub fn schedule_overlay_reveal(window: &WebviewWindow, generation: u32, focus: b
     });
 }
 
+#[cfg(not(target_os = "macos"))]
 pub fn schedule_overlay_focus(window: &WebviewWindow, generation: u32) {
     let handle = window.clone();
     let _ = window.run_on_main_thread(move || {

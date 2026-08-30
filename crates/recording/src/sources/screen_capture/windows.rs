@@ -425,8 +425,10 @@ pub struct VideoSource {
     first_frame: Option<oneshot::Receiver<Result<(), String>>>,
 }
 
+type SharedFirstScreenFrameSender = Arc<Mutex<Option<oneshot::Sender<Result<(), String>>>>>;
+
 #[derive(Clone)]
-struct FirstScreenFrame(Arc<Mutex<Option<oneshot::Sender<Result<(), String>>>>>);
+struct FirstScreenFrame(SharedFirstScreenFrameSender);
 
 impl FirstScreenFrame {
     fn complete(&self, result: Result<(), String>) {

@@ -1727,7 +1727,9 @@ pub(crate) struct PipelineBuildScope(Arc<PipelineBuildScopeInner>);
 type CaptureCompletion = Shared<BoxFuture<'static, Result<(), String>>>;
 
 struct ScopeError {
+    #[cfg(any(test, target_os = "linux", windows))]
     message: String,
+    #[cfg(any(test, target_os = "linux", windows))]
     uncertain: bool,
 }
 
@@ -1978,7 +1980,9 @@ impl PipelineBuildScope {
         }
         if !self.0.committed.load(Ordering::Acquire) {
             self.0.cleanup_errors.lock().unwrap().push(ScopeError {
+                #[cfg(any(test, target_os = "linux", windows))]
                 message: error,
+                #[cfg(any(test, target_os = "linux", windows))]
                 uncertain: true,
             });
         }
@@ -2027,7 +2031,9 @@ impl PipelineBuildScope {
         }
         if !self.is_committed() {
             self.0.cleanup_errors.lock().unwrap().push(ScopeError {
+                #[cfg(any(test, target_os = "linux", windows))]
                 message: error,
+                #[cfg(any(test, target_os = "linux", windows))]
                 uncertain: !self.requires_joined_stop(),
             });
         }

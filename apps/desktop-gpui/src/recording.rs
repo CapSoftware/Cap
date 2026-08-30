@@ -18,7 +18,7 @@ use cap_recording::{
     sources::screen_capture::ScreenCaptureTarget,
     studio_recording,
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 use futures_util::FutureExt as _;
 use kameo::{Actor, actor::ActorRef};
 
@@ -545,6 +545,7 @@ async fn finish_windows_failed_capture(
 }
 
 impl ActiveRecording {
+    #[cfg(any(target_os = "linux", windows))]
     pub fn done_fut(&self) -> cap_recording::DoneFut {
         match &self.handle {
             Handle::Studio(handle) => handle.done_fut(),
