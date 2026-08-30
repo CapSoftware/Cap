@@ -552,6 +552,7 @@ struct PreviewFrameView {
     frame_size: (f32, f32),
     frame_rect: crate::editor_canvas::CanvasRect,
     stats: Option<Arc<PumpStats>>,
+    frame_sequence: u64,
 }
 
 impl PreviewFrameView {
@@ -561,6 +562,7 @@ impl PreviewFrameView {
             frame_size: (1920., 1080.),
             frame_rect,
             stats: None,
+            frame_sequence: 0,
         }
     }
 
@@ -573,6 +575,7 @@ impl PreviewFrameView {
     ) -> Option<EditorPreviewFrame> {
         self.frame_size = frame_size;
         self.stats = stats;
+        self.frame_sequence = self.frame_sequence.wrapping_add(1);
         let previous = self.frame.replace(frame);
         cx.notify();
         previous
@@ -587,6 +590,7 @@ impl Render for PreviewFrameView {
         let frame_size = self.frame_size;
         let frame_rect = self.frame_rect.clone();
         let painted = self.stats.clone();
+        let frame_sequence = self.frame_sequence;
 
         gpui::canvas(
             |bounds, _window, _cx| bounds,
@@ -608,7 +612,7 @@ impl Render for PreviewFrameView {
                 window.paint_quad(gpui::fill(fitted, gpui::black()));
                 frame.paint(fitted, window);
                 if let Some(stats) = &painted {
-                    stats.painted.fetch_add(1, Ordering::Relaxed);
+                    stats.record_paint(frame_sequence);
                 }
             },
         )
@@ -694,8 +698,10 @@ pub struct EditorFrame {
 ///   `total_rendered` to see what the renderer's latest-wins drain discarded.
 /// * `dropped` -- frames the pump's bounded channel refused because the UI was
 ///   behind.
-/// * `presented` -- frames that reached [`EditorWindow::frame_arrived`]. This
-///   is the frame rate: distinct pictures per second.
+/// * `presented` -- frames delivered to [`EditorWindow::frame_arrived`],
+///   which can be replaced by another frame before the next canvas paint.
+/// * `painted_frames` -- distinct delivered frames submitted by the canvas.
+///   This excludes repeat paints but does not prove physical display scanout.
 /// * `painted` -- *paints* of the preview canvas, not frames. The window also
 ///   repaints for the clock and the playhead, so this runs ahead of
 ///   `presented` (~1.65x during playback) and must never be reported as fps.
@@ -709,6 +715,8 @@ pub struct PumpStats {
     pub dropped: AtomicU64,
     pub presented: AtomicU64,
     pub painted: AtomicU64,
+    pub painted_frames: AtomicU64,
+    last_painted_sequence: AtomicU64,
     pub convert_nanos: AtomicU64,
     pub convert_samples: AtomicU64,
 }
@@ -722,17 +730,30 @@ pub struct StatsSnapshot {
     pub dropped: u64,
     pub presented: u64,
     pub painted: u64,
+    pub painted_frames: u64,
     pub convert_nanos: u64,
     pub convert_samples: u64,
 }
 
 impl PumpStats {
+    fn record_paint(&self, frame_sequence: u64) {
+        self.painted.fetch_add(1, Ordering::Relaxed);
+        if self
+            .last_painted_sequence
+            .swap(frame_sequence, Ordering::Relaxed)
+            != frame_sequence
+        {
+            self.painted_frames.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     pub fn snapshot(&self) -> StatsSnapshot {
         StatsSnapshot {
             rendered: self.rendered.load(Ordering::Relaxed),
             dropped: self.dropped.load(Ordering::Relaxed),
             presented: self.presented.load(Ordering::Relaxed),
             painted: self.painted.load(Ordering::Relaxed),
+            painted_frames: self.painted_frames.load(Ordering::Relaxed),
             convert_nanos: self.convert_nanos.load(Ordering::Relaxed),
             convert_samples: self.convert_samples.load(Ordering::Relaxed),
         }
@@ -746,6 +767,7 @@ impl StatsSnapshot {
             dropped: self.dropped.saturating_sub(before.dropped),
             presented: self.presented.saturating_sub(before.presented),
             painted: self.painted.saturating_sub(before.painted),
+            painted_frames: self.painted_frames.saturating_sub(before.painted_frames),
             convert_nanos: self.convert_nanos.saturating_sub(before.convert_nanos),
             convert_samples: self.convert_samples.saturating_sub(before.convert_samples),
         }
@@ -763,14 +785,16 @@ impl StatsSnapshot {
     /// *where* a shortfall happened.
     ///
     /// `fps` is **delivered** frames per second -- distinct pictures that
-    /// reached the window. `paints` is deliberately separate and is *not* a
+    /// reached the window, including frames replaced before painting.
+    /// `paint_submitted_fps` counts distinct frames the canvas painted.
+    /// `paints` is deliberately separate and is *not* a
     /// frame rate: the window also repaints for the playhead and the clock, so
     /// it runs ahead of the frame count and would flatter the number.
     pub fn report(self, seconds: f64) -> String {
         let seconds = seconds.max(0.001);
         format!(
             "playback fps={:.1} frames={} dropped={} (rendered={} rendered_fps={:.1} paints={} \
-             convert_avg={:.0}us over {:.2}s)",
+             convert_avg={:.0}us over {:.2}s painted_frames={} paint_submitted_fps={:.1})",
             self.presented as f64 / seconds,
             self.presented,
             self.dropped,
@@ -779,6 +803,8 @@ impl StatsSnapshot {
             self.painted,
             self.convert_micros(),
             seconds,
+            self.painted_frames,
+            self.painted_frames as f64 / seconds,
         )
     }
 }
@@ -9063,12 +9089,14 @@ mod tests {
             dropped: 20,
             presented: 600,
             painted: 600,
+            painted_frames: 300,
             convert_nanos: 600 * 1_500_000,
             convert_samples: 600,
         };
         let delta = after.since(before);
         assert_eq!(delta.convert_micros(), 1500.0);
         let report = delta.report(10.0);
+        assert!(report.contains("painted_frames=300 paint_submitted_fps=30.0"));
         assert!(
             report.starts_with("playback fps=60.0 frames=600 dropped=20"),
             "{report}"
@@ -9084,6 +9112,21 @@ mod tests {
             noisy_paints.report(10.0).starts_with("playback fps=60.0 "),
             "paints must not inflate the frame rate"
         );
+    }
+
+    #[test]
+    fn painted_frames_exclude_repaints_and_frames_replaced_before_paint() {
+        let stats = PumpStats::default();
+        stats.record_paint(1);
+        stats.record_paint(1);
+        let before = stats.snapshot();
+        stats.record_paint(4);
+        stats.record_paint(4);
+        stats.record_paint(5);
+        let after = stats.snapshot();
+        assert_eq!(after.painted, 5);
+        assert_eq!(after.painted_frames, 3);
+        assert_eq!(after.since(before).painted_frames, 2);
     }
 
     /// Playhead seconds come from the engine's frame number over the app's
