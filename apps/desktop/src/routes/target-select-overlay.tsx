@@ -82,6 +82,7 @@ import {
 	createOptionsQuery,
 	createOrganizationsQuery,
 } from "~/utils/queries";
+import { createRecordingMenuPopup } from "~/utils/recording-menu";
 import {
 	type CanvasControls,
 	createImageDataWS,
@@ -2121,10 +2122,15 @@ function RecordingControls(props: {
 		});
 	};
 
-	function showMenu(menu: Promise<Menu>, e: UIEvent) {
+	const popupRecordingMenu = createRecordingMenuPopup();
+
+	function showMenu(createMenu: () => Promise<Menu>, e: UIEvent) {
 		e.stopPropagation();
-		const rect = (e.target as HTMLDivElement).getBoundingClientRect();
-		menu.then((menu) => menu.popup(new LogicalPosition(rect.x, rect.y + 40)));
+		const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+		void popupRecordingMenu(
+			createMenu,
+			new LogicalPosition(rect.x, rect.y + 40),
+		).catch(() => toast.error("Could not open recording menu"));
 	}
 
 	return (
@@ -2195,13 +2201,14 @@ function RecordingControls(props: {
 										</span>
 									</div>
 								</div>
-								<div
+								<button
+									type="button"
+									aria-label="Choose recording mode"
 									class="pl-2.5 pr-3 py-1.5 flex items-center border-l border-white/20 bg-white/5 transition-colors group-hover:bg-white/10"
-									onMouseDown={(e) => showMenu(menuModes(), e)}
-									onClick={(e) => showMenu(menuModes(), e)}
+									onClick={(e) => showMenu(menuModes, e)}
 								>
 									<IconCapCaretDown class="pointer-events-none" />
-								</div>
+								</button>
 							</Popover.Anchor>
 							<Popover.Portal>
 								<Popover.Content class="z-200 w-[min(21rem,calc(100vw-1.5rem))] rounded-xl border border-amber-6 bg-gray-1 p-3.5 text-gray-12 shadow-xl outline-hidden data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95">
@@ -2232,13 +2239,14 @@ function RecordingControls(props: {
 								</Popover.Content>
 							</Popover.Portal>
 						</Popover>
-						<div
+						<button
+							type="button"
+							aria-label="Recording countdown"
 							class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
-							onMouseDown={(e) => showMenu(preRecordingMenu(), e)}
-							onClick={(e) => showMenu(preRecordingMenu(), e)}
+							onClick={(e) => showMenu(preRecordingMenu, e)}
 						>
 							<IconCapGear class="pointer-events-none will-change-transform size-5" />
-						</div>
+						</button>
 					</div>
 				</div>
 				<Show when={(rawOptions.mode as string) !== "screenshot"}>
