@@ -161,7 +161,7 @@ export async function POST(request: NextRequest) {
 						source: { type: "desktopMP4" as const },
 						...(receipt
 							? {
-									metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.desktopRecordingUpload', JSON_OBJECT('version', ${receipt.version}, 'artifact', JSON_EXTRACT(${JSON.stringify(receipt.artifact)}, '$'), 'fileSize', ${receipt.fileSize}, 'duration', ${receipt.duration}, 'hasAudio', JSON_EXTRACT(${JSON.stringify(receipt.hasAudio)}, '$'), 'fullDecode', JSON_EXTRACT('true', '$'), 'objectIdentity', ${receipt.objectIdentity}))`,
+									metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.desktopRecordingUpload', JSON_OBJECT('version', ${receipt.version}, 'artifact', JSON_EXTRACT(${JSON.stringify(receipt.artifact)}, '$'), 'fileSize', ${receipt.fileSize}, 'duration', ${receipt.duration}, 'hasAudio', JSON_EXTRACT(${JSON.stringify(receipt.hasAudio)}, '$'), 'fullDecode', JSON_EXTRACT('true', '$'), 'requiredAudioVerified', JSON_EXTRACT(${JSON.stringify(receipt.requiredAudioVerified)}, '$'), 'objectIdentity', ${receipt.objectIdentity}))`,
 								}
 							: {}),
 					})

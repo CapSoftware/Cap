@@ -1136,6 +1136,7 @@ mod tests {
                 duration: 2.0,
                 has_audio: true,
                 full_decode: true,
+                required_audio_verified: verification.required_audio,
             });
             state.verification = Some(verification);
             state.phase = UploadPhase::Verified;
@@ -1234,6 +1235,7 @@ mod tests {
                     duration: 2.0,
                     has_audio: true,
                     full_decode: true,
+                    required_audio_verified: verification.required_audio,
                 }))
             } else {
                 Ok(Confirmation::Pending)

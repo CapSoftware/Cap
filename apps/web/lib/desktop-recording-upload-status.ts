@@ -94,6 +94,7 @@ export async function createVerifiedRecordingReceipt(
 		duration: output.duration,
 		hasAudio: Boolean(output.audioCodec),
 		fullDecode: true,
+		requiredAudioVerified: request.requiredAudio,
 		objectIdentity: head.ETag,
 	};
 }
@@ -115,7 +116,11 @@ export async function verifyDesktopRecordingUpload(
 		video,
 		request,
 	);
-	if (expected.requiredAudio && !receipt.data.hasAudio) return null;
+	if (
+		expected.requiredAudio &&
+		(!receipt.data.hasAudio || !receipt.data.requiredAudioVerified)
+	)
+		return null;
 	const head = await EffectRuntime.runPromise(
 		bucket.headObject(`${video.ownerId}/${video.id}/result.mp4`),
 	);
@@ -132,5 +137,6 @@ export async function verifyDesktopRecordingUpload(
 		duration: receipt.data.duration,
 		hasAudio: receipt.data.hasAudio,
 		fullDecode: true,
+		requiredAudioVerified: receipt.data.requiredAudioVerified,
 	};
 }

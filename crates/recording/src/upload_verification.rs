@@ -35,6 +35,8 @@ pub struct VerifiedUploadReceipt {
     pub duration: f64,
     pub has_audio: bool,
     pub full_decode: bool,
+    #[serde(default)]
+    pub required_audio_verified: bool,
 }
 
 impl UploadVerification {
@@ -103,7 +105,7 @@ impl UploadVerification {
             || !receipt.duration.is_finite()
             || receipt.duration <= 0.0
             || !receipt.full_decode
-            || (self.required_audio && !receipt.has_audio)
+            || (self.required_audio && (!receipt.has_audio || !receipt.required_audio_verified))
         {
             return Err("Recording verification did not match the local recording".into());
         }
@@ -171,6 +173,7 @@ mod tests {
                 "duration": 10.0,
                 "hasAudio": true,
                 "fullDecode": true,
+                "requiredAudioVerified": request.required_audio,
             }
         })
     }
@@ -207,6 +210,7 @@ mod tests {
             ("version", json!(2)),
             ("hasAudio", json!(false)),
             ("fullDecode", json!(false)),
+            ("requiredAudioVerified", json!(false)),
             ("fileSize", json!(0)),
             ("duration", json!(0)),
             (
@@ -272,5 +276,40 @@ mod tests {
         ] {
             assert!(completed_drive_object_identity(&value, 4096).is_none());
         }
+    }
+
+    #[test]
+    fn weak_audio_receipt_cannot_satisfy_a_stronger_request_for_the_same_object() {
+        let weak = UploadVerification::mp4(4096, 10.0, false, "\"same-object\"".into()).unwrap();
+        let strong = UploadVerification::mp4(4096, 10.0, true, "\"same-object\"".into()).unwrap();
+        let mut receipt = response(&weak);
+        assert_eq!(receipt["verification"]["hasAudio"], json!(true));
+        assert_eq!(receipt["verification"]["fullDecode"], json!(true));
+        assert!(
+            weak.verified_receipt("owned-video", &receipt)
+                .unwrap()
+                .is_some()
+        );
+        assert!(strong.verified_receipt("owned-video", &receipt).is_err());
+        assert!(
+            receipt["verification"]
+                .as_object_mut()
+                .unwrap()
+                .remove("requiredAudioVerified")
+                .is_some()
+        );
+        assert!(
+            weak.verified_receipt("owned-video", &receipt)
+                .unwrap()
+                .is_some()
+        );
+        assert!(strong.verified_receipt("owned-video", &receipt).is_err());
+        receipt["verification"]["requiredAudioVerified"] = json!(true);
+        assert!(
+            strong
+                .verified_receipt("owned-video", &receipt)
+                .unwrap()
+                .is_some()
+        );
     }
 }

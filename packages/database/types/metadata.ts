@@ -20,6 +20,7 @@ export interface VideoMetadata {
 		duration: number;
 		hasAudio: boolean;
 		fullDecode: true;
+		requiredAudioVerified?: boolean;
 		objectIdentity: string;
 	};
 	/**

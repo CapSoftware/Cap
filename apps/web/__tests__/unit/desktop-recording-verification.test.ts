@@ -173,6 +173,17 @@ describe("desktop recording verification", () => {
 				.success,
 		).toBe(true);
 		expect(
+			recordingUploadReceiptSchema.parse({ ...receipt, fullDecode: true })
+				.requiredAudioVerified,
+		).toBe(false);
+		expect(
+			recordingUploadReceiptSchema.parse({
+				...receipt,
+				fullDecode: true,
+				requiredAudioVerified: true,
+			}).requiredAudioVerified,
+		).toBe(true);
+		expect(
 			recordingUploadReceiptSchema.safeParse({
 				...receipt,
 				fullDecode: true,

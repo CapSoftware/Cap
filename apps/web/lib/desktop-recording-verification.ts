@@ -103,6 +103,7 @@ export const recordingUploadReceiptSchema = z
 		duration: positiveNumber,
 		hasAudio: z.boolean(),
 		fullDecode: z.literal(true),
+		requiredAudioVerified: z.boolean().default(false),
 		objectIdentity: z.string().min(1),
 	})
 	.refine(
