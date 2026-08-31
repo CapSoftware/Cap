@@ -605,7 +605,7 @@ impl MainWindow {
         });
         #[cfg(target_os = "windows")]
         cx.observe_window_activation(window, |this, window, cx| {
-            if window.is_window_active() && !this.displays.is_empty() {
+            if window.is_window_active() && !this.devices.displays.is_empty() {
                 this.schedule_target_prewarm(window, cx);
             }
             cx.notify();
