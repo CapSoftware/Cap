@@ -44,12 +44,14 @@ impl UploadLock {
             .parent()
             .ok_or_else(|| io::Error::other("Recording has no parent directory"))?;
         let directory = parent.join(".upload-locks");
-        let mut builder = fs::DirBuilder::new();
+        let builder = fs::DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = builder;
             builder.mode(0o700);
-        }
+            builder
+        };
         match builder.create(&directory) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
