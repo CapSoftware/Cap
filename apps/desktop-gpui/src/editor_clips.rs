@@ -16,9 +16,13 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
+    io::Write as _,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use cap_project::{
@@ -28,10 +32,10 @@ use cap_project::{
     XY,
 };
 use gpui::{
-    AnyElement, AppContext as _, Bounds, Context, CursorStyle, Entity, FontWeight, Hsla,
+    AnyElement, App, AppContext as _, Bounds, Context, CursorStyle, Entity, FontWeight, Hsla,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement, Pixels, Point, RenderImage, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled, StyledImage as _, Window, div, img,
+    StatefulInteractiveElement as _, Styled, StyledImage as _, Window, WindowHandle, div, img,
     prelude::FluentBuilder, px, svg,
 };
 
@@ -297,6 +301,9 @@ pub(crate) struct ClipsState {
     import_menu: Option<Point<Pixels>>,
     /// `importing`.
     importing: bool,
+    import_cancelled: Option<Arc<AtomicBool>>,
+    import_reload_subscription: Option<gpui::Subscription>,
+    prepared_mp4_import: Option<PreparedMp4Import>,
     /// `editingIndex`.
     editing: Option<usize>,
     /// The inline rename field, created on first use (it needs a window).
@@ -318,6 +325,9 @@ impl Default for ClipsState {
             open: false,
             import_menu: None,
             importing: false,
+            import_cancelled: None,
+            import_reload_subscription: None,
+            prepared_mp4_import: None,
             editing: None,
             rename_input: None,
             drag: None,
@@ -326,6 +336,14 @@ impl Default for ClipsState {
             scroll: ScrollHandle::new(),
             thumbs: HashMap::new(),
             thumbs_inflight: 0,
+        }
+    }
+}
+
+impl Drop for ClipsState {
+    fn drop(&mut self) {
+        if let Some(cancelled) = &self.import_cancelled {
+            cancelled.store(true, Ordering::Release);
         }
     }
 }
@@ -783,6 +801,7 @@ impl EditorWindow {
                             .gap(px(8.))
                             .font_weight(FontWeight::MEDIUM)
                             .full_width()
+                            .disabled(self.clips.importing)
                             .on_click(cx.listener(
                                 |this, _, _window, cx| {
                                     if !this.begin_editor_recording(cx) {
@@ -804,7 +823,11 @@ impl EditorWindow {
                             ui::ButtonSize::Md,
                         )
                         .icon("icons/circle-plus.svg")
-                        .label("Import")
+                        .label(if self.clips.importing {
+                            "Importing…"
+                        } else {
+                            "Import"
+                        })
                         .height(px(40.))
                         .gap(px(8.))
                         .font_weight(FontWeight::MEDIUM)
@@ -1171,6 +1194,9 @@ impl EditorWindow {
     }
 
     fn begin_editor_recording(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.clips.importing {
+            return false;
+        }
         let session = RecordingSession::global(cx);
         if session.read(cx).phase != Phase::Idle || app_windows::clean_capture_owned(cx) {
             tracing::warn!("a recording is already live; not starting another from the editor");
@@ -1294,10 +1320,6 @@ impl EditorWindow {
         overlays
     }
 
-    /// The import menu (`:541-556`): a native `Menu.popup()` in the Tauri
-    /// app, here the `ui::Menu` shape -- backdrop plus a panel at the click
-    /// position -- because it needs a disabled row, which `ui::Menu` has no
-    /// arm for.
     fn render_clips_import_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let origin = self.clips.import_menu?;
         let theme = self.theme;
@@ -1335,35 +1357,39 @@ impl EditorWindow {
                         })),
                 )
                 .child(
-                    div()
-                        .absolute()
-                        .left(origin.x)
-                        .top(origin.y)
-                        .flex()
-                        .flex_col()
-                        .min_w(px(180.))
-                        .p(px(4.))
-                        .rounded(px(8.))
-                        .border_1()
-                        .border_color(Hsla::from(theme.gray_3))
-                        .bg(Hsla::from(theme.gray_1))
-                        .text_size(px(12.))
-                        .text_color(Hsla::from(theme.gray_12))
+                    gpui::anchored()
+                        .position(origin)
+                        .snap_to_window_with_margin(px(12.))
                         .child(
-                            row("clips-import-existing", "Existing recording")
-                                .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.clips.import_menu = None;
-                                    this.pick_existing_recording(window, cx);
-                                })),
-                        )
-                        .child(
-                            // Disabled: `crate::import` only creates *new*
-                            // library bundles (`pick_and_import_video`);
-                            // appending an MP4 to the open project
-                            // (`append_mp4_to_editor_project`) has no seam
-                            // here yet.
-                            row("clips-import-mp4", "MP4 Video…").opacity(0.5),
+                            div()
+                                .flex()
+                                .flex_col()
+                                .min_w(px(180.))
+                                .p(px(4.))
+                                .rounded(px(8.))
+                                .border_1()
+                                .border_color(Hsla::from(theme.gray_3))
+                                .bg(Hsla::from(theme.gray_1))
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.gray_12))
+                                .child(
+                                    row("clips-import-existing", "Existing recording")
+                                        .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.clips.import_menu = None;
+                                            cx.notify();
+                                            this.pick_existing_recording(window, cx);
+                                        })),
+                                )
+                                .child(
+                                    row("clips-import-mp4", "MP4 Video…")
+                                        .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.clips.import_menu = None;
+                                            cx.notify();
+                                            this.pick_mp4(window, cx);
+                                        })),
+                                ),
                         ),
                 )
                 .into_any_element(),
@@ -1443,6 +1469,27 @@ impl EditorWindow {
         .detach();
     }
 
+    fn pick_mp4(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.clips.importing {
+            return;
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            #[cfg(target_os = "macos")]
+            let source = crate::platform::open_image_panel(&["mp4"]);
+            #[cfg(not(target_os = "macos"))]
+            let source = rfd::FileDialog::new()
+                .add_filter("MP4 Video", &["mp4"])
+                .pick_file();
+            if let Some(source) = source {
+                this.update_in(cx, |this, window, cx| {
+                    this.import_recording_path(source, window, cx);
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     /// `importRecordingPath` (`:503-523`): stop playback, persist the live
     /// config (the `setProjectConfig` call -- the import merges into what is
     /// on disk), run the import off-thread, then reload the editor the way
@@ -1450,7 +1497,7 @@ impl EditorWindow {
     fn import_recording_path(
         &mut self,
         source: PathBuf,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.clips.importing {
@@ -1462,23 +1509,43 @@ impl EditorWindow {
         self.pending_save().borrow_mut().flush();
         if let Err(error) = self.project.write(&self.project_path) {
             tracing::error!("failed to persist the project config before import: {error}");
+            cx.spawn(async move |_, _| show_import_error(&error.to_string()))
+                .detach();
+            return;
         }
+        if source.is_file() && has_allowed_extension(&source.to_string_lossy(), &["mp4"]) {
+            self.import_mp4(source, window, cx);
+            return;
+        }
+        let Some(editor) = window.window_handle().downcast::<Self>() else {
+            return;
+        };
         self.clips.importing = true;
         cx.notify();
 
         let target = self.project_path.clone();
+        let in_flight = crate::import::InFlightImport::begin();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn({
                     let target = target.clone();
-                    async move { append_cap_project_to_editor(&target, &source) }
+                    async move {
+                        let _in_flight = in_flight;
+                        append_cap_project_to_editor(&target, &source)
+                    }
                 })
                 .await;
             match result {
                 Ok(count) => {
                     tracing::info!(count, path = %target.display(), "clips imported");
-                    cx.update(|cx| crate::app_windows::reload_editor(&target, cx));
+                    cx.update(|cx| {
+                        if import_editor_is_open(editor, cx) {
+                            editor
+                                .update(cx, |view, _, cx| view.schedule_import_reload(editor, cx))
+                                .ok();
+                        }
+                    });
                 }
                 Err(error) => {
                     tracing::error!("failed to import clip: {error}");
@@ -1494,6 +1561,402 @@ impl EditorWindow {
             }
         })
         .detach();
+    }
+
+    fn import_mp4(&mut self, source: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor) = window.window_handle().downcast::<Self>() else {
+            return;
+        };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.clips.import_cancelled = Some(cancelled.clone());
+        self.clips.importing = true;
+        cx.notify();
+        let target = self.project_path.clone();
+        let in_flight = crate::import::InFlightImport::begin();
+        let worker_cancelled = cancelled.clone();
+        let config = self.project.clone();
+        let (send, receive) = flume::bounded(1);
+        let worker = std::thread::Builder::new()
+            .name("cap-editor-import".to_string())
+            .spawn(move || {
+                let result = PreparedMp4Import::prepare(
+                    &target,
+                    &source,
+                    &config,
+                    worker_cancelled,
+                    in_flight,
+                );
+                let _ = send.send(result);
+            });
+        if let Err(error) = worker {
+            self.clips.import_cancelled = None;
+            self.clips.importing = false;
+            cx.notify();
+            cx.spawn(async move |_, _| show_import_error(&error.to_string()))
+                .detach();
+            return;
+        }
+        cx.spawn(async move |_, cx| {
+            let result = receive
+                .recv_async()
+                .await
+                .map_err(|error| format!("Video import worker failed: {error}"))
+                .and_then(std::convert::identity);
+            let completion = cx.update(|cx| {
+                if cancelled.load(Ordering::Acquire) || !import_editor_is_open(editor, cx) {
+                    return None;
+                }
+                editor
+                    .update(cx, |view, _, cx| {
+                        if !view
+                            .clips
+                            .import_cancelled
+                            .as_ref()
+                            .is_some_and(|current| Arc::ptr_eq(current, &cancelled))
+                        {
+                            return None;
+                        }
+                        match result {
+                            Ok(prepared) => {
+                                view.clips.prepared_mp4_import = Some(prepared);
+                                view.schedule_import_reload(editor, cx);
+                                None
+                            }
+                            Err(error) => {
+                                view.clips.import_cancelled = None;
+                                view.clips.importing = false;
+                                cx.notify();
+                                Some(error)
+                            }
+                        }
+                    })
+                    .ok()
+                    .flatten()
+            });
+            if let Some(error) = completion {
+                show_import_error(&error);
+            }
+        })
+        .detach();
+    }
+
+    fn schedule_import_reload(&mut self, editor: WindowHandle<Self>, cx: &mut Context<Self>) {
+        let cancelled = self.clips.import_cancelled.clone();
+        let observed_cancelled = cancelled.clone();
+        let session = RecordingSession::global(cx);
+        self.clips.import_reload_subscription =
+            Some(cx.observe(&session, move |_, session, cx| {
+                if session.read(cx).phase == Phase::Idle {
+                    let cancelled = observed_cancelled.clone();
+                    cx.defer(move |cx| reload_imported_editor_if_idle(editor, cancelled, cx));
+                }
+            }));
+        cx.defer(move |cx| reload_imported_editor_if_idle(editor, cancelled, cx));
+    }
+}
+
+fn reload_imported_editor_if_idle(
+    editor: WindowHandle<EditorWindow>,
+    cancelled: Option<Arc<AtomicBool>>,
+    cx: &mut App,
+) {
+    if cancelled
+        .as_ref()
+        .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
+        || !import_editor_is_open(editor, cx)
+        || RecordingSession::global(cx).read(cx).phase != Phase::Idle
+    {
+        return;
+    }
+    let outcome = editor
+        .update(cx, |view, window, cx| {
+            let owns_import = match (&view.clips.import_cancelled, &cancelled) {
+                (Some(current), Some(expected)) => Arc::ptr_eq(current, expected),
+                (None, None) => view.clips.importing,
+                _ => false,
+            };
+            if !owns_import {
+                return None;
+            }
+            let phase = RecordingSession::global(cx).read(cx).phase;
+            if phase != Phase::Idle {
+                return None;
+            }
+            if view.clips.prepared_mp4_import.is_some() {
+                view.pending_save().borrow_mut().flush();
+            }
+            match PreparedMp4Import::commit_if_idle(
+                &mut view.clips.prepared_mp4_import,
+                phase,
+                &view.project,
+            ) {
+                Ok(Some(config)) => view.project = config,
+                Ok(None) => {}
+                Err(error) => {
+                    view.clips.import_cancelled = None;
+                    view.clips.importing = false;
+                    view.clips.import_reload_subscription = None;
+                    cx.notify();
+                    window.refresh();
+                    return Some(Err(error));
+                }
+            }
+            Some(Ok(view.project_path.clone()))
+        })
+        .ok()
+        .flatten();
+    match outcome {
+        Some(Ok(target)) => app_windows::reload_editor(&target, cx),
+        Some(Err(error)) => {
+            cx.spawn(async move |_| show_import_error(&error)).detach();
+        }
+        None => {}
+    }
+}
+
+fn import_editor_is_open(editor: WindowHandle<EditorWindow>, cx: &App) -> bool {
+    cx.try_global::<app_windows::AppWindows>()
+        .is_some_and(|windows| windows.editors.iter().any(|(_, handle)| *handle == editor))
+}
+
+struct PendingImportDirectory {
+    path: PathBuf,
+    retain: bool,
+}
+
+impl Drop for PendingImportDirectory {
+    fn drop(&mut self) {
+        if self.retain {
+            return;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(&self.path) else {
+            return;
+        };
+        if !metadata.is_dir() {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(&self.path)
+            .and_then(|entries| entries.collect::<Result<Vec<_>, _>>())
+        else {
+            return;
+        };
+        if entries.iter().any(|entry| {
+            !matches!(
+                entry.file_name().to_str(),
+                Some("display.mp4" | "audio.ogg")
+            ) || !entry.file_type().is_ok_and(|kind| kind.is_file())
+        }) {
+            tracing::warn!(path = %self.path.display(), "retaining unexpected import staging contents");
+            return;
+        }
+        for entry in entries {
+            if let Err(error) = std::fs::remove_file(entry.path()) {
+                tracing::warn!(%error, path = %entry.path().display(), "could not remove partial import");
+            }
+        }
+        if let Err(error) = std::fs::remove_dir(&self.path) {
+            tracing::warn!(%error, path = %self.path.display(), "could not remove import staging directory");
+        }
+    }
+}
+
+struct PreparedMp4Import {
+    target: PathBuf,
+    original_meta: Vec<u8>,
+    meta: RecordingMeta,
+    fallback_timeline: Option<TimelineConfiguration>,
+    segment: MultipleSegment,
+    duration: f64,
+    cancelled: Arc<AtomicBool>,
+    directory: PendingImportDirectory,
+    _upload_lock: cap_recording::upload_resume::UploadLock,
+    _in_flight: crate::import::InFlightImport,
+}
+
+impl PreparedMp4Import {
+    fn commit_if_idle(
+        pending: &mut Option<Self>,
+        phase: Phase,
+        latest: &ProjectConfiguration,
+    ) -> Result<Option<ProjectConfiguration>, String> {
+        if phase != Phase::Idle {
+            return Ok(None);
+        }
+        pending
+            .take()
+            .map(|prepared| prepared.commit(latest))
+            .transpose()
+    }
+
+    fn prepare(
+        target: &Path,
+        source: &Path,
+        config: &ProjectConfiguration,
+        cancelled: Arc<AtomicBool>,
+        in_flight: crate::import::InFlightImport,
+    ) -> Result<Self, String> {
+        if cancelled.load(Ordering::Acquire) {
+            return Err("Import cancelled".to_string());
+        }
+        let target = target.canonicalize().map_err(|error| error.to_string())?;
+        let upload_lock = cap_recording::upload_resume::UploadLock::acquire(&target)
+            .map_err(|error| format!("Cannot import while this recording is in use: {error}"))?;
+        let original_meta =
+            std::fs::read(target.join("recording-meta.json")).map_err(|error| error.to_string())?;
+        let mut meta = RecordingMeta::load_for_project(&target)
+            .map_err(|error| format!("Failed to load target project metadata: {error}"))?;
+        let RecordingMetaInner::Studio(studio) = &meta.inner else {
+            return Err("Instant mode recordings cannot be edited".to_string());
+        };
+        if !matches!(studio.status(), StudioRecordingStatus::Complete) {
+            return Err("Finish or recover this recording before importing a clip".to_string());
+        }
+        let segments = ensure_multiple_segments(&mut meta)?.segments.clone();
+        let fallback_timeline = if config.timeline.is_none() {
+            let mut fallback = ProjectConfiguration::default();
+            Some(ensure_project_timeline(&mut fallback, &target, &segments)?.clone())
+        } else {
+            None
+        };
+        if cancelled.load(Ordering::Acquire) {
+            return Err("Import cancelled".to_string());
+        }
+        let index = u32::try_from(segments.len()).map_err(|error| error.to_string())?;
+        let (directory, relative) = unique_segment_dir(&target, index)?;
+        let directory = PendingImportDirectory {
+            path: directory,
+            retain: false,
+        };
+        let display_path = directory.path.join("display.mp4");
+        let audio_path = directory.path.join("audio.ogg");
+        let (fps, sample_rate) = crate::import::transcode_editor_video(
+            source,
+            &display_path,
+            &audio_path,
+            &target,
+            &cancelled,
+        )?;
+        let duration = get_video_duration_secs(&display_path)?;
+        if !duration.is_finite() || duration <= 0.0 {
+            return Err("Imported video has no valid duration".to_string());
+        }
+        let system_audio = sample_rate.map(|_| AudioMeta {
+            path: format!("{relative}/audio.ogg").into(),
+            start_time: Some(0.0),
+            device_id: None,
+            gap_summary: None,
+        });
+        Ok(Self {
+            target,
+            original_meta,
+            meta,
+            fallback_timeline,
+            segment: MultipleSegment {
+                display: VideoMeta {
+                    path: format!("{relative}/display.mp4").into(),
+                    fps,
+                    start_time: Some(0.0),
+                    device_id: None,
+                },
+                camera: None,
+                mic: None,
+                system_audio,
+                cursor: None,
+                keyboard: None,
+                display_notch: None,
+            },
+            duration,
+            cancelled,
+            directory,
+            _upload_lock: upload_lock,
+            _in_flight: in_flight,
+        })
+    }
+
+    fn commit(self, latest: &ProjectConfiguration) -> Result<ProjectConfiguration, String> {
+        self.commit_with(latest, |config, path| config.write(path))
+    }
+
+    fn commit_with(
+        mut self,
+        latest: &ProjectConfiguration,
+        write_config: impl FnOnce(&ProjectConfiguration, &Path) -> std::io::Result<()>,
+    ) -> Result<ProjectConfiguration, String> {
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err("Import cancelled".to_string());
+        }
+        let meta_path = self.target.join("recording-meta.json");
+        if std::fs::read(&meta_path).map_err(|error| error.to_string())? != self.original_meta {
+            return Err(
+                "Recording metadata changed during import; the original project was retained"
+                    .to_string(),
+            );
+        }
+        let mut config = latest.clone();
+        let inner = ensure_multiple_segments(&mut self.meta)?;
+        let index = u32::try_from(inner.segments.len()).map_err(|error| error.to_string())?;
+        inner.segments.push(self.segment.clone());
+        if config.timeline.is_none() {
+            config.timeline = self.fallback_timeline.clone();
+        }
+        let timeline = config.timeline.as_mut().ok_or("Missing project timeline")?;
+        timeline.segments.push(TimelineSegment {
+            recording_clip: index,
+            timescale: 1.0,
+            start: 0.0,
+            end: self.duration,
+            name: None,
+            speed_audio_mode: None,
+        });
+        add_clip_configs(&mut config, index, std::slice::from_ref(&self.segment));
+        config.validate().map_err(|error| error.to_string())?;
+        let backup_path = self
+            .directory
+            .path
+            .join("recording-meta-before-import.json");
+        let mut backup = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&backup_path)
+            .map_err(|error| error.to_string())?;
+        backup
+            .write_all(&self.original_meta)
+            .map_err(|error| error.to_string())?;
+        backup
+            .set_permissions(
+                std::fs::metadata(&meta_path)
+                    .map_err(|error| error.to_string())?
+                    .permissions(),
+            )
+            .map_err(|error| error.to_string())?;
+        backup.sync_all().map_err(|error| error.to_string())?;
+        drop(backup);
+        self.directory.retain = true;
+        self.meta
+            .save_for_project()
+            .map_err(|error| format!("Failed to save project metadata: {error:?}"))?;
+        if let Err(error) = write_config(&config, &self.target) {
+            let published =
+                serde_json::to_vec_pretty(&self.meta).map_err(|error| error.to_string())?;
+            if std::fs::read(&meta_path).is_ok_and(|bytes| bytes == published) {
+                if let Err(restore_error) = std::fs::rename(&backup_path, &meta_path) {
+                    return Err(format!(
+                        "Failed to save imported clip: {error}; metadata backup retained at {}: {restore_error}",
+                        backup_path.display()
+                    ));
+                }
+            } else {
+                return Err(format!(
+                    "Failed to save imported clip: {error}; recording changed, so metadata backup was retained at {}",
+                    backup_path.display()
+                ));
+            }
+            return Err(format!("Failed to save project config: {error}"));
+        }
+        if let Err(error) = std::fs::remove_file(&backup_path) {
+            tracing::warn!(%error, path = %backup_path.display(), "could not remove completed import backup");
+        }
+        Ok(config)
     }
 }
 
@@ -1915,9 +2378,23 @@ fn add_clip_configs(
 
 /// `unique_segment_dir` (`import.rs:414-435`).
 fn unique_segment_dir(project_path: &Path, index: u32) -> Result<(PathBuf, String), String> {
-    let segments_root = project_path.join("content").join("segments");
-    std::fs::create_dir_all(&segments_root)
-        .map_err(|e| format!("Failed to create imported segment directory: {e}"))?;
+    let content = project_path.join("content");
+    let segments_root = content.join("segments");
+    for directory in [&content, &segments_root] {
+        match std::fs::create_dir(directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if !std::fs::symlink_metadata(directory).is_ok_and(|metadata| metadata.is_dir()) {
+                    return Err("Imported segment parent must be a directory".to_string());
+                }
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Failed to create imported segment directory: {error}"
+                ));
+            }
+        }
+    }
 
     let mut counter = 0;
     loop {
@@ -1927,12 +2404,15 @@ fn unique_segment_dir(project_path: &Path, index: u32) -> Result<(PathBuf, Strin
             format!("segment-{index}-import-{counter}")
         };
         let path = segments_root.join(&name);
-        if !path.exists() {
-            std::fs::create_dir_all(&path)
-                .map_err(|e| format!("Failed to create imported segment directory: {e}"))?;
-            return Ok((path, format!("content/segments/{name}")));
+        match std::fs::create_dir(&path) {
+            Ok(()) => return Ok((path, format!("content/segments/{name}"))),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => counter += 1,
+            Err(error) => {
+                return Err(format!(
+                    "Failed to create imported segment directory: {error}"
+                ));
+            }
         }
-        counter += 1;
     }
 }
 
@@ -2773,6 +3253,360 @@ pub(crate) fn append_cap_project_to_editor(
 mod tests {
     use super::*;
     use gpui::{point, size};
+
+    const MP4_WITHOUT_AUDIO: &[u8] =
+        include_bytes!("../../media-server/src/__tests__/fixtures/test-no-audio.mp4");
+    const MP4_WITH_AUDIO: &[u8] =
+        include_bytes!("../../media-server/src/__tests__/fixtures/test-with-audio.mp4");
+
+    struct ImportFixture {
+        root: PathBuf,
+        project: PathBuf,
+        source: PathBuf,
+        config: ProjectConfiguration,
+        _imports: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ImportFixture {
+        fn new(source_bytes: &[u8]) -> Self {
+            let imports = crate::import::IMPORT_TEST_LOCK.lock().unwrap();
+            ffmpeg::init().unwrap();
+            let root = std::env::temp_dir().join(format!(
+                "cap-editor-import-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir(&root).unwrap();
+            let project = root.join("target.cap");
+            let segment_dir = project.join("content/segments/segment-0");
+            std::fs::create_dir_all(&segment_dir).unwrap();
+            std::fs::write(segment_dir.join("display.mp4"), MP4_WITHOUT_AUDIO).unwrap();
+            let source = root.join("source.mp4");
+            std::fs::write(&source, source_bytes).unwrap();
+            let recording_segment = MultipleSegment {
+                display: VideoMeta {
+                    path: "content/segments/segment-0/display.mp4".into(),
+                    fps: 30,
+                    start_time: Some(0.0),
+                    device_id: None,
+                },
+                camera: None,
+                mic: None,
+                system_audio: None,
+                cursor: None,
+                keyboard: None,
+                display_notch: None,
+            };
+            RecordingMeta {
+                project_path: project.clone(),
+                platform: Some(cap_project::Platform::default()),
+                pretty_name: "Existing project".to_string(),
+                sharing: None,
+                inner: RecordingMetaInner::Studio(Box::new(
+                    StudioRecordingMeta::MultipleSegments {
+                        inner: MultipleSegments {
+                            segments: vec![recording_segment.clone()],
+                            cursors: Cursors::default(),
+                            status: Some(StudioRecordingStatus::Complete),
+                        },
+                    },
+                )),
+                upload: None,
+            }
+            .save_for_project()
+            .unwrap();
+            let mut config = ProjectConfiguration::default();
+            config.timeline = Some(timeline(vec![segment(0, 0.0, 0.5)]));
+            add_clip_configs(&mut config, 0, &[recording_segment]);
+            config.write(&project).unwrap();
+            Self {
+                root,
+                project,
+                source,
+                config,
+                _imports: imports,
+            }
+        }
+
+        fn prepare(&self, cancelled: Arc<AtomicBool>) -> PreparedMp4Import {
+            PreparedMp4Import::prepare(
+                &self.project,
+                &self.source,
+                &self.config,
+                cancelled,
+                crate::import::InFlightImport::begin(),
+            )
+            .unwrap()
+        }
+
+        fn corrupt_last_packet(&self, kind: ffmpeg::media::Type) -> Vec<u8> {
+            let mut input = ffmpeg::format::input(&self.source).unwrap();
+            let stream_index = input.streams().best(kind).unwrap().index();
+            let packet = input
+                .packets()
+                .filter(|(stream, _)| stream.index() == stream_index)
+                .map(|(_, packet)| packet)
+                .last()
+                .unwrap();
+            let start = usize::try_from(packet.position()).unwrap();
+            let end = start.checked_add(packet.size()).unwrap();
+            let mut bytes = std::fs::read(&self.source).unwrap();
+            assert!(packet.size() > 0 && end <= bytes.len());
+            bytes[start..end].fill(0xff);
+            drop(input);
+            std::fs::write(&self.source, &bytes).unwrap();
+            bytes
+        }
+
+        fn project_bytes(&self) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+            (
+                std::fs::read(self.project.join("recording-meta.json")).unwrap(),
+                std::fs::read(self.project.join("project-config.json")).unwrap(),
+                std::fs::read(self.project.join("content/segments/segment-0/display.mp4")).unwrap(),
+            )
+        }
+    }
+
+    impl Drop for ImportFixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+
+    #[test]
+    fn mp4_append_preserves_existing_media_and_edits_made_during_conversion() {
+        for source in [MP4_WITHOUT_AUDIO, MP4_WITH_AUDIO] {
+            let fixture = ImportFixture::new(source);
+            let before = fixture.project_bytes();
+            let prepared = fixture.prepare(Arc::new(AtomicBool::new(false)));
+            let mut latest = fixture.config.clone();
+            latest.background.padding = 37.0;
+            latest.timeline.as_mut().unwrap().segments[0].name =
+                Some("Edited during import".to_string());
+            let result = prepared.commit(&latest).unwrap();
+            let meta = RecordingMeta::load_for_project(&fixture.project).unwrap();
+            let RecordingMetaInner::Studio(studio) = &meta.inner else {
+                panic!("Expected Studio")
+            };
+            let StudioRecordingMeta::MultipleSegments { inner } = studio.as_ref() else {
+                panic!("Expected multiple segments")
+            };
+            assert_eq!(inner.segments.len(), 2);
+            let imported = &inner.segments[1];
+            assert!(imported.camera.is_none() && imported.mic.is_none());
+            assert_eq!(imported.system_audio.is_some(), source == MP4_WITH_AUDIO);
+            assert!(
+                cap_enc_ffmpeg::remux::probe_video_can_decode(&meta.path(&imported.display.path))
+                    .unwrap()
+            );
+            if let Some(audio) = &imported.system_audio {
+                let input = ffmpeg::format::input(&meta.path(&audio.path)).unwrap();
+                assert!(input.streams().best(ffmpeg::media::Type::Audio).is_some());
+                assert!(input.duration() > 0);
+            }
+            assert_eq!(std::fs::read(&fixture.source).unwrap(), source);
+            assert_eq!(fixture.project_bytes().2, before.2);
+            let timeline = result.timeline.as_ref().unwrap();
+            assert_eq!(timeline.segments.len(), 2);
+            assert_eq!(timeline.segments[1].recording_clip, 1);
+            assert!(timeline.segments[1].end > 0.0);
+            let mut without_append = result;
+            let _ = without_append.timeline.as_mut().unwrap().segments.pop();
+            without_append.clips.retain(|clip| clip.index != 1);
+            assert_eq!(
+                serde_json::to_value(without_append).unwrap(),
+                serde_json::to_value(latest).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn mp4_publication_waits_for_capture_to_be_idle_and_uses_the_latest_edits() {
+        let fixture = ImportFixture::new(MP4_WITH_AUDIO);
+        let before = fixture.project_bytes();
+        let mut pending = Some(fixture.prepare(Arc::new(AtomicBool::new(false))));
+        for phase in [
+            Phase::Starting,
+            Phase::Recording { paused: false },
+            Phase::Recording { paused: true },
+            Phase::Stopping,
+        ] {
+            assert!(
+                PreparedMp4Import::commit_if_idle(&mut pending, phase, &fixture.config)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(pending.is_some());
+            assert_eq!(fixture.project_bytes(), before);
+        }
+        let mut latest = fixture.config.clone();
+        latest.background.padding = 41.0;
+        let config = PreparedMp4Import::commit_if_idle(&mut pending, Phase::Idle, &latest)
+            .unwrap()
+            .unwrap();
+        assert!(pending.is_none());
+        assert_eq!(config.background.padding, 41.0);
+        assert_eq!(config.timeline.unwrap().segments.len(), 2);
+        assert_eq!(fixture.project_bytes().2, before.2);
+        let meta = RecordingMeta::load_for_project(&fixture.project).unwrap();
+        let RecordingMetaInner::Studio(studio) = meta.inner else {
+            panic!("Studio expected")
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = studio.as_ref() else {
+            panic!("Multiple segments expected")
+        };
+        assert_eq!(inner.segments.len(), 2);
+    }
+
+    #[test]
+    fn closing_while_mp4_publication_waits_keeps_the_original_project() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let before = fixture.project_bytes();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let prepared = fixture.prepare(cancelled.clone());
+        let directory = prepared.directory.path.clone();
+        let mut clips = ClipsState::default();
+        clips.import_cancelled = Some(cancelled.clone());
+        clips.prepared_mp4_import = Some(prepared);
+        assert!(
+            PreparedMp4Import::commit_if_idle(
+                &mut clips.prepared_mp4_import,
+                Phase::Recording { paused: false },
+                &fixture.config
+            )
+            .unwrap()
+            .is_none()
+        );
+        drop(clips);
+        assert!(cancelled.load(Ordering::Acquire));
+        assert_eq!(fixture.project_bytes(), before);
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn corrupt_video_and_audio_tails_never_publish_an_import() {
+        for kind in [ffmpeg::media::Type::Video, ffmpeg::media::Type::Audio] {
+            let fixture = ImportFixture::new(MP4_WITH_AUDIO);
+            let before = fixture.project_bytes();
+            let source = fixture.corrupt_last_packet(kind);
+            let result = PreparedMp4Import::prepare(
+                &fixture.project,
+                &fixture.source,
+                &fixture.config,
+                Arc::new(AtomicBool::new(false)),
+                crate::import::InFlightImport::begin(),
+            );
+            assert!(result.is_err(), "corrupt {kind:?} was accepted");
+            assert_eq!(fixture.project_bytes(), before);
+            assert_eq!(std::fs::read(&fixture.source).unwrap(), source);
+        }
+    }
+
+    #[test]
+    fn unsupported_audio_is_not_imported_as_a_silent_clip() {
+        let mut source = MP4_WITH_AUDIO.to_vec();
+        let tag = source
+            .windows(4)
+            .position(|bytes| bytes == b"mp4a")
+            .unwrap();
+        source[tag..tag + 4].copy_from_slice(b"zzzz");
+        let descriptor = source
+            .windows(4)
+            .position(|bytes| bytes == b"esds")
+            .unwrap();
+        source[descriptor..descriptor + 4].copy_from_slice(b"free");
+        let fixture = ImportFixture::new(&source);
+        let before = fixture.project_bytes();
+        let input = ffmpeg::format::input(&fixture.source).unwrap();
+        let audio = input
+            .streams()
+            .find(|stream| stream.parameters().medium() == ffmpeg::media::Type::Audio)
+            .unwrap();
+        assert_eq!(audio.parameters().id(), ffmpeg::codec::Id::None);
+        drop(input);
+        let result = PreparedMp4Import::prepare(
+            &fixture.project,
+            &fixture.source,
+            &fixture.config,
+            Arc::new(AtomicBool::new(false)),
+            crate::import::InFlightImport::begin(),
+        );
+        assert!(result.is_err());
+        assert_eq!(fixture.project_bytes(), before);
+        assert_eq!(std::fs::read(&fixture.source).unwrap(), source);
+    }
+
+    #[test]
+    fn dropping_editor_state_cancels_prepared_mp4_without_publishing() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let before = fixture.project_bytes();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut clips = ClipsState::default();
+        clips.import_cancelled = Some(cancelled.clone());
+        let prepared = fixture.prepare(cancelled.clone());
+        let directory = prepared.directory.path.clone();
+        drop(clips);
+        assert!(cancelled.load(Ordering::Acquire));
+        assert!(prepared.commit(&fixture.config).is_err());
+        assert_eq!(fixture.project_bytes(), before);
+        assert_eq!(std::fs::read(&fixture.source).unwrap(), MP4_WITHOUT_AUDIO);
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn invalid_mp4_import_preserves_existing_project() {
+        let fixture = ImportFixture::new(b"not an MP4");
+        let before = fixture.project_bytes();
+        let result = PreparedMp4Import::prepare(
+            &fixture.project,
+            &fixture.source,
+            &fixture.config,
+            Arc::new(AtomicBool::new(false)),
+            crate::import::InFlightImport::begin(),
+        );
+        assert!(result.is_err());
+        assert_eq!(fixture.project_bytes(), before);
+        assert_eq!(std::fs::read(&fixture.source).unwrap(), b"not an MP4");
+        assert!(!fixture.project.join("content/segments/segment-1").exists());
+    }
+
+    #[test]
+    fn failed_mp4_config_commit_restores_original_metadata_bytes() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let before = fixture.project_bytes();
+        let prepared = fixture.prepare(Arc::new(AtomicBool::new(false)));
+        let result = prepared.commit_with(&fixture.config, |_, _| {
+            Err(std::io::Error::other(
+                "injected project config write failure",
+            ))
+        });
+        assert!(result.is_err());
+        assert_eq!(fixture.project_bytes(), before);
+        assert_eq!(std::fs::read(&fixture.source).unwrap(), MP4_WITHOUT_AUDIO);
+    }
+
+    #[test]
+    fn mp4_import_refuses_metadata_changed_during_conversion() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let prepared = fixture.prepare(Arc::new(AtomicBool::new(false)));
+        let mut meta = RecordingMeta::load_for_project(&fixture.project).unwrap();
+        meta.pretty_name = "Changed by another operation".to_string();
+        meta.save_for_project().unwrap();
+        let changed = fixture.project_bytes();
+        assert!(prepared.commit(&fixture.config).is_err());
+        assert_eq!(fixture.project_bytes(), changed);
+    }
+
+    #[test]
+    fn import_segment_allocation_never_recreates_a_deleted_project() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        std::fs::remove_dir_all(&fixture.project).unwrap();
+        assert!(unique_segment_dir(&fixture.project, 1).is_err());
+        assert!(!fixture.project.exists());
+    }
 
     fn segment(recording_clip: u32, start: f64, end: f64) -> TimelineSegment {
         TimelineSegment {
