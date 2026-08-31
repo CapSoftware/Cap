@@ -1099,7 +1099,7 @@ index 97bad184dc58..e087c0dc8a54 100644
  
  float4 hsla_to_rgba(Hsla hsla) {
 diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
-index 8a3aa5ea067d..aacd697be58d 100644
+index 8a3aa5ea067d..f5b2c1a52a82 100644
 --- a/crates/gpui_macos/src/window.rs
 +++ b/crates/gpui_macos/src/window.rs
 @@ -4,7 +4,6 @@
@@ -1145,7 +1145,19 @@ index 8a3aa5ea067d..aacd697be58d 100644
          }
      }
  
-@@ -3132,7 +3127,8 @@
+@@ -1178,6 +1173,10 @@
+         }
+         this.input_handler.take();
+-        this.foreground_executor
++        let accesskit_adapter = this.accesskit_adapter.take();
++        let foreground_executor = this.foreground_executor.clone();
++        drop(this);
++        foreground_executor
+             .spawn(async move {
++                drop(accesskit_adapter);
+                 unsafe {
+                     if let Some(parent) = sheet_parent {
+@@ -3132,7 +3131,8 @@
                  let hit: BOOL = msg_send![description, containsString: blur_test];
                  if hit == YES {
                      let radius: id = msg_send![class!(NSNumber), numberWithDouble: 60.0f64];

@@ -29,7 +29,7 @@ use gpui::{Entity, Task};
 
 /// `MAIN_WINDOW_SIZE.expanded` in index.tsx.
 const EXPANDED_WIDTH: f32 = 600.;
-const EXPANDED_HEIGHT: f32 = 660.;
+const EXPANDED_HEIGHT: f32 = 700.;
 
 /// `duration: 180` in `resizeMainWindow`.
 const RESIZE_DURATION_SECS: f32 = 0.18;
@@ -396,6 +396,13 @@ impl RecordingStartPermit {
     }
 }
 
+struct MicrophoneWarning {
+    config: recording::StartConfig,
+    permit: RecordingStartPermit,
+    dont_show_again: bool,
+    error: Option<String>,
+}
+
 pub struct MainWindow {
     theme: Theme,
     expanded: bool,
@@ -431,6 +438,7 @@ pub struct MainWindow {
     session: Entity<RecordingSession>,
     checking_storage: bool,
     deep_link_start: Option<RecordingStartPermit>,
+    microphone_warning: Option<MicrophoneWarning>,
     /// The Recents scan, or `None` while the first one is in flight -- which
     /// is the query's `isLoading`, and draws the same three skeleton cards.
     recents: Option<Vec<RecentEntry>>,
@@ -624,6 +632,7 @@ impl MainWindow {
             session,
             checking_storage: false,
             deep_link_start: None,
+            microphone_warning: None,
             recents: None,
             recents_task: None,
             library: None,
@@ -1914,6 +1923,24 @@ impl MainWindow {
         let Ok(permit) = self.prepare_deep_link_start(cx) else {
             return;
         };
+        let microphone_available = config.microphone.as_ref().is_some_and(|name| {
+            self.devices
+                .microphones
+                .iter()
+                .any(|device| &device.name == name)
+        });
+        if !microphone_available && crate::store::GeneralSettings::load().confirm_without_microphone
+        {
+            self.microphone_warning = Some(MicrophoneWarning {
+                config,
+                permit,
+                dont_show_again: false,
+                error: None,
+            });
+            cx.defer(app_windows::show_main_window);
+            cx.notify();
+            return;
+        }
         self.check_storage_before_start(config, false, permit, cx);
     }
 
@@ -1933,6 +1960,7 @@ impl MainWindow {
     }
 
     pub(crate) fn cancel_deep_link_start(&mut self) {
+        self.microphone_warning = None;
         if RecordingStartPermit::cancel_current(&mut self.deep_link_start) {
             self.checking_storage = false;
         }
@@ -1978,6 +2006,40 @@ impl MainWindow {
 
     fn finish_recording_start(&mut self, permit: &RecordingStartPermit) {
         self.finish_deep_link_start(permit);
+    }
+
+    fn confirm_microphone_warning(&mut self, cx: &mut Context<Self>) {
+        let Some(mut warning) = self.microphone_warning.take() else {
+            return;
+        };
+        if !self.recording_start_is_current(&warning.permit, cx) {
+            self.finish_recording_start(&warning.permit);
+            cx.notify();
+            return;
+        }
+        if warning.dont_show_again
+            && !crate::store::set_store_setting(
+                crate::store::RECORDING_START_SAFETY,
+                "confirmBeforeRecordingWithoutMicrophone",
+                serde_json::Value::Bool(false),
+            )
+        {
+            warning.error = Some(
+                "Could not save your preference. Try again or leave the box unchecked.".into(),
+            );
+            self.microphone_warning = Some(warning);
+            cx.notify();
+            return;
+        }
+        warning.config.microphone = None;
+        warning.config.mic_feed = None;
+        self.check_storage_before_start(warning.config, false, warning.permit, cx);
+        cx.notify();
+    }
+
+    fn dismiss_microphone_warning(&mut self, cx: &mut Context<Self>) {
+        self.cancel_deep_link_start();
+        cx.notify();
     }
 
     fn check_storage_before_start(
@@ -2304,6 +2366,9 @@ impl Render for MainWindow {
             .when(app_windows::clean_capture_pending(cx), |this| {
                 this.child(self.render_clean_capture_preflight(cx))
             })
+            .when(self.microphone_warning.is_some(), |this| {
+                this.child(self.render_microphone_warning(cx))
+            })
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" && this.dismiss_main(cx) {
                     cx.stop_propagation();
@@ -2313,6 +2378,94 @@ impl Render for MainWindow {
 }
 
 impl MainWindow {
+    fn render_microphone_warning(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let checked = self
+            .microphone_warning
+            .as_ref()
+            .is_some_and(|warning| warning.dont_show_again);
+        let error = self
+            .microphone_warning
+            .as_ref()
+            .and_then(|warning| warning.error.clone());
+        div()
+            .id("microphone-warning")
+            .absolute()
+            .inset_0()
+            .rounded(px(16.))
+            .occlude()
+            .flex()
+            .items_center()
+            .justify_center()
+            .p(px(16.))
+            .bg(theme.shell_bg())
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(360.))
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(theme.body_border(6))
+                    .bg(theme.gray_1)
+                    .p(px(16.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.))
+                    .child(div().text_size(px(15.)).text_color(theme.gray_12).child("No microphone detected"))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .line_height(px(18.))
+                            .text_color(theme.gray_11)
+                            .child("This recording will not include your voice. Select a microphone, or continue without one."),
+                    )
+                    .child(
+                        div()
+                            .id("microphone-warning-dont-show-again")
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .py(px(4.))
+                            .cursor_pointer()
+                            .child(
+                                div()
+                                    .size(px(16.))
+                                    .rounded(px(4.))
+                                    .border_1()
+                                    .border_color(if checked { theme.blue_9 } else { theme.gray_7 })
+                                    .bg(if checked { theme.blue_9 } else { theme.gray_2 })
+                                    .when(checked, |this| this.child(svg().path("icons/check.svg").size(px(14.)).text_color(rgb(0xffffff)))),
+                            )
+                            .child(div().text_size(px(12.)).text_color(theme.gray_11).child("Don't show again"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(warning) = &mut this.microphone_warning {
+                                    warning.dont_show_again = !warning.dont_show_again;
+                                    warning.error = None;
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .when_some(error, |this, error| this.child(div().text_size(px(11.)).text_color(theme.red_9).child(error)))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.))
+                            .child(
+                                ui::Button::plain(&theme, "confirm-without-microphone", ui::ButtonVariant::Blue, ui::ButtonSize::Lg)
+                                    .label("Record without microphone")
+                                    .on_click(cx.listener(|this, _, _, cx| this.confirm_microphone_warning(cx))),
+                            )
+                            .child(
+                                ui::Button::plain(&theme, "cancel-without-microphone", ui::ButtonVariant::Gray, ui::ButtonSize::Lg)
+                                    .label("Go back")
+                                    .on_click(cx.listener(|this, _, _, cx| this.dismiss_microphone_warning(cx))),
+                            ),
+                    ),
+            )
+    }
+
     fn render_clean_capture_preflight(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         div()
@@ -3127,8 +3280,16 @@ impl MainWindow {
         cx.notify();
     }
 
-    fn dismiss_main(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn show_recorder(&mut self, cx: &mut Context<Self>) {
         if self.panel.is_some() {
+            self.close_panel(cx);
+        }
+    }
+
+    fn dismiss_main(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.microphone_warning.is_some() {
+            self.dismiss_microphone_warning(cx);
+        } else if self.panel.is_some() {
             if self.search.is_empty() {
                 self.close_panel(cx);
             } else {
@@ -4613,6 +4774,7 @@ impl MainWindow {
 
     /// `mt-[16px] mb-[6px]`, logo `w-[92px]`, Mode pill on the right.
     fn render_logo_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let recording_clip = self.session.read(cx).editor_recording_target().is_some();
         div()
             .flex()
             .flex_row()
@@ -4628,10 +4790,41 @@ impl MainWindow {
                     .flex_row()
                     .items_center()
                     .gap(px(4.))
-                    .child(self.render_logo())
-                    .child(self.render_plan_badge()),
+                    .when(!recording_clip, |this| {
+                        this.child(self.render_logo())
+                            .child(self.render_plan_badge())
+                    })
+                    .when(recording_clip, |this| {
+                        this.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.))
+                                .child(div().text_size(px(13.)).child("Record a new clip"))
+                                .child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .text_color(self.theme.gray_11)
+                                        .child("Add to your current project"),
+                                ),
+                        )
+                    }),
             )
-            .child(self.render_mode_pill(cx))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(5.))
+                    .child(self.render_mode_pill(cx))
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .line_height(px(12.))
+                            .text_color(self.theme.gray_11)
+                            .child(format!("{} Mode", self.effective_mode(cx).panel_title())),
+                    ),
+            )
     }
 
     /// The plan badge: Personal is `text-[0.6rem] ml-2 rounded-lg border
@@ -4810,20 +5003,14 @@ impl MainWindow {
             .gap(px(8.))
             .w_full()
             .flex_shrink_0()
-            .when(self.expanded, |this| {
-                this.child(
-                    // `px-1 pb-0.5` + `text-xs font-semibold text-gray-12`.
-                    div().px(px(4.)).pb(px(2.)).child(
-                        div()
-                            .text_size(px(12.))
-                            // `font-semibold` (`new-main/index.tsx:3024`)
-                            // renders 700: no 600 face is loaded over there.
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(self.theme.gray_12)
-                            .child("Capture"),
-                    ),
-                )
-            })
+            .child(
+                div()
+                    .px(px(4.))
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(self.theme.gray_11)
+                    .child("Choose a capture source"),
+            )
             .child(
                 div()
                     .flex()
@@ -4874,6 +5061,7 @@ impl MainWindow {
                     .id(SharedString::from(format!("{}-dropdown", target.label())))
                     .flex()
                     .w(px(28.))
+                    .rounded_r(px(7.))
                     .flex_shrink_0()
                     .items_center()
                     .justify_center()
@@ -4953,6 +5141,8 @@ impl MainWindow {
             .flex()
             .flex_1()
             .py(px(8.))
+            .when(split, |this| this.rounded_l(px(7.)))
+            .when(!split, |this| this.rounded(px(7.)))
             // `hover:bg-blue-4` / `dark:hover:bg-blue-4/40` when selected,
             // `hover:bg-gray-4` otherwise.
             .hover(move |style| {
@@ -5073,6 +5263,15 @@ impl MainWindow {
                         }
                     })),
                 ),
+            )
+            .child(
+                div()
+                    .px(px(4.))
+                    .pt(px(2.))
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(self.theme.gray_11)
+                    .child("Choose your audio devices"),
             )
             .child(
                 self.labelled(

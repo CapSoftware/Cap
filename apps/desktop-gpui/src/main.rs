@@ -71,7 +71,7 @@ use crate::{assets::Assets, main_window::MainWindow, session::RecordingSession};
 
 /// Matches the Tauri main window exactly (`CapWindowId::Main`).
 const MAIN_WINDOW_WIDTH: f32 = 330.;
-const MAIN_WINDOW_HEIGHT: f32 = 395.;
+const MAIN_WINDOW_HEIGHT: f32 = 460.;
 
 /// The corner radius the native material is clipped to. `radius = 16` for
 /// material `"panel"` on both visual systems in
@@ -269,11 +269,9 @@ fn main() {
                     window_min_size: Some(size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT))),
                     #[cfg(target_os = "linux")]
                     window_decorations: Some(gpui::WindowDecorations::Client),
-                    // Stays `Normal` and gets its panel treatment (level 100,
-                    // all Spaces) from `platform::apply_panel_behavior` below.
-                    // `WindowKind::Floating` is not the answer: it allocates an
-                    // NSPanel, and a panel hides itself when the application
-                    // deactivates -- exactly wrong for a recorder.
+                    #[cfg(target_os = "macos")]
+                    kind: gpui::WindowKind::Floating,
+                    #[cfg(not(target_os = "macos"))]
                     kind: gpui::WindowKind::Normal,
                     // The header is dragged by the app via `start_window_move`
                     // rather than by AppKit, so mark the content view as app-owned
@@ -301,6 +299,22 @@ fn main() {
         .detach();
 
         app_windows::init(window_handle, session, cx);
+        #[cfg(target_os = "macos")]
+        match platform::install_native_quit_handler() {
+            Ok(requests) => {
+                cx.spawn(async move |cx| {
+                    while requests.recv_async().await.is_ok() {
+                        cx.update(menus::quit);
+                    }
+                })
+                .detach();
+            }
+            Err(error) => {
+                tracing::error!(%error, "Could not install safe native Quit handling");
+                menus::quit(cx);
+                return;
+            }
+        }
         #[cfg(target_os = "linux")]
         single_instance::init_linux_reopen(cx);
         updates::schedule_startup_check(cx);

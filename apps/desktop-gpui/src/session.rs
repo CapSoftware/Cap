@@ -23,6 +23,114 @@ pub enum Phase {
     Stopping,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PauseControlTicket {
+    generation: u64,
+    sequence: u64,
+    paused: bool,
+}
+
+struct PendingPauseControl {
+    ticket: PauseControlTicket,
+    abort: futures_util::future::AbortHandle,
+}
+
+#[derive(Default)]
+struct PauseControlState {
+    pending: Option<PendingPauseControl>,
+    sequence: u64,
+    uncertain: bool,
+}
+
+impl PauseControlState {
+    fn begin(
+        &mut self,
+        generation: u64,
+        paused: bool,
+    ) -> Option<(PauseControlTicket, futures_util::future::AbortRegistration)> {
+        if self.pending.is_some() || self.uncertain {
+            return None;
+        }
+        self.sequence = self.sequence.wrapping_add(1);
+        let ticket = PauseControlTicket {
+            generation,
+            sequence: self.sequence,
+            paused,
+        };
+        let (abort, registration) = futures_util::future::AbortHandle::new_pair();
+        self.pending = Some(PendingPauseControl {
+            ticket: ticket.clone(),
+            abort,
+        });
+        Some((ticket, registration))
+    }
+
+    fn invalidate(&mut self) {
+        if let Some(pending) = self.pending.take() {
+            pending.abort.abort();
+        }
+    }
+
+    fn cancel_for_stop(&mut self) {
+        self.uncertain |= self.pending.is_some();
+        self.invalidate();
+    }
+
+    fn complete(
+        &mut self,
+        ticket: &PauseControlTicket,
+        generation: u64,
+        phase: Phase,
+        paused: Option<bool>,
+    ) -> bool {
+        if generation != ticket.generation
+            || !matches!(phase, Phase::Recording { .. })
+            || self
+                .pending
+                .as_ref()
+                .is_none_or(|pending| pending.ticket != *ticket)
+        {
+            return false;
+        }
+        self.pending = None;
+        self.uncertain = paused.is_none();
+        true
+    }
+}
+
+struct PauseControlOutcome {
+    paused: Option<bool>,
+    error: Option<String>,
+}
+
+async fn run_pause_control(
+    expected_paused: bool,
+    control: impl Future<Output = anyhow::Result<()>>,
+    query_paused: impl Future<Output = anyhow::Result<bool>>,
+) -> PauseControlOutcome {
+    let result = control.await;
+    let state = tokio::time::timeout(Duration::from_secs(2), query_paused).await;
+    let (paused, state_error) = match state {
+        Ok(Ok(true)) => (Some(true), None),
+        Ok(Ok(false)) if result.is_ok() => (Some(false), None),
+        Ok(Ok(false)) => (None, None),
+        Ok(Err(error)) => (
+            None,
+            Some(format!("Could not confirm capture state: {error:#}")),
+        ),
+        Err(_) => (None, Some("Timed out confirming capture state".into())),
+    };
+    let error = result
+        .err()
+        .map(|error| format!("{error:#}"))
+        .or(state_error)
+        .or_else(|| {
+            (paused != Some(expected_paused))
+                .then(|| "Capture did not acknowledge the requested pause state".into())
+        });
+    PauseControlOutcome { paused, error }
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RecordingOwner {
@@ -242,6 +350,8 @@ pub struct RecordingSession {
     storage_monitor: Option<Task<()>>,
     failure_monitor: Option<Task<()>>,
     recording_generation: u64,
+    pause_control: PauseControlState,
+    pause_control_error: Option<String>,
     #[cfg(target_os = "linux")]
     instant_attempt: Option<recording::InstantAttempt>,
     #[cfg(target_os = "linux")]
@@ -279,6 +389,8 @@ impl RecordingSession {
             storage_monitor: None,
             failure_monitor: None,
             recording_generation: 0,
+            pause_control: PauseControlState::default(),
+            pause_control_error: None,
             #[cfg(target_os = "linux")]
             instant_attempt: None,
             #[cfg(target_os = "linux")]
@@ -326,6 +438,26 @@ impl RecordingSession {
 
     pub fn is_paused(&self) -> bool {
         matches!(self.phase, Phase::Recording { paused: true })
+    }
+
+    pub fn pause_pending(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if self.clean_control.pending.is_some() {
+            return true;
+        }
+        self.pause_control.pending.is_some()
+    }
+
+    pub fn pause_uncertain(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if self.clean_control.uncertain {
+            return true;
+        }
+        self.pause_control.uncertain
+    }
+
+    pub fn pause_unavailable(&self) -> bool {
+        self.pause_pending() || self.pause_uncertain() || self.pipeline_failed
     }
 
     /// The live (or last) recording's mode -- the bar exposes mic mute for
@@ -386,9 +518,16 @@ impl RecordingSession {
         if self.phase != Phase::Idle {
             return;
         }
+        if !crate::menus::recording_start_allowed(cx) {
+            cx.notify();
+            return;
+        }
         self.storage_monitor = None;
         self.failure_monitor = None;
         self.recording_generation = self.recording_generation.wrapping_add(1);
+        self.pause_control.invalidate();
+        self.pause_control.uncertain = false;
+        self.pause_control_error = None;
         self.pipeline_failed = false;
         #[cfg(target_os = "linux")]
         {
@@ -732,6 +871,7 @@ impl RecordingSession {
             self.stop_requested = false;
         }
         self.stopped_elapsed = Some(self.elapsed());
+        self.pause_control.cancel_for_stop();
         self.phase = Phase::Stopping;
         cx.notify();
 
@@ -842,28 +982,70 @@ impl RecordingSession {
         let Some(active) = self.active.as_ref() else {
             return;
         };
-
-        // Optimistic flip; the actor call is fire-and-logged. The Tauri app
-        // does the same through its mutation -- there is no rollback UI.
-        self.phase = Phase::Recording { paused: !paused };
-        if paused {
-            if let Some(since) = self.paused_since.take() {
-                self.paused_accum += since.elapsed();
-            }
-        } else {
-            self.paused_since = Some(Instant::now());
+        if self.pipeline_failed {
+            return;
         }
-        cx.notify();
-
+        let Some((ticket, registration)) =
+            self.pause_control.begin(self.recording_generation, !paused)
+        else {
+            return;
+        };
         let control = if paused {
             active.resume_handle()
         } else {
             active.pause_handle()
         };
-        gpui_tokio::Tokio::spawn(cx, async move {
-            if let Err(error) = control.await {
-                tracing::error!("pause/resume failed: {error:#}");
-            }
+        let query_paused = active.is_paused_handle();
+        cx.notify();
+        let task = gpui_tokio::Tokio::spawn(
+            cx,
+            futures_util::future::Abortable::new(
+                run_pause_control(ticket.paused, control, query_paused),
+                registration,
+            ),
+        );
+        cx.spawn(async move |this, cx| {
+            let outcome = match task.await {
+                Ok(Ok(outcome)) => outcome,
+                Ok(Err(_)) => return,
+                Err(error) => PauseControlOutcome {
+                    paused: None,
+                    error: Some(format!("Capture control task failed: {error}")),
+                },
+            };
+            this.update(cx, |this, cx| {
+                if !this.pause_control.complete(
+                    &ticket,
+                    this.recording_generation,
+                    this.phase,
+                    outcome.paused,
+                ) {
+                    return;
+                }
+                if let Some(paused) = outcome.paused {
+                    let was_paused = this.is_paused();
+                    this.phase = Phase::Recording { paused };
+                    if was_paused && !paused {
+                        if let Some(since) = this.paused_since.take() {
+                            this.paused_accum += since.elapsed();
+                        }
+                    } else if !was_paused && paused {
+                        this.paused_since = Some(Instant::now());
+                    }
+                }
+                if this.pause_control_error.is_some() && this.error == this.pause_control_error {
+                    this.error = None;
+                }
+                this.pause_control_error = outcome
+                    .error
+                    .map(|error| format!("{error}. Use Stop if recording cannot continue safely."));
+                if let Some(error) = &this.pause_control_error {
+                    tracing::error!(%error, "pause/resume failed");
+                    this.error = Some(error.clone());
+                }
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
     }
@@ -1028,6 +1210,9 @@ impl RecordingSession {
     /// Cancel the live recording and delete its project directory (the bar's
     /// trash button).
     pub fn delete(&mut self, cx: &mut Context<Self>) {
+        if self.pause_unavailable() {
+            return;
+        }
         #[cfg(target_os = "linux")]
         if self.clean_control.pending.is_some() || self.clean_control.uncertain {
             return;
@@ -1065,6 +1250,9 @@ impl RecordingSession {
     /// The bar's restart button: throw away the live recording and immediately
     /// start a new one with the same config.
     pub fn restart(&mut self, cx: &mut Context<Self>) {
+        if !crate::menus::recording_start_allowed(cx) || self.pause_unavailable() {
+            return;
+        }
         #[cfg(target_os = "linux")]
         if self.clean_control.pending.is_some() || self.clean_control.uncertain {
             return;
@@ -1340,6 +1528,9 @@ impl RecordingSession {
             self.show_controls_after_pause = false;
         }
         self.failure_monitor = None;
+        self.pause_control.invalidate();
+        self.pause_control.uncertain = false;
+        self.pause_control_error = None;
         self.pipeline_failed = false;
         self.storage_monitor = None;
         self.phase = Phase::Idle;
@@ -1812,5 +2003,116 @@ mod recording_failure_tests {
         for phase in [Phase::Idle, Phase::Starting, Phase::Stopping] {
             assert!(!recording_failure_is_current(phase, 4, 4));
         }
+    }
+}
+
+#[cfg(test)]
+mod pause_control_tests {
+    use super::*;
+
+    #[test]
+    fn rapid_toggle_does_not_dispatch_a_second_control() {
+        let mut state = PauseControlState::default();
+        let (ticket, _) = state.begin(1, true).unwrap();
+        assert!(state.begin(1, false).is_none());
+        assert!(state.complete(&ticket, 1, Phase::Recording { paused: false }, Some(true)));
+        assert!(state.begin(1, false).is_some());
+    }
+
+    #[test]
+    fn late_pause_acknowledgments_cannot_change_a_stopped_or_new_recording() {
+        for phase in [Phase::Idle, Phase::Starting, Phase::Stopping] {
+            let mut state = PauseControlState::default();
+            let (ticket, _) = state.begin(1, true).unwrap();
+            assert!(!state.complete(&ticket, 1, phase, Some(true)));
+        }
+        let mut state = PauseControlState::default();
+        let (old, _) = state.begin(1, true).unwrap();
+        state.invalidate();
+        let (new, _) = state.begin(2, true).unwrap();
+        assert!(!state.complete(&old, 2, Phase::Recording { paused: false }, Some(true)));
+        assert!(state.complete(&new, 2, Phase::Recording { paused: false }, Some(true)));
+    }
+
+    #[test]
+    fn a_stop_retry_does_not_accept_a_late_pause_or_resume_unconfirmed_capture() {
+        let mut state = PauseControlState::default();
+        let (old, _) = state.begin(1, true).unwrap();
+        state.cancel_for_stop();
+        assert!(state.uncertain);
+        assert!(state.begin(1, false).is_none());
+        assert!(!state.complete(&old, 1, Phase::Recording { paused: false }, Some(true)));
+    }
+
+    #[tokio::test]
+    async fn pause_is_not_confirmed_before_the_actor_acknowledges_and_reports_it() {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let queried = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = queried.clone();
+        let mut control = Box::pin(run_pause_control(
+            true,
+            async {
+                receive.await?;
+                Ok(())
+            },
+            async move {
+                observed.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(true)
+            },
+        ));
+        assert!(futures_util::poll!(&mut control).is_pending());
+        assert!(!queried.load(std::sync::atomic::Ordering::SeqCst));
+        send.send(()).unwrap();
+        let outcome = control.await;
+        assert_eq!(outcome.paused, Some(true));
+        assert!(outcome.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_pause_does_not_claim_capture_is_paused_or_allow_an_unsafe_retry() {
+        let outcome = run_pause_control(
+            true,
+            async { anyhow::bail!("pipeline shutdown failed") },
+            async { Ok(false) },
+        )
+        .await;
+        assert_eq!(outcome.paused, None);
+        assert!(outcome.error.unwrap().contains("pipeline shutdown failed"));
+        let mut state = PauseControlState::default();
+        let (ticket, _) = state.begin(1, true).unwrap();
+        assert!(state.complete(
+            &ticket,
+            1,
+            Phase::Recording { paused: false },
+            outcome.paused
+        ));
+        assert!(state.uncertain);
+        assert!(state.begin(1, true).is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_resume_preserves_a_confirmed_pause_and_reports_the_failure() {
+        let outcome =
+            run_pause_control(false, async { anyhow::bail!("input unavailable") }, async {
+                Ok(true)
+            })
+            .await;
+        assert_eq!(outcome.paused, Some(true));
+        assert!(outcome.error.unwrap().contains("input unavailable"));
+    }
+
+    #[tokio::test]
+    async fn stop_cancels_an_unstarted_pause_request() {
+        let mut state = PauseControlState::default();
+        let (_, registration) = state.begin(1, true).unwrap();
+        let polled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = polled.clone();
+        let control = futures_util::future::Abortable::new(
+            async move { observed.store(true, std::sync::atomic::Ordering::SeqCst) },
+            registration,
+        );
+        state.invalidate();
+        assert!(control.await.is_err());
+        assert!(!polled.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

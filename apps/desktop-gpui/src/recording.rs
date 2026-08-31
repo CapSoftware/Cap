@@ -596,7 +596,6 @@ impl ActiveRecording {
         }
     }
 
-    #[cfg(target_os = "linux")]
     pub fn is_paused_handle(
         &self,
     ) -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send>> {

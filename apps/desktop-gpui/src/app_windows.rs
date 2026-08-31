@@ -604,6 +604,7 @@ pub(crate) fn show_main_window_after_capture_pause(cx: &mut App) {
                 view.resume_device_restore(cx);
             }
             if reset_target {
+                view.show_recorder(cx);
                 view.clear_target(cx);
             }
             // Every path back to the main window is a path a new capture may
@@ -1288,11 +1289,9 @@ pub fn open_teleprompter(cx: &mut App) {
                 appears_transparent: true,
                 traffic_light_position: Some(teleprompter_window::TRAFFIC_LIGHTS),
             }),
-            // `alwaysOnTop: true` + `visibleOnAllWorkspaces: true` are applied
-            // below as level 101 + `CanJoinAllSpaces`, the same way the main
-            // window gets level 100 -- a `WindowKind::PopUp` panel would be
-            // non-activating, and this window has to take keystrokes for the
-            // script.
+            #[cfg(target_os = "macos")]
+            kind: WindowKind::Floating,
+            #[cfg(not(target_os = "macos"))]
             kind: WindowKind::Normal,
             focus: true,
             show: true,
@@ -1578,6 +1577,7 @@ pub fn open_editor_recording_main(editor_path: PathBuf, cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     main.update(cx, |view, _, cx| {
         view.cancel_deep_link_start();
+        view.show_recorder(cx);
         view.clear_target(cx);
         cx.notify();
     })

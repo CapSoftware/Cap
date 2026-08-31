@@ -118,8 +118,17 @@ impl ControlsWindow {
             "Starting".into()
         } else if stopping {
             "Saving…".into()
+        } else if session.pause_pending() {
+            if session.is_paused() {
+                "Resuming…"
+            } else {
+                "Pausing…"
+            }
+            .into()
         } else if error.is_some() {
             "Error".into()
+        } else if session.is_paused() {
+            "Paused".into()
         } else {
             Self::format_elapsed(session.elapsed()).into()
         };
@@ -267,7 +276,21 @@ impl ControlsWindow {
         let theme = self.theme;
         let session = self.session.read(cx);
         let paused = session.is_paused();
-        let busy = !matches!(session.phase, Phase::Recording { .. });
+        let busy = !matches!(session.phase, Phase::Recording { .. }) || session.pause_unavailable();
+        let pause_pending = session.pause_pending();
+        let pause_tooltip = if session.pause_uncertain() {
+            "Capture state is unconfirmed. Use Stop."
+        } else if pause_pending {
+            if paused {
+                "Resuming recording…"
+            } else {
+                "Pausing recording…"
+            }
+        } else if paused {
+            "Resume recording"
+        } else {
+            "Pause recording"
+        };
 
         div()
             .h(px(40.))
@@ -280,6 +303,7 @@ impl ControlsWindow {
             .bg(theme.gray_1)
             .border_1()
             .border_color(theme.gray_5)
+            .when(paused, |this| this.border_color(theme.amber_6))
             .shadow(vec![gpui::BoxShadow {
                 color: gpui::hsla(0., 0., 0., 0.1),
                 offset: gpui::point(px(0.), px(1.)),
@@ -313,11 +337,22 @@ impl ControlsWindow {
                                     },
                                     busy,
                                 )
+                                .when(paused, |this| {
+                                    this.bg(theme.amber_3)
+                                        .border_1()
+                                        .border_color(theme.amber_6)
+                                })
+                                .when(pause_pending, |this| this.opacity(0.5))
+                                .tooltip(move |_, cx| {
+                                    ui::Tooltip::new(&theme, pause_tooltip).view(cx)
+                                })
                                 .when(!busy, |this| {
-                                    this.on_click(cx.listener(|this, _, _, cx| {
-                                        this.session
-                                            .update(cx, |session, cx| session.toggle_pause(cx));
-                                    }))
+                                    this.active(|style| style.bg(theme.amber_6)).on_click(
+                                        cx.listener(|this, _, _, cx| {
+                                            this.session
+                                                .update(cx, |session, cx| session.toggle_pause(cx));
+                                        }),
+                                    )
                                 }),
                             )
                             .child(

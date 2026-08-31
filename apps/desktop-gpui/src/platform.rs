@@ -7,13 +7,6 @@
 //! `raw_window_handle::HasWindowHandle`, and on macOS the AppKit handle's
 //! `ns_view` reaches the `NSWindow`, where the same AppKit calls apply.
 //!
-//! A plain `NSWindow` with `FullScreenPrimary` stays off other apps'
-//! fullscreen Spaces. Tauri swizzles to `NSPanel` and the nspanel fullscreen
-//! sample uses `CanJoinAllSpaces | FullScreenAuxiliary`. We promote
-//! `GPUIWindow` to `GPUIPanel` (same ivar layout, already registered) and
-//! apply that collection behavior so the recorder stays above Chrome
-//! fullscreen the way the Tauri app does.
-//!
 //! Everything here must run on the main thread. gpui's foreground executor is
 //! the main thread, and every caller sits inside a `Window` update, so that
 //! holds by construction.
@@ -53,6 +46,42 @@ pub enum MaterialKind {
 pub struct WindowMaterial(pub Option<MaterialKind>);
 
 impl gpui::Global for WindowMaterial {}
+
+#[cfg(any(target_os = "macos", test))]
+struct NativeQuitRequests {
+    sender: flume::Sender<()>,
+    permitted: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl NativeQuitRequests {
+    fn new() -> (Self, flume::Receiver<()>) {
+        let (sender, receiver) = flume::bounded(1);
+        (
+            Self {
+                sender,
+                permitted: std::sync::atomic::AtomicBool::new(false),
+            },
+            receiver,
+        )
+    }
+
+    fn permit_exit(&self) {
+        self.permitted
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    fn request(&self) -> bool {
+        if self
+            .permitted
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return true;
+        }
+        let _ = self.sender.try_send(());
+        false
+    }
+}
 
 pub fn active_material(cx: &gpui::App) -> Option<MaterialKind> {
     cx.try_global::<WindowMaterial>()
@@ -94,6 +123,68 @@ mod mac {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     use super::{ForcedAppearance, MaterialKind, PanelBehavior};
+
+    static NATIVE_QUIT_REQUESTS: std::sync::OnceLock<super::NativeQuitRequests> =
+        std::sync::OnceLock::new();
+
+    unsafe extern "C-unwind" fn application_should_terminate(
+        _: &AnyObject,
+        _: Sel,
+        _: *mut AnyObject,
+    ) -> usize {
+        usize::from(
+            NATIVE_QUIT_REQUESTS
+                .get()
+                .is_some_and(|requests| requests.request()),
+        )
+    }
+
+    pub fn install_native_quit_handler() -> Result<flume::Receiver<()>, String> {
+        use objc2::{class, ffi, msg_send, runtime::Imp, sel};
+        use objc2_foundation::MainThreadMarker;
+
+        let _main_thread =
+            MainThreadMarker::new().ok_or("Native Quit must be installed on the main thread")?;
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            let app = app.as_ref().ok_or("NSApplication is unavailable")?;
+            let delegate: *mut AnyObject = msg_send![app, delegate];
+            let delegate = delegate
+                .as_ref()
+                .ok_or("Application delegate is unavailable")?;
+            let delegate_class = delegate.class();
+            if delegate_class.name() != "GPUIApplicationDelegate" {
+                return Err("Native Quit requires the owned GPUI application delegate".into());
+            }
+            let selector = sel!(applicationShouldTerminate:);
+            if delegate_class.instance_method(selector).is_some() {
+                return Err("Application delegate already has a native Quit handler".into());
+            }
+            let (requests, receiver) = super::NativeQuitRequests::new();
+            NATIVE_QUIT_REQUESTS
+                .set(requests)
+                .map_err(|_| "Native Quit request receiver was already installed")?;
+            let implementation = std::mem::transmute::<
+                unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> usize,
+                Imp,
+            >(application_should_terminate);
+            if !ffi::class_addMethod(
+                delegate_class as *const _ as *mut _,
+                selector.as_ptr(),
+                Some(implementation),
+                c"Q@:@".as_ptr(),
+            ) {
+                return Err("Could not install the native Quit handler".into());
+            }
+            Ok(receiver)
+        }
+    }
+
+    pub fn permit_native_quit() {
+        if let Some(requests) = NATIVE_QUIT_REQUESTS.get() {
+            requests.permit_exit();
+        }
+    }
 
     pub fn apply_window_theme(window: &Window, appearance: ForcedAppearance) {
         use objc2_app_kit::{
@@ -194,13 +285,14 @@ mod mac {
         // at the bottom, where nothing overlaps it). Radius must match what
         // the window's root element draws, not what looks close.
         content_view.setWantsLayer(true);
-        unsafe {
+        let set_clip_radius = |radius: f64| unsafe {
             let layer: *mut AnyObject = msg_send![&*content_view, layer];
             if !layer.is_null() {
                 let _: () = msg_send![layer, setCornerRadius: radius];
                 let _: () = msg_send![layer, setMasksToBounds: true];
             }
-        }
+        };
+        set_clip_radius(16.0);
 
         let bounds = content_view.bounds();
 
@@ -221,27 +313,23 @@ mod mac {
             unsafe {
                 let glass: *mut AnyObject = msg_send![glass_class, alloc];
                 let glass: *mut AnyObject = msg_send![glass, initWithFrame: bounds];
-                if !glass.is_null() {
+                if let Some(glass) = Id::from_raw(glass) {
+                    set_clip_radius(radius);
                     let identifier = NSString::from_str(LIQUID_GLASS_IDENTIFIER);
-                    let _: () = msg_send![glass, setIdentifier: &*identifier];
+                    let _: () = msg_send![&*glass, setIdentifier: &*identifier];
 
                     let responds: bool =
-                        msg_send![glass, respondsToSelector: sel!(setCornerRadius:)];
+                        msg_send![&*glass, respondsToSelector: sel!(setCornerRadius:)];
                     if responds {
-                        let _: () = msg_send![glass, setCornerRadius: radius];
+                        let _: () = msg_send![&*glass, setCornerRadius: radius];
                     }
 
-                    let _: () = msg_send![glass, setStyle: NS_GLASS_EFFECT_VIEW_STYLE_REGULAR];
-                    let _: () = msg_send![glass, setAutoresizingMask: NS_VIEW_WIDTH_HEIGHT_SIZABLE];
-                    // The `alloc` claim is deliberately not balanced: the view
-                    // lives for the life of the process (there is no teardown
-                    // path here, unlike the Tauri command that can be called
-                    // with `enabled: false`), and the superview's retain is
-                    // what keeps it alive. Same steady state the shipping app
-                    // sits in after a single apply.
+                    let _: () = msg_send![&*glass, setStyle: NS_GLASS_EFFECT_VIEW_STYLE_REGULAR];
+                    let _: () =
+                        msg_send![&*glass, setAutoresizingMask: NS_VIEW_WIDTH_HEIGHT_SIZABLE];
                     let _: () = msg_send![
                         &*content_view,
-                        addSubview: glass,
+                        addSubview: &*glass,
                         positioned: NSWindowOrderingMode::NSWindowBelow,
                         relativeTo: std::ptr::null_mut::<AnyObject>(),
                     ];
@@ -637,7 +725,8 @@ mod mac {
     /// documents for floating over those Spaces, and it is what
     /// tauri-nspanel's fullscreen example sets after the panel swizzle.
     fn apply_fullscreen_overlay_behavior(ns_window: &NSWindow) {
-        promote_to_gpui_panel(ns_window);
+        // Changing an initialized NSWindow's class breaks AppKit's KVO teardown.
+        // Callers that need a panel must create it as Floating or PopUp.
         unsafe {
             ns_window.setCollectionBehavior(
                 NSWindowCollectionBehavior::CanJoinAllSpaces
@@ -652,34 +741,6 @@ mod mac {
                 let _: () = objc2::msg_send![ns_window, setFloatingPanel: true];
             }
         }
-    }
-
-    /// `object_setClass` from `GPUIWindow` to `GPUIPanel` -- the gpui spelling
-    /// of tauri-nspanel's `to_panel()`. Both classes are built with the same
-    /// ivar (`WINDOW_STATE_IVAR`); if the sizes ever diverge we leave the
-    /// window as-is and rely on the collection-behavior flags alone.
-    fn promote_to_gpui_panel(ns_window: &NSWindow) {
-        use objc2::runtime::{AnyClass, AnyObject};
-
-        let class = ns_window.class();
-        if class.name() != "GPUIWindow" {
-            return;
-        }
-        let Some(panel) = AnyClass::get("GPUIPanel") else {
-            return;
-        };
-        if class.instance_size() != panel.instance_size() {
-            tracing::warn!(
-                window_size = class.instance_size(),
-                panel_size = panel.instance_size(),
-                "GPUIWindow/GPUIPanel instance sizes differ; not promoting to panel"
-            );
-            return;
-        }
-        unsafe {
-            AnyObject::set_class(ns_window.as_ref(), panel);
-        }
-        tracing::info!("promoted GPUIWindow to GPUIPanel for fullscreen overlay");
     }
 
     /// `NSWindow.setAlphaValue:` -- the whole of
@@ -1850,6 +1911,64 @@ pub use stub::*;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_quit_permission_is_consumed_by_exactly_one_callback() {
+        let (requests, receiver) = super::NativeQuitRequests::new();
+        requests.permit_exit();
+        assert!(requests.request());
+        assert!(receiver.try_recv().is_err());
+        assert!(!requests.request());
+        assert_eq!(receiver.try_recv(), Ok(()));
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn concurrent_native_quit_requests_are_cancelled_and_coalesced() {
+        let (requests, receiver) = super::NativeQuitRequests::new();
+        let requests = std::sync::Arc::new(requests);
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let requests = requests.clone();
+                std::thread::spawn(move || requests.request())
+            })
+            .collect();
+        for thread in threads {
+            assert!(!thread.join().unwrap());
+        }
+        assert_eq!(receiver.try_recv(), Ok(()));
+        assert!(receiver.try_recv().is_err());
+        assert!(!requests.request());
+        assert_eq!(receiver.try_recv(), Ok(()));
+    }
+
+    #[test]
+    fn concurrent_native_callbacks_cannot_reuse_an_exit_permit() {
+        let (requests, receiver) = super::NativeQuitRequests::new();
+        requests.permit_exit();
+        let requests = std::sync::Arc::new(requests);
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let requests = requests.clone();
+                std::thread::spawn(move || requests.request())
+            })
+            .collect();
+        let permitted = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .filter(|permitted| *permitted)
+            .count();
+        assert_eq!(permitted, 1);
+        assert_eq!(receiver.try_recv(), Ok(()));
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn missing_native_quit_consumer_never_authorizes_termination() {
+        let (requests, receiver) = super::NativeQuitRequests::new();
+        drop(receiver);
+        assert!(!requests.request());
+    }
+
     #[test]
     fn confirmation_accepts_native_ok_and_matching_custom_label_only() {
         let accept = "Install update";
