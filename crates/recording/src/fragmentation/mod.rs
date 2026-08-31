@@ -29,8 +29,8 @@ pub fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result
 }
 
 pub fn sync_file(path: &Path) {
-    if let Ok(file) = std::fs::File::open(path) {
-        let _ = file.sync_all();
+    if let Err(error) = cap_enc_ffmpeg::sync_media_file(path) {
+        tracing::warn!(%error, path = %path.display(), "File fsync failed");
     }
 }
 
