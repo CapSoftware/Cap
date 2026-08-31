@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 #[cfg(windows)]
 static INSTANCE_MUTEX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 
+#[cfg(target_os = "macos")]
+static INSTANCE_LOCK: std::sync::OnceLock<MacInstanceLock> = std::sync::OnceLock::new();
+
 #[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
 const MAX_FORWARDED_DEEP_LINK_BYTES: usize = 1024 * 1024;
 
@@ -20,52 +23,56 @@ fn pidfile() -> PathBuf {
 
 pub fn acquire() {
     let path = pidfile();
+    #[cfg(target_os = "macos")]
+    {
+        let lock = match acquire_macos_instance(
+            &path,
+            std::env::args().skip(1),
+            activate_macos_instance,
+        ) {
+            Ok(Some(lock)) => lock,
+            Ok(None) => std::process::exit(0),
+            Err(error) => {
+                tracing::error!(%error, "Could not acquire the Cap GPUI instance lock");
+                std::process::exit(1);
+            }
+        };
+        if INSTANCE_LOCK.set(lock).is_err() {
+            tracing::error!("The Cap GPUI instance lock was initialized twice");
+            std::process::exit(1);
+        }
+        if let Err(error) = publish_macos_pidfile(&path) {
+            tracing::error!(%error, "Could not publish the Cap GPUI instance pidfile");
+            std::process::exit(1);
+        }
+    }
     #[cfg(windows)]
     acquire_windows_instance(&path);
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     if let Ok(raw) = std::fs::read_to_string(&path)
         && let Ok(pid) = raw.trim().parse::<i32>()
         && pid > 0
         && pid != std::process::id() as i32
         && is_cap_gpui(pid)
     {
-        #[cfg(target_os = "linux")]
-        {
-            match forward_linux_reopen(&path, pid as u32) {
-                Ok(()) => tracing::info!(pid, "Requested the existing Cap GPUI controls"),
-                Err(error) => tracing::warn!(
-                    pid,
-                    %error,
-                    "Could not reopen Cap GPUI; the existing instance remains unchanged"
-                ),
-            }
-            std::process::exit(0);
+        match forward_linux_reopen(&path, pid as u32) {
+            Ok(()) => tracing::info!(pid, "Requested the existing Cap GPUI controls"),
+            Err(error) => tracing::warn!(
+                pid,
+                %error,
+                "Could not reopen Cap GPUI; the existing instance remains unchanged"
+            ),
         }
-        #[cfg(not(target_os = "linux"))]
-        {
-            tracing::info!(pid, "terminating the previous instance");
-            unsafe {
-                libc::kill(pid, libc::SIGTERM);
-            }
-            for _ in 0..40 {
-                if unsafe { libc::kill(pid, 0) } != 0 {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            if unsafe { libc::kill(pid, 0) } == 0 {
-                tracing::warn!(pid, "previous instance ignored SIGTERM; killing it");
-                unsafe {
-                    libc::kill(pid, libc::SIGKILL);
-                }
-            }
+        std::process::exit(0);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
         }
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    if let Err(error) = std::fs::write(&path, std::process::id().to_string()) {
-        tracing::warn!(%error, "could not write the instance pidfile");
+        if let Err(error) = std::fs::write(&path, std::process::id().to_string()) {
+            tracing::warn!(%error, "could not write the instance pidfile");
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -81,27 +88,25 @@ pub fn acquire() {
     }
 }
 
-/// Guard against pid reuse: only ever signal a process that is actually this
-/// binary. Linux zombies retain their comm name but lose their exe link.
+/// Linux zombies retain their comm name but lose their exe link.
 #[cfg(unix)]
 fn is_cap_gpui(pid: i32) -> bool {
-    #[cfg(not(target_os = "linux"))]
-    if unsafe { libc::kill(pid, 0) } != 0 {
-        return false;
-    }
     #[cfg(target_os = "linux")]
     {
         std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|path| is_cap_gpui_image(&path))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "comm="])
-            .output()
-            .is_ok_and(|output| {
-                output.status.success()
-                    && is_cap_gpui_image(Path::new(String::from_utf8_lossy(&output.stdout).trim()))
-            })
+        use std::os::unix::ffi::OsStrExt;
+
+        let mut buffer = [0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        let length =
+            unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+        length > 0
+            && buffer
+                .split(|byte| *byte == 0)
+                .next()
+                .is_some_and(|path| is_cap_gpui_image(Path::new(std::ffi::OsStr::from_bytes(path))))
     }
 }
 
@@ -117,6 +122,263 @@ fn is_cap_gpui_image(path: &Path) -> bool {
     #[cfg(target_os = "linux")]
     let name = name.strip_suffix(" (deleted)").unwrap_or(name);
     name.eq_ignore_ascii_case(IMAGE_NAME)
+}
+
+#[cfg(target_os = "macos")]
+struct MacInstanceLock {
+    file: std::fs::File,
+    owner_pid: libc::pid_t,
+}
+
+#[cfg(target_os = "macos")]
+impl MacInstanceLock {
+    fn acquire(path: &Path) -> std::io::Result<Option<Self>> {
+        use std::os::{
+            fd::AsRawFd,
+            unix::fs::{MetadataExt, OpenOptionsExt},
+        };
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.nlink() != 1
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o077 != 0
+        {
+            return Err(std::io::Error::other(
+                "The Cap GPUI instance lock is not a private file",
+            ));
+        }
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let error = std::io::Error::last_os_error();
+            return if error.kind() == std::io::ErrorKind::WouldBlock {
+                Ok(None)
+            } else {
+                Err(error)
+            };
+        }
+        let current = path.symlink_metadata()?;
+        if !current.is_file() || current.dev() != metadata.dev() || current.ino() != metadata.ino()
+        {
+            return Err(std::io::Error::other("The Cap GPUI instance lock changed"));
+        }
+        Ok(Some(Self {
+            file,
+            owner_pid: unsafe { libc::getpid() },
+        }))
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacInstanceLock {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+
+        // A fork child must not unlock its parent's shared file description.
+        if self.owner_pid == unsafe { libc::getpid() }
+            && unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) } != 0
+        {
+            tracing::warn!(error = %std::io::Error::last_os_error(), "Could not release the Cap GPUI instance lock");
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn read_macos_instance_file(path: &Path) -> std::io::Result<String> {
+    use std::{io::Read, os::unix::fs::OpenOptionsExt};
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > 128 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Invalid Cap GPUI instance metadata",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(129).read_to_end(&mut bytes)?;
+    if bytes.len() > 128 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Cap GPUI instance metadata changed",
+        ));
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Invalid Cap GPUI instance metadata encoding",
+        )
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_instance_pid(path: &Path) -> std::io::Result<Option<u32>> {
+    let raw = match read_macos_instance_file(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    Ok(raw
+        .trim()
+        .parse::<i32>()
+        .ok()
+        .filter(|pid| *pid > 0 && *pid != std::process::id() as i32 && is_cap_gpui(*pid))
+        .map(|pid| pid as u32))
+}
+
+#[cfg(target_os = "macos")]
+fn acquire_macos_instance(
+    path: &Path,
+    arguments: impl Iterator<Item = String>,
+    activate: impl FnOnce(u32),
+) -> std::io::Result<Option<MacInstanceLock>> {
+    let lock = MacInstanceLock::acquire(&path.with_extension("lock"))?;
+    let mut incumbent = macos_instance_pid(path)?;
+    if lock.is_none() {
+        for _ in 0..40 {
+            if incumbent.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            incumbent = macos_instance_pid(path)?;
+        }
+    }
+    if let Some(pid) = incumbent {
+        if let Err(error) = forward_macos_deep_links(path, pid, arguments) {
+            tracing::warn!(pid, %error, "Could not forward to Cap GPUI; the existing instance remains unchanged");
+        }
+        if macos_instance_pid(path)? == Some(pid) {
+            activate(pid);
+        }
+        return Ok(None);
+    }
+    if lock.is_none() {
+        tracing::warn!("Cap GPUI is still starting; the existing instance remains unchanged");
+    }
+    Ok(lock)
+}
+
+#[cfg(target_os = "macos")]
+fn publish_macos_pidfile(path: &Path) -> std::io::Result<()> {
+    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+
+    let temporary_path = path.with_extension(format!("pid.{}.tmp", crate::store::new_uuid_v4()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary_path)?;
+    let result = write!(file, "{}", std::process::id())
+        .and_then(|()| std::fs::rename(&temporary_path, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary_path);
+    }
+    result
+}
+
+#[cfg(target_os = "macos")]
+fn forward_macos_deep_links(
+    path: &Path,
+    pid: u32,
+    arguments: impl Iterator<Item = String>,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let urls = arguments
+        .filter(|argument| is_forwardable_deep_link(argument))
+        .take(33)
+        .collect::<Vec<_>>();
+    if urls.is_empty() {
+        return Ok(());
+    }
+    if urls.len() > 32 {
+        return Err(std::io::Error::other("Too many forwarded Cap deep links"));
+    }
+    let started = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(2);
+    let endpoint = loop {
+        if let Some(endpoint) = read_macos_instance_file(&path.with_extension("ipc"))
+            .ok()
+            .and_then(|contents| parse_forwarding_endpoint(&contents))
+            .filter(|endpoint| endpoint.pid == pid)
+        {
+            break endpoint;
+        }
+        if started.elapsed() >= timeout {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "The running Cap GPUI endpoint is unavailable",
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    for url in urls {
+        let remaining = timeout
+            .checked_sub(started.elapsed())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Cap deep-link forwarding timed out",
+                )
+            })?;
+        let address = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, endpoint.port));
+        let mut stream = std::net::TcpStream::connect_timeout(&address, remaining)?;
+        stream.set_nonblocking(true)?;
+        let mut payload = Vec::with_capacity(12 + url.len());
+        payload.extend_from_slice(&endpoint.secret.to_be_bytes());
+        payload.extend_from_slice(&(url.len() as u32).to_be_bytes());
+        payload.extend_from_slice(url.as_bytes());
+        let mut pending = payload.as_slice();
+        while !pending.is_empty() {
+            if started.elapsed() >= timeout {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Cap deep-link forwarding timed out",
+                ));
+            }
+            match stream.write(pending) {
+                Ok(0) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "Cap GPUI closed its forwarding connection",
+                    ));
+                }
+                Ok(written) => pending = &pending[written..],
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(5))
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn activate_macos_instance(pid: u32) {
+    use objc2::{class, msg_send, runtime::AnyObject};
+
+    unsafe {
+        let instance: *mut AnyObject = msg_send![class!(NSRunningApplication), runningApplicationWithProcessIdentifier: pid as i32];
+        if !instance.is_null() {
+            let _: bool = msg_send![instance, activateWithOptions: 1_usize << 1];
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -682,7 +944,7 @@ fn forward_windows_deep_links(path: &Path, pid: u32) {
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 fn parse_forwarding_endpoint(contents: &str) -> Option<ForwardingEndpoint> {
     let mut parts = contents.trim().split(':');
     let pid = parts.next()?.parse().ok()?;
@@ -1180,6 +1442,474 @@ mod tests {
                 .unwrap_err()
                 .kind(),
             std::io::ErrorKind::InvalidData
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use super::*;
+    use std::{
+        os::{
+            fd::AsRawFd,
+            unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt, symlink},
+        },
+        process::{Child, Command, Stdio},
+        time::{Duration, Instant},
+    };
+
+    struct Fixture {
+        directory: PathBuf,
+        children: Vec<Child>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let directory = std::env::temp_dir().join(format!(
+                "cap-gpui-macos-instance-{}",
+                crate::store::new_uuid_v4()
+            ));
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&directory)
+                .unwrap();
+            Self {
+                directory,
+                children: Vec::new(),
+            }
+        }
+
+        fn pidfile(&self) -> PathBuf {
+            self.directory.join("cap-gpui.pid")
+        }
+
+        fn incumbent(&mut self) -> u32 {
+            let binary = self.directory.join("cap-gpui");
+            std::fs::copy("/bin/sleep", &binary).unwrap();
+            self.children
+                .push(Command::new(binary).arg("30").spawn().unwrap());
+            let pid = self.children.last().unwrap().id();
+            wait_until(|| is_cap_gpui(pid as i32));
+            pid
+        }
+
+        fn contender(&mut self, label: &str) {
+            self.children.push(
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "single_instance::macos_tests::acquire_child_probe",
+                        "--test-threads=1",
+                    ])
+                    .env("CAP_GPUI_MACOS_INSTANCE_PROBE", &self.directory)
+                    .env("CAP_GPUI_MACOS_INSTANCE_LABEL", label)
+                    .env("CAP_GPUI_APP_DATA_DIR", &self.directory)
+                    .stdout(Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            );
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            for child in &mut self.children {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    fn wait_until(mut ready: impl FnMut() -> bool) {
+        let started = Instant::now();
+        while !ready() {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "Instance fixture timed out"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn identity(path: &Path) -> (u64, u64, Vec<u8>) {
+        let metadata = path.symlink_metadata().unwrap();
+        (metadata.dev(), metadata.ino(), std::fs::read(path).unwrap())
+    }
+
+    #[test]
+    fn lock_is_private_exclusive_and_released_without_removing_metadata() {
+        let fixture = Fixture::new();
+        let path = fixture.pidfile().with_extension("lock");
+        let first = MacInstanceLock::acquire(&path).unwrap().unwrap();
+        assert_eq!(
+            first.file.metadata().unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let flags = unsafe { libc::fcntl(first.file.as_raw_fd(), libc::F_GETFD) };
+        assert!(flags >= 0);
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+        assert!(MacInstanceLock::acquire(&path).unwrap().is_none());
+        std::fs::write(fixture.pidfile(), "owner-pid").unwrap();
+        std::fs::write(fixture.pidfile().with_extension("ipc"), "owner-endpoint").unwrap();
+        let before = identity(&path);
+        let pid_before = identity(&fixture.pidfile());
+        let ipc_before = identity(&fixture.pidfile().with_extension("ipc"));
+        let inherited = first.file.try_clone().unwrap();
+        drop(first);
+        let second = MacInstanceLock::acquire(&path).unwrap().unwrap();
+        drop(inherited);
+        assert!(MacInstanceLock::acquire(&path).unwrap().is_none());
+        drop(second);
+        assert_eq!(identity(&path), before);
+        assert_eq!(identity(&fixture.pidfile()), pid_before);
+        assert_eq!(
+            identity(&fixture.pidfile().with_extension("ipc")),
+            ipc_before
+        );
+    }
+
+    #[test]
+    fn lock_rejects_symlinks_and_hardlinks_without_touching_target() {
+        let fixture = Fixture::new();
+        let target = fixture.directory.join("protected");
+        std::fs::write(&target, "unchanged").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let before = identity(&target);
+        let path = fixture.pidfile().with_extension("lock");
+        symlink(&target, &path).unwrap();
+        assert!(MacInstanceLock::acquire(&path).is_err());
+        assert_eq!(identity(&target), before);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::hard_link(&target, &path).unwrap();
+        assert!(MacInstanceLock::acquire(&path).is_err());
+        assert_eq!(identity(&target), before);
+    }
+
+    #[test]
+    fn live_legacy_instance_survives_failed_forwarding_without_metadata_changes() {
+        let mut fixture = Fixture::new();
+        let pid = fixture.incumbent();
+        let path = fixture.pidfile();
+        std::fs::write(&path, pid.to_string()).unwrap();
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let endpoint = ForwardingEndpoint {
+            pid,
+            port: listener.local_addr().unwrap().port(),
+            secret: 123,
+        };
+        write_forwarding_endpoint(&path.with_extension("ipc"), endpoint).unwrap();
+        drop(listener);
+        let before = identity(&path);
+        let ipc_before = identity(&path.with_extension("ipc"));
+        let mut activated = None;
+        let result = acquire_macos_instance(
+            &path,
+            ["cap://action?value=\"stop_recording\"".into()].into_iter(),
+            |pid| activated = Some(pid),
+        )
+        .unwrap();
+        assert!(result.is_none());
+        assert_eq!(activated, Some(pid));
+        assert!(fixture.children[0].try_wait().unwrap().is_none());
+        assert_eq!(identity(&path), before);
+        assert_eq!(identity(&path.with_extension("ipc")), ipc_before);
+        assert!(
+            MacInstanceLock::acquire(&path.with_extension("lock"))
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn busy_startup_waits_for_legacy_pid_without_claiming_its_files() {
+        let mut fixture = Fixture::new();
+        let pid = fixture.incumbent();
+        let path = fixture.pidfile();
+        let _owner = MacInstanceLock::acquire(&path.with_extension("lock"))
+            .unwrap()
+            .unwrap();
+        let publishing_path = path.clone();
+        let publisher = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            std::fs::write(publishing_path, pid.to_string()).unwrap();
+        });
+        let mut activated = None;
+        let result = acquire_macos_instance(&path, std::iter::empty(), |pid| activated = Some(pid));
+        publisher.join().unwrap();
+        assert!(result.unwrap().is_none());
+        assert_eq!(activated, Some(pid));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), pid.to_string());
+        assert!(fixture.children[0].try_wait().unwrap().is_none());
+        assert!(
+            MacInstanceLock::acquire(&path.with_extension("lock"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn unreadable_owner_metadata_never_admits_a_duplicate() {
+        let mut fixture = Fixture::new();
+        let pid = fixture.incumbent();
+        let path = fixture.pidfile();
+        let owner = MacInstanceLock::acquire(&path.with_extension("lock"))
+            .unwrap()
+            .unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let before = path.symlink_metadata().unwrap().ino();
+        assert!(
+            acquire_macos_instance(&path, std::iter::empty(), |_| panic!(
+                "Unreadable PID must not activate"
+            ))
+            .is_err()
+        );
+        assert_eq!(path.symlink_metadata().unwrap().ino(), before);
+        assert!(
+            MacInstanceLock::acquire(&path.with_extension("lock"))
+                .unwrap()
+                .is_none()
+        );
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::write(&path, pid.to_string()).unwrap();
+        let pid_before = identity(&path);
+        let endpoint_path = path.with_extension("ipc");
+        std::fs::create_dir(&endpoint_path).unwrap();
+        let endpoint_before = endpoint_path.symlink_metadata().unwrap().ino();
+        drop(owner);
+        let mut activated = None;
+        assert!(
+            acquire_macos_instance(
+                &path,
+                ["cap-desktop://auth?token=fixture".into()].into_iter(),
+                |pid| activated = Some(pid)
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(activated, Some(pid));
+        assert!(fixture.children[0].try_wait().unwrap().is_none());
+        assert_eq!(identity(&path), pid_before);
+        assert_eq!(
+            endpoint_path.symlink_metadata().unwrap().ino(),
+            endpoint_before
+        );
+    }
+
+    #[test]
+    fn forwarding_refuses_a_different_pid_and_excessive_arguments() {
+        let fixture = Fixture::new();
+        let path = fixture.pidfile();
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = ForwardingEndpoint {
+            pid: 123,
+            port: listener.local_addr().unwrap().port(),
+            secret: 456,
+        };
+        write_forwarding_endpoint(&path.with_extension("ipc"), endpoint).unwrap();
+        let before = identity(&path.with_extension("ipc"));
+        let url = "cap-desktop://auth?token=fixture".to_string();
+        let error = forward_macos_deep_links(&path, 789, [url.clone()].into_iter()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(forward_macos_deep_links(&path, 123, std::iter::repeat_n(url, 33)).is_err());
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        assert_eq!(identity(&path.with_extension("ipc")), before);
+    }
+
+    #[test]
+    fn duplicate_forwards_auth_and_actions_with_the_existing_protocol() {
+        let mut fixture = Fixture::new();
+        let pid = fixture.incumbent();
+        let path = fixture.pidfile();
+        std::fs::write(&path, pid.to_string()).unwrap();
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = ForwardingEndpoint {
+            pid,
+            port: listener.local_addr().unwrap().port(),
+            secret: 123,
+        };
+        write_forwarding_endpoint(&path.with_extension("ipc"), endpoint).unwrap();
+        let before = identity(&path.with_extension("ipc"));
+        let receiver = std::thread::spawn(move || {
+            let mut urls = Vec::new();
+            wait_until(|| {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .unwrap();
+                        urls.push(read_forwarded_deep_link(&mut stream, endpoint.secret).unwrap());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(error) => panic!("Forwarding listener failed: {error}"),
+                }
+                urls.len() == 2
+            });
+            urls
+        });
+        let urls = [
+            "cap-desktop://auth?token=fixture".to_string(),
+            "cap://action?value=\"stop_recording\"".to_string(),
+        ];
+        let mut activated = None;
+        let result = acquire_macos_instance(
+            &path,
+            std::iter::once("https://example.invalid".into()).chain(urls.clone()),
+            |pid| activated = Some(pid),
+        );
+        let forwarded = receiver.join().unwrap();
+        assert!(result.unwrap().is_none());
+        assert_eq!(forwarded, urls);
+        assert_eq!(activated, Some(pid));
+        assert_eq!(identity(&path.with_extension("ipc")), before);
+        assert!(fixture.children[0].try_wait().unwrap().is_none());
+    }
+
+    #[test]
+    fn stale_owner_can_be_replaced_without_following_pidfile_symlink() {
+        let fixture = Fixture::new();
+        let path = fixture.pidfile();
+        let target = fixture.directory.join("stale-pid");
+        std::fs::write(&target, "not-a-pid").unwrap();
+        let before = identity(&target);
+        symlink(&target, &path).unwrap();
+        let _owner = acquire_macos_instance(&path, std::iter::empty(), |_| {
+            panic!("No incumbent should activate")
+        })
+        .unwrap()
+        .unwrap();
+        publish_macos_pidfile(&path).unwrap();
+        assert!(!path.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            std::process::id().to_string()
+        );
+        assert_eq!(identity(&target), before);
+    }
+
+    #[test]
+    fn oversized_and_fifo_metadata_fail_without_blocking_startup() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let mut fixture = Fixture::new();
+        let path = fixture.pidfile();
+        std::fs::write(&path, [b'1'; 129]).unwrap();
+        let before = identity(&path);
+        assert!(
+            acquire_macos_instance(&path, std::iter::empty(), |_| panic!(
+                "Invalid metadata must not activate"
+            ))
+            .is_err()
+        );
+        assert_eq!(identity(&path), before);
+        std::fs::remove_file(&path).unwrap();
+        let fifo = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        fixture.contender("metadata");
+        wait_until(|| fixture.children[0].try_wait().unwrap().is_some());
+        assert!(fixture.children[0].wait().unwrap().success());
+    }
+
+    #[test]
+    fn acquire_child_probe() {
+        let Some(directory) = std::env::var_os("CAP_GPUI_MACOS_INSTANCE_PROBE").map(PathBuf::from)
+        else {
+            return;
+        };
+        let label = std::env::var("CAP_GPUI_MACOS_INSTANCE_LABEL").unwrap();
+        assert!(matches!(label.as_str(), "a" | "b" | "metadata"));
+        if label == "metadata" {
+            assert!(read_macos_instance_file(&directory.join("cap-gpui.pid")).is_err());
+            return;
+        }
+        std::fs::write(directory.join(format!("ready-{label}")), "ready").unwrap();
+        wait_until(|| directory.join("go").exists());
+        let path = directory.join("cap-gpui.pid");
+        let owner = acquire_macos_instance(&path, std::iter::empty(), |_| {}).unwrap();
+        if owner.is_some() {
+            publish_macos_pidfile(&path).unwrap();
+            start_deep_link_forwarding(&path).unwrap();
+            std::fs::write(
+                directory.join(format!("owner-{label}")),
+                std::process::id().to_string(),
+            )
+            .unwrap();
+            wait_until(|| directory.join("release").exists());
+        } else {
+            std::fs::write(
+                directory.join(format!("duplicate-{label}")),
+                std::process::id().to_string(),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn concurrent_processes_publish_exactly_one_owner_and_preserve_its_metadata_on_exit() {
+        let mut fixture = Fixture::new();
+        fixture.contender("a");
+        fixture.contender("b");
+        wait_until(|| {
+            ["a", "b"]
+                .iter()
+                .all(|label| fixture.directory.join(format!("ready-{label}")).exists())
+        });
+        std::fs::write(fixture.directory.join("go"), "go").unwrap();
+        wait_until(|| {
+            ["owner", "duplicate"].iter().all(|role| {
+                ["a", "b"]
+                    .iter()
+                    .any(|label| fixture.directory.join(format!("{role}-{label}")).exists())
+            })
+        });
+        let owners = ["a", "b"]
+            .into_iter()
+            .filter(|label| fixture.directory.join(format!("owner-{label}")).exists())
+            .collect::<Vec<_>>();
+        assert_eq!(owners.len(), 1);
+        let owner = std::fs::read_to_string(fixture.directory.join(format!("owner-{}", owners[0])))
+            .unwrap();
+        let path = fixture.pidfile();
+        let pid_before = identity(&path);
+        let ipc_before = identity(&path.with_extension("ipc"));
+        let lock_before = identity(&path.with_extension("lock"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), owner);
+        assert_eq!(
+            parse_forwarding_endpoint(
+                &std::fs::read_to_string(path.with_extension("ipc")).unwrap()
+            )
+            .unwrap()
+            .pid
+            .to_string(),
+            owner
+        );
+        assert!(
+            MacInstanceLock::acquire(&path.with_extension("lock"))
+                .unwrap()
+                .is_none()
+        );
+        std::fs::write(fixture.directory.join("release"), "release").unwrap();
+        for child in &mut fixture.children {
+            wait_until(|| child.try_wait().unwrap().is_some());
+            assert!(child.wait().unwrap().success());
+        }
+        assert_eq!(identity(&path), pid_before);
+        assert_eq!(identity(&path.with_extension("ipc")), ipc_before);
+        assert_eq!(identity(&path.with_extension("lock")), lock_before);
+        let _replacement = acquire_macos_instance(&path, std::iter::empty(), |_| {
+            panic!("Exited instance must not activate")
+        })
+        .unwrap()
+        .unwrap();
+        publish_macos_pidfile(&path).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            std::process::id().to_string()
         );
     }
 }

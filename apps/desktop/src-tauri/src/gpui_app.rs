@@ -341,9 +341,6 @@ fn classic_pending() -> PathBuf {
 }
 
 /// The pid of the live `cap-gpui` that owns the pidfile, if there is one.
-/// Spawning over a live instance would not stack: its single-instance guard
-/// kills the previous process, so a handoff that relaunched unconditionally
-/// would restart a session the user may be recording in.
 fn running_instance_pid() -> Option<u32> {
     let pid = std::fs::read_to_string(gpui_pidfile())
         .ok()?

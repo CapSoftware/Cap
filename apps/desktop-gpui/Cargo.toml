@@ -169,8 +169,6 @@ tauri-winres = "0.3.5"
 # dev-dependencies so the shipped binary's tokio features are unchanged.
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 
-# kill(2) for the new-instance-wins guard (`src/single_instance.rs`); already
-# in the lockfile through half the tree, this only makes it direct.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

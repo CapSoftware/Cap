@@ -194,8 +194,6 @@ fn main() {
 
     let _log_guard = init_logging();
 
-    // A relaunch means "run the code I just built": take over from any
-    // previous instance still alive in the tray (see `single_instance`).
     single_instance::acquire();
     store::mark_handoff_session();
 
