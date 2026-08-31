@@ -396,6 +396,48 @@ jobs:
           fi
           codesign --verify "$DMG"
 
+      - name: Notarize and verify macOS disk image
+        if: ${{ runner.os == 'macOS' }}
+        timeout-minutes: 25
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ github.workspace }}/api.p8
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          DMGS=(target/${{ matrix.settings.target }}/release/bundle/dmg/*.dmg)
+          if [[ ${#DMGS[@]} -eq 0 ]]; then
+            echo "::error::No macOS disk image is available for notarization."
+            exit 1
+          fi
+          [[ -n "$APPLE_API_KEY" && -n "$APPLE_API_ISSUER" && -s "$APPLE_API_KEY_PATH" ]]
+          for DMG in "${DMGS[@]}"; do
+            [[ -f "$DMG" && -s "$DMG" && ! -L "$DMG" ]]
+            codesign --verify "$DMG"
+            NOTARY_RESULT="$(mktemp "$RUNNER_TEMP/cap-dmg-notary.XXXXXX")"
+            NOTARY_EXIT=0
+            xcrun notarytool submit "$DMG" \
+              --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" \
+              --wait --timeout 20m --output-format json > "$NOTARY_RESULT" || NOTARY_EXIT=$?
+            node -e '
+              const fs = require("node:fs");
+              const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+              if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(result.id ?? "")) {
+                throw new Error("Notarization submission ID is missing or invalid.");
+              }
+              console.log(JSON.stringify({ submissionId: result.id, status: result.status }));
+              if (process.argv[2] !== "0" || result.status !== "Accepted") {
+                throw new Error("Disk image notarization did not complete with Accepted status.");
+              }
+            ' "$NOTARY_RESULT" "$NOTARY_EXIT"
+            xcrun stapler staple "$DMG"
+            xcrun stapler validate "$DMG"
+            codesign --verify "$DMG"
+            spctl --assess --type open --context context:primary-signature "$DMG"
+          done
+
       # Guards against the Linux packaging regressions:
       #   1. Frontend missing: vinxi must produce apps/desktop/.output/public,
       #      which Tauri EMBEDS into the binary (it is NOT shipped as a loose
