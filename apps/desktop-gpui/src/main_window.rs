@@ -27,9 +27,8 @@ use crate::{
 };
 use gpui::{Entity, Task};
 
-/// `MAIN_WINDOW_SIZE.expanded` in index.tsx.
 const EXPANDED_WIDTH: f32 = 600.;
-const EXPANDED_HEIGHT: f32 = 700.;
+const EXPANDED_HEIGHT: f32 = 680.;
 
 /// `duration: 180` in `resizeMainWindow`.
 const RESIZE_DURATION_SECS: f32 = 0.18;
@@ -3143,7 +3142,7 @@ impl MainWindow {
                 .child(self.render_logo_row(cx))
                 .child(
                     // `flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-1
-                    // w-full` -- expanded overflows 660px once Recents is in, so
+                    // w-full` -- expanded can overflow once Recents is in, so
                     // this column has to scroll.
                     div()
                         .id("home-scroll")
@@ -5237,7 +5236,6 @@ impl MainWindow {
             .on_click(on_click)
     }
 
-    /// `mt-[16px] mb-[6px]`, logo `w-[92px]`, Mode pill on the right.
     fn render_logo_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let recording_clip = self.session.read(cx).editor_recording_target().is_some();
         div()
@@ -5245,8 +5243,8 @@ impl MainWindow {
             .flex_row()
             .items_center()
             .justify_between()
-            .mt(px(16.))
-            .mb(px(6.))
+            .mt(px(8.))
+            .mb(px(4.))
             .flex_shrink_0()
             .child(
                 // `flex items-center space-x-1` around the logo and its badge.
@@ -5280,12 +5278,12 @@ impl MainWindow {
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap(px(5.))
+                    .gap(px(4.))
                     .child(self.render_mode_pill(cx))
                     .child(
                         div()
-                            .text_size(px(10.))
-                            .line_height(px(12.))
+                            .text_size(px(9.))
+                            .line_height(px(11.))
                             .text_color(self.theme.gray_11)
                             .child(format!("{} Mode", self.effective_mode(cx).panel_title())),
                     ),
@@ -5338,16 +5336,13 @@ impl MainWindow {
         }
     }
 
-    /// `*:w-[92px]` on the logo link, against a 103x40 viewBox, so the lockup
-    /// is 92x35.7.
-    ///
     /// This goes through `img()`, not `svg()`. The two take different paths in
     /// gpui: `svg()` keeps only the alpha and tints it with one colour, which
     /// would flatten the badge, the three blue rings and the wordmark into a
     /// single silhouette, whereas `img()` rasterises through resvg and keeps
     /// the colour. `img()` also renders at `SMOOTH_SVG_SCALE_FACTOR` (2x), so
-    /// the 103px-wide source becomes a 206px raster -- more than the 184 device
-    /// pixels a 92px lockup needs on a 2x display.
+    /// the 103px-wide source becomes a 206px raster -- more than the 168 device
+    /// pixels an 84px lockup needs on a 2x display.
     ///
     /// The app ships two files rather than recolouring one, so this picks the
     /// same way it does.
@@ -5357,8 +5352,8 @@ impl MainWindow {
         } else {
             "icons/logo-full.svg"
         })
-        .w(px(92.))
-        .h(px(92. * 40. / 103.))
+        .w(px(84.))
+        .h(px(84. * 40. / 103.))
         .flex_shrink_0()
     }
 
@@ -5471,8 +5466,8 @@ impl MainWindow {
             .child(
                 div()
                     .px(px(4.))
-                    .text_size(px(11.))
-                    .line_height(px(16.))
+                    .text_size(px(10.))
+                    .line_height(px(14.))
                     .text_color(self.theme.gray_11)
                     .child("Choose a capture source"),
             )
@@ -5503,8 +5498,14 @@ impl MainWindow {
     fn render_split_target(&self, target: TargetType, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let selected = self.target == Some(target);
+        let hover_fill = if selected {
+            theme.tile_selected_hover_bg()
+        } else {
+            theme.body_hover_fill(4)
+        };
 
         div()
+            .group(target.label())
             .flex()
             .flex_1()
             .overflow_hidden()
@@ -5539,7 +5540,7 @@ impl MainWindow {
                             .size(px(16.))
                             .text_color(theme.gray_11),
                     )
-                    .hover(|style| style.bg(theme.body_hover_fill(6)))
+                    .group_hover(target.label(), move |style| style.bg(hover_fill))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_panel(Panel::Target(target), window, cx);
                     })),
@@ -5582,6 +5583,11 @@ impl MainWindow {
         let theme = self.theme;
         let selected = self.target == Some(target);
         let expanded = self.expanded;
+        let hover_fill = if selected {
+            theme.tile_selected_hover_bg()
+        } else {
+            theme.body_hover_fill(4)
+        };
 
         let icon_color = if selected {
             theme.blue_10
@@ -5608,15 +5614,10 @@ impl MainWindow {
             .py(px(8.))
             .when(split, |this| this.rounded_l(px(7.)))
             .when(!split, |this| this.rounded(px(7.)))
-            // `hover:bg-blue-4` / `dark:hover:bg-blue-4/40` when selected,
-            // `hover:bg-gray-4` otherwise.
-            .hover(move |style| {
-                style.bg(if selected {
-                    theme.tile_selected_hover_bg()
-                } else {
-                    theme.body_hover_fill(4)
-                })
+            .when(split, |this| {
+                this.group_hover(target.label(), move |style| style.bg(hover_fill))
             })
+            .when(!split, |this| this.hover(move |style| style.bg(hover_fill)))
             .on_click(cx.listener(move |this, _, _window, cx| {
                 // `toggleTargetMode`: clicking the armed tile again is a
                 // cancel, which takes the overlays down with it.
@@ -5673,10 +5674,6 @@ impl MainWindow {
                 .child(
                     div()
                         .text_size(px(12.))
-                        // `text-xs` is 12/16. gpui's default line box is ~19.5
-                        // at 12px, which makes each compact tile 3.5px too
-                        // tall and clips the last device row (system audio)
-                        // by 1–2px against the 395px window.
                         .line_height(px(16.))
                         .text_color(label_color)
                         .child(target.label()),
@@ -5686,13 +5683,21 @@ impl MainWindow {
 
     /// `BaseControls`: camera, microphone, system audio.
     fn render_base_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let gap = if self.expanded { 10. } else { 8. };
+        let gap = if self.expanded { 10. } else { 6. };
 
         div()
             .flex()
             .flex_col()
             .gap(px(gap))
             .w_full()
+            .child(
+                div()
+                    .px(px(4.))
+                    .text_size(px(10.))
+                    .line_height(px(14.))
+                    .text_color(self.theme.gray_11)
+                    .child("Choose your camera and microphone"),
+            )
             .child(
                 self.labelled(
                     "Camera",
@@ -5728,15 +5733,6 @@ impl MainWindow {
                         }
                     })),
                 ),
-            )
-            .child(
-                div()
-                    .px(px(4.))
-                    .pt(px(2.))
-                    .text_size(px(11.))
-                    .line_height(px(16.))
-                    .text_color(self.theme.gray_11)
-                    .child("Choose your audio devices"),
             )
             .child(
                 self.labelled(

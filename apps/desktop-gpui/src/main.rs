@@ -69,9 +69,8 @@ use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 
 use crate::{assets::Assets, main_window::MainWindow, session::RecordingSession};
 
-/// Matches the Tauri main window exactly (`CapWindowId::Main`).
 const MAIN_WINDOW_WIDTH: f32 = 330.;
-const MAIN_WINDOW_HEIGHT: f32 = 460.;
+const MAIN_WINDOW_HEIGHT: f32 = 440.;
 
 /// The corner radius the native material is clipped to. `radius = 16` for
 /// material `"panel"` on both visual systems in
