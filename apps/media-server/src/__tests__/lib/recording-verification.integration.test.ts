@@ -1,5 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+	mkdtemp,
+	readdir,
+	readFile,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -209,6 +216,30 @@ describe("complete recording decode", () => {
 });
 
 async function decoderPids(input: string): Promise<number[]> {
+	if (process.platform === "linux") {
+		const processes = (await readdir("/proc")).filter((name) =>
+			/^\d+$/.test(name),
+		);
+		const matches = await Promise.all(
+			processes.map(async (pid) => {
+				try {
+					const command = await readFile(`/proc/${pid}/cmdline`, "utf8");
+					return command.includes("ffmpeg") && command.includes(input)
+						? Number(pid)
+						: null;
+				} catch (error) {
+					if (
+						error instanceof Error &&
+						"code" in error &&
+						(error.code === "ENOENT" || error.code === "ESRCH")
+					)
+						return null;
+					throw error;
+				}
+			}),
+		);
+		return matches.filter((pid): pid is number => pid !== null);
+	}
 	const output = await run(["ps", "-axo", "pid=,command="]);
 	return output
 		.split("\n")
