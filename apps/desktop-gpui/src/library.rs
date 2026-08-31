@@ -33,7 +33,7 @@ use cap_project::{
     InstantRecordingMeta, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
     StudioRecordingStatus,
 };
-use cap_recording::recovery::RecoveryManager;
+use cap_recording::{recovery::RecoveryManager, upload_resume::UploadLock};
 use gpui::RenderImage;
 use image::buffer::ConvertBuffer as _;
 
@@ -499,6 +499,9 @@ fn recover_incomplete_recording_in(
     let meta = RecordingMeta::load_for_project(&canonical_path)
         .map_err(|error| format!("Failed to load recording metadata: {error}"))?;
     if matches!(meta.inner, RecordingMetaInner::Instant(_)) {
+        let _upload_lock = UploadLock::acquire(&canonical_path).map_err(|error| {
+            format!("Could not lock the instant recording for recovery: {error}")
+        })?;
         return crate::recording::recover_instant_recording(&canonical_path)
             .map_err(|error| format!("Could not save the instant recording: {error:#}"));
     }
@@ -1727,6 +1730,78 @@ mod tests {
         );
         assert!(elsewhere.is_dir());
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn instant_recovery_preserves_live_recording_while_its_upload_lock_is_held() {
+        fn snapshot(directory: &Path) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+            let mut entries = std::collections::BTreeMap::new();
+            let mut pending = vec![directory.to_path_buf()];
+            while let Some(parent) = pending.pop() {
+                for entry in std::fs::read_dir(parent).unwrap() {
+                    let entry = entry.unwrap();
+                    let path = entry.path();
+                    let relative = path.strip_prefix(directory).unwrap().to_path_buf();
+                    if entry.file_type().unwrap().is_dir() {
+                        assert!(entries.insert(relative, None).is_none());
+                        pending.push(path);
+                    } else {
+                        assert!(
+                            entries
+                                .insert(relative, Some(std::fs::read(path).unwrap()))
+                                .is_none()
+                        );
+                    }
+                }
+            }
+            entries
+        }
+
+        let root = temp_dir("instant-recovery-owned");
+        let recordings = root.join("recordings");
+        let metadata = serde_json::json!({
+            "pretty_name": "Live instant recording",
+            "sharing": null,
+            "recording": true,
+        })
+        .to_string();
+        let bundle = write_bundle(&recordings, "live-instant", &metadata);
+        for (relative, contents) in [
+            (
+                "content/display/init.mp4",
+                b"unfinished video init".as_slice(),
+            ),
+            (
+                "content/display/segment_001.m4s",
+                b"unfinished video fragment",
+            ),
+            (
+                "content/audio/segment_001.m4s",
+                b"unfinished audio fragment",
+            ),
+            ("content/output.mp4", b"existing partial output"),
+        ] {
+            let path = bundle.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+        let before = snapshot(&bundle);
+        let owner = UploadLock::acquire(&bundle).unwrap();
+
+        let result = recover_incomplete_recording_in(std::slice::from_ref(&recordings), &bundle);
+
+        assert_eq!(
+            result,
+            Err("Could not lock the instant recording for recovery: Another upload owns this recording".to_string())
+        );
+        assert_eq!(snapshot(&bundle), before);
+        assert!(matches!(
+            RecordingMeta::load_for_project(&bundle).unwrap().inner,
+            RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true })
+        ));
+
+        drop(owner);
         std::fs::remove_dir_all(root).unwrap();
     }
 
