@@ -1440,6 +1440,29 @@ impl RecoveryManager {
         Self::finalize_to_progressive_mp4_with_health(fragmented_dir, output, None)
     }
 
+    pub fn validate_instant_output(
+        project_path: &Path,
+        required_audio: bool,
+    ) -> Result<PathBuf, RecoveryError> {
+        let content = project_path.join("content");
+        let output = content.join("output.mp4");
+        for path in [project_path, content.as_path(), output.as_path()] {
+            reject_recovery_link(&path.symlink_metadata()?)?;
+        }
+        Self::require_no_track_failure(project_path)?;
+        validate_recovered_track(&output, ffmpeg::media::Type::Video)?;
+        probe_video_seek_points(&output, EXPORT_SEEK_PROBE_SAMPLE_COUNT)
+            .map_err(RecoveryError::UnplayableVideo)?;
+        let input = ffmpeg::format::input(&output)
+            .map_err(|error| RecoveryError::Validation(error.to_string()))?;
+        let has_audio = input.streams().best(ffmpeg::media::Type::Audio).is_some();
+        drop(input);
+        if required_audio || has_audio {
+            validate_recovered_track(&output, ffmpeg::media::Type::Audio)?;
+        }
+        Ok(output)
+    }
+
     pub fn finalize_instant_output(
         display_dir: &Path,
         audio_dir: &Path,
@@ -3227,6 +3250,30 @@ mod instant_cleanup_tests {
             io::ErrorKind::PermissionDenied,
             "injected workspace cleanup failure",
         ))
+    }
+
+    #[test]
+    fn existing_instant_validation_is_read_only_and_requires_requested_audio() {
+        let directory = playable_instant_project();
+        let project = directory.path();
+        let output = project.join("content/output.mp4");
+        RecoveryManager::finalize_instant_output(
+            &project.join("content/display"),
+            &project.join("content/audio"),
+            &output,
+        )
+        .unwrap();
+        let before = recovery_snapshot(project).unwrap();
+        assert_eq!(
+            RecoveryManager::validate_instant_output(project, false).unwrap(),
+            output
+        );
+        assert!(RecoveryManager::validate_instant_output(project, true).is_err());
+        assert_eq!(recovery_snapshot(project).unwrap(), before);
+        fs::write(&output, b"invalid media retained for repair").unwrap();
+        let before = recovery_snapshot(project).unwrap();
+        assert!(RecoveryManager::validate_instant_output(project, false).is_err());
+        assert_eq!(recovery_snapshot(project).unwrap(), before);
     }
 
     fn retained_workspace(project: &Path) -> PathBuf {
