@@ -6072,16 +6072,27 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                 #[cfg(target_os = "macos")]
                 {
-                    app.manage(gpui_app::StartupRedirectState::default());
+                    if app.try_state::<gpui_app::StartupRedirectState>().is_none() {
+                        app.manage(gpui_app::StartupRedirectState::default());
+                    }
                     let app = app.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(Duration::from_millis(750)).await;
-                        if app
+                        let Some(reopen_pid) = app
                             .try_state::<gpui_app::StartupRedirectState>()
-                            .is_some_and(|state| state.exit_if_pending())
+                            .and_then(|state| state.exit_if_pending())
+                        else {
+                            return;
+                        };
+                        if let Some(pid) = reopen_pid
                         {
-                            app.exit(0);
+                            match tokio::task::spawn_blocking(move || gpui_app::request_gpui_reopen(pid)).await {
+                                Ok(Ok(())) => info!(pid, "Queued a request to reopen Cap GPUI"),
+                                Ok(Err(error)) => warn!(pid, %error, "Could not confirm Cap GPUI reopening; the existing instance remains unchanged"),
+                                Err(error) => warn!(pid, %error, "Cap GPUI reopen forwarding did not finish"),
+                            }
                         }
+                        app.exit(0);
                     });
                 }
 

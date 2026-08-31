@@ -47,16 +47,26 @@ struct GpuiForwardingEndpoint {
 
 #[cfg(any(target_os = "macos", test))]
 #[derive(Default)]
-pub(crate) struct StartupRedirectState(std::sync::atomic::AtomicU8);
+pub(crate) struct StartupRedirectState {
+    phase: std::sync::atomic::AtomicU8,
+    reopen_pid: Option<u32>,
+}
 
 #[cfg(any(target_os = "macos", test))]
 impl StartupRedirectState {
+    fn with_reopen(pid: u32) -> Self {
+        Self {
+            reopen_pid: Some(pid),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn begin_forwarding(&self) -> bool {
         self.transition(0, 1)
     }
 
-    pub(crate) fn exit_if_pending(&self) -> bool {
-        self.transition(0, 2)
+    pub(crate) fn exit_if_pending(&self) -> Option<Option<u32>> {
+        self.transition(0, 2).then_some(self.reopen_pid)
     }
 
     pub(crate) fn exit_after_forwarding(&self) -> bool {
@@ -64,7 +74,7 @@ impl StartupRedirectState {
     }
 
     fn transition(&self, from: u8, to: u8) -> bool {
-        self.0
+        self.phase
             .compare_exchange(
                 from,
                 to,
@@ -445,6 +455,175 @@ fn forwarded_gpui_argument(argument: &str) -> Option<String> {
     is_forwardable_gpui_deep_link(&url).then_some(url)
 }
 
+#[cfg(target_os = "macos")]
+fn read_macos_gpui_metadata(path: &std::path::Path, private: bool) -> std::io::Result<String> {
+    use nix::libc;
+    use std::{
+        io::Read,
+        os::unix::fs::{MetadataExt, OpenOptionsExt},
+    };
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    let forbidden_permissions = if private { 0o077 } else { 0o022 };
+    if !metadata.is_file()
+        || metadata.len() > 128
+        || metadata.nlink() != 1
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & forbidden_permissions != 0
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "Cap GPUI instance metadata is not owner controlled",
+        ));
+    }
+    let mut contents = String::new();
+    file.take(129).read_to_string(&mut contents)?;
+    if contents.len() > 128 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Cap GPUI instance metadata changed",
+        ));
+    }
+    Ok(contents)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_reopen_incumbent(path: &std::path::Path, pid: u32) -> std::io::Result<bool> {
+    use nix::libc;
+    use std::os::unix::ffi::OsStrExt;
+
+    if pid == 0
+        || pid > i32::MAX as u32
+        || pid == std::process::id()
+        || read_macos_gpui_metadata(path, false)?
+            .trim()
+            .parse::<u32>()
+            .ok()
+            != Some(pid)
+    {
+        return Ok(false);
+    }
+    let mut buffer = [0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let length =
+        unsafe { libc::proc_pidpath(pid as i32, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+    Ok(length > 0
+        && buffer.split(|byte| *byte == 0).next().is_some_and(|bytes| {
+            is_gpui_process_image(std::path::Path::new(std::ffi::OsStr::from_bytes(bytes)))
+        }))
+}
+
+#[cfg(target_os = "macos")]
+fn reopen_time_remaining(
+    started: std::time::Instant,
+    timeout: std::time::Duration,
+) -> std::io::Result<std::time::Duration> {
+    timeout
+        .checked_sub(started.elapsed())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Cap GPUI reopen request timed out",
+            )
+        })
+}
+
+#[cfg(target_os = "macos")]
+fn send_gpui_reopen(
+    endpoint: GpuiForwardingEndpoint,
+    started: std::time::Instant,
+    timeout: std::time::Duration,
+) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+
+    let address = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, endpoint.port));
+    let mut stream =
+        std::net::TcpStream::connect_timeout(&address, reopen_time_remaining(started, timeout)?)?;
+    stream.set_nonblocking(true)?;
+    let mut payload = [0_u8; 12];
+    payload[..8].copy_from_slice(&endpoint.secret.to_be_bytes());
+    let mut pending = payload.as_slice();
+    while !pending.is_empty() {
+        let remaining = reopen_time_remaining(started, timeout)?;
+        match stream.write(pending) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "Cap GPUI closed its forwarding connection",
+                ));
+            }
+            Ok(written) => pending = &pending[written..],
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(remaining.min(std::time::Duration::from_millis(5)))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let mut acknowledgment = [0_u8; 1];
+    loop {
+        let remaining = reopen_time_remaining(started, timeout)?;
+        match stream.read(&mut acknowledgment) {
+            Ok(1) if acknowledgment[0] == 1 => return Ok(()),
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Cap GPUI did not acknowledge the reopen request",
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(remaining.min(std::time::Duration::from_millis(5)))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn request_gpui_reopen(pid: u32) -> Result<(), String> {
+    let request = || -> std::io::Result<()> {
+        let started = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(2);
+        let path = gpui_pidfile();
+        loop {
+            reopen_time_remaining(started, timeout)?;
+            if !macos_reopen_incumbent(&path, pid)? {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotConnected,
+                    "The Cap GPUI instance changed before reopening",
+                ));
+            }
+            match read_macos_gpui_metadata(&path.with_extension("ipc"), true) {
+                Ok(contents) => {
+                    if let Some(endpoint) = parse_gpui_forwarding_endpoint(&contents)
+                        .filter(|endpoint| endpoint.pid == pid)
+                    {
+                        return send_gpui_reopen(endpoint, started, timeout);
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+            std::thread::sleep(
+                reopen_time_remaining(started, timeout)?.min(std::time::Duration::from_millis(50)),
+            );
+        }
+    };
+    request().map_err(|error| format!("Could not confirm reopening the running Cap GPUI: {error}"))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn gpui_launch_needs_reopen(args: &[String]) -> bool {
+    !args
+        .iter()
+        .any(|argument| forwarded_gpui_argument(argument).is_some())
+}
+
 #[cfg(any(target_os = "macos", windows))]
 fn forward_deep_links_to_gpui(pid: u32, args: &[String]) -> bool {
     use std::io::Write;
@@ -715,6 +894,13 @@ pub async fn switch_to_gpui_app(app: AppHandle) -> Result<(), String> {
                     }
                     return Err(error);
                 }
+                #[cfg(target_os = "macos")]
+                if let Err(error) = request_gpui_reopen(pid) {
+                    if !uses_shared_store {
+                        write_shared_store_flag(previous_shared_flag.unwrap_or(false));
+                    }
+                    return Err(error);
+                }
                 #[cfg(not(target_os = "linux"))]
                 activate_instance(pid);
                 info!(pid, "Cap GPUI is already running; requested its controls");
@@ -793,13 +979,23 @@ fn redirect_decision(app: &AppHandle) -> Result<bool, String> {
         #[cfg(any(target_os = "macos", windows))]
         {
             let args = std::env::args().skip(1).collect::<Vec<_>>();
+            #[cfg(target_os = "macos")]
+            if gpui_launch_needs_reopen(&args) {
+                app.manage(StartupRedirectState::with_reopen(pid));
+            } else {
+                forward_deep_links_to_gpui(pid, &args);
+            }
+            #[cfg(windows)]
             forward_deep_links_to_gpui(pid, &args);
         }
         #[cfg(target_os = "linux")]
         launch_linux_activation(binary_path(app).as_deref(), spawn_detached)?;
         #[cfg(not(target_os = "linux"))]
         activate_instance(pid);
-        info!(pid, "Cap GPUI is already running; requested its controls");
+        info!(
+            pid,
+            "Cap GPUI is already running; preserving the existing instance"
+        );
         return Ok(true);
     }
 
@@ -891,8 +1087,8 @@ mod tests {
     fn startup_redirect_exits_once_when_no_open_event_arrives() {
         let state = StartupRedirectState::default();
 
-        assert!(state.exit_if_pending());
-        assert!(!state.exit_if_pending());
+        assert_eq!(state.exit_if_pending(), Some(None));
+        assert!(state.exit_if_pending().is_none());
         assert!(!state.begin_forwarding());
         assert!(!state.exit_after_forwarding());
     }
@@ -903,8 +1099,30 @@ mod tests {
 
         assert!(state.begin_forwarding());
         assert!(!state.begin_forwarding());
-        assert!(!state.exit_if_pending());
+        assert!(state.exit_if_pending().is_none());
         assert!(state.exit_after_forwarding());
+        assert!(!state.exit_after_forwarding());
+    }
+
+    #[test]
+    fn startup_plain_launch_returns_its_reopen_intent_only_once() {
+        let state = StartupRedirectState::with_reopen(123);
+
+        assert_eq!(state.exit_if_pending(), Some(Some(123)));
+        assert!(state.exit_if_pending().is_none());
+        assert!(!state.begin_forwarding());
+        assert!(!state.exit_after_forwarding());
+    }
+
+    #[test]
+    fn startup_open_event_suppresses_pending_plain_reopen() {
+        let state = StartupRedirectState::with_reopen(123);
+
+        assert!(state.begin_forwarding());
+        assert!(state.exit_if_pending().is_none());
+        assert!(!state.begin_forwarding());
+        assert!(state.exit_after_forwarding());
+        assert!(state.exit_if_pending().is_none());
         assert!(!state.exit_after_forwarding());
     }
 
@@ -1089,5 +1307,132 @@ mod tests {
         let file_url = reqwest::Url::from_file_path(&project).unwrap();
 
         assert!(forwarded_gpui_argument(file_url.as_str()).is_some());
+    }
+
+    #[test]
+    fn only_launches_without_forwardable_actions_request_reopening() {
+        assert!(super::gpui_launch_needs_reopen(&[]));
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("Recording.cap");
+        std::fs::create_dir(&project).unwrap();
+        for argument in [
+            "cap-desktop://auth?token=fixture".to_string(),
+            "cap://action?value=%22stop_recording%22".to_string(),
+            project.to_str().unwrap().to_string(),
+            reqwest::Url::from_file_path(&project).unwrap().to_string(),
+        ] {
+            assert!(!super::gpui_launch_needs_reopen(&[argument]));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reopen_sends_private_packet_and_requires_acknowledgment() {
+        use std::{
+            io::{Read, Write},
+            time::{Duration, Instant},
+        };
+
+        for reply in [0_u8, 1] {
+            let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let endpoint = GpuiForwardingEndpoint {
+                pid: 123,
+                port: listener.local_addr().unwrap().port(),
+                secret: 456,
+            };
+            let server = std::thread::spawn(move || {
+                let started = Instant::now();
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(started.elapsed() < Duration::from_secs(5));
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("Reopen listener failed: {error}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut packet = [0_u8; 12];
+                stream.read_exact(&mut packet).unwrap();
+                assert_eq!(&packet[..8], &endpoint.secret.to_be_bytes());
+                assert_eq!(&packet[8..], &0_u32.to_be_bytes());
+                stream.write_all(&[reply]).unwrap();
+            });
+            let result = super::send_gpui_reopen(endpoint, Instant::now(), Duration::from_secs(2));
+            server.join().unwrap();
+            if reply == 1 {
+                result.unwrap();
+            } else {
+                assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reopen_deadline_also_bounds_missing_acknowledgment() {
+        use std::time::{Duration, Instant};
+
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let endpoint = GpuiForwardingEndpoint {
+            pid: 123,
+            port: listener.local_addr().unwrap().port(),
+            secret: 456,
+        };
+        assert_eq!(
+            super::send_gpui_reopen(endpoint, Instant::now(), Duration::from_millis(100))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::TimedOut
+        );
+        let expired = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            super::send_gpui_reopen(endpoint, expired, Duration::from_secs(2))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::TimedOut
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reopen_rejects_shared_or_linked_endpoint_and_changed_pid() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cap-gpui.ipc");
+        std::fs::write(&path, "123:456:789").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            super::read_macos_gpui_metadata(&path, true).unwrap(),
+            "123:456:789"
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            super::read_macos_gpui_metadata(&path, true)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let linked = directory.path().join("linked.ipc");
+        symlink(&path, &linked).unwrap();
+        assert!(super::read_macos_gpui_metadata(&linked, true).is_err());
+        std::fs::remove_file(&linked).unwrap();
+        std::fs::hard_link(&path, &linked).unwrap();
+        assert!(super::read_macos_gpui_metadata(&path, true).is_err());
+        let pidfile = directory.path().join("cap-gpui.pid");
+        std::fs::write(&pidfile, "123").unwrap();
+        assert!(!super::macos_reopen_incumbent(&pidfile, 456).unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "123:456:789");
+        assert_eq!(std::fs::read_to_string(&pidfile).unwrap(), "123");
     }
 }

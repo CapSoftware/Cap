@@ -17,6 +17,17 @@ struct ForwardingEndpoint {
     secret: u64,
 }
 
+#[cfg(any(windows, target_os = "macos", test))]
+#[derive(Debug, PartialEq, Eq)]
+enum ForwardedRequest {
+    DeepLink(String),
+    #[cfg(target_os = "macos")]
+    Reopen,
+}
+
+#[cfg(target_os = "macos")]
+const REOPEN_ACK: u8 = 1;
+
 fn pidfile() -> PathBuf {
     crate::store::app_data_dir().join("cap-gpui.pid")
 }
@@ -295,71 +306,148 @@ fn forward_macos_deep_links(
     pid: u32,
     arguments: impl Iterator<Item = String>,
 ) -> std::io::Result<()> {
-    use std::io::Write;
-
     let urls = arguments
         .filter(|argument| is_forwardable_deep_link(argument))
         .take(33)
         .collect::<Vec<_>>();
-    if urls.is_empty() {
-        return Ok(());
-    }
     if urls.len() > 32 {
         return Err(std::io::Error::other("Too many forwarded Cap deep links"));
     }
     let started = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(2);
     let endpoint = loop {
-        if let Some(endpoint) = read_macos_instance_file(&path.with_extension("ipc"))
-            .ok()
-            .and_then(|contents| parse_forwarding_endpoint(&contents))
-            .filter(|endpoint| endpoint.pid == pid)
-        {
+        if let Some(endpoint) = read_macos_forwarding_endpoint(&path.with_extension("ipc"), pid)? {
             break endpoint;
         }
-        if started.elapsed() >= timeout {
+        let remaining = forwarding_time_remaining(started, timeout)?;
+        std::thread::sleep(remaining.min(std::time::Duration::from_millis(50)));
+    };
+    for url in urls
+        .iter()
+        .map(|url| Some(url.as_str()))
+        .chain(urls.is_empty().then_some(None))
+    {
+        if macos_instance_pid(path)? != Some(pid) {
             return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "The running Cap GPUI endpoint is unavailable",
+                std::io::ErrorKind::NotConnected,
+                "The Cap GPUI instance changed before forwarding",
             ));
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        send_macos_forwarded_request(endpoint, url, started, timeout)?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn read_macos_forwarding_endpoint(
+    path: &Path,
+    pid: u32,
+) -> std::io::Result<Option<ForwardingEndpoint>> {
+    use std::{
+        io::Read,
+        os::unix::fs::{MetadataExt, OpenOptionsExt},
     };
-    for url in urls {
-        let remaining = timeout
-            .checked_sub(started.elapsed())
-            .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "Cap deep-link forwarding timed out",
-                )
-            })?;
-        let address = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, endpoint.port));
-        let mut stream = std::net::TcpStream::connect_timeout(&address, remaining)?;
-        stream.set_nonblocking(true)?;
-        let mut payload = Vec::with_capacity(12 + url.len());
-        payload.extend_from_slice(&endpoint.secret.to_be_bytes());
-        payload.extend_from_slice(&(url.len() as u32).to_be_bytes());
-        payload.extend_from_slice(url.as_bytes());
-        let mut pending = payload.as_slice();
-        while !pending.is_empty() {
-            if started.elapsed() >= timeout {
+
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.len() > 128
+        || metadata.nlink() != 1
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "Cap GPUI endpoint is not private owner metadata",
+        ));
+    }
+    let mut contents = String::new();
+    file.take(129).read_to_string(&mut contents)?;
+    if contents.len() > 128 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Cap GPUI endpoint changed",
+        ));
+    }
+    Ok(parse_forwarding_endpoint(&contents).filter(|endpoint| endpoint.pid == pid))
+}
+
+#[cfg(target_os = "macos")]
+fn forwarding_time_remaining(
+    started: std::time::Instant,
+    timeout: std::time::Duration,
+) -> std::io::Result<std::time::Duration> {
+    timeout
+        .checked_sub(started.elapsed())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Cap GPUI forwarding timed out",
+            )
+        })
+}
+
+#[cfg(target_os = "macos")]
+fn send_macos_forwarded_request(
+    endpoint: ForwardingEndpoint,
+    url: Option<&str>,
+    started: std::time::Instant,
+    timeout: std::time::Duration,
+) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+
+    let address = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, endpoint.port));
+    let mut stream = std::net::TcpStream::connect_timeout(
+        &address,
+        forwarding_time_remaining(started, timeout)?,
+    )?;
+    stream.set_nonblocking(true)?;
+    let bytes = url.unwrap_or_default().as_bytes();
+    let mut payload = Vec::with_capacity(12 + bytes.len());
+    payload.extend_from_slice(&endpoint.secret.to_be_bytes());
+    payload.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    payload.extend_from_slice(bytes);
+    let mut pending = payload.as_slice();
+    while !pending.is_empty() {
+        let remaining = forwarding_time_remaining(started, timeout)?;
+        match stream.write(pending) {
+            Ok(0) => {
                 return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "Cap deep-link forwarding timed out",
+                    std::io::ErrorKind::WriteZero,
+                    "Cap GPUI closed its forwarding connection",
                 ));
             }
-            match stream.write(pending) {
-                Ok(0) => {
+            Ok(written) => pending = &pending[written..],
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(remaining.min(std::time::Duration::from_millis(5)))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    if url.is_none() {
+        let mut acknowledgment = [0_u8; 1];
+        loop {
+            let remaining = forwarding_time_remaining(started, timeout)?;
+            match stream.read(&mut acknowledgment) {
+                Ok(1) if acknowledgment[0] == REOPEN_ACK => break,
+                Ok(_) => {
                     return Err(std::io::Error::new(
-                        std::io::ErrorKind::WriteZero,
-                        "Cap GPUI closed its forwarding connection",
+                        std::io::ErrorKind::InvalidData,
+                        "Cap GPUI did not acknowledge the reopen request",
                     ));
                 }
-                Ok(written) => pending = &pending[written..],
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(std::time::Duration::from_millis(5))
+                    std::thread::sleep(remaining.min(std::time::Duration::from_millis(5)))
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(error),
@@ -367,6 +455,20 @@ fn forward_macos_deep_links(
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn acknowledge_reopen(
+    writer: &mut impl std::io::Write,
+    enqueue: impl FnOnce() -> bool,
+) -> std::io::Result<()> {
+    if !enqueue() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "Cap GPUI could not queue the reopen request",
+        ));
+    }
+    writer.write_all(&[REOPEN_ACK])
 }
 
 #[cfg(target_os = "macos")]
@@ -850,8 +952,16 @@ fn start_deep_link_forwarding(path: &Path) -> std::io::Result<()> {
                 match connection {
                     Ok(mut stream) => {
                         let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
-                        match read_forwarded_deep_link(&mut stream, endpoint.secret) {
-                            Ok(url) => crate::deeplink::submit_deep_link(&url),
+                        match read_forwarded_request(&mut stream, endpoint.secret) {
+                            Ok(ForwardedRequest::DeepLink(url)) => crate::deeplink::submit_deep_link(&url),
+                            #[cfg(target_os = "macos")]
+                            Ok(ForwardedRequest::Reopen) => {
+                                let result = stream.set_write_timeout(Some(std::time::Duration::from_secs(2)))
+                                    .and_then(|()| acknowledge_reopen(&mut stream, crate::deeplink::submit_reopen));
+                                if let Err(error) = result {
+                                    tracing::warn!(%error, "could not acknowledge the Cap GPUI reopen request");
+                                }
+                            }
                             Err(error) => {
                                 tracing::warn!(%error, "rejected a forwarded Cap deep link");
                             }
@@ -966,10 +1076,10 @@ fn is_forwardable_deep_link(url: &str) -> bool {
 }
 
 #[cfg(any(windows, target_os = "macos", test))]
-fn read_forwarded_deep_link(
+fn read_forwarded_request(
     reader: &mut impl std::io::Read,
     expected_secret: u64,
-) -> std::io::Result<String> {
+) -> std::io::Result<ForwardedRequest> {
     let mut secret = [0_u8; 8];
     reader.read_exact(&mut secret)?;
     if u64::from_be_bytes(secret) != expected_secret {
@@ -982,6 +1092,10 @@ fn read_forwarded_deep_link(
     let mut size = [0_u8; 4];
     reader.read_exact(&mut size)?;
     let size = u32::from_be_bytes(size) as usize;
+    #[cfg(target_os = "macos")]
+    if size == 0 {
+        return Ok(ForwardedRequest::Reopen);
+    }
     if size == 0 || size > MAX_FORWARDED_DEEP_LINK_BYTES {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -1001,7 +1115,7 @@ fn read_forwarded_deep_link(
         ));
     }
 
-    Ok(url)
+    Ok(ForwardedRequest::DeepLink(url))
 }
 
 #[cfg(windows)]
@@ -1087,8 +1201,8 @@ fn activate_windows_instance(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ForwardingEndpoint, MAX_FORWARDED_DEEP_LINK_BYTES, is_cap_gpui_image,
-        is_forwardable_deep_link, parse_forwarding_endpoint, read_forwarded_deep_link,
+        ForwardedRequest, ForwardingEndpoint, MAX_FORWARDED_DEEP_LINK_BYTES, is_cap_gpui_image,
+        is_forwardable_deep_link, parse_forwarding_endpoint, read_forwarded_request,
     };
     use std::path::Path;
 
@@ -1359,7 +1473,11 @@ mod tests {
         let mut payload = secret.to_be_bytes().to_vec();
         payload.extend_from_slice(&(url.as_str().len() as u32).to_be_bytes());
         payload.extend_from_slice(url.as_str().as_bytes());
-        let authenticated = read_forwarded_deep_link(&mut payload.as_slice(), secret).unwrap();
+        let authenticated = match read_forwarded_request(&mut payload.as_slice(), secret).unwrap() {
+            ForwardedRequest::DeepLink(url) => url,
+            #[cfg(target_os = "macos")]
+            ForwardedRequest::Reopen => panic!("A project action must remain a deep link"),
+        };
         let authenticated = reqwest::Url::parse(&authenticated).unwrap();
         assert!(matches!(
             crate::deeplink::DeepLinkAction::try_from(&authenticated),
@@ -1425,11 +1543,11 @@ mod tests {
         payload.extend_from_slice(url.as_bytes());
 
         assert_eq!(
-            read_forwarded_deep_link(&mut payload.as_slice(), secret).unwrap(),
-            url
+            read_forwarded_request(&mut payload.as_slice(), secret).unwrap(),
+            ForwardedRequest::DeepLink(url.to_string())
         );
         assert_eq!(
-            read_forwarded_deep_link(&mut payload.as_slice(), secret + 1)
+            read_forwarded_request(&mut payload.as_slice(), secret + 1)
                 .unwrap_err()
                 .kind(),
             std::io::ErrorKind::PermissionDenied
@@ -1438,11 +1556,22 @@ mod tests {
         let mut oversized = secret.to_be_bytes().to_vec();
         oversized.extend_from_slice(&((MAX_FORWARDED_DEEP_LINK_BYTES + 1) as u32).to_be_bytes());
         assert_eq!(
-            read_forwarded_deep_link(&mut oversized.as_slice(), secret)
+            read_forwarded_request(&mut oversized.as_slice(), secret)
                 .unwrap_err()
                 .kind(),
             std::io::ErrorKind::InvalidData
         );
+        #[cfg(not(target_os = "macos"))]
+        {
+            let mut empty = secret.to_be_bytes().to_vec();
+            empty.extend_from_slice(&0_u32.to_be_bytes());
+            assert_eq!(
+                read_forwarded_request(&mut empty.as_slice(), secret)
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::InvalidData
+            );
+        }
     }
 }
 
@@ -1762,6 +1891,170 @@ int main(int argc, char **argv) {
     }
 
     #[test]
+    fn reopen_authentication_precedes_dispatch_and_ack_requires_queue_success() {
+        let secret = 123_u64;
+        let mut payload = secret.to_be_bytes().to_vec();
+        payload.extend_from_slice(&0_u32.to_be_bytes());
+        assert_eq!(
+            read_forwarded_request(&mut payload.as_slice(), secret).unwrap(),
+            ForwardedRequest::Reopen
+        );
+        assert_eq!(
+            read_forwarded_request(&mut payload.as_slice(), secret + 1)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        for length in [0, 7, 8, 11] {
+            assert_eq!(
+                read_forwarded_request(&mut &payload[..length], secret)
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::UnexpectedEof
+            );
+        }
+        let mut reply = Vec::new();
+        assert_eq!(
+            acknowledge_reopen(&mut reply, || false).unwrap_err().kind(),
+            std::io::ErrorKind::BrokenPipe
+        );
+        assert!(reply.is_empty());
+        let (queued, requests) = flume::bounded(1);
+        acknowledge_reopen(&mut reply, || queued.send(()).is_ok()).unwrap();
+        assert_eq!(requests.try_recv(), Ok(()));
+        assert_eq!(reply, [REOPEN_ACK]);
+    }
+
+    #[test]
+    fn reopen_uses_real_tcp_and_waits_for_queue_acknowledgment() {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = ForwardingEndpoint {
+            pid: 123,
+            port: listener.local_addr().unwrap().port(),
+            secret: 456,
+        };
+        let (queued, requests) = flume::bounded(1);
+        let server = std::thread::spawn(move || {
+            use std::io::Read;
+
+            for reopen in [true, false] {
+                let mut connection = None;
+                wait_until(|| match listener.accept() {
+                    Ok((stream, _)) => {
+                        connection = Some(stream);
+                        true
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => false,
+                    Err(error) => panic!("Reopen listener failed: {error}"),
+                });
+                let mut stream = connection.unwrap();
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                if reopen {
+                    assert_eq!(
+                        read_forwarded_request(&mut stream, endpoint.secret).unwrap(),
+                        ForwardedRequest::Reopen
+                    );
+                    acknowledge_reopen(&mut stream, || queued.send(()).is_ok()).unwrap();
+                } else {
+                    let url = "cap-desktop://auth?token=fixture";
+                    let mut expected = endpoint.secret.to_be_bytes().to_vec();
+                    expected.extend_from_slice(&(url.len() as u32).to_be_bytes());
+                    expected.extend_from_slice(url.as_bytes());
+                    let mut received = Vec::new();
+                    stream.read_to_end(&mut received).unwrap();
+                    assert_eq!(received, expected);
+                }
+            }
+            listener
+        });
+        let result =
+            send_macos_forwarded_request(endpoint, None, Instant::now(), Duration::from_secs(2));
+        let deep_link = send_macos_forwarded_request(
+            endpoint,
+            Some("cap-desktop://auth?token=fixture"),
+            Instant::now(),
+            Duration::from_secs(2),
+        );
+        let listener = server.join().unwrap();
+        result.unwrap();
+        deep_link.unwrap();
+        assert_eq!(requests.try_recv(), Ok(()));
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn reopen_without_ack_expires_without_changing_endpoint_metadata() {
+        let fixture = Fixture::new();
+        let path = fixture.pidfile().with_extension("ipc");
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let endpoint = ForwardingEndpoint {
+            pid: 123,
+            port: listener.local_addr().unwrap().port(),
+            secret: 456,
+        };
+        write_forwarding_endpoint(&path, endpoint).unwrap();
+        let before = identity(&path);
+        let result = send_macos_forwarded_request(
+            endpoint,
+            None,
+            Instant::now(),
+            Duration::from_millis(100),
+        );
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+        assert_eq!(identity(&path), before);
+        let expired = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            send_macos_forwarded_request(endpoint, None, expired, Duration::from_secs(2))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::TimedOut
+        );
+    }
+
+    #[test]
+    fn reopen_endpoint_requires_private_unlinked_owner_file() {
+        let fixture = Fixture::new();
+        let path = fixture.pidfile().with_extension("ipc");
+        let endpoint = ForwardingEndpoint {
+            pid: 123,
+            port: 456,
+            secret: 789,
+        };
+        write_forwarding_endpoint(&path, endpoint).unwrap();
+        let before = identity(&path);
+        assert_eq!(
+            read_macos_forwarding_endpoint(&path, 123).unwrap(),
+            Some(endpoint)
+        );
+        assert_eq!(read_macos_forwarding_endpoint(&path, 321).unwrap(), None);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            read_macos_forwarding_endpoint(&path, 123)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let linked = fixture.directory.join("linked.ipc");
+        symlink(&path, &linked).unwrap();
+        assert!(read_macos_forwarding_endpoint(&linked, 123).is_err());
+        std::fs::remove_file(&linked).unwrap();
+        std::fs::hard_link(&path, &linked).unwrap();
+        assert!(read_macos_forwarding_endpoint(&path, 123).is_err());
+        assert_eq!(identity(&path), before);
+    }
+
+    #[test]
     fn duplicate_forwards_auth_and_actions_with_the_existing_protocol() {
         let mut fixture = Fixture::new();
         let pid = fixture.incumbent();
@@ -1785,7 +2078,12 @@ int main(int argc, char **argv) {
                         stream
                             .set_read_timeout(Some(Duration::from_secs(2)))
                             .unwrap();
-                        urls.push(read_forwarded_deep_link(&mut stream, endpoint.secret).unwrap());
+                        let ForwardedRequest::DeepLink(url) =
+                            read_forwarded_request(&mut stream, endpoint.secret).unwrap()
+                        else {
+                            panic!("Forwarded URLs must not request reopening");
+                        };
+                        urls.push(url);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
                     Err(error) => panic!("Forwarding listener failed: {error}"),

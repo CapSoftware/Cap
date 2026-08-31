@@ -184,26 +184,46 @@ impl TryFrom<&Url> for DeepLinkAction {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum QueuedAction {
+    DeepLink(DeepLinkAction),
+    #[cfg(target_os = "macos")]
+    Reopen,
+}
+
+impl QueuedAction {
+    fn execute(self, cx: &mut App) -> Result<(), String> {
+        match self {
+            Self::DeepLink(action) => action.execute(cx),
+            #[cfg(target_os = "macos")]
+            Self::Reopen => {
+                app_windows::handle_dock_reopen(cx);
+                Ok(())
+            }
+        }
+    }
+}
+
 /// The action queue. Unbounded and created on first touch, so URLs submitted
 /// before [`init`] runs (the launch AppleEvent, argv) wait for the drain task
 /// instead of being dropped -- the buffering the Tauri app gets from its
 /// executor being managed before `on_open_url` is wired.
-fn channel() -> &'static (
-    flume::Sender<DeepLinkAction>,
-    flume::Receiver<DeepLinkAction>,
-) {
-    static CHANNEL: OnceLock<(
-        flume::Sender<DeepLinkAction>,
-        flume::Receiver<DeepLinkAction>,
-    )> = OnceLock::new();
+fn channel() -> &'static (flume::Sender<QueuedAction>, flume::Receiver<QueuedAction>) {
+    static CHANNEL: OnceLock<(flume::Sender<QueuedAction>, flume::Receiver<QueuedAction>)> =
+        OnceLock::new();
     CHANNEL.get_or_init(flume::unbounded)
 }
 
 pub(crate) fn submit_action(action: DeepLinkAction) {
     tracing::info!("queueing deep link action");
-    if channel().0.send(action).is_err() {
+    if channel().0.send(QueuedAction::DeepLink(action)).is_err() {
         tracing::error!("failed to queue deep link action");
     }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn submit_reopen() -> bool {
+    channel().0.send(QueuedAction::Reopen).is_ok()
 }
 
 /// The one entry point for a URL handed over by the OS -- what
@@ -273,7 +293,7 @@ pub fn init(cx: &mut App) {
     cx.spawn(async move |cx| {
         while let Ok(action) = rx.recv_async().await {
             cx.update(|cx| {
-                tracing::info!("executing deep link action");
+                tracing::info!("executing Cap action");
                 if let Err(error) = action.execute(cx) {
                     tracing::error!(%error, "failed to handle deep link action");
                 }
@@ -633,10 +653,25 @@ mod tests {
         for action in &expected {
             submit_action(action.clone());
         }
+        #[cfg(target_os = "macos")]
+        assert!(submit_reopen());
         for action in expected {
-            assert_eq!(channel().1.try_recv().unwrap(), action);
+            assert_eq!(
+                channel().1.try_recv().unwrap(),
+                QueuedAction::DeepLink(action)
+            );
         }
+        #[cfg(target_os = "macos")]
+        assert_eq!(channel().1.try_recv().unwrap(), QueuedAction::Reopen);
         assert!(channel().1.is_empty());
+    }
+
+    #[test]
+    fn private_reopen_is_not_a_public_deep_link_action() {
+        for value in ["\"reopen\"", "{\"reopen\":{}}"] {
+            let url = Url::parse_with_params("cap-desktop://action", &[("value", value)]).unwrap();
+            assert!(DeepLinkAction::try_from(&url).is_err());
+        }
     }
 
     // -- The Tauri parser's own tests (`deeplink_actions.rs:299-514`),
