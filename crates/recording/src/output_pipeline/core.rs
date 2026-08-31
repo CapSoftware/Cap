@@ -310,6 +310,41 @@ pub(crate) enum BlockingThreadFinish {
     TimedOut(anyhow::Error),
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("out-of-process media finalization failed after the encoder joined: {source:#}")]
+pub(crate) struct OopMediaFailureAfterJoin {
+    #[source]
+    source: anyhow::Error,
+}
+
+impl OopMediaFailureAfterJoin {
+    #[cfg(any(test, target_os = "macos", windows))]
+    pub(crate) fn new(source: anyhow::Error) -> Self {
+        Self { source }
+    }
+}
+
+#[cfg(any(test, target_os = "macos", windows))]
+pub(crate) fn resolve_oop_thread_finish(
+    thread_result: BlockingThreadFinish,
+) -> anyhow::Result<anyhow::Result<()>> {
+    match thread_result {
+        BlockingThreadFinish::Clean => Ok(Ok(())),
+        BlockingThreadFinish::Failed(error)
+            if error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<super::oop_muxer::MuxerSubprocessFinishError>()
+                    .is_some_and(super::oop_muxer::MuxerSubprocessFinishError::child_reaped)
+            }) =>
+        {
+            Ok(Err(anyhow::Error::new(OopMediaFailureAfterJoin::new(
+                error,
+            ))))
+        }
+        BlockingThreadFinish::Failed(error) | BlockingThreadFinish::TimedOut(error) => Err(error),
+    }
+}
+
 #[cfg(any(test, target_os = "macos", windows))]
 fn join_blocking_thread(
     handle: std::thread::JoinHandle<anyhow::Result<()>>,
@@ -317,7 +352,10 @@ fn join_blocking_thread(
 ) -> anyhow::Result<()> {
     match handle.join() {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) => Err(anyhow!("{label} returned error: {error:#}")),
+        Ok(Err(error)) => {
+            let message = format!("{label} returned error: {error:#}");
+            Err(error.context(message))
+        }
         Err(panic_payload) => Err(anyhow!("{label} panicked during finish: {panic_payload:?}")),
     }
 }
@@ -2620,7 +2658,10 @@ fn resolve_pipeline_completion(
         (Err(error), _) | (_, Err(error)) => Err(error),
         (_, Ok(Ok(()))) if stop_signal.user_stopped() => Ok(()),
         (_, Ok(Ok(()))) => Ok(()),
-        (_, Ok(Err(error))) => Err(anyhow!("Muxer finish failed: {error:#}")),
+        (_, Ok(Err(error))) => {
+            let message = format!("Muxer finish failed: {error:#}");
+            Err(error.context(message))
+        }
     }
 }
 
@@ -3889,6 +3930,11 @@ pub struct FinishedOutputPipeline {
     pub audio_gap_summary: Option<AudioGapSummary>,
 }
 
+pub(crate) struct OutputPipelineStopOutcome {
+    pub(crate) finished: FinishedOutputPipeline,
+    pub(crate) media_error: Option<anyhow::Error>,
+}
+
 #[derive(Clone, Default)]
 pub struct PipelineStopSignal {
     user_stopped: Arc<AtomicBool>,
@@ -3944,19 +3990,35 @@ impl OutputPipeline {
         &self.path
     }
 
-    pub async fn stop(mut self) -> anyhow::Result<FinishedOutputPipeline> {
+    pub async fn stop(self) -> anyhow::Result<FinishedOutputPipeline> {
+        let outcome = self.stop_with_outcome().await?;
+        match outcome.media_error {
+            Some(error) => Err(error),
+            None => Ok(outcome.finished),
+        }
+    }
+
+    pub(crate) async fn stop_with_outcome(mut self) -> anyhow::Result<OutputPipelineStopOutcome> {
         drop(self.stop_token.take());
 
-        if self.joined_stop {
+        let media_error = if self.joined_stop {
             match self.done_fut.clone().await {
-                Err(error) if error.is_caused_by::<PipelineStoppedByUser>() => {}
-                result => result?,
+                Err(error) if error.is_caused_by::<PipelineStoppedByUser>() => None,
+                Err(error) if error.is_caused_by::<OopMediaFailureAfterJoin>() => {
+                    Some(anyhow::Error::new(error))
+                }
+                Err(error) => return Err(error.into()),
+                Ok(()) => None,
             }
         } else {
             const PIPELINE_STOP_TIMEOUT: Duration = Duration::from_secs(10);
             match tokio::time::timeout(PIPELINE_STOP_TIMEOUT, self.done_fut.clone()).await {
-                Ok(Err(error)) if error.is_caused_by::<PipelineStoppedByUser>() => {}
-                Ok(res) => res?,
+                Ok(Err(error)) if error.is_caused_by::<PipelineStoppedByUser>() => None,
+                Ok(Err(error)) if error.is_caused_by::<OopMediaFailureAfterJoin>() => {
+                    Some(anyhow::Error::new(error))
+                }
+                Ok(Err(error)) => return Err(error.into()),
+                Ok(Ok(())) => None,
                 Err(_) => {
                     return Err(anyhow!(
                         "Pipeline stop timed out after {}s — tasks may still be running",
@@ -3964,7 +4026,7 @@ impl OutputPipeline {
                     ));
                 }
             }
-        }
+        };
 
         let first_timestamp = match tokio::time::timeout(
             Duration::from_secs(1),
@@ -3985,13 +4047,16 @@ impl OutputPipeline {
             }
         };
 
-        Ok(FinishedOutputPipeline {
-            path: self.path,
-            first_timestamp,
-            video_info: self.video_info,
-            video_frame_count: self.video_frame_count.load(Ordering::Acquire),
-            video_timestamp_span: self.video_timestamp_span.get(),
-            audio_gap_summary: self.audio_gap_summary.get().copied(),
+        Ok(OutputPipelineStopOutcome {
+            finished: FinishedOutputPipeline {
+                path: self.path,
+                first_timestamp,
+                video_info: self.video_info,
+                video_frame_count: self.video_frame_count.load(Ordering::Acquire),
+                video_timestamp_span: self.video_timestamp_span.get(),
+                audio_gap_summary: self.audio_gap_summary.get().copied(),
+            },
+            media_error,
         })
     }
 
@@ -6806,6 +6871,51 @@ mod tests {
                     panic!("expected failure, got timeout: {error:#}");
                 }
             }
+        }
+
+        #[test]
+        fn reaped_subprocess_failure_is_media_error_only_after_thread_join() {
+            let handle = std::thread::spawn(|| {
+                Err(anyhow::Error::new(
+                    crate::output_pipeline::oop_muxer::MuxerSubprocessFinishError::Reaped(
+                        crate::output_pipeline::oop_muxer::MuxerSubprocessError::Crashed(
+                            "test subprocess exit".into(),
+                        ),
+                    ),
+                ))
+            });
+            let thread_result =
+                wait_for_blocking_thread_finish(handle, Duration::from_millis(100), "test-worker");
+            let media_error = resolve_oop_thread_finish(thread_result)
+                .expect("joined worker failure should use the media result")
+                .expect_err("reaped subprocess failure should remain visible");
+
+            assert!(
+                media_error
+                    .chain()
+                    .any(|cause| cause.downcast_ref::<OopMediaFailureAfterJoin>().is_some())
+            );
+        }
+
+        #[test]
+        fn unconfirmed_subprocess_failure_is_not_joined_media_error() {
+            let handle = std::thread::spawn(|| {
+                Err(anyhow::Error::new(
+                    crate::output_pipeline::oop_muxer::MuxerSubprocessFinishError::Unconfirmed(
+                        anyhow!("wait failed"),
+                    ),
+                ))
+            });
+            let thread_result =
+                wait_for_blocking_thread_finish(handle, Duration::from_millis(100), "test-worker");
+            let error = resolve_oop_thread_finish(thread_result)
+                .expect_err("unconfirmed subprocess must use the outer error");
+
+            assert!(
+                !error
+                    .chain()
+                    .any(|cause| cause.downcast_ref::<OopMediaFailureAfterJoin>().is_some())
+            );
         }
 
         #[test]

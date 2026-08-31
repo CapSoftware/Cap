@@ -18,7 +18,6 @@ use cap_recording::{
     sources::screen_capture::ScreenCaptureTarget,
     studio_recording,
 };
-#[cfg(any(target_os = "linux", windows))]
 use futures_util::FutureExt as _;
 use kameo::{Actor, actor::ActorRef};
 
@@ -478,15 +477,24 @@ where
     (true, result)
 }
 
-#[cfg(any(windows, all(target_os = "linux", test)))]
+#[cfg(any(target_os = "macos", windows, test))]
 async fn finish_after_capture_stop<T, F>(
-    stop: impl Future<Output = anyhow::Result<T>>,
+    stop: impl Future<Output = (bool, anyhow::Result<T>)>,
     finalize: impl FnOnce(T) -> F,
 ) -> (bool, anyhow::Result<PathBuf>)
 where
     F: Future<Output = anyhow::Result<PathBuf>>,
 {
-    match stop.await {
+    let (capture_stopped, result) = stop.await;
+    if !capture_stopped {
+        return (
+            false,
+            Err(result.err().unwrap_or_else(|| {
+                anyhow!("Studio capture cleanup is unconfirmed; local files preserved")
+            })),
+        );
+    }
+    match result {
         Ok(completed) => {
             let result = std::panic::AssertUnwindSafe(finalize(completed))
                 .catch_unwind()
@@ -498,7 +506,7 @@ where
                 });
             (true, result)
         }
-        Err(error) => (false, Err(error)),
+        Err(error) => (true, Err(error)),
     }
 }
 
@@ -628,23 +636,30 @@ impl ActiveRecording {
         }))
     }
 
-    #[cfg(windows)]
-    pub fn clean_windows_studio_stop_handle(&self) -> Option<CaptureStopFuture> {
+    #[cfg(any(target_os = "macos", windows))]
+    pub fn clean_studio_stop_handle(&self) -> Option<CaptureStopFuture> {
         let Handle::Studio(handle) = &self.handle else {
             return None;
         };
         let handle = handle.clone();
         Some(Box::pin(async move {
             let capture_target = handle.capture_target.clone();
-            finish_after_capture_stop(handle.stop(), |completed| {
-                finalize_studio(completed, capture_target)
-            })
+            finish_after_capture_stop(
+                async move {
+                    let outcome = handle.stop_with_outcome().await;
+                    (
+                        outcome.capture_stopped,
+                        outcome.result.map_err(anyhow::Error::msg),
+                    )
+                },
+                |completed| finalize_studio(completed, capture_target),
+            )
             .await
         }))
     }
 
-    #[cfg(windows)]
-    pub fn windows_studio_delete_handle(&self) -> Option<CaptureStopFuture> {
+    #[cfg(any(target_os = "macos", windows))]
+    pub fn studio_delete_handle(&self) -> Option<CaptureStopFuture> {
         let Handle::Studio(handle) = &self.handle else {
             return None;
         };
@@ -663,7 +678,7 @@ impl ActiveRecording {
                 );
             }
             if let Err(error) = report.result {
-                return (false, Err(anyhow!(error)));
+                return (true, Err(anyhow!(error)));
             }
             let output = directory.clone();
             let result = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&directory))
@@ -745,7 +760,15 @@ impl ActiveRecording {
         {
             Handle::Studio(handle) => {
                 let handle = handle.clone();
-                Box::pin(async move { handle.stop().await.map(|_| ()) })
+                return Box::pin(async move {
+                    let outcome = handle.stop_with_outcome().await;
+                    (
+                        outcome.capture_stopped,
+                        outcome.result.map_err(anyhow::Error::msg).and_then(|_| {
+                            Err(anyhow!("Recording pipeline failed; local files preserved"))
+                        }),
+                    )
+                });
             }
             Handle::Instant(handle) => {
                 let handle = handle.clone();
@@ -822,7 +845,7 @@ impl ActiveRecording {
         let _operation = self.instant_operation.lock().await;
         let result = match &self.handle {
             Handle::Studio(handle) => {
-                #[cfg(windows)]
+                #[cfg(any(target_os = "macos", windows))]
                 {
                     let report = handle
                         .stop_with_intent(studio_recording::StudioStopIntent::Discard)
@@ -834,7 +857,7 @@ impl ActiveRecording {
                     }
                     report.result.map(|_| ()).map_err(anyhow::Error::msg)
                 }
-                #[cfg(not(windows))]
+                #[cfg(not(any(target_os = "macos", windows)))]
                 handle.cancel().await
             }
             Handle::Instant(handle) => {
@@ -3088,14 +3111,14 @@ mod tests {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod capture_stop_contract_tests {
     use super::*;
 
     #[tokio::test]
     async fn failed_capture_stop_retains_retry_and_never_runs_finalization() {
         let (stopped, result) = finish_after_capture_stop(
-            async { anyhow::bail!("cleanup unconfirmed") },
+            async { (false, Err(anyhow!("cleanup unconfirmed"))) },
             |(): ()| async { panic!("Failed capture must not finalize") },
         )
         .await;
@@ -3110,7 +3133,7 @@ mod capture_stop_contract_tests {
 
     #[tokio::test]
     async fn failed_finalization_after_confirmed_capture_stop_is_safe_to_release() {
-        let (stopped, result) = finish_after_capture_stop(async { Ok(()) }, |()| async {
+        let (stopped, result) = finish_after_capture_stop(async { (true, Ok(())) }, |()| async {
             anyhow::bail!("remux failed")
         })
         .await;
@@ -3130,16 +3153,17 @@ mod capture_stop_contract_tests {
                 .await
                 .is_err()
         );
-        stop_tx.send(Ok(())).unwrap();
+        stop_tx.send((true, Ok(()))).unwrap();
         let (stopped, result) = future.await;
         assert!(stopped);
         assert_eq!(result.unwrap(), PathBuf::from("saved-project"));
     }
     #[tokio::test]
     async fn finalization_panic_preserves_the_successful_capture_stop_acknowledgement() {
-        let (stopped, result) =
-            finish_after_capture_stop(async { Ok(()) }, |()| async { panic!("post-stop failure") })
-                .await;
+        let (stopped, result) = finish_after_capture_stop(async { (true, Ok(())) }, |()| async {
+            panic!("post-stop failure")
+        })
+        .await;
         assert!(stopped);
         assert!(
             result
@@ -3147,6 +3171,27 @@ mod capture_stop_contract_tests {
                 .to_string()
                 .contains("after capture stopped")
         );
+    }
+
+    #[tokio::test]
+    async fn confirmed_media_failure_releases_capture_without_finalizing() {
+        let (stopped, result) = finish_after_capture_stop(
+            async { (true, Err(anyhow!("encoder exited after truncated media"))) },
+            |(): ()| async { panic!("Failed media must not finalize") },
+        )
+        .await;
+        assert!(stopped);
+        assert!(result.unwrap_err().to_string().contains("truncated media"));
+    }
+
+    #[tokio::test]
+    async fn successful_media_without_capture_acknowledgement_cannot_finalize() {
+        let (stopped, result) = finish_after_capture_stop(async { (false, Ok(())) }, |()| async {
+            panic!("Unconfirmed capture must not finalize")
+        })
+        .await;
+        assert!(!stopped);
+        assert!(result.unwrap_err().to_string().contains("unconfirmed"));
     }
 }
 
@@ -3562,7 +3607,7 @@ mod windows_studio_stop_tests {
     async fn studio_stop_error_never_finalizes_or_acknowledges_cleanup() {
         let called = std::sync::atomic::AtomicBool::new(false);
         let (acknowledged, result) = finish_after_capture_stop(
-            async { Err::<(), _>(anyhow!("encoder join timed out")) },
+            async { (false, Err::<(), _>(anyhow!("encoder join timed out"))) },
             |_| async {
                 called.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(PathBuf::new())
@@ -3581,10 +3626,11 @@ mod windows_studio_stop_tests {
 
     #[tokio::test]
     async fn healthy_studio_stop_retains_existing_finalization() {
-        let (acknowledged, result) = finish_after_capture_stop(async { Ok(()) }, |_| async {
-            Ok(PathBuf::from("preserved.cap"))
-        })
-        .await;
+        let (acknowledged, result) =
+            finish_after_capture_stop(async { (true, Ok(())) }, |_| async {
+                Ok(PathBuf::from("preserved.cap"))
+            })
+            .await;
         assert!(acknowledged);
         assert_eq!(result.unwrap(), PathBuf::from("preserved.cap"));
     }

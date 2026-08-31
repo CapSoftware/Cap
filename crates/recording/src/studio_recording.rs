@@ -49,6 +49,8 @@ use tracing::{Instrument, debug, error_span, info, trace, warn};
 
 const COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_WIDTH: u32 = 1600;
 const COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_HEIGHT: u32 = 1000;
+const UNCONFIRMED_CAPTURE_CLEANUP: &str =
+    "Studio capture cleanup is unconfirmed; local recording preserved";
 
 fn camera_active_max_capture_size(
     quality: crate::StudioQuality,
@@ -83,6 +85,35 @@ enum ActorState {
     },
 }
 
+#[derive(Clone)]
+struct TerminalStopFailure {
+    capture_stopped: bool,
+    error: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Studio capture stopped with unusable media: {source:#}")]
+struct StudioCaptureStoppedError {
+    #[source]
+    source: anyhow::Error,
+}
+
+impl StudioCaptureStoppedError {
+    fn new(source: anyhow::Error) -> Self {
+        Self { source }
+    }
+}
+
+fn studio_capture_stopped(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<StudioCaptureStoppedError>().is_some())
+}
+
+fn minimum_segment_stop_deadline(discard: bool, segment_start: Instant) -> Option<Instant> {
+    (!discard).then(|| segment_start + Duration::from_secs(1))
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StudioQuiescence {
@@ -91,7 +122,7 @@ pub enum StudioQuiescence {
     Unconfirmed,
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StudioStopIntent {
     Preserve,
@@ -222,7 +253,13 @@ impl Drop for StudioLifetimeOwner {
     }
 }
 
-#[cfg(windows)]
+#[derive(Clone)]
+pub struct StudioStopOutcome {
+    pub capture_stopped: bool,
+    pub result: Result<CompletedRecording, String>,
+}
+
+#[cfg(any(target_os = "macos", windows))]
 #[derive(Clone)]
 pub struct WindowsStudioStopReport {
     pub accepted_intent: bool,
@@ -230,7 +267,7 @@ pub struct WindowsStudioStopReport {
     pub result: Result<CompletedRecording, String>,
 }
 
-#[cfg(windows)]
+#[cfg(any(target_os = "macos", windows))]
 #[derive(Default)]
 struct WindowsStudioTerminal {
     result: tokio::sync::Mutex<Option<(StudioStopIntent, WindowsStudioStopReport)>>,
@@ -242,9 +279,9 @@ struct WindowsStudioTerminal {
 pub struct ActorHandle {
     #[cfg(target_os = "linux")]
     lifecycle: StudioLifecycle,
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     recording_dir: PathBuf,
-    #[cfg(windows)]
+    #[cfg(any(target_os = "macos", windows))]
     terminal: Arc<WindowsStudioTerminal>,
     actor_ref: kameo::actor::ActorRef<Actor>,
     pub capture_target: screen_capture::ScreenCaptureTarget,
@@ -258,6 +295,8 @@ pub struct Actor {
     lifetime: StudioLifetimeOwner,
     recording_dir: PathBuf,
     state: Option<ActorState>,
+    all_tracks_stopped: bool,
+    terminal_stop_failure: Option<TerminalStopFailure>,
     #[cfg(windows)]
     cancel_error: Option<String>,
     segment_factory: SegmentPipelineFactory,
@@ -317,7 +356,11 @@ impl Actor {
         let stopped = pipeline.stop().await;
         #[cfg(windows)]
         let stopped = stopped.map_err(|error| self.preserve_windows_stop_failure(error));
-        let mut pipeline = stopped?;
+        let PipelineStopOutcome {
+            mut pipeline,
+            media_error,
+            all_tracks_stopped,
+        } = stopped?;
 
         tracing::info!("pipeline shutdown");
 
@@ -332,7 +375,13 @@ impl Actor {
                         "Cursor shutdown acknowledgement failed: {_error}"
                     )));
                     #[cfg(not(windows))]
-                    None
+                    if media_error.is_some() {
+                        return Err(anyhow!(
+                            "Cursor shutdown acknowledgement failed after media finalization error: {_error}"
+                        ));
+                    } else {
+                        None
+                    }
                 }
             }
         } else {
@@ -374,6 +423,15 @@ impl Actor {
             camera_device_id,
             mic_device_id,
         });
+        self.all_tracks_stopped &= all_tracks_stopped;
+
+        if let Some(error) = media_error {
+            if self.all_tracks_stopped {
+                return Err(anyhow::Error::new(StudioCaptureStoppedError::new(error)));
+            }
+            let message = format!("{UNCONFIRMED_CAPTURE_CLEANUP}: {error:#}");
+            return Err(error.context(message));
+        }
 
         Ok(cursors)
     }
@@ -390,14 +448,32 @@ impl Actor {
 
     #[cfg(windows)]
     fn preserve_windows_stop_failure(&mut self, error: anyhow::Error) -> anyhow::Error {
+        self.preserve_failure_evidence(error)
+    }
+
+    fn preserve_failure_evidence(&mut self, error: anyhow::Error) -> anyhow::Error {
         let error = match persist_failed_recording(&self.recording_dir, &format!("{error:#}")) {
             Ok(()) => error,
             Err(persist) => error.context(format!(
                 "Could not persist failed Studio metadata: {persist:#}"
             )),
         };
+        #[cfg(windows)]
         self.cancel_error
             .get_or_insert_with(|| format!("{error:#}"));
+        error
+    }
+
+    fn preserve_terminal_stop_failure(
+        &mut self,
+        error: anyhow::Error,
+        capture_stopped: bool,
+    ) -> anyhow::Error {
+        let error = self.preserve_failure_evidence(error);
+        self.terminal_stop_failure = Some(TerminalStopFailure {
+            capture_stopped,
+            error: format!("{error:#}"),
+        });
         error
     }
 
@@ -406,14 +482,28 @@ impl Actor {
             let _ = self.completion_tx.send(Some(Ok(())));
         }
     }
-}
 
-impl Message<Stop> for Actor {
-    type Reply = anyhow::Result<CompletedRecording>;
-
-    async fn handle(&mut self, _: Stop, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+    async fn handle_stop(
+        &mut self,
+        discard: bool,
+        ctx: &mut Context<Self, anyhow::Result<CompletedRecording>>,
+    ) -> anyhow::Result<CompletedRecording> {
         #[cfg(target_os = "linux")]
         self.cancel_resume().await?;
+        if let Some(failure) = self.terminal_stop_failure.as_ref() {
+            let error = anyhow!(failure.error.clone());
+            if failure.capture_stopped && self.all_tracks_stopped {
+                let error = anyhow::Error::new(StudioCaptureStoppedError::new(error));
+                let error = match ctx.actor_ref().stop_gracefully().await {
+                    Ok(()) => error,
+                    Err(stop_error) => error.context(format!(
+                        "Studio actor stop acknowledgement failed: {stop_error}"
+                    )),
+                };
+                return Err(error);
+            }
+            return Err(error);
+        }
         let cursors = match self.state.take() {
             Some(ActorState::Recording {
                 pipeline,
@@ -421,19 +511,40 @@ impl Message<Stop> for Actor {
                 segment_start_instant,
                 ..
             }) => {
-                // Wait for minimum segment duration
-                tokio::time::sleep_until((segment_start_instant + Duration::from_secs(1)).into())
-                    .await;
+                if let Some(deadline) =
+                    minimum_segment_stop_deadline(discard, segment_start_instant)
+                {
+                    tokio::time::sleep_until(deadline.into()).await;
+                }
 
-                let (cursors, _) = self.stop_pipeline(pipeline, segment_start_time).await?;
-
-                cursors
+                match self.stop_pipeline(pipeline, segment_start_time).await {
+                    Ok((cursors, _)) => cursors,
+                    Err(error) if studio_capture_stopped(&error) => {
+                        let error = self.preserve_failure_evidence(error);
+                        let error = match ctx.actor_ref().stop_gracefully().await {
+                            Ok(()) => error,
+                            Err(stop_error) => error.context(format!(
+                                "Studio actor stop acknowledgement failed: {stop_error}"
+                            )),
+                        };
+                        return Err(error);
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             Some(ActorState::Paused { cursors, .. }) => cursors,
             _ => return Err(anyhow!("Not recording")),
         };
 
-        ctx.actor_ref().stop_gracefully().await?;
+        if let Err(stop_error) = ctx.actor_ref().stop_gracefully().await {
+            let error = anyhow!("Studio actor stop acknowledgement failed: {stop_error}");
+            let error = if self.all_tracks_stopped {
+                anyhow::Error::new(StudioCaptureStoppedError::new(error))
+            } else {
+                error
+            };
+            return Err(self.preserve_failure_evidence(error));
+        }
 
         #[cfg(target_os = "linux")]
         let known_failure = {
@@ -446,6 +557,14 @@ impl Message<Stop> for Actor {
         let known_failure = self.windows_failure();
         #[cfg(not(any(target_os = "linux", windows)))]
         let known_failure = None;
+        let known_failure = if self.all_tracks_stopped {
+            known_failure
+        } else {
+            Some(match known_failure {
+                Some(error) => format!("{UNCONFIRMED_CAPTURE_CLEANUP}: {error}"),
+                None => UNCONFIRMED_CAPTURE_CLEANUP.to_string(),
+            })
+        };
 
         let recording = stop_recording(
             self.recording_dir.clone(),
@@ -455,11 +574,50 @@ impl Message<Stop> for Actor {
             self.display_notch,
             known_failure,
         )
-        .await?;
+        .await;
+        let recording = match recording {
+            Ok(recording) => recording,
+            Err(error) => {
+                let error = if self.all_tracks_stopped {
+                    anyhow::Error::new(StudioCaptureStoppedError::new(error))
+                } else {
+                    error
+                };
+                return Err(self.preserve_failure_evidence(error));
+            }
+        };
+
+        if !self.all_tracks_stopped {
+            return Err(self.preserve_failure_evidence(anyhow!(UNCONFIRMED_CAPTURE_CLEANUP)));
+        }
 
         self.notify_completion_ok();
 
         Ok(recording)
+    }
+}
+
+impl Message<Stop> for Actor {
+    type Reply = anyhow::Result<CompletedRecording>;
+
+    async fn handle(&mut self, _: Stop, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        self.handle_stop(false, ctx).await
+    }
+}
+
+struct StopWithIntent {
+    discard: bool,
+}
+
+impl Message<StopWithIntent> for Actor {
+    type Reply = anyhow::Result<CompletedRecording>;
+
+    async fn handle(
+        &mut self,
+        message: StopWithIntent,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_stop(message.discard, ctx).await
     }
 }
 
@@ -471,26 +629,38 @@ impl Message<Pause> for Actor {
     async fn handle(&mut self, _: Pause, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
         #[cfg(target_os = "linux")]
         self.cancel_resume().await?;
-        self.state = match self.state.take() {
+        match self.state.take() {
             Some(ActorState::Recording {
                 pipeline,
                 segment_start_time,
                 index,
                 ..
             }) => {
-                let (cursors, next_cursor_id) = self
+                let stopped = self
                     .stop_pipeline(pipeline, segment_start_time)
                     .await
-                    .context("stop_pipeline")?;
-
-                Some(ActorState::Paused {
-                    next_index: index + 1,
-                    cursors,
-                    next_cursor_id,
-                })
+                    .context("stop_pipeline");
+                match stopped {
+                    Ok((cursors, next_cursor_id)) if self.all_tracks_stopped => {
+                        self.state = Some(ActorState::Paused {
+                            next_index: index + 1,
+                            cursors,
+                            next_cursor_id,
+                        });
+                    }
+                    Ok(_) => {
+                        let error = anyhow!(UNCONFIRMED_CAPTURE_CLEANUP);
+                        return Err(self.preserve_terminal_stop_failure(error, false));
+                    }
+                    Err(error) => {
+                        let capture_stopped = studio_capture_stopped(&error);
+                        let error = self.preserve_terminal_stop_failure(error, capture_stopped);
+                        return Err(error);
+                    }
+                }
             }
-            state => state,
-        };
+            state => self.state = state,
+        }
 
         Ok(())
     }
@@ -682,6 +852,9 @@ impl Message<Resume> for Actor {
     type Reply = anyhow::Result<futures::future::BoxFuture<'static, anyhow::Result<()>>>;
 
     async fn handle(&mut self, _: Resume, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        if !self.all_tracks_stopped {
+            bail!(UNCONFIRMED_CAPTURE_CLEANUP);
+        }
         if self
             .completion_tx
             .borrow()
@@ -789,6 +962,9 @@ impl Message<Resume> for Actor {
     type Reply = anyhow::Result<()>;
 
     async fn handle(&mut self, _: Resume, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        if !self.all_tracks_stopped {
+            bail!(UNCONFIRMED_CAPTURE_CLEANUP);
+        }
         self.state = match self.state.take() {
             Some(ActorState::Paused {
                 next_index,
@@ -827,18 +1003,40 @@ impl Message<Cancel> for Actor {
     async fn handle(&mut self, _: Cancel, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
         #[cfg(target_os = "linux")]
         self.cancel_resume().await?;
+        if let Some(failure) = self.terminal_stop_failure.as_ref() {
+            bail!("Previous Studio stop failed: {}", failure.error);
+        }
         #[cfg(windows)]
         if let Some(error) = &self.cancel_error {
             bail!("Previous capture cancellation failed: {error}");
         }
         if let Some(ActorState::Recording { pipeline, .. }) = self.state.take() {
-            if let Err(e) = pipeline.stop().await {
-                #[cfg(windows)]
-                {
-                    return Err(self.preserve_windows_stop_failure(e));
+            let stopped = match pipeline.stop().await {
+                Ok(stopped) => stopped,
+                Err(error) => {
+                    let error = error.context("Pipeline stop failed during Studio cancellation");
+                    return Err(self.preserve_terminal_stop_failure(error, false));
                 }
-                #[cfg(not(windows))]
-                warn!("Pipeline stop error during cancel: {e:#}");
+            };
+            let PipelineStopOutcome {
+                mut media_error,
+                all_tracks_stopped,
+                ..
+            } = stopped;
+            self.all_tracks_stopped &= all_tracks_stopped;
+            if !self.all_tracks_stopped {
+                let error = match media_error.take() {
+                    Some(error) => {
+                        let message = format!("{UNCONFIRMED_CAPTURE_CLEANUP}: {error:#}");
+                        error.context(message)
+                    }
+                    None => anyhow!(UNCONFIRMED_CAPTURE_CLEANUP),
+                };
+                return Err(self.preserve_terminal_stop_failure(error, false));
+            }
+            if let Some(error) = media_error {
+                let error = error.context("Studio cancellation found unusable media");
+                return Err(self.preserve_terminal_stop_failure(error, false));
             }
 
             #[cfg(windows)]
@@ -960,6 +1158,32 @@ struct FinishedPipeline {
     pub system_audio: Option<FinishedOutputPipeline>,
     pub cursor: Option<CursorPipeline>,
     pub track_failures: Vec<TrackFailureRecord>,
+}
+
+struct PipelineStopOutcome {
+    pipeline: FinishedPipeline,
+    media_error: Option<anyhow::Error>,
+    all_tracks_stopped: bool,
+}
+
+fn classify_pipeline_stop_errors(
+    stop_errors: &[String],
+    media_errors: &[String],
+) -> anyhow::Result<Option<anyhow::Error>> {
+    if !media_errors.is_empty() && !stop_errors.is_empty() {
+        bail!(
+            "Studio media failed after one producer stopped, but other capture cleanup is unconfirmed: {}; media errors: {}",
+            stop_errors.join("; "),
+            media_errors.join("; ")
+        );
+    }
+
+    Ok((!media_errors.is_empty()).then(|| {
+        anyhow!(
+            "Studio media finalization failed after all capture producers stopped: {}",
+            media_errors.join("; ")
+        )
+    }))
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -1125,30 +1349,30 @@ impl Pipeline {
         })
     }
 
-    pub async fn stop(mut self) -> anyhow::Result<FinishedPipeline> {
+    pub async fn stop(mut self) -> anyhow::Result<PipelineStopOutcome> {
         #[cfg(any(target_os = "linux", windows))]
         self.stopping
             .store(true, std::sync::atomic::Ordering::Release);
         #[cfg(target_os = "macos")]
         let (screen, microphone, camera, system_audio) = {
             let (microphone, camera, (screen, system_audio)) = futures::join!(
-                OptionFuture::from(self.microphone.map(|s| s.stop())),
-                OptionFuture::from(self.camera.map(|s| s.stop())),
+                OptionFuture::from(self.microphone.map(|s| s.stop_with_outcome())),
+                OptionFuture::from(self.camera.map(|s| s.stop_with_outcome())),
                 async {
                     // These sources share a capturer; only the first stop awaits its native acknowledgement.
                     let system_audio =
-                        OptionFuture::from(self.system_audio.map(|s| s.stop())).await;
-                    (self.screen.stop().await, system_audio)
+                        OptionFuture::from(self.system_audio.map(|s| s.stop_with_outcome())).await;
+                    (self.screen.stop_with_outcome().await, system_audio)
                 }
             );
             (screen, microphone, camera, system_audio)
         };
         #[cfg(not(target_os = "macos"))]
         let (screen, microphone, camera, system_audio) = futures::join!(
-            self.screen.stop(),
-            OptionFuture::from(self.microphone.map(|s| s.stop())),
-            OptionFuture::from(self.camera.map(|s| s.stop())),
-            OptionFuture::from(self.system_audio.map(|s| s.stop()))
+            self.screen.stop_with_outcome(),
+            OptionFuture::from(self.microphone.map(|s| s.stop_with_outcome())),
+            OptionFuture::from(self.camera.map(|s| s.stop_with_outcome())),
+            OptionFuture::from(self.system_audio.map(|s| s.stop_with_outcome()))
         );
 
         if let Some(cursor) = self.cursor.as_mut() {
@@ -1159,62 +1383,110 @@ impl Pipeline {
             && let Err(error) = watcher_task.await
         {
             warn!(error = %error, "Studio recording watcher task ended unexpectedly");
-            #[cfg(any(target_os = "linux", windows))]
             return Err(anyhow!(
                 "Studio recording watcher acknowledgement failed: {error}"
             ));
         }
 
+        let stop_errors = [
+            ("display", screen.as_ref().err()),
+            (
+                "microphone",
+                microphone.as_ref().and_then(|result| result.as_ref().err()),
+            ),
+            (
+                "camera",
+                camera.as_ref().and_then(|result| result.as_ref().err()),
+            ),
+            (
+                "system audio",
+                system_audio
+                    .as_ref()
+                    .and_then(|result| result.as_ref().err()),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(track, error)| error.map(|error| format!("{track}: {error:#}")))
+        .collect::<Vec<_>>();
+
+        let media_errors = [
+            (
+                "display",
+                screen
+                    .as_ref()
+                    .ok()
+                    .and_then(|outcome| outcome.media_error.as_ref()),
+            ),
+            (
+                "microphone",
+                microphone
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .and_then(|outcome| outcome.media_error.as_ref()),
+            ),
+            (
+                "camera",
+                camera
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .and_then(|outcome| outcome.media_error.as_ref()),
+            ),
+            (
+                "system audio",
+                system_audio
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .and_then(|outcome| outcome.media_error.as_ref()),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(track, error)| error.map(|error| format!("{track}: {error:#}")))
+        .collect::<Vec<_>>();
+
+        let media_error = classify_pipeline_stop_errors(&stop_errors, &media_errors)?;
+
         #[cfg(windows)]
-        {
-            let errors = [
-                ("display", screen.as_ref().err()),
-                (
-                    "microphone",
-                    microphone.as_ref().and_then(|result| result.as_ref().err()),
-                ),
-                (
-                    "camera",
-                    camera.as_ref().and_then(|result| result.as_ref().err()),
-                ),
-                (
-                    "system audio",
-                    system_audio
-                        .as_ref()
-                        .and_then(|result| result.as_ref().err()),
-                ),
-            ]
-            .into_iter()
-            .filter_map(|(track, error)| error.map(|error| format!("{track}: {error:#}")))
-            .collect::<Vec<_>>();
-            if !errors.is_empty() {
-                bail!(
-                    "Requested Studio track stop failed; capture cleanup is unconfirmed: {}",
-                    errors.join("; ")
-                );
-            }
+        if !stop_errors.is_empty() {
+            bail!(
+                "Requested Studio track stop failed; capture cleanup is unconfirmed: {}",
+                stop_errors.join("; ")
+            );
         }
 
-        Ok(FinishedPipeline {
-            start_time: self.start_time,
-            screen: screen.context("display")?,
-            microphone: finalize_optional_track(
-                RecordingTrackKind::Microphone,
-                microphone.transpose(),
-                &self.track_failures,
-            ),
-            camera: finalize_optional_track(
-                RecordingTrackKind::Camera,
-                camera.transpose(),
-                &self.track_failures,
-            ),
-            system_audio: finalize_optional_track(
-                RecordingTrackKind::SystemAudio,
-                system_audio.transpose(),
-                &self.track_failures,
-            ),
-            cursor: self.cursor,
-            track_failures: take_track_failures(&self.track_failures),
+        let microphone = microphone
+            .transpose()
+            .map(|outcome| outcome.map(|outcome| outcome.finished));
+        let camera = camera
+            .transpose()
+            .map(|outcome| outcome.map(|outcome| outcome.finished));
+        let system_audio = system_audio
+            .transpose()
+            .map(|outcome| outcome.map(|outcome| outcome.finished));
+
+        Ok(PipelineStopOutcome {
+            pipeline: FinishedPipeline {
+                start_time: self.start_time,
+                screen: screen.context("display")?.finished,
+                microphone: finalize_optional_track(
+                    RecordingTrackKind::Microphone,
+                    microphone,
+                    &self.track_failures,
+                ),
+                camera: finalize_optional_track(
+                    RecordingTrackKind::Camera,
+                    camera,
+                    &self.track_failures,
+                ),
+                system_audio: finalize_optional_track(
+                    RecordingTrackKind::SystemAudio,
+                    system_audio,
+                    &self.track_failures,
+                ),
+                cursor: self.cursor,
+                track_failures: take_track_failures(&self.track_failures),
+            },
+            media_error,
+            all_tracks_stopped: stop_errors.is_empty(),
         })
     }
 
@@ -1351,31 +1623,58 @@ struct CursorPipeline {
 
 impl ActorHandle {
     pub async fn stop(&self) -> anyhow::Result<CompletedRecording> {
+        self.stop_with_outcome()
+            .await
+            .result
+            .map_err(anyhow::Error::msg)
+    }
+
+    pub async fn stop_with_outcome(&self) -> StudioStopOutcome {
         #[cfg(target_os = "linux")]
         {
             let report = self.stop_with_report().await;
-            if !report.accepted_intent || report.quiescence != StudioQuiescence::Joined {
-                bail!("Studio capture cleanup is unconfirmed; local recording preserved");
+            let capture_stopped =
+                report.accepted_intent && report.quiescence == StudioQuiescence::Joined;
+            let result = if capture_stopped {
+                report.result
+            } else {
+                Err(report.result.err().unwrap_or_else(|| {
+                    "Studio capture cleanup is unconfirmed; local recording preserved".into()
+                }))
+            };
+            StudioStopOutcome {
+                capture_stopped,
+                result,
             }
-            report.result.map_err(anyhow::Error::msg)
         }
-        #[cfg(windows)]
+        #[cfg(any(target_os = "macos", windows))]
         {
             let report = self.stop_with_intent(StudioStopIntent::Preserve).await;
-            if !report.accepted_intent || !report.stop_acknowledged {
-                bail!(
-                    "Studio stop is unconfirmed: {}",
-                    report
-                        .result
-                        .err()
-                        .unwrap_or_else(|| "terminal acknowledgement missing".into())
-                );
+            let capture_stopped = report.accepted_intent && report.stop_acknowledged;
+            let result = if capture_stopped {
+                report.result
+            } else {
+                Err(report.result.err().unwrap_or_else(|| {
+                    "Studio stop is unconfirmed; terminal acknowledgement missing".into()
+                }))
+            };
+            StudioStopOutcome {
+                capture_stopped,
+                result,
             }
-            report.result.map_err(anyhow::Error::msg)
         }
-        #[cfg(not(any(target_os = "linux", windows)))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
-            Ok(self.actor_ref.ask(Stop).await?)
+            let result = self.actor_ref.ask(Stop).await;
+            let capture_stopped = match &result {
+                Ok(_) => true,
+                Err(kameo::error::SendError::HandlerError(error)) => studio_capture_stopped(error),
+                Err(_) => false,
+            };
+            StudioStopOutcome {
+                capture_stopped,
+                result: result.map_err(|error| format!("{error:#}")),
+            }
         }
     }
 
@@ -1411,7 +1710,12 @@ impl ActorHandle {
                         .0
                         .terminal_started
                         .store(true, std::sync::atomic::Ordering::Release);
-                    let result = actor.ask(Stop).await.map_err(|error| format!("{error:#}"));
+                    let result = actor
+                        .ask(StopWithIntent {
+                            discard: intent == StudioStopIntent::Discard,
+                        })
+                        .await
+                        .map_err(|error| format!("{error:#}"));
                     if let Err(error) = &result {
                         lifecycle.fail(error.clone());
                     }
@@ -1448,26 +1752,26 @@ impl ActorHandle {
         })
     }
 
-    #[cfg(windows)]
+    #[cfg(any(target_os = "macos", windows))]
     pub fn same_attempt(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.terminal, &other.terminal)
     }
 
-    #[cfg(windows)]
+    #[cfg(any(target_os = "macos", windows))]
     pub fn terminal_started(&self) -> bool {
         self.terminal
             .started
             .load(std::sync::atomic::Ordering::Acquire)
     }
 
-    #[cfg(windows)]
+    #[cfg(any(target_os = "macos", windows))]
     pub fn stop_acknowledged(&self) -> bool {
         self.terminal
             .acknowledged
             .load(std::sync::atomic::Ordering::Acquire)
     }
 
-    #[cfg(windows)]
+    #[cfg(any(target_os = "macos", windows))]
     pub async fn stop_with_intent(&self, intent: StudioStopIntent) -> WindowsStudioStopReport {
         let terminal = self.terminal.clone();
         let actor = self.actor_ref.clone();
@@ -1486,7 +1790,19 @@ impl ActorHandle {
                     terminal
                         .started
                         .store(true, std::sync::atomic::Ordering::Release);
-                    let result = actor.ask(Stop).await.map_err(|error| format!("{error:#}"));
+                    let result = actor
+                        .ask(StopWithIntent {
+                            discard: intent == StudioStopIntent::Discard,
+                        })
+                        .await;
+                    let stop_acknowledged = match &result {
+                        Ok(_) => true,
+                        Err(kameo::error::SendError::HandlerError(error)) => {
+                            studio_capture_stopped(error)
+                        }
+                        Err(_) => false,
+                    };
+                    let result = result.map_err(|error| format!("{error:#}"));
                     let result = match result {
                         Err(error) => match persist_failed_recording(&recording_dir, &error) {
                             Ok(()) => Err(error),
@@ -1498,7 +1814,7 @@ impl ActorHandle {
                     };
                     let report = WindowsStudioStopReport {
                         accepted_intent: true,
-                        stop_acknowledged: result.is_ok(),
+                        stop_acknowledged,
                         result,
                     };
                     terminal.acknowledged.store(
@@ -1523,7 +1839,7 @@ impl ActorHandle {
     }
 
     pub async fn pause(&self) -> anyhow::Result<()> {
-        #[cfg(windows)]
+        #[cfg(any(target_os = "macos", windows))]
         if self.terminal_started() {
             bail!("Studio terminal cleanup already owns this attempt");
         }
@@ -1822,7 +2138,7 @@ async fn spawn_studio_recording_actor(
 
     let base_inputs = base_inputs.clone();
 
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     let actor_recording_dir = recording_dir.clone();
     let actor_ref = Actor::spawn(Actor {
         #[cfg(target_os = "linux")]
@@ -1837,6 +2153,8 @@ async fn spawn_studio_recording_actor(
             segment_start_time,
             segment_start_instant: Instant::now(),
         }),
+        all_tracks_stopped: true,
+        terminal_stop_failure: None,
         segment_factory: segment_pipeline_factory,
         #[cfg(target_os = "linux")]
         resume_attempt: None,
@@ -1852,9 +2170,9 @@ async fn spawn_studio_recording_actor(
     Ok(ActorHandle {
         #[cfg(target_os = "linux")]
         lifecycle,
-        #[cfg(any(target_os = "linux", windows))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         recording_dir: actor_recording_dir,
-        #[cfg(windows)]
+        #[cfg(any(target_os = "macos", windows))]
         terminal: Arc::new(WindowsStudioTerminal::default()),
         actor_ref,
         capture_target: base_inputs.capture_target,
@@ -2835,7 +3153,6 @@ fn current_time_f64() -> f64 {
         .as_secs_f64()
 }
 
-#[cfg(any(target_os = "linux", windows))]
 fn persist_failed_recording(recording_dir: &Path, error: &str) -> anyhow::Result<()> {
     let mut meta = RecordingMeta::load_for_project(recording_dir)
         .map_err(|error| anyhow!("load failed Studio recording metadata: {error}"))?;
@@ -2904,6 +3221,236 @@ mod tests {
         AudioMuxer, AudioSource, ChannelAudioSource, ChannelAudioSourceConfig, ChannelVideoSource,
         ChannelVideoSourceConfig, Muxer, SetupCtx, TaskPool, VideoFrame, VideoMuxer,
     };
+
+    #[test]
+    fn media_failure_requires_every_producer_stop_to_be_confirmed() {
+        let error = classify_pipeline_stop_errors(
+            &["microphone: stop timed out".into()],
+            &["display: subprocess exited".into()],
+        )
+        .expect_err("one stopped producer cannot acknowledge the whole Studio pipeline");
+
+        assert!(error.to_string().contains("cleanup is unconfirmed"));
+    }
+
+    #[test]
+    fn media_failure_remains_visible_after_every_producer_stops() {
+        let error = classify_pipeline_stop_errors(&[], &["display: subprocess exited".into()])
+            .expect("confirmed producer stops should return the media result")
+            .expect("unusable media must remain an error");
+
+        assert!(error.to_string().contains("all capture producers stopped"));
+    }
+
+    #[test]
+    fn discard_skips_the_minimum_segment_deadline() {
+        let segment_start = Instant::now();
+
+        assert_eq!(minimum_segment_stop_deadline(true, segment_start), None);
+        assert_eq!(
+            minimum_segment_stop_deadline(false, segment_start),
+            Some(segment_start + Duration::from_secs(1))
+        );
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    fn terminal_failure_handle(path: &Path) -> ActorHandle {
+        let (completion_tx, completion_rx) = watch::channel(None);
+        let target = screen_capture::ScreenCaptureTarget::CameraOnly;
+        let segment_factory = SegmentPipelineFactory::new(
+            path.join("content/segments"),
+            path.join("content/cursors"),
+            RecordingBaseInputs {
+                capture_target: target.clone(),
+                capture_system_audio: false,
+                mic_feed: None,
+                camera_feed: None,
+                #[cfg(target_os = "macos")]
+                shareable_content: None,
+                #[cfg(target_os = "macos")]
+                excluded_windows: Vec::new(),
+            },
+            false,
+            false,
+            false,
+            false,
+            30,
+            crate::StudioQuality::Balanced,
+            completion_tx.clone(),
+        );
+        let mut actor = Actor {
+            recording_dir: path.to_path_buf(),
+            state: None,
+            all_tracks_stopped: true,
+            terminal_stop_failure: None,
+            #[cfg(windows)]
+            cancel_error: None,
+            segment_factory,
+            segments: Vec::new(),
+            completion_tx,
+            display_notch: None,
+        };
+        let error = anyhow::Error::new(StudioCaptureStoppedError::new(anyhow!(
+            "pause found unusable media"
+        )));
+        let error = actor.preserve_terminal_stop_failure(error, true);
+        assert!(studio_capture_stopped(&error));
+        let actor_ref = Actor::spawn(actor);
+        ActorHandle {
+            recording_dir: path.to_path_buf(),
+            terminal: Arc::new(WindowsStudioTerminal::default()),
+            actor_ref,
+            capture_target: target,
+            done_fut: completion_rx_to_done_fut(completion_rx),
+        }
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[tokio::test]
+    async fn pause_media_failure_replays_as_acknowledged_terminal_error() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("content")).unwrap();
+        write_in_progress_meta(temp.path()).unwrap();
+        std::fs::write(temp.path().join("content/partial.m4s"), b"partial").unwrap();
+        let handle = terminal_failure_handle(temp.path());
+        assert!(matches!(
+            RecordingMeta::load_for_project(temp.path())
+                .unwrap()
+                .studio_meta()
+                .unwrap()
+                .status(),
+            StudioRecordingStatus::Failed { .. }
+        ));
+
+        let report = handle.stop_with_intent(StudioStopIntent::Preserve).await;
+        assert!(report.accepted_intent);
+        assert!(report.stop_acknowledged);
+        let error = report
+            .result
+            .err()
+            .expect("media failure must remain visible");
+        assert!(handle.stop_acknowledged());
+        assert!(matches!(
+            RecordingMeta::load_for_project(temp.path())
+                .unwrap()
+                .studio_meta()
+                .unwrap()
+                .status(),
+            StudioRecordingStatus::Failed { .. }
+        ));
+        assert_eq!(
+            std::fs::read(temp.path().join("content/partial.m4s")).unwrap(),
+            b"partial"
+        );
+
+        let replay = handle.stop_with_intent(StudioStopIntent::Preserve).await;
+        assert!(replay.accepted_intent);
+        assert!(replay.stop_acknowledged);
+        assert_eq!(replay.result.err().expect("cached media failure"), error);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn prior_unconfirmed_optional_stop_handle(path: &Path) -> ActorHandle {
+        let (completion_tx, completion_rx) = watch::channel(None);
+        let target = screen_capture::ScreenCaptureTarget::CameraOnly;
+        let segment_factory = SegmentPipelineFactory::new(
+            path.join("content/segments"),
+            path.join("content/cursors"),
+            RecordingBaseInputs {
+                capture_target: target.clone(),
+                capture_system_audio: false,
+                mic_feed: None,
+                camera_feed: None,
+                shareable_content: None,
+                excluded_windows: Vec::new(),
+            },
+            false,
+            false,
+            true,
+            false,
+            30,
+            crate::StudioQuality::Balanced,
+            completion_tx.clone(),
+        );
+        let timestamps = Timestamps::now();
+        let actor_ref = Actor::spawn(Actor {
+            recording_dir: path.to_path_buf(),
+            state: Some(ActorState::Paused {
+                next_index: 1,
+                cursors: Default::default(),
+                next_cursor_id: 0,
+            }),
+            all_tracks_stopped: false,
+            terminal_stop_failure: None,
+            segment_factory,
+            segments: vec![RecordingSegment {
+                start: 0.0,
+                end: 1.0,
+                pipeline: FinishedPipeline {
+                    start_time: timestamps,
+                    screen: test_finished_output_pipeline_at(
+                        path.join("content/partial.m4s"),
+                        Timestamp::Instant(timestamps.instant()),
+                        Some(test_video_info()),
+                        1,
+                    ),
+                    microphone: None,
+                    camera: None,
+                    system_audio: None,
+                    cursor: None,
+                    track_failures: vec![TrackFailureRecord {
+                        track: RecordingTrackKind::Camera,
+                        stage: TrackFailureStage::Stop,
+                        error: "camera encoder join timed out".into(),
+                    }],
+                },
+                camera_device_id: None,
+                mic_device_id: None,
+            }],
+            completion_tx,
+            display_notch: None,
+        });
+        ActorHandle {
+            recording_dir: path.to_path_buf(),
+            terminal: Arc::new(WindowsStudioTerminal::default()),
+            actor_ref,
+            capture_target: target,
+            done_fut: completion_rx_to_done_fut(completion_rx),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn prior_optional_join_timeout_cannot_ack_after_final_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("content")).unwrap();
+        write_in_progress_meta(temp.path()).unwrap();
+        std::fs::write(temp.path().join("content/partial.m4s"), b"partial").unwrap();
+        let handle = prior_unconfirmed_optional_stop_handle(temp.path());
+
+        let report = handle.stop_with_intent(StudioStopIntent::Preserve).await;
+        assert!(report.accepted_intent);
+        assert!(!report.stop_acknowledged);
+        let error = report.result.err().expect("unconfirmed optional stop");
+        assert!(error.contains(UNCONFIRMED_CAPTURE_CLEANUP));
+        assert!(matches!(
+            RecordingMeta::load_for_project(temp.path())
+                .unwrap()
+                .studio_meta()
+                .unwrap()
+                .status(),
+            StudioRecordingStatus::Failed { .. }
+        ));
+        assert_eq!(
+            std::fs::read(temp.path().join("content/partial.m4s")).unwrap(),
+            b"partial"
+        );
+
+        let replay = handle.stop_with_intent(StudioStopIntent::Preserve).await;
+        assert!(replay.accepted_intent);
+        assert!(!replay.stop_acknowledged);
+        assert_eq!(replay.result.err().expect("cached unconfirmed stop"), error);
+    }
 
     #[cfg(target_os = "linux")]
     mod resume_transaction_tests {
@@ -3012,6 +3559,8 @@ mod tests {
                         cursors,
                         next_cursor_id: 13,
                     }),
+                    all_tracks_stopped: true,
+                    terminal_stop_failure: None,
                     segment_factory: factory,
                     resume_attempt: None,
                     resume_generation: 0,
@@ -3589,7 +4138,8 @@ mod tests {
         let finished = stopping.await.unwrap().unwrap();
 
         assert!(screen_stopped_while_audio_waited);
-        assert!(finished.microphone.is_some());
+        assert!(finished.media_error.is_none());
+        assert!(finished.pipeline.microphone.is_some());
     }
 
     #[cfg(target_os = "macos")]
@@ -3719,11 +4269,14 @@ mod tests {
             drop(screen_tx);
             assert!(!stopping.is_finished());
             microphone_release.notify_one();
-            let finished = tokio::time::timeout(Duration::from_secs(2), stopping)
+            let stopped = tokio::time::timeout(Duration::from_secs(2), stopping)
                 .await
                 .unwrap()
                 .unwrap()
                 .unwrap();
+            assert_eq!(stopped.all_tracks_stopped, !fail_system_audio);
+            assert!(stopped.media_error.is_none());
+            let finished = stopped.pipeline;
             assert!(finished.microphone.is_some());
             assert!(finished.camera.is_some());
             finished
@@ -4456,6 +5009,8 @@ mod tests {
                         .checked_sub(Duration::from_secs(2))
                         .unwrap(),
                 }),
+                all_tracks_stopped: true,
+                terminal_stop_failure: None,
                 segment_factory,
                 segments: Vec::new(),
                 completion_tx,
@@ -4623,8 +5178,9 @@ mod tests {
             drop(screen_tx);
         }
         #[cfg(not(windows))]
-        let finished =
-            stopped.expect("display success should still allow the recording to stop cleanly");
+        let finished = stopped
+            .expect("display success should still allow the recording to stop cleanly")
+            .pipeline;
 
         #[cfg(not(windows))]
         drop(screen_tx);
@@ -4688,6 +5244,8 @@ mod windows_cancel_tests {
         Actor {
             recording_dir: PathBuf::new(),
             state: None,
+            all_tracks_stopped: true,
+            terminal_stop_failure: None,
             cancel_error: error,
             segment_factory,
             segments: Vec::new(),

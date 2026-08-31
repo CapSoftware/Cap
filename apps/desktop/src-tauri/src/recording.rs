@@ -2538,7 +2538,7 @@ async fn start_recording_prepared(
         let app = app.clone();
         let state_mtx = Arc::clone(&state_mtx);
         let project_file_path = project_file_path.clone();
-        #[cfg(any(target_os = "linux", windows))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         let instant_watch = inputs.mode == RecordingMode::Instant;
         async move {
             fail!("recording::wait_actor_done");
@@ -2565,7 +2565,7 @@ async fn start_recording_prepared(
                         return;
                     }
                 }
-                #[cfg(windows)]
+                #[cfg(any(target_os = "macos", windows))]
                 if !instant_watch {
                     let state = state_mtx.read().await;
                     if let Some(InProgressRecording::Studio { handle, common, .. }) =
@@ -2602,7 +2602,7 @@ async fn start_recording_prepared(
                 }
                 ActorDoneDisposition::UnexpectedStop { error }
                 | ActorDoneDisposition::Failed { error } => {
-                    #[cfg(any(target_os = "linux", windows))]
+                    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
                     if !instant_watch {
                         let _ = control_studio_recording(
                             &app,
@@ -3257,7 +3257,7 @@ where
     finish(report.result).await
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StudioTerminalAction {
     Stop,
@@ -3362,10 +3362,10 @@ async fn control_studio_recording(
     )
 }
 
-#[cfg(windows)]
-async fn after_windows_studio_stop<T, F>(
+#[cfg(any(target_os = "macos", windows))]
+async fn after_studio_capture_stop<T, F>(
     stop: impl std::future::Future<Output = studio_recording::WindowsStudioStopReport>,
-    finish: impl FnOnce(studio_recording::CompletedRecording) -> F,
+    finish: impl FnOnce(Result<studio_recording::CompletedRecording, String>) -> F,
 ) -> Result<T, String>
 where
     F: std::future::Future<Output = Result<T, String>>,
@@ -3383,10 +3383,10 @@ where
                 .unwrap_or_else(|| "terminal acknowledgement missing".into())
         ));
     }
-    finish(report.result?).await
+    finish(report.result).await
 }
 
-#[cfg(windows)]
+#[cfg(any(target_os = "macos", windows))]
 async fn control_studio_recording(
     app: &AppHandle,
     state: &Arc<tokio::sync::RwLock<App>>,
@@ -3420,9 +3420,9 @@ async fn control_studio_recording(
     };
     let stopping = handle.clone();
     let finishing = handle.clone();
-    let result = after_windows_studio_stop(
+    let result = after_studio_capture_stop(
         async move { stopping.stop_with_intent(intent).await },
-        |recording| async move {
+        |result| async move {
             let mut state = state.write().await;
             let current = match state.current_recording() {
                 Some(InProgressRecording::Studio {
@@ -3439,29 +3439,50 @@ async fn control_studio_recording(
             if !current {
                 return Err("Studio terminal completion is stale".into());
             }
-            if let Some(error) = failure {
-                return Err(error);
+            let outcome = match (failure, result) {
+                (Some(failure), Err(error)) => Err(format!("{failure}; {error}")),
+                (Some(error), _) => Err(error),
+                (None, result) => result,
+            };
+            let mut error = outcome.as_ref().err().cloned();
+            if discard && error.is_none() {
+                error = remove_recording_dir(&directory).await.err();
             }
-            if discard {
-                remove_recording_dir(&directory).await?;
+            #[cfg(target_os = "macos")]
+            if action == StudioTerminalAction::Restart && error.is_none() {
+                drop(state.clear_current_recording());
+                CurrentRecordingChanged.emit(app).ok();
+                return Ok(());
             }
-            let completed = if discard {
+            let completed = if let Some(error) = &error {
+                Err(error.clone())
+            } else if discard {
                 Err("Recording discarded after Studio stop acknowledgement".into())
             } else {
-                Ok(CompletedRecording::Studio {
+                outcome.map(|recording| CompletedRecording::Studio {
                     recording,
                     target_name,
                     capture_target,
                 })
             };
-            handle_recording_end_inner(
+            if let Some(error) = &error {
+                let _ = RecordingEvent::Failed {
+                    error: error.clone(),
+                }
+                .emit(app);
+            }
+            let cleanup = handle_recording_end_inner(
                 app.clone(),
                 completed,
                 &mut state,
                 directory,
-                action == StudioTerminalAction::Restart,
+                action == StudioTerminalAction::Restart && error.is_none(),
             )
-            .await
+            .await;
+            match error {
+                Some(error) => Err(error),
+                None => cleanup,
+            }
         },
     )
     .await;
@@ -3495,7 +3516,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     if crate::clean_capture::queue_stop(&app) {
         return Ok(());
     }
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     if let Some(result) =
         control_studio_recording(&app, &state, None, StudioTerminalAction::Stop, None).await
     {
@@ -3572,7 +3593,7 @@ pub async fn restart_recording(
         }
         return Box::pin(start_recording(app, state, inputs)).await;
     }
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     {
         let current = {
             let state = state.read().await;
@@ -3608,7 +3629,7 @@ pub async fn restart_recording(
                         if let Some(generation) = generation {
                             crate::clean_capture::wait_restored(&app, generation).await?;
                         }
-                        #[cfg(windows)]
+                        #[cfg(any(target_os = "macos", windows))]
                         let _ = generation;
                         Ok(())
                     },
@@ -3716,7 +3737,7 @@ pub async fn restart_recording(
     start_recording(app.clone(), state, inputs).await
 }
 
-#[cfg(any(target_os = "linux", windows, test))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows, test))]
 async fn complete_studio_restart(
     restart: impl std::future::Future<Output = Result<RecordingAction, String>> + Send + 'static,
 ) -> Result<RecordingAction, String> {
@@ -3725,7 +3746,7 @@ async fn complete_studio_restart(
         .map_err(|error| format!("Recording restart task failed: {error}"))?
 }
 
-#[cfg(any(target_os = "linux", windows, test))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows, test))]
 async fn restart_with_editor_target<C, R, S, F>(
     target: &EditorRecordingTarget,
     cleanup: C,
@@ -3762,7 +3783,7 @@ where
     result
 }
 
-#[cfg(any(target_os = "linux", windows, test))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows, test))]
 fn take_failed_restart_editor_target(
     target: &EditorRecordingTarget,
     expected: Option<&Path>,
@@ -3798,7 +3819,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
     if let Some(attempt) = linux_instant::current(&app) {
         return linux_instant::control(app, attempt, true).await;
     }
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     if let Some(result) =
         control_studio_recording(&app, &state, None, StudioTerminalAction::Discard, None).await
     {
@@ -4106,7 +4127,7 @@ async fn handle_recording_end_inner(
     {
         return Err("Studio capture cleanup is unconfirmed; active recording retained".into());
     }
-    #[cfg(windows)]
+    #[cfg(any(target_os = "macos", windows))]
     if let Some(InProgressRecording::Studio {
         handle: studio,
         common,
@@ -8098,15 +8119,15 @@ mod studio_joined_completion_tests {
     }
 }
 
-#[cfg(all(test, windows))]
-mod windows_studio_control_tests {
+#[cfg(all(test, any(target_os = "macos", windows)))]
+mod studio_capture_control_tests {
     use super::*;
 
     #[tokio::test]
     async fn studio_unconfirmed_or_losing_stop_cannot_restore_or_delete() {
         for (accepted_intent, stop_acknowledged) in [(true, false), (false, true), (false, false)] {
             let effects = std::sync::atomic::AtomicUsize::new(0);
-            let result = after_windows_studio_stop(
+            let result = after_studio_capture_stop(
                 async {
                     studio_recording::WindowsStudioStopReport {
                         accepted_intent,
@@ -8123,5 +8144,54 @@ mod windows_studio_control_tests {
             assert!(result.is_err());
             assert_eq!(effects.load(std::sync::atomic::Ordering::SeqCst), 0);
         }
+    }
+
+    #[tokio::test]
+    async fn acknowledged_media_failure_reaches_cleanup_with_its_error() {
+        let effects = std::sync::atomic::AtomicUsize::new(0);
+        let result = after_studio_capture_stop(
+            async {
+                studio_recording::WindowsStudioStopReport {
+                    accepted_intent: true,
+                    stop_acknowledged: true,
+                    result: Err("encoder exited before completing media".into()),
+                }
+            },
+            |result| async {
+                effects.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                result.map(|_| ())
+            },
+        )
+        .await;
+        assert_eq!(effects.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            result.unwrap_err(),
+            "encoder exited before completing media"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_stop_does_not_enter_cleanup() {
+        let effects = std::sync::atomic::AtomicUsize::new(0);
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let stop = after_studio_capture_stop(async { receive.await.unwrap() }, |result| async {
+            effects.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            result.map(|_| ())
+        });
+        tokio::pin!(stop);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut stop)
+                .await
+                .is_err()
+        );
+        assert_eq!(effects.load(std::sync::atomic::Ordering::SeqCst), 0);
+        send.send(studio_recording::WindowsStudioStopReport {
+            accepted_intent: true,
+            stop_acknowledged: true,
+            result: Err("media finalization failed".into()),
+        })
+        .unwrap_or_else(|_| panic!("Stop receiver closed before acknowledgement"));
+        assert!(stop.await.is_err());
+        assert_eq!(effects.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

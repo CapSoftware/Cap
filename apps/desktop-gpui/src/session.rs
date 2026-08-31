@@ -852,9 +852,11 @@ impl RecordingSession {
         #[cfg(windows)]
         let retained_stop = recording_failed
             .then(|| active.failed_stop_handle())
-            .or_else(|| active.clean_windows_studio_stop_handle());
+            .or_else(|| active.clean_studio_stop_handle());
         #[cfg(target_os = "macos")]
-        let retained_stop = recording_failed.then(|| active.failed_stop_handle());
+        let retained_stop = recording_failed
+            .then(|| active.failed_stop_handle())
+            .or_else(|| active.clean_studio_stop_handle());
         #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         let retained_stop: Option<recording::CaptureStopFuture> = None;
         let retains_active = retained_stop.is_some();
@@ -901,6 +903,11 @@ impl RecordingSession {
                     tracing::error!(%error, "Capture cleanup is unconfirmed; retaining Stop control");
                     this.phase = phase_before_stop;
                     this.stopped_elapsed = None;
+                    if matches!(this.phase, Phase::Recording { .. })
+                        && let Some(active) = &this.active
+                    {
+                        this.monitor_storage(active.project_dir.clone(), cx);
+                    }
                     #[cfg(windows)]
                     let message = if this.mode() == Some(recording::RecordingMode::Studio) {
                         format!("{error}. Studio shutdown remains unconfirmed; recording and files retained.")
@@ -1225,9 +1232,9 @@ impl RecordingSession {
             self.discard_instant(None, cx);
             return;
         }
-        #[cfg(windows)]
+        #[cfg(any(target_os = "macos", windows))]
         if self.mode() == Some(recording::RecordingMode::Studio) {
-            self.discard_windows_studio(None, cx);
+            self.discard_studio_after_stop(None, cx);
             return;
         }
         self.storage_monitor = None;
@@ -1284,9 +1291,9 @@ impl RecordingSession {
             self.discard_instant(Some(config), cx);
             return;
         }
-        #[cfg(windows)]
+        #[cfg(any(target_os = "macos", windows))]
         if self.mode() == Some(recording::RecordingMode::Studio) {
-            self.discard_windows_studio(Some(config), cx);
+            self.discard_studio_after_stop(Some(config), cx);
             return;
         }
         #[cfg(target_os = "linux")]
@@ -1369,12 +1376,12 @@ impl RecordingSession {
         .detach();
     }
 
-    #[cfg(windows)]
-    fn discard_windows_studio(&mut self, restart: Option<StartConfig>, cx: &mut Context<Self>) {
+    #[cfg(any(target_os = "macos", windows))]
+    fn discard_studio_after_stop(&mut self, restart: Option<StartConfig>, cx: &mut Context<Self>) {
         let Some(active) = self.active.as_ref() else {
             return;
         };
-        let Some(future) = active.windows_studio_delete_handle() else {
+        let Some(future) = active.studio_delete_handle() else {
             return;
         };
         let directory = active.project_dir.clone();
@@ -1404,8 +1411,19 @@ impl RecordingSession {
                             this.start(config, cx);
                         }
                     }
+                    Ok((true, Err(error))) => {
+                        this.active = None;
+                        this.finish(cx);
+                        this.error = Some(format!(
+                            "{error:#}; discard/restart stopped, local recording retained"
+                        ));
+                        cx.notify();
+                    }
                     result => {
                         this.phase = phase;
+                        if matches!(this.phase, Phase::Recording { .. }) {
+                            this.monitor_storage(directory.clone(), cx);
+                        }
                         this.error = Some(match result {
                             Ok((_, Err(error))) => format!(
                                 "{error:#}; discard/restart stopped, local recording retained"
