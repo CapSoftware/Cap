@@ -485,9 +485,8 @@ pub async fn delete_instant_video(video_id: &str) -> Result<(), String> {
     if status.is_success() || status == StatusCode::NOT_FOUND {
         return Ok(());
     }
-    let body = response.text().await.unwrap_or_default();
     Err(format!(
-        "Failed to delete instant recording {video_id}: {status}: {body}"
+        "Failed to delete instant recording {video_id}: {status}"
     ))
 }
 
@@ -762,9 +761,8 @@ async fn prefetch_segment_urls(
     .await?;
     let status = response.status();
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
         return Err(AuthApiError::Other(format!(
-            "api/upload_signed_batch/{status}: {body}"
+            "api/upload_signed_batch/{status}"
         )));
     }
     response
@@ -960,9 +958,8 @@ async fn signal_recording_complete(video_id: &str) -> Result<(), String> {
     if status.is_success() {
         return Ok(());
     }
-    let body = response.text().await.unwrap_or_default();
     Err(format!(
-        "Failed to finish instant recording upload: {status}: {body}"
+        "Failed to finish instant recording upload: {status}"
     ))
 }
 
@@ -1172,20 +1169,16 @@ async fn request_video_id() -> Result<String, AuthApiError> {
         auth::authed_request(reqwest::Method::GET, "/api/desktop/video/new-id", None).await?;
     if response.status() != StatusCode::OK {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
         return Err(AuthApiError::Other(format!(
-            "request_video_id/error/{status}: {body:?}"
+            "request_video_id/error/{status}"
         )));
     }
     let text = response
         .text()
         .await
         .map_err(|error| AuthApiError::Other(format!("Failed to read response body: {error}")))?;
-    let config = serde_json::from_str::<S3UploadMeta>(&text).map_err(|error| {
-        AuthApiError::Other(format!(
-            "Failed to deserialize reserved video ID: {error}. Response body: {text}"
-        ))
-    })?;
+    let config = serde_json::from_str::<S3UploadMeta>(&text)
+        .map_err(|_| AuthApiError::Other("Invalid reserved video ID response".into()))?;
     Ok(config.id)
 }
 
@@ -1253,18 +1246,15 @@ async fn create_or_get_video_with_mode(
             return Err(AuthApiError::UpgradeRequired);
         }
         return Err(AuthApiError::Other(format!(
-            "create_or_get_video/error/{status}: {body:?}"
+            "create_or_get_video/error/{status}"
         )));
     }
     let text = response
         .text()
         .await
         .map_err(|error| AuthApiError::Other(format!("Failed to read response body: {error}")))?;
-    serde_json::from_str::<S3UploadMeta>(&text).map_err(|error| {
-        AuthApiError::Other(format!(
-            "Failed to deserialize response: {error}. Response body: {text}"
-        ))
-    })
+    serde_json::from_str::<S3UploadMeta>(&text)
+        .map_err(|_| AuthApiError::Other("Invalid video creation response".into()))
 }
 
 async fn upload_video(
@@ -1330,12 +1320,8 @@ async fn multipart_initiate(video_id: &str) -> Result<InitiateResponse, AuthApiE
     })?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<no response body>".into());
         return Err(AuthApiError::Other(format!(
-            "api/upload_multipart_initiate/{status}: {body}"
+            "api/upload_multipart_initiate/{status}"
         )));
     }
     response.json().await.map_err(|error| {
@@ -1377,12 +1363,8 @@ async fn multipart_presign(
     })?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<no response body>".into());
         return Err(AuthApiError::Other(format!(
-            "api/upload_multipart_presign_part/{status}: {body}"
+            "api/upload_multipart_presign_part/{status}"
         )));
     }
     response
@@ -1425,12 +1407,8 @@ async fn multipart_complete(
     })?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<no response body>".into());
         return Err(AuthApiError::Other(format!(
-            "api/upload_multipart_complete/{status}: {body}"
+            "api/upload_multipart_complete/{status}"
         )));
     }
     let response = response.json::<Value>().await.unwrap_or(Value::Null);
@@ -1562,7 +1540,9 @@ async fn put_part(
         if let Some(md5_sum) = &md5_sum {
             request = request.header("Content-MD5", md5_sum);
         }
-        let response = checked_upload_step(cancel, || async { Ok(request.send().await) }).await?;
+        let response =
+            checked_upload_step(cancel, || async { Ok(send_upload_request(request).await) })
+                .await?;
         match response {
             Ok(response) => {
                 if !upload_status_ok(
@@ -1573,9 +1553,8 @@ async fn put_part(
                     total_size,
                 ) {
                     let status = response.status();
-                    let body = response.text().await.unwrap_or_default();
                     return Err(AuthApiError::Other(format!(
-                        "uploader/part/{part_number}/status/{status}: {body}"
+                        "uploader/part/{part_number}/status/{status}"
                     )));
                 }
                 let etag = response
@@ -1699,10 +1678,7 @@ async fn presigned_put_bytes_inner(
     .await?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let body = response.text().await.unwrap_or_default();
-        return Err(AuthApiError::Other(format!(
-            "api/upload_signed/{status}: {body}"
-        )));
+        return Err(AuthApiError::Other(format!("api/upload_signed/{status}")));
     }
     let target = response
         .json::<Response>()
@@ -1738,7 +1714,7 @@ async fn upload_signed_bytes_inner(
         request = request.header(name, value);
     }
     let response = optional_upload_step(cancel, || async {
-        request.send().await.map_err(|error| {
+        send_upload_request(request).await.map_err(|error| {
             if error.is_timeout() {
                 AuthApiError::Timeout
             } else {
@@ -1754,6 +1730,12 @@ async fn upload_signed_bytes_inner(
         )));
     }
     Ok(())
+}
+
+async fn send_upload_request(
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, reqwest::Error> {
+    request.send().await.map_err(reqwest::Error::without_url)
 }
 
 fn upload_content_type(subpath: &str) -> &'static str {
@@ -1958,6 +1940,46 @@ fn urlencoding(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn presigned_transfer_errors_never_expose_secret_urls() {
+        let client = reqwest::Client::new();
+        for url in [
+            "cap-test://upload.invalid/private-object?X-Amz-Signature=fake-s3-secret",
+            "cap-test://upload.invalid/private-object?upload_id=fake-drive-secret",
+        ] {
+            let original = client.put(url).send().await.unwrap_err();
+            assert_eq!(original.url().unwrap().as_str(), url);
+            assert!(original.to_string().contains("fake-"));
+
+            let error = send_upload_request(client.put(url)).await.unwrap_err();
+            assert!(error.is_builder());
+            assert!(error.url().is_none());
+            let direct = upload_signed_bytes_inner(
+                SignedUploadTarget {
+                    url: url.into(),
+                    headers: HashMap::new(),
+                },
+                "segments/video/segment_001.m4s",
+                vec![1, 2, 3],
+                None,
+            )
+            .await
+            .unwrap_err();
+            for message in [error.to_string(), format!("{error:?}"), direct.to_string()] {
+                assert!(!message.is_empty());
+                for secret in [
+                    "fake-",
+                    "upload.invalid",
+                    "private-object",
+                    "upload_id",
+                    "X-Amz",
+                ] {
+                    assert!(!message.contains(secret), "Upload error leaked {secret}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn abort_segments_waits_until_the_upload_task_has_stopped() {
