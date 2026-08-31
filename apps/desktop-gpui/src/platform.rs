@@ -168,12 +168,14 @@ mod mac {
                 unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> usize,
                 Imp,
             >(application_should_terminate);
-            if !ffi::class_addMethod(
+            if !objc2::runtime::Bool::from_raw(ffi::class_addMethod(
                 delegate_class as *const _ as *mut _,
                 selector.as_ptr(),
                 Some(implementation),
                 c"Q@:@".as_ptr(),
-            ) {
+            ))
+            .as_bool()
+            {
                 return Err("Could not install the native Quit handler".into());
             }
             Ok(receiver)
