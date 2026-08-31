@@ -63,6 +63,7 @@ cap-project = { path = "../../crates/project" }
 # a `RenderImage` (`src/editor_sidebar/cursor.rs`).
 cap-cursor-info = { path = "../../crates/cursor-info" }
 resvg = "0.45"
+rodio = { version = "0.19.0", default-features = false, features = ["mp3"] }
 # The editor stack. `cap-rendering` is not a new subtree -- cap-recording
 # already depends on it, so wgpu 25 and its vendored wgpu-hal have been built
 # by this workspace since the recording unit; naming it here only makes the

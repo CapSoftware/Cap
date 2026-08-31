@@ -39,6 +39,7 @@ mod library;
 mod main_window;
 mod menus;
 mod mode_select_window;
+mod onboarding_audio;
 mod onboarding_window;
 mod permissions;
 mod permissions_ui;

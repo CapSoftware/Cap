@@ -1397,7 +1397,7 @@ name = "cap-audio"
 version = "0.1.0"
 dependencies = [
  "cidre",
- "cpal",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "ffmpeg-next",
  "serde",
  "serde_json",
@@ -1554,7 +1554,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-video",
  "cosmic-text 0.14.2",
- "cpal",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "dirs 6.0.0",
  "ffmpeg-next",
  "flume 0.11.1",
@@ -1576,6 +1576,7 @@ dependencies = [
  "reqwest 0.12.28",
  "resvg 0.45.1",
  "rfd",
+ "rodio",
  "scap-targets",
  "semver",
  "serde",
@@ -1606,7 +1607,7 @@ dependencies = [
  "cap-media-info",
  "cap-project",
  "cap-rendering",
- "cpal",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "ffmpeg-next",
  "flume 0.11.1",
  "futures",
@@ -1758,7 +1759,7 @@ dependencies = [
 name = "cap-media-info"
 version = "0.1.0"
 dependencies = [
- "cpal",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "ffmpeg-next",
  "thiserror 1.0.69",
  "workspace-hack",
@@ -1850,7 +1851,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "coreaudio-rs",
- "cpal",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "device_query",
  "either",
  "ffmpeg-next",
@@ -1943,7 +1944,7 @@ name = "cap-timestamp"
 version = "0.1.0"
 dependencies = [
  "cidre",
- "cpal",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "windows 0.60.0",
  "workspace-hack",
 ]
@@ -2733,6 +2734,29 @@ dependencies = [
  "unicode-linebreak",
  "unicode-script",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "cpal"
+version = "0.15.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "873dab07c8f743075e57f524c583985fbaf745602acbe916a01539364369a779"
+dependencies = [
+ "alsa",
+ "core-foundation-sys",
+ "coreaudio-rs",
+ "dasp_sample",
+ "jni",
+ "js-sys",
+ "libc",
+ "mach2 0.4.3",
+ "ndk",
+ "ndk-context",
+ "oboe",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "windows 0.54.0",
 ]
 
 [[package]]
@@ -8997,6 +9021,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rodio"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6006a627c1a38d37f3d3a85c6575418cfe34a5392d60a686d0071e1c8d427acb"
+dependencies = [
+ "cpal 0.15.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "symphonia",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "roxmltree"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9173,7 +9208,7 @@ dependencies = [
 name = "scap-cpal"
 version = "0.1.0"
 dependencies = [
- "cpal",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "thiserror 1.0.69",
  "tracing",
  "workspace-hack",
@@ -9195,7 +9230,7 @@ name = "scap-ffmpeg"
 version = "0.1.0"
 dependencies = [
  "cidre",
- "cpal",
+ "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "ffmpeg-next",
  "scap-direct3d",
  "scap-screencapturekit",
@@ -10340,6 +10375,55 @@ name = "symlink"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
+
+[[package]]
+name = "symphonia"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5773a4c030a19d9bfaa090f49746ff35c75dfddfa700df7a5939d5e076a57039"
+dependencies = [
+ "lazy_static",
+ "symphonia-bundle-mp3",
+ "symphonia-core",
+ "symphonia-metadata",
+]
+
+[[package]]
+name = "symphonia-bundle-mp3"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4872dd6bb56bf5eac799e3e957aa1981086c3e613b27e0ac23b176054f7c57ed"
+dependencies = [
+ "lazy_static",
+ "log",
+ "symphonia-core",
+ "symphonia-metadata",
+]
+
+[[package]]
+name = "symphonia-core"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea00cc4f79b7f6bb7ff87eddc065a1066f3a43fe1875979056672c9ef948c2af"
+dependencies = [
+ "arrayvec",
+ "bitflags 1.3.2",
+ "bytemuck",
+ "lazy_static",
+ "log",
+]
+
+[[package]]
+name = "symphonia-metadata"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36306ff42b9ffe6e5afc99d49e121e0bd62fe79b9db7b9681d48e29fa19e6b16"
+dependencies = [
+ "encoding_rs",
+ "lazy_static",
+ "log",
+ "symphonia-core",
+]
 
 [[package]]
 name = "syn"

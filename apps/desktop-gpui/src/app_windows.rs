@@ -1059,36 +1059,60 @@ pub fn open_onboarding(cx: &mut App) {
         return;
     }
 
-    let bounds = Bounds::centered(
-        None,
-        size(
-            px(onboarding_window::ONBOARDING_WIDTH),
-            px(onboarding_window::ONBOARDING_HEIGHT),
+    let cursor_display = scap_targets::Display::get_containing_cursor()
+        .and_then(|display| display.raw_handle().logical_bounds());
+    let display = cursor_display
+        .and_then(|bounds| {
+            let center = point(
+                px((bounds.position().x() + bounds.size().width() / 2.) as f32),
+                px((bounds.position().y() + bounds.size().height() / 2.) as f32),
+            );
+            cx.displays()
+                .into_iter()
+                .find(|display| display.bounds().contains(&center))
+        })
+        .or_else(|| cx.primary_display());
+    let bounds = match display {
+        Some(display) => {
+            let available = display.visible_bounds();
+            let width = (f32::from(display.bounds().size.width) * 0.58)
+                .clamp(onboarding_window::ONBOARDING_WIDTH, 1080.)
+                .min((f32::from(available.size.width) - 32.).max(1.));
+            let height = (width * 0.72)
+                .clamp(onboarding_window::ONBOARDING_HEIGHT, 780.)
+                .min((f32::from(available.size.height) - 32.).max(1.));
+            Bounds {
+                origin: available.center() - point(px(width / 2.), px(height / 2.)),
+                size: size(px(width), px(height)),
+            }
+        }
+        None => Bounds::centered(
+            None,
+            size(
+                px(onboarding_window::ONBOARDING_WIDTH),
+                px(onboarding_window::ONBOARDING_HEIGHT),
+            ),
+            cx,
         ),
-        cx,
-    );
+    };
 
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(gpui::TitlebarOptions {
-                title: Some("Welcome to Cap".into()),
-                appears_transparent: true,
-                traffic_light_position: Some(onboarding_window::TRAFFIC_LIGHTS),
-            }),
+            titlebar: None,
             kind: WindowKind::Normal,
             focus: true,
             show: true,
             is_resizable: false,
             is_minimizable: true,
-            window_min_size: Some(size(
-                px(onboarding_window::ONBOARDING_WIDTH),
-                px(onboarding_window::ONBOARDING_HEIGHT),
-            )),
+            window_min_size: Some(bounds.size),
             window_background: gpui::WindowBackgroundAppearance::Transparent,
             ..Default::default()
         },
-        |window, cx| cx.new(|cx| OnboardingWindow::new(window, cx)),
+        |window, cx| {
+            window.set_window_title("Welcome to Cap");
+            cx.new(|cx| OnboardingWindow::new(window, cx))
+        },
     );
 
     let handle = match handle {
@@ -1110,6 +1134,7 @@ pub fn open_onboarding(cx: &mut App) {
         .flatten();
     cx.spawn(async move |_| {
         if let Some(native) = &native {
+            let _ = platform::install_window_material(native, 16.);
             platform::show_native(native);
         }
     })
@@ -1126,6 +1151,15 @@ pub fn onboarding_finished(cx: &mut App) {
     }
     crate::tray::refresh_menu(cx);
     show_main_window(cx);
+}
+
+pub fn close_onboarding(cx: &mut App) {
+    if let Some(handle) = cx.global_mut::<AppWindows>().onboarding.take() {
+        handle
+            .update(cx, |_, window, _| window.remove_window())
+            .ok();
+    }
+    onboarding_closed(cx);
 }
 
 pub fn onboarding_closed(cx: &mut App) {
