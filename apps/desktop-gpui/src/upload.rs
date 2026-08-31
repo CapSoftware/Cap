@@ -1975,7 +1975,7 @@ mod tests {
                     "upload_id",
                     "X-Amz",
                 ] {
-                    assert!(!message.contains(secret), "Upload error leaked {secret}");
+                    assert!(!message.contains(secret), "Upload error leaked a secret");
                 }
             }
         }
