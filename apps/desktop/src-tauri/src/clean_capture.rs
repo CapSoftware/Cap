@@ -1857,11 +1857,7 @@ fn release_inner(
                         .ok()
                         .and_then(|id| saved.visibility_for(id))
                 {
-                    let result = if visible {
-                        window.show()
-                    } else {
-                        window.hide()
-                    };
+                    let result = set_native_visibility(&window, visible);
                     if let Err(error) = result {
                         tracing::warn!(%error, "Could not restore Main after recording");
                     }
@@ -1913,11 +1909,7 @@ fn release_inner(
                         .ok()
                         .and_then(|id| saved.visibility_for(id))
                 {
-                    let result = if visible {
-                        window.show()
-                    } else {
-                        window.hide()
-                    };
+                    let result = set_native_visibility(&window, visible);
                     if let Err(error) = result {
                         tracing::warn!(%error, "Could not restore clean capture window");
                     }
@@ -3700,25 +3692,34 @@ async fn save_windows(app: &AppHandle, generation: u32) -> Result<Vec<SavedWindo
 
 fn set_native_visibility(window: &WebviewWindow, visible: bool) -> Result<(), String> {
     #[cfg(target_os = "linux")]
-    if cap_recording::screenshot::uses_wayland_portal() {
+    {
         use gtk::prelude::*;
         let gtk = window.gtk_window().map_err(|error| error.to_string())?;
+        // Tao queues GTK visibility changes even on the UI thread; this gate needs
+        // the native change to complete before checking its acknowledgement.
         if visible {
-            gtk.show();
+            if cap_recording::screenshot::uses_wayland_portal() {
+                gtk.show();
+            } else {
+                gtk.show_all();
+            }
         } else {
             gtk.hide();
         }
         if gtk.is_visible() != visible || (!visible && gtk.is_mapped()) {
             return Err("GTK did not acknowledge the recording window visibility change".into());
         }
-        return Ok(());
+        Ok(())
     }
-    if visible {
-        window.show()
-    } else {
-        window.hide()
+    #[cfg(not(target_os = "linux"))]
+    {
+        if visible {
+            window.show()
+        } else {
+            window.hide()
+        }
+        .map_err(|error| error.to_string())
     }
-    .map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "linux")]
