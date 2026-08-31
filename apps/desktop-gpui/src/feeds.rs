@@ -23,10 +23,41 @@ use cap_recording::feeds::{
     camera::{self, CameraFeed},
     microphone::{self, MicrophoneFeed, MicrophoneSamples},
 };
+use futures_util::{
+    FutureExt as _,
+    future::{BoxFuture, Shared},
+};
 use gpui::{App, AppContext as _, Context, Entity, Global};
 use kameo::{Actor as _, actor::ActorRef};
 
 pub use cap_recording::feeds::camera::DeviceOrModelID;
+
+pub type InputReady =
+    Shared<BoxFuture<'static, Result<crate::store::RecordingDeviceSettings, String>>>;
+
+#[derive(Clone, Default)]
+pub struct InputReadiness {
+    pub camera: Option<InputReady>,
+    pub microphone: Option<InputReady>,
+}
+
+fn owned_input_readiness(
+    input: impl std::future::Future<Output = Result<crate::store::RecordingDeviceSettings, String>>
+    + Send
+    + 'static,
+    current_epoch: Arc<AtomicU64>,
+    epoch: u64,
+) -> InputReady {
+    async move {
+        let result = input.await;
+        if current_epoch.load(Ordering::Acquire) != epoch {
+            return Err("Device selection changed before it was ready".to_string());
+        }
+        result
+    }
+    .boxed()
+    .shared()
+}
 
 use crate::app_windows;
 
@@ -60,6 +91,23 @@ async fn camera_input_operation<T>(
         return Ok(None);
     }
     operation.await.map(Some)
+}
+
+fn configuration_result(
+    current_epoch: u64,
+    epoch: u64,
+    pending: bool,
+    error: Option<&str>,
+) -> Option<Result<(), String>> {
+    if current_epoch != epoch {
+        Some(Err(
+            "Device selection changed before the format was applied".into(),
+        ))
+    } else if pending {
+        None
+    } else {
+        Some(error.map_or(Ok(()), |error| Err(error.to_string())))
+    }
 }
 
 /// How the pickers map dB to a 0..1 bar: `DeviceListPanel` in `index.tsx`
@@ -588,7 +636,18 @@ pub struct Feeds {
     camera_actor: Option<ActorRef<CameraFeed>>,
     camera_preview_sender: Option<flume::Sender<PreviewCameraFrame>>,
     camera_input_gate: Arc<tokio::sync::Mutex<()>>,
+    mic_input_gate: Arc<tokio::sync::Mutex<()>>,
+    mic_input_epoch: Arc<AtomicU64>,
     mic_actor: Option<ActorRef<MicrophoneFeed>>,
+    camera_settings: Option<camera::CameraDeviceSettings>,
+    microphone_settings: Option<microphone::MicrophoneDeviceSettings>,
+    applied_settings: crate::store::RecordingDeviceSettings,
+    camera_input_pending: bool,
+    mic_input_pending: bool,
+    mic_input_released: bool,
+    microphone_error: Option<String>,
+    camera_ready: Option<InputReady>,
+    microphone_ready: Option<InputReady>,
     /// Selected camera; `Some` while the preview window should exist.
     pub camera: Option<SelectedCamera>,
     /// Selected microphone name.
@@ -625,6 +684,8 @@ pub struct Feeds {
 pub struct SelectedCamera {
     pub id: DeviceOrModelID,
     pub label: String,
+    pub device_id: String,
+    pub model_id: Option<cap_camera::ModelID>,
 }
 
 struct FeedsGlobal(Entity<Feeds>);
@@ -636,7 +697,18 @@ impl Feeds {
             camera_actor: None,
             camera_preview_sender: None,
             camera_input_gate: Arc::new(tokio::sync::Mutex::new(())),
+            mic_input_gate: Arc::new(tokio::sync::Mutex::new(())),
+            mic_input_epoch: Arc::new(AtomicU64::new(0)),
             mic_actor: None,
+            camera_settings: None,
+            microphone_settings: None,
+            applied_settings: crate::store::RecordingDeviceSettings::default(),
+            camera_input_pending: false,
+            mic_input_pending: false,
+            mic_input_released: false,
+            microphone_error: None,
+            camera_ready: None,
+            microphone_ready: None,
             camera: None,
             microphone: None,
             mic_level_db: -96.0,
@@ -698,6 +770,30 @@ impl Feeds {
         self.mic_actor.clone().filter(|actor| actor.is_alive())
     }
 
+    pub fn input_readiness(&self) -> InputReadiness {
+        InputReadiness {
+            camera: self
+                .camera_ready
+                .clone()
+                .filter(|_| self.camera_actor().is_some()),
+            microphone: self
+                .microphone_ready
+                .clone()
+                .filter(|_| self.mic_actor().is_some()),
+        }
+    }
+
+    pub fn applied_device_settings(&self) -> crate::store::RecordingDeviceSettings {
+        self.applied_settings
+    }
+
+    pub fn requested_device_settings(&self) -> crate::store::RecordingDeviceSettings {
+        crate::store::RecordingDeviceSettings {
+            camera: self.camera_settings,
+            microphone: self.microphone_settings,
+        }
+    }
+
     #[cfg(target_os = "linux")]
     pub(crate) fn set_camera_preview_rendering(&self, enabled: bool) -> bool {
         self.camera_preview_active.swap(enabled, Ordering::AcqRel)
@@ -720,13 +816,35 @@ impl Feeds {
     /// Select (or deselect) the camera. Opens/closes the preview window and
     /// points the app-scoped feed at the device.
     pub fn set_camera(&mut self, selection: Option<SelectedCamera>, cx: &mut Context<Self>) {
-        if self.camera == selection {
-            return;
+        let settings = selection.as_ref().and_then(|selection| {
+            crate::store::RecordingDeviceSettings::for_camera(
+                &selection.device_id,
+                selection.model_id.as_ref(),
+            )
+        });
+        self.set_camera_with_settings(selection, settings, cx);
+    }
+
+    pub fn set_camera_with_settings(
+        &mut self,
+        selection: Option<SelectedCamera>,
+        settings: Option<camera::CameraDeviceSettings>,
+        cx: &mut Context<Self>,
+    ) -> u64 {
+        if self.camera == selection
+            && self.camera_settings == settings
+            && self.camera_error.is_none()
+        {
+            return self.camera_epoch;
         }
         self.camera_epoch += 1;
         self.camera_input_epoch
             .store(self.camera_epoch, Ordering::Release);
         self.camera = selection.clone();
+        self.camera_ready = None;
+        self.camera_settings = settings;
+        self.applied_settings.camera = None;
+        self.camera_input_pending = false;
         self.camera_error = None;
         cx.notify();
 
@@ -740,6 +858,25 @@ impl Feeds {
                 cx.defer(app_windows::close_camera_window);
             }
         }
+        self.camera_epoch
+    }
+
+    pub fn camera_configuration_result(&self, epoch: u64) -> Option<Result<(), String>> {
+        configuration_result(
+            self.camera_epoch,
+            epoch,
+            self.camera_input_pending,
+            self.camera_error.as_deref(),
+        )
+    }
+
+    pub fn microphone_configuration_result(&self, epoch: u64) -> Option<Result<(), String>> {
+        configuration_result(
+            self.mic_epoch,
+            epoch,
+            self.mic_input_pending,
+            self.microphone_error.as_deref(),
+        )
     }
 
     pub fn park_camera_preview(&mut self, cx: &mut Context<Self>) {
@@ -748,6 +885,8 @@ impl Feeds {
         }
 
         self.camera_preview_parked = true;
+        self.applied_settings.camera = None;
+        self.camera_input_pending = false;
         self.camera_epoch += 1;
         self.camera_input_epoch
             .store(self.camera_epoch, Ordering::Release);
@@ -784,11 +923,15 @@ impl Feeds {
 
     fn start_camera_preview(&mut self, selection: SelectedCamera, cx: &mut Context<Self>) {
         self.camera_error = None;
+        self.camera_input_pending = true;
+        self.applied_settings.camera = None;
         let epoch = self.camera_epoch;
+        let settings = self.camera_settings;
         let actor = self.ensure_camera_actor(cx);
         let sender = self.camera_preview_sender.clone();
         let gate = self.camera_input_gate.clone();
         let current_epoch = self.camera_input_epoch.clone();
+        let readiness_epoch = current_epoch.clone();
         let set = gpui_tokio::Tokio::spawn(cx, async move {
             let ready = camera_input_operation(&gate, &current_epoch, epoch, async {
                 let sender = sender
@@ -798,29 +941,46 @@ impl Feeds {
                 actor
                     .ask(camera::SetInput {
                         id: selection.id,
-                        settings: None,
+                        settings,
                     })
                     .await
                     .map_err(|error| error.to_string())
             })
             .await?;
-            if let Some(ready) = ready {
-                ready.await.map_err(|error| error.to_string())?;
-            }
-            Ok::<_, String>(())
-        });
-        cx.spawn(async move |this, cx| {
-            let result = match set.await {
-                Ok(result) => result.map(|_| ()),
-                Err(error) => Err(error.to_string()),
+            let camera = if let Some(ready) = ready {
+                let (_, info) = ready.await.map_err(|error| error.to_string())?;
+                Some(camera::CameraDeviceSettings {
+                    width: Some(info.width),
+                    height: Some(info.height),
+                    frame_rate: Some(info.frame_rate.0 as f32 / info.frame_rate.1 as f32),
+                })
+            } else {
+                None
             };
+            Ok::<_, String>(crate::store::RecordingDeviceSettings {
+                camera,
+                microphone: None,
+            })
+        });
+        let ready = owned_input_readiness(
+            async move { set.await.unwrap_or_else(|error| Err(error.to_string())) },
+            readiness_epoch,
+            epoch,
+        );
+        self.camera_ready = Some(ready.clone());
+        cx.spawn(async move |this, cx| {
+            let result = ready.await;
             this.update(cx, |this, cx| {
                 if this.camera_epoch != epoch {
                     return;
                 }
-                if let Err(error) = result {
-                    tracing::error!("camera input failed: {error}");
-                    this.camera_error = Some(error);
+                this.camera_input_pending = false;
+                match result {
+                    Ok(settings) => this.applied_settings.camera = settings.camera,
+                    Err(error) => {
+                        tracing::error!("camera input failed: {error}");
+                        this.camera_error = Some(error);
+                    }
                 }
                 cx.notify();
             })
@@ -855,44 +1015,98 @@ impl Feeds {
     /// Select (or deselect) the microphone. The feed keeps running between
     /// recordings so the pickers and bar have a live level.
     pub fn set_microphone(&mut self, label: Option<String>, cx: &mut Context<Self>) {
-        if self.microphone == label {
-            return;
+        let settings = label
+            .as_deref()
+            .and_then(crate::store::RecordingDeviceSettings::for_microphone);
+        self.set_microphone_with_settings(label, settings, cx);
+    }
+
+    pub fn set_microphone_with_settings(
+        &mut self,
+        label: Option<String>,
+        settings: Option<microphone::MicrophoneDeviceSettings>,
+        cx: &mut Context<Self>,
+    ) -> u64 {
+        if self.microphone == label
+            && self.microphone_settings == settings
+            && !self.mic_input_released
+            && self.microphone_error.is_none()
+        {
+            return self.mic_epoch;
         }
         self.mic_epoch += 1;
+        self.mic_input_epoch
+            .store(self.mic_epoch, Ordering::Release);
         self.microphone = label.clone();
+        self.microphone_settings = settings;
+        self.applied_settings.microphone = None;
+        self.microphone_error = None;
+        self.mic_input_pending = label.is_some();
+        self.mic_input_released = false;
         self.mic_level_db = -96.0;
-        cx.notify();
-
+        let epoch = self.mic_epoch;
         let actor = self.ensure_mic_actor(cx);
-        match label {
-            Some(label) => {
-                gpui_tokio::Tokio::spawn(cx, async move {
-                    match actor
-                        .ask(microphone::SetInput {
-                            label: label.clone(),
-                            settings: None,
-                        })
+        let gate = self.mic_input_gate.clone();
+        let current_epoch = self.mic_input_epoch.clone();
+        let readiness_epoch = current_epoch.clone();
+        let task = gpui_tokio::Tokio::spawn(cx, async move {
+            let ready = camera_input_operation(&gate, &current_epoch, epoch, async {
+                if let Some(label) = label {
+                    actor
+                        .ask(microphone::SetInput { label, settings })
                         .await
-                    {
-                        Ok(ready) => {
-                            if let Err(error) = ready.await {
-                                tracing::warn!("microphone '{label}' failed to open: {error}");
-                            }
-                        }
-                        Err(error) => {
-                            tracing::warn!("microphone '{label}' set-input failed: {error}")
-                        }
+                        .map(Some)
+                        .map_err(|error| error.to_string())
+                } else {
+                    actor
+                        .ask(microphone::RemoveInput)
+                        .await
+                        .map(|()| None)
+                        .map_err(|error| error.to_string())
+                }
+            })
+            .await?;
+            let microphone = if let Some(Some(ready)) = ready {
+                let config = ready.await.map_err(|error| error.to_string())?;
+                Some(microphone::MicrophoneDeviceSettings {
+                    sample_rate: Some(config.sample_rate().0),
+                    channels: Some(config.channels()),
+                })
+            } else {
+                None
+            };
+            Ok::<_, String>(crate::store::RecordingDeviceSettings {
+                camera: None,
+                microphone,
+            })
+        });
+        let ready = owned_input_readiness(
+            async move { task.await.unwrap_or_else(|error| Err(error.to_string())) },
+            readiness_epoch,
+            epoch,
+        );
+        self.microphone_ready = Some(ready.clone());
+        cx.spawn(async move |this, cx| {
+            let result = ready.await;
+            this.update(cx, |this, cx| {
+                if this.mic_epoch != epoch {
+                    return;
+                }
+                this.mic_input_pending = false;
+                match result {
+                    Ok(settings) => this.applied_settings.microphone = settings.microphone,
+                    Err(error) => {
+                        tracing::warn!("microphone input failed: {error}");
+                        this.microphone_error = Some(error);
                     }
-                })
-                .detach();
-            }
-            None => {
-                gpui_tokio::Tokio::spawn(cx, async move {
-                    let _ = actor.ask(microphone::RemoveInput).await;
-                })
-                .detach();
-            }
-        }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+        epoch
     }
 
     /// Drop the live camera and microphone inputs without forgetting what was
@@ -905,9 +1119,26 @@ impl Feeds {
     /// chosen -- so neither does this: only the hardware is released.
     pub fn release_inputs(&mut self, cx: &mut Context<Self>) {
         self.park_camera_preview(cx);
+        self.mic_epoch += 1;
+        self.mic_input_epoch
+            .store(self.mic_epoch, Ordering::Release);
+        self.mic_input_pending = false;
+        self.mic_input_released = true;
+        self.applied_settings.microphone = None;
+        self.microphone_ready = None;
         if let Some(actor) = self.mic_actor.clone() {
+            let gate = self.mic_input_gate.clone();
+            let current_epoch = self.mic_input_epoch.clone();
+            let epoch = self.mic_epoch;
             gpui_tokio::Tokio::spawn(cx, async move {
-                if let Err(error) = actor.ask(microphone::RemoveInput).await {
+                if let Err(error) = camera_input_operation(&gate, &current_epoch, epoch, async {
+                    actor
+                        .ask(microphone::RemoveInput)
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+                .await
+                {
                     tracing::warn!("releasing the microphone feed: {error}");
                 }
             })
@@ -1193,6 +1424,85 @@ fn db_fs(samples: &MicrophoneSamples) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn same_device_format_change_discards_queued_previous_configuration() {
+        let gate = tokio::sync::Mutex::new(());
+        let current = AtomicU64::new(1);
+        let guard = gate.lock().await;
+        let first = camera_input_operation(&gate, &current, 1, async {
+            Ok((
+                "same-device",
+                camera::CameraDeviceSettings {
+                    width: Some(1280),
+                    height: Some(720),
+                    frame_rate: Some(30.),
+                },
+            ))
+        });
+        tokio::pin!(first);
+        assert!(futures_util::poll!(&mut first).is_pending());
+        current.store(2, Ordering::Release);
+        let second = camera_input_operation(&gate, &current, 2, async {
+            Ok((
+                "same-device",
+                camera::CameraDeviceSettings {
+                    width: Some(1920),
+                    height: Some(1080),
+                    frame_rate: Some(60.),
+                },
+            ))
+        });
+        tokio::pin!(second);
+        assert!(futures_util::poll!(&mut second).is_pending());
+        drop(guard);
+        assert_eq!(first.await.unwrap(), None);
+        let (device, settings) = second.await.unwrap().unwrap();
+        assert_eq!(device, "same-device");
+        assert_eq!(settings.width, Some(1920));
+        assert_eq!(settings.frame_rate, Some(60.));
+        assert!(configuration_result(2, 1, false, None).unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn input_readiness_rejects_late_ack_for_preview_and_recording_waiters() {
+        let current = Arc::new(AtomicU64::new(7));
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let ready = owned_input_readiness(
+            async move { receive.await.map_err(|error| error.to_string()) },
+            current.clone(),
+            7,
+        );
+        let mut recording_waiter = ready.clone();
+        assert!(futures_util::poll!(&mut recording_waiter).is_pending());
+        current.store(8, Ordering::Release);
+        send.send(crate::store::RecordingDeviceSettings::default())
+            .unwrap();
+        assert!(ready.await.unwrap_err().contains("selection changed"));
+        assert!(recording_waiter.await.is_err());
+        let applied = crate::store::RecordingDeviceSettings {
+            camera: Some(camera::CameraDeviceSettings {
+                width: Some(1280),
+                height: Some(720),
+                frame_rate: Some(29.97),
+            }),
+            microphone: None,
+        };
+        let ready = owned_input_readiness(async move { Ok(applied) }, current, 8);
+        assert_eq!(ready.clone().await.unwrap(), applied);
+        assert_eq!(ready.await.unwrap(), applied);
+    }
+
+    #[test]
+    fn input_configuration_status_never_reports_pending_or_failed_as_ready() {
+        assert_eq!(configuration_result(3, 3, true, None), None);
+        assert_eq!(
+            configuration_result(3, 3, false, Some("unavailable")),
+            Some(Err("unavailable".into()))
+        );
+        assert_eq!(configuration_result(3, 3, false, None), Some(Ok(())));
+        assert!(configuration_result(4, 3, false, None).unwrap().is_err());
+    }
 
     #[tokio::test]
     async fn camera_preview_subscription_survives_removal_and_reattaches_once() {

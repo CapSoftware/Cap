@@ -50,6 +50,7 @@ cpal = { git = "https://github.com/CapSoftware/cpal", rev = "6013cb5f8bd3" }
 # The actual recording engine -- the same studio/instant actors the Tauri app
 # drives. Drags in the ffmpeg encode stack; that is the point.
 cap-recording = { path = "../../crates/recording" }
+cap-media-info = { path = "../../crates/media-info" }
 cap-enc-ffmpeg = { path = "../../crates/enc-ffmpeg" }
 # Already in the tree through cap-recording; direct so the camera draw bench
 # can construct `NativeCameraFrame.timestamp` for its synthetic frames.

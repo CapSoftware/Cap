@@ -1543,6 +1543,7 @@ dependencies = [
  "cap-editor",
  "cap-enc-ffmpeg",
  "cap-export",
+ "cap-media-info",
  "cap-project",
  "cap-recording",
  "cap-rendering",

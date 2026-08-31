@@ -5426,6 +5426,8 @@ mod tests {
                 },
                 microphone: None,
                 camera: None,
+                device_settings: crate::store::RecordingDeviceSettings::default(),
+                input_readiness: crate::feeds::InputReadiness::default(),
                 system_audio: false,
                 excluded_windows: Vec::new(),
                 camera_feed: None,

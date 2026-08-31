@@ -40,6 +40,8 @@ pub struct StartConfig {
     /// Microphone by name -- the identity `MicrophoneFeed` keys on.
     pub microphone: Option<String>,
     pub camera: Option<DeviceOrModelID>,
+    pub device_settings: crate::store::RecordingDeviceSettings,
+    pub input_readiness: crate::feeds::InputReadiness,
     pub system_audio: bool,
     /// Our own windows (the recording controls bar; the camera bubble in studio
     /// mode), excluded from capture the way the Tauri app excludes them.
@@ -1686,6 +1688,17 @@ async fn start_attempt_with_upload(
 
     tracing::info!(dir = %project_dir.display(), "starting recording");
 
+    if config.camera.is_some()
+        && let Some(ready) = &config.input_readiness.camera
+    {
+        ready.clone().await.map_err(anyhow::Error::msg)?;
+    }
+    if config.microphone.is_some()
+        && let Some(ready) = &config.input_readiness.microphone
+    {
+        ready.clone().await.map_err(anyhow::Error::msg)?;
+    }
+
     let (mic_feed, mic_lock, mic_errors) = match (&config.mic_feed, &config.microphone) {
         (Some(actor), Some(label)) => match actor.ask(microphone::Lock).await {
             Ok(lock) => {
@@ -1698,14 +1711,15 @@ async fn start_attempt_with_upload(
             }
             Err(error) => {
                 tracing::warn!("app mic feed lock failed ({error}), spawning one for '{label}'");
-                let (feed, lock, error_rx) = setup_microphone(label)
-                    .await
-                    .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
+                let (feed, lock, error_rx) =
+                    setup_microphone(label, config.device_settings.microphone)
+                        .await
+                        .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
                 (Some(feed), Some(lock), Some(error_rx))
             }
         },
         (None, Some(label)) => {
-            let (feed, lock, error_rx) = setup_microphone(label)
+            let (feed, lock, error_rx) = setup_microphone(label, config.device_settings.microphone)
                 .await
                 .with_context(|| format!("Selected microphone '{label}' is unavailable"))?;
             (Some(feed), Some(lock), Some(error_rx))
@@ -1731,12 +1745,12 @@ async fn start_attempt_with_upload(
                     }
                     Err(error) => {
                         tracing::warn!("app camera feed lock failed ({error}), spawning one");
-                        let (feed, lock) = setup_camera(id).await?;
+                        let (feed, lock) = setup_camera(id, config.device_settings.camera).await?;
                         (Some(feed), Some(Arc::new(lock)))
                     }
                 }
             } else {
-                let (feed, lock) = setup_camera(id).await?;
+                let (feed, lock) = setup_camera(id, config.device_settings.camera).await?;
                 (Some(feed), Some(Arc::new(lock)))
             }
         }
@@ -1995,6 +2009,7 @@ fn resolve_excluded_window_ids(
 
 async fn setup_camera(
     id: &DeviceOrModelID,
+    settings: Option<camera::CameraDeviceSettings>,
 ) -> anyhow::Result<(
     ActorRef<CameraFeed>,
     cap_recording::feeds::camera::CameraFeedLock,
@@ -2003,7 +2018,7 @@ async fn setup_camera(
     let ready = feed
         .ask(camera::SetInput {
             id: id.clone(),
-            settings: None,
+            settings,
         })
         .await
         .map_err(|e| anyhow!("camera setup: {e}"))?;
@@ -2017,6 +2032,7 @@ async fn setup_camera(
 
 async fn setup_microphone(
     label: &str,
+    settings: Option<microphone::MicrophoneDeviceSettings>,
 ) -> anyhow::Result<(
     ActorRef<MicrophoneFeed>,
     Arc<cap_recording::feeds::microphone::MicrophoneFeedLock>,
@@ -2027,7 +2043,7 @@ async fn setup_microphone(
     let ready = feed
         .ask(microphone::SetInput {
             label: label.to_string(),
-            settings: None,
+            settings,
         })
         .await
         .map_err(|e| anyhow!("setup: {e}"))?;

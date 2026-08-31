@@ -62,6 +62,7 @@ fn remembered_camera(id: &recording::DeviceOrModelID, cameras: &[CameraOption]) 
             },
             label: "Camera".to_string(),
             best_format: None,
+            formats: Vec::new(),
         })
 }
 
@@ -224,6 +225,86 @@ impl TargetType {
 pub enum DeviceMenu {
     Camera,
     Microphone,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum DeviceFormatTarget {
+    Camera(CameraOption),
+    Microphone(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DeviceFormat {
+    Camera(cap_recording::feeds::camera::CameraDeviceSettings),
+    Microphone(cap_recording::feeds::microphone::MicrophoneDeviceSettings),
+}
+
+impl DeviceFormat {
+    fn label(self) -> String {
+        match self {
+            Self::Camera(settings) => {
+                match (settings.width, settings.height, settings.frame_rate) {
+                    (Some(width), Some(height), Some(rate)) => {
+                        format!("{width}×{height} @ {rate:.0}fps")
+                    }
+                    _ => "Default".into(),
+                }
+            }
+            Self::Microphone(settings) => match (settings.sample_rate, settings.channels) {
+                (Some(rate), Some(channels)) => {
+                    let channels = match channels {
+                        1 => "Mono".into(),
+                        2 => "Stereo".into(),
+                        count => format!("{count} channels"),
+                    };
+                    format!("{}kHz {channels}", rate as f32 / 1000.)
+                }
+                _ => "Default".into(),
+            },
+        }
+    }
+}
+
+struct PendingDeviceFormat {
+    target: DeviceFormatTarget,
+    format: DeviceFormat,
+    epoch: u64,
+}
+
+fn complete_format_request(
+    pending: &mut Option<PendingDeviceFormat>,
+    result: Option<Result<(), String>>,
+    still_owned: bool,
+    save: impl FnOnce(&DeviceFormatTarget, DeviceFormat) -> bool,
+) -> Option<Result<DeviceFormat, String>> {
+    let result = result?;
+    let pending = pending.take()?;
+    if !still_owned {
+        return None;
+    }
+    Some(result.and_then(|()| {
+        if save(&pending.target, pending.format) {
+            Ok(pending.format)
+        } else {
+            Err("Could not save the device format preference. Try again.".to_string())
+        }
+    }))
+}
+
+fn save_device_format(target: &DeviceFormatTarget, format: DeviceFormat) -> bool {
+    match (target, format) {
+        (DeviceFormatTarget::Camera(camera), DeviceFormat::Camera(settings)) => {
+            crate::store::set_camera_device_settings(
+                &camera.device_id,
+                camera.model_id.as_ref(),
+                settings,
+            )
+        }
+        (DeviceFormatTarget::Microphone(name), DeviceFormat::Microphone(settings)) => {
+            crate::store::set_microphone_device_settings(name, settings)
+        }
+        _ => false,
+    }
 }
 
 impl DeviceMenu {
@@ -414,6 +495,12 @@ pub struct MainWindow {
     microphone: Option<MicrophoneOption>,
     pending_device_restore: crate::store::RecordingInputSettings,
     device_restore_suspended: bool,
+    device_format_target: Option<DeviceFormatTarget>,
+    device_formats: Option<Result<Vec<DeviceFormat>, String>>,
+    device_format_value: Option<DeviceFormat>,
+    device_format_generation: u64,
+    device_format_pending: Option<PendingDeviceFormat>,
+    device_format_notice: Option<String>,
     system_audio: bool,
     /// Which display/window is selected for each split target.
     selected_display: Option<DisplayOption>,
@@ -587,10 +674,20 @@ impl MainWindow {
                     tracing::warn!("Could not save the selected microphone");
                 }
             }
+            let format_result =
+                this.device_format_pending
+                    .as_ref()
+                    .and_then(|pending| match pending.format {
+                        DeviceFormat::Camera(_) => feeds.camera_configuration_result(pending.epoch),
+                        DeviceFormat::Microphone(_) => {
+                            feeds.microphone_configuration_result(pending.epoch)
+                        }
+                    });
             if camera_changed || microphone_changed || matches!(this.panel, Some(Panel::Device(_)))
             {
                 cx.notify();
             }
+            this.finish_device_format_change(format_result, cx);
         })
         .detach();
 
@@ -620,6 +717,12 @@ impl MainWindow {
             microphone: None,
             pending_device_restore: crate::store::RecordingInputSettings::load(),
             device_restore_suspended: false,
+            device_format_target: None,
+            device_formats: None,
+            device_format_value: None,
+            device_format_generation: 0,
+            device_format_pending: None,
+            device_format_notice: None,
             system_audio: false,
             selected_display: None,
             selected_window: None,
@@ -1881,15 +1984,22 @@ impl MainWindow {
             return;
         }
 
-        let (camera_feed, mic_feed) = {
+        let (camera_feed, mic_feed, input_readiness, device_settings) = {
             let feeds = Feeds::global(cx);
             feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
             let feeds = feeds.read(cx);
-            (feeds.camera_actor(), feeds.mic_actor())
+            (
+                feeds.camera_actor(),
+                feeds.mic_actor(),
+                feeds.input_readiness(),
+                feeds.requested_device_settings(),
+            )
         };
         let config = recording::StartConfig {
             mode,
             target,
+            device_settings,
+            input_readiness,
             microphone: self.microphone.as_ref().map(|mic| mic.name.clone()),
             camera: self.camera_id.clone(),
             system_audio: self.system_audio,
@@ -1909,6 +2019,7 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) {
         if self.enumerating
+            || self.device_format_pending.is_some()
             || self.pending_device_restore.camera_id.is_some()
             || self.pending_device_restore.microphone_name.is_some()
         {
@@ -1948,6 +2059,9 @@ impl MainWindow {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Result<RecordingStartPermit, String> {
+        if self.device_format_pending.is_some() {
+            return Err("Wait for the device format change to finish before recording".into());
+        }
         let permit = RecordingStartPermit::prepare(
             self.session.read(cx).phase,
             app_windows::clean_capture_owned(cx),
@@ -1967,12 +2081,15 @@ impl MainWindow {
     }
 
     pub(crate) fn is_preparing_recording(&self) -> bool {
-        self.checking_storage || self.deep_link_start.is_some()
+        self.checking_storage
+            || self.deep_link_start.is_some()
+            || self.device_format_pending.is_some()
     }
 
     fn device_changes_allowed(&self, cx: &gpui::App) -> bool {
         self.session.read(cx).phase == Phase::Idle
             && !self.is_preparing_recording()
+            && !self.device_restore_suspended
             && !app_windows::clean_capture_owned(cx)
     }
 
@@ -2210,6 +2327,7 @@ impl MainWindow {
 
     pub(crate) fn suspend_device_restore(&mut self) {
         self.device_restore_suspended = true;
+        self.device_format_pending = None;
     }
 
     pub(crate) fn resume_device_restore(&mut self, cx: &mut Context<Self>) {
@@ -2266,6 +2384,8 @@ impl MainWindow {
                 .map(|(camera, id)| feeds::SelectedCamera {
                     id: id.clone(),
                     label: camera.label.clone(),
+                    device_id: camera.device_id.clone(),
+                    model_id: camera.model_id.clone(),
                 });
         self.camera_id = id;
         self.camera = camera;
@@ -3193,6 +3313,17 @@ impl MainWindow {
                 .child("Recording Modes")
                 .into_any_element(),
             Panel::Library(kind) => self.render_library_header(kind, cx).into_any_element(),
+            Panel::Device(_) if self.device_format_target.is_some() => div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(px(12.))
+                .text_color(theme.gray_11)
+                .child(match self.device_format_target.as_ref().unwrap() {
+                    DeviceFormatTarget::Camera(camera) => camera.label.clone(),
+                    DeviceFormatTarget::Microphone(name) => name.clone(),
+                })
+                .into_any_element(),
             Panel::Device(_) | Panel::Target(_) => {
                 self.render_search_field(panel, cx).into_any_element()
             }
@@ -3239,7 +3370,7 @@ impl MainWindow {
                                     .child("Back"),
                             )
                             .hover(|style| style.bg(theme.body_hover_fill(4)))
-                            .on_click(cx.listener(|this, _, _window, cx| this.close_panel(cx))),
+                            .on_click(cx.listener(|this, _, _window, cx| this.back_panel(cx))),
                     )
                     .child(header_trailing),
             )
@@ -3268,6 +3399,9 @@ impl MainWindow {
     }
 
     fn close_panel(&mut self, cx: &mut Context<Self>) {
+        self.device_format_target = None;
+        self.device_formats = None;
+        self.device_format_generation += 1;
         self.panel = None;
         self.search.clear();
         self.search_input
@@ -3278,6 +3412,16 @@ impl MainWindow {
         // flight is left to land, the way a TanStack refetch is.
         self.target_poll_task = None;
         cx.notify();
+    }
+
+    fn back_panel(&mut self, cx: &mut Context<Self>) {
+        if self.device_format_target.take().is_some() {
+            self.device_formats = None;
+            self.device_format_generation += 1;
+            cx.notify();
+        } else {
+            self.close_panel(cx);
+        }
     }
 
     pub(crate) fn show_recorder(&mut self, cx: &mut Context<Self>) {
@@ -3291,7 +3435,7 @@ impl MainWindow {
             self.dismiss_microphone_warning(cx);
         } else if self.panel.is_some() {
             if self.search.is_empty() {
-                self.close_panel(cx);
+                self.back_panel(cx);
             } else {
                 self.clear_search(cx);
             }
@@ -3305,6 +3449,9 @@ impl MainWindow {
     }
 
     pub fn open_panel(&mut self, panel: Panel, window: &mut Window, cx: &mut Context<Self>) {
+        self.device_format_target = None;
+        self.device_formats = None;
+        self.device_format_generation += 1;
         self.panel = Some(panel);
         self.search.clear();
         self.search_input
@@ -4242,6 +4389,9 @@ impl MainWindow {
     }
 
     fn render_device_list(&self, menu: DeviceMenu, cx: &mut Context<Self>) -> gpui::Div {
+        if self.device_format_target.is_some() {
+            return self.render_device_formats(menu, cx);
+        }
         let theme = self.theme;
         let list = div().flex().flex_col().gap(px(4.)).w_full();
 
@@ -4304,22 +4454,45 @@ impl MainWindow {
                     let chosen = camera.clone();
 
                     rows.push(
-                        self.render_device_list_row(
-                            SharedString::from(format!("camera-{}", camera.device_id)),
-                            menu.icon(),
-                            camera.label.clone(),
-                            camera.best_format.map(|format| format.describe()),
-                            selected,
-                            None,
-                            cx.listener(move |this, _, _window, cx| {
-                                if !this.device_changes_allowed(cx) {
-                                    return;
-                                }
-                                this.set_camera_selection(Some(chosen.clone()), cx);
-                                this.close_panel(cx);
-                            }),
-                        )
-                        .into_any_element(),
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(4.))
+                            .w_full()
+                            .child(
+                                self.render_device_list_row(
+                                    SharedString::from(format!("camera-{}", camera.device_id)),
+                                    menu.icon(),
+                                    camera.label.clone(),
+                                    if selected {
+                                        Feeds::global(cx)
+                                            .read(cx)
+                                            .applied_device_settings()
+                                            .camera
+                                            .map(|settings| DeviceFormat::Camera(settings).label())
+                                    } else {
+                                        camera.best_format.map(|format| {
+                                            format!("Available: {}", format.describe())
+                                        })
+                                    },
+                                    selected,
+                                    None,
+                                    cx.listener(move |this, _, _window, cx| {
+                                        if !this.device_changes_allowed(cx) {
+                                            return;
+                                        }
+                                        this.set_camera_selection(Some(chosen.clone()), cx);
+                                        this.close_panel(cx);
+                                    }),
+                                )
+                                .flex_1()
+                                .min_w_0(),
+                            )
+                            .child(self.render_device_format_button(
+                                DeviceFormatTarget::Camera(camera.clone()),
+                                cx,
+                            ))
+                            .into_any_element(),
                     );
                 }
             }
@@ -4338,24 +4511,48 @@ impl MainWindow {
                     let chosen = mic.clone();
 
                     rows.push(
-                        self.render_device_list_row(
-                            SharedString::from(format!("mic-{}", mic.name)),
-                            menu.icon(),
-                            mic.name.clone(),
-                            mic.describe(),
-                            selected,
-                            selected.then(|| {
-                                feeds::picker_level(Feeds::global(cx).read(cx).mic_level_db)
-                            }),
-                            cx.listener(move |this, _, _window, cx| {
-                                if !this.device_changes_allowed(cx) {
-                                    return;
-                                }
-                                this.set_microphone_selection(Some(chosen.clone()), cx);
-                                this.close_panel(cx);
-                            }),
-                        )
-                        .into_any_element(),
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(4.))
+                            .w_full()
+                            .child(
+                                self.render_device_list_row(
+                                    SharedString::from(format!("mic-{}", mic.name)),
+                                    menu.icon(),
+                                    mic.name.clone(),
+                                    if selected {
+                                        Feeds::global(cx)
+                                            .read(cx)
+                                            .applied_device_settings()
+                                            .microphone
+                                            .map(|settings| {
+                                                DeviceFormat::Microphone(settings).label()
+                                            })
+                                    } else {
+                                        mic.describe()
+                                            .map(|description| format!("Available: {description}"))
+                                    },
+                                    selected,
+                                    selected.then(|| {
+                                        feeds::picker_level(Feeds::global(cx).read(cx).mic_level_db)
+                                    }),
+                                    cx.listener(move |this, _, _window, cx| {
+                                        if !this.device_changes_allowed(cx) {
+                                            return;
+                                        }
+                                        this.set_microphone_selection(Some(chosen.clone()), cx);
+                                        this.close_panel(cx);
+                                    }),
+                                )
+                                .flex_1()
+                                .min_w_0(),
+                            )
+                            .child(self.render_device_format_button(
+                                DeviceFormatTarget::Microphone(mic.name.clone()),
+                                cx,
+                            ))
+                            .into_any_element(),
                     );
                 }
             }
@@ -4366,6 +4563,274 @@ impl MainWindow {
         }
 
         list.children(rows)
+    }
+
+    fn open_device_formats(&mut self, target: DeviceFormatTarget, cx: &mut Context<Self>) {
+        if !self.device_changes_allowed(cx) {
+            return;
+        }
+        self.device_format_generation += 1;
+        let generation = self.device_format_generation;
+        self.device_format_value = Some(match &target {
+            DeviceFormatTarget::Camera(camera) => DeviceFormat::Camera(
+                crate::store::RecordingDeviceSettings::for_camera(
+                    &camera.device_id,
+                    camera.model_id.as_ref(),
+                )
+                .unwrap_or_default(),
+            ),
+            DeviceFormatTarget::Microphone(name) => DeviceFormat::Microphone(
+                crate::store::RecordingDeviceSettings::for_microphone(name).unwrap_or_default(),
+            ),
+        });
+        self.device_format_target = Some(target.clone());
+        self.device_format_notice = None;
+        self.device_formats = match &target {
+            DeviceFormatTarget::Camera(camera) => Some(Ok(std::iter::once(DeviceFormat::Camera(
+                Default::default(),
+            ))
+            .chain(
+                camera
+                    .formats
+                    .iter()
+                    .map(|format| DeviceFormat::Camera(format.settings())),
+            )
+            .collect())),
+            DeviceFormatTarget::Microphone(_) => None,
+        };
+        if let DeviceFormatTarget::Microphone(name) = target {
+            cx.spawn(async move |this, cx| {
+                let formats = cx
+                    .background_executor()
+                    .spawn(async move {
+                        devices::microphone_formats(&name).map(|formats| {
+                            std::iter::once(DeviceFormat::Microphone(Default::default()))
+                                .chain(formats.into_iter().map(DeviceFormat::Microphone))
+                                .collect()
+                        })
+                    })
+                    .await;
+                this.update(cx, |this, cx| {
+                    if this.device_format_generation != generation
+                        || this.device_format_target.is_none()
+                    {
+                        return;
+                    }
+                    this.device_formats = Some(formats);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    fn device_format_target_selected(&self, target: &DeviceFormatTarget) -> bool {
+        match target {
+            DeviceFormatTarget::Camera(camera) => self
+                .camera
+                .as_ref()
+                .is_some_and(|selected| selected.device_id == camera.device_id),
+            DeviceFormatTarget::Microphone(name) => self
+                .microphone
+                .as_ref()
+                .is_some_and(|selected| selected.name == *name),
+        }
+    }
+
+    fn choose_device_format(&mut self, format: DeviceFormat, cx: &mut Context<Self>) {
+        if !self.device_changes_allowed(cx) {
+            return;
+        }
+        let Some(target) = self.device_format_target.clone() else {
+            return;
+        };
+        if !self
+            .device_formats
+            .as_ref()
+            .and_then(|formats| formats.as_ref().ok())
+            .is_some_and(|formats| formats.contains(&format))
+        {
+            return;
+        }
+        self.device_format_notice = None;
+        if !self.device_format_target_selected(&target) {
+            self.complete_device_format_save(&target, format, cx);
+            return;
+        }
+        let feeds = Feeds::global(cx);
+        let epoch = feeds.update(cx, |feeds, cx| match format {
+            DeviceFormat::Camera(settings) => {
+                feeds.set_camera_with_settings(feeds.camera.clone(), Some(settings), cx)
+            }
+            DeviceFormat::Microphone(settings) => {
+                feeds.set_microphone_with_settings(feeds.microphone.clone(), Some(settings), cx)
+            }
+        });
+        self.device_format_pending = Some(PendingDeviceFormat {
+            target,
+            format,
+            epoch,
+        });
+        let result = match format {
+            DeviceFormat::Camera(_) => feeds.read(cx).camera_configuration_result(epoch),
+            DeviceFormat::Microphone(_) => feeds.read(cx).microphone_configuration_result(epoch),
+        };
+        self.finish_device_format_change(result, cx);
+        cx.notify();
+    }
+
+    fn finish_device_format_change(
+        &mut self,
+        result: Option<Result<(), String>>,
+        cx: &mut Context<Self>,
+    ) {
+        let still_owned = !self.device_restore_suspended
+            && self.session.read(cx).phase == Phase::Idle
+            && self
+                .device_format_pending
+                .as_ref()
+                .is_some_and(|pending| self.device_format_target_selected(&pending.target));
+        let Some(result) = complete_format_request(
+            &mut self.device_format_pending,
+            result,
+            still_owned,
+            save_device_format,
+        ) else {
+            return;
+        };
+        match result {
+            Ok(format) => {
+                self.device_format_value = Some(format);
+                self.device_format_notice = None;
+            }
+            Err(error) => {
+                self.device_format_notice = Some(error.clone());
+                self.session.update(cx, |session, cx| {
+                    session.error = Some(format!("Could not apply device format: {error}"));
+                    cx.notify();
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    fn complete_device_format_save(
+        &mut self,
+        target: &DeviceFormatTarget,
+        format: DeviceFormat,
+        cx: &mut Context<Self>,
+    ) {
+        if save_device_format(target, format) {
+            self.device_format_value = Some(format);
+            self.device_format_notice = None;
+        } else {
+            let error = "Could not save the device format preference. Try again.".to_string();
+            self.device_format_notice = Some(error.clone());
+            self.session.update(cx, |session, cx| {
+                session.error = Some(error);
+                cx.notify();
+            });
+        }
+        cx.notify();
+    }
+
+    fn render_device_formats(&self, menu: DeviceMenu, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let applied = self
+            .device_format_target
+            .as_ref()
+            .filter(|target| self.device_format_target_selected(target))
+            .and_then(|target| {
+                let settings = Feeds::global(cx).read(cx).applied_device_settings();
+                match target {
+                    DeviceFormatTarget::Camera(_) => settings.camera.map(DeviceFormat::Camera),
+                    DeviceFormatTarget::Microphone(_) => {
+                        settings.microphone.map(DeviceFormat::Microphone)
+                    }
+                }
+            });
+        let list = div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .w_full()
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme.gray_11)
+                    .pb(px(8.))
+                    .child("Preferred format"),
+            )
+            .when_some(applied, |list, format| {
+                list.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.gray_11)
+                        .pb(px(8.))
+                        .child(format!("Current: {}", format.label())),
+                )
+            });
+        let list = match &self.device_formats {
+            None => list.child(self.render_empty_state("Loading formats...")),
+            Some(Err(error)) => list.child(self.render_empty_state(error.clone())),
+            Some(Ok(formats)) => {
+                list.children(formats.iter().enumerate().map(|(index, format)| {
+                    let format = *format;
+                    self.render_device_list_row(
+                        SharedString::from(format!("device-format-{index}")),
+                        menu.icon(),
+                        format.label(),
+                        None,
+                        self.device_format_value == Some(format),
+                        None,
+                        cx.listener(move |this, _, _, cx| this.choose_device_format(format, cx)),
+                    )
+                }))
+            }
+        };
+        list.when(self.device_format_pending.is_some(), |list| {
+            list.child(self.render_empty_state("Applying format..."))
+        })
+        .when_some(self.device_format_notice.as_ref(), |list, notice| {
+            list.child(self.render_empty_state(notice.clone()))
+        })
+    }
+
+    fn render_device_format_button(
+        &self,
+        target: DeviceFormatTarget,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let enabled = self.device_changes_allowed(cx);
+        let name = match &target {
+            DeviceFormatTarget::Camera(camera) => format!("camera-format-{}", camera.device_id),
+            DeviceFormatTarget::Microphone(name) => format!("mic-format-{name}"),
+        };
+        div()
+            .id(SharedString::from(name))
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(32.))
+            .flex_shrink_0()
+            .rounded(px(6.))
+            .when(enabled, |button| {
+                button
+                    .cursor_pointer()
+                    .hover(|style| style.bg(self.theme.body_hover_fill(4)))
+            })
+            .when(!enabled, |button| button.opacity(0.45))
+            .child(
+                svg()
+                    .path("icons/settings-2.svg")
+                    .size(px(16.))
+                    .text_color(self.theme.gray_11),
+            )
+            .on_click(
+                cx.listener(move |this, _, _, cx| this.open_device_formats(target.clone(), cx)),
+            )
     }
 
     /// The width one target card gets, computed rather than flexed.
@@ -4660,13 +5125,13 @@ impl MainWindow {
         )
     }
 
-    fn render_empty_state(&self, message: &'static str) -> gpui::AnyElement {
+    fn render_empty_state(&self, message: impl Into<SharedString>) -> gpui::AnyElement {
         div()
             .py(px(24.))
             .w_full()
             .text_size(px(14.))
             .text_color(self.theme.gray_11)
-            .child(message)
+            .child(message.into())
             .into_any_element()
     }
 
@@ -5864,6 +6329,7 @@ mod remembered_device_tests {
             model_id: model.map(|model| cap_camera::ModelID::try_from(model.to_string()).unwrap()),
             label: format!("Camera {device}"),
             best_format: None,
+            formats: Vec::new(),
         }
     }
 
@@ -5940,6 +6406,84 @@ mod remembered_device_tests {
             Some("Remembered microphone")
         );
         assert!(take_pending_recording_inputs(&mut pending, false, false).is_none());
+    }
+}
+
+#[cfg(test)]
+mod device_format_tests {
+    use super::*;
+
+    fn pending() -> Option<PendingDeviceFormat> {
+        Some(PendingDeviceFormat {
+            target: DeviceFormatTarget::Microphone("Desk".into()),
+            format: DeviceFormat::Microphone(
+                cap_recording::feeds::microphone::MicrophoneDeviceSettings {
+                    sample_rate: Some(48_000),
+                    channels: Some(1),
+                },
+            ),
+            epoch: 7,
+        })
+    }
+
+    #[test]
+    fn format_preference_is_saved_once_after_readiness_not_while_pending() {
+        let mut request = pending();
+        let mut writes = Vec::new();
+        assert!(
+            complete_format_request(&mut request, None, true, |_, _| panic!(
+                "pending input cannot save"
+            ))
+            .is_none()
+        );
+        assert!(request.is_some());
+        let result = complete_format_request(&mut request, Some(Ok(())), true, |target, format| {
+            writes.push((target.clone(), format));
+            true
+        })
+        .unwrap()
+        .unwrap();
+        assert!(request.is_none());
+        assert_eq!(
+            writes,
+            vec![(DeviceFormatTarget::Microphone("Desk".into()), result)]
+        );
+        assert!(
+            complete_format_request(&mut request, Some(Ok(())), true, |_, _| panic!(
+                "duplicate acknowledgement cannot save"
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn failed_or_unowned_format_acknowledgements_do_not_save() {
+        for (result, owned) in [
+            (Err("input disconnected".into()), true),
+            (Ok(()), false),
+            (Err("selection changed".into()), false),
+        ] {
+            let mut request = pending();
+            let completion = complete_format_request(&mut request, Some(result), owned, |_, _| {
+                panic!("failed or stale input cannot save")
+            });
+            assert!(request.is_none());
+            if owned {
+                assert!(completion.unwrap().is_err());
+            } else {
+                assert!(completion.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn format_save_error_does_not_report_success() {
+        let mut request = pending();
+        let error = complete_format_request(&mut request, Some(Ok(())), true, |_, _| false)
+            .unwrap()
+            .unwrap_err();
+        assert!(error.contains("Could not save"));
+        assert!(request.is_none());
     }
 }
 

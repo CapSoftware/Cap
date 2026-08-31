@@ -935,6 +935,97 @@ pub const RECORDING_START_SAFETY: &str = "recording_start_safety";
 /// the section the tray's Select Mode submenu reads and writes.
 pub const RECORDING_SETTINGS: &str = "recording_settings";
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RecordingDeviceSettings {
+    pub camera: Option<cap_recording::feeds::camera::CameraDeviceSettings>,
+    pub microphone: Option<cap_recording::feeds::microphone::MicrophoneDeviceSettings>,
+}
+
+impl RecordingDeviceSettings {
+    pub fn for_camera(
+        device_id: &str,
+        model_id: Option<&cap_camera::ModelID>,
+    ) -> Option<cap_recording::feeds::camera::CameraDeviceSettings> {
+        let settings = store_section(RECORDING_SETTINGS);
+        let formats = settings.get("cameraDeviceSettings")?;
+        std::iter::once(format!("device:{device_id}"))
+            .chain(model_id.map(|model| format!("model:{model}")))
+            .find_map(|key| {
+                formats
+                    .get(key)
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+            })
+    }
+
+    pub fn for_microphone(
+        name: &str,
+    ) -> Option<cap_recording::feeds::microphone::MicrophoneDeviceSettings> {
+        store_section(RECORDING_SETTINGS)
+            .get("microphoneDeviceSettings")?
+            .get(name)
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+    }
+}
+
+pub fn set_camera_device_settings(
+    device_id: &str,
+    model_id: Option<&cap_camera::ModelID>,
+    settings: cap_recording::feeds::camera::CameraDeviceSettings,
+) -> bool {
+    let keys = std::iter::once(format!("device:{device_id}"))
+        .chain(model_id.map(|model| format!("model:{model}")));
+    set_device_format_settings("cameraDeviceSettings", keys, settings)
+}
+
+pub fn set_microphone_device_settings(
+    name: &str,
+    settings: cap_recording::feeds::microphone::MicrophoneDeviceSettings,
+) -> bool {
+    set_device_format_settings("microphoneDeviceSettings", [name.to_string()], settings)
+}
+
+fn set_device_format_settings(
+    map_key: &str,
+    keys: impl IntoIterator<Item = String>,
+    settings: impl serde::Serialize,
+) -> bool {
+    let Ok(Value::Object(fields)) = serde_json::to_value(settings) else {
+        return false;
+    };
+    let path = tauri_store_path();
+    let Some(mut store) = read_store(&path) else {
+        return false;
+    };
+    let section = store
+        .entry(RECORDING_SETTINGS.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(section) = section.as_object_mut() else {
+        return false;
+    };
+    let map = section
+        .entry(map_key.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(map) = map.as_object_mut() else {
+        return false;
+    };
+    for key in keys {
+        let entry = map.entry(key).or_insert_with(|| Value::Object(Map::new()));
+        let Some(entry) = entry.as_object_mut() else {
+            return false;
+        };
+        for (key, value) in &fields {
+            if value.is_null() {
+                entry.remove(key);
+            } else {
+                entry.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    write_store(&path, &Value::Object(store))
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RecordingInputSettings {
     pub camera_id: Option<cap_recording::feeds::camera::DeviceOrModelID>,
@@ -1761,6 +1852,99 @@ mod tests {
             let _ = std::fs::remove_file(&self.path);
             TEST_TAURI_STORE_PATH.with(|current| *current.borrow_mut() = None);
         }
+    }
+
+    #[test]
+    fn device_format_preferences_use_tauri_keys_and_preserve_other_fields() {
+        use cap_recording::feeds::{
+            camera::CameraDeviceSettings, microphone::MicrophoneDeviceSettings,
+        };
+        let store = TempStore::new(
+            "device-format-preferences",
+            Some(
+                r#"{"recording_settings":{"mode":"studio","cameraDeviceSettings":{"device:camera-1":{"width":1280,"height":720,"frameRate":30,"future":7},"model:vendor:product":{"frameRate":60},"device:other":{"width":640}},"microphoneDeviceSettings":{"Desk":{"sampleRate":48000,"channels":1,"future":9},"Other":{"channels":2}},"future":{"keep":true}},"unrelated":{"keep":true}}"#,
+            ),
+        );
+        let before = store.read();
+        let model = cap_camera::ModelID::try_from("vendor:product".to_string()).unwrap();
+        let snapshot = RecordingDeviceSettings {
+            camera: RecordingDeviceSettings::for_camera("camera-1", Some(&model)),
+            microphone: RecordingDeviceSettings::for_microphone("Desk"),
+        };
+        assert_eq!(snapshot.camera.unwrap().frame_rate, Some(30.));
+        assert_eq!(
+            RecordingDeviceSettings::for_camera("replugged", Some(&model))
+                .unwrap()
+                .frame_rate,
+            Some(60.)
+        );
+        let camera = CameraDeviceSettings {
+            width: Some(1920),
+            height: Some(1080),
+            frame_rate: Some(30.),
+        };
+        assert!(set_camera_device_settings("camera-1", Some(&model), camera));
+        assert!(set_microphone_device_settings(
+            "Desk",
+            MicrophoneDeviceSettings {
+                sample_rate: Some(44100),
+                channels: Some(2)
+            }
+        ));
+        assert_eq!(
+            RecordingDeviceSettings::for_camera("camera-1", Some(&model)),
+            Some(camera)
+        );
+        assert_eq!(
+            RecordingDeviceSettings::for_camera("replugged", Some(&model)),
+            Some(camera)
+        );
+        assert_eq!(snapshot.camera.unwrap().width, Some(1280));
+        assert_eq!(snapshot.microphone.unwrap().sample_rate, Some(48000));
+        let after = store.read();
+        assert_eq!(
+            after[RECORDING_SETTINGS]["cameraDeviceSettings"]["device:camera-1"]["future"],
+            7
+        );
+        assert_eq!(
+            after[RECORDING_SETTINGS]["microphoneDeviceSettings"]["Desk"]["future"],
+            9
+        );
+        assert_eq!(
+            after[RECORDING_SETTINGS]["cameraDeviceSettings"]["device:other"],
+            before[RECORDING_SETTINGS]["cameraDeviceSettings"]["device:other"]
+        );
+        assert_eq!(
+            after[RECORDING_SETTINGS]["microphoneDeviceSettings"]["Other"],
+            before[RECORDING_SETTINGS]["microphoneDeviceSettings"]["Other"]
+        );
+        assert_eq!(after["unrelated"], before["unrelated"]);
+        assert_eq!(
+            after[RECORDING_SETTINGS]["future"],
+            before[RECORDING_SETTINGS]["future"]
+        );
+        assert!(set_camera_device_settings(
+            "camera-1",
+            Some(&model),
+            CameraDeviceSettings::default()
+        ));
+        assert!(
+            store.read()[RECORDING_SETTINGS]["cameraDeviceSettings"]["device:camera-1"]
+                .get("frameRate")
+                .is_none()
+        );
+        assert_eq!(
+            store.read()[RECORDING_SETTINGS]["cameraDeviceSettings"]["device:camera-1"]["future"],
+            7
+        );
+    }
+
+    #[test]
+    fn device_format_save_failure_does_not_replace_unreadable_preferences() {
+        let store = TempStore::new("device-format-invalid-store", Some("{broken"));
+        let before = std::fs::read(&store.path).unwrap();
+        assert!(!set_microphone_device_settings("Desk", Default::default()));
+        assert_eq!(std::fs::read(&store.path).unwrap(), before);
     }
 
     #[test]

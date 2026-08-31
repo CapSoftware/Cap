@@ -360,10 +360,7 @@ impl DeepLinkAction {
                 let permit = main
                     .update(cx, |view, _, cx| view.prepare_deep_link_start(cx))
                     .map_err(|_| "The recording window is unavailable".to_string())??;
-                let selection = camera.clone().map(|id| SelectedCamera {
-                    label: camera_label(&id),
-                    id,
-                });
+                let selection = camera.clone().map(camera_selection);
                 if !permit.is_current(cx) {
                     let _ = main.update(cx, |view, _, _| view.finish_deep_link_start(&permit));
                     return Err("Recording preparation is no longer current".into());
@@ -383,11 +380,16 @@ impl DeepLinkAction {
                         let _ = main.update(cx, |view, _, _| view.finish_deep_link_start(&permit));
                         return;
                     }
-                    let (camera_feed, mic_feed) = {
+                    let (camera_feed, mic_feed, input_readiness, device_settings) = {
                         let feeds = Feeds::global(cx);
                         feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
                         let feeds = feeds.read(cx);
-                        (feeds.camera_actor(), feeds.mic_actor())
+                        (
+                            feeds.camera_actor(),
+                            feeds.mic_actor(),
+                            feeds.input_readiness(),
+                            feeds.requested_device_settings(),
+                        )
                     };
                     if main
                         .update(cx, |view, _, cx| {
@@ -395,6 +397,8 @@ impl DeepLinkAction {
                                 recording::StartConfig {
                                     mode,
                                     target: capture_target,
+                                    device_settings,
+                                    input_readiness,
                                     microphone: mic_label,
                                     camera,
                                     system_audio: capture_system_audio,
@@ -469,10 +473,7 @@ impl DeepLinkAction {
             // signals with no consumer in this app.
             #[cfg(debug_assertions)]
             DeepLinkAction::OpenCamera { camera } => {
-                let selection = SelectedCamera {
-                    label: camera_label(&camera),
-                    id: camera,
-                };
+                let selection = camera_selection(camera);
                 Feeds::global(cx).update(cx, |feeds, cx| feeds.set_camera(Some(selection), cx));
                 Ok(())
             }
@@ -556,22 +557,35 @@ impl DeepLinkAction {
     }
 }
 
-/// The display label for a deep-linked camera id. The Tauri action carries no
-/// label (its command takes the bare `DeviceOrModelID`); this app's
-/// [`SelectedCamera`] wants one for the pickers, so it is resolved against the
-/// same enumeration `devices.rs` lists from, falling back to the raw device id
-/// for a device that is not currently attached.
-fn camera_label(id: &DeviceOrModelID) -> String {
-    cap_camera::list_cameras()
-        .find(|info| match id {
-            DeviceOrModelID::DeviceID(device_id) => info.device_id() == device_id.as_str(),
-            DeviceOrModelID::ModelID(model) => info.model_id() == Some(model),
-        })
-        .map(|info| info.display_name().to_string())
-        .unwrap_or_else(|| match id {
-            DeviceOrModelID::DeviceID(device_id) => device_id.clone(),
-            DeviceOrModelID::ModelID(_) => "Camera".to_string(),
-        })
+fn camera_selection(id: DeviceOrModelID) -> SelectedCamera {
+    let info = cap_camera::list_cameras().find(|info| match &id {
+        DeviceOrModelID::DeviceID(device) => info.device_id() == device,
+        DeviceOrModelID::ModelID(model) => info.model_id() == Some(model),
+    });
+    SelectedCamera {
+        device_id: info
+            .as_ref()
+            .map(|info| info.device_id().to_string())
+            .unwrap_or_else(|| match &id {
+                DeviceOrModelID::DeviceID(device) => device.clone(),
+                DeviceOrModelID::ModelID(_) => String::new(),
+            }),
+        model_id: info
+            .as_ref()
+            .and_then(|info| info.model_id().cloned())
+            .or_else(|| match &id {
+                DeviceOrModelID::ModelID(model) => Some(model.clone()),
+                DeviceOrModelID::DeviceID(_) => None,
+            }),
+        label: info
+            .as_ref()
+            .map(|info| info.display_name().to_string())
+            .unwrap_or_else(|| match &id {
+                DeviceOrModelID::DeviceID(device) => device.clone(),
+                DeviceOrModelID::ModelID(_) => "Camera".to_string(),
+            }),
+        id,
+    }
 }
 
 #[cfg(test)]

@@ -18,6 +18,7 @@ pub struct CameraOption {
     /// Highest-resolution format the device advertises, shown as the row's
     /// subtitle. `None` when the device reports no formats.
     pub best_format: Option<CameraFormat>,
+    pub formats: Vec<CameraFormat>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -28,6 +29,14 @@ pub struct CameraFormat {
 }
 
 impl CameraFormat {
+    pub fn settings(self) -> cap_recording::feeds::camera::CameraDeviceSettings {
+        cap_recording::feeds::camera::CameraDeviceSettings {
+            width: Some(self.width),
+            height: Some(self.height),
+            frame_rate: Some(self.frame_rate),
+        }
+    }
+
     /// Matches the web UI: `1920×1080 @ 30fps`.
     pub fn describe(&self) -> String {
         format!(
@@ -167,28 +176,37 @@ impl TargetSnapshot {
 fn list_cameras() -> Vec<CameraOption> {
     cap_camera::list_cameras()
         .map(|camera| {
-            // Highest resolution first, then highest frame rate at that
-            // resolution -- the same ordering the web UI's `bestFormat` uses.
-            let best_format = camera.formats().and_then(|formats| {
-                formats
-                    .into_iter()
-                    .max_by(|a, b| {
-                        (a.width() * a.height())
-                            .cmp(&(b.width() * b.height()))
-                            .then(a.frame_rate().total_cmp(&b.frame_rate()))
-                    })
-                    .map(|format| CameraFormat {
-                        width: format.width(),
-                        height: format.height(),
-                        frame_rate: format.frame_rate(),
-                    })
+            let mut formats = camera
+                .formats()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|format| CameraFormat {
+                    width: format.width(),
+                    height: format.height(),
+                    frame_rate: format.frame_rate(),
+                })
+                .collect::<Vec<_>>();
+            let mut seen = std::collections::HashSet::new();
+            formats.retain(|format| {
+                seen.insert((
+                    format.width,
+                    format.height,
+                    format.frame_rate.round() as u32,
+                ))
             });
+            formats.sort_by(|a, b| {
+                (b.width * b.height)
+                    .cmp(&(a.width * a.height))
+                    .then(b.frame_rate.total_cmp(&a.frame_rate))
+            });
+            let best_format = formats.first().copied();
 
             CameraOption {
                 device_id: camera.device_id().to_string(),
                 model_id: camera.model_id().cloned(),
                 label: camera.display_name().to_string(),
                 best_format,
+                formats,
             }
         })
         .collect()
@@ -233,6 +251,45 @@ fn list_microphones() -> Vec<MicrophoneOption> {
     }
 
     mics
+}
+
+pub fn microphone_formats(
+    name: &str,
+) -> Result<Vec<cap_recording::feeds::microphone::MicrophoneDeviceSettings>, String> {
+    let devices = cap_recording::feeds::microphone::MicrophoneFeed::list();
+    let (device, _) = devices
+        .get(name)
+        .ok_or_else(|| format!("Microphone '{name}' is no longer available"))?;
+    let configs = device
+        .supported_input_configs()
+        .map_err(|error| format!("Could not read microphone formats: {error}"))?;
+    let mut formats = std::collections::BTreeSet::new();
+    for config in configs {
+        if cap_media_info::ffmpeg_sample_format_for(config.sample_format()).is_none() {
+            continue;
+        }
+        for sample_rate in [
+            config.min_sample_rate().0,
+            44_100,
+            48_000,
+            96_000,
+            config.max_sample_rate().0,
+        ] {
+            if (config.min_sample_rate().0..=config.max_sample_rate().0).contains(&sample_rate) {
+                formats.insert((sample_rate, config.channels()));
+            }
+        }
+    }
+    Ok(formats
+        .into_iter()
+        .rev()
+        .map(
+            |(sample_rate, channels)| cap_recording::feeds::microphone::MicrophoneDeviceSettings {
+                sample_rate: Some(sample_rate),
+                channels: Some(channels),
+            },
+        )
+        .collect())
 }
 
 /// `Window::get_topmost_at_cursor`, minus this process's own windows: the
