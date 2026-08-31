@@ -1162,16 +1162,21 @@ fn capture_environment_is_x11(
 fn validate_capture_visibility(
     mode: cap_recording::RecordingMode,
     target: &cap_recording::screen_capture::ScreenCaptureTarget,
+    camera_requested: bool,
+    uses_wayland_portal: bool,
     supported: bool,
 ) -> Result<bool, String> {
-    if !matches!(
-        mode,
-        cap_recording::RecordingMode::Studio | cap_recording::RecordingMode::Instant
-    ) || !matches!(
-        target,
-        cap_recording::screen_capture::ScreenCaptureTarget::Display { .. }
-            | cap_recording::screen_capture::ScreenCaptureTarget::Area { .. }
-    ) {
+    use cap_recording::{RecordingMode, screen_capture::ScreenCaptureTarget};
+    let needs_visibility = match target {
+        ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. } => {
+            matches!(mode, RecordingMode::Studio | RecordingMode::Instant)
+        }
+        ScreenCaptureTarget::Window { .. } => {
+            mode == RecordingMode::Instant && camera_requested && !uses_wayland_portal
+        }
+        ScreenCaptureTarget::CameraOnly => false,
+    };
+    if !needs_visibility {
         return Ok(false);
     }
     if !supported {
@@ -1205,6 +1210,12 @@ pub async fn prepare(
     if !validate_capture_visibility(
         inputs.mode,
         &inputs.capture_target,
+        app.state::<crate::RequestedInputsState>()
+            .snapshot()
+            .camera
+            .value
+            .is_some(),
+        uses_wayland_portal,
         capture_environment_is_x11(
             inputs.mode,
             x11_environment(
@@ -2619,18 +2630,57 @@ mod tests {
         };
         for mode in [RecordingMode::Studio, RecordingMode::Instant] {
             for target in [&display, &area] {
-                assert_eq!(validate_capture_visibility(mode, target, true), Ok(true));
-                assert!(validate_capture_visibility(mode, target, false).is_err());
+                assert_eq!(
+                    validate_capture_visibility(mode, target, false, false, true),
+                    Ok(true)
+                );
+                assert!(validate_capture_visibility(mode, target, false, false, false).is_err());
             }
             for target in [&window, &ScreenCaptureTarget::CameraOnly] {
-                assert_eq!(validate_capture_visibility(mode, target, true), Ok(false));
-                assert_eq!(validate_capture_visibility(mode, target, false), Ok(false));
+                assert_eq!(
+                    validate_capture_visibility(mode, target, false, false, true),
+                    Ok(false)
+                );
+                assert_eq!(
+                    validate_capture_visibility(mode, target, false, false, false),
+                    Ok(false)
+                );
             }
         }
         assert_eq!(
-            validate_capture_visibility(RecordingMode::Screenshot, &display, false),
+            validate_capture_visibility(RecordingMode::Screenshot, &display, false, false, false),
             Ok(false)
         );
+    }
+
+    #[test]
+    fn window_camera_visibility_is_required_only_for_x11_instant() {
+        use cap_recording::{RecordingMode, screen_capture::ScreenCaptureTarget};
+        let target = ScreenCaptureTarget::Window {
+            id: "1".parse().unwrap(),
+        };
+        for mode in [
+            RecordingMode::Studio,
+            RecordingMode::Instant,
+            RecordingMode::Screenshot,
+        ] {
+            for camera in [false, true] {
+                for wayland in [false, true] {
+                    let required = mode == RecordingMode::Instant && camera && !wayland;
+                    assert_eq!(
+                        validate_capture_visibility(mode, &target, camera, wayland, true),
+                        Ok(required)
+                    );
+                    let unsupported =
+                        validate_capture_visibility(mode, &target, camera, wayland, false);
+                    if required {
+                        assert!(unsupported.is_err());
+                    } else {
+                        assert_eq!(unsupported, Ok(false));
+                    }
+                }
+            }
+        }
     }
 
     #[test]

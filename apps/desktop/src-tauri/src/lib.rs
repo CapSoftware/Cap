@@ -134,11 +134,8 @@ use windows::{
     set_window_transparent, show_overlay,
 };
 
+use crate::recording_settings::{RecordingSettingsStore, RecordingTargetMode};
 use crate::{recording::start_recording, upload::build_video_meta};
-use crate::{
-    recording_settings::{RecordingSettingsStore, RecordingTargetMode},
-    upload::InstantMultipartUpload,
-};
 use exit_shutdown::{
     AppExitAction, ExitRequestDecision, app_exit_action, collect_device_inventory,
     handle_exit_requested, run_while_active,
@@ -2650,6 +2647,7 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
     }
 
     export::cancel_all_exports();
+    upload::lifecycle::shutdown().await;
     power_observer::uninstall(app);
     fake_window::cancel_all_fake_window_listeners(app);
     close_target_select_overlays(app);
@@ -4131,6 +4129,17 @@ async fn upload_exported_video(
 
     let mut meta = RecordingMeta::load_for_project(&path).map_err(|v| v.to_string())?;
 
+    if matches!(meta.inner, RecordingMetaInner::Instant(_)) {
+        match upload::lifecycle::retry_existing(app.clone(), &path).await {
+            Ok(Some(link)) => return Ok(UploadResult::Success(link)),
+            Ok(None) => {}
+            Err(AuthedApiError::InvalidAuthentication) => {
+                return Ok(UploadResult::NotAuthenticated);
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+
     let file_path = meta.output_path();
     if !file_path.exists() {
         notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
@@ -4635,6 +4644,12 @@ fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMeta
     Ok(result)
 }
 
+fn acquire_recording_delete_lock(
+    path: &std::path::Path,
+) -> Result<cap_recording::upload_resume::UploadLock, String> {
+    cap_recording::upload_resume::UploadLock::acquire(path).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
@@ -4673,8 +4688,12 @@ async fn delete_recording_directory(app: AppHandle, path: PathBuf) -> Result<(),
             return Err("Path is not inside a recordings directory".to_string());
         }
 
+        upload::lifecycle::cancel(&canonical_path).await;
+        let ownership = acquire_recording_delete_lock(&canonical_path)?;
+        upload::lifecycle::mark_cancelled(&canonical_path).map_err(|error| error.to_string())?;
         std::fs::remove_dir_all(&canonical_path)
-            .map_err(|e| format!("Failed to delete recording: {e}"))?;
+            .map_err(|error| format!("Failed to delete recording: {error}"))?;
+        drop(ownership);
     }
 
     let _ = RecordingDeleted { path }.emit(&app);
@@ -6140,15 +6159,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 }
             });
 
-            tokio::spawn({
-                let app = app.clone();
-                async move {
-                    resume_uploads(app)
-                        .await
-                        .map_err(|err| warn!("Error resuming uploads: {err}"))
-                        .ok();
-                }
-            });
+            upload::lifecycle::init(app.clone());
 
             spawn_mic_error_handler(app.clone(), mic_error_rx);
             spawn_device_watchers(app.clone());
@@ -7171,232 +7182,101 @@ fn instant_upload_may_resume(inner: &RecordingMetaInner) -> bool {
     )
 }
 
+#[cfg(test)]
 fn load_instant_resume_candidate(path: &std::path::Path) -> Result<Option<RecordingMeta>, String> {
-    let mut meta = RecordingMeta::load_for_project(path).map_err(|error| error.to_string())?;
-    if matches!(
-        meta.inner,
-        RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. })
-    ) {
-        meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Failed {
-            error: "Recording crashed".into(),
-        });
-        meta.save_for_project().map_err(|error| error.to_string())?;
-    }
-    Ok(instant_upload_may_resume(&meta.inner).then_some(meta))
+    load_upload_resume_candidate(path, true).map(|candidate| candidate.map(|(meta, _lock)| meta))
 }
 
-async fn resume_uploads(app: AppHandle) -> Result<(), String> {
-    let mut entries = Vec::new();
-    for recordings_dir in recordings_locations::known_recordings_dirs(&app) {
-        let Ok(dir_entries) = std::fs::read_dir(&recordings_dir) else {
+fn load_upload_resume_candidate(
+    path: &std::path::Path,
+    mark_crashed: bool,
+) -> Result<Option<(RecordingMeta, cap_recording::upload_resume::UploadLock)>, String> {
+    let lock = match upload::acquire_upload_lock(path) {
+        Ok(lock) => lock,
+        Err(_) => return Ok(None),
+    };
+    let mut meta = RecordingMeta::load_for_project(path).map_err(|error| error.to_string())?;
+    if mark_crashed {
+        let changed = match &mut meta.inner {
+            RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. }) => {
+                meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Failed {
+                    error: "Recording crashed".into(),
+                });
+                true
+            }
+            RecordingMetaInner::Studio(studio) => {
+                if let StudioRecordingMeta::MultipleSegments { inner } = &mut **studio
+                    && matches!(inner.status, Some(StudioRecordingStatus::InProgress))
+                {
+                    inner.status = Some(StudioRecordingStatus::Failed {
+                        error: "Recording crashed".into(),
+                    });
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        };
+        if changed {
+            meta.save_for_project().map_err(|error| error.to_string())?;
+        }
+    }
+    upload::lifecycle::reconcile_reupload(&mut meta).map_err(|error| error.to_string())?;
+    Ok(instant_upload_may_resume(&meta.inner).then_some((meta, lock)))
+}
+
+async fn resume_uploads(app: AppHandle, mark_crashed: bool) -> Result<(), String> {
+    upload::lifecycle::reap().await;
+    for directory in recordings_locations::known_recordings_dirs(&app) {
+        let Ok(entries) = std::fs::read_dir(directory) else {
             continue;
         };
-        entries.extend(dir_entries.flatten());
-    }
-
-    for entry in entries {
-        let path = entry.path();
-        if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
-            // Load recording meta to check for in-progress recordings
-            let candidate = load_instant_resume_candidate(&path);
-            if let Ok(Some(mut meta)) = candidate {
-                let mut needs_save = false;
-
-                // Check if recording is still marked as in-progress and if so mark as failed
-                // This should only happen if the application crashes while recording
-                match &mut meta.inner {
-                    RecordingMetaInner::Studio(meta_box) => {
-                        if let StudioRecordingMeta::MultipleSegments { inner } = &mut **meta_box
-                            && let Some(StudioRecordingStatus::InProgress) = &inner.status
-                        {
-                            inner.status = Some(StudioRecordingStatus::Failed {
-                                error: "Recording crashed".to_string(),
-                            });
-                            needs_save = true;
-                        }
-                    }
-                    RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. }) => {
-                        meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Failed {
-                            error: "Recording crashed".to_string(),
-                        });
-                        needs_save = true;
-                    }
-                    _ => {}
-                }
-
-                // Save the updated meta if we made changes
-                if needs_save && let Err(err) = meta.save_for_project() {
-                    error!("Failed to save recording meta for {path:?}: {err}");
-                }
-
-                if !instant_upload_may_resume(&meta.inner) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("cap") {
+                continue;
+            }
+            if !upload::lifecycle::has_capacity() {
+                break;
+            }
+            let (meta, lock) = match load_upload_resume_candidate(&path, mark_crashed) {
+                Ok(Some(candidate)) => candidate,
+                Ok(None) => continue,
+                Err(error) => {
+                    warn!(%error, "Recording upload state could not be read; files retained");
                     continue;
                 }
-                let required_audio = matches!(
-                    &meta.inner,
-                    RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
-                        sample_rate: Some(_),
-                        ..
-                    })
-                );
-
-                // Handle upload resumption
-                if let Some(upload_meta) = meta.upload {
-                    match upload_meta {
-                        UploadMeta::MultipartUpload {
-                            video_id: _,
-                            file_path,
-                            pre_created_video,
-                            recording_dir,
-                        } => {
-                            #[cfg(target_os = "linux")]
-                            if matches!(&meta.inner, RecordingMetaInner::Instant(_)) {
-                                upload::strict_instant::resume(
-                                    app.clone(),
-                                    recording_dir,
-                                    pre_created_video,
-                                    None,
-                                    required_audio,
-                                );
-                                continue;
-                            }
-                            InstantMultipartUpload::spawn(
-                                app.clone(),
-                                file_path,
-                                pre_created_video,
-                                recording_dir,
-                                None,
-                            );
-                        }
-                        UploadMeta::SinglePartUpload {
-                            video_id,
-                            file_path,
-                            screenshot_path,
-                            recording_dir,
-                        } => {
-                            let app = app.clone();
-                            tokio::spawn(async move {
-                                if let Ok(meta) = build_video_meta(&file_path)
-                                    .map_err(|error| {
-                                        error!("Failed to resume video upload. error getting video metadata: {error}");
-
-                                        if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| error!("Error loading project metadata: {err}")) {
-                                            meta.upload = Some(UploadMeta::Failed { error });
-                                            meta.save_for_project().map_err(|err| error!("Error saving project metadata: {err}")).ok();
-                                        }
-                                    })
-                                    && let Ok(uploaded_video) = upload_video(
-                                        &app,
-                                        video_id,
-                                        file_path,
-                                        screenshot_path,
-                                        meta,
-                                        None,
-                                    )
-                                    .await
-                                    .map_err(|error| {
-                                        error!("Error completing resumed upload for video: {error}");
-
-                                        if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| error!("Error loading project metadata: {err}")) {
-                                            meta.upload = Some(UploadMeta::Failed { error: error.to_string() });
-                                            meta.save_for_project().map_err(|err| error!("Error saving project metadata: {err}")).ok();
-                                        }
-                                    })
-                                    {
-                                        if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| error!("Error loading project metadata: {err}")) {
-                                            meta.upload = Some(UploadMeta::Complete);
-                                            meta.sharing = Some(SharingMeta {
-                                                link: uploaded_video.link.clone(),
-                                                id: uploaded_video.id.clone(),
-                                                content_hash: None,
-                                            });
-                                            meta.save_for_project()
-                                                .map_err(|e| error!("Failed to save recording meta: {e}"))
-                                                .ok();
-                                        }
-
-                                        let _ = app
-                                            .state::<ArcLock<ClipboardContext>>()
-                                            .write()
-                                            .await
-                                            .set_text(uploaded_video.link.clone());
-                                        NotificationType::ShareableLinkCopied.send(&app);
-                                    }
-                            });
-                        }
-                        UploadMeta::SegmentUpload {
-                            video_id,
-                            pre_created_video,
-                            recording_dir,
-                        } => {
-                            let same_recording = recording_dir
-                                .canonicalize()
-                                .ok()
-                                .zip(path.canonicalize().ok())
-                                .is_some_and(|(stored, current)| stored == current);
-                            if !same_recording
-                                || !matches!(
-                                    &meta.inner,
-                                    RecordingMetaInner::Instant(
-                                        InstantRecordingMeta::Complete { .. }
-                                    )
-                                )
-                            {
-                                warn!(
-                                    video_id,
-                                    "Incomplete or relocated recording upload retained for recovery"
-                                );
-                                continue;
-                            }
-                            let events = match upload::resume::collect_segment_events(
-                                &recording_dir,
-                                required_audio,
-                            ) {
-                                Ok(events) => events,
-                                Err(error) => {
-                                    warn!(video_id, %error, "Invalid segment upload retained locally for recovery");
-                                    continue;
-                                }
-                            };
-                            info!(
-                                video_id = video_id,
-                                "Resuming validated segment upload on restart"
-                            );
-                            let (segment_tx, segment_rx) = std::sync::mpsc::channel();
-                            for event in events {
-                                if let Err(error) = segment_tx.send(event) {
-                                    warn!(video_id, %error, "Could not queue resumed segment upload");
-                                }
-                            }
-                            drop(segment_tx);
-
-                            #[cfg(target_os = "linux")]
-                            if matches!(&meta.inner, RecordingMetaInner::Instant(_)) {
-                                upload::strict_instant::resume(
-                                    app.clone(),
-                                    recording_dir,
-                                    pre_created_video,
-                                    Some(segment_rx),
-                                    required_audio,
-                                );
-                                continue;
-                            }
-                            crate::upload::SegmentUploader::spawn(
-                                app.clone(),
-                                video_id,
-                                segment_rx,
-                                None,
-                                recording_dir,
-                                pre_created_video,
-                            );
-                        }
-                        UploadMeta::Failed { .. } | UploadMeta::Complete => {}
+            };
+            if matches!(
+                meta.upload,
+                None | Some(UploadMeta::Complete | UploadMeta::Failed { .. })
+            ) {
+                continue;
+            }
+            let fallback_audio = matches!(
+                &meta.inner,
+                RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
+                    sample_rate: Some(_),
+                    ..
+                })
+            );
+            let required_audio =
+                match upload::lifecycle::resume_audio(&app, &path, fallback_audio).await {
+                    Ok(Some(required_audio)) => required_audio,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        warn!(%error, "Recording upload intent could not be read; files retained");
+                        continue;
                     }
-                }
+                };
+            if let Err(error) =
+                upload::lifecycle::resume_existing(app.clone(), meta, lock, required_audio).await
+            {
+                warn!(%error, "Upload retry remains local");
             }
         }
     }
-
     Ok(())
 }
 
@@ -8593,6 +8473,77 @@ mod instant_resume_safety_tests {
         std::fs::write(path.join("recording-meta.json"), b"invalid").unwrap();
         assert!(load_instant_resume_candidate(&path).is_err());
         assert!(path.is_dir());
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn periodic_reconciliation_does_not_mark_an_active_recording_failed() {
+        let path = project(
+            "periodic",
+            InstantRecordingMeta::InProgress { recording: true },
+        );
+        assert!(
+            load_upload_resume_candidate(&path, false)
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(
+            RecordingMeta::load_for_project(&path).unwrap().inner,
+            RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true })
+        ));
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn another_upload_owner_prevents_startup_metadata_mutation() {
+        let path = project(
+            "owned",
+            InstantRecordingMeta::InProgress { recording: true },
+        );
+        let lock = cap_recording::upload_resume::UploadLock::acquire(&path).unwrap();
+        let before = std::fs::read(path.join("recording-meta.json")).unwrap();
+        assert!(load_upload_resume_candidate(&path, true).unwrap().is_none());
+        assert_eq!(
+            std::fs::read(path.join("recording-meta.json")).unwrap(),
+            before
+        );
+        drop(lock);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn explicit_delete_accepts_idle_gpui_recordings_while_resume_defers_them() {
+        let path = project(
+            "gpui-delete",
+            InstantRecordingMeta::Complete {
+                fps: 30,
+                sample_rate: None,
+            },
+        );
+        std::fs::write(path.join("instant-upload.json"), b"{}").unwrap();
+        assert!(upload::acquire_upload_lock(&path).is_err());
+        let ownership = acquire_recording_delete_lock(&path).unwrap();
+        assert!(acquire_recording_delete_lock(&path).is_err());
+        std::fs::remove_dir_all(&path).unwrap();
+        drop(ownership);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn explicit_delete_cannot_bypass_another_clients_active_upload_lock() {
+        let path = project(
+            "active-delete",
+            InstantRecordingMeta::Complete {
+                fps: 30,
+                sample_rate: None,
+            },
+        );
+        let ownership = cap_recording::upload_resume::UploadLock::acquire(&path).unwrap();
+        let original = std::fs::read(path.join("recording-meta.json")).unwrap();
+        assert!(acquire_recording_delete_lock(&path).is_err());
+        assert_eq!(
+            std::fs::read(path.join("recording-meta.json")).unwrap(),
+            original
+        );
+        drop(ownership);
         std::fs::remove_dir_all(path).unwrap();
     }
 }

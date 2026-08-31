@@ -10,6 +10,10 @@ use crate::{
 use async_stream::{stream, try_stream};
 use bytes::Bytes;
 use cap_project::{RecordingMeta, S3UploadMeta, UploadMeta};
+use cap_recording::{
+    upload_resume::UploadLock,
+    upload_verification::{UploadVerification, VerifiedUploadReceipt},
+};
 use cap_utils::spawn_actor;
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
@@ -35,19 +39,90 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
 use tokio::{
     fs::File,
-    io::{AsyncReadExt, AsyncSeekExt, BufReader},
+    io::{AsyncReadExt, BufReader},
     task::{self, JoinHandle},
     time::{self, Instant, timeout},
 };
 use tokio_util::io::ReaderStream;
 use tracing::{Span, debug, error, info, info_span, instrument, trace, warn};
 
+pub(crate) mod lifecycle;
 pub(crate) mod resume;
 use tracing_futures::Instrument;
+
+pub(crate) fn acquire_upload_lock(recording_dir: &Path) -> Result<UploadLock, AuthedApiError> {
+    let lock = UploadLock::acquire(recording_dir).map_err(|error| error.to_string())?;
+    match std::fs::symlink_metadata(recording_dir.join("instant-upload.json")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(lock),
+        Ok(_) => Err("This recording's upload is managed by Cap GPUI; local files retained".into()),
+        Err(error) => Err(format!("Could not verify recording upload ownership: {error}").into()),
+    }
+}
+
+async fn await_upload_verification(
+    app: &AppHandle,
+    video_id: &str,
+    verification: &UploadVerification,
+    session: &lifecycle::Session,
+) -> Result<VerifiedUploadReceipt, AuthedApiError> {
+    session.set_verification(verification)?;
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(10 * 60) {
+        session.check()?;
+        let result = tokio::select! {
+            result = api::verify_recording_complete(app, video_id, verification) => result,
+            _ = session.cancelled() => return Err("Upload verification cancelled; local files retained".into()),
+        };
+        match result {
+            Ok(Some(receipt)) => {
+                session.record_receipt(verification, &receipt)?;
+                return Ok(receipt);
+            }
+            Err(error @ AuthedApiError::ReuploadRequired) => {
+                session.clear_verification()?;
+                return Err(error);
+            }
+            Ok(None) => {}
+            Err(error @ AuthedApiError::InvalidAuthentication) => return Err(error),
+            Err(error) => warn!(%error, "Recording verification pending; local files retained"),
+        }
+        tokio::select! { _ = tokio::time::sleep(Duration::from_secs(5)) => {}, _ = session.cancelled() => return Err("Upload verification cancelled; local files retained".into()) }
+    }
+    Err(AuthedApiError::VerificationPending)
+}
+
+fn validate_uploaded_segment_inventory(
+    manifest: &SegmentUploadManifest,
+    expected: &[cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent],
+) -> Result<(), AuthedApiError> {
+    use cap_enc_ffmpeg::segmented_stream::SegmentMediaType;
+    for media_type in [SegmentMediaType::Video, SegmentMediaType::Audio] {
+        let mut indices = expected
+            .iter()
+            .filter(|event| !event.is_init && event.media_type == media_type)
+            .map(|event| event.index)
+            .collect::<Vec<_>>();
+        indices.sort_unstable();
+        let expected_init = expected
+            .iter()
+            .any(|event| event.is_init && event.media_type == media_type);
+        let (actual_init, actual_segments) = match media_type {
+            SegmentMediaType::Video => (manifest.video_init_uploaded, &manifest.video_segments),
+            SegmentMediaType::Audio => (manifest.audio_init_uploaded, &manifest.audio_segments),
+        };
+        if actual_init != expected_init
+            || !actual_segments.iter().map(|entry| entry.index).eq(indices)
+        {
+            return Err("Uploaded segments do not cover the final recording inventory".into());
+        }
+    }
+    Ok(())
+}
 
 pub struct UploadedItem {
     pub link: String,
     pub id: String,
+    pub object_identity: Option<String>,
     // #[allow(unused)]
     // pub config: S3UploadMeta,
 }
@@ -216,10 +291,18 @@ pub async fn upload_video(
             .map_err(|e| error!("Failed to get video metadata: {e}"))
             .ok();
 
-        api::upload_multipart_complete(app, &video_id, &upload_id, &parts, metadata.clone())
-            .await?;
-
-        Ok(metadata)
+        let completed_identity =
+            api::upload_multipart_complete(app, &video_id, &upload_id, &parts, metadata.clone())
+                .await?;
+        let object_identity = if is_drive_upload {
+            parts
+                .iter()
+                .rev()
+                .find_map(|part| part.object_identity.clone())
+        } else {
+            completed_identity
+        };
+        Ok((metadata, object_identity))
     };
 
     // TODO: We don't report progress on image upload
@@ -244,7 +327,7 @@ pub async fn upload_video(
     async_capture_event(
         app,
         match &video_result {
-            Ok(meta) => AnalyticsEvent::MultipartUploadComplete {
+            Ok((meta, _)) => AnalyticsEvent::MultipartUploadComplete {
                 duration: start.elapsed(),
                 length: meta
                     .as_ref()
@@ -261,11 +344,13 @@ pub async fn upload_video(
         },
     );
 
-    let _ = (video_result?, thumbnail_result?);
+    let (_, object_identity) = video_result?;
+    thumbnail_result?;
 
     Ok(UploadedItem {
         link: app.make_app_url(format!("/s/{video_id}")).await,
         id: video_id,
+        object_identity,
     })
 }
 
@@ -331,6 +416,7 @@ pub async fn upload_screenshot_bytes(
     Ok(UploadedItem {
         link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
         id: s3_config.id,
+        object_identity: None,
     })
 }
 
@@ -362,6 +448,7 @@ pub async fn upload_screenshot_file(
     Ok(UploadedItem {
         link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
         id: s3_config.id,
+        object_identity: None,
     })
 }
 
@@ -490,40 +577,6 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
     })
 }
 
-pub fn try_repair_corrupt_mp4(path: &Path) -> Result<(), String> {
-    let repaired_path = path.with_extension("repaired.mp4");
-
-    info!(
-        original = %path.display(),
-        repaired = %repaired_path.display(),
-        "Attempting to repair corrupt MP4 via FFmpeg remux"
-    );
-
-    cap_enc_ffmpeg::remux::remux_file(path, &repaired_path)
-        .map_err(|e| format!("FFmpeg remux repair failed for {}: {e}", path.display()))?;
-
-    let repaired_size = std::fs::metadata(&repaired_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
-
-    if repaired_size == 0 {
-        let _ = std::fs::remove_file(&repaired_path);
-        return Err("Repaired file is empty — no recoverable data".to_string());
-    }
-
-    std::fs::rename(&repaired_path, path).map_err(|e| {
-        let _ = std::fs::remove_file(&repaired_path);
-        format!("Failed to replace original file with repaired version: {e}")
-    })?;
-
-    info!(
-        repaired_size_mb = repaired_size as f64 / 1_000_000.0,
-        "Successfully replaced corrupt file with repaired version"
-    );
-
-    Ok(())
-}
-
 #[instrument]
 pub async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
     task::spawn_blocking(move || {
@@ -557,29 +610,46 @@ pub async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
 
 pub struct InstantMultipartUpload {
     #[cfg(not(target_os = "linux"))]
+    pub(crate) session: Arc<lifecycle::Session>,
+    #[cfg(not(target_os = "linux"))]
     pub handle: tokio::task::JoinHandle<Result<(), AuthedApiError>>,
 }
 
 impl InstantMultipartUpload {
     /// starts a progressive (multipart) upload that runs until recording stops
     /// and the file has stabilized (no additional data is being written).
-    pub fn spawn(
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn spawn(
         app: AppHandle,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
-        recording_dir: PathBuf,
+        session: Arc<lifecycle::Session>,
         realtime_upload_done: Option<Receiver<()>>,
+        required_audio: bool,
     ) -> Self {
+        let recording_dir = session.directory.clone();
+        let worker_session = session.clone();
         let handle = spawn_actor(async move {
             let start = Instant::now();
-            let result = Self::run(
-                app.clone(),
-                file_path.clone(),
-                pre_created_video,
-                recording_dir,
-                realtime_upload_done,
-            )
-            .await;
+            let result = worker_session
+                .run(async {
+                    worker_session.acquire()?;
+                    crate::web_api::inherit_upload_context(
+                        worker_session.context(),
+                        Self::run(
+                            app.clone(),
+                            file_path.clone(),
+                            pre_created_video,
+                            recording_dir,
+                            realtime_upload_done,
+                            required_audio,
+                            worker_session.clone(),
+                        ),
+                    )
+                    .await
+                })
+                .await;
+
             async_capture_event(
                 &app,
                 match &result {
@@ -602,38 +672,37 @@ impl InstantMultipartUpload {
 
             result.map(|_| ())
         });
-        #[cfg(target_os = "linux")]
-        drop(handle);
         Self {
+            session,
             #[cfg(not(target_os = "linux"))]
             handle,
         }
     }
 
-    pub async fn run(
+    pub(crate) async fn run(
         app: AppHandle,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
         recording_dir: PathBuf,
         realtime_video_done: Option<Receiver<()>>,
+        required_audio: bool,
+        session: Arc<lifecycle::Session>,
     ) -> Result<Option<S3VideoMeta>, AuthedApiError> {
+        session.check()?;
+        if let Some(verification) = session.cached_verification()? {
+            await_upload_verification(&app, &pre_created_video.id, &verification, &session).await?;
+            return Ok(Some(build_video_meta(&file_path)?));
+        }
         let _active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
         let video_id = pre_created_video.id.clone();
         debug!("Initiating multipart upload for {video_id}...");
 
-        let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
-            format!("Error reading project meta from {recording_dir:?} for upload init: {err}")
-        })?;
-        project_meta.upload = Some(UploadMeta::MultipartUpload {
+        session.persist_upload(UploadMeta::MultipartUpload {
             video_id: video_id.clone(),
             file_path: file_path.clone(),
             pre_created_video: pre_created_video.clone(),
             recording_dir: recording_dir.clone(),
-        });
-        project_meta
-            .save_for_project()
-            .map_err(|e| error!("Failed to save recording meta: {e}"))
-            .ok();
+        })?;
 
         let upload = api::upload_multipart_initiate(&app, &video_id).await?;
         let is_drive_upload = is_google_drive_upload(upload.provider.as_deref(), &upload.upload_id);
@@ -676,54 +745,42 @@ impl InstantMultipartUpload {
         parts = deduplicated_parts.into_values().collect::<Vec<_>>();
         parts.sort_by_key(|part| part.part_number);
 
-        let metadata = match build_video_meta(&file_path) {
-            Ok(meta) => Some(meta),
-            Err(e) => {
-                error!("Failed to get video metadata: {e}");
-                warn!("Output file may be corrupt, attempting FFmpeg remux repair for {video_id}");
-
-                match try_repair_corrupt_mp4(&file_path) {
-                    Ok(()) => {
-                        info!("Successfully repaired corrupt recording for {video_id}");
-                        match build_video_meta(&file_path) {
-                            Ok(meta) => Some(meta),
-                            Err(repair_meta_err) => {
-                                error!(
-                                    "File still unreadable after repair attempt: {repair_meta_err}"
-                                );
-                                return Err(format!(
-                                    "Recording file could not be salvaged after encoder failure. \
-                                     Original error: {e}, Post-repair error: {repair_meta_err}"
-                                )
-                                .into());
-                            }
-                        }
-                    }
-                    Err(repair_err) => {
-                        error!("FFmpeg repair also failed: {repair_err}");
-                        return Err(format!(
-                            "Recording file could not be salvaged after encoder failure. \
-                             Original error: {e}, Repair error: {repair_err}"
-                        )
-                        .into());
-                    }
-                }
-            }
+        // Multipart parts already describe the original bytes. Repairing the file here
+        // would validate different bytes from those being completed remotely.
+        let metadata = build_video_meta(&file_path).map_err(|error| {
+            format!(
+                "Uploaded recording could not be validated; original retained for recovery: {error}"
+            )
+        })?;
+        let file_size = std::fs::metadata(&file_path)
+            .map_err(|error| error.to_string())?
+            .len();
+        let duration = metadata.duration_in_secs;
+        let metadata = Some(metadata);
+        session.wait_ready().await?;
+        let completed_identity =
+            api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata.clone())
+                .await?;
+        let object_identity = if is_drive_upload {
+            parts
+                .iter()
+                .rev()
+                .find_map(|part| part.object_identity.clone())
+        } else {
+            completed_identity
         };
-
-        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata.clone())
-            .await?;
+        let verification = UploadVerification::mp4(
+            file_size,
+            duration,
+            required_audio,
+            object_identity.ok_or(
+                "Server did not return the uploaded object identity; local recording retained",
+            )?,
+        )?;
+        await_upload_verification(&app, &video_id, &verification, &session).await?;
         info!("Multipart upload complete for {video_id}.");
 
         emit_upload_complete(&app, &video_id);
-
-        let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
-            format!("Error reading project meta from {recording_dir:?} for upload complete: {err}")
-        })?;
-        project_meta.upload = Some(UploadMeta::Complete);
-        project_meta
-            .save_for_project()
-            .map_err(|err| format!("Error reading project meta from {recording_dir:?}: {err}"))?;
 
         let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
@@ -732,6 +789,7 @@ impl InstantMultipartUpload {
 }
 
 pub struct SegmentUploader {
+    pub(crate) session: Arc<lifecycle::Session>,
     pub handle: tokio::task::JoinHandle<Result<(), AuthedApiError>>,
 }
 
@@ -990,28 +1048,40 @@ impl PresignedUrlCache {
 }
 
 impl SegmentUploader {
-    pub fn spawn(
+    pub(crate) fn spawn(
         app: AppHandle,
-        video_id: String,
         segment_rx: std::sync::mpsc::Receiver<
             cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent,
         >,
         recording_done: Option<flume::Receiver<()>>,
-        recording_dir: PathBuf,
+        session: Arc<lifecycle::Session>,
         pre_created_video: VideoUploadInfo,
+        required_audio: bool,
     ) -> Self {
+        let recording_dir = session.directory.clone();
+        let worker_session = session.clone();
         Self {
+            session,
             handle: spawn_actor(async move {
                 let start = Instant::now();
-                let result = Self::run(
-                    app.clone(),
-                    video_id.clone(),
-                    segment_rx,
-                    recording_done,
-                    recording_dir.clone(),
-                    pre_created_video,
-                )
-                .await;
+                let result = worker_session
+                    .run(async {
+                        worker_session.acquire()?;
+                        crate::web_api::inherit_upload_context(
+                            worker_session.context(),
+                            Self::run(
+                                app.clone(),
+                                segment_rx,
+                                recording_done,
+                                recording_dir.clone(),
+                                pre_created_video,
+                                required_audio,
+                                worker_session.clone(),
+                            ),
+                        )
+                        .await
+                    })
+                    .await;
 
                 async_capture_event(
                     &app,
@@ -1075,17 +1145,20 @@ impl SegmentUploader {
                 )
                 .into());
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            lifecycle::cancellable(tokio::time::sleep(Duration::from_millis(50))).await?;
         };
 
         let start = Instant::now();
         let file_data = loop {
-            let data = tokio::fs::read(&actual_path).await.map_err(|e| {
-                format!(
-                    "segment_upload/read/{subpath}: {e} ({})",
-                    actual_path.display()
-                )
-            })?;
+            let path = actual_path.clone();
+            let data = lifecycle::file_io(move || std::fs::read(path))
+                .await
+                .map_err(|e| {
+                    format!(
+                        "segment_upload/read/{subpath}: {e} ({})",
+                        actual_path.display()
+                    )
+                })?;
 
             if data.len() as u64 == expected_size {
                 break data;
@@ -1099,7 +1172,7 @@ impl SegmentUploader {
                 .into());
             }
 
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            lifecycle::cancellable(tokio::time::sleep(Duration::from_millis(50))).await?;
         };
 
         Ok(Bytes::from(file_data))
@@ -1135,15 +1208,18 @@ impl SegmentUploader {
                 .header("Content-Type", content_type_for_upload_subpath(subpath))
                 .timeout(Duration::from_secs(5 * 60))
                 .body(file_bytes.clone());
-            let send_result = with_drive_content_range(
-                request,
-                &presigned_url,
-                0,
-                file_size as u64,
-                file_size as u64,
+            let send_result = lifecycle::cancellable(
+                with_drive_content_range(
+                    request,
+                    &presigned_url,
+                    0,
+                    file_size as u64,
+                    file_size as u64,
+                )
+                .send(),
             )
-            .send()
-            .await;
+            .await?
+            .map_err(reqwest::Error::without_url);
 
             match send_result {
                 Ok(resp) if resp.status().is_success() => {
@@ -1151,7 +1227,6 @@ impl SegmentUploader {
                 }
                 Ok(resp) => {
                     let status = resp.status();
-                    let body = resp.text().await.unwrap_or_default();
                     if attempt < MAX_RETRIES - 1 {
                         warn!(
                             attempt = attempt + 1,
@@ -1163,7 +1238,7 @@ impl SegmentUploader {
                             .await;
                         continue;
                     }
-                    return Err(format!("segment_upload/{subpath}/error: {status} {body}").into());
+                    return Err(format!("segment_upload/{subpath}/error: {status}").into());
                 }
                 Err(err) if is_reqwest_network_error(&err) => {
                     if attempt < MAX_RETRIES - 1 {
@@ -1217,15 +1292,16 @@ impl SegmentUploader {
             .header("Content-Type", "application/json")
             .timeout(Duration::from_secs(60))
             .body(json);
-        let resp =
+        let resp = lifecycle::cancellable(
             with_drive_content_range(request, &presigned_url, 0, content_length, content_length)
-                .send()
-                .await
-                .map_err(|err| format!("segment_upload/manifest/error: {err}"))?;
+                .send(),
+        )
+        .await?
+        .map_err(reqwest::Error::without_url)
+        .map_err(|err| format!("segment_upload/manifest/error: {err}"))?;
 
         if !resp.status().is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("segment_upload/manifest/error: {body}").into());
+            return Err(format!("segment_upload/manifest/error: {}", resp.status()).into());
         }
 
         Ok(())
@@ -1233,30 +1309,32 @@ impl SegmentUploader {
 
     async fn run(
         app: AppHandle,
-        video_id: String,
         segment_rx: std::sync::mpsc::Receiver<
             cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent,
         >,
         recording_done: Option<flume::Receiver<()>>,
         recording_dir: PathBuf,
         pre_created_video: VideoUploadInfo,
+        required_audio: bool,
+        session: Arc<lifecycle::Session>,
     ) -> Result<u64, AuthedApiError> {
         use cap_enc_ffmpeg::segmented_stream::SegmentMediaType;
+        let video_id = pre_created_video.id.clone();
 
+        session.check()?;
+
+        if let Some(verification) = session.cached_verification()? {
+            await_upload_verification(&app, &video_id, &verification, &session).await?;
+            return Ok(0);
+        }
         let _active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
         info!("Starting segment uploader for {video_id}");
 
-        let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
-            format!("Error reading project meta from {recording_dir:?} for segment upload: {err}")
-        })?;
-        project_meta.upload = Some(UploadMeta::SegmentUpload {
+        session.persist_upload(UploadMeta::SegmentUpload {
             video_id: video_id.clone(),
             pre_created_video: pre_created_video.clone(),
             recording_dir: recording_dir.clone(),
-        });
-        project_meta
-            .save_for_project()
-            .map_err(|error| format!("Failed to persist resumable segment upload: {error}"))?;
+        })?;
 
         let state = Arc::new(Mutex::new(SegmentUploadState::new()));
         let semaphore = Arc::new(tokio::sync::Semaphore::new(6));
@@ -1270,9 +1348,13 @@ impl SegmentUploader {
             let cache = url_cache.clone();
             let app = app.clone();
             let vid = video_id.clone();
-            prefetch_tasks.push(tokio::spawn(async move {
-                cache.prefetch(&app, &vid, 20).await;
-            }));
+            let context = session.context();
+            prefetch_tasks.push(tokio::spawn(crate::web_api::inherit_upload_context(
+                context,
+                async move {
+                    cache.prefetch(&app, &vid, 20).await;
+                },
+            )));
         }
 
         let manifest_dirty = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1286,39 +1368,43 @@ impl SegmentUploader {
             let shutdown = manifest_shutdown.clone();
             let notify = manifest_notify.clone();
             let url_cache = url_cache.clone();
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(1));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                loop {
-                    tokio::select! {
-                        _ = interval.tick() => {}
-                        _ = notify.notified() => {}
-                    }
-                    if dirty.swap(false, std::sync::atomic::Ordering::AcqRel) {
-                        let manifest = state
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .to_manifest();
-                        if let Err(e) =
-                            Self::upload_manifest(&app, &video_id, &manifest, &url_cache).await
-                        {
-                            warn!("Periodic manifest upload failed: {e}");
+            let context = session.context();
+            tokio::spawn(crate::web_api::inherit_upload_context(
+                context,
+                async move {
+                    let mut interval = tokio::time::interval(Duration::from_secs(1));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    loop {
+                        tokio::select! {
+                            _ = interval.tick() => {}
+                            _ = notify.notified() => {}
                         }
-                    }
-                    if shutdown.load(std::sync::atomic::Ordering::Acquire) {
                         if dirty.swap(false, std::sync::atomic::Ordering::AcqRel) {
                             let manifest = state
                                 .lock()
                                 .unwrap_or_else(|e| e.into_inner())
                                 .to_manifest();
-                            Self::upload_manifest(&app, &video_id, &manifest, &url_cache)
-                                .await
-                                .ok();
+                            if let Err(e) =
+                                Self::upload_manifest(&app, &video_id, &manifest, &url_cache).await
+                            {
+                                warn!("Periodic manifest upload failed: {e}");
+                            }
                         }
-                        break;
+                        if shutdown.load(std::sync::atomic::Ordering::Acquire) {
+                            if dirty.swap(false, std::sync::atomic::Ordering::AcqRel) {
+                                let manifest = state
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .to_manifest();
+                                Self::upload_manifest(&app, &video_id, &manifest, &url_cache)
+                                    .await
+                                    .ok();
+                            }
+                            break;
+                        }
                     }
-                }
-            })
+                },
+            ))
         };
 
         let (async_segment_tx, mut async_segment_rx) = tokio::sync::mpsc::unbounded_channel::<
@@ -1328,10 +1414,11 @@ impl SegmentUploader {
         let bridge_handle = {
             let async_segment_tx = async_segment_tx;
             let recording_done = recording_done.clone();
+            let session = session.clone();
             std::thread::Builder::new()
                 .name("segment-rx-bridge".to_string())
                 .spawn(move || {
-                    loop {
+                    while session.check().is_ok() && !async_segment_tx.is_closed() {
                         match segment_rx.recv_timeout(std::time::Duration::from_millis(20)) {
                             Ok(event) => {
                                 if async_segment_tx.send(event).is_err() {
@@ -1382,6 +1469,7 @@ impl SegmentUploader {
         loop {
             tokio::select! {
                 biased;
+                _ = session.cancelled() => { async_segment_rx.close(); break; }
                 Some(join_result) = in_flight.next(), if !in_flight.is_empty() => {
                     state.lock().unwrap_or_else(|error| error.into_inner()).record_task_result(join_result);
                 }
@@ -1419,7 +1507,10 @@ impl SegmentUploader {
                     let expected_size = event.file_size;
                     let subpath_for_fail = subpath.clone();
 
-                    let handle = tokio::spawn(async move {
+                    let context = session.context();
+                    let task_session = session.clone();
+                    let handle = tokio::spawn(crate::web_api::inherit_upload_context(context, async move {
+                        task_session.check()?;
                         let _read_permit = read_semaphore_clone
                             .acquire()
                             .await
@@ -1544,7 +1635,7 @@ impl SegmentUploader {
                         }
 
                         Ok(())
-                    });
+                    }));
 
                     in_flight.push(handle);
 
@@ -1557,9 +1648,10 @@ impl SegmentUploader {
                         let app_ref = app.clone();
                         let vid_ref = video_id.clone();
                         let from = event.index + 1;
-                        prefetch_tasks.push(tokio::spawn(async move {
+                        let context = session.context();
+                        prefetch_tasks.push(tokio::spawn(crate::web_api::inherit_upload_context(context, async move {
                             cache.extend_prefetch(&app_ref, &vid_ref, from, 20).await;
-                        }));
+                        })));
                     }
 
                     if consecutive_failures.load(std::sync::atomic::Ordering::Relaxed) >= CONSECUTIVE_FAILURE_LIMIT {
@@ -1592,6 +1684,7 @@ impl SegmentUploader {
             .record_task_result(manifest_result.map(|()| Ok(())));
         cancel_segment_prefetch_tasks(&mut prefetch_tasks).await;
 
+        session.check()?;
         let failed = {
             let s = state.lock().unwrap_or_else(|e| e.into_inner());
             s.failed_segments.clone()
@@ -1603,6 +1696,7 @@ impl SegmentUploader {
                 "Retrying failed segment uploads before completing"
             );
             for seg in failed {
+                session.check()?;
                 let file_data =
                     Self::read_segment_data(&seg.file_path, &seg.subpath, seg.expected_size).await;
 
@@ -1660,8 +1754,19 @@ impl SegmentUploader {
             }
         }
 
+        session.wait_ready().await?;
         let completion_state = state.as_ref();
+        let expected_events = resume::collect_segment_events(&recording_dir, required_audio)?;
+        validate_uploaded_segment_inventory(
+            &completion_state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .completed_manifest()?,
+            &expected_events,
+        )?;
         publish_completed_segments(completion_state, |final_manifest| async move {
+            let final_json = serde_json::to_vec_pretty(&final_manifest)?;
+            let verification = UploadVerification::segments(&final_json, required_audio);
             {
                 let mut manifest_err: Option<AuthedApiError> = None;
                 for attempt in 0..3u32 {
@@ -1722,14 +1827,11 @@ impl SegmentUploader {
                 if !signal_ok {
                     error!("All attempts to signal recording complete failed for {video_id}");
 
-                    if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir) {
-                        meta.upload = Some(UploadMeta::SegmentUpload {
-                            video_id: video_id.clone(),
-                            pre_created_video: pre_created_video.clone(),
-                            recording_dir: recording_dir.clone(),
-                        });
-                        meta.save_for_project().ok();
-                    }
+                    session.persist_upload(UploadMeta::SegmentUpload {
+                        video_id: video_id.clone(),
+                        pre_created_video: pre_created_video.clone(),
+                        recording_dir: recording_dir.clone(),
+                    })?;
 
                     emit_upload_complete(&app, &video_id);
 
@@ -1740,15 +1842,8 @@ impl SegmentUploader {
                 }
             }
 
+            await_upload_verification(&app, &video_id, &verification, &session).await?;
             emit_upload_complete(&app, &video_id);
-
-            let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
-            format!("Error reading project meta from {recording_dir:?} for upload complete: {err}")
-        })?;
-            project_meta.upload = Some(UploadMeta::Complete);
-            project_meta
-                .save_for_project()
-                .map_err(|err| format!("Error saving project meta for {recording_dir:?}: {err}"))?;
 
             let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
@@ -1811,126 +1906,95 @@ pub fn from_file_to_chunks(path: PathBuf) -> impl Stream<Item = io::Result<Chunk
 /// Creates a stream that reads chunks from a potentially growing file, yielding [Chunk]'s.
 /// The first chunk of the file is yielded last to allow for header rewriting after recording completion.
 /// This uploader will continually poll the filesystem and wait for the file to stop uploading before flushing the rest.
+struct UploadFile {
+    file: Mutex<std::fs::File>,
+    _guard: Option<lifecycle::ReadGuard>,
+}
+
+async fn open_upload_file(path: PathBuf) -> io::Result<Arc<UploadFile>> {
+    let guard = lifecycle::UploadScope::current().map(|scope| scope.read_guard());
+    lifecycle::file_io(move || {
+        Ok(Arc::new(UploadFile {
+            file: Mutex::new(std::fs::File::open(path)?),
+            _guard: guard,
+        }))
+    })
+    .await
+}
+
+async fn upload_file_size(file: Arc<UploadFile>) -> io::Result<u64> {
+    lifecycle::file_io(move || {
+        file.file
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .metadata()
+            .map(|metadata| metadata.len())
+    })
+    .await
+}
+
+async fn upload_file_chunk(file: Arc<UploadFile>, offset: u64, count: usize) -> io::Result<Bytes> {
+    lifecycle::file_io(move || {
+        use std::io::{Read, Seek};
+        let mut file = file.file.lock().unwrap_or_else(PoisonError::into_inner);
+        file.seek(std::io::SeekFrom::Start(offset))?;
+        let mut bytes = vec![0; count];
+        file.read_exact(&mut bytes)?;
+        Ok(Bytes::from(bytes))
+    })
+    .await
+}
+
 #[instrument(skip(realtime_upload_done))]
 pub fn from_pending_file_to_chunks(
     path: PathBuf,
     realtime_upload_done: Option<Receiver<()>>,
 ) -> impl Stream<Item = io::Result<Chunk>> {
     try_stream! {
-        let mut file = timeout(Duration::from_secs(20), async move {
+        let file = timeout(Duration::from_secs(20), async {
             loop {
-                if let Ok(file) = tokio::fs::File::open(&path).await.map_err(|err| error!("from_pending_file_to_chunks/open: {err:?}")) {
-                    break file;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                if let Ok(file) = open_upload_file(path.clone()).await { return Ok::<_, io::Error>(file); }
+                lifecycle::cancellable(tokio::time::sleep(Duration::from_millis(100))).await.map_err(io::Error::other)?;
             }
-        })
-        .await
-        .map_err(|_| io::Error::other("Failed to open file. The recording pipeline may have crashed?"))?;
-
+        }).await.map_err(|_| io::Error::other("Failed to open recording upload file"))??;
         let mut part_number = 1;
-        let mut last_read_position: u64 = 0;
+        let mut offset = 0u64;
         let mut realtime_is_done = realtime_upload_done.as_ref().map(|_| false);
         let mut recording_completed_cleanly = false;
-        let mut first_chunk_size: Option<u64> = None;
-        let mut chunk_buffer = vec![0u8; MAX_CHUNK_SIZE as usize];
-
+        let mut first_chunk_size = None;
         loop {
-            if !realtime_is_done.unwrap_or(true) && let Some(ref realtime_receiver) = realtime_upload_done {
-                    match realtime_receiver.try_recv() {
-                        Ok(_) => {
-                            realtime_is_done = Some(true);
-                            recording_completed_cleanly = true;
-                        },
-                        Err(flume::TryRecvError::Empty) => {},
-                        Err(flume::TryRecvError::Disconnected) => {
-                            warn!(
-                                "Recording channel disconnected without completion signal — \
-                                 recording may have failed, finishing upload without header correction"
-                            );
-                            realtime_is_done = Some(true);
-                        },
-                    }
-
+            lifecycle::cancellable(async {}).await.map_err(io::Error::other)?;
+            if !realtime_is_done.unwrap_or(true) && let Some(receiver) = &realtime_upload_done {
+                match receiver.try_recv() {
+                    Ok(()) => { realtime_is_done = Some(true); recording_completed_cleanly = true; }
+                    Err(flume::TryRecvError::Empty) => {},
+                    Err(flume::TryRecvError::Disconnected) => { realtime_is_done = Some(true); }
+                }
             }
-
-            let file_size = match file.metadata().await {
-                Ok(metadata) => metadata.len(),
-                Err(_) => {
-                    // File might be temporarily locked, retry with shorter delay
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    continue;
-                }
+            let file_size = upload_file_size(file.clone()).await?;
+            let available = file_size.saturating_sub(offset);
+            let should_read = match realtime_is_done {
+                Some(done) => available >= MIN_CHUNK_SIZE || (done && available > 0),
+                None => available > 0,
             };
-
-            let new_data_size = file_size.saturating_sub(last_read_position);
-
-            // Determine if we should read a chunk
-            let should_read_chunk = if let Some(is_done) = realtime_is_done {
-                (new_data_size >= MIN_CHUNK_SIZE) || (is_done && new_data_size > 0)
-            } else {
-                new_data_size > 0
-            };
-
-            if should_read_chunk {
-                let chunk_size = std::cmp::min(new_data_size, MAX_CHUNK_SIZE) as usize;
-
-                file.seek(std::io::SeekFrom::Start(last_read_position)).await?;
-
-                let mut total_read = 0;
-                while total_read < chunk_size {
-                    match file.read(&mut chunk_buffer[total_read..chunk_size]).await {
-                        Ok(0) => break, // EOF
-                        Ok(n) => total_read += n,
-                        Err(e) => yield Err(e)?,
-                    }
-                }
-
-                if total_read > 0 {
-                    if last_read_position == 0 {
-                        first_chunk_size = Some(total_read as u64);
-                    }
-
-                    yield Chunk {
-                        total_size: file_size,
-                        part_number,
-                        offset: last_read_position,
-                        chunk: Bytes::copy_from_slice(&chunk_buffer[..total_read]),
-                    };
-                    part_number += 1;
-                    last_read_position += total_read as u64;
-                }
-            } else if new_data_size == 0 && realtime_is_done.unwrap_or(true) {
-                if let Some(first_size) = first_chunk_size && realtime_upload_done.is_some() && recording_completed_cleanly {
-                    file.seek(std::io::SeekFrom::Start(0)).await?;
-
-                    let chunk_size = first_size as usize;
-                    let mut total_read = 0;
-
-                    while total_read < chunk_size {
-                        match file.read(&mut chunk_buffer[total_read..chunk_size]).await {
-                            Ok(0) => break,
-                            Ok(n) => total_read += n,
-                            Err(e) => yield Err(e)?,
-                        }
-                    }
-
-                    if total_read > 0 {
-                        yield Chunk {
-                            total_size: file_size,
-                            part_number: 1,
-                            offset: 0,
-                            chunk: Bytes::copy_from_slice(&chunk_buffer[..total_read]),
-                        };
-                    }
+            if should_read {
+                let count = available.min(MAX_CHUNK_SIZE) as usize;
+                let chunk = upload_file_chunk(file.clone(), offset, count).await?;
+                if offset == 0 { first_chunk_size = Some(count); }
+                yield Chunk { total_size: file_size, part_number, offset, chunk };
+                part_number += 1;
+                offset = offset.saturating_add(count as u64);
+            } else if available == 0 && realtime_is_done.unwrap_or(true) {
+                if let Some(count) = first_chunk_size && realtime_upload_done.is_some() && recording_completed_cleanly {
+                    let chunk = upload_file_chunk(file.clone(), 0, count).await?;
+                    yield Chunk { total_size: file_size, part_number: 1, offset: 0, chunk };
                 }
                 break;
             } else {
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                lifecycle::cancellable(tokio::time::sleep(Duration::from_millis(100))).await.map_err(io::Error::other)?;
             }
         }
-    }
-    .instrument(Span::current())
+    }.instrument(Span::current())
 }
 
 #[instrument(skip(app, stream, upload_id, failed_chunks))]
@@ -2075,10 +2139,7 @@ fn multipart_uploader(
                                     req = req.header("Content-MD5", md5_sum);
                                 }
 
-                                let send_result = req
-                                    .send()
-                                    .instrument(info_span!("s3_put", size = size))
-                                    .await;
+                                let send_result = lifecycle::cancellable(req.send().instrument(info_span!("s3_put", size = size))).await?.map_err(reqwest::Error::without_url);
 
                                 let resp = match send_result {
                                     Ok(resp) => resp,
@@ -2118,13 +2179,8 @@ fn multipart_uploader(
                                             retry_req =
                                                 retry_req.header("Content-MD5", md5_sum);
                                         }
-                                        retry_req
-                                            .send()
-                                            .instrument(info_span!(
-                                                "s3_put_after_network_recovery",
-                                                size = size
-                                            ))
-                                            .await
+                                        lifecycle::cancellable(retry_req.send().instrument(info_span!("s3_put_after_network_recovery", size = size))).await?
+                                            .map_err(reqwest::Error::without_url)
                                             .map_err(|err| {
                                                 format!(
                                                     "uploader/part/{part_number}/network_retry_error: {err:?}"
@@ -2146,19 +2202,9 @@ fn multipart_uploader(
                                     .and_then(|etag| etag.to_str().ok())
                                     .map(|v| v.trim_matches('"').to_string());
 
-                                match !is_upload_response_accepted(
-                                    &presigned_url,
-                                    resp.status(),
-                                    offset,
-                                    size as u64,
-                                    total_size,
-                                ) {
-                                    true => Err(format!(
-                                        "uploader/part/{part_number}/error: {}",
-                                        resp.text().await.unwrap_or_default()
-                                    )),
-                                    false => Ok(()),
-                                }?;
+                                if !is_upload_response_accepted(&presigned_url, resp.status(), offset, size as u64, total_size) {
+                                    return Err(format!("uploader/part/{part_number}/error: {}", resp.status()).into());
+                                }
 
                                 trace!("Completed upload of part {part_number}");
 
@@ -2175,7 +2221,9 @@ fn multipart_uploader(
                                     }
                                 };
 
+                                let object_identity = completed_drive_upload_identity(resp, is_google_drive_resumable_url(&presigned_url), total_size).await;
                                 Ok::<_, AuthedApiError>(UploadedPart {
+                                    object_identity,
                                     etag,
                                     part_number,
                                     size,
@@ -2233,19 +2281,24 @@ fn multipart_uploader(
 async fn read_exact_upload_chunk(
     file_path: &Path,
     offset: u64,
-    chunk_size: usize,
+    expected_size: usize,
 ) -> io::Result<Bytes> {
-    if chunk_size == 0 {
+    if expected_size == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "Upload chunk must contain bytes",
+            "Upload chunk must not be empty",
         ));
     }
-    let mut file = File::open(file_path).await?;
-    file.seek(std::io::SeekFrom::Start(offset)).await?;
-    let mut buffer = vec![0u8; chunk_size];
-    file.read_exact(&mut buffer).await?;
-    Ok(Bytes::from(buffer))
+    let path = file_path.to_path_buf();
+    lifecycle::file_io(move || {
+        use std::io::{Read, Seek};
+        let mut file = std::fs::File::open(path)?;
+        file.seek(std::io::SeekFrom::Start(offset))?;
+        let mut bytes = vec![0; expected_size];
+        file.read_exact(&mut bytes)?;
+        Ok(Bytes::from(bytes))
+    })
+    .await
 }
 
 #[instrument(skip(app, failed_chunks))]
@@ -2308,14 +2361,13 @@ async fn retry_failed_chunks(
             req = req.header("Content-MD5", md5_sum);
         }
 
-        let send_result = req
-            .send()
-            .instrument(info_span!(
-                "s3_put_retry",
-                part_number = failed.part_number,
-                size = size
-            ))
-            .await;
+        let send_result = lifecycle::cancellable(req.send().instrument(info_span!(
+            "s3_put_retry",
+            part_number = failed.part_number,
+            size = size
+        )))
+        .await?
+        .map_err(reqwest::Error::without_url);
 
         let resp = match send_result {
             Ok(resp) => resp,
@@ -2355,20 +2407,19 @@ async fn retry_failed_chunks(
                 if let Some(md5_sum) = &md5_sum {
                     retry_req = retry_req.header("Content-MD5", md5_sum);
                 }
-                retry_req
-                    .send()
-                    .instrument(info_span!(
-                        "s3_put_retry_after_network_recovery",
-                        part_number = failed.part_number,
-                        size = size
-                    ))
-                    .await
-                    .map_err(|err| {
-                        format!(
-                            "retry/part/{}/network_retry_error: {err:?}",
-                            failed.part_number
-                        )
-                    })?
+                lifecycle::cancellable(retry_req.send().instrument(info_span!(
+                    "s3_put_retry_after_network_recovery",
+                    part_number = failed.part_number,
+                    size = size
+                )))
+                .await?
+                .map_err(reqwest::Error::without_url)
+                .map_err(|err| {
+                    format!(
+                        "retry/part/{}/network_retry_error: {err:?}",
+                        failed.part_number
+                    )
+                })?
             }
             Err(err) => {
                 return Err(format!("retry/part/{}/error: {err:?}", failed.part_number).into());
@@ -2389,12 +2440,9 @@ async fn retry_failed_chunks(
             size as u64,
             failed.total_size,
         ) {
-            return Err(format!(
-                "retry/part/{}/error: {}",
-                failed.part_number,
-                resp.text().await.unwrap_or_default()
-            )
-            .into());
+            return Err(
+                format!("retry/part/{}/error: {}", failed.part_number, resp.status()).into(),
+            );
         }
 
         info!(
@@ -2412,7 +2460,14 @@ async fn retry_failed_chunks(
             }
         };
 
+        let object_identity = completed_drive_upload_identity(
+            resp,
+            is_google_drive_resumable_url(&presigned_url),
+            failed.total_size,
+        )
+        .await;
         retry_parts.push(UploadedPart {
+            object_identity,
             etag,
             part_number: failed.part_number,
             size,
@@ -2421,6 +2476,26 @@ async fn retry_failed_chunks(
     }
 
     Ok(retry_parts)
+}
+
+async fn completed_drive_upload_identity(
+    response: reqwest::Response,
+    is_drive: bool,
+    expected_size: u64,
+) -> Option<String> {
+    if !is_drive || !response.status().is_success() {
+        return None;
+    }
+    lifecycle::cancellable(response.json::<serde_json::Value>())
+        .await
+        .ok()?
+        .ok()
+        .and_then(|value| {
+            cap_recording::upload_verification::completed_drive_object_identity(
+                &value,
+                expected_size,
+            )
+        })
 }
 
 fn is_reqwest_network_error(err: &reqwest::Error) -> bool {
@@ -2456,9 +2531,17 @@ async fn wait_for_network_recovery(app: &AppHandle, video_id: &str) -> bool {
             return false;
         }
 
-        tokio::time::sleep(delay).await;
+        if lifecycle::cancellable(tokio::time::sleep(delay))
+            .await
+            .is_err()
+        {
+            return false;
+        }
 
-        if probe_connectivity(app).await {
+        if lifecycle::cancellable(probe_connectivity(app))
+            .await
+            .unwrap_or(false)
+        {
             info!(
                 video_id,
                 waited_secs = start.elapsed().as_secs(),
@@ -2496,16 +2579,15 @@ pub async fn singlepart_uploader(
         request = request.header(key, value);
     }
 
-    let resp = with_drive_content_range(request, &presigned_url, 0, total_size, total_size)
-        .send()
-        .await
-        .map_err(|err| format!("singlepart_uploader/error: {err:?}"))?;
+    let resp = lifecycle::cancellable(
+        with_drive_content_range(request, &presigned_url, 0, total_size, total_size).send(),
+    )
+    .await?
+    .map_err(reqwest::Error::without_url)
+    .map_err(|err| format!("singlepart_uploader/error: {err:?}"))?;
 
     match !resp.status().is_success() {
-        true => Err(format!(
-            "singlepart_uploader/error: {}",
-            resp.text().await.unwrap_or_default()
-        )),
+        true => Err(format!("singlepart_uploader/error: {}", resp.status())),
         false => Ok(()),
     }?;
 
@@ -2581,16 +2663,16 @@ fn progress<T: UploadedChunk, E>(
                 if should_send_immediately {
                     let app_clone = app.clone();
                     let video_id_clone = video_id.clone();
-                    tokio::spawn(async move {
+                    tokio::spawn(crate::web_api::inherit_upload_context(crate::web_api::UploadRequestContext::current(), async move {
                         api::desktop_video_progress(&app_clone, &video_id_clone, uploaded, total).await.ok();
-                    });
+                    }));
                 } else {
                     let app_clone = app.clone();
                     let video_id_clone = video_id.clone();
-                    pending_task = Some(tokio::spawn(async move {
+                    pending_task = Some(tokio::spawn(crate::web_api::inherit_upload_context(crate::web_api::UploadRequestContext::current(), async move {
                         tokio::time::sleep(Duration::from_secs(2)).await;
                         api::desktop_video_progress(&app_clone, &video_id_clone, uploaded, total).await.ok();
-                    }));
+                    })));
 
                     let app_reemit = app.clone();
                     let video_id_reemit = video_id.clone();
@@ -3751,13 +3833,18 @@ pub(crate) mod strict_instant {
             path: &str,
             bytes: Bytes,
         ) -> impl Future<Output = Result<(), AuthedApiError>> + Send;
-        fn complete(&self) -> impl Future<Output = Result<(), AuthedApiError>> + Send;
+        fn complete(
+            &self,
+            manifest: &SegmentUploadManifest,
+            required_audio: bool,
+        ) -> impl Future<Output = Result<(), AuthedApiError>> + Send;
     }
 
     struct LiveTransport<'a> {
         app: &'a AppHandle,
         video_id: &'a str,
         control: &'a Control,
+        session: Option<&'a lifecycle::Session>,
     }
 
     impl Transport for LiveTransport<'_> {
@@ -3832,29 +3919,21 @@ pub(crate) mod strict_instant {
             Err(failure.unwrap())
         }
 
-        async fn complete(&self) -> Result<(), AuthedApiError> {
-            let mut failure = None;
-            for attempt in 0..3 {
-                if attempt > 0 {
-                    self.control
-                        .step(|| async {
-                            tokio::time::sleep(Duration::from_millis(1000u64 << (attempt - 1)))
-                                .await;
-                            Ok(())
-                        })
-                        .await?;
-                }
-                match self
-                    .control
-                    .step(|| api::signal_recording_complete(self.app, self.video_id))
-                    .await
-                {
-                    Ok(()) => return Ok(()),
-                    Err(error) => failure = Some(error),
-                }
-                self.control.check()?;
-            }
-            Err(failure.unwrap())
+        async fn complete(
+            &self,
+            manifest: &SegmentUploadManifest,
+            required_audio: bool,
+        ) -> Result<(), AuthedApiError> {
+            let session = self.session.ok_or("Upload ownership is missing")?;
+            session.wait_ready().await?;
+            let expected = resume::collect_segment_events(&session.directory, required_audio)?;
+            validate_uploaded_segment_inventory(manifest, &expected)?;
+            let verification =
+                UploadVerification::segments(&serde_json::to_vec(manifest)?, required_audio);
+            self.control
+                .step(|| await_upload_verification(self.app, self.video_id, &verification, session))
+                .await?;
+            Ok(())
         }
     }
 
@@ -3945,65 +4024,92 @@ pub(crate) mod strict_instant {
         control
             .step(|| transport.put("segments/manifest.json", bytes.into()))
             .await?;
-        control.step(|| transport.complete()).await
+        control
+            .step(|| transport.complete(&manifest, required_audio))
+            .await
     }
 
-    pub fn spawn(
+    pub(crate) fn spawn(
         app: AppHandle,
-        recording_dir: PathBuf,
+        session: Arc<lifecycle::Session>,
         video: VideoUploadInfo,
         events: Option<std::sync::mpsc::Receiver<SegmentCompletedEvent>>,
         control: Control,
         required_audio: bool,
     ) -> SegmentUploader {
+        let recording_dir = session.directory.clone();
+        session.bind_control(control.clone());
+        let worker_session = session.clone();
         SegmentUploader {
+            session,
             handle: spawn_actor(async move {
                 let _owner = WorkerGuard(control.clone());
                 let _active = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
-                let result = if let Some(events) = events {
-                    match Bridge::new(events) {
-                        Ok(mut bridge) => {
-                            let transport = LiveTransport {
-                                app: &app,
-                                video_id: &video.id,
-                                control: &control,
-                            };
-                            let result = AssertUnwindSafe(segments(
-                                &transport,
-                                &control,
-                                &mut bridge.events,
-                                required_audio,
-                            ))
-                            .catch_unwind()
-                            .await;
-                            let joined = bridge.finish().await;
-                            let _ = control
-                                .0
-                                .cleanup
-                                .send_replace(Some(joined && result.is_ok()));
-                            match result {
-                                Ok(result) if joined => result,
-                                _ => {
-                                    Err("Instant upload cleanup is unconfirmed".to_string().into())
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            let _ = control.0.cleanup.send_replace(Some(true));
-                            Err(error)
-                        }
-                    }
+                let result = if let Err(error) = worker_session.acquire() {
+                    control.0.cleanup.send_replace(Some(true));
+                    Err(error)
                 } else {
-                    let result =
-                        AssertUnwindSafe(multipart(&app, &recording_dir, &video, &control))
-                            .catch_unwind()
-                            .await;
-                    let _ = control.0.cleanup.send_replace(Some(result.is_ok()));
-                    result.unwrap_or_else(|_| {
-                        Err("Instant multipart cleanup is unconfirmed"
-                            .to_string()
-                            .into())
-                    })
+                    worker_session
+                        .run(crate::web_api::inherit_upload_context(
+                            worker_session.context(),
+                            async {
+                                if let Some(events) = events {
+                                    match Bridge::new(events) {
+                                        Ok(mut bridge) => {
+                                            let transport = LiveTransport {
+                                                app: &app,
+                                                video_id: &video.id,
+                                                control: &control,
+                                                session: Some(&worker_session),
+                                            };
+                                            let result = AssertUnwindSafe(segments(
+                                                &transport,
+                                                &control,
+                                                &mut bridge.events,
+                                                required_audio,
+                                            ))
+                                            .catch_unwind()
+                                            .await;
+                                            let joined = bridge.finish().await;
+                                            worker_session.wait_for_reads().await;
+                                            let _ = control
+                                                .0
+                                                .cleanup
+                                                .send_replace(Some(joined && result.is_ok()));
+                                            match result {
+                                                Ok(result) if joined => result,
+                                                _ => Err("Instant upload cleanup is unconfirmed"
+                                                    .to_string()
+                                                    .into()),
+                                            }
+                                        }
+                                        Err(error) => {
+                                            let _ = control.0.cleanup.send_replace(Some(true));
+                                            Err(error)
+                                        }
+                                    }
+                                } else {
+                                    let result = AssertUnwindSafe(multipart(
+                                        &app,
+                                        &recording_dir,
+                                        &video,
+                                        &control,
+                                        &worker_session,
+                                        required_audio,
+                                    ))
+                                    .catch_unwind()
+                                    .await;
+                                    worker_session.wait_for_reads().await;
+                                    let _ = control.0.cleanup.send_replace(Some(result.is_ok()));
+                                    result.unwrap_or_else(|_| {
+                                        Err("Instant multipart cleanup is unconfirmed"
+                                            .to_string()
+                                            .into())
+                                    })
+                                }
+                            },
+                        ))
+                        .await
                 };
                 if result.is_err() {
                     control.deny();
@@ -4085,7 +4191,8 @@ pub(crate) mod strict_instant {
             let sent = target
                 .control
                 .step(|| async { Ok(request.send().await) })
-                .await?;
+                .await?
+                .map_err(reqwest::Error::without_url);
             let response = match sent {
                 Ok(response) => response,
                 Err(error) if attempt == 0 && is_reqwest_network_error(&error) => {
@@ -4119,7 +4226,14 @@ pub(crate) mod strict_instant {
                     )
                 })?;
             target.control.check()?;
+            let object_identity = completed_drive_upload_identity(
+                response,
+                is_google_drive_resumable_url(&url),
+                chunk.total_size,
+            )
+            .await;
             return Ok(UploadedPart {
+                object_identity,
                 part_number: chunk.part_number,
                 etag,
                 size,
@@ -4134,6 +4248,8 @@ pub(crate) mod strict_instant {
         directory: &Path,
         video: &VideoUploadInfo,
         control: &Control,
+        session: &lifecycle::Session,
+        required_audio: bool,
     ) -> Result<(), AuthedApiError> {
         let upload = control
             .step(|| api::upload_multipart_initiate(app, &video.id))
@@ -4156,8 +4272,13 @@ pub(crate) mod strict_instant {
         let metadata = tokio::task::spawn_blocking(move || build_video_meta(&path))
             .await
             .map_err(|error| error.to_string())??;
-        control
-            .complete(|| {
+        session.wait_ready().await?;
+        let file_size = std::fs::metadata(directory.join("content/output.mp4"))
+            .map_err(|error| error.to_string())?
+            .len();
+        let duration = metadata.duration_in_secs;
+        let completed_identity = control
+            .step(|| {
                 api::upload_multipart_complete(
                     app,
                     &video.id,
@@ -4166,15 +4287,36 @@ pub(crate) mod strict_instant {
                     Some(metadata),
                 )
             })
-            .await
+            .await?;
+        let object_identity =
+            if is_google_drive_upload(upload.provider.as_deref(), &upload.upload_id) {
+                parts
+                    .iter()
+                    .rev()
+                    .find_map(|part| part.object_identity.clone())
+            } else {
+                completed_identity
+            };
+        let verification = UploadVerification::mp4(
+            file_size,
+            duration,
+            required_audio,
+            object_identity.ok_or(
+                "Server did not return the uploaded object identity; local recording retained",
+            )?,
+        )?;
+        control
+            .step(|| await_upload_verification(app, &video.id, &verification, session))
+            .await?;
+        Ok(())
     }
 
     fn strict_chunks(path: PathBuf, control: Control) -> impl Stream<Item = io::Result<Chunk>> {
         try_stream! {
             let started = Instant::now();
-            let mut file = loop {
+            let file = loop {
                 control.check().map_err(io::Error::other)?;
-                let opened = File::open(&path).await;
+                let opened = open_upload_file(path.clone()).await;
                 control.check().map_err(io::Error::other)?;
                 match opened {
                     Ok(file) => break file,
@@ -4185,29 +4327,24 @@ pub(crate) mod strict_instant {
             let mut offset = 0u64;
             let mut number = 1;
             let mut first_size = None;
-            let mut buffer = vec![0; MAX_CHUNK_SIZE as usize];
             loop {
                 control.check().map_err(io::Error::other)?;
                 let done = *control.0.decision.borrow() == 1;
-                let size = file.metadata().await?.len();
+                let size = upload_file_size(file.clone()).await?;
                 control.check().map_err(io::Error::other)?;
                 let available = size.saturating_sub(offset);
                 if available >= MIN_CHUNK_SIZE || (done && available > 0) {
                     let count = available.min(MAX_CHUNK_SIZE) as usize;
-                    file.seek(std::io::SeekFrom::Start(offset)).await?;
-                    control.check().map_err(io::Error::other)?;
-                    file.read_exact(&mut buffer[..count]).await?;
+                    let chunk = upload_file_chunk(file.clone(), offset, count).await?;
                     control.check().map_err(io::Error::other)?;
                     if offset == 0 { first_size = Some(count); }
-                    yield Chunk { total_size: size, part_number: number, offset, chunk: Bytes::copy_from_slice(&buffer[..count]) };
+                    yield Chunk { total_size: size, part_number: number, offset, chunk };
                     offset += count as u64; number += 1;
                 } else if done && available == 0 {
                     if let Some(count) = first_size {
-                        file.seek(std::io::SeekFrom::Start(0)).await?;
+                        let chunk = upload_file_chunk(file.clone(), 0, count).await?;
                         control.check().map_err(io::Error::other)?;
-                        file.read_exact(&mut buffer[..count]).await?;
-                        control.check().map_err(io::Error::other)?;
-                        yield Chunk { total_size: size, part_number: 1, offset: 0, chunk: Bytes::copy_from_slice(&buffer[..count]) };
+                        yield Chunk { total_size: size, part_number: 1, offset: 0, chunk };
                     }
                     break;
                 } else {
@@ -4275,14 +4412,7 @@ pub(crate) mod strict_instant {
         control.permission().await?;
         for info in failed {
             control.check()?;
-            let mut file = File::open(path).await.map_err(|error| error.to_string())?;
-            control.check()?;
-            file.seek(std::io::SeekFrom::Start(info.offset))
-                .await
-                .map_err(|error| error.to_string())?;
-            control.check()?;
-            let mut bytes = vec![0; info.chunk_size];
-            file.read_exact(&mut bytes)
+            let bytes = read_exact_upload_chunk(path, info.offset, info.chunk_size)
                 .await
                 .map_err(|error| error.to_string())?;
             control.check()?;
@@ -4328,48 +4458,11 @@ pub(crate) mod strict_instant {
             app,
             video_id,
             control,
+            session: None,
         };
         control
             .step(|| transport.put("screenshot/screen-capture.jpg", bytes.into()))
             .await
-    }
-
-    pub fn resume(
-        app: AppHandle,
-        directory: PathBuf,
-        video: VideoUploadInfo,
-        events: Option<std::sync::mpsc::Receiver<SegmentCompletedEvent>>,
-        required_audio: bool,
-    ) {
-        let (control, permission) = Control::new();
-        if permission.grant().is_err() {
-            return;
-        }
-        let upload = spawn(
-            app.clone(),
-            directory.clone(),
-            video.clone(),
-            events,
-            control.clone(),
-            required_audio,
-        );
-        drop(tauri::async_runtime::spawn(async move {
-            let result = upload.handle.await;
-            if matches!(result, Ok(Ok(()))) && control.joined().await && control.check().is_ok() {
-                let result = (|| -> Result<(), String> {
-                    let mut meta = RecordingMeta::load_for_project(&directory)
-                        .map_err(|error| error.to_string())?;
-                    control.check().map_err(|error| error.to_string())?;
-                    meta.upload = Some(UploadMeta::Complete);
-                    meta.save_for_project().map_err(|error| error.to_string())?;
-                    control.check().map_err(|error| error.to_string())
-                })();
-                if let Err(error) = result {
-                    error!(%error, "Resumed Instant upload local completion failed");
-                }
-            }
-            emit_upload_complete(&app, &video.id);
-        }));
     }
 
     #[cfg(test)]
@@ -4392,7 +4485,11 @@ pub(crate) mod strict_instant {
                 }
                 Ok(())
             }
-            async fn complete(&self) -> Result<(), AuthedApiError> {
+            async fn complete(
+                &self,
+                _: &SegmentUploadManifest,
+                _: bool,
+            ) -> Result<(), AuthedApiError> {
                 self.calls.lock().unwrap().push("Complete".into());
                 if self.delay_complete.load(Ordering::Acquire) {
                     self.entered.notify_one();
@@ -4585,6 +4682,7 @@ pub(crate) mod strict_instant {
                     self.released.notified().await;
                 }
                 Ok(UploadedPart {
+                    object_identity: None,
                     part_number: chunk.part_number,
                     etag: "synthetic".into(),
                     size: chunk.chunk.len(),

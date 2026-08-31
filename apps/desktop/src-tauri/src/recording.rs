@@ -2291,6 +2291,14 @@ async fn start_recording_prepared(
                                 .map_err(anyhow::Error::msg)?;
                                 attempt.checked(Ok(())).map_err(anyhow::Error::msg)?;
                             }
+                            let upload_session = crate::upload::lifecycle::prepare(
+                                &app_handle,
+                                &recording_dir,
+                                &video_upload_info.id,
+                                inputs.capture_system_audio || mic_feed.is_some(),
+                            )
+                            .await
+                            .map_err(anyhow::Error::from)?;
                             let handle = builder
                                 .build(
                                     #[cfg(target_os = "macos")]
@@ -2317,7 +2325,7 @@ async fn start_recording_prepared(
                                 Arc::new(tokio::sync::Mutex::new(
                                     crate::upload::strict_instant::spawn(
                                         app_handle.clone(),
-                                        recording_dir.clone(),
+                                        upload_session,
                                         video_upload_info.clone(),
                                         events,
                                         attempt.upload(),
@@ -2332,22 +2340,24 @@ async fn start_recording_prepared(
                                 if let Some(rx) = segment_rx {
                                     SegmentUploader::spawn(
                                         app_handle.clone(),
-                                        video_upload_info.id.clone(),
                                         rx,
                                         Some(finish_upload_rx.clone()),
-                                        recording_dir.clone(),
+                                        upload_session,
                                         video_upload_info.clone(),
+                                        inputs.capture_system_audio || mic_feed.is_some(),
                                     )
                                 } else {
                                     let progressive_upload = InstantMultipartUpload::spawn(
                                         app_handle.clone(),
                                         recording_dir.join("content/output.mp4"),
                                         video_upload_info.clone(),
-                                        recording_dir.clone(),
+                                        upload_session,
                                         Some(finish_upload_rx.clone()),
+                                        inputs.capture_system_audio || mic_feed.is_some(),
                                     );
                                     SegmentUploader {
                                         handle: progressive_upload.handle,
+                                        session: progressive_upload.session,
                                     }
                                 }
                             };
@@ -3130,7 +3140,7 @@ async fn cancel_discarded_recording(
             }
             #[cfg(not(target_os = "linux"))]
             {
-                segment_upload.handle.abort();
+                segment_upload.session.mark_cancelled().ok();
                 if let Err(err) = handle.cancel().await {
                     warn!("Failed to cancel instant recording while discarding: {err:#}");
                 }
@@ -3191,15 +3201,10 @@ async fn delete_remote_instant_video(app: &AppHandle, video_id: &str) -> Result<
 async fn discard_recording(app: &AppHandle, recording: InProgressRecording) -> Result<(), String> {
     let recording_dir = recording.recording_dir().clone();
     let video_id = cancel_discarded_recording(app, recording).await;
-    let local_delete = remove_recording_dir(&recording_dir).await;
-    let remote_delete = if let Some(video_id) = video_id {
-        delete_remote_instant_video(app, &video_id).await
-    } else {
-        Ok(())
-    };
-
-    remote_delete?;
-    local_delete
+    if let Some(video_id) = video_id {
+        delete_remote_instant_video(app, &video_id).await?;
+    }
+    remove_recording_dir(&recording_dir).await
 }
 
 #[cfg(target_os = "linux")]
@@ -3492,7 +3497,10 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
             error!("Recording stop failed: {e:#}");
             if let Some(ctx) = ctx {
                 #[cfg(not(target_os = "linux"))]
-                ctx.segment_upload.handle.abort();
+                {
+                    ctx.segment_upload.session.cancel();
+                    let _ = ctx.segment_upload.handle.await;
+                }
                 #[cfg(target_os = "linux")]
                 if let Some(attempt) = linux_instant::current(&app) {
                     attempt.cancel();
@@ -3616,20 +3624,34 @@ pub async fn restart_recording(
     let inputs = recording.inputs().clone();
     let recording_dir = recording.recording_dir().clone();
 
-    // Cleanup of the discarded recording must not block or abort the restart:
-    // the old recording is already cancelled at this point, and the new one
-    // writes to a fresh directory.
-    if let Some(video_id) = cancel_discarded_recording(&app, recording).await {
-        let app = app.clone();
-        tokio::spawn(async move {
-            if let Err(err) = delete_remote_instant_video(&app, &video_id).await {
-                warn!("Failed to delete remote instant video while restarting: {err}");
-            }
-        });
-    }
-
-    if let Err(err) = remove_recording_dir(&recording_dir).await {
-        warn!("Failed to delete recording files while restarting: {err}");
+    let upload_session = match &recording {
+        InProgressRecording::Instant { segment_upload, .. } => {
+            #[cfg(not(target_os = "linux"))]
+            let session = segment_upload.session.clone();
+            #[cfg(target_os = "linux")]
+            let session = segment_upload.lock().await.session.clone();
+            Some(session)
+        }
+        _ => None,
+    };
+    let video_id = cancel_discarded_recording(&app, recording).await;
+    if let (Some(video_id), Some(session)) = (video_id, upload_session) {
+        let cleanup_app = app.clone();
+        let cleanup_directory = recording_dir.clone();
+        if let Err(error) = crate::upload::lifecycle::supervise(app.clone(), session, async move {
+            delete_remote_instant_video(&cleanup_app, &video_id)
+                .await
+                .map_err(AuthedApiError::from)?;
+            remove_recording_dir(&cleanup_directory)
+                .await
+                .map_err(AuthedApiError::from)
+        })
+        .await
+        {
+            warn!(%error, "Restart retained the cancelled recording");
+        }
+    } else if let Err(error) = remove_recording_dir(&recording_dir).await {
+        warn!(%error, "Failed to delete recording files while restarting");
     }
 
     if let Some(generation) = clean_generation {
@@ -4082,6 +4104,8 @@ async fn handle_recording_end_inner(
         return Ok(());
     }
     let cleared = app.clear_recording_state();
+    #[cfg(not(target_os = "linux"))]
+    let mut cleared = cleared;
 
     if let Some(in_progress) = cleared.as_ref() {
         let mode = in_progress.inputs().mode;
@@ -4151,7 +4175,7 @@ async fn handle_recording_end_inner(
     {
         info!("Ending upload after recording failure");
         #[cfg(not(target_os = "linux"))]
-        segment_upload.handle.abort();
+        segment_upload.session.cancel();
         #[cfg(target_os = "linux")]
         {
             let _ = segment_upload;
@@ -4162,6 +4186,19 @@ async fn handle_recording_end_inner(
         crate::upload::emit_upload_complete(&handle, &video_upload_info.id);
     }
 
+    #[cfg(not(target_os = "linux"))]
+    if recording.is_err()
+        && let Some(InProgressRecording::Instant { segment_upload, .. }) = cleared.take()
+    {
+        let session = segment_upload.session.clone();
+        let _ = crate::upload::lifecycle::supervise(handle.clone(), session, async move {
+            segment_upload
+                .handle
+                .await
+                .map_err(|error| error.to_string())?
+        })
+        .await;
+    }
     drop(cleared);
 
     if app.was_camera_only_recording {
@@ -4560,72 +4597,62 @@ async fn handle_recording_finish(
                 })
             };
 
-            spawn_actor({
-                let video_upload_info = video_upload_info.clone();
+            #[cfg(not(target_os = "linux"))]
+            let session = segment_upload.session.clone();
+            #[cfg(target_os = "linux")]
+            let session = segment_upload.lock().await.session.clone();
+            session
+                .persist_local_complete(
+                    recording.meta.clone(),
+                    SharingMeta {
+                        id: video_upload_info.id.clone(),
+                        link: video_upload_info.link.clone(),
+                        content_hash: None,
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+            session
+                .mark_ready(false)
+                .map_err(|error| error.to_string())?;
+            let job_session = session.clone();
+            crate::upload::lifecycle::supervise(app.clone(), session, {
+                let video = video_upload_info.clone();
                 let recording_dir = recording_dir.clone();
-
                 async move {
-                    let upload_succeeded = await_instant_upload(segment_upload)
-                        .await
-                        .map_err(|e| e.to_string())
-                        .and_then(|r| r.map_err(|v| v.to_string()))
-                        .is_ok();
-
-                    if upload_succeeded {
-                        info!("Segment upload succeeded");
-                        crate::automation::run_upload_completed_automations(
-                            app.clone(),
-                            recording_dir.clone(),
-                            Some(video_upload_info.link.clone()),
-                            Some(video_upload_info.id.clone()),
-                        );
-                    } else {
-                        crate::upload::emit_upload_complete(&app, &video_upload_info.id);
-                    }
-
-                    let _ = screenshot_task.await;
-
-                    if upload_succeeded
-                        && let Ok(bytes) =
-                            compress_image(display_screenshot).await.map_err(|err| {
-                                error!(
-                                    "Error compressing thumbnail for instant mode progressive upload: {err}"
-                                )
-                            })
-                    {
-                        let res = crate::upload::singlepart_uploader(
-                            app.clone(),
-                            crate::api::PresignedS3PutRequest {
-                                video_id: video_upload_info.id.clone(),
-                                subpath: "screenshot/screen-capture.jpg".to_string(),
-                                method: PresignedS3PutRequestMethod::Put,
-                                meta: None,
-                            },
-                            bytes.len() as u64,
-                            stream::once(async move {
-                                Ok::<_, std::io::Error>(bytes::Bytes::from(bytes))
-                            }),
-                        )
-                        .await;
-                        if let Err(err) = res {
-                            error!(
-                                "Error updating thumbnail for instant mode progressive upload: {err}"
-                            );
-                        }
-                    }
-
-                    if upload_succeeded
-                        && GeneralSettingsStore::get(&app)
-                            .ok()
-                            .flatten()
-                            .unwrap_or_default()
-                            .delete_instant_recordings_after_upload
-                        && let Err(err) = tokio::fs::remove_dir_all(&recording_dir).await
-                    {
-                        error!("Failed to remove recording files after upload: {err:?}");
-                    }
+                    let uploaded = await_instant_upload(segment_upload).await;
+                    let screenshot = screenshot_task.await;
+                    uploaded.map_err(AuthedApiError::from)??;
+                    screenshot
+                        .map_err(|error| error.to_string())?
+                        .map_err(AuthedApiError::from)?;
+                    job_session.check()?;
+                    let bytes = compress_image(display_screenshot).await?;
+                    crate::upload::singlepart_uploader(
+                        app.clone(),
+                        crate::api::PresignedS3PutRequest {
+                            video_id: video.id.clone(),
+                            subpath: "screenshot/screen-capture.jpg".into(),
+                            method: PresignedS3PutRequestMethod::Put,
+                            meta: None,
+                        },
+                        bytes.len() as u64,
+                        stream::once(
+                            async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) },
+                        ),
+                    )
+                    .await?;
+                    job_session.complete_locally(&app).await?;
+                    crate::automation::run_upload_completed_automations(
+                        app,
+                        recording_dir,
+                        Some(video.link),
+                        Some(video.id),
+                    );
+                    Ok(())
                 }
-            });
+            })
+            .await
+            .map_err(|error| error.to_string())?;
 
             (
                 RecordingMetaInner::Instant(recording.meta),
@@ -4639,17 +4666,6 @@ async fn handle_recording_finish(
     };
 
     let instant_share = sharing.as_ref().map(|s| (s.link.clone(), s.id.clone()));
-
-    if let RecordingMetaInner::Instant(_) = &meta_inner
-        && let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
-            error!("Failed to load recording meta while saving finished recording: {err}")
-        })
-    {
-        meta.inner = meta_inner.clone();
-        meta.sharing = sharing;
-        meta.save_for_project()
-            .map_err(|e| format!("Failed to save recording meta: {e}"))?;
-    }
 
     if let RecordingMetaInner::Instant(_) = &meta_inner {
         let (link, id) = match instant_share {
@@ -6088,12 +6104,6 @@ pub(crate) mod linux_instant {
         {
             return Ok(());
         }
-        if !matches!(
-            inputs.capture_target,
-            ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. }
-        ) {
-            return Err("Instant screen camera is supported for X11 Display and Area only. No camera was omitted.".into());
-        }
         if !x11 {
             return Err(
                 "Instant camera composition requires an X11 desktop; Wayland is not supported."
@@ -6112,6 +6122,15 @@ pub(crate) mod linux_instant {
             .raw_handle()
             .physical_position()
             .ok_or("Display physical position unavailable")?;
+        if matches!(target, ScreenCaptureTarget::Window { .. }) {
+            let crop = crop.ok_or("Capture window bounds unavailable")?;
+            return physical_window_capture_rect(
+                position.x() + crop.position().x(),
+                position.y() + crop.position().y(),
+                crop.size().width(),
+                crop.size().height(),
+            );
+        }
         let size = display
             .physical_size()
             .ok_or("Display physical size unavailable")?;
@@ -6126,6 +6145,32 @@ pub(crate) mod linux_instant {
                 )
             }),
         )
+    }
+
+    fn physical_window_capture_rect(
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    ) -> Result<crate::linux_instant_camera::PhysicalRect, String> {
+        let coordinates = f64::from(i32::MIN)..=f64::from(i32::MAX);
+        let dimensions = 2.0..=f64::from(i32::MAX);
+        if ![x, y, width, height]
+            .iter()
+            .all(|value| value.is_finite() && value.fract() == 0.0)
+            || !coordinates.contains(&x)
+            || !coordinates.contains(&y)
+            || !dimensions.contains(&width)
+            || !dimensions.contains(&height)
+        {
+            return Err("Capture window has invalid physical bounds".into());
+        }
+        Ok(crate::linux_instant_camera::PhysicalRect {
+            x: x as i32,
+            y: y as i32,
+            width: width as u32,
+            height: height as u32,
+        })
     }
 
     fn physical_capture_rect(
@@ -6504,7 +6549,7 @@ pub(crate) mod linux_instant {
                     target_name,
                     finalized: false,
                 };
-                match finalize(&app, &attempt, &mut completed).await {
+                match finalize(&attempt, &mut completed).await {
                     Ok(()) => Ok(Some(completed)),
                     Err(error) => {
                         attempt.cancel();
@@ -6530,10 +6575,14 @@ pub(crate) mod linux_instant {
                 }
             }
         };
-        if !attempt.upload_cleanup().await {
-            return Err("Instant upload cleanup is unconfirmed; local recording retained".into());
+        if !matches!(result, Ok(Some(_))) {
+            if !attempt.upload_cleanup().await {
+                return Err(
+                    "Instant upload cleanup is unconfirmed; local recording retained".into(),
+                );
+            }
+            let _ = attempt.join_upload(segment_upload.clone()).await;
         }
-        let _ = attempt.join_upload(segment_upload.clone()).await;
         let successful_discard = matches!(result, Ok(None));
         let successful_upload = matches!(result, Ok(Some(_)));
         let finish_app = app.clone();
@@ -6562,24 +6611,58 @@ pub(crate) mod linux_instant {
         )
         .await;
         if result.is_ok() && successful_upload {
-            result = successful_effects(&app, &attempt, &directory, &share_info);
+            let session = segment_upload.lock().await.session.clone();
+            result = session.mark_ready(false).map_err(|error| error.to_string());
+            if result.is_ok() {
+                let network_attempt = attempt.clone();
+                let network_app = app.clone();
+                let network_video = share_info.clone();
+                let network_session = session.clone();
+                result = crate::upload::lifecycle::supervise(app.clone(), session, async move {
+                    let authorized = network_attempt.authorize();
+                    let uploaded = network_attempt.join_upload(segment_upload).await;
+                    let joined = network_attempt.upload_cleanup().await;
+                    authorized.map_err(AuthedApiError::from)?;
+                    uploaded.map_err(AuthedApiError::from)?;
+                    if !joined {
+                        return Err("Instant upload cleanup is unconfirmed".into());
+                    }
+                    let bytes =
+                        compress_image(network_session.directory.join("screenshots/display.jpg"))
+                            .await?;
+                    crate::upload::strict_instant::upload_thumbnail(
+                        &network_app,
+                        &network_video.id,
+                        bytes,
+                        &network_attempt.upload(),
+                    )
+                    .await?;
+                    network_session.complete_locally(&network_app).await?;
+                    crate::automation::run_upload_completed_automations(
+                        network_app,
+                        network_session.directory.clone(),
+                        Some(network_video.link),
+                        Some(network_video.id),
+                    );
+                    Ok(())
+                })
+                .await
+                .map_err(|error| error.to_string());
+            }
+            if result.is_ok() {
+                result = successful_effects(&app, &attempt, &directory, &share_info);
+            }
         }
         result = attempt.checked(result);
         if result.is_ok() && successful_discard {
-            result = remove_owned_directory(directory.clone(), attempt.clone(), false).await;
+            result = delete_remote_instant_video(&app, &video_id).await;
             result = attempt.checked(result);
             if result.is_ok() {
-                result = delete_remote_instant_video(&app, &video_id).await;
-                result = attempt.checked(result);
+                result = crate::upload::lifecycle::mark_cancelled(&directory)
+                    .map_err(|error| error.to_string());
             }
-        } else if result.is_ok() && successful_upload {
-            let settings = GeneralSettingsStore::get(&app)
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            result = attempt.checked(result);
-            if result.is_ok() && settings.delete_instant_recordings_after_upload {
-                result = remove_owned_directory(directory.clone(), attempt.clone(), true).await;
+            if result.is_ok() {
+                result = remove_owned_directory(directory.clone(), attempt.clone(), false).await;
                 result = attempt.checked(result);
             }
         }
@@ -6664,14 +6747,7 @@ pub(crate) mod linux_instant {
                         Some(video.id.clone()),
                     )
                 },
-                upload_automation: || {
-                    crate::automation::run_upload_completed_automations(
-                        app.clone(),
-                        directory.to_path_buf(),
-                        Some(video.link.clone()),
-                        Some(video.id.clone()),
-                    )
-                },
+                upload_automation: || {},
                 open_link: |link| open_external_link(app.clone(), link),
                 copy_link: |link| {
                     app.clipboard()
@@ -6733,14 +6809,10 @@ pub(crate) mod linux_instant {
         meta.save_for_project().map_err(|error| error.to_string())
     }
 
-    async fn finalize(
-        app: &AppHandle,
-        attempt: &Attempt,
-        completed: &mut CompletedRecording,
-    ) -> Result<(), String> {
+    async fn finalize(attempt: &Attempt, completed: &mut CompletedRecording) -> Result<(), String> {
         let CompletedRecording::Instant {
             recording,
-            segment_upload,
+            segment_upload: _,
             video_upload_info,
             finalized,
             ..
@@ -6761,44 +6833,17 @@ pub(crate) mod linux_instant {
             create_screenshot_source_from_segments(&directory.join("content/display")).await?
         };
         create_screenshot(source, screenshot.clone(), None).await?;
-        let bytes = compress_image(screenshot).await?;
-        let upload_control = attempt.upload();
-        crate::upload::strict_instant::upload_thumbnail(
-            app,
-            &video_upload_info.id,
-            bytes,
-            &upload_control,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
         let mut meta =
             RecordingMeta::load_for_project(directory).map_err(|error| error.to_string())?;
-        attempt
-            .upload()
-            .check()
-            .map_err(|error| error.to_string())?;
+        attempt.checked(Ok(()))?;
         meta.sharing = Some(SharingMeta {
             link: video_upload_info.link.clone(),
             id: video_upload_info.id.clone(),
             content_hash: None,
         });
-        meta.save_for_project().map_err(|error| error.to_string())?;
-        attempt.authorize()?;
-        attempt.join_upload(segment_upload.clone()).await?;
-        if !attempt.upload_cleanup().await {
-            return Err("Instant upload cleanup is unconfirmed".into());
-        }
-        attempt
-            .upload()
-            .check()
-            .map_err(|error| error.to_string())?;
         meta.inner = RecordingMetaInner::Instant(recording.meta.clone());
-        meta.upload = Some(cap_project::UploadMeta::Complete);
         meta.save_for_project().map_err(|error| error.to_string())?;
-        attempt
-            .upload()
-            .check()
-            .map_err(|error| error.to_string())?;
+        attempt.checked(Ok(()))?;
         *finalized = true;
         Ok(())
     }
@@ -6928,6 +6973,53 @@ pub(crate) mod linux_instant {
                 );
             crate::clean_capture::deliver_preflight_shortcut(&state);
             task.await.unwrap().unwrap();
+        }
+
+        #[test]
+        fn instant_window_capture_reference_preserves_exact_size_and_origin() {
+            assert_eq!(
+                physical_window_capture_rect(-40.0, 31.0, 1281.0, 721.0).unwrap(),
+                crate::linux_instant_camera::PhysicalRect {
+                    x: -40,
+                    y: 31,
+                    width: 1281,
+                    height: 721,
+                }
+            );
+            assert_eq!(
+                physical_window_capture_rect(-1921.0, -1081.0, 1919.0, 1079.0).unwrap(),
+                crate::linux_instant_camera::PhysicalRect {
+                    x: -1921,
+                    y: -1081,
+                    width: 1919,
+                    height: 1079,
+                }
+            );
+        }
+
+        #[test]
+        fn instant_window_capture_reference_rejects_invalid_geometry() {
+            for value in [
+                f64::NAN,
+                f64::INFINITY,
+                0.0,
+                1.0,
+                400.5,
+                f64::from(u32::MAX),
+            ] {
+                assert!(physical_window_capture_rect(0.0, 0.0, value, 720.0).is_err());
+                assert!(physical_window_capture_rect(0.0, 0.0, 1280.0, value).is_err());
+            }
+            for value in [
+                f64::NAN,
+                f64::NEG_INFINITY,
+                -0.5,
+                f64::from(i32::MIN) - 1.0,
+                f64::from(i32::MAX) + 1.0,
+            ] {
+                assert!(physical_window_capture_rect(value, 0.0, 1280.0, 720.0).is_err());
+                assert!(physical_window_capture_rect(0.0, value, 1280.0, 720.0).is_err());
+            }
         }
 
         #[test]
@@ -7085,7 +7177,7 @@ pub(crate) mod linux_instant {
         }
 
         #[test]
-        fn instant_screen_camera_support_rejects_window_wayland_and_preserves_studio() {
+        fn instant_screen_camera_support_allows_x11_window_and_preserves_wayland_rejection() {
             let mut inputs = StartRecordingInputs {
                 capture_target: ScreenCaptureTarget::Window {
                     id: "1".parse().unwrap(),
@@ -7094,7 +7186,8 @@ pub(crate) mod linux_instant {
                 mode: RecordingMode::Instant,
                 organization_id: None,
             };
-            assert!(validate_screen_camera_support(&inputs, true, true).is_err());
+            assert!(validate_screen_camera_support(&inputs, true, true).is_ok());
+            assert!(validate_screen_camera_support(&inputs, true, false).is_err());
             assert!(validate_screen_camera_support(&inputs, false, false).is_ok());
             inputs.capture_target = ScreenCaptureTarget::Display {
                 id: "1".parse().unwrap(),
