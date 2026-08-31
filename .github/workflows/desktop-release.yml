@@ -701,6 +701,19 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      - name: Retain signed packages for release validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-release-${{ matrix.settings.target }}-${{ inputs.sha }}
+          path: |
+            target/${{ matrix.settings.target }}/release/bundle/dmg/*.dmg
+            target/${{ matrix.settings.target }}/release/bundle/nsis/*.exe
+            target/${{ matrix.settings.target }}/release/bundle/deb/*.deb
+            target/${{ matrix.settings.target }}/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
       - name: Upload assets
         if: ${{ runner.os != 'Linux' }}
         uses: crabnebula-dev/cloud-release@v0
