@@ -1421,6 +1421,7 @@ pub struct SegmentUi<'a> {
     pub audio_picker_lane: Option<u32>,
     /// `isHoveringGenerateZoomButton` (`TL/ZoomTrack.tsx:308-309, 784`).
     pub hovering_generate_zoom: bool,
+    pub scene_preview_time: Option<f64>,
 }
 
 impl SegmentUi<'_> {
@@ -1790,7 +1791,28 @@ fn render_track_content(
         && let Some(preview) = view.preview_time
         && let Some(ghost) = new_zoom_segment(model, preview, secs_per_pixel)
     {
-        content = content.child(render_zoom_ghost(ghost, view, secs_per_pixel, height));
+        content = content.child(render_gap_ghost(
+            TrackKind::Zoom,
+            ghost,
+            view,
+            secs_per_pixel,
+            height,
+        ));
+    }
+
+    if row.kind == TrackKind::Scene
+        && !ui.dragging
+        && view.hovered_track == Some(TrackKind::Scene)
+        && let Some(preview) = ui.scene_preview_time
+        && let Some(ghost) = new_scene_segment(model, preview)
+    {
+        content = content.child(render_gap_ghost(
+            TrackKind::Scene,
+            ghost,
+            view,
+            secs_per_pixel,
+            height,
+        ));
     }
 
     if row.kind == TrackKind::ThreeD {
@@ -1856,6 +1878,30 @@ pub fn new_zoom_segment(
     secs_per_pixel: f64,
 ) -> Option<(f64, f64)> {
     new_gap_segment(model, TrackKind::Zoom, preview, secs_per_pixel)
+}
+
+pub fn new_scene_segment(model: &TimelineModel, preview: f64) -> Option<(f64, f64)> {
+    if !preview.is_finite()
+        || preview < 0.0
+        || !model.total_duration.is_finite()
+        || preview >= model.total_duration
+        || model
+            .scene
+            .iter()
+            .any(|segment| preview >= segment.start && preview < segment.end)
+    {
+        return None;
+    }
+    let end = model
+        .scene
+        .iter()
+        .filter(|segment| segment.start > preview)
+        .map(|segment| segment.start)
+        .min_by(f64::total_cmp)
+        .unwrap_or(model.total_duration)
+        .min(model.total_duration)
+        .min(preview + 3.0);
+    (end - preview >= 0.5).then_some((preview, end))
 }
 
 pub fn new_gap_segment(
@@ -1939,13 +1985,14 @@ fn render_camera3d_setup_ghost(
         .into_any_element()
 }
 
-fn render_zoom_ghost(
+fn render_gap_ghost(
+    kind: TrackKind,
     (start, end): (f64, f64),
     view: TimelineView,
     secs_per_pixel: f64,
     height: f32,
 ) -> AnyElement {
-    let color = TrackKind::Zoom.color();
+    let color = kind.color();
     let x = ((start - view.transform.position) / secs_per_pixel) as f32;
     let width = ((end - start) / secs_per_pixel) as f32;
     div()
@@ -3912,6 +3959,51 @@ mod tests {
         // floor takes over.
         let wide = new_zoom_segment(&model, 10.0, 60. / 1000.).unwrap();
         assert!((wide.1 - wide.0 - 4.8).abs() < 1e-9, "{wide:?}");
+    }
+
+    #[test]
+    fn scene_preview_and_creation_share_non_overlapping_placement() {
+        let scene = |start, end| Segment {
+            start,
+            end,
+            lane: 0,
+            detail: SegmentDetail::Scene {
+                mode: SceneMode::CameraOnly,
+            },
+        };
+        let model = TimelineModel {
+            scene: vec![scene(2.0, 5.0), scene(8.0, 11.0)],
+            total_duration: 20.0,
+            ..TimelineModel::default()
+        };
+        assert_eq!(new_scene_segment(&model, 0.0), Some((0.0, 2.0)));
+        assert_eq!(new_scene_segment(&model, 5.0), Some((5.0, 8.0)));
+        assert_eq!(new_scene_segment(&model, 7.5), Some((7.5, 8.0)));
+        assert_eq!(new_scene_segment(&model, 11.0), Some((11.0, 14.0)));
+        assert_eq!(new_scene_segment(&model, 19.0), Some((19.0, 20.0)));
+        for time in [2.0, 4.9, 7.6, 8.0, 19.6, 20.0] {
+            assert_eq!(new_scene_segment(&model, time), None, "{time}");
+        }
+        let mut reordered = model.clone();
+        reordered.scene.reverse();
+        assert_eq!(new_scene_segment(&reordered, 0.0), Some((0.0, 2.0)));
+        assert_eq!(new_scene_segment(&reordered, 5.0), Some((5.0, 8.0)));
+    }
+
+    #[test]
+    fn scene_placement_requires_a_finite_half_second_of_recording() {
+        let mut model = TimelineModel {
+            total_duration: 0.5,
+            ..TimelineModel::default()
+        };
+        assert_eq!(new_scene_segment(&model, 0.0), Some((0.0, 0.5)));
+        for time in [-1.0, 0.1, f64::NAN, f64::INFINITY] {
+            assert_eq!(new_scene_segment(&model, time), None);
+        }
+        for duration in [0.0, 0.49, f64::NAN, f64::INFINITY] {
+            model.total_duration = duration;
+            assert_eq!(new_scene_segment(&model, 0.0), None);
+        }
     }
 
     // -- Waveforms ----------------------------------------------------------

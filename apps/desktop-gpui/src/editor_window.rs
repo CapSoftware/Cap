@@ -1326,6 +1326,7 @@ pub struct EditorWindow {
     /// The segment under the pointer: `(track, lane, index)`. This is the
     /// `group-hover` the trim handles' reveal hangs off.
     hovered_segment: Option<(TrackKind, u32, usize)>,
+    scene_preview_time: Option<f64>,
     /// The gutter chip under the pointer, which is what reveals the red
     /// per-track delete button (`TL/index.tsx:1516-1546`, `group/icon`).
     hovered_gutter: Option<(TrackKind, u32)>,
@@ -1336,6 +1337,7 @@ pub struct EditorWindow {
     /// `isGeneratingAutoZoom` / `sessionDismissedGenerateZoomPrompt`
     /// (`TL/ZoomTrack.tsx:60-65`).
     generating_auto_zoom: bool,
+    auto_zoom_message: Option<&'static str>,
     zoom_prompt_dismissed: bool,
     hovering_generate_zoom: bool,
     clip_speed: Option<ClipSpeedMenu>,
@@ -1660,10 +1662,12 @@ impl EditorWindow {
             split_mode: false,
             split_preview: None,
             hovered_segment: None,
+            scene_preview_time: None,
             hovered_gutter: None,
             drag: None,
             playback_tick: 0,
             generating_auto_zoom: false,
+            auto_zoom_message: None,
             zoom_prompt_dismissed: false,
             hovering_generate_zoom: false,
             clip_speed: None,
@@ -2831,6 +2835,9 @@ impl EditorWindow {
     ) {
         if self.view.hovered_track != track {
             self.view.hovered_track = track;
+            if track != Some(TrackKind::Scene) {
+                self.scene_preview_time = None;
+            }
             cx.notify();
         }
     }
@@ -3013,6 +3020,7 @@ impl EditorWindow {
                         TrackKind::Zoom,
                         secs_per_pixel,
                         f32::from(event.position.x),
+                        viewport_width,
                         cx,
                     );
                 } else if kind == TrackKind::ThreeD {
@@ -3029,6 +3037,7 @@ impl EditorWindow {
                             TrackKind::ThreeD,
                             secs_per_pixel,
                             f32::from(event.position.x),
+                            viewport_width,
                             cx,
                         );
                     }
@@ -3037,7 +3046,19 @@ impl EditorWindow {
                     self.open_audio_picker(lane, cx);
                 } else if matches!(kind, TrackKind::Text | TrackKind::Mask | TrackKind::Scene) {
                     cx.stop_propagation();
-                    self.add_segment_at_click(kind, lane, press_time, window, cx);
+                    let time = if kind == TrackKind::Scene {
+                        let Some(time) = timeline::preview_time_from_x(
+                            f32::from(event.position.x),
+                            viewport_width,
+                            self.view.transform,
+                        ) else {
+                            return;
+                        };
+                        time
+                    } else {
+                        press_time
+                    };
+                    self.add_segment_at_click(kind, lane, time, window, cx);
                 }
                 return;
             }
@@ -3179,11 +3200,10 @@ impl EditorWindow {
         kind: TrackKind,
         secs_per_pixel: f64,
         down_x: f32,
+        viewport_width: f32,
         cx: &mut Context<Self>,
     ) {
-        let ghost = (self.view.hovered_track == Some(kind))
-            .then_some(self.view.preview_time)
-            .flatten()
+        let ghost = timeline::preview_time_from_x(down_x, viewport_width, self.view.transform)
             .and_then(|preview| {
                 timeline::new_gap_segment(&self.timeline, kind, preview, secs_per_pixel)
                     .map(|ghost| (preview, ghost))
@@ -3903,6 +3923,7 @@ impl EditorWindow {
             return;
         }
         self.generating_auto_zoom = true;
+        self.auto_zoom_message = None;
         cx.notify();
         let path = self.project_path.clone();
         let duration = self.recording_duration;
@@ -3924,6 +3945,9 @@ impl EditorWindow {
                 this.hovering_generate_zoom = false;
                 if segments.is_empty() {
                     tracing::info!("auto zoom produced no segments");
+                    this.auto_zoom_message = Some(
+                        "No zoom segments could be generated. Click or drag on the track to add one.",
+                    );
                     cx.notify();
                     return;
                 }
@@ -4015,23 +4039,7 @@ impl EditorWindow {
                     .collect();
                 edits::find_placement(&lane_segments, time, length, total)
             }
-            TrackKind::Scene => {
-                let max_duration = {
-                    let next = timeline
-                        .scene_segments
-                        .iter()
-                        .filter(|segment| segment.start > time)
-                        .map(|segment| segment.start)
-                        .min_by(|a, b| a.total_cmp(b));
-                    let available = next.unwrap_or(total) - time;
-                    3.0_f64.min(available)
-                };
-                if max_duration < 0.5 {
-                    None
-                } else {
-                    Some((time, time + max_duration))
-                }
-            }
+            TrackKind::Scene => timeline::new_scene_segment(&self.timeline, time),
             _ => None,
         };
         let Some((start, end)) = placement else {
@@ -4528,6 +4536,13 @@ impl EditorWindow {
         let mut changed = false;
         if self.hovered_segment != hovered {
             self.hovered_segment = hovered;
+            changed = true;
+        }
+        let scene_preview_time = (kind == TrackKind::Scene && matches!(hit, Hit::Empty))
+            .then(|| timeline::preview_time_from_x(window_x, viewport_width, self.view.transform))
+            .flatten();
+        if self.scene_preview_time != scene_preview_time {
+            self.scene_preview_time = scene_preview_time;
             changed = true;
         }
 
@@ -5204,31 +5219,6 @@ impl EditorWindow {
     }
 
     // -- Header --------------------------------------------------------------
-
-    /// `EditorButton`: `group flex flex-row items-center px-1.5 gap-1.5 h-8
-    /// rounded-lg text-[0.875rem]`, `disabled:opacity-50 disabled:text-gray-11`
-    /// (`ui.tsx:317-334`).
-    ///
-    /// Every one of these is inert this unit -- see the README's deviation
-    /// table -- so they all render in the disabled state rather than pretending
-    /// to be live.
-    /// The header's and player toolbar's unbuilt affordances, drawn at their
-    /// real metrics in `EditorButton`'s disabled state -- the shared component
-    /// the config sidebar's Reset and Import actions use live.
-    fn editor_button(
-        &self,
-        icon: &'static str,
-        label: Option<&'static str>,
-        right_icon: Option<&'static str>,
-        width: Option<f32>,
-    ) -> impl IntoElement {
-        ui::EditorButton::plain(&self.theme, icon)
-            .disabled(true)
-            .when_some(label, |this, label| this.label(label))
-            .left_icon(icon)
-            .when_some(right_icon, |this, icon| this.right_icon(icon))
-            .when_some(width, |this, width| this.width(px(width)))
-    }
 
     /// The header's undo and redo buttons (`Header.tsx:145-168`).
     ///
@@ -7186,13 +7176,7 @@ impl EditorWindow {
                             .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
                                 this.open_presets_menu(event.position(), window, cx);
                             })),
-                    )
-                    .child(self.editor_button(
-                        "icons/building-2.svg",
-                        Some("Sign in"),
-                        Some("icons/chevron-down.svg"),
-                        None,
-                    )),
+                    ),
             )
             // Right group: `flex-1 h-full flex flex-row items-center gap-2
             // pl-2 pr-2`.
@@ -8072,6 +8056,7 @@ impl EditorWindow {
                 _ => None,
             },
             hovering_generate_zoom: self.hovering_generate_zoom,
+            scene_preview_time: self.scene_preview_time,
         };
         // The ghost trim and its release animation draw from a patched copy
         // of the model; everything else draws the real one.
@@ -8168,14 +8153,10 @@ impl EditorWindow {
                             .top_0()
                             .bottom_0()
                             .flex()
-                            .flex_row()
+                            .flex_col()
                             .items_center()
                             .justify_center()
-                            .gap(px(4.))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|_, _, _, cx| cx.stop_propagation()),
-                            )
+                            .gap(px(2.))
                             .child(
                                 div()
                                     .id("zoom-generate-hit")
@@ -8183,6 +8164,10 @@ impl EditorWindow {
                                     .flex_row()
                                     .items_center()
                                     .gap(px(4.))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                                    )
                                     .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                                         if this.hovering_generate_zoom != *hovered {
                                             this.hovering_generate_zoom = *hovered;
@@ -8222,6 +8207,12 @@ impl EditorWindow {
                                             })),
                                     ),
                             )
+                            .children(self.auto_zoom_message.map(|message| {
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(Hsla::from(theme.gray_11))
+                                    .child(message)
+                            }))
                     }))
                     .children(delete_label.map(|label| {
                         let hovered = self.hovered_gutter == Some((kind, lane));
