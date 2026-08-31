@@ -1032,3 +1032,24 @@ index 993b2ff3fadc..e8916c11025f 100644
 +        assert_eq!(visibility.phase, VisibilityPhase::Remapping(8));
 +    }
 +}
+diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
+--- a/crates/gpui_linux/src/linux/x11/client.rs
++++ b/crates/gpui_linux/src/linux/x11/client.rs
+@@ -1797 +1797,16 @@
+-        event_loop.run(None, &mut self.clone(), |_| {}).log_err();
++        let xcb_connection = self.0.borrow().xcb_connection.clone();
++        let loop_signal = event_loop.get_signal();
++        // Checked XCB replies can buffer events without leaving the fd readable.
++        // Wake the first dispatch, then drain after each dispatch's idle callbacks.
++        loop_signal.wakeup();
++        event_loop
++            .run(None, &mut self.clone(), |client| {
++                if client
++                    .process_x11_events(&xcb_connection)
++                    .log_err()
++                    .is_none()
++                {
++                    loop_signal.stop();
++                }
++            })
++            .log_err();
