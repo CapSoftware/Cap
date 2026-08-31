@@ -112,6 +112,11 @@ function InProgressRecordingInner() {
 	const [recordingFailure, setRecordingFailure] = createSignal<string | null>(
 		null,
 	);
+	const [pauseError, setPauseError] = createSignal<string | null>(null);
+	const [pausePendingAction, setPausePendingAction] = createSignal<
+		string | null
+	>(null);
+	let pauseRequest: object | undefined;
 	const [degradedReason, setDegradedReason] = createSignal<string | null>(null);
 	const [issuePanelVisible, setIssuePanelVisible] = createSignal(false);
 	const [issueKey, setIssueKey] = createSignal("");
@@ -157,6 +162,8 @@ function InProgressRecordingInner() {
 			);
 		const failure = recordingFailure();
 		if (failure) issues.push(failure);
+		const controlError = pauseError();
+		if (controlError) issues.push(controlError);
 		return issues;
 	});
 
@@ -201,6 +208,9 @@ function InProgressRecordingInner() {
 	createTauriEventListener(events.recordingEvent, (payload) => {
 		switch (payload.variant) {
 			case "Countdown":
+				pauseRequest = undefined;
+				setPausePendingAction(null);
+				setPauseError(null);
 				setStartingDismissed(false);
 				setDisconnectedInputs({ microphone: false, camera: false });
 				setRecordingFailure(null);
@@ -215,6 +225,9 @@ function InProgressRecordingInner() {
 				});
 				break;
 			case "Started": {
+				pauseRequest = undefined;
+				setPausePendingAction(null);
+				setPauseError(null);
 				const wasStartingDismissed = startingDismissed();
 				setStartingDismissed(false);
 				setDisconnectedInputs({ microphone: false, camera: false });
@@ -238,6 +251,7 @@ function InProgressRecordingInner() {
 				break;
 			}
 			case "Paused":
+				setPauseError(null);
 				if (state().variant === "recording") {
 					setPauseResumes((a) => [...a, { pause: Date.now() }]);
 				}
@@ -245,6 +259,7 @@ function InProgressRecordingInner() {
 				setTime(Date.now());
 				break;
 			case "Resumed":
+				setPauseError(null);
 				setPauseResumes(
 					produce((a) => {
 						if (a.length === 0) return a;
@@ -481,10 +496,34 @@ function InProgressRecordingInner() {
 
 	const togglePause = createMutation(() => ({
 		mutationFn: async () => {
-			if (state().variant === "paused") {
-				await commands.resumeRecording();
-			} else {
-				await commands.pauseRecording();
+			if (
+				pauseRequest ||
+				(state().variant !== "recording" && state().variant !== "paused")
+			)
+				return;
+			const request = { start: start(), resume: state().variant === "paused" };
+			pauseRequest = request;
+			setPauseError(null);
+			setPausePendingAction(request.resume ? "Resuming…" : "Pausing…");
+			try {
+				if (request.resume) await commands.resumeRecording();
+				else await commands.pauseRecording();
+			} catch (error) {
+				if (
+					pauseRequest === request &&
+					start() === request.start &&
+					(state().variant === "recording" || state().variant === "paused")
+				) {
+					setPauseError(
+						`Could not ${request.resume ? "resume" : "pause"} recording: ${String(error)}`,
+					);
+				}
+				throw error;
+			} finally {
+				if (pauseRequest === request) {
+					pauseRequest = undefined;
+					setPausePendingAction(null);
+				}
 			}
 		},
 	}));
@@ -876,10 +915,21 @@ function InProgressRecordingInner() {
 												}
 											>
 												<Show
-													when={isMaxRecordingLimitEnabled()}
-													fallback={formatTime(adjustedTime() / 1000)}
+													when={
+														pausePendingAction() || state().variant === "paused"
+													}
+													fallback={
+														<Show
+															when={isMaxRecordingLimitEnabled()}
+															fallback={formatTime(adjustedTime() / 1000)}
+														>
+															{formatTime(remainingRecordingTime() / 1000)}
+														</Show>
+													}
 												>
-													{formatTime(remainingRecordingTime() / 1000)}
+													<span role="status" aria-live="polite">
+														{pausePendingAction() ?? "Paused"}
+													</span>
 												</Show>
 											</Show>
 										</span>
@@ -1004,8 +1054,21 @@ function InProgressRecordingInner() {
 
 										{canPauseRecording() && (
 											<ActionButton
-												disabled={togglePause.isPending || isCountdown()}
+												disabled={
+													togglePause.isPending ||
+													isCountdown() ||
+													stopRequested() ||
+													stopRecording.isPending ||
+													teardownInFlight()
+												}
 												onClick={() => togglePause.mutate()}
+												aria-pressed={state().variant === "paused"}
+												aria-busy={togglePause.isPending}
+												class={cx(
+													"active:scale-90 motion-reduce:transform-none",
+													state().variant === "paused" &&
+														"bg-amber-3 text-amber-11 ring-1 ring-amber-6",
+												)}
 												title={
 													state().variant === "paused"
 														? "Resume recording"
@@ -1017,11 +1080,18 @@ function InProgressRecordingInner() {
 														: "Pause recording"
 												}
 											>
-												{state().variant === "paused" ? (
-													<IconCapPlayCircle />
-												) : (
-													<IconCapPauseCircle />
-												)}
+												<Show
+													when={togglePause.isPending}
+													fallback={
+														state().variant === "paused" ? (
+															<IconCapPlayCircle />
+														) : (
+															<IconCapPauseCircle />
+														)
+													}
+												>
+													<IconLucideLoader2 class="size-5 animate-spin motion-reduce:animate-none" />
+												</Show>
 											</ActionButton>
 										)}
 

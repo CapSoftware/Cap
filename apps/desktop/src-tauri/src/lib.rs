@@ -137,8 +137,9 @@ use windows::{
 use crate::recording_settings::{RecordingSettingsStore, RecordingTargetMode};
 use crate::{recording::start_recording, upload::build_video_meta};
 use exit_shutdown::{
-    AppExitAction, ExitRequestDecision, app_exit_action, collect_device_inventory,
-    handle_exit_requested, run_while_active,
+    AppExitAction, ExitBlocked, ExitRequestDecision, app_exit_action, collect_device_inventory,
+    handle_exit_requested, prepare_then_begin_exit, recording_start_allowed, run_while_active,
+    with_idle_recording_state,
 };
 use futures::FutureExt;
 use std::panic::AssertUnwindSafe;
@@ -376,6 +377,7 @@ impl CameraWindowCloseGate {
 pub struct AppExitState {
     exiting: AtomicBool,
     restarting: AtomicBool,
+    admission: std::sync::Mutex<()>,
 }
 
 impl Default for AppExitState {
@@ -383,6 +385,7 @@ impl Default for AppExitState {
         Self {
             exiting: AtomicBool::new(false),
             restarting: AtomicBool::new(false),
+            admission: std::sync::Mutex::new(()),
         }
     }
 }
@@ -1108,6 +1111,10 @@ impl App {
         mode: RecordingMode,
         target: ScreenCaptureTarget,
     ) -> Result<(), String> {
+        recording_start_allowed(
+            app_is_exiting(&self.handle),
+            updates::recording_start_blocked(&self.handle),
+        )?;
         #[cfg(target_os = "linux")]
         if mode != RecordingMode::Instant
             && recording::linux_instant::current(&self.handle).is_some()
@@ -2764,19 +2771,127 @@ fn finalize_app_exit(app: &AppHandle, exit_code: i32) {
     }
 }
 
-pub async fn request_app_exit(app: AppHandle) {
-    let Some(exit_state) = app.try_state::<AppExitState>() else {
-        warn!("Exit state unavailable while requesting app exit");
-        export::cancel_all_exports();
-        finalize_app_exit(&app, 0);
-        #[cfg(not(target_os = "macos"))]
-        return;
-    };
-
-    if !exit_state.begin() {
-        return;
+pub(crate) fn with_idle_app<T>(
+    app: &AppHandle,
+    include_exports: bool,
+    begin: impl FnOnce() -> T,
+) -> Result<T, ExitBlocked> {
+    let exit_state = app
+        .try_state::<AppExitState>()
+        .ok_or(ExitBlocked::StateUnavailable)?;
+    let _admission = exit_state
+        .admission
+        .try_lock()
+        .map_err(|_| ExitBlocked::StateUnavailable)?;
+    if exit_state.is_exiting() {
+        return Err(ExitBlocked::AlreadyExiting);
     }
+    let state = app
+        .try_state::<ArcLock<App>>()
+        .ok_or(ExitBlocked::StateUnavailable)?;
+    let finalizing = app
+        .try_state::<FinalizingRecordings>()
+        .ok_or(ExitBlocked::StateUnavailable)?;
+    let _clean_capture = app
+        .try_state::<clean_capture::State>()
+        .ok_or(ExitBlocked::StateUnavailable)?;
+    let updates = app
+        .try_state::<updates::UpdatesState>()
+        .ok_or(ExitBlocked::StateUnavailable)?;
+    if updates.is_installing() {
+        return Err(ExitBlocked::UpdateInstalling);
+    }
+    with_idle_recording_state(
+        &state,
+        |state| {
+            if state.is_recording_active_or_pending() || clean_capture::phase(app).is_some() {
+                return Err(ExitBlocked::RecordingActive);
+            }
+            let recordings = finalizing
+                .recordings
+                .try_lock()
+                .map_err(|_| ExitBlocked::StateUnavailable)?;
+            if !recordings.is_empty() {
+                return Err(ExitBlocked::FinalizationActive);
+            }
+            if include_exports
+                && (export::export_session_active() || upload::upload_session_active())
+            {
+                return Err(ExitBlocked::ExportActive);
+            }
+            Ok(())
+        },
+        begin,
+    )
+}
 
+fn begin_app_exit_if_idle(app: &AppHandle, restarting: bool) -> Result<bool, ExitBlocked> {
+    let exit_state = app
+        .try_state::<AppExitState>()
+        .ok_or(ExitBlocked::StateUnavailable)?;
+    with_idle_app(app, restarting, || {
+        if !exit_state.begin() {
+            return false;
+        }
+        if restarting {
+            exit_state.begin_restart();
+        }
+        true
+    })
+}
+
+pub(crate) fn prepare_app_exit(
+    app: &AppHandle,
+    prepare: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let exit_state = app
+        .try_state::<AppExitState>()
+        .ok_or(ExitBlocked::StateUnavailable.message())?;
+    with_idle_app(app, true, || {
+        prepare_then_begin_exit(prepare, || exit_state.begin())
+    })
+    .map_err(|reason| reason.message().to_string())?
+}
+
+fn show_exit_blocked(app: &AppHandle, reason: ExitBlocked) {
+    warn!(
+        ?reason,
+        "Refusing app exit while recording safety is unconfirmed"
+    );
+    app.dialog()
+        .message(reason.message())
+        .title("Cap is still busy")
+        .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
+        .show(|_| {});
+}
+
+#[tauri::command]
+#[specta::specta]
+fn restart_app(app: AppHandle) -> Result<(), String> {
+    match begin_app_exit_if_idle(&app, true) {
+        Ok(true) => {
+            app.request_restart();
+            Ok(())
+        }
+        Ok(false) => Err("Cap is already shutting down.".into()),
+        Err(reason) => Err(reason.message().into()),
+    }
+}
+
+pub async fn request_app_exit(app: AppHandle) {
+    match begin_app_exit_if_idle(&app, false) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(ExitBlocked::AlreadyExiting) => return,
+        Err(reason) => {
+            show_exit_blocked(&app, reason);
+            return;
+        }
+    }
+    complete_admitted_app_exit(app).await;
+}
+
+pub(crate) async fn complete_admitted_app_exit(app: AppHandle) {
     spawn_exit_watchdog();
     export::cancel_all_exports();
 
@@ -5559,6 +5674,7 @@ fn specta_builder() -> tauri_specta::Builder {
             recording::start_recording,
             recording::stop_recording,
             recording::pause_recording,
+            recording::get_recording_pause_state,
             recording::resume_recording,
             recording::toggle_pause_recording,
             recording::set_mic_recording_muted,
@@ -5707,6 +5823,7 @@ fn specta_builder() -> tauri_specta::Builder {
             automation::list_automation_capabilities,
             updates::updates_check,
             updates::updates_download_and_install,
+            restart_app,
             updates::updates_channel_changed,
         ])
         .events(tauri_specta::collect_events![
@@ -6005,15 +6122,26 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         tracing::warn!("Failed to register SIGHUP handler");
                         return;
                     };
-                    tokio::select! {
-                        _ = term.recv() => {
-                            tracing::info!("Received SIGTERM; initiating graceful shutdown");
+                    loop {
+                        tokio::select! {
+                            signal = term.recv() => {
+                                if signal.is_none() {
+                                    return;
+                                }
+                                tracing::info!("Received SIGTERM; requesting graceful shutdown");
+                            }
+                            signal = hup.recv() => {
+                                if signal.is_none() {
+                                    return;
+                                }
+                                tracing::info!("Received SIGHUP; requesting graceful shutdown");
+                            }
                         }
-                        _ = hup.recv() => {
-                            tracing::info!("Received SIGHUP; initiating graceful shutdown");
+                        request_app_exit(app_for_signal.clone()).await;
+                        if app_is_exiting(&app_for_signal) {
+                            return;
                         }
                     }
-                    request_app_exit(app_for_signal).await;
                 });
             }
 

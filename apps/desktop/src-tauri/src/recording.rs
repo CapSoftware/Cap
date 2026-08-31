@@ -2858,6 +2858,38 @@ async fn start_recording_prepared(
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app, state))]
+pub async fn get_recording_pause_state(
+    app: AppHandle,
+    state: MutableState<'_, App>,
+) -> Result<Option<bool>, String> {
+    let query: std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, String>> + Send>> =
+        if crate::clean_capture::phase(&app).is_some() {
+            Box::pin(async move { crate::clean_capture::is_paused(&app).await })
+        } else {
+            let state = state.read().await;
+            match state.current_recording() {
+                Some(InProgressRecording::Studio { handle, .. }) => {
+                    let handle = handle.clone();
+                    Box::pin(
+                        async move { handle.is_paused().await.map_err(|error| error.to_string()) },
+                    )
+                }
+                Some(InProgressRecording::Instant { handle, .. }) => {
+                    let query = handle.is_paused();
+                    Box::pin(async move { query.await.map_err(|error| error.to_string()) })
+                }
+                None => return Ok(None),
+            }
+        };
+    tokio::time::timeout(Duration::from_secs(2), query)
+        .await
+        .map_err(|_| "Timed out confirming recording pause state".to_string())?
+        .map(Some)
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app, state))]
 pub async fn pause_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     if crate::clean_capture::phase(&app).is_some() {
         return crate::clean_capture::control(&app, false).await;

@@ -76,6 +76,9 @@ async stopRecording() : Promise<null> {
 async pauseRecording() : Promise<null> {
     return await TAURI_INVOKE("pause_recording");
 },
+async getRecordingPauseState() : Promise<boolean | null> {
+    return await TAURI_INVOKE("get_recording_pause_state");
+},
 async resumeRecording() : Promise<null> {
     return await TAURI_INVOKE("resume_recording");
 },
@@ -524,6 +527,9 @@ async updatesCheck() : Promise<UpdateCheckResult | null> {
 },
 async updatesDownloadAndInstall() : Promise<null> {
     return await TAURI_INVOKE("updates_download_and_install");
+},
+async restartApp() : Promise<null> {
+    return await TAURI_INVOKE("restart_app");
 },
 async updatesChannelChanged() : Promise<null> {
     return await TAURI_INVOKE("updates_channel_changed");

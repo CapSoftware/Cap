@@ -334,8 +334,9 @@ impl ActorHandle {
         Ok(self.actor_ref.ask(Cancel).await?)
     }
 
-    pub async fn is_paused(&self) -> anyhow::Result<bool> {
-        Ok(self.actor_ref.ask(IsPaused).await?)
+    pub fn is_paused(&self) -> impl Future<Output = anyhow::Result<bool>> + Send + 'static + use<> {
+        let actor_ref = self.actor_ref.clone();
+        async move { Ok(actor_ref.ask(IsPaused).await?) }
     }
 
     pub fn take_segment_rx(

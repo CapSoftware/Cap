@@ -27,7 +27,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tracing::{info, warn};
 
-use crate::{App, MutableState, general_settings::GeneralSettingsStore, request_app_exit};
+use crate::general_settings::GeneralSettingsStore;
 
 #[cfg(windows)]
 const BINARY_NAME: &str = "cap-gpui.exe";
@@ -694,60 +694,46 @@ pub async fn gpui_app_available(app: AppHandle) -> bool {
 /// the page reverts it.
 #[tauri::command]
 #[specta::specta]
-pub async fn switch_to_gpui_app(
-    app: AppHandle,
-    state: MutableState<'_, App>,
-) -> Result<(), String> {
-    if state.read().await.is_recording_active_or_pending() {
-        return Err("Stop your recording before switching to the native app.".to_string());
-    }
-    if crate::export::export_session_active() {
-        return Err(
-            "Wait for your export to finish before switching to the native app.".to_string(),
-        );
-    }
-    if crate::upload::upload_session_active() {
-        return Err(
-            "Wait for your upload to finish before switching to the native app.".to_string(),
-        );
-    }
-
+pub async fn switch_to_gpui_app(app: AppHandle) -> Result<(), String> {
     let path =
         binary_path(&app).ok_or_else(|| "Cap GPUI isn't included in this build".to_string())?;
-
-    // The caller wrote this app's own store; a dev build must also set the
-    // flag where `cap-gpui` and the next startup's redirect actually read it.
-    if !own_store_is_shared(&app) {
-        write_shared_store_flag(true);
-    }
-
-    match running_instance_pid() {
-        Some(pid) => {
-            #[cfg(target_os = "linux")]
-            if let Err(error) = launch_linux_activation(Some(&path), spawn_detached) {
-                if !own_store_is_shared(&app) {
-                    write_shared_store_flag(false);
+    crate::prepare_app_exit(&app, || {
+        let uses_shared_store = own_store_is_shared(&app);
+        let previous_shared_flag = if uses_shared_store {
+            None
+        } else {
+            let previous = shared_store_flag();
+            write_shared_store_flag(true);
+            previous
+        };
+        match running_instance_pid() {
+            Some(pid) => {
+                #[cfg(target_os = "linux")]
+                if let Err(error) = launch_linux_activation(Some(&path), spawn_detached) {
+                    if !uses_shared_store {
+                        write_shared_store_flag(previous_shared_flag.unwrap_or(false));
+                    }
+                    return Err(error);
                 }
-                return Err(error);
+                #[cfg(not(target_os = "linux"))]
+                activate_instance(pid);
+                info!(pid, "Cap GPUI is already running; requested its controls");
             }
-            #[cfg(not(target_os = "linux"))]
-            activate_instance(pid);
-            info!(pid, "Cap GPUI is already running; requested its controls");
-        }
-        None => {
-            write_handoff_marker();
-            info!(path = %path.display(), "handing off to Cap GPUI");
-            if let Err(error) = spawn_detached(&path, &[]) {
-                let _ = std::fs::remove_file(handoff_marker());
-                if !own_store_is_shared(&app) {
-                    write_shared_store_flag(false);
+            None => {
+                write_handoff_marker();
+                info!(path = %path.display(), "handing off to Cap GPUI");
+                if let Err(error) = spawn_detached(&path, &[]) {
+                    let _ = std::fs::remove_file(handoff_marker());
+                    if !uses_shared_store {
+                        write_shared_store_flag(previous_shared_flag.unwrap_or(false));
+                    }
+                    return Err(error);
                 }
-                return Err(error);
             }
         }
-    }
-
-    request_app_exit(app).await;
+        Ok(())
+    })?;
+    crate::complete_admitted_app_exit(app).await;
     Ok(())
 }
 
