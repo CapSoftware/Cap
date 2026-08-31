@@ -1485,11 +1485,52 @@ mod macos_tests {
 
         fn incumbent(&mut self) -> u32 {
             let binary = self.directory.join("cap-gpui");
-            std::fs::copy("/bin/sleep", &binary).unwrap();
-            self.children
-                .push(Command::new(binary).arg("30").spawn().unwrap());
-            let pid = self.children.last().unwrap().id();
-            wait_until(|| is_cap_gpui(pid as i32));
+            let source = self.directory.join("incumbent.c");
+            let ready = self.directory.join("incumbent.ready");
+            std::fs::write(
+                &source,
+                r#"#include <stdio.h>
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 1;
+    FILE *ready = fopen(argv[1], "wx");
+    if (ready == NULL) return 2;
+    if (fputs("ready", ready) == EOF) {
+        fclose(ready);
+        return 3;
+    }
+    if (fclose(ready) != 0) return 4;
+    return getchar() == EOF ? 0 : 5;
+}
+"#,
+            )
+            .unwrap();
+            let compiled = Command::new("/usr/bin/cc")
+                .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+                .arg(&source)
+                .arg("-o")
+                .arg(&binary)
+                .output()
+                .unwrap();
+            assert!(
+                compiled.status.success(),
+                "Could not compile instance fixture: {}",
+                String::from_utf8_lossy(&compiled.stderr)
+            );
+            self.children.push(
+                Command::new(binary)
+                    .arg(&ready)
+                    .stdin(Stdio::piped())
+                    .spawn()
+                    .unwrap(),
+            );
+            let child = self.children.last_mut().unwrap();
+            let pid = child.id();
+            wait_until(|| {
+                assert_eq!(child.try_wait().unwrap(), None, "Instance fixture exited");
+                std::fs::read(&ready).is_ok_and(|contents| contents == b"ready")
+                    && is_cap_gpui(pid as i32)
+            });
             pid
         }
 
@@ -1740,6 +1781,7 @@ mod macos_tests {
             wait_until(|| {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
                         stream
                             .set_read_timeout(Some(Duration::from_secs(2)))
                             .unwrap();
