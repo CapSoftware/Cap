@@ -13,6 +13,7 @@ use scap_targets::{Display, DisplayId, Window, WindowId};
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraOption {
     pub device_id: String,
+    pub model_id: Option<cap_camera::ModelID>,
     pub label: String,
     /// Highest-resolution format the device advertises, shown as the row's
     /// subtitle. `None` when the device reports no formats.
@@ -185,6 +186,7 @@ fn list_cameras() -> Vec<CameraOption> {
 
             CameraOption {
                 device_id: camera.device_id().to_string(),
+                model_id: camera.model_id().cloned(),
                 label: camera.display_name().to_string(),
                 best_format,
             }

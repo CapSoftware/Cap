@@ -935,6 +935,57 @@ pub const RECORDING_START_SAFETY: &str = "recording_start_safety";
 /// the section the tray's Select Mode submenu reads and writes.
 pub const RECORDING_SETTINGS: &str = "recording_settings";
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RecordingInputSettings {
+    pub camera_id: Option<cap_recording::feeds::camera::DeviceOrModelID>,
+    pub microphone_name: Option<String>,
+}
+
+impl RecordingInputSettings {
+    pub fn load() -> Self {
+        let settings = store_section(RECORDING_SETTINGS);
+        Self {
+            camera_id: settings.get("cameraId").and_then(recording_camera_id),
+            microphone_name: settings
+                .get("micName")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string),
+        }
+    }
+}
+
+fn recording_camera_id(value: &Value) -> Option<cap_recording::feeds::camera::DeviceOrModelID> {
+    use cap_recording::feeds::camera::DeviceOrModelID;
+
+    let object = value.as_object()?;
+    if object.len() != 1 {
+        return None;
+    }
+    if let Some(id) = object.get("DeviceID").and_then(Value::as_str) {
+        return (!id.is_empty()).then(|| DeviceOrModelID::DeviceID(id.to_string()));
+    }
+    let model = object.get("ModelID")?.as_str()?.to_string();
+    cap_camera::ModelID::try_from(model)
+        .ok()
+        .map(DeviceOrModelID::ModelID)
+}
+
+pub fn set_recording_camera_id(id: Option<&cap_recording::feeds::camera::DeviceOrModelID>) -> bool {
+    let Ok(value) = serde_json::to_value(id) else {
+        return false;
+    };
+    set_store_setting(RECORDING_SETTINGS, "cameraId", value)
+}
+
+pub fn set_recording_microphone_name(name: Option<&str>) -> bool {
+    set_store_setting(
+        RECORDING_SETTINGS,
+        "micName",
+        name.map_or(Value::Null, |name| Value::String(name.to_string())),
+    )
+}
+
 /// `RecordingSettingsStore.mode`, i.e. `cap_recording::RecordingMode` under
 /// `#[serde(rename_all = "camelCase")]` -- one lowercase word per variant
 /// (`studio`, `instant`, `screenshot`). `None` when the key is absent, which
@@ -1710,6 +1761,99 @@ mod tests {
             let _ = std::fs::remove_file(&self.path);
             TEST_TAURI_STORE_PATH.with(|current| *current.borrow_mut() = None);
         }
+    }
+
+    #[test]
+    fn recording_inputs_round_trip_without_replacing_unknown_settings() {
+        use cap_recording::feeds::camera::DeviceOrModelID;
+
+        let store = TempStore::new(
+            "recording-inputs-round-trip",
+            Some(
+                r#"{"recording_settings":{"mode":"studio","cameraId":{"ModelID":"vendor:product"},"micName":"Desk microphone","cameraDeviceSettings":{"model:vendor:product":{"frameRate":30}},"unknown":{"keep":true}},"other":{"keep":[1,2]}}"#,
+            ),
+        );
+        let original = store.read();
+        let model = cap_camera::ModelID::try_from("vendor:product".to_string()).unwrap();
+        assert_eq!(
+            RecordingInputSettings::load(),
+            RecordingInputSettings {
+                camera_id: Some(DeviceOrModelID::ModelID(model)),
+                microphone_name: Some("Desk microphone".to_string()),
+            }
+        );
+
+        let camera = DeviceOrModelID::DeviceID("replacement-camera".to_string());
+        assert!(set_recording_camera_id(Some(&camera)));
+        assert!(set_recording_microphone_name(Some(
+            "Replacement microphone"
+        )));
+        assert_eq!(
+            RecordingInputSettings::load(),
+            RecordingInputSettings {
+                camera_id: Some(camera),
+                microphone_name: Some("Replacement microphone".to_string()),
+            }
+        );
+
+        assert!(set_recording_camera_id(None));
+        assert!(set_recording_microphone_name(None));
+        assert_eq!(
+            RecordingInputSettings::load(),
+            RecordingInputSettings::default()
+        );
+        let mut expected = original;
+        expected[RECORDING_SETTINGS]["cameraId"] = Value::Null;
+        expected[RECORDING_SETTINGS]["micName"] = Value::Null;
+        assert_eq!(store.read(), expected);
+    }
+
+    #[test]
+    fn recording_inputs_keep_saved_identity_without_device_enumeration() {
+        let store = TempStore::new(
+            "recording-inputs-absent-device",
+            Some(
+                r#"{"recording_settings":{"cameraId":{"DeviceID":"unplugged-camera"},"micName":"Unplugged microphone"}}"#,
+            ),
+        );
+        let before = std::fs::read(&store.path).unwrap();
+        let first = RecordingInputSettings::load();
+        assert_eq!(
+            first.microphone_name.as_deref(),
+            Some("Unplugged microphone")
+        );
+        assert_eq!(
+            first.camera_id,
+            Some(cap_recording::feeds::camera::DeviceOrModelID::DeviceID(
+                "unplugged-camera".into()
+            ))
+        );
+        assert_eq!(RecordingInputSettings::load(), first);
+        assert_eq!(std::fs::read(&store.path).unwrap(), before);
+    }
+
+    #[test]
+    fn recording_inputs_malformed_camera_does_not_panic_or_clear_other_settings() {
+        let store = TempStore::new(
+            "recording-inputs-malformed-model",
+            Some(
+                r#"{"recording_settings":{"cameraId":{"ModelID":"missing-separator"},"micName":"Valid microphone","future":42}}"#,
+            ),
+        );
+        let before = store.read();
+        let settings = RecordingInputSettings::load();
+        assert!(settings.camera_id.is_none());
+        assert_eq!(
+            settings.microphone_name.as_deref(),
+            Some("Valid microphone")
+        );
+        assert!(set_recording_microphone_name(None));
+        let after = store.read();
+        assert_eq!(
+            after[RECORDING_SETTINGS]["cameraId"],
+            before[RECORDING_SETTINGS]["cameraId"]
+        );
+        assert_eq!(after[RECORDING_SETTINGS]["future"], 42);
     }
 
     #[test]

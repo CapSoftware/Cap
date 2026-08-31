@@ -99,6 +99,53 @@ pub fn window_size(state: &CameraWindowState, frame_aspect: Option<f32>) -> (f32
     (width, height + CAMERA_TOOLBAR_HEIGHT)
 }
 
+pub(crate) fn inline_preview_size(
+    state: &CameraWindowState,
+    frame_aspect: Option<f32>,
+    viewport: (f32, f32),
+) -> (f32, f32) {
+    let (width, height) = preview_dimensions(state, frame_aspect);
+    let scale = ((viewport.0 - 48.).max(160.) / width)
+        .min((viewport.1 - 320.).max(160.) / height)
+        .min(1.);
+    (
+        (width * scale).round(),
+        (height * scale).round() + CAMERA_TOOLBAR_HEIGHT,
+    )
+}
+
+#[cfg(test)]
+mod inline_preview_tests {
+    use super::*;
+
+    #[test]
+    fn camera_only_preview_preserves_size_until_viewport_requires_scaling() {
+        let state = CameraWindowState::default();
+        assert_eq!(
+            inline_preview_size(&state, Some(16. / 9.), (1920., 1080.)),
+            window_size(&state, Some(16. / 9.)),
+        );
+        assert_eq!(
+            inline_preview_size(&state, None, (100., 100.)),
+            (160., 216.),
+        );
+    }
+
+    #[test]
+    fn camera_only_wide_preview_preserves_aspect_and_toolbar_space() {
+        let state = CameraWindowState {
+            size: 600.,
+            shape: CameraShape::Full,
+            ..Default::default()
+        };
+        assert_eq!(
+            inline_preview_size(&state, Some(16. / 9.), (800., 600.)),
+            (498., 336.),
+        );
+        assert_eq!(state.size, 600.);
+    }
+}
+
 /// 0..1 across the 150..600 size range -- drives the toolbar scale and the
 /// issue overlay's text metrics, like `cameraToolbarScale` /
 /// `cameraOverlayTextMetrics`.
@@ -114,7 +161,7 @@ fn normalized_size(state: &CameraWindowState) -> f32 {
 /// (`camera.tsx:805-807`). The `cameraBorderRadius` 3rem formula styles only
 /// the native page's issue overlay, and the native WGSL mask uses its own
 /// smaller radii; the 24px container is what users see.
-fn preview_radius(state: &CameraWindowState) -> f32 {
+pub(crate) fn preview_radius(state: &CameraWindowState) -> f32 {
     match state.shape {
         CameraShape::Round => clamp_size(state.size) / 2.,
         _ => 24.,
@@ -159,6 +206,7 @@ fn linux_camera_recording_snapshot(
     client_rect: LinuxCameraPhysicalRect,
     viewport: (f32, f32),
     scale_factor: f32,
+    picker_size: Option<(f32, f32)>,
 ) -> anyhow::Result<LinuxCameraRecordingSnapshot> {
     if !scale_factor.is_finite() || scale_factor <= 0.0 {
         anyhow::bail!("Camera window has an invalid scale factor");
@@ -181,7 +229,8 @@ fn linux_camera_recording_snapshot(
     if physical_viewport != (client_rect.width, client_rect.height) {
         anyhow::bail!("Camera viewport and X11 client dimensions disagree; wait for resizing");
     }
-    let expected = window_size(&state, Some(frame_width as f32 / frame_height as f32));
+    let expected = picker_size
+        .unwrap_or_else(|| window_size(&state, Some(frame_width as f32 / frame_height as f32)));
     if (
         recording_physical_extent(expected.0, scale_factor)?,
         recording_physical_extent(expected.1, scale_factor)?,
@@ -724,6 +773,9 @@ struct BlurBridge {
 pub struct CameraWindow {
     theme: Theme,
     state: CameraWindowState,
+    inline: bool,
+    picker_size: Option<(f32, f32)>,
+    size_generation: Arc<AtomicU64>,
     chrome_visible: bool,
     resizing: Option<ResizeDrag>,
     hovered_handle: Option<ResizeCorner>,
@@ -789,6 +841,7 @@ impl CameraWindow {
             },
             (f32::from(viewport.width), f32::from(viewport.height)),
             window.scale_factor(),
+            self.picker_size,
         )
     }
 
@@ -831,6 +884,9 @@ impl CameraWindow {
         Self {
             theme,
             state,
+            inline: false,
+            picker_size: None,
+            size_generation: Arc::new(AtomicU64::new(0)),
             chrome_visible: false,
             resizing: None,
             hovered_handle: None,
@@ -850,6 +906,55 @@ impl CameraWindow {
             position_save_generation: Arc::new(AtomicU64::new(0)),
             last_saved_position: None,
         }
+    }
+
+    pub fn set_inline(&mut self, inline: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.inline == inline {
+            return;
+        }
+        self.inline = inline;
+        self.invalidate_pending_resize();
+        self.resizing = None;
+        self.chrome_visible = false;
+        self.hovered_handle = None;
+        if !inline {
+            self.apply_window_size(window, cx);
+        }
+        cx.notify();
+    }
+
+    pub fn inline_size(&self, viewport: (f32, f32)) -> (f32, f32) {
+        inline_preview_size(&self.state, self.frame_aspect(), viewport)
+    }
+
+    pub fn is_inline(&self) -> bool {
+        self.inline
+    }
+
+    pub fn picker_size(&self) -> Option<(f32, f32)> {
+        self.picker_size
+    }
+
+    pub fn invalidate_pending_resize(&self) {
+        self.size_generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub fn set_picker_size(
+        &mut self,
+        size: Option<(f32, f32)>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.picker_size != size {
+            self.invalidate_pending_resize();
+            self.picker_size = size;
+            cx.notify();
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn preview_image(&self, cx: &gpui::App) -> Option<Arc<gpui::RenderImage>> {
+        self.preview.read(cx).latest_frame.clone()
     }
 
     /// Called by the feed pump for every camera frame. Only the preview child
@@ -1083,6 +1188,7 @@ impl CameraWindow {
     ) {
         #[cfg(target_os = "macos")]
         let blur_before = self.state.background_blur;
+        self.picker_size = None;
         mutate(&mut self.state);
         self.state.size = clamp_size(self.state.size);
         #[cfg(not(target_os = "macos"))]
@@ -1116,7 +1222,14 @@ impl CameraWindow {
     /// *bottom*-left, so the anchor and the clamp both go through one native
     /// `setFrame:` instead.
     fn apply_window_size(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let (width, height) = window_size(&self.state, self.frame_aspect());
+        if self.inline {
+            return;
+        }
+        let (width, height) = self
+            .picker_size
+            .unwrap_or_else(|| window_size(&self.state, self.frame_aspect()));
+        let generation = self.size_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let generations = self.size_generation.clone();
 
         let bounds = window.bounds();
         let (x, y) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
@@ -1147,6 +1260,9 @@ impl CameraWindow {
         #[cfg(target_os = "windows")]
         if let Some(native) = platform::native_window(window) {
             cx.spawn(async move |_, _| {
+                if generations.load(Ordering::Acquire) != generation {
+                    return;
+                }
                 platform::set_window_logical_frame(
                     &native,
                     f64::from(new_x),
@@ -1171,6 +1287,9 @@ impl CameraWindow {
             // callbacks, so it runs from a fresh runloop turn (the
             // `set_window_frame` rule).
             cx.spawn(async move |_, _| {
+                if generations.load(Ordering::Acquire) != generation {
+                    return;
+                }
                 platform::set_window_frame(
                     &native,
                     appkit_x,
@@ -1551,6 +1670,7 @@ impl CameraWindow {
         let delta = dx.max(dy);
         let next = clamp_size(drag.start_size + delta);
         if (next - self.state.size).abs() > 0.5 {
+            self.picker_size = None;
             self.state.size = next;
             self.apply_window_size(window, cx);
             self.sync_preview_chrome(cx);
@@ -1595,7 +1715,7 @@ impl Render for CameraWindow {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, _| {
-                    if this.resizing.is_none() {
+                    if this.resizing.is_none() && !this.inline {
                         window.start_window_move();
                     }
                 }),
@@ -1802,9 +1922,15 @@ mod recording_snapshot_tests {
         for scale in [1.0, 1.25, 1.5, 2.0] {
             for origin in [(37, 91), (-1920, -1080)] {
                 let (client, viewport) = geometry(state, (640, 480), scale, origin);
-                let snapshot =
-                    linux_camera_recording_snapshot(state, (640, 480), client, viewport, scale)
-                        .unwrap();
+                let snapshot = linux_camera_recording_snapshot(
+                    state,
+                    (640, 480),
+                    client,
+                    viewport,
+                    scale,
+                    None,
+                )
+                .unwrap();
                 let expected_side = (state.size * scale).round() as u32;
                 assert_eq!(
                     snapshot.content_rect,
@@ -1831,13 +1957,60 @@ mod recording_snapshot_tests {
         };
         let (client, viewport) = geometry(state, (1920, 1080), 1.5, (-1400, 20));
         let snapshot =
-            linux_camera_recording_snapshot(state, (1920, 1080), client, viewport, 1.5).unwrap();
+            linux_camera_recording_snapshot(state, (1920, 1080), client, viewport, 1.5, None)
+                .unwrap();
         assert_eq!(snapshot.content_rect.width, 1067);
         assert_eq!(snapshot.content_rect.height, 600);
         assert_eq!(snapshot.content_rect.x, -1400);
         assert_eq!(snapshot.content_rect.y, 104);
         assert_eq!(snapshot.corner_radius_pixels, 36.0);
         assert_eq!(snapshot.state, state);
+    }
+
+    #[test]
+    fn snapshot_accepts_temporary_picker_size_without_changing_saved_size() {
+        let state = CameraWindowState::default();
+        let viewport = (150.0, 206.0);
+        let client = LinuxCameraPhysicalRect {
+            x: 80,
+            y: 120,
+            width: 150,
+            height: 206,
+        };
+        assert!(
+            linux_camera_recording_snapshot(state, (640, 480), client, viewport, 1.0, None,)
+                .is_err()
+        );
+        let snapshot = linux_camera_recording_snapshot(
+            state,
+            (640, 480),
+            client,
+            viewport,
+            1.0,
+            Some(viewport),
+        )
+        .unwrap();
+        assert_eq!(snapshot.state, state);
+        assert_eq!(
+            snapshot.content_rect,
+            LinuxCameraPhysicalRect {
+                x: 80,
+                y: 176,
+                width: 150,
+                height: 150,
+            }
+        );
+        assert!(
+            linux_camera_recording_snapshot(
+                state,
+                (640, 480),
+                client,
+                viewport,
+                1.0,
+                Some((151.0, 206.0)),
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1850,7 +2023,7 @@ mod recording_snapshot_tests {
         for scale in [1.0, 1.25, 1.5, 2.0] {
             let (client, viewport) = geometry(state, (1280, 720), scale, (0, 0));
             let snapshot =
-                linux_camera_recording_snapshot(state, (1280, 720), client, viewport, scale)
+                linux_camera_recording_snapshot(state, (1280, 720), client, viewport, scale, None)
                     .unwrap();
             assert_eq!(snapshot.content_rect.width, snapshot.content_rect.height);
             assert_eq!(snapshot.corner_radius_pixels, 24.0 * scale);
@@ -1869,6 +2042,7 @@ mod recording_snapshot_tests {
                 client,
                 (viewport.0 + 1.0, viewport.1),
                 1.25,
+                None,
             )
             .is_err()
         );
@@ -1882,6 +2056,7 @@ mod recording_snapshot_tests {
                 client,
                 viewport,
                 1.25,
+                None,
             )
             .is_err()
         );
@@ -1891,7 +2066,8 @@ mod recording_snapshot_tests {
         };
         let (client, viewport) = geometry(full, (1920, 1080), 1.0, (0, 0));
         assert!(
-            linux_camera_recording_snapshot(full, (2400, 1000), client, viewport, 1.0).is_err()
+            linux_camera_recording_snapshot(full, (2400, 1000), client, viewport, 1.0, None)
+                .is_err()
         );
     }
 
@@ -1901,7 +2077,7 @@ mod recording_snapshot_tests {
         let (client, viewport) = geometry(state, (640, 480), 1.0, (0, 0));
         for invalid in [0.0, -1.0, f32::NAN, f32::INFINITY] {
             assert!(
-                linux_camera_recording_snapshot(state, (640, 480), client, viewport, invalid)
+                linux_camera_recording_snapshot(state, (640, 480), client, viewport, invalid, None)
                     .is_err()
             );
             assert!(
@@ -1914,6 +2090,7 @@ mod recording_snapshot_tests {
                     client,
                     viewport,
                     1.0,
+                    None,
                 )
                 .is_err()
             );
@@ -1924,12 +2101,15 @@ mod recording_snapshot_tests {
                     client,
                     (invalid, viewport.1),
                     1.0,
+                    None,
                 )
                 .is_err()
             );
         }
         for frame in [(0, 480), (640, 0)] {
-            assert!(linux_camera_recording_snapshot(state, frame, client, viewport, 1.0).is_err());
+            assert!(
+                linux_camera_recording_snapshot(state, frame, client, viewport, 1.0, None).is_err()
+            );
         }
         assert!(
             linux_camera_recording_snapshot(
@@ -1938,6 +2118,7 @@ mod recording_snapshot_tests {
                 LinuxCameraPhysicalRect { width: 0, ..client },
                 viewport,
                 1.0,
+                None,
             )
             .is_err()
         );
@@ -1949,7 +2130,8 @@ mod recording_snapshot_tests {
         for origin in [(i32::MAX, 0), (0, i32::MAX)] {
             let (client, viewport) = geometry(state, (640, 480), 1.0, origin);
             assert!(
-                linux_camera_recording_snapshot(state, (640, 480), client, viewport, 1.0).is_err()
+                linux_camera_recording_snapshot(state, (640, 480), client, viewport, 1.0, None)
+                    .is_err()
             );
         }
         assert!(recording_physical_extent(f32::MAX, 2.0).is_err());
@@ -1962,7 +2144,8 @@ mod recording_snapshot_tests {
         let scale = 4.0 / 3.0;
         let (client, viewport) = geometry(state, (640, 480), scale, (0, 0));
         let snapshot =
-            linux_camera_recording_snapshot(state, (640, 480), client, viewport, scale).unwrap();
+            linux_camera_recording_snapshot(state, (640, 480), client, viewport, scale, None)
+                .unwrap();
         assert_eq!(snapshot.content_rect.width, 307);
         assert_eq!(snapshot.content_rect.height, 306);
         assert_eq!(snapshot.content_rect.x, client.x);

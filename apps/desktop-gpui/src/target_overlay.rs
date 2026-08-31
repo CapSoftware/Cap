@@ -67,6 +67,16 @@ fn required_window_title_matches(required: Option<&str>, actual: Option<&str>) -
     required.is_none_or(|required| actual == Some(required))
 }
 
+fn recording_devices_available(cx: &App) -> bool {
+    crate::session::RecordingSession::global(cx).read(cx).phase == crate::session::Phase::Idle
+        && !app_windows::clean_capture_owned(cx)
+        && cx
+            .global::<app_windows::AppWindows>()
+            .main
+            .read(cx)
+            .is_ok_and(|view| !view.is_preparing_recording())
+}
+
 /// How close to an edge or corner counts as grabbing that handle. The TSX's
 /// corner buttons are 30px boxes hung 12px outside the crop and its edge
 /// buttons are 10px strips straddling the border; this is the same reach
@@ -454,6 +464,23 @@ pub struct OverlayWindow {
     /// popped up at the event location (`target-select-overlay.tsx:2064-2090,
     /// 2206-2210`). `Some` while it is open.
     mode_menu: Option<crate::ui::MenuState>,
+    inline_camera: Option<Entity<crate::camera_window::CameraWindow>>,
+    inline_camera_subscription: Option<gpui::Subscription>,
+    empty_camera_state: crate::store::CameraWindowState,
+    device_menu: Option<OverlayDeviceMenu>,
+    _main_subscription: Option<gpui::Subscription>,
+}
+
+#[derive(Clone)]
+enum OverlayDeviceChoice {
+    Camera(Option<crate::devices::CameraOption>),
+    Microphone(Option<crate::devices::MicrophoneOption>),
+}
+
+struct OverlayDeviceMenu {
+    state: crate::ui::MenuState,
+    items: Vec<crate::ui::MenuItem>,
+    choices: Vec<OverlayDeviceChoice>,
 }
 
 /// `menuModes` (`target-select-overlay.tsx:2064-2090`): three check items, in
@@ -482,6 +509,11 @@ impl OverlayWindow {
         crate::theme::bind_window(window, cx);
         let theme = Theme::for_window(window, cx, false);
         cx.observe(&select, |_, _, cx| cx.notify()).detach();
+        let main = cx.global::<app_windows::AppWindows>().main;
+        let main_subscription = main
+            .update(cx, |_, _, cx| cx.entity())
+            .ok()
+            .map(|main| cx.observe(&main, |_, _, cx| cx.notify()));
 
         let logical = display
             .logical_size()
@@ -504,6 +536,11 @@ impl OverlayWindow {
             crop: None,
             drag: None,
             mode_menu: None,
+            inline_camera: None,
+            inline_camera_subscription: None,
+            empty_camera_state: crate::store::load().camera_window.unwrap_or_default(),
+            device_menu: None,
+            _main_subscription: main_subscription,
         }
     }
 
@@ -515,6 +552,7 @@ impl OverlayWindow {
     /// (`CAP_GPUI_AUTO_AREA`), since unprivileged synthetic drags are dropped.
     pub fn set_crop(&mut self, crop: AreaRect, cx: &mut Context<Self>) {
         self.crop = Some(crop.clamped(self.display_size));
+        self.sync_area_camera(cx);
         cx.notify();
     }
 
@@ -593,6 +631,35 @@ impl OverlayWindow {
         self.theme.refresh(window, cx, false);
     }
 
+    fn sync_inline_camera(&mut self, cx: &mut Context<Self>) {
+        let camera = (self.select.read(cx).mode == Some(TargetType::CameraOnly))
+            .then(|| app_windows::camera_preview_entity(cx))
+            .flatten();
+        if self.inline_camera.as_ref().map(Entity::entity_id)
+            == camera.as_ref().map(Entity::entity_id)
+        {
+            return;
+        }
+        self.inline_camera_subscription = camera
+            .as_ref()
+            .map(|camera| cx.observe(camera, |_, _, cx| cx.notify()));
+        self.inline_camera = camera;
+    }
+
+    fn sync_area_camera(&self, cx: &mut Context<Self>) {
+        if self.select.read(cx).recording_mode == Mode::Screenshot {
+            return;
+        }
+        let display = self.display_id.clone();
+        let crop = self.crop;
+        let epoch = app_windows::camera_picker_epoch(cx);
+        cx.defer(move |cx| {
+            if app_windows::camera_picker_epoch(cx) == epoch {
+                app_windows::sync_camera_area(display, crop, cx);
+            }
+        });
+    }
+
     /// True when the cursor is on this overlay's display -- `data-over` in the
     /// display variant, `isActiveDisplay` in the area variant.
     fn is_active_display(&self, cx: &App) -> bool {
@@ -603,6 +670,7 @@ impl OverlayWindow {
 impl Render for OverlayWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        self.sync_inline_camera(cx);
         let mode = self.select.read(cx).mode;
 
         let root = div()
@@ -611,6 +679,19 @@ impl Render for OverlayWindow {
             .key_context("TargetSelectOverlay")
             .on_key_down(
                 cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
+                    if let Some(menu) = &mut this.device_menu {
+                        match menu.state.on_key(&event.keystroke.key) {
+                            crate::ui::MenuKey::Commit(index) => this.choose_device(index, cx),
+                            crate::ui::MenuKey::Dismiss => {
+                                this.device_menu = None;
+                                cx.notify();
+                            }
+                            crate::ui::MenuKey::Moved => cx.notify(),
+                            crate::ui::MenuKey::Ignored => return,
+                        }
+                        cx.stop_propagation();
+                        return;
+                    }
                     // The Tauri app registers Escape as a *global* shortcut while
                     // the overlays are up; here it is a plain key handler on the
                     // overlay that has focus (see the README deviation).
@@ -644,11 +725,214 @@ impl Render for OverlayWindow {
         };
         // Painted after the variant so the dropdown sits above the start
         // cluster it drops from.
-        root.children(self.render_mode_menu(cx)).into_any_element()
+        root.children(self.render_mode_menu(cx))
+            .children(self.render_device_menu(cx))
+            .into_any_element()
     }
 }
 
 impl OverlayWindow {
+    fn render_device_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let menu = self.device_menu.as_ref()?;
+        Some(
+            crate::ui::Menu::plain(
+                &self.theme,
+                "overlay-device-menu",
+                menu.items.clone(),
+                &menu.state,
+            )
+            .on_select(cx.listener(|this, index: &usize, _, cx| {
+                this.choose_device(*index, cx);
+            }))
+            .on_dismiss(cx.listener(|this, _, _, cx| {
+                this.device_menu = None;
+                cx.notify();
+            }))
+            .into_any_element(),
+        )
+    }
+
+    fn choose_device(&mut self, index: usize, cx: &mut Context<Self>) {
+        let choice = self
+            .device_menu
+            .take()
+            .and_then(|menu| menu.choices.get(index).cloned());
+        if let Some(choice) = choice {
+            self.apply_device_choice(choice, cx);
+        }
+        cx.notify();
+    }
+
+    fn apply_device_choice(&mut self, choice: OverlayDeviceChoice, cx: &mut Context<Self>) {
+        self.device_menu = None;
+        let main = cx.global::<app_windows::AppWindows>().main;
+        cx.defer(move |cx| {
+            if !recording_devices_available(cx) {
+                return;
+            }
+            if let Err(error) = main.update(cx, |view, _, cx| match choice {
+                OverlayDeviceChoice::Camera(camera) => view.set_camera_selection(camera, cx),
+                OverlayDeviceChoice::Microphone(mic) => view.set_microphone_selection(mic, cx),
+            }) {
+                tracing::warn!(%error, "could not update the recording device");
+            }
+        });
+        cx.notify();
+    }
+
+    fn open_device_menu(&mut self, camera: bool, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if !recording_devices_available(cx) {
+            return;
+        }
+        let main = cx.global::<app_windows::AppWindows>().main;
+        let Ok(view) = main.read(cx) else { return };
+        if view.is_enumerating_devices() {
+            return;
+        }
+        let (items, choices) = if camera {
+            let mut items = vec![crate::ui::MenuItem::new(
+                "No Camera",
+                view.camera_selection().is_none(),
+            )];
+            let mut choices = vec![OverlayDeviceChoice::Camera(None)];
+            for camera in &view.device_snapshot().cameras {
+                items.push(crate::ui::MenuItem::new(
+                    camera.label.clone(),
+                    view.camera_selection()
+                        .is_some_and(|selected| selected.device_id == camera.device_id),
+                ));
+                choices.push(OverlayDeviceChoice::Camera(Some(camera.clone())));
+            }
+            (items, choices)
+        } else {
+            let mut items = vec![crate::ui::MenuItem::new(
+                "No Microphone",
+                view.microphone_selection().is_none(),
+            )];
+            let mut choices = vec![OverlayDeviceChoice::Microphone(None)];
+            for mic in &view.device_snapshot().microphones {
+                items.push(crate::ui::MenuItem::new(
+                    mic.name.clone(),
+                    view.microphone_selection()
+                        .is_some_and(|selected| selected.name == mic.name),
+                ));
+                choices.push(OverlayDeviceChoice::Microphone(Some(mic.clone())));
+            }
+            (items, choices)
+        };
+        self.mode_menu = None;
+        self.device_menu = Some(OverlayDeviceMenu {
+            state: crate::ui::MenuState::new(position, &items),
+            items,
+            choices,
+        });
+        cx.notify();
+    }
+
+    fn render_device_control(&self, camera: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let main = cx.global::<app_windows::AppWindows>().main;
+        let Ok(view) = main.read(cx) else {
+            return div().into_any_element();
+        };
+        let selected = if camera {
+            view.camera_selection().map(|camera| camera.label.clone())
+        } else {
+            view.microphone_selection().map(|mic| mic.name.clone())
+        };
+        let enabled = selected.is_some();
+        let disabled = view.is_enumerating_devices() || !recording_devices_available(cx);
+        let theme = self.theme;
+        div()
+            .id(if camera {
+                "overlay-camera"
+            } else {
+                "overlay-microphone"
+            })
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .px(px(8.))
+            .h(px(42.))
+            .flex_1()
+            .min_w_0()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme.gray_5)
+            .bg(theme.gray_3)
+            .text_color(theme.gray_12)
+            .when(disabled, |row| row.opacity(0.7))
+            .child(
+                svg()
+                    .path(if camera {
+                        "icons/camera.svg"
+                    } else {
+                        "icons/microphone.svg"
+                    })
+                    .size(px(16.))
+                    .flex_shrink_0(),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(14.))
+                    .child(selected.unwrap_or_else(|| {
+                        if camera { "No Camera" } else { "No Microphone" }.into()
+                    })),
+            )
+            .child(
+                div()
+                    .id(if camera {
+                        "overlay-camera-toggle"
+                    } else {
+                        "overlay-microphone-toggle"
+                    })
+                    .px(px(10.))
+                    .h(px(24.))
+                    .min_w(px(40.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .text_size(px(11.))
+                    .bg(if enabled {
+                        Hsla::from(theme.blue_9)
+                    } else {
+                        Hsla::from(theme.gray_5)
+                    })
+                    .text_color(if enabled {
+                        gpui::white()
+                    } else {
+                        Hsla::from(theme.gray_11)
+                    })
+                    .child(if enabled { "On" } else { "Off" })
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        if disabled {
+                            return;
+                        }
+                        if enabled {
+                            this.apply_device_choice(
+                                if camera {
+                                    OverlayDeviceChoice::Camera(None)
+                                } else {
+                                    OverlayDeviceChoice::Microphone(None)
+                                },
+                                cx,
+                            );
+                        } else {
+                            this.open_device_menu(camera, event.position(), cx);
+                        }
+                    })),
+            )
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                this.open_device_menu(camera, event.position(), cx);
+            }))
+            .into_any_element()
+    }
+
     /// The caret's dropdown while it is open -- `Menu.popup` in the source,
     /// rendered with the app's own menu component here (the closest thing to
     /// a native context menu this side of AppKit; check state, outside-click
@@ -676,6 +960,14 @@ impl OverlayWindow {
     /// `TargetSelect::set_recording_mode`, and refreshes the tray.
     fn choose_mode(&mut self, index: usize, cx: &mut Context<Self>) {
         self.mode_menu = None;
+        if crate::session::RecordingSession::global(cx)
+            .read(cx)
+            .editor_recording_target()
+            .is_some()
+        {
+            cx.notify();
+            return;
+        }
         if let Some((_, mode)) = MODE_MENU.get(index).copied() {
             app_windows::set_recording_mode(mode, cx);
         }
@@ -827,10 +1119,46 @@ impl OverlayWindow {
             .into_any_element()
     }
 
-    /// The camera-only variant: no capture target to pick, just the start
-    /// cluster over a dim screen. The TSX also inlines a camera preview here;
-    /// ours keeps the preview bubble window it already has (README deviation).
     fn render_camera_variant(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let preview = if let Some(camera) = &self.inline_camera {
+            let (width, height) = camera.read(cx).inline_size(self.display_size);
+            div()
+                .w(px(width))
+                .h(px(height))
+                .flex_none()
+                .child(camera.clone())
+                .into_any_element()
+        } else {
+            let (width, height) = crate::camera_window::inline_preview_size(
+                &self.empty_camera_state,
+                None,
+                self.display_size,
+            );
+            div()
+                .w(px(width))
+                .h(px(height))
+                .pt(px(crate::camera_window::CAMERA_TOOLBAR_HEIGHT))
+                .child(
+                    div()
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(8.))
+                        .rounded(px(crate::camera_window::preview_radius(
+                            &self.empty_camera_state,
+                        )))
+                        .border_1()
+                        .border_color(self.theme.gray_6)
+                        .bg(gpui::black())
+                        .text_size(px(14.))
+                        .text_color(self.theme.gray_11)
+                        .child(svg().path("icons/camera.svg").size(px(32.)))
+                        .child("Please select a camera"),
+                )
+                .into_any_element()
+        };
         div()
             .size_full()
             .relative()
@@ -862,6 +1190,15 @@ impl OverlayWindow {
                             .text_color(self.theme.gray_11)
                             .child("Record using only your camera and microphone"),
                     ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .justify_center()
+                    .w_full()
+                    .px(px(24.))
+                    .mb(px(16.))
+                    .child(preview),
             )
             .child(self.render_controls_cluster(self.target(cx), false, cx))
     }
@@ -1119,10 +1456,16 @@ impl OverlayWindow {
         let (screen_width, screen_height) = self.display_size;
 
         let below = crop.bottom() + MARGIN_BELOW;
-        let y = if below + CLUSTER_HEIGHT <= screen_height {
+        let cluster_height = CLUSTER_HEIGHT
+            + if self.select.read(cx).recording_mode == Mode::Screenshot {
+                0.
+            } else {
+                78.
+            };
+        let y = if below + cluster_height <= screen_height {
             below
         } else {
-            let above = crop.y - CLUSTER_HEIGHT - MARGIN_TOP_OUTSIDE;
+            let above = crop.y - cluster_height - MARGIN_TOP_OUTSIDE;
             if above >= TOP_SAFE_MARGIN {
                 above
             } else {
@@ -1202,10 +1545,6 @@ impl OverlayWindow {
 
     /// `RecordingControls`: the close button, the gradient start pill with its
     /// mode line and caret, and the pre-recording settings button.
-    ///
-    /// The device row (a second glass card with camera and microphone selects)
-    /// and the "What is X Mode?" link below it are deferred -- the device
-    /// pickers live in the main window here (README).
     fn render_controls_cluster(
         &self,
         target: Option<ScreenCaptureTarget>,
@@ -1260,6 +1599,18 @@ impl OverlayWindow {
                         ),
                 ),
             )
+            .when(mode != Mode::Screenshot, |cluster| {
+                cluster.child(
+                    self.glass_surface().p(px(12.)).child(
+                        div()
+                            .flex()
+                            .gap(px(8.))
+                            .w_full()
+                            .child(self.render_device_control(true, cx))
+                            .child(self.render_device_control(false, cx)),
+                    ),
+                )
+            })
     }
 
     /// `size-9 rounded-full bg-gray-12` with the inverted X glyph.
@@ -1413,7 +1764,15 @@ impl OverlayWindow {
                         MouseButton::Left,
                         cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
                             cx.stop_propagation();
+                            if crate::session::RecordingSession::global(cx)
+                                .read(cx)
+                                .editor_recording_target()
+                                .is_some()
+                            {
+                                return;
+                            }
                             let current = this.select.read(cx).recording_mode;
+                            this.device_menu = None;
                             this.mode_menu = Some(crate::ui::MenuState::new(
                                 event.position,
                                 &mode_menu_items(current),
@@ -1515,6 +1874,7 @@ impl OverlayWindow {
                 Some(AreaDrag::Draw { anchor: point })
             }
         };
+        self.sync_area_camera(cx);
         cx.notify();
     }
 
@@ -1563,6 +1923,7 @@ impl OverlayWindow {
         };
 
         self.crop = Some(next);
+        self.sync_area_camera(cx);
         cx.notify();
     }
 
@@ -1578,6 +1939,7 @@ impl OverlayWindow {
                 self.crop = Some(crop.clamped(self.display_size));
             }
         }
+        self.sync_area_camera(cx);
         // Releasing a fresh draw in screenshot mode captures immediately --
         // the screenshot area picker has no confirm step
         // (`target-select-overlay.tsx`'s area mouse-up). Move/resize grabs

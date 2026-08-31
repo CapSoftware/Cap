@@ -218,25 +218,54 @@ impl CleanCaptureGate {
     }
 }
 
-/// `originalCameraBounds` / `lastRepositionedWindowId` in the window variant of
-/// the target-select overlay (`target-select-overlay.tsx:478-563`).
-///
-/// The overlay parks the camera bubble 16px inside the bottom-right corner of
-/// whatever window it is highlighting, and puts it back when the picker goes
-/// away *unless* the pick was committed -- a click that locks the highlight, or
-/// a recording/screenshot start, both of which null the saved bounds over
-/// there so the bubble stays where the user will see it in the capture.
 #[derive(Default)]
 pub struct CameraPark {
-    /// The bubble's gpui-space logical top-left before the first park. `None`
-    /// while nothing has been moved, and cleared outright once the pick is
-    /// committed (`setOriginalCameraBounds(null)`).
-    origin: Option<(f32, f32)>,
-    /// `lastRepositionedWindowId`: the park runs once per highlighted window,
-    /// not once per poll tick.
+    original: Option<CameraSnapshot>,
+    mode: Option<TargetType>,
     last_window: Option<scap_targets::WindowId>,
-    /// The pick was committed; no further parking and no revert.
+    last_area: Option<AreaRect>,
+    area_target: Option<(DisplayId, AreaRect)>,
     released: bool,
+    epoch: u64,
+    generation: u64,
+    pending: Option<CameraPlacement>,
+}
+
+#[derive(Clone, Copy)]
+struct CameraSnapshot {
+    handle: WindowHandle<CameraWindow>,
+    bounds: AreaRect,
+    picker_size: Option<(f32, f32)>,
+}
+
+#[derive(Clone, Copy)]
+enum CameraSizeOverride {
+    Preserve,
+    Set(Option<(f32, f32)>),
+}
+
+#[derive(Clone, Copy)]
+struct CameraPlacement {
+    camera: WindowHandle<CameraWindow>,
+    bounds: AreaRect,
+    size_override: CameraSizeOverride,
+}
+
+impl CameraPark {
+    fn invalidate_pending(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.pending = None;
+    }
+
+    fn reset_selection(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+        self.original = None;
+        self.mode = None;
+        self.last_window = None;
+        self.last_area = None;
+        self.area_target = None;
+        self.released = false;
+    }
 }
 
 impl Global for AppWindows {}
@@ -357,6 +386,11 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             // clean or not: the fallback at `recording.rs:3225-3237` does the
             // same so a cancelled or failed recording still restores the
             // editor and cannot leak its target into the next session.
+            let main = cx.global::<AppWindows>().main;
+            main.update(cx, |view, _, _| {
+                view.cancel_deep_link_start();
+            })
+            .ok();
             let editor_target =
                 session.update(cx, |session, _| session.take_editor_recording_target());
             if let Some(editor_path) = editor_target {
@@ -547,7 +581,8 @@ pub(crate) fn show_main_window_after_capture_pause(cx: &mut App) {
         open_onboarding(cx);
         return;
     }
-    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+    let resume_inputs = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
+    if resume_inputs {
         crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
     }
     let reset_target = RecordingSession::global(cx).read(cx).phase == Phase::Idle
@@ -565,6 +600,9 @@ pub(crate) fn show_main_window_after_capture_pause(cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     let native = main
         .update(cx, |view, window, cx| {
+            if resume_inputs {
+                view.resume_device_restore(cx);
+            }
             if reset_target {
                 view.clear_target(cx);
             }
@@ -687,6 +725,11 @@ fn hide_main_and_park_camera_preview(cx: &mut App) {
         return;
     }
 
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _, _| {
+        view.suspend_device_restore();
+    })
+    .ok();
     close_camera_window(cx);
     crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.park_camera_preview(cx));
 }
@@ -695,24 +738,28 @@ fn camera_preview_can_be_parked(phase: Phase) -> bool {
     matches!(phase, Phase::Idle)
 }
 
-/// ⌘W, the File/Window menus' Close Window, and the main window's own red
-/// traffic light.
-///
-/// `CapWindowId::Main`'s `CloseRequested` arm (`lib.rs:5644-5697`), transcribed:
-/// prevent the close and hide the window, sync the dock, and -- when nothing is
-/// recording -- hide the camera bubble, close the target-select overlays, pause
-/// the camera preview and release the mic and camera feeds.
-///
-/// Two deviations, both noted in the report: the camera bubble is *closed*
-/// rather than hidden (this app has no hide-in-place path for it, and the
-/// observable result is the same bubble-off-screen), and `camera_preview.pause()`
-/// has no counterpart because there is no preview stream server here -- the
-/// preview is the bubble, and closing it stops the pump.
 pub fn request_close_main(cx: &mut App) {
     #[cfg(target_os = "linux")]
     if clean_capture_pending(cx) {
         cancel_clean_capture(cx);
         return;
+    }
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle
+        && RecordingSession::global(cx)
+            .read(cx)
+            .editor_recording_target()
+            .is_some()
+    {
+        abort_editor_recording_flow(cx);
+        return;
+    }
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+        let main = cx.global::<AppWindows>().main;
+        main.update(cx, |view, _, _| {
+            view.cancel_deep_link_start();
+            view.suspend_device_restore();
+        })
+        .ok();
     }
     hide_main_window(cx);
 
@@ -1065,13 +1112,20 @@ fn restore_after_settings(cx: &mut App) {
 /// Must be reached through `cx.defer` from inside an entity update: opening a
 /// window paints it synchronously and would double-lease the caller.
 pub fn open_mode_select(cx: &mut App) -> bool {
+    if RecordingSession::global(cx)
+        .read(cx)
+        .editor_recording_target()
+        .is_some()
+    {
+        return false;
+    }
     #[cfg(target_os = "linux")]
     if defer_window_until_capture_safe(cx) {
         return false;
     }
     let main = cx.global::<AppWindows>().main;
     let mode = main
-        .update(cx, |view, _window, _cx| view.mode())
+        .update(cx, |view, _window, cx| view.effective_mode(cx))
         .unwrap_or(Mode::Instant);
 
     if let Some(handle) = cx.global::<AppWindows>().mode_select {
@@ -1503,6 +1557,33 @@ pub fn open_editor_target_overlays(editor_path: PathBuf, request: OverlayRequest
         cx.global_mut::<AppWindows>().editor_hidden_for_picker = Some(key.clone());
         hide_editor_window(&key, cx);
     }
+    hide_main_window(cx);
+}
+
+pub fn open_editor_recording_main(editor_path: PathBuf, cx: &mut App) {
+    let session = RecordingSession::global(cx);
+    if session.read(cx).phase != Phase::Idle
+        || session.read(cx).editor_recording_target().as_ref() != Some(&editor_path)
+    {
+        return;
+    }
+    let key = editor_key(&editor_path);
+    if editor_window_handle(&key, cx).is_none() {
+        abort_editor_recording_flow(cx);
+        return;
+    }
+    close_target_overlays(cx);
+    cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
+    cx.global_mut::<AppWindows>().editor_hidden_for_picker = Some(key.clone());
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _, cx| {
+        view.cancel_deep_link_start();
+        view.clear_target(cx);
+        cx.notify();
+    })
+    .ok();
+    hide_editor_window(&key, cx);
+    show_main_window(cx);
 }
 
 fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
@@ -1531,11 +1612,12 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
     select.update(cx, |select, cx| {
         select.arm(Some(request.mode), request.recording_mode, pinned, cx)
     });
+    sync_camera_presentation(cx);
 
-    // Only the window variant parks the camera bubble; the display/area/camera
-    // variants have no window to park it in.
-    if request.mode == TargetType::Window {
-        arm_camera_park(cx);
+    if request.mode == TargetType::Window
+        || (request.mode == TargetType::Area && request.recording_mode != Mode::Screenshot)
+    {
+        arm_camera_park(request.mode, cx);
     }
 
     let displays = match &display {
@@ -1601,10 +1683,22 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
 /// reveals the main window again (`dismissalReveals`,
 /// `new-main/index.tsx:2047-2058`).
 pub fn dismiss_target_overlays(cx: &mut App) {
+    if RecordingSession::global(cx).read(cx).phase == Phase::Idle
+        && RecordingSession::global(cx)
+            .read(cx)
+            .editor_recording_target()
+            .is_some()
+    {
+        abort_editor_recording_flow(cx);
+        return;
+    }
     close_target_overlays(cx);
     let main = cx.global::<AppWindows>().main;
-    main.update(cx, |view, _window, cx| view.clear_target(cx))
-        .ok();
+    main.update(cx, |view, _window, cx| {
+        view.cancel_deep_link_start();
+        view.clear_target(cx);
+    })
+    .ok();
 
     // An editor-owned picker cancelled: clear the editor recording target and
     // reveal that editor with focus, record modal closed -- the non-
@@ -1649,6 +1743,7 @@ pub fn close_target_overlays(cx: &mut App) {
         let recording_mode = select.recording_mode;
         select.arm(None, recording_mode, None, cx);
     });
+    sync_camera_presentation(cx);
 }
 
 /// Repaint every overlay. The cursor probe runs while none of them is the
@@ -2816,6 +2911,7 @@ fn begin_retained_capture_restore(cx: &mut App) {
                 Ok(()) => {
                     crate::hotkeys::complete_clean_capture_stop(generation, cx);
                     let _restored = cx.global_mut::<AppWindows>().clean_capture.take();
+                    update_camera_presentation(true, cx);
                     RecordingSession::global(cx).update(cx, |_, cx| cx.notify());
                 }
                 Err(error) => {
@@ -2879,6 +2975,7 @@ fn restore_clean_capture_ui(cx: &mut App) -> bool {
     if let Err(error) = result.and_then(|result| result) {
         tracing::warn!(%error, "could not restore the main window");
     }
+    update_camera_presentation(true, cx);
     true
 }
 
@@ -3164,6 +3261,7 @@ pub fn open_camera_window(cx: &mut App) {
         .unwrap_or_else(scap_targets::Display::primary);
     let (x, y) = camera_window::opening_position(&display);
 
+    let inline = camera_preview_is_inline(cx);
     let handle = cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds {
@@ -3192,7 +3290,7 @@ pub fn open_camera_window(cx: &mut App) {
                 WindowKind::PopUp
             },
             focus: false,
-            show: true,
+            show: !inline,
             is_resizable: false,
             is_minimizable: false,
             window_background: gpui::WindowBackgroundAppearance::Transparent,
@@ -3218,12 +3316,17 @@ pub fn open_camera_window(cx: &mut App) {
                             shadow: false,
                         },
                     );
-                    platform::show_window_without_focus(window);
+                    if !inline {
+                        platform::show_window_without_focus(window);
+                    }
                     platform::native_window(window)
                 })
                 .ok()
                 .flatten();
             remove_popup_window_chrome(native, cx);
+            sync_camera_presentation(cx);
+            sync_opened_camera_with_picker(cx);
+            refresh_target_overlays(cx);
         }
         Err(error) => tracing::error!("camera window failed to open: {error:#}"),
     }
@@ -3231,136 +3334,372 @@ pub fn open_camera_window(cx: &mut App) {
 
 pub fn close_camera_window(cx: &mut App) {
     if let Some(handle) = cx.global_mut::<AppWindows>().camera.take() {
+        #[cfg(not(target_os = "macos"))]
+        if let Some(previous) = handle
+            .update(cx, |view, _, cx| view.preview_image(cx))
+            .ok()
+            .flatten()
+        {
+            evict_overlay_camera_image(previous, cx);
+        }
+        let park = &mut cx.global_mut::<AppWindows>().camera_park;
+        park.invalidate_pending();
+        park.original = None;
+        park.last_window = None;
+        park.last_area = None;
         handle
             .update(cx, |_, window, _| window.remove_window())
             .ok();
+        refresh_target_overlays(cx);
     }
 }
 
-// -- The camera bubble parked inside a picked window -------------------------
-//
-// `repositionCameraForWindow` (`target-select-overlay.tsx:125-162`) and its
-// caller (`:507-563`): while the window picker is up and nothing has been
-// committed yet, the bubble sits 16px inside the bottom-right corner of the
-// window the overlay is highlighting, so the camera is *in* the recording of
-// that window rather than floating somewhere outside it. It goes back where it
-// came from when the picker is dismissed, and stays parked when the pick is
-// committed (a click that locks the highlight, or a start).
+fn camera_preview_is_inline(cx: &App) -> bool {
+    TargetSelect::global(cx).read(cx).mode == Some(TargetType::CameraOnly)
+}
 
-/// The 16px inset `repositionCameraForWindow` uses on both axes; a window that
-/// cannot hold the bubble plus two of these is left alone (`:147-153`).
+pub fn camera_preview_entity(cx: &mut App) -> Option<Entity<CameraWindow>> {
+    cx.global::<AppWindows>()
+        .camera?
+        .update(cx, |_, _, cx| cx.entity())
+        .ok()
+}
+
+fn sync_camera_presentation(cx: &mut App) {
+    update_camera_presentation(false, cx);
+}
+
+fn update_camera_presentation(force: bool, cx: &mut App) {
+    #[cfg(target_os = "linux")]
+    if cx.global::<AppWindows>().clean_capture.is_some() {
+        return;
+    }
+    let Some(handle) = cx.global::<AppWindows>().camera else {
+        return;
+    };
+    let inline = camera_preview_is_inline(cx);
+    let changed = handle
+        .update(cx, |view, window, cx| {
+            let changed = view.is_inline() != inline;
+            view.set_inline(inline, window, cx);
+            changed
+        })
+        .unwrap_or(false);
+    if !changed && !force {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        #[cfg(not(target_os = "linux"))]
+        let native = cx.update(|cx| {
+            if cx.global::<AppWindows>().camera != Some(handle)
+                || camera_preview_is_inline(cx) != inline
+            {
+                return None;
+            }
+            handle
+                .update(cx, |_, window, _| {
+                    #[cfg(target_os = "windows")]
+                    if !inline {
+                        platform::show_window_without_focus(window);
+                        return None;
+                    }
+                    platform::native_window(window)
+                })
+                .ok()
+                .flatten()
+        });
+        #[cfg(not(target_os = "linux"))]
+        if let Some(native) = native {
+            if inline {
+                platform::hide_native(&native);
+            } else {
+                platform::order_front_native(&native);
+            }
+        }
+        #[cfg(target_os = "linux")]
+        cx.update(|cx| {
+            if cx.global::<AppWindows>().camera != Some(handle)
+                || camera_preview_is_inline(cx) != inline
+                || cx.global::<AppWindows>().clean_capture.is_some()
+            {
+                return;
+            }
+            let result = handle.update(cx, |_, window, _| {
+                if cap_recording::screenshot::uses_wayland_portal() {
+                    window.set_retained_visibility(!inline).map(|_| ())
+                } else {
+                    platform::set_x11_window_visible(window, !inline)
+                }
+            });
+            if let Err(error) = result.and_then(|result| result) {
+                tracing::warn!(%error, "could not update camera picker visibility");
+            }
+        });
+    })
+    .detach();
+}
+
 const CAMERA_PARK_PADDING: f32 = 16.;
 
-/// The camera bubble's geometry, in the two coordinate spaces the move needs.
 struct CameraFrame {
-    native: platform::NativeWindow,
-    /// gpui-space logical top-left -- the space the overlay's window bounds and
-    /// the persisted `cameraWindowPosition` both live in (global, y down).
-    origin: (f32, f32),
-    /// The AppKit frame (bottom-left origin, points), for `setFrame:`.
-    frame: (f64, f64, f64, f64),
+    native: CameraNativeFrame,
+    snapshot: CameraSnapshot,
+}
+
+enum CameraNativeFrame {
+    #[cfg(target_os = "macos")]
+    Mac {
+        native: platform::NativeWindow,
+        frame: (f64, f64, f64, f64),
+    },
+    #[cfg(target_os = "windows")]
+    Windows(platform::NativeWindow),
+    #[cfg(target_os = "linux")]
+    X11 { window_id: u32, scale: f64 },
+}
+
+#[cfg(target_os = "macos")]
+fn camera_native_frame(window: &gpui::Window) -> Option<(CameraNativeFrame, AreaRect)> {
+    let native = platform::native_window(window)?;
+    let frame = platform::window_frame(&native);
+    let origin = window.bounds().origin;
+    Some((
+        CameraNativeFrame::Mac { native, frame },
+        AreaRect {
+            x: f32::from(origin.x),
+            y: f32::from(origin.y),
+            width: frame.2 as f32,
+            height: frame.3 as f32,
+        },
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn camera_native_frame(window: &gpui::Window) -> Option<(CameraNativeFrame, AreaRect)> {
+    let native = platform::native_window(window)?;
+    let (x, y, width, height) = platform::window_logical_frame(&native);
+    Some((
+        CameraNativeFrame::Windows(native),
+        AreaRect {
+            x: x as f32,
+            y: y as f32,
+            width: width as f32,
+            height: height as f32,
+        },
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn camera_native_frame(window: &gpui::Window) -> Option<(CameraNativeFrame, AreaRect)> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let window_id = match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+        RawWindowHandle::Xlib(handle) => u32::try_from(handle.window).ok()?,
+        RawWindowHandle::Xcb(handle) => handle.window.get(),
+        _ => return None,
+    };
+    let bounds = window.bounds();
+    Some((
+        CameraNativeFrame::X11 {
+            window_id,
+            scale: f64::from(window.scale_factor()),
+        },
+        AreaRect {
+            x: f32::from(bounds.origin.x),
+            y: f32::from(bounds.origin.y),
+            width: f32::from(bounds.size.width),
+            height: f32::from(bounds.size.height),
+        },
+    ))
 }
 
 fn camera_frame(cx: &mut App) -> Option<CameraFrame> {
     let handle = cx.global::<AppWindows>().camera?;
     handle
-        .update(cx, |_, window, _| {
-            let native = platform::native_window(window)?;
-            #[cfg(target_os = "windows")]
-            let frame = platform::window_logical_frame(&native);
-            #[cfg(not(target_os = "windows"))]
-            let frame = platform::window_frame(&native);
-            let origin = window.bounds().origin;
+        .update(cx, |view, window, _| {
+            let (native, bounds) = camera_native_frame(window)?;
             Some(CameraFrame {
                 native,
-                origin: (f32::from(origin.x), f32::from(origin.y)),
-                frame,
+                snapshot: CameraSnapshot {
+                    handle,
+                    bounds,
+                    picker_size: view.picker_size(),
+                },
             })
         })
         .ok()
         .flatten()
+        .filter(|camera| camera.snapshot.bounds.width > 0. && camera.snapshot.bounds.height > 0.)
 }
 
-/// `win.setPosition(new LogicalPosition(x, y))` on the camera window, spelled
-/// as the delta on its AppKit frame the way `CameraWindow::apply_window_size`
-/// does -- gpui's own origin math disagrees with AppKit's, and the delta is
-/// exact in both. Runs from a task: `setFrame:` re-enters gpui's window
-/// callbacks.
-fn move_camera_window(camera: CameraFrame, to: (f32, f32), cx: &mut App) {
-    let dx = f64::from(to.0 - camera.origin.0);
-    let dy = f64::from(to.1 - camera.origin.1);
-    if dx.abs() < 0.5 && dy.abs() < 0.5 {
-        return;
+fn camera_snapshot(cx: &mut App) -> Option<CameraSnapshot> {
+    let mut snapshot = camera_frame(cx)?.snapshot;
+    if let Some(pending) = cx.global::<AppWindows>().camera_park.pending
+        && pending.camera == snapshot.handle
+    {
+        snapshot.bounds = pending.bounds;
+        if let CameraSizeOverride::Set(picker_size) = pending.size_override {
+            snapshot.picker_size = picker_size;
+        }
     }
-    #[cfg(not(target_os = "windows"))]
-    let (frame_x, frame_y, width, height) = camera.frame;
-    #[cfg(target_os = "windows")]
-    let (_, _, width, height) = camera.frame;
-    #[cfg(target_os = "windows")]
-    let (x, y) = (f64::from(to.0), f64::from(to.1));
-    // gpui +y is down, AppKit +y is up.
-    #[cfg(not(target_os = "windows"))]
-    let (x, y) = (frame_x + dx, frame_y - dy);
-    let native = camera.native;
-    cx.spawn(async move |_| {
-        #[cfg(target_os = "windows")]
-        platform::set_window_logical_frame(&native, x, y, width, height);
-        #[cfg(not(target_os = "windows"))]
-        platform::set_window_frame(&native, x, y, width, height);
+    Some(snapshot)
+}
+
+impl CameraFrame {
+    fn apply(self, bounds: AreaRect) -> anyhow::Result<()> {
+        match self.native {
+            #[cfg(target_os = "macos")]
+            CameraNativeFrame::Mac { native, frame } => {
+                let dx = f64::from(bounds.x - self.snapshot.bounds.x);
+                let dy = f64::from(bounds.y - self.snapshot.bounds.y);
+                platform::set_window_frame(
+                    &native,
+                    frame.0 + dx,
+                    frame.1 + frame.3 - dy - f64::from(bounds.height),
+                    f64::from(bounds.width),
+                    f64::from(bounds.height),
+                );
+            }
+            #[cfg(target_os = "windows")]
+            CameraNativeFrame::Windows(native) => {
+                platform::set_window_logical_frame(
+                    &native,
+                    f64::from(bounds.x),
+                    f64::from(bounds.y),
+                    f64::from(bounds.width),
+                    f64::from(bounds.height),
+                );
+            }
+            #[cfg(target_os = "linux")]
+            CameraNativeFrame::X11 { window_id, scale } => {
+                use x11rb::connection::Connection as _;
+                use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt as _};
+
+                let (connection, _) = x11rb::connect(None)?;
+                connection
+                    .configure_window(
+                        window_id,
+                        &ConfigureWindowAux::new()
+                            .x((f64::from(bounds.x) * scale).round() as i32)
+                            .y((f64::from(bounds.y) * scale).round() as i32)
+                            .width((f64::from(bounds.width) * scale).round().max(1.) as u32)
+                            .height((f64::from(bounds.height) * scale).round().max(1.) as u32),
+                    )?
+                    .check()?;
+                connection.flush()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn queue_camera_placement(placement: CameraPlacement, cx: &mut App) {
+    let park = &mut cx.global_mut::<AppWindows>().camera_park;
+    park.invalidate_pending();
+    park.pending = Some(placement);
+    let generation = park.generation;
+    cx.spawn(async move |cx| {
+        let camera = cx.update(|cx| {
+            let windows = cx.global::<AppWindows>();
+            if windows.camera_park.generation != generation
+                || windows.camera != Some(placement.camera)
+            {
+                return None;
+            }
+            let Some(frame) = camera_frame(cx) else {
+                let park = &mut cx.global_mut::<AppWindows>().camera_park;
+                park.invalidate_pending();
+                park.last_window = None;
+                park.last_area = None;
+                return None;
+            };
+            placement
+                .camera
+                .update(cx, |view, window, cx| {
+                    view.invalidate_pending_resize();
+                    if let CameraSizeOverride::Set(picker_size) = placement.size_override {
+                        view.set_picker_size(picker_size, window, cx);
+                    }
+                })
+                .ok()?;
+            cx.global_mut::<AppWindows>().camera_park.pending = None;
+            Some(frame)
+        });
+        // Native setters re-enter GPUI; no App or camera entity borrow may survive this call.
+        if let Some(camera) = camera
+            && let Err(error) = camera.apply(placement.bounds)
+        {
+            tracing::warn!(%error, "could not move the camera preview into the capture target");
+            cx.update(|cx| {
+                let park = &mut cx.global_mut::<AppWindows>().camera_park;
+                if park.generation == generation {
+                    park.last_window = None;
+                    park.last_area = None;
+                }
+            });
+        }
     })
     .detach();
 }
 
-/// `onMount` of the window-variant overlay (`target-select-overlay.tsx:507-517`):
-/// remember where the bubble was before the picker touches it. Only for a fresh
-/// picker -- re-pointing an open picker at another window does not remount the
-/// overlay over there, so the *original* original is what a dismissal restores.
-fn arm_camera_park(cx: &mut App) {
-    {
-        let park = &cx.global::<AppWindows>().camera_park;
-        if park.origin.is_some() || park.released || park.last_window.is_some() {
-            return;
-        }
+fn arm_camera_park(mode: TargetType, cx: &mut App) {
+    if cx.global::<AppWindows>().camera_park.mode == Some(mode) {
+        return;
     }
-    let origin = camera_frame(cx).map(|camera| camera.origin);
-    cx.global_mut::<AppWindows>().camera_park = CameraPark {
-        origin,
-        last_window: None,
-        released: false,
-    };
+    let original = (mode == TargetType::Window)
+        .then(|| camera_snapshot(cx))
+        .flatten();
+    let park = &mut cx.global_mut::<AppWindows>().camera_park;
+    let pending = park.pending;
+    park.invalidate_pending();
+    park.reset_selection();
+    park.mode = Some(mode);
+    park.original = original;
+    if let Some(pending) = pending {
+        queue_camera_placement(pending, cx);
+    }
 }
 
-/// The reposition effect (`target-select-overlay.tsx:518-545`), driven by the
-/// same cursor poll that feeds the highlight: park the bubble in the window the
-/// overlay is highlighting, once per window, and stop entirely once the pick is
-/// committed.
+fn sync_opened_camera_with_picker(cx: &mut App) {
+    let select = TargetSelect::global(cx);
+    match select.read(cx).mode {
+        Some(TargetType::Window) => {
+            let target = select.read(cx).active_window().cloned();
+            sync_camera_park(target, cx);
+        }
+        Some(TargetType::Area) => {
+            if let Some((display, crop)) = cx.global::<AppWindows>().camera_park.area_target.clone()
+            {
+                sync_camera_area(display, Some(crop), cx);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn camera_picker_epoch(cx: &App) -> u64 {
+    cx.global::<AppWindows>().camera_park.epoch
+}
+
 pub fn sync_camera_park(active: Option<HoveredWindow>, cx: &mut App) {
-    if !cx.has_global::<AppWindows>() {
+    if !cx.has_global::<AppWindows>()
+        || TargetSelect::global(cx).read(cx).mode != Some(TargetType::Window)
+    {
         return;
     }
     let Some(target) = active else {
-        // `lastRepositionedWindowId = null`: nothing highlighted, so the next
-        // window to be highlighted parks again even if it is the same one.
         cx.global_mut::<AppWindows>().camera_park.last_window = None;
         return;
     };
-    {
-        let park = &cx.global::<AppWindows>().camera_park;
-        if park.released || park.last_window.as_ref() == Some(&target.id) {
-            return;
-        }
+    let park = &cx.global::<AppWindows>().camera_park;
+    if park.released || park.last_window.as_ref() == Some(&target.id) {
+        return;
     }
-    cx.global_mut::<AppWindows>().camera_park.last_window = Some(target.id.clone());
-    park_camera_in_window(&target, cx);
+    if park_camera_in_window(&target, cx) {
+        cx.global_mut::<AppWindows>().camera_park.last_window = Some(target.id);
+    }
 }
 
-/// The bubble's new top-left, in the global logical space its own position
-/// lives in -- `repositionCameraForWindow`'s arithmetic
-/// (`target-select-overlay.tsx:141-160`), verbatim: the window's
-/// display-relative bounds made absolute with the display origin, the bubble
-/// tucked into the bottom-right corner one padding in, rounded. `None` when the
-/// window cannot hold the bubble plus a padding on each side, which is that
-/// function's early return (`:147-153`) -- the bubble stays where it is.
 fn camera_park_position(
     display_origin: (f32, f32),
     window: AreaRect,
@@ -3375,75 +3714,214 @@ fn camera_park_position(
     let absolute_x = window.x + display_origin.0;
     let absolute_y = window.y + display_origin.1;
     Some((
-        (absolute_x + window.width - camera_width - CAMERA_PARK_PADDING).round(),
-        (absolute_y + window.height - camera_height - CAMERA_PARK_PADDING).round(),
+        (absolute_x + window.width - camera_width - CAMERA_PARK_PADDING + 0.5).floor(),
+        (absolute_y + window.height - camera_height - CAMERA_PARK_PADDING + 0.5).floor(),
     ))
 }
 
-fn park_camera_in_window(target: &HoveredWindow, cx: &mut App) {
+fn park_camera_in_window(target: &HoveredWindow, cx: &mut App) -> bool {
     let Some(display) = scap_targets::Display::from_id(&target.display_id) else {
+        return false;
+    };
+    let Some(display_bounds) = display.raw_handle().logical_bounds() else {
+        return false;
+    };
+    let Some(camera) = camera_snapshot(cx) else {
+        return false;
+    };
+
+    let display_origin = (
+        display_bounds.position().x() as f32,
+        display_bounds.position().y() as f32,
+    );
+    let Some((x, y)) = camera_park_position(
+        display_origin,
+        target.bounds,
+        (camera.bounds.width, camera.bounds.height),
+    ) else {
+        return false;
+    };
+
+    let park = &mut cx.global_mut::<AppWindows>().camera_park;
+    if park
+        .original
+        .is_none_or(|original| original.handle != camera.handle)
+    {
+        park.original = Some(camera);
+    }
+    queue_camera_placement(
+        CameraPlacement {
+            camera: camera.handle,
+            bounds: AreaRect {
+                x,
+                y,
+                ..camera.bounds
+            },
+            size_override: CameraSizeOverride::Preserve,
+        },
+        cx,
+    );
+    true
+}
+
+fn camera_area_bounds(
+    display_origin: (f32, f32),
+    crop: AreaRect,
+    original_size: (f32, f32),
+) -> Option<AreaRect> {
+    let (original_width, original_height) = original_size;
+    let toolbar = camera_window::CAMERA_TOOLBAR_HEIGHT;
+    let content_height = (original_height - toolbar).max(0.);
+    let content_max = original_width.max(content_height);
+    let target_max = 100_f32.max(content_max.min(crop.width.min(crop.height) * 0.5 - toolbar));
+    let scale = if content_max > 0. {
+        target_max / content_max
+    } else {
+        1.
+    };
+    let width = (original_width * scale).round();
+    let height = (content_height * scale).round() + toolbar;
+    if crop.width <= width + CAMERA_PARK_PADDING * 2.
+        || crop.height <= height + CAMERA_PARK_PADDING * 2.
+    {
+        return None;
+    }
+    Some(AreaRect {
+        x: (crop.x + crop.width - width - CAMERA_PARK_PADDING).round() + display_origin.0,
+        y: (crop.y + crop.height - height - CAMERA_PARK_PADDING).round() + display_origin.1,
+        width,
+        height,
+    })
+}
+
+fn camera_area_bounds_changed(previous: AreaRect, next: AreaRect) -> bool {
+    (previous.x - next.x).abs() > 1.
+        || (previous.y - next.y).abs() > 1.
+        || (previous.width - next.width).abs() > 1.
+        || (previous.height - next.height).abs() > 1.
+}
+
+pub fn sync_camera_area(display_id: DisplayId, crop: Option<AreaRect>, cx: &mut App) {
+    if !cx.has_global::<AppWindows>()
+        || !cx
+            .global::<AppWindows>()
+            .overlays
+            .iter()
+            .any(|(display, _)| *display == display_id)
+    {
+        return;
+    }
+    let select = TargetSelect::global(cx);
+    if select.read(cx).mode != Some(TargetType::Area)
+        || select.read(cx).recording_mode == Mode::Screenshot
+        || cx.global::<AppWindows>().camera_park.released
+    {
+        return;
+    }
+    let Some(crop) = crop else {
+        if cx
+            .global::<AppWindows>()
+            .camera_park
+            .area_target
+            .as_ref()
+            .is_none_or(|(display, _)| *display == display_id)
+        {
+            revert_camera_park(cx);
+            arm_camera_park(TargetType::Area, cx);
+        }
+        return;
+    };
+    cx.global_mut::<AppWindows>().camera_park.area_target = Some((display_id.clone(), crop));
+    let Some(display) = scap_targets::Display::from_id(&display_id) else {
         return;
     };
     let Some(display_bounds) = display.raw_handle().logical_bounds() else {
         return;
     };
-    let Some(camera) = camera_frame(cx) else {
+    let Some(camera) = camera_snapshot(cx) else {
         return;
     };
-
-    let (_, _, width, height) = camera.frame;
-    let display_origin = (
-        display_bounds.position().x() as f32,
-        display_bounds.position().y() as f32,
-    );
-    let Some(to) =
-        camera_park_position(display_origin, target.bounds, (width as f32, height as f32))
-    else {
-        tracing::debug!(
-            camera_width = width,
-            camera_height = height,
-            window_width = target.bounds.width,
-            window_height = target.bounds.height,
-            "target window is too small for the camera bubble; leaving it where it is"
-        );
+    let park = &mut cx.global_mut::<AppWindows>().camera_park;
+    let original = match park.original {
+        Some(original) if original.handle == camera.handle => original,
+        _ => {
+            park.original = Some(camera);
+            camera
+        }
+    };
+    let Some(bounds) = camera_area_bounds(
+        (
+            display_bounds.position().x() as f32,
+            display_bounds.position().y() as f32,
+        ),
+        crop,
+        (original.bounds.width, original.bounds.height),
+    ) else {
         return;
     };
-
-    // A camera opened *after* the picker went up has no remembered position
-    // yet; the effect over there picks it up the same way (`getCameraWindow()`
-    // starts returning a window and the reposition runs).
-    if cx.global::<AppWindows>().camera_park.origin.is_none() {
-        cx.global_mut::<AppWindows>().camera_park.origin = Some(camera.origin);
+    if park
+        .last_area
+        .is_some_and(|last| !camera_area_bounds_changed(last, bounds))
+    {
+        return;
     }
-    tracing::info!(window = %target.id, x = to.0, y = to.1, "parking the camera bubble in the picked window");
-    move_camera_window(camera, to, cx);
+    park.last_area = Some(bounds);
+    queue_camera_placement(
+        CameraPlacement {
+            camera: camera.handle,
+            bounds,
+            size_override: CameraSizeOverride::Set(Some((bounds.width, bounds.height))),
+        },
+        cx,
+    );
 }
 
-/// `setOriginalCameraBounds(null)`: the pick was committed -- a click that
-/// locks the highlight (`:609-617`), a recording start or a screenshot start
-/// (`:687-690`) -- so the bubble stays where the picker put it and no dismissal
-/// puts it back.
 pub fn release_camera_park(cx: &mut App) {
     if !cx.has_global::<AppWindows>() {
         return;
     }
     let park = &mut cx.global_mut::<AppWindows>().camera_park;
-    park.origin = None;
+    park.original = None;
     park.released = true;
 }
 
-/// `onCleanup` (`:558-563`): the picker went away without a commit, so the
-/// bubble goes back to where it was.
 fn revert_camera_park(cx: &mut App) {
-    let park = std::mem::take(&mut cx.global_mut::<AppWindows>().camera_park);
-    let Some(origin) = park.origin else {
+    let park = &mut cx.global_mut::<AppWindows>().camera_park;
+    let original = park.original;
+    let mode = park.mode;
+    if !park.released {
+        park.invalidate_pending();
+    }
+    park.reset_selection();
+    let Some(original) = original else {
         return;
     };
-    let Some(camera) = camera_frame(cx) else {
+    let Some(camera) = camera_snapshot(cx).filter(|camera| camera.handle == original.handle) else {
         return;
     };
-    tracing::info!(x = origin.0, y = origin.1, "restoring the camera bubble");
-    move_camera_window(camera, origin, cx);
+    let (bounds, size_override) = if mode == Some(TargetType::Area) {
+        (
+            original.bounds,
+            CameraSizeOverride::Set(original.picker_size),
+        )
+    } else {
+        (
+            AreaRect {
+                x: original.bounds.x,
+                y: original.bounds.y,
+                ..camera.bounds
+            },
+            CameraSizeOverride::Preserve,
+        )
+    };
+    queue_camera_placement(
+        CameraPlacement {
+            camera: original.handle,
+            bounds,
+            size_override,
+        },
+        cx,
+    );
 }
 
 /// Hand a camera frame to the preview window. Returns false when no window is
@@ -3456,9 +3934,35 @@ pub fn deliver_camera_frame(
     let Some(handle) = cx.global::<AppWindows>().camera else {
         return false;
     };
-    handle
+    #[cfg(not(target_os = "macos"))]
+    let previous = camera_preview_is_inline(cx)
+        .then(|| {
+            handle
+                .update(cx, |view, _, cx| view.preview_image(cx))
+                .ok()
+                .flatten()
+        })
+        .flatten();
+    let delivered = handle
         .update(cx, |view, window, cx| view.frame_arrived(frame, window, cx))
-        .is_ok()
+        .is_ok();
+    #[cfg(not(target_os = "macos"))]
+    if let Some(previous) = previous {
+        evict_overlay_camera_image(previous, cx);
+    }
+    delivered
+}
+
+#[cfg(not(target_os = "macos"))]
+fn evict_overlay_camera_image(image: Arc<gpui::RenderImage>, cx: &mut App) {
+    let overlays = cx.global::<AppWindows>().overlays.clone();
+    for (_, overlay) in overlays {
+        overlay
+            .update(cx, |_, window, _| {
+                let _ = window.drop_image(image.clone());
+            })
+            .ok();
+    }
 }
 
 // -- Editor -----------------------------------------------------------------
@@ -4277,6 +4781,20 @@ pub fn editor_closed(project_path: &Path, cx: &mut App) {
         }
     }
 
+    let session = RecordingSession::global(cx);
+    if session.read(cx).phase == Phase::Idle
+        && session
+            .read(cx)
+            .editor_recording_target()
+            .is_some_and(|path| editor_key(&path) == key)
+    {
+        if clean_capture_owned(cx) {
+            cancel_clean_capture(cx);
+        } else {
+            abort_editor_recording_flow(cx);
+        }
+    }
+
     let windows = cx.global::<AppWindows>();
     let editors_left = windows.editors.len() + windows.screenshot_editors.len();
     let settings_open = windows.settings.is_some();
@@ -4438,6 +4956,15 @@ fn set_editor_content_protection(project_path: &Path, hidden: bool, cx: &mut App
 ///   there the window merely stays minimized, here it was hidden outright and
 ///   leaving it hidden would leave the app with no window at all.
 fn editor_recording_finished(editor_path: PathBuf, recording: Option<PathBuf>, cx: &mut App) {
+    cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
+    cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _, cx| {
+        view.cancel_deep_link_start();
+        view.clear_target(cx);
+        cx.notify();
+    })
+    .ok();
     set_editor_content_protection(&editor_path, false, cx);
 
     let Some(handle) = editor_window_handle(&editor_path, cx) else {
@@ -4468,13 +4995,37 @@ fn editor_recording_finished(editor_path: PathBuf, recording: Option<PathBuf>, c
 /// would stay hidden forever, since no phase transition is coming.
 pub fn abort_editor_recording_flow(cx: &mut App) {
     let session = RecordingSession::global(cx);
-    let Some(editor_path) = session.update(cx, |session, _| session.take_editor_recording_target())
-    else {
+    if session.read(cx).phase != Phase::Idle || session.read(cx).editor_recording_target().is_none()
+    {
+        return;
+    }
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _, _| view.cancel_deep_link_start())
+        .ok();
+    let Some(editor_path) = session.update(cx, |session, cx| {
+        let target = session.take_editor_recording_target();
+        cx.notify();
+        target
+    }) else {
         return;
     };
+    close_target_overlays(cx);
     cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
+    cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
+    let main = cx.global::<AppWindows>().main;
+    main.update(cx, |view, _, cx| {
+        view.cancel_deep_link_start();
+        view.clear_target(cx);
+        cx.notify();
+    })
+    .ok();
+    hide_main_window(cx);
     tracing::info!(path = %editor_path.display(), "editor recording flow aborted before start");
-    if editor_window_handle(&editor_path, cx).is_some() {
+    if let Some(handle) = editor_window_handle(&editor_path, cx) {
+        hide_main_and_park_camera_preview(cx);
+        handle
+            .update(cx, |view, _, cx| view.editor_picker_dismissed(cx))
+            .ok();
         reveal_editor_window(&editor_path, cx);
     } else {
         show_main_window(cx);
@@ -5772,6 +6323,10 @@ mod tests {
             camera_park_position((0.4, 0.), window, (320.3, 240.)),
             Some((564., 394.))
         );
+        assert_eq!(
+            camera_park_position((-1920.5, 0.), window, (320., 240.)),
+            Some((-1356., 394.))
+        );
 
         // Exactly one padding on each side still fits; one point more does not.
         let snug = AreaRect {
@@ -5786,5 +6341,129 @@ mod tests {
         );
         assert_eq!(camera_park_position((0., 0.), snug, (321., 240.)), None);
         assert_eq!(camera_park_position((0., 0.), snug, (320., 241.)), None);
+    }
+
+    #[test]
+    fn area_camera_keeps_toolbar_height_and_restores_the_original_scale() {
+        let crop = AreaRect {
+            x: 100.,
+            y: 50.,
+            width: 800.,
+            height: 600.,
+        };
+        assert_eq!(
+            camera_area_bounds((0., 0.), crop, (320., 376.)),
+            Some(AreaRect {
+                x: 640.,
+                y: 334.,
+                width: 244.,
+                height: 300.,
+            })
+        );
+        assert_eq!(
+            camera_area_bounds(
+                (0., 0.),
+                AreaRect {
+                    width: 1200.,
+                    height: 1000.,
+                    ..crop
+                },
+                (320., 376.)
+            ),
+            Some(AreaRect {
+                x: 964.,
+                y: 658.,
+                width: 320.,
+                height: 376.,
+            })
+        );
+    }
+
+    #[test]
+    fn area_camera_preserves_landscape_and_portrait_content_aspects() {
+        let crop = AreaRect {
+            x: 100.,
+            y: 50.,
+            width: 600.,
+            height: 400.,
+        };
+        assert_eq!(
+            camera_area_bounds((0., 0.), crop, (320., 236.)),
+            Some(AreaRect {
+                x: 540.,
+                y: 297.,
+                width: 144.,
+                height: 137.,
+            })
+        );
+        assert_eq!(
+            camera_area_bounds((0., 0.), crop, (180., 376.)),
+            Some(AreaRect {
+                x: 603.,
+                y: 234.,
+                width: 81.,
+                height: 200.,
+            })
+        );
+    }
+
+    #[test]
+    fn area_camera_uses_the_minimum_size_and_requires_room_beyond_both_insets() {
+        let crop = AreaRect {
+            x: 0.,
+            y: 0.,
+            width: 200.,
+            height: 200.,
+        };
+        assert_eq!(
+            camera_area_bounds((0., 0.), crop, (320., 376.)),
+            Some(AreaRect {
+                x: 84.,
+                y: 28.,
+                width: 100.,
+                height: 156.,
+            })
+        );
+        assert_eq!(
+            camera_area_bounds(
+                (0., 0.),
+                AreaRect {
+                    width: 132.,
+                    ..crop
+                },
+                (320., 376.)
+            ),
+            None
+        );
+        assert_eq!(
+            camera_area_bounds(
+                (0., 0.),
+                AreaRect {
+                    height: 188.,
+                    ..crop
+                },
+                (320., 376.)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn area_camera_position_preserves_the_display_origin() {
+        let crop = AreaRect {
+            x: 100.,
+            y: 50.,
+            width: 800.,
+            height: 600.,
+        };
+        assert_eq!(
+            camera_area_bounds((-1920.5, -1080.25), crop, (320., 376.)),
+            Some(AreaRect {
+                x: -1280.5,
+                y: -746.25,
+                width: 244.,
+                height: 300.,
+            })
+        );
     }
 }

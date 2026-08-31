@@ -427,7 +427,13 @@ impl DeepLinkAction {
                     app_windows::clean_capture_owned(cx),
                     cx,
                     app_windows::cancel_clean_capture,
-                    |cx| session.update(cx, |session, cx| session.stop(cx)),
+                    |cx| {
+                        if session.read(cx).phase == crate::session::Phase::Idle {
+                            app_windows::abort_editor_recording_flow(cx);
+                        } else {
+                            session.update(cx, |session, cx| session.stop(cx));
+                        }
+                    },
                 );
                 Ok(())
             }
