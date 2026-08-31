@@ -690,6 +690,11 @@ fn reveal_now_with_options(
         return Ok(false);
     }
     let Some(state) = app.try_state::<State>() else {
+        #[cfg(target_os = "macos")]
+        if window.label() == CapWindowId::Main.label() {
+            crate::platform::constrain_main_window_to_visible_frame(&window.as_ref().window())
+                .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
+        }
         window.show()?;
         return Ok(true);
     };
@@ -714,6 +719,11 @@ fn reveal_now_with_options(
     // Mapping runs on the UI thread; a new capture must acknowledge its queued hide
     // before starting. Do not retain this mutex across synchronous GTK callbacks.
     drop(inner);
+    #[cfg(target_os = "macos")]
+    if window.label() == CapWindowId::Main.label() {
+        crate::platform::constrain_main_window_to_visible_frame(&window.as_ref().window())
+            .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
+    }
     set_native_visibility(window, true)
         .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
     if unminimize {

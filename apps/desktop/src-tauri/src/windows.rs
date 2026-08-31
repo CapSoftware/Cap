@@ -1510,16 +1510,9 @@ impl ShowCapWindow {
                         move || {
                             let _panel_activation_guard = panel_activation_guard;
                             use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                            use tauri_nspanel::panel_delegate;
                             use crate::panel_manager::try_to_panel;
 
-                            let delegate = panel_delegate!(MainPanelDelegate {
-                                window_did_become_key,
-                                window_did_resign_key
-                            });
-
-                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
-
+                            // Tao's delegate carries the native events from queued AppKit resizes.
                             let panel = match try_to_panel(&window) {
                                 Ok(p) => p,
                                 Err(e) => {
@@ -1534,9 +1527,18 @@ impl ShowCapWindow {
                                     | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
                             );
 
-                            panel.set_delegate(delegate);
-
                             panel.set_level(MAIN_PANEL_LEVEL);
+
+                            let resized_window = window.clone();
+                            window.on_window_event(move |event| {
+                                if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. })
+                                    && let Err(error) = crate::platform::constrain_main_window_to_visible_frame(
+                                        &resized_window.as_ref().window(),
+                                    )
+                                {
+                                    warn!(%error, "Failed to fit resized Main window to its visible screen area");
+                                }
+                            });
 
                             let _ = window.set_position(main_position);
 
