@@ -6,6 +6,22 @@
  * Video metadata structure
  */
 export interface VideoMetadata {
+	desktopRecordingUpload?: {
+		version: 1;
+		artifact:
+			| { kind: "segments"; manifestSha256: string }
+			| {
+					kind: "mp4";
+					fileSize: number;
+					duration: number;
+					objectIdentity: string;
+			  };
+		fileSize: number;
+		duration: number;
+		hasAudio: boolean;
+		fullDecode: true;
+		objectIdentity: string;
+	};
 	/**
 	 * Custom created date that can be edited by the user
 	 * This overrides the display of the actual createdAt timestamp

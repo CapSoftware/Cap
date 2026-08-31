@@ -3,8 +3,13 @@ import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
+import { createVerifiedRecordingReceipt } from "@/lib/desktop-recording-upload-status";
+import {
+	type RecordingVerification,
+	recordingVerificationSchema,
+} from "@/lib/desktop-recording-verification";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import {
 	queueVideoTranscription,
@@ -13,6 +18,12 @@ import {
 import { isEditSourceKey } from "@/lib/video-edit-processing";
 
 interface ProgressWebhookPayload {
+	manifestSha256?: string;
+	recordingVerification?: {
+		request: RecordingVerification;
+		fullDecode: boolean;
+		objectIdentity?: string;
+	};
 	jobId: string;
 	videoId: string;
 	phase:
@@ -101,6 +112,30 @@ export async function POST(request: NextRequest) {
 		const dbPhase = mapPhaseToDbPhase(payload.phase);
 
 		if (dbPhase === "complete") {
+			const [currentVideo] = await db()
+				.select()
+				.from(videos)
+				.where(eq(videos.id, payload.videoId as Video.VideoId));
+			const proof = payload.recordingVerification;
+			const receipt = proof
+				? currentVideo && payload.metadata
+					? await createVerifiedRecordingReceipt(
+							currentVideo,
+							recordingVerificationSchema.parse(proof.request),
+							payload.metadata,
+							proof.fullDecode,
+							proof.objectIdentity,
+						)
+					: null
+				: undefined;
+			if (receipt === null) {
+				return NextResponse.json(
+					{
+						error: "Recording completion is missing required verification data",
+					},
+					{ status: 503 },
+				);
+			}
 			if (payload.metadata) {
 				const duration = getValidDuration(payload.metadata.duration);
 				await db()
@@ -114,19 +149,22 @@ export async function POST(request: NextRequest) {
 					.where(eq(videos.id, payload.videoId as Video.VideoId));
 			}
 
-			const [currentVideo] = await db()
-				.select()
-				.from(videos)
-				.where(eq(videos.id, payload.videoId as Video.VideoId));
 			const [currentUpload] = await db()
 				.select({ rawFileKey: videoUploads.rawFileKey })
 				.from(videoUploads)
 				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
 
-			if (currentVideo?.source?.type === "desktopSegments") {
+			if (currentVideo?.source?.type === "desktopSegments" || receipt) {
 				await db()
 					.update(videos)
-					.set({ source: { type: "desktopMP4" as const } })
+					.set({
+						source: { type: "desktopMP4" as const },
+						...(receipt
+							? {
+									metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.desktopRecordingUpload', JSON_OBJECT('version', ${receipt.version}, 'artifact', JSON_EXTRACT(${JSON.stringify(receipt.artifact)}, '$'), 'fileSize', ${receipt.fileSize}, 'duration', ${receipt.duration}, 'hasAudio', JSON_EXTRACT(${JSON.stringify(receipt.hasAudio)}, '$'), 'fullDecode', JSON_EXTRACT('true', '$'), 'objectIdentity', ${receipt.objectIdentity}))`,
+								}
+							: {}),
+					})
 					.where(eq(videos.id, payload.videoId as Video.VideoId));
 			}
 

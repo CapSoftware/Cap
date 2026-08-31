@@ -4,6 +4,7 @@ import type { User, Video } from "@cap/web-domain";
 import { and, eq, notInArray } from "drizzle-orm";
 import { start } from "workflow/api";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import type { RecordingVerification } from "@/lib/desktop-recording-verification";
 import { transcribeVideo } from "@/lib/transcribe";
 import { finalizeDesktopRecordingWorkflow } from "@/workflows/finalize-desktop-recording";
 
@@ -70,16 +71,22 @@ async function queueEarlySegmentsTranscription({
 export async function queueDesktopSegmentsFinalization({
 	videoId,
 	userId,
+	verification,
 }: {
 	videoId: Video.VideoId;
 	userId: User.UserId;
+	verification?: RecordingVerification;
 }): Promise<DesktopSegmentsFinalizationStatus> {
+	const processingMessage =
+		verification?.artifact.kind === "mp4"
+			? "Verifying uploaded recording..."
+			: PROCESSING_MESSAGE;
 	const result = await db()
 		.update(videoUploads)
 		.set({
 			phase: "processing",
 			processingProgress: 0,
-			processingMessage: PROCESSING_MESSAGE,
+			processingMessage,
 			processingError: null,
 			updatedAt: new Date(),
 		})
@@ -105,7 +112,7 @@ export async function queueDesktopSegmentsFinalization({
 				videoId,
 				phase: "processing",
 				processingProgress: 0,
-				processingMessage: PROCESSING_MESSAGE,
+				processingMessage,
 			});
 		} catch {
 			return "already-processing";
@@ -117,20 +124,22 @@ export async function queueDesktopSegmentsFinalization({
 			{
 				videoId,
 				userId,
+				verification,
 			},
 		]);
 		// The segments are fully uploaded at this point, so transcription can
 		// start right away from the segment audio instead of waiting for the mux
 		// into result.mp4. Failures here never block finalization: the workflow
 		// re-queues transcription after the mux exactly as before.
-		await queueEarlySegmentsTranscription({ videoId, userId }).catch(
-			(error) => {
-				console.warn(
-					`[queueDesktopSegmentsFinalization] Early transcription queue failed for ${videoId}`,
-					error,
-				);
-			},
-		);
+		if (verification?.artifact.kind !== "mp4")
+			await queueEarlySegmentsTranscription({ videoId, userId }).catch(
+				(error) => {
+					console.warn(
+						`[queueDesktopSegmentsFinalization] Early transcription queue failed for ${videoId}`,
+						error,
+					);
+				},
+			);
 		return "queued";
 	} catch (error) {
 		await db()
