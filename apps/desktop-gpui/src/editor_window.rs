@@ -1136,15 +1136,19 @@ impl PendingProjectSave {
     }
 
     pub fn flush(&mut self) {
-        let (Some(path), Some(config)) = (self.path.clone(), self.config.take()) else {
-            return;
-        };
-        match config.write(&path) {
-            Ok(()) => tracing::debug!(path = %path.display(), "project config written"),
-            Err(error) => {
-                tracing::error!(path = %path.display(), "failed to persist project config: {error}")
-            }
+        if let Err(error) = self.try_flush() {
+            tracing::error!(path = ?self.path, "failed to persist project config: {error}");
         }
+    }
+
+    pub fn try_flush(&mut self) -> std::io::Result<()> {
+        let (Some(path), Some(config)) = (&self.path, &self.config) else {
+            return Ok(());
+        };
+        config.write(path)?;
+        tracing::debug!(path = %path.display(), "project config written");
+        self.config = None;
+        Ok(())
     }
 }
 
@@ -1516,9 +1520,29 @@ impl EditorWindow {
         // `restore_main_windows_if_no_editors` (`lib.rs:5777-5792`). Deferred
         // out of the callback -- it fires with the App borrowed.
         let path = project_path.clone();
-        window.on_window_should_close(cx, move |_window, cx| {
+        let window_id = window.window_handle().window_id();
+        window.on_window_should_close(cx, move |window, cx| {
+            let blocked = window.root::<Self>().flatten().and_then(|editor| {
+                let editor = editor.read(cx);
+                if let Some(reason) = editor.busy_reason() {
+                    return Some(reason.to_string());
+                }
+                let saved = editor.pending_save.borrow_mut().try_flush();
+                saved.err().map(|error| {
+                    format!(
+                        "Could not save the recording. Keep the editor open and try again: {error}"
+                    )
+                })
+            });
+            if let Some(message) = blocked {
+                cx.spawn(async move |_| {
+                    crate::platform::alert_dialog("Recording retained", &message);
+                })
+                .detach();
+                return false;
+            }
             let path = path.clone();
-            cx.defer(move |cx| crate::app_windows::editor_closed(&path, cx));
+            cx.defer(move |cx| crate::app_windows::editor_closed(&path, window_id, cx));
             true
         });
 
@@ -5448,41 +5472,49 @@ impl EditorWindow {
     fn delete_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_selection(None, cx);
         let path = self.project_path.clone();
-        cx.spawn_in(window, async move |_this, cx| {
-            let confirmed = crate::platform::confirm_dialog(
-                "Cap",
-                "Are you sure you want to delete this recording?",
-                "Yes",
-                "No",
-                false,
-            );
-            if !confirmed {
-                return;
-            }
-            _this
-                .update_in(cx, |_this, window, _cx| {
-                    window.remove_window();
-                })
-                .ok();
-            cx.background_executor()
-                .timer(Duration::from_millis(20))
-                .await;
-            let deleted = cx
-                .background_executor()
-                .spawn({
-                    let path = path.clone();
-                    async move { crate::library::delete_recording_directory(&path) }
-                })
-                .await;
-            if let Err(error) = deleted {
-                tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
-                return;
-            }
-            let _ = cx.update(|_window, cx| {
-                crate::app_windows::refresh_library_after_delete(cx);
-            });
-        })
-        .detach();
+        let handle = window.window_handle().downcast::<Self>();
+        if let Some(handle) = handle {
+            cx.defer(move |cx| crate::app_windows::request_editor_deletion(path, handle, cx));
+        }
+    }
+
+    pub(crate) fn busy_reason(&self) -> Option<&'static str> {
+        if self
+            .export
+            .as_ref()
+            .is_some_and(|export| export.phase.is_busy())
+        {
+            Some(
+                "Wait for the export or its cancellation to finish before closing or deleting this recording.",
+            )
+        } else if self.clips.is_importing() {
+            Some("Wait for the clip import to finish before closing or deleting this recording.")
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn deletion_blocked_reason(&self) -> Option<&'static str> {
+        self.busy_reason().or((self.instance.is_none()
+            && !matches!(self.state, LoadState::Failed(_)))
+        .then_some("Wait for the recording to finish opening before deleting it."))
+    }
+
+    pub(crate) fn prepare_for_deletion(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<Option<Arc<EditorInstance>>, String> {
+        if let Some(reason) = self.deletion_blocked_reason() {
+            return Err(reason.into());
+        }
+        self.pending_save
+            .borrow_mut()
+            .try_flush()
+            .map_err(|error| format!("Could not save the recording before deleting it: {error}"))?;
+        self.save_task = None;
+        self.stop_playback(cx);
+        self.export = None;
+        Ok(self.take_instance())
     }
 
     fn open_add_track(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -8912,6 +8944,36 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_predelete_save_keeps_the_pending_edit_for_retry() {
+        let root = std::env::temp_dir().join(format!(
+            "cap-editor-save-delete-{}",
+            crate::store::new_uuid_v4()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let source = root.join("source.mp4");
+        std::fs::write(&source, b"original recording").unwrap();
+        let config = ProjectConfiguration {
+            aspect_ratio: Some(cap_project::AspectRatio::Square),
+            ..Default::default()
+        };
+        let mut pending = PendingProjectSave {
+            path: Some(source.clone()),
+            config: Some(config),
+        };
+        assert!(pending.try_flush().is_err());
+        assert!(pending.config.is_some());
+        assert_eq!(std::fs::read(&source).unwrap(), b"original recording");
+        pending.path = Some(root.clone());
+        pending.try_flush().unwrap();
+        assert!(pending.config.is_none());
+        let saved: ProjectConfiguration =
+            serde_json::from_slice(&std::fs::read(root.join("project-config.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved.aspect_ratio, Some(cap_project::AspectRatio::Square));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn playback_shortcut_is_reserved_for_bare_space_outside_text_fields() {

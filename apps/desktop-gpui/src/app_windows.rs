@@ -8,6 +8,7 @@
 //! main window whenever the session comes back to rest.
 
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -59,6 +60,7 @@ pub struct AppWindows {
     /// (`windows.rs:3656-3659`). The Tauri app keys its label off an
     /// incrementing id; the path is the identity in both.
     pub editors: Vec<(PathBuf, WindowHandle<EditorWindow>)>,
+    deleting_editors: HashSet<PathBuf>,
     /// One screenshot editor per `.cap` bundle -- the gpui spelling of
     /// `ScreenshotEditorWindowIds`, keyed by the bundle directory.
     pub screenshot_editors: Vec<(PathBuf, WindowHandle<ScreenshotEditorWindow>)>,
@@ -337,6 +339,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         teleprompter: None,
         overlays: Vec::new(),
         editors: Vec::new(),
+        deleting_editors: HashSet::new(),
         screenshot_editors: Vec::new(),
         main_hidden_for_picker: false,
         editor_hidden_for_picker: None,
@@ -787,6 +790,23 @@ pub fn handle_dock_reopen(cx: &mut App) {
     if !cx.has_global::<AppWindows>() {
         return;
     }
+    let live = cx
+        .windows()
+        .into_iter()
+        .map(|handle| handle.window_id())
+        .collect::<HashSet<_>>();
+    {
+        let windows = cx.global_mut::<AppWindows>();
+        windows
+            .editors
+            .retain(|(_, handle)| live.contains(&handle.window_id()));
+        windows
+            .screenshot_editors
+            .retain(|(_, handle)| live.contains(&handle.window_id()));
+        windows.settings = windows
+            .settings
+            .filter(|handle| live.contains(&handle.window_id()));
+    }
     let windows = cx.global::<AppWindows>();
     if crate::store::should_show_onboarding() {
         if windows.onboarding.is_some() {
@@ -798,28 +818,59 @@ pub fn handle_dock_reopen(cx: &mut App) {
         cx.activate(true);
         return;
     }
-    let focus: Option<gpui::AnyWindowHandle> = windows
+    let candidates = windows
         .editors
-        .first()
-        .map(|(_, handle)| (*handle).into())
-        .or_else(|| windows.settings.map(Into::into));
+        .iter()
+        .map(|(_, handle)| gpui::AnyWindowHandle::from(*handle))
+        .chain(
+            windows
+                .screenshot_editors
+                .iter()
+                .map(|(_, handle)| (*handle).into()),
+        )
+        .chain(windows.settings.map(Into::into))
+        .collect::<Vec<_>>();
+    let focus = first_registered_reopen_target(candidates, &live);
     tracing::info!(focus_existing = focus.is_some(), "dock reopen");
     match focus {
         Some(handle) => {
-            let native = handle
-                .update(cx, |_, window, _| platform::native_window(window))
-                .ok()
-                .flatten();
-            cx.spawn(async move |_| {
-                if let Some(native) = &native {
-                    platform::show_native(native);
+            cx.defer(move |cx| {
+                if !cx
+                    .windows()
+                    .iter()
+                    .any(|current| current.window_id() == handle.window_id())
+                {
+                    handle_dock_reopen(cx);
+                    return;
                 }
-            })
-            .detach();
+                let native = match handle.update(cx, |_, window, _| platform::native_window(window))
+                {
+                    Ok(native) => native,
+                    Err(error) => {
+                        tracing::warn!(%error, "could not focus the registered editor window");
+                        return;
+                    }
+                };
+                cx.spawn(async move |_| {
+                    if let Some(native) = &native {
+                        platform::show_native(native);
+                    }
+                })
+                .detach();
+            });
         }
         None => show_main_window(cx),
     }
     cx.activate(true);
+}
+
+fn first_registered_reopen_target(
+    candidates: impl IntoIterator<Item = gpui::AnyWindowHandle>,
+    live: &HashSet<gpui::WindowId>,
+) -> Option<gpui::AnyWindowHandle> {
+    candidates
+        .into_iter()
+        .find(|candidate| live.contains(&candidate.window_id()))
 }
 
 /// Open the settings window on a page, and hide the main window.
@@ -2137,6 +2188,7 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
         teleprompter,
         overlays,
         editors,
+        deleting_editors: _,
         screenshot_editors,
         main_hidden_for_picker: _,
         editor_hidden_for_picker: _,
@@ -3992,6 +4044,10 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
         return;
     }
     let key = editor_key(&project_path);
+    if cx.global::<AppWindows>().deleting_editors.contains(&key) {
+        tracing::info!(path = %key.display(), "recording deletion is still settling; editor remains closed");
+        return;
+    }
 
     if cx
         .global::<AppWindows>()
@@ -4757,30 +4813,43 @@ fn reveal_main_after_editor_close(editors_left: usize, settings_open: bool, idle
 /// `restore_main_windows_if_no_editors` (`lib.rs:5777-5792`) -- so the main
 /// window comes back only once the last editor has closed, and never over an
 /// open Settings window ([`reveal_main_after_editor_close`]).
-pub fn editor_closed(project_path: &Path, cx: &mut App) {
+pub fn editor_closed(project_path: &Path, window_id: gpui::WindowId, cx: &mut App) {
     let key = editor_key(project_path);
-    let handle = {
-        let editors = &mut cx.global_mut::<AppWindows>().editors;
-        let index = editors.iter().position(|(path, _)| path == &key);
-        index.map(|index| editors.remove(index).1)
+    let Some(handle) =
+        take_editor_window(&mut cx.global_mut::<AppWindows>().editors, &key, window_id)
+    else {
+        return;
     };
 
-    if let Some(handle) = handle {
-        // `onCleanup(() => { clearTimeout(saveTimer); flushProjectConfig() })`
-        // (`ED/context.ts:1246-1252`): a `.cap` closed inside the 250ms save
-        // debounce still gets its last edit written.
-        if let Ok(pending) = handle.update(cx, |view, _window, _cx| view.pending_save()) {
-            pending.borrow_mut().flush();
-        }
-        let instance = handle
-            .update(cx, |view, _window, _cx| view.take_instance())
-            .ok()
-            .flatten();
-        if let Some(instance) = instance {
-            gpui_tokio::Tokio::spawn(cx, async move { instance.dispose().await }).detach();
-        }
+    // `onCleanup(() => { clearTimeout(saveTimer); flushProjectConfig() })`
+    // (`ED/context.ts:1246-1252`): a `.cap` closed inside the 250ms save
+    // debounce still gets its last edit written.
+    if let Ok(pending) = handle.update(cx, |view, _window, _cx| view.pending_save()) {
+        pending.borrow_mut().flush();
+    }
+    let instance = handle
+        .update(cx, |view, _window, _cx| view.take_instance())
+        .ok()
+        .flatten();
+    if let Some(instance) = instance {
+        gpui_tokio::Tokio::spawn(cx, async move { instance.dispose().await }).detach();
     }
 
+    restore_after_editor_close(&key, cx);
+}
+
+fn take_editor_window(
+    editors: &mut Vec<(PathBuf, WindowHandle<EditorWindow>)>,
+    key: &Path,
+    window_id: gpui::WindowId,
+) -> Option<WindowHandle<EditorWindow>> {
+    let index = editors
+        .iter()
+        .position(|(path, handle)| path == key && handle.window_id() == window_id)?;
+    Some(editors.remove(index).1)
+}
+
+fn restore_after_editor_close(key: &Path, cx: &mut App) {
     let session = RecordingSession::global(cx);
     if session.read(cx).phase == Phase::Idle
         && session
@@ -4814,6 +4883,147 @@ pub fn editor_closed(project_path: &Path, cx: &mut App) {
     }
 }
 
+fn editor_deletion_allowed(
+    project_path: &Path,
+    handle: WindowHandle<EditorWindow>,
+    cx: &App,
+) -> Result<(), String> {
+    if !crate::library::known_recordings_dirs().iter().any(|root| {
+        root.canonicalize()
+            .is_ok_and(|root| project_path != root && project_path.starts_with(root))
+    }) {
+        return Err(
+            "This recording is outside the recordings library. Its files were not changed.".into(),
+        );
+    }
+    let windows = cx.global::<AppWindows>();
+    if windows.deleting_editors.contains(project_path) {
+        return Err("This recording is already being deleted.".into());
+    }
+    if !windows
+        .editors
+        .iter()
+        .any(|(path, current)| path == project_path && *current == handle)
+    {
+        return Err(
+            "The editor changed while deletion was being confirmed. The recording was not deleted."
+                .into(),
+        );
+    }
+    let session = RecordingSession::global(cx);
+    if session.read(cx).phase != Phase::Idle
+        || session.read(cx).editor_recording_target().is_some()
+        || clean_capture_owned(cx)
+    {
+        return Err("Finish or cancel the recording before deleting this project.".into());
+    }
+    let editor = handle
+        .read(cx)
+        .map_err(|_| "The editor has already closed. The recording was not deleted.")?;
+    if let Some(reason) = editor.deletion_blocked_reason() {
+        return Err(reason.into());
+    }
+    Ok(())
+}
+
+pub(crate) fn request_editor_deletion(
+    project_path: PathBuf,
+    handle: WindowHandle<EditorWindow>,
+    cx: &mut App,
+) {
+    let key = editor_key(&project_path);
+    cx.spawn(async move |cx| {
+        if let Err(error) = cx.update(|cx| editor_deletion_allowed(&key, handle, cx)) {
+            platform::alert_dialog("Recording retained", &error);
+            return;
+        }
+        if !platform::confirm_dialog("Cap", "Are you sure you want to delete this recording?", "Yes", "No", false) {
+            return;
+        }
+        let prepared = cx.update(|cx| {
+            editor_deletion_allowed(&key, handle, cx)?;
+            let ownership = cap_recording::upload_resume::UploadLock::acquire(&key)
+                .map_err(|error| format!("This recording is still in use. Finish or cancel its upload and try again: {error}"))?;
+            let windows = cx.global_mut::<AppWindows>();
+            windows.deleting_editors.insert(key.clone());
+            windows.editors.retain(|(_, current)| *current != handle);
+            let result = handle.update(cx, |view, window, cx| {
+                let instance = view.prepare_for_deletion(cx)?;
+                window.remove_window();
+                Ok::<_, String>(instance)
+            });
+            match result {
+                Ok(Ok(instance)) => {
+                    restore_after_editor_close(&key, cx);
+                    Ok((instance, ownership))
+                }
+                Ok(Err(error)) => {
+                    let windows = cx.global_mut::<AppWindows>();
+                    windows.deleting_editors.remove(&key);
+                    windows.editors.push((key.clone(), handle));
+                    Err(error)
+                }
+                Err(error) => {
+                    cx.global_mut::<AppWindows>().deleting_editors.remove(&key);
+                    Err(format!("Could not close the editor: {error}"))
+                }
+            }
+        });
+        let (instance, ownership) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                platform::alert_dialog("Recording retained", &error);
+                return;
+            }
+        };
+        let deleting = key.clone();
+        let task = cx.update(|cx| gpui_tokio::Tokio::spawn(cx, async move {
+            delete_after_editor_cleanup(
+                async move {
+                    if let Some(instance) = instance {
+                        for segment in instance.segment_medias.iter() {
+                            for audio in [&segment.audio, &segment.system_audio] {
+                                if let Err(error) = audio.get().await {
+                                    tracing::debug!(%error, "audio reader settled with an error before deletion");
+                                }
+                            }
+                        }
+                        instance.dispose().await;
+                    }
+                    drop(ownership);
+                    Ok(())
+                },
+                crate::upload::queue::delete_recording(deleting),
+            ).await
+        }));
+        let notice = cx.background_executor().timer(std::time::Duration::from_secs(10));
+        futures_util::pin_mut!(task, notice);
+        let result = match futures_util::future::select(&mut task, &mut notice).await {
+            futures_util::future::Either::Left((result, _)) => result,
+            futures_util::future::Either::Right(_) => {
+                platform::alert_dialog("Deletion is still finishing", "Cap is waiting for recording cleanup to finish before completing this deletion.");
+                task.await
+            }
+        }.unwrap_or_else(|error| Err(format!("Recording deletion failed: {error}")));
+        cx.update(|cx| {
+            cx.global_mut::<AppWindows>().deleting_editors.remove(&key);
+            refresh_library_after_delete(cx);
+        });
+        if let Err(error) = result {
+            tracing::error!(path = %key.display(), %error, "recording deletion failed");
+            platform::alert_dialog("Could not delete recording", &error);
+        }
+    }).detach();
+}
+
+async fn delete_after_editor_cleanup(
+    cleanup: impl Future<Output = Result<(), String>>,
+    delete: impl Future<Output = Result<(), String>>,
+) -> Result<(), String> {
+    cleanup.await?;
+    delete.await
+}
+
 /// `addExistingRecordingToEditor` ends with `EditorInstances::remove(window)`
 /// and the sidebar reloads the webview (`ClipsSidebar.tsx:513-517`,
 /// `import.rs:1892`): the same bundle, re-read from disk. The native
@@ -4824,6 +5034,9 @@ pub fn editor_closed(project_path: &Path, cx: &mut App) {
 /// between.
 pub fn reload_editor(project_path: &Path, cx: &mut App) {
     let key = editor_key(project_path);
+    if cx.global::<AppWindows>().deleting_editors.contains(&key) {
+        return;
+    }
     let handle = {
         let editors = &mut cx.global_mut::<AppWindows>().editors;
         let index = editors.iter().position(|(path, _)| path == &key);
@@ -5414,6 +5627,96 @@ fn close_controls(session: &Entity<RecordingSession>, cx: &mut App) {
 mod tests {
     use super::*;
     use crate::store::{DEFAULT_EXCLUDED_WINDOW_TITLES, WindowExclusion, default_excluded_windows};
+
+    #[test]
+    fn dock_reopen_uses_registered_windows_and_falls_back_after_delete() {
+        let editor = WindowHandle::<EditorWindow>::new(1_u64.into());
+        let screenshot = WindowHandle::<ScreenshotEditorWindow>::new(2_u64.into());
+        let settings = WindowHandle::<SettingsWindow>::new(3_u64.into());
+        let candidates = [editor.into(), screenshot.into(), settings.into()];
+        let mut live = HashSet::from([editor.window_id(), settings.window_id()]);
+        assert_eq!(
+            first_registered_reopen_target(candidates, &live),
+            Some(editor.into())
+        );
+        live.remove(&editor.window_id());
+        assert_eq!(
+            first_registered_reopen_target(candidates, &live),
+            Some(settings.into())
+        );
+        live.clear();
+        assert_eq!(first_registered_reopen_target(candidates, &live), None);
+    }
+
+    #[test]
+    fn old_editor_close_preserves_a_reopened_window_for_the_same_project() {
+        let path = PathBuf::from("recording.cap");
+        let old = WindowHandle::<EditorWindow>::new(1_u64.into());
+        let current = WindowHandle::<EditorWindow>::new(2_u64.into());
+        let other = WindowHandle::<EditorWindow>::new(3_u64.into());
+        let mut editors = vec![(path.clone(), current), (PathBuf::from("other.cap"), other)];
+        assert_eq!(
+            take_editor_window(&mut editors, &path, old.window_id()),
+            None
+        );
+        assert_eq!(editors.len(), 2);
+        assert_eq!(
+            take_editor_window(&mut editors, &path, current.window_id()),
+            Some(current)
+        );
+        assert_eq!(editors, vec![(PathBuf::from("other.cap"), other)]);
+    }
+
+    struct DeleteFixture(PathBuf);
+
+    impl DeleteFixture {
+        fn new() -> Self {
+            let directory = std::env::temp_dir()
+                .join(format!("cap-editor-delete-{}", crate::store::new_uuid_v4()));
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::write(directory.join("source.mp4"), b"retained recording bytes").unwrap();
+            Self(directory)
+        }
+    }
+
+    impl Drop for DeleteFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn recording_files_are_not_deleted_before_editor_cleanup_finishes() {
+        let fixture = DeleteFixture::new();
+        let source = fixture.0.join("source.mp4");
+        let (complete, completed) = tokio::sync::oneshot::channel();
+        let deletion = delete_after_editor_cleanup(
+            async { completed.await.map_err(|error| error.to_string()) },
+            async { std::fs::remove_file(&source).map_err(|error| error.to_string()) },
+        );
+        tokio::pin!(deletion);
+        tokio::select! {
+            biased;
+            _ = &mut deletion => panic!("deletion ran before cleanup completed"),
+            _ = tokio::task::yield_now() => {}
+        }
+        assert_eq!(std::fs::read(&source).unwrap(), b"retained recording bytes");
+        complete.send(()).unwrap();
+        deletion.await.unwrap();
+        assert!(!source.exists());
+    }
+
+    #[tokio::test]
+    async fn failed_editor_cleanup_leaves_original_recording_bytes_untouched() {
+        let fixture = DeleteFixture::new();
+        let source = fixture.0.join("source.mp4");
+        let result = delete_after_editor_cleanup(async { Err("cleanup failed".into()) }, async {
+            std::fs::remove_file(&source).map_err(|error| error.to_string())
+        })
+        .await;
+        assert_eq!(result, Err("cleanup failed".into()));
+        assert_eq!(std::fs::read(source).unwrap(), b"retained recording bytes");
+    }
 
     #[cfg(target_os = "linux")]
     fn pending_clean_capture(mode: RecordingMode, wayland: bool) -> CleanCaptureUi {

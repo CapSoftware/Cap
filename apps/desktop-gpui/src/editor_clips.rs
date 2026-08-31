@@ -340,6 +340,12 @@ impl Default for ClipsState {
     }
 }
 
+impl ClipsState {
+    pub(crate) fn is_importing(&self) -> bool {
+        self.importing
+    }
+}
+
 impl Drop for ClipsState {
     fn drop(&mut self) {
         if let Some(cancelled) = &self.import_cancelled {

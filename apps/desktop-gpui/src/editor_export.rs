@@ -177,6 +177,7 @@ pub struct ExportUi {
     pub preview_error: Option<String>,
     pub preview_task: Option<gpui::Task<()>>,
     pub phase: ExportPhase,
+    close_requested: bool,
     pub rendered: u32,
     pub total_frames: u32,
     pub output_path: Option<PathBuf>,
@@ -227,6 +228,7 @@ impl ExportUi {
             preview_error: None,
             preview_task: None,
             phase: ExportPhase::Idle,
+            close_requested: false,
             rendered: 0,
             total_frames: 0,
             output_path: None,
@@ -337,8 +339,12 @@ impl EditorWindow {
     pub(crate) fn close_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(ui) = self.export.as_mut() {
             if ui.phase.is_busy() {
+                ui.close_requested = true;
                 ui.cancel.store(true, Ordering::Relaxed);
+                cx.notify();
+                return;
             }
+            ui.sign_in_cancel.store(true, Ordering::Relaxed);
             if let Some(image) = ui.preview.take() {
                 let _ = window.drop_image(image);
             }
@@ -346,6 +352,16 @@ impl EditorWindow {
         }
         self.export = None;
         cx.notify();
+    }
+
+    fn finish_requested_export_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .export
+            .as_ref()
+            .is_some_and(|ui| ui.close_requested && !ui.phase.is_busy())
+        {
+            self.close_export(window, cx);
+        }
     }
 
     fn copy_share_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -488,7 +504,7 @@ impl EditorWindow {
         let Some(ui) = self.export.as_mut() else {
             return;
         };
-        if ui.phase.is_busy() {
+        if ui.phase.is_busy() || ui.close_requested {
             return;
         }
         if ui.destination == ExportDestination::Link {
@@ -517,7 +533,7 @@ impl EditorWindow {
         let force = ui.force_ffmpeg;
         let project_path = self.project_path.clone();
         let project = self.project.clone();
-        ui.cancel.store(false, Ordering::Relaxed);
+        ui.cancel = Arc::new(AtomicBool::new(false));
         let cancel = ui.cancel.clone();
         ui.phase = if destination == ExportDestination::File {
             ExportPhase::ChoosingFile
@@ -550,6 +566,9 @@ impl EditorWindow {
                         }
                         cx.notify();
                     });
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.finish_requested_export_close(window, cx)
+                    });
                     return;
                 }
                 chosen
@@ -571,6 +590,9 @@ impl EditorWindow {
                 true
             });
             if !started.unwrap_or(false) {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.finish_requested_export_close(window, cx)
+                });
                 return;
             }
 
@@ -682,6 +704,9 @@ impl EditorWindow {
                     });
                 }
             }
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_requested_export_close(window, cx)
+            });
         }));
     }
 
@@ -762,7 +787,7 @@ impl EditorWindow {
         let Some(ui) = self.export.as_mut() else {
             return;
         };
-        if ui.phase.is_busy() {
+        if ui.phase.is_busy() || ui.close_requested {
             return;
         }
 
@@ -788,7 +813,7 @@ impl EditorWindow {
                 .first()
                 .map(|org| org.id.clone())
         });
-        ui.cancel.store(false, Ordering::Relaxed);
+        ui.cancel = Arc::new(AtomicBool::new(false));
         let cancel = ui.cancel.clone();
         ui.phase = ExportPhase::Starting;
         ui.error = None;
@@ -976,6 +1001,9 @@ impl EditorWindow {
                     show_upload_failure(&this, cx, "Export task failed", false);
                 }
             }
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_requested_export_close(window, cx)
+            });
         }));
     }
 
@@ -1882,7 +1910,7 @@ impl EditorWindow {
                         let Some(ui) = this.export.as_mut() else {
                             return;
                         };
-                        ui.cancel.store(true, Ordering::Relaxed);
+                        let cancel = ui.cancel.clone();
                         cx.spawn_in(window, async move |this, cx| {
                             let confirmed = platform::confirm_dialog(
                                 "Cancel export?",
@@ -1891,15 +1919,12 @@ impl EditorWindow {
                                 "Keep exporting",
                                 true,
                             );
-                            if confirmed {
-                                let _ = this.update(cx, |this, cx| {
-                                    if let Some(ui) = this.export.as_mut() {
-                                        ui.cancel.store(true, Ordering::Relaxed);
-                                        ui.phase = ExportPhase::Idle;
-                                    }
-                                    cx.notify();
-                                });
-                            }
+                            let _ = this.update(cx, |this, cx| {
+                                if let Some(ui) = this.export.as_mut() {
+                                    cancel_matching_export(&ui.cancel, &cancel, confirmed);
+                                }
+                                cx.notify();
+                            });
                         })
                         .detach();
                     })),
@@ -1986,6 +2011,12 @@ impl EditorWindow {
                     .on_click(cx.listener(|this, _, window, cx| this.close_export(window, cx))),
                 )
             })
+    }
+}
+
+fn cancel_matching_export(current: &Arc<AtomicBool>, requested: &Arc<AtomicBool>, confirmed: bool) {
+    if confirmed && Arc::ptr_eq(current, requested) {
+        current.store(true, Ordering::Relaxed);
     }
 }
 
@@ -2103,7 +2134,29 @@ async fn run_export(
 
 #[cfg(test)]
 mod tests {
-    use super::ExportPhase;
+    use super::{ExportPhase, cancel_matching_export};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    #[test]
+    fn declining_cancel_preserves_the_running_export() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        cancel_matching_export(&cancel, &cancel, false);
+        assert!(!cancel.load(Ordering::Relaxed));
+        cancel_matching_export(&cancel, &cancel, true);
+        assert!(cancel.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn late_confirmation_cannot_cancel_a_subsequent_export() {
+        let previous = Arc::new(AtomicBool::new(false));
+        let current = Arc::new(AtomicBool::new(false));
+        cancel_matching_export(&current, &previous, true);
+        assert!(!current.load(Ordering::Relaxed));
+        assert!(!previous.load(Ordering::Relaxed));
+    }
 
     #[test]
     fn choosing_a_file_blocks_duplicate_exports_without_showing_progress() {
