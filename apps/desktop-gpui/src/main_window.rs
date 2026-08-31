@@ -599,9 +599,18 @@ impl MainWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         crate::theme::bind_window(window, cx);
+        window.on_window_should_close(cx, |_, cx| {
+            cx.defer(app_windows::request_close_main);
+            false
+        });
         #[cfg(target_os = "windows")]
-        cx.observe_window_activation(window, |_, _, cx| cx.notify())
-            .detach();
+        cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() && !this.displays.is_empty() {
+                this.schedule_target_prewarm(window, cx);
+            }
+            cx.notify();
+        })
+        .detach();
         let theme = Theme::for_window(window, cx, true);
         let mut previous_phase = Phase::Idle;
         cx.observe_in(&session, window, move |this, session, window, cx| {
@@ -835,18 +844,21 @@ impl MainWindow {
 
     // -- Target thumbnails (`thumbnails/mod.rs` + the queries around it) -----
 
-    /// `scheduleTargetListPrewarm` (`new-main/index.tsx:1897-1965`): once,
-    /// shortly after the window is up, walk the cheap target lists and then
-    /// both thumbnail sweeps, sequentially, so the first time the user opens a
-    /// picker the cards are already warm.
-    ///
-    /// gpui has no `requestIdleCallback`, so this takes the source's fallback
-    /// branch verbatim -- a 250ms timer. Dropping `prewarm_task` is the
-    /// `cancelScheduledTargetListPrewarm` half; a recording starting is the
-    /// one thing that suppresses it, exactly as `if (isRecording()) return`
-    /// does.
+    fn target_prewarm_allowed(&self, window: &Window, cx: &Context<Self>) -> bool {
+        let visible = if cfg!(target_os = "macos") {
+            crate::platform::window_is_visible(window)
+        } else {
+            window.is_window_active()
+        };
+        self.session.read(cx).phase == Phase::Idle
+            && visible
+            && !crate::app_windows::onboarding_is_open(cx)
+            && crate::store::has_completed_startup()
+            && crate::store::has_completed_onboarding()
+    }
+
     fn schedule_target_prewarm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.session.read(cx).phase != Phase::Idle || !self.thumbnails.take_prewarm() {
+        if !self.target_prewarm_allowed(window, cx) || !self.thumbnails.take_prewarm() {
             return;
         }
 
@@ -859,9 +871,13 @@ impl MainWindow {
             // `prefetchQuery` calls, in that order. Each sweep re-lists, so the
             // separate cheap-list prefetch it opens with is already covered.
             for kind in [TargetType::Display, TargetType::Window] {
-                let Ok(sweep) =
-                    this.update_in(cx, |this, window, cx| this.start_capture(kind, window, cx))
-                else {
+                let Ok(sweep) = this.update_in(cx, |this, window, cx| {
+                    if this.target_prewarm_allowed(window, cx) {
+                        this.start_capture(kind, window, cx)
+                    } else {
+                        None
+                    }
+                }) else {
                     return;
                 };
                 if let Some(sweep) = sweep {
