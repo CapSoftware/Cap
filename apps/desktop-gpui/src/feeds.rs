@@ -14,10 +14,10 @@
 
 use std::time::{Duration, Instant};
 
-#[cfg(any(not(target_os = "macos"), test))]
 use std::sync::Arc;
 #[cfg(not(target_os = "macos"))]
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cap_recording::feeds::{
     camera::{self, CameraFeed},
@@ -29,6 +29,38 @@ use kameo::{Actor as _, actor::ActorRef};
 pub use cap_recording::feeds::camera::DeviceOrModelID;
 
 use crate::app_windows;
+
+#[cfg(target_os = "macos")]
+type PreviewCameraFrame = cap_recording::NativeCameraFrame;
+#[cfg(not(target_os = "macos"))]
+type PreviewCameraFrame = cap_recording::FFmpegVideoFrame;
+
+async fn attach_camera_preview_sender(
+    actor: &ActorRef<CameraFeed>,
+    sender: &flume::Sender<PreviewCameraFrame>,
+) -> Result<(), String> {
+    if sender.is_disconnected() {
+        return Err("Camera preview worker is unavailable".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    let result = actor.ask(camera::AddNativeSender(sender.clone())).await;
+    #[cfg(not(target_os = "macos"))]
+    let result = actor.ask(camera::AddSender(sender.clone())).await;
+    result.map_err(|error| error.to_string())
+}
+
+async fn camera_input_operation<T>(
+    gate: &tokio::sync::Mutex<()>,
+    current_epoch: &AtomicU64,
+    epoch: u64,
+    operation: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<Option<T>, String> {
+    let _operation = gate.lock().await;
+    if current_epoch.load(Ordering::Acquire) != epoch {
+        return Ok(None);
+    }
+    operation.await.map(Some)
+}
 
 /// How the pickers map dB to a 0..1 bar: `DeviceListPanel` in `index.tsx`
 /// (`DB_SCALE = 40`, inverted, square-rooted). 1 = silence, 0 = full scale --
@@ -554,6 +586,8 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
 
 pub struct Feeds {
     camera_actor: Option<ActorRef<CameraFeed>>,
+    camera_preview_sender: Option<flume::Sender<PreviewCameraFrame>>,
+    camera_input_gate: Arc<tokio::sync::Mutex<()>>,
     mic_actor: Option<ActorRef<MicrophoneFeed>>,
     /// Selected camera; `Some` while the preview window should exist.
     pub camera: Option<SelectedCamera>,
@@ -575,8 +609,7 @@ pub struct Feeds {
     camera_preview_blur: Arc<AtomicU8>,
     #[cfg(not(target_os = "macos"))]
     camera_preview_reset: Option<flume::Sender<CameraWorkerCommand>>,
-    #[cfg(target_os = "linux")]
-    camera_processing_epoch: Arc<std::sync::atomic::AtomicU64>,
+    camera_input_epoch: Arc<AtomicU64>,
     #[cfg(target_os = "linux")]
     camera_recording_active: Arc<AtomicBool>,
     #[cfg(target_os = "linux")]
@@ -601,6 +634,8 @@ impl Feeds {
     pub fn init(cx: &mut App) -> Entity<Self> {
         let feeds = cx.new(|_| Self {
             camera_actor: None,
+            camera_preview_sender: None,
+            camera_input_gate: Arc::new(tokio::sync::Mutex::new(())),
             mic_actor: None,
             camera: None,
             microphone: None,
@@ -617,8 +652,7 @@ impl Feeds {
             camera_preview_blur: Arc::new(AtomicU8::new(0)),
             #[cfg(not(target_os = "macos"))]
             camera_preview_reset: None,
-            #[cfg(target_os = "linux")]
-            camera_processing_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            camera_input_epoch: Arc::new(AtomicU64::new(0)),
             #[cfg(target_os = "linux")]
             camera_recording_active: Arc::new(AtomicBool::new(false)),
             #[cfg(target_os = "linux")]
@@ -653,7 +687,7 @@ impl Feeds {
             actor: self.camera_actor()?,
             selected: self.camera.as_ref()?.id.clone(),
             epoch: self.camera_epoch,
-            current_epoch: self.camera_processing_epoch.clone(),
+            current_epoch: self.camera_input_epoch.clone(),
             recording_active: self.camera_recording_active.clone(),
             next_generation: self.camera_recording_generation.clone(),
         })
@@ -690,8 +724,7 @@ impl Feeds {
             return;
         }
         self.camera_epoch += 1;
-        #[cfg(target_os = "linux")]
-        self.camera_processing_epoch
+        self.camera_input_epoch
             .store(self.camera_epoch, Ordering::Release);
         self.camera = selection.clone();
         self.camera_error = None;
@@ -701,14 +734,9 @@ impl Feeds {
             Some(selection) if !self.camera_preview_parked => {
                 self.start_camera_preview(selection, cx);
             }
-            Some(_) => {}
+            Some(_) => self.remove_camera_input(cx),
             None => {
-                if let Some(actor) = self.camera_actor.clone() {
-                    gpui_tokio::Tokio::spawn(cx, async move {
-                        let _ = actor.ask(camera::RemoveInput).await;
-                    })
-                    .detach();
-                }
+                self.remove_camera_input(cx);
                 cx.defer(app_windows::close_camera_window);
             }
         }
@@ -721,8 +749,7 @@ impl Feeds {
 
         self.camera_preview_parked = true;
         self.camera_epoch += 1;
-        #[cfg(target_os = "linux")]
-        self.camera_processing_epoch
+        self.camera_input_epoch
             .store(self.camera_epoch, Ordering::Release);
 
         #[cfg(not(target_os = "macos"))]
@@ -733,14 +760,7 @@ impl Feeds {
             }
         }
 
-        if let Some(actor) = self.camera_actor.clone() {
-            gpui_tokio::Tokio::spawn(cx, async move {
-                if let Err(error) = actor.ask(camera::RemoveInput).await {
-                    tracing::warn!("parking the camera preview: {error}");
-                }
-            })
-            .detach();
-        }
+        self.remove_camera_input(cx);
 
         tracing::info!("camera preview parked");
     }
@@ -755,8 +775,7 @@ impl Feeds {
         self.camera_preview_active.store(true, Ordering::Release);
         if let Some(selection) = self.camera.clone() {
             self.camera_epoch += 1;
-            #[cfg(target_os = "linux")]
-            self.camera_processing_epoch
+            self.camera_input_epoch
                 .store(self.camera_epoch, Ordering::Release);
             self.start_camera_preview(selection, cx);
             tracing::info!("camera preview resumed");
@@ -764,17 +783,31 @@ impl Feeds {
     }
 
     fn start_camera_preview(&mut self, selection: SelectedCamera, cx: &mut Context<Self>) {
+        self.camera_error = None;
         let epoch = self.camera_epoch;
         let actor = self.ensure_camera_actor(cx);
+        let sender = self.camera_preview_sender.clone();
+        let gate = self.camera_input_gate.clone();
+        let current_epoch = self.camera_input_epoch.clone();
         let set = gpui_tokio::Tokio::spawn(cx, async move {
-            let ready = actor
-                .ask(camera::SetInput {
-                    id: selection.id,
-                    settings: None,
-                })
-                .await
-                .map_err(|error| error.to_string())?;
-            ready.await.map_err(|error| error.to_string())
+            let ready = camera_input_operation(&gate, &current_epoch, epoch, async {
+                let sender = sender
+                    .as_ref()
+                    .ok_or_else(|| "Camera preview subscription is unavailable".to_string())?;
+                attach_camera_preview_sender(&actor, sender).await?;
+                actor
+                    .ask(camera::SetInput {
+                        id: selection.id,
+                        settings: None,
+                    })
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .await?;
+            if let Some(ready) = ready {
+                ready.await.map_err(|error| error.to_string())?;
+            }
+            Ok::<_, String>(())
         });
         cx.spawn(async move |this, cx| {
             let result = match set.await {
@@ -795,6 +828,28 @@ impl Feeds {
         })
         .detach();
         cx.defer(app_windows::open_camera_window);
+    }
+
+    fn remove_camera_input(&self, cx: &Context<Self>) {
+        let Some(actor) = self.camera_actor.clone() else {
+            return;
+        };
+        let gate = self.camera_input_gate.clone();
+        let current_epoch = self.camera_input_epoch.clone();
+        let epoch = self.camera_epoch;
+        gpui_tokio::Tokio::spawn(cx, async move {
+            if let Err(error) = camera_input_operation(&gate, &current_epoch, epoch, async {
+                actor
+                    .ask(camera::RemoveInput)
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .await
+            {
+                tracing::warn!("releasing the camera preview input: {error}");
+            }
+        })
+        .detach();
     }
 
     /// Select (or deselect) the microphone. The feed keeps running between
@@ -849,14 +904,7 @@ impl Feeds {
     /// frontend's `rawOptions` -- the pickers still show the device that was
     /// chosen -- so neither does this: only the hardware is released.
     pub fn release_inputs(&mut self, cx: &mut Context<Self>) {
-        if let Some(actor) = self.camera_actor.clone() {
-            gpui_tokio::Tokio::spawn(cx, async move {
-                if let Err(error) = actor.ask(camera::RemoveInput).await {
-                    tracing::warn!("releasing the camera feed: {error}");
-                }
-            })
-            .detach();
-        }
+        self.park_camera_preview(cx);
         if let Some(actor) = self.mic_actor.clone() {
             gpui_tokio::Tokio::spawn(cx, async move {
                 if let Err(error) = actor.ask(microphone::RemoveInput).await {
@@ -870,19 +918,23 @@ impl Feeds {
     }
 
     fn ensure_camera_actor(&mut self, cx: &mut Context<Self>) -> ActorRef<CameraFeed> {
-        if let Some(actor) = self.camera_actor.clone()
-            && actor.is_alive()
+        let actor = self.camera_actor.clone().filter(|actor| actor.is_alive());
+        if let Some(actor) = actor.as_ref()
+            && self
+                .camera_preview_sender
+                .as_ref()
+                .is_some_and(|sender| !sender.is_disconnected())
         {
-            return actor;
+            return actor.clone();
         }
 
         // kameo spawns onto the ambient tokio runtime; this method runs on
         // gpui's main thread, so enter the gpui_tokio runtime first or the
         // spawn panics (unwind across the objc frame aborts the process).
-        let actor = {
+        let actor = actor.unwrap_or_else(|| {
             let _runtime = gpui_tokio::Tokio::handle(cx).enter();
             CameraFeed::spawn(CameraFeed::default())
-        };
+        });
 
         // The preview channel: bounded(4) so a stalled UI drops frames instead
         // of ballooning; the pump drains on the main thread and hands each
@@ -890,15 +942,7 @@ impl Feeds {
         #[cfg(target_os = "macos")]
         let pump = {
             let (frame_tx, frame_rx) = flume::bounded::<cap_recording::NativeCameraFrame>(4);
-            {
-                let actor = actor.clone();
-                gpui_tokio::Tokio::spawn(cx, async move {
-                    if let Err(error) = actor.ask(camera::AddNativeSender(frame_tx)).await {
-                        tracing::error!("attaching camera preview sender: {error}");
-                    }
-                })
-                .detach();
-            }
+            self.camera_preview_sender = Some(frame_tx);
 
             cx.spawn(async move |_this, cx| {
                 while let Ok(frame) = frame_rx.recv_async().await {
@@ -910,6 +954,7 @@ impl Feeds {
         #[cfg(not(target_os = "macos"))]
         let pump = {
             let (frame_tx, frame_rx) = flume::bounded::<cap_recording::FFmpegVideoFrame>(4);
+            self.camera_preview_sender = Some(frame_tx);
             let (preview_tx, preview_rx) = flume::bounded(2);
             let (reset_tx, reset_rx) = flume::bounded(4);
             self.camera_preview_reset = Some(reset_tx);
@@ -930,16 +975,6 @@ impl Feeds {
                 })
             {
                 tracing::error!("starting camera preview worker: {error}");
-            }
-
-            {
-                let actor = actor.clone();
-                gpui_tokio::Tokio::spawn(cx, async move {
-                    if let Err(error) = actor.ask(camera::AddSender(frame_tx)).await {
-                        tracing::error!("attaching camera preview sender: {error}");
-                    }
-                })
-                .detach();
             }
 
             cx.spawn(async move |_this, cx| {
@@ -1158,6 +1193,134 @@ fn db_fs(samples: &MicrophoneSamples) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn camera_preview_subscription_survives_removal_and_reattaches_once() {
+        let actor = CameraFeed::spawn(CameraFeed::default());
+        let (sender, receiver) = flume::bounded(1);
+        attach_camera_preview_sender(&actor, &sender).await.unwrap();
+        assert_eq!(receiver.sender_count(), 2);
+
+        actor.ask(camera::RemoveInput).await.unwrap();
+        assert_eq!(receiver.sender_count(), 1);
+        assert!(!receiver.is_disconnected());
+
+        attach_camera_preview_sender(&actor, &sender).await.unwrap();
+        attach_camera_preview_sender(&actor, &sender).await.unwrap();
+        assert_eq!(receiver.sender_count(), 2);
+        drop(sender);
+        assert!(!receiver.is_disconnected());
+        actor.ask(camera::RemoveInput).await.unwrap();
+        assert!(receiver.is_disconnected());
+        actor.stop_gracefully().await.unwrap();
+        actor.wait_for_shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn camera_preview_reconnect_waits_for_started_removal() {
+        let actor = CameraFeed::spawn(CameraFeed::default());
+        let (sender, receiver) = flume::bounded(1);
+        attach_camera_preview_sender(&actor, &sender).await.unwrap();
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        let epoch = Arc::new(AtomicU64::new(1));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let removal = tokio::spawn({
+            let actor = actor.clone();
+            let gate = gate.clone();
+            let epoch = epoch.clone();
+            async move {
+                camera_input_operation(&gate, &epoch, 1, async {
+                    started_tx.send(()).unwrap();
+                    release_rx.await.unwrap();
+                    actor
+                        .ask(camera::RemoveInput)
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+                .await
+            }
+        });
+        started_rx.await.unwrap();
+        epoch.store(2, Ordering::Release);
+        let reconnect = camera_input_operation(
+            &gate,
+            &epoch,
+            2,
+            attach_camera_preview_sender(&actor, &sender),
+        );
+        tokio::pin!(reconnect);
+        assert!(futures_util::poll!(&mut reconnect).is_pending());
+        release_tx.send(()).unwrap();
+        assert_eq!(removal.await.unwrap().unwrap(), Some(()));
+        assert_eq!(reconnect.await.unwrap(), Some(()));
+        assert_eq!(receiver.sender_count(), 2);
+        actor.stop_gracefully().await.unwrap();
+        actor.wait_for_shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn camera_preview_stale_removal_cannot_erase_new_subscription() {
+        let actor = CameraFeed::spawn(CameraFeed::default());
+        let (sender, receiver) = flume::bounded(1);
+        let gate = tokio::sync::Mutex::new(());
+        let epoch = AtomicU64::new(2);
+        let stale_removal = camera_input_operation(&gate, &epoch, 1, async {
+            actor
+                .ask(camera::RemoveInput)
+                .await
+                .map_err(|error| error.to_string())
+        });
+        assert_eq!(
+            camera_input_operation(
+                &gate,
+                &epoch,
+                2,
+                attach_camera_preview_sender(&actor, &sender),
+            )
+            .await
+            .unwrap(),
+            Some(())
+        );
+        assert_eq!(stale_removal.await.unwrap(), None);
+        drop(sender);
+        assert!(!receiver.is_disconnected());
+        actor.stop_gracefully().await.unwrap();
+        actor.wait_for_shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn camera_preview_failed_attachment_releases_input_gate() {
+        let actor = CameraFeed::spawn(CameraFeed::default());
+        let (sender, receiver) = flume::bounded(1);
+        drop(receiver);
+        let gate = tokio::sync::Mutex::new(());
+        let epoch = AtomicU64::new(1);
+        let error = camera_input_operation(
+            &gate,
+            &epoch,
+            1,
+            attach_camera_preview_sender(&actor, &sender),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "Camera preview worker is unavailable");
+        let (sender, receiver) = flume::bounded(1);
+        assert_eq!(
+            camera_input_operation(
+                &gate,
+                &epoch,
+                1,
+                attach_camera_preview_sender(&actor, &sender),
+            )
+            .await
+            .unwrap(),
+            Some(())
+        );
+        assert_eq!(receiver.sender_count(), 2);
+        actor.stop_gracefully().await.unwrap();
+        actor.wait_for_shutdown().await;
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
