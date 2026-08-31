@@ -1874,6 +1874,21 @@ function RecordingControls(props: {
 	const devices = createDevicesQuery();
 	const [noMicrophoneWarningOpen, setNoMicrophoneWarningOpen] =
 		createSignal(false);
+	const [dontShowMicrophoneWarning, setDontShowMicrophoneWarning] =
+		createSignal(false);
+	const [confirmingWithoutMicrophone, setConfirmingWithoutMicrophone] =
+		createSignal(false);
+	let microphoneConfirmationRevision = 0;
+	let controlsDisposed = false;
+	onCleanup(() => {
+		controlsDisposed = true;
+		microphoneConfirmationRevision += 1;
+	});
+	const dismissMicrophoneWarning = () => {
+		microphoneConfirmationRevision += 1;
+		setConfirmingWithoutMicrophone(false);
+		setNoMicrophoneWarningOpen(false);
+	};
 	const cameras = createMemo(() => devices.data?.cameras ?? []);
 	const mics = createMemo(() => devices.data?.microphones ?? []);
 	const permissions = createMemo(() => devices.data?.permissions);
@@ -1914,6 +1929,27 @@ function RecordingControls(props: {
 		if (!rawOptions.micName) return null;
 		return mics().find((name) => name === rawOptions.micName) ?? null;
 	});
+	const microphoneConfirmationContext = createMemo(() =>
+		JSON.stringify({
+			target: props.target,
+			mode: rawOptions.mode,
+			microphone: rawOptions.micName,
+			selectedMicrophone: selectedMicName(),
+			camera: rawOptions.cameraID,
+			cameraAvailable: selectedCamera() !== null,
+			systemAudio: rawOptions.captureSystemAudio,
+			targetModeSource: rawOptions.targetModeSource,
+			organizationId: rawOptions.organizationId,
+		}),
+	);
+	let previousConfirmationContext = microphoneConfirmationContext();
+	createEffect(() => {
+		const context = microphoneConfirmationContext();
+		if (context !== previousConfirmationContext) {
+			previousConfirmationContext = context;
+			dismissMicrophoneWarning();
+		}
+	});
 
 	createEffect(() => {
 		if (
@@ -1936,6 +1972,7 @@ function RecordingControls(props: {
 	const startDisabled = () => !!props.disabled || startLoading();
 
 	const startRecording = async (confirmedWithoutMicrophone = false) => {
+		if (confirmingWithoutMicrophone() && !confirmedWithoutMicrophone) return;
 		if (rawOptions.mode === "instant" && !auth.data) {
 			emit("start-sign-in");
 			return;
@@ -2055,6 +2092,45 @@ function RecordingControls(props: {
 			});
 	};
 
+	const confirmWithoutMicrophone = async () => {
+		if (startDisabled() || confirmingWithoutMicrophone()) return;
+		const revision = ++microphoneConfirmationRevision;
+		const context = microphoneConfirmationContext();
+		setConfirmingWithoutMicrophone(true);
+		if (dontShowMicrophoneWarning()) {
+			try {
+				await recordingStartSafetyStore.set({
+					confirmBeforeRecordingWithoutMicrophone: false,
+				});
+			} catch {
+				if (controlsDisposed || revision !== microphoneConfirmationRevision)
+					return;
+				setConfirmingWithoutMicrophone(false);
+				toast.error(
+					"Could not save your preference. Try again or leave the box unchecked.",
+				);
+				return;
+			}
+		}
+		if (
+			controlsDisposed ||
+			revision !== microphoneConfirmationRevision ||
+			context !== microphoneConfirmationContext()
+		) {
+			if (!controlsDisposed && revision === microphoneConfirmationRevision) {
+				dismissMicrophoneWarning();
+			}
+			return;
+		}
+		try {
+			await startRecording(true);
+		} finally {
+			if (!controlsDisposed && revision === microphoneConfirmationRevision) {
+				setConfirmingWithoutMicrophone(false);
+			}
+		}
+	};
+
 	const menuModes = async () =>
 		await Menu.new({
 			items: [
@@ -2157,7 +2233,10 @@ function RecordingControls(props: {
 						</div>
 						<Popover
 							open={noMicrophoneWarningOpen()}
-							onOpenChange={setNoMicrophoneWarningOpen}
+							onOpenChange={(open) => {
+								if (open) setNoMicrophoneWarningOpen(true);
+								else dismissMicrophoneWarning();
+							}}
 							placement="bottom"
 							gutter={8}
 						>
@@ -2224,6 +2303,19 @@ function RecordingControls(props: {
 											</p>
 										</div>
 									</div>
+									<label class="mt-3 flex cursor-pointer items-center gap-2 text-xs text-gray-11">
+										<input
+											type="checkbox"
+											class="size-3.5 accent-blue-9"
+											checked={dontShowMicrophoneWarning()}
+											onChange={(event) =>
+												setDontShowMicrophoneWarning(
+													event.currentTarget.checked,
+												)
+											}
+										/>
+										Don't show again
+									</label>
 									<div class="flex gap-2 justify-end mt-3">
 										<Popover.CloseButton class="px-3 h-8 text-xs font-medium rounded-lg border border-gray-4 bg-gray-2 text-gray-12 hover:bg-gray-3">
 											Go back
@@ -2231,7 +2323,10 @@ function RecordingControls(props: {
 										<button
 											type="button"
 											class="px-3 h-8 text-xs font-medium text-white rounded-lg bg-blue-9 hover:bg-blue-10"
-											onClick={() => void startRecording(true)}
+											onClick={() => void confirmWithoutMicrophone()}
+											disabled={
+												startDisabled() || confirmingWithoutMicrophone()
+											}
 										>
 											Record without microphone
 										</button>
