@@ -1035,7 +1035,18 @@ index 993b2ff3fadc..e8916c11025f 100644
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
-@@ -1797 +1797,16 @@
+@@ -814,3 +814,2 @@
+-                if atom == state.atoms.WM_DELETE_WINDOW && window.should_close() {
+-                    // window "x" button clicked by user
+-                    // Rest of the close logic is handled in drop_window()
++                if atom == state.atoms.WM_DELETE_WINDOW {
++                    // Closing can flush app effects that open another window.
+@@ -818 +817,3 @@
+-                    window.close();
++                    if window.should_close() {
++                        window.close();
++                    }
+@@ -1797 +1798,16 @@
 -        event_loop.run(None, &mut self.clone(), |_| {}).log_err();
 +        let xcb_connection = self.0.borrow().xcb_connection.clone();
 +        let loop_signal = event_loop.get_signal();
@@ -1053,3 +1064,23 @@ diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/l
 +                }
 +            })
 +            .log_err();
+diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
+--- a/crates/gpui_linux/src/linux/x11/window.rs
++++ b/crates/gpui_linux/src/linux/x11/window.rs
+@@ -1013,2 +1013,2 @@
+-        let mut cb = self.callbacks.borrow_mut();
+-        if let Some(mut should_close) = cb.should_close.take() {
++        let should_close = self.callbacks.borrow_mut().should_close.take();
++        if let Some(mut should_close) = should_close {
+@@ -1016 +1016,5 @@
+-            cb.should_close = Some(should_close);
++            let mut callbacks = self.callbacks.borrow_mut();
++            if callbacks.should_close.is_none() {
++                callbacks.should_close = Some(should_close);
++            }
++            drop(callbacks);
+@@ -1131,2 +1135,2 @@
+-        let mut callbacks = self.callbacks.borrow_mut();
+-        if let Some(fun) = callbacks.close.take() {
++        let close = self.callbacks.borrow_mut().close.take();
++        if let Some(fun) = close {
