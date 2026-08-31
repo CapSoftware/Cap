@@ -8971,7 +8971,10 @@ mod tests {
         let saved: ProjectConfiguration =
             serde_json::from_slice(&std::fs::read(root.join("project-config.json")).unwrap())
                 .unwrap();
-        assert_eq!(saved.aspect_ratio, Some(cap_project::AspectRatio::Square));
+        assert!(matches!(
+            saved.aspect_ratio,
+            Some(cap_project::AspectRatio::Square)
+        ));
         std::fs::remove_dir_all(root).unwrap();
     }
 
