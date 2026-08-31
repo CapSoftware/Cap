@@ -306,6 +306,7 @@ fn main() {
         #[cfg(target_os = "linux")]
         single_instance::init_linux_reopen(cx);
         updates::schedule_startup_check(cx);
+        upload::queue::init(cx);
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both
         // reach into the window registry, so they come after it -- and the menu

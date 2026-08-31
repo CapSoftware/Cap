@@ -695,10 +695,8 @@ impl RecordingSession {
         #[cfg(target_os = "linux")]
         let defer_share_until_success =
             crate::app_windows::clean_capture_active(cx) || active.instant_lifecycle().is_some();
-        #[cfg(windows)]
+        #[cfg(not(target_os = "linux"))]
         let defer_share_until_success = true;
-        #[cfg(not(any(target_os = "linux", windows)))]
-        let defer_share_until_success = false;
         if let Some(link) = &instant_share_url
             && !low_storage
             && !recording_failed

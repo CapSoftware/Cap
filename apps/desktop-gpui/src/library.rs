@@ -275,6 +275,7 @@ pub struct RecordingItem {
     pub path: PathBuf,
     pub mode: RecordingMode,
     pub status: RecordingStatus,
+    pub upload: Option<crate::upload::queue::UploadState>,
     /// `clip_count`, which drives the `"N clips"` badge.
     pub clip_count: u32,
     pub pretty_name: String,
@@ -296,11 +297,12 @@ pub struct IncompleteRecordingItem {
 }
 
 impl RecordingItem {
-    /// `hasActiveRecording` (`recordings.tsx:66-73`) minus its upload half:
-    /// there are no uploads in this app, so `MultipartUpload` /
-    /// `SinglePartUpload` can never be the reason to keep polling.
     pub fn is_active(&self) -> bool {
         self.status == RecordingStatus::InProgress
+            || self
+                .upload
+                .as_ref()
+                .is_some_and(crate::upload::queue::UploadState::is_pending)
     }
 
     /// `studioCompleteCheck()`: the only rows whose whole body is clickable.
@@ -353,7 +355,9 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
     };
 
     let thumbnail = bundle_thumbnail_path(&path);
+    let upload = crate::upload::queue::status(&path, &meta);
     RecordingItem {
+        upload,
         mode,
         status,
         clip_count,

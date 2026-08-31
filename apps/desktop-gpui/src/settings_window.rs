@@ -973,13 +973,12 @@ impl SettingsWindow {
                 return;
             }
 
-            let deleted = cx
-                .background_executor()
-                .spawn({
-                    let path = path.clone();
-                    async move { library::delete_recording_directory(&path) }
-                })
-                .await;
+            let Ok(task) = cx.update(|_, cx| {
+                gpui_tokio::Tokio::spawn(cx, crate::upload::queue::delete_recording(path.clone()))
+            }) else {
+                return;
+            };
+            let deleted = task.await.unwrap_or_else(|error| Err(error.to_string()));
             if let Err(error) = deleted {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
                 return;
@@ -2614,6 +2613,23 @@ impl SettingsWindow {
                 .child(glyph(item.mode.icon()))
                 .child(item.mode.label()),
             )
+            .when_some(item.upload.clone(), |this, upload| {
+                let label = upload.label();
+                let message = upload
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| label.to_string());
+                this.child(
+                    pill(theme.settings_fill())
+                        .id("recording-upload-status")
+                        .child(label)
+                        .tooltip(move |_, cx| {
+                            ui::Tooltip::new(&theme, message.clone())
+                                .style(ui::TooltipStyle::Light)
+                                .view(cx)
+                        }),
+                )
+            })
             .when(item.clip_count > 1, |this| {
                 this.child(pill(theme.settings_fill()).child(format!("{} clips", item.clip_count)))
             })
@@ -2685,16 +2701,38 @@ impl SettingsWindow {
         }
 
         if mode == RecordingMode::Instant {
-            // `uploadExportedVideo(path, "Reupload", ..)`: there is no upload
-            // infrastructure here, so the button is drawn disabled (README).
-            actions = actions.child(self.row_button(
-                ("recording-reupload", index),
-                "icons/rotate-ccw.svg",
-                "Reupload",
-                true,
-                cx,
-                |_, _, _| {},
-            ));
+            let retry_path = path.clone();
+            actions = actions.child(
+                self.row_button(
+                    ("recording-reupload", index),
+                    "icons/rotate-ccw.svg",
+                    "Retry upload",
+                    !item
+                        .upload
+                        .as_ref()
+                        .is_some_and(crate::upload::queue::UploadState::can_retry),
+                    cx,
+                    move |_, window, cx| {
+                        let path = retry_path.clone();
+                        cx.spawn_in(window, async move |this, cx| {
+                            let Ok(task) = cx.update(|_, cx| {
+                                gpui_tokio::Tokio::spawn(cx, crate::upload::queue::retry(path))
+                            }) else {
+                                return;
+                            };
+                            if let Err(error) =
+                                task.await.unwrap_or_else(|error| Err(error.to_string()))
+                            {
+                                tracing::warn!(%error, "Upload retry deferred");
+                            }
+                            let _ = this.update_in(cx, |this, window, cx| {
+                                this.refresh_recordings(window, cx)
+                            });
+                        })
+                        .detach();
+                    },
+                ),
+            );
             if let Some(link) = sharing {
                 actions = actions.child(self.row_button(
                     ("recording-instant-link", index),
@@ -4454,6 +4492,7 @@ mod tests {
             path: std::path::PathBuf::from(format!("/tmp/{name}.cap")),
             mode,
             status: crate::library::RecordingStatus::Complete,
+            upload: None,
             clip_count: 1,
             pretty_name: name.to_string(),
             sharing: None,

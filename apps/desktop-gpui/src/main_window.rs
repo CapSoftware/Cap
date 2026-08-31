@@ -1103,17 +1103,24 @@ impl MainWindow {
         window.refresh();
 
         self.recovery_action_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    if recover {
-                        library::recover_incomplete_recording(&recording.project_path)
-                    } else {
-                        library::delete_recording_directory(&recording.project_path)
-                            .map(|()| recording.project_path)
-                    }
-                })
-                .await;
+            let result = if recover {
+                cx.background_executor().spawn(async move {
+                    library::recover_incomplete_recording(&recording.project_path)
+                }).await
+            } else {
+                let path = recording.project_path;
+                let Ok(task) = cx.update(|_, cx| {
+                    gpui_tokio::Tokio::spawn(
+                        cx,
+                        crate::upload::queue::delete_recording(path.clone()),
+                    )
+                }) else {
+                    return;
+                };
+                task.await
+                    .unwrap_or_else(|error| Err(error.to_string()))
+                    .map(|()| path)
+            };
 
             this.update_in(cx, |this, window, cx| {
                 this.recovery_pending = false;
@@ -3431,7 +3438,15 @@ impl MainWindow {
         let sharing = item.sharing.clone();
         let mode = item.mode;
         let opens_editor = item.opens_editor();
-        let subtitle = item.mode.label().to_string();
+        let subtitle = item.upload.as_ref().map_or_else(
+            || item.mode.label().to_string(),
+            |upload| {
+                upload
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| upload.label().to_string())
+            },
+        );
         let actions = self.render_recording_card_actions(index, item, cx);
 
         self.library_card(
@@ -3489,6 +3504,36 @@ impl MainWindow {
                 ("lib-rec-link", index),
                 "icons/link.svg",
                 move |_, _, cx| cx.open_url(&url),
+            ));
+        }
+        if item
+            .upload
+            .as_ref()
+            .is_some_and(crate::upload::queue::UploadState::can_retry)
+        {
+            let retry_path = path.clone();
+            row = row.child(self.library_action(
+                ("lib-rec-retry", index),
+                "icons/rotate-ccw.svg",
+                cx.listener(move |_, _, window, cx| {
+                    let path = retry_path.clone();
+                    cx.spawn_in(window, async move |this, cx| {
+                        let Ok(task) = cx.update(|_, cx| {
+                            gpui_tokio::Tokio::spawn(cx, crate::upload::queue::retry(path))
+                        }) else {
+                            return;
+                        };
+                        if let Err(error) =
+                            task.await.unwrap_or_else(|error| Err(error.to_string()))
+                        {
+                            tracing::warn!(%error, "Upload retry deferred");
+                        }
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            this.refresh_open_library(window, cx)
+                        });
+                    })
+                    .detach();
+                }),
             ));
         }
         let folder = path.clone();
@@ -3719,13 +3764,12 @@ impl MainWindow {
             ) {
                 return;
             }
-            let deleted = cx
-                .background_executor()
-                .spawn({
-                    let path = path.clone();
-                    async move { library::delete_recording_directory(&path) }
-                })
-                .await;
+            let Ok(task) = cx.update(|_, cx| {
+                gpui_tokio::Tokio::spawn(cx, crate::upload::queue::delete_recording(path.clone()))
+            }) else {
+                return;
+            };
+            let deleted = task.await.unwrap_or_else(|error| Err(error.to_string()));
             if let Err(error) = deleted {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
                 return;

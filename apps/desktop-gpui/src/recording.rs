@@ -857,16 +857,15 @@ impl ActiveRecording {
             }
             return Err(error);
         }
-        let upload = match self.instant_upload.as_ref() {
+        let mut upload = match self.instant_upload.as_ref() {
             Some(upload) => upload.lock().await.take(),
             None => None,
         };
-        let remote_result = if let Some(upload) = upload {
+        let remote_result = if let Some(upload) = upload.as_mut() {
             upload.cancel().await
         } else {
             Ok(())
         };
-        #[cfg(target_os = "linux")]
         remote_result.map_err(anyhow::Error::msg)?;
         tokio::task::spawn_blocking({
             let dir = self.project_dir.clone();
@@ -875,8 +874,6 @@ impl ActiveRecording {
         .await
         .context("delete task")?
         .with_context(|| format!("deleting {}", self.project_dir.display()))?;
-        #[cfg(not(target_os = "linux"))]
-        remote_result.map_err(anyhow::Error::msg)?;
         Ok(())
     }
 
@@ -919,7 +916,6 @@ impl ActiveRecording {
                     let upload = instant_upload
                         .as_mut()
                         .ok_or_else(|| anyhow!("instant recording has no upload session"))?;
-                    let segmented = upload.is_segmented();
 
                     let display_dir = project_path.join("content/display");
                     let audio_dir = project_path.join("content/audio");
@@ -969,116 +965,6 @@ impl ActiveRecording {
                     .await
                     .context("instant thumbnail task")?;
 
-                    if segmented {
-                        #[cfg(any(target_os = "linux", windows))]
-                        if let Err(error) = upload.finish_screenshot(&completed.project_path).await {
-                            persist_instant_upload_failure(&completed.project_path, &error, upload.metadata_lock())?;
-                            return Err(anyhow!(error));
-                        }
-                        upload.authorize_completion().map_err(anyhow::Error::msg)?;
-                    }
-                    if let Err(error) = upload.finish_segments().await {
-                        persist_instant_upload_failure(
-                            &completed.project_path,
-                            &error,
-                            upload.metadata_lock(),
-                        )?;
-                        return Err(anyhow!(error));
-                    }
-
-                    let upload_result = if segmented {
-                        #[cfg(any(target_os = "linux", windows))]
-                        { Ok(()) }
-                        #[cfg(not(any(target_os = "linux", windows)))]
-                        { upload.finish_screenshot(&completed.project_path).await }
-                    } else {
-                        crate::upload::upload_exported_video(
-                            completed.project_path.clone(),
-                            None,
-                            |_| {},
-                            #[cfg(target_os = "linux")]
-                            upload.cancellation_token(),
-                            #[cfg(not(target_os = "linux"))]
-                            Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                        )
-                        .await
-                        .and_then(|result| match result {
-                            crate::upload::UploadResult::Success(_) => Ok(()),
-                            crate::upload::UploadResult::NotAuthenticated => Err(
-                                "Your session has expired. Please sign in again to upload this recording."
-                                    .to_string(),
-                            ),
-                            crate::upload::UploadResult::UpgradeRequired => {
-                                Err("Instant recording requires an upgraded plan.".to_string())
-                            }
-                        })
-                    };
-                    #[cfg(target_os = "linux")]
-                    {
-                        let upload_cancel = Some(upload.cancellation_token());
-                        let delete_local = !preserve_local
-                            && crate::store::GeneralSettings::load()
-                                .delete_instant_recordings_after_upload;
-                        let local_result = finish_instant_upload_locally(
-                            upload_cancel.as_deref(),
-                            async { upload_result },
-                            || {
-                                persist_instant_upload_complete(
-                                    &completed.project_path,
-                                    upload.metadata_lock(),
-                                    upload_cancel.as_deref(),
-                                )
-                            },
-                            async {
-                                if delete_local {
-                                    let directory = completed.project_path.clone();
-                                    let cancel = upload_cancel.clone();
-                                    tokio::task::spawn_blocking(move || {
-                                        remove_uploaded_instant_recording(&directory, cancel.as_deref())
-                                    })
-                                    .await
-                                    .context("instant upload cleanup task")??;
-                                }
-                                Ok(())
-                            },
-                        )
-                        .await;
-                        if let Err(error) = local_result {
-                            persist_instant_upload_failure(
-                                &completed.project_path,
-                                &error.to_string(),
-                                upload.metadata_lock(),
-                            )?;
-                            return Err(error);
-                        }
-                    }
-                    #[cfg(not(target_os = "linux"))]
-                    {
-                        if let Err(error) = upload_result {
-                            persist_instant_upload_failure(
-                                &completed.project_path,
-                                &error,
-                                upload.metadata_lock(),
-                            )?;
-                            return Err(anyhow!(error));
-                        }
-                        persist_instant_upload_complete(
-                            &completed.project_path,
-                            upload.metadata_lock(),
-                            None,
-                        )?;
-                        if !preserve_local
-                            && crate::store::GeneralSettings::load()
-                                .delete_instant_recordings_after_upload
-                        {
-                            let directory = completed.project_path.clone();
-                            tokio::task::spawn_blocking(move || std::fs::remove_dir_all(directory))
-                                .await
-                                .context("instant upload cleanup task")?
-                                .context("deleting uploaded instant recording")?;
-                        }
-                    }
-
                     Ok(completed.project_path)
                 }
                 .await;
@@ -1086,6 +972,13 @@ impl ActiveRecording {
                     && let Some(upload) = instant_upload.as_mut()
                 {
                     upload.abort_segments().await;
+                }
+                if let Ok(project) = &result
+                    && let Some(upload) = upload_guard.as_deref_mut().and_then(Option::take)
+                    && let Err(error) =
+                        crate::upload::queue::enqueue(project.clone(), upload, preserve_local).await
+                {
+                    tracing::warn!(path = %project.display(), %error, "Local recording saved; upload needs attention");
                 }
                 result
             }
@@ -1543,10 +1436,22 @@ pub(crate) fn persist_instant_upload_failure(
             cap_project::RecordingMeta::load_for_project(project_path).map_err(|load_error| {
                 anyhow!("loading failed instant recording metadata: {load_error}")
             })?;
-        meta.upload = Some(cap_project::UploadMeta::Failed {
-            error: error.to_string(),
-        });
-        save_instant_metadata(&meta)?;
+        if matches!(
+            meta.upload,
+            Some(
+                cap_project::UploadMeta::SegmentUpload { .. }
+                    | cap_project::UploadMeta::MultipartUpload { .. }
+                    | cap_project::UploadMeta::SinglePartUpload { .. }
+            )
+        ) {
+            crate::upload::queue::record_failure(project_path, error)
+                .map_err(anyhow::Error::msg)?;
+        } else {
+            meta.upload = Some(cap_project::UploadMeta::Failed {
+                error: error.to_string(),
+            });
+            save_instant_metadata(&meta)?;
+        }
         Ok(())
     })
 }
@@ -1561,7 +1466,7 @@ fn check_instant_publication_cancelled(
     Ok(())
 }
 
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(test)]
 fn remove_uploaded_instant_recording(
     directory: &std::path::Path,
     cancel: Option<&std::sync::atomic::AtomicBool>,
@@ -1570,7 +1475,7 @@ fn remove_uploaded_instant_recording(
     std::fs::remove_dir_all(directory).context("deleting uploaded instant recording")
 }
 
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(test)]
 pub(crate) async fn finish_instant_upload_locally(
     cancel: Option<&std::sync::atomic::AtomicBool>,
     upload: impl std::future::Future<Output = Result<(), String>>,
@@ -1585,7 +1490,7 @@ pub(crate) async fn finish_instant_upload_locally(
     check_instant_publication_cancelled(cancel)
 }
 
-fn persist_instant_upload_complete(
+pub(crate) fn persist_instant_upload_complete(
     project_path: &std::path::Path,
     metadata_lock: &Mutex<()>,
     cancel: Option<&std::sync::atomic::AtomicBool>,
@@ -2000,6 +1905,13 @@ async fn start_attempt_with_upload(
                     segment_rx.is_some(),
                     &metadata_lock,
                 )?;
+                crate::upload::queue::record_capture(
+                    &project_dir,
+                    &video,
+                    segment_rx.is_some(),
+                    config.microphone.is_some() || config.system_audio,
+                )
+                .map_err(anyhow::Error::msg)?;
                 crate::upload::start_instant_upload(
                     video,
                     project_dir.clone(),
@@ -2908,6 +2820,33 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(std::fs::read(&path).unwrap(), original);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_instant_upload_preserves_resumable_identity_and_audio_intent() {
+        let dir = temp_project("upload-identity");
+        let video = cap_project::VideoUploadInfo {
+            id: "saved-video".into(),
+            link: "https://example.invalid/s/saved-video".into(),
+            config: cap_project::S3UploadMeta {
+                id: "saved-video".into(),
+            },
+        };
+        let metadata_lock = Mutex::new(());
+        persist_in_progress_instant_meta(&dir, &video, true, &metadata_lock).unwrap();
+        crate::upload::queue::record_capture(&dir, &video, true, true).unwrap();
+        persist_instant_upload_failure(&dir, "offline", &metadata_lock).unwrap();
+        let meta = cap_project::RecordingMeta::load_for_project(&dir).unwrap();
+        assert!(
+            matches!(meta.upload, Some(cap_project::UploadMeta::SegmentUpload { video_id, .. }) if video_id == "saved-video")
+        );
+        let state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("instant-upload.json")).unwrap())
+                .unwrap();
+        assert_eq!(state["requested_audio"], true);
+        assert_eq!(state["last_error"], "offline");
+        assert_eq!(state["phase"], "Retrying");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

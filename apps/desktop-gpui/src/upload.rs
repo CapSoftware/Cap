@@ -14,6 +14,8 @@ use serde_json::{Value, json};
 
 use crate::auth::{self, AuthApiError};
 
+pub(crate) mod queue;
+
 const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
 const MAX_CHUNK_SIZE: u64 = 15 * 1024 * 1024;
 const MAX_SEGMENT_UPLOADS: usize = 6;
@@ -42,12 +44,76 @@ pub struct InstantUpload {
     metadata_lock: Arc<Mutex<()>>,
     completion_permit: Option<tokio::sync::oneshot::Sender<()>>,
     completion_control: Option<CompletionControl>,
+    bridge: Option<std::thread::JoinHandle<()>>,
+    ownership: Option<cap_recording::upload_resume::UploadLock>,
+    request_context: Option<auth::UploadRequestContext>,
+    reads: Arc<UploadReads>,
+}
+
+#[derive(Default)]
+struct UploadReads {
+    active: std::sync::atomic::AtomicUsize,
+    finished: tokio::sync::Notify,
+}
+
+struct UploadReadGuard(Arc<UploadReads>);
+
+impl Drop for UploadReadGuard {
+    fn drop(&mut self) {
+        if self.0.active.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.0.finished.notify_one();
+        }
+    }
+}
+
+impl UploadReads {
+    async fn join(&self) {
+        while self.active.load(Ordering::Acquire) != 0 {
+            self.finished.notified().await;
+        }
+    }
+}
+
+tokio::task_local! {
+    static UPLOAD_READS: Arc<UploadReads>;
+}
+
+async fn tracked_upload_read<T: Send + 'static>(
+    read: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, tokio::task::JoinError> {
+    let guard = UPLOAD_READS
+        .try_with(|reads| {
+            reads.active.fetch_add(1, Ordering::AcqRel);
+            UploadReadGuard(reads.clone())
+        })
+        .ok();
+    tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        read()
+    })
+    .await
+}
+
+async fn with_upload_context<F: Future>(
+    context: Option<auth::UploadRequestContext>,
+    reads: Arc<UploadReads>,
+    future: F,
+) -> F::Output {
+    UPLOAD_READS
+        .scope(reads, async move {
+            match context {
+                Some(context) => context.run(future).await,
+                None => future.await,
+            }
+        })
+        .await
 }
 
 #[derive(Clone)]
 pub(crate) struct CompletionControl {
     denied: tokio::sync::watch::Sender<bool>,
     cancel: Arc<AtomicBool>,
+    expected_manifest: Arc<Mutex<Option<SegmentUploadManifest>>>,
 }
 
 impl CompletionControl {
@@ -66,21 +132,25 @@ pub(crate) struct CompletionAuthorization {
 struct CompletionRequirement {
     permission: tokio::sync::oneshot::Receiver<()>,
     denied: tokio::sync::watch::Receiver<bool>,
+    expected_manifest: Arc<Mutex<Option<SegmentUploadManifest>>>,
 }
 
 impl CompletionAuthorization {
     pub(crate) fn new() -> Self {
         let (permit, permission) = tokio::sync::oneshot::channel();
         let (denied, denial) = tokio::sync::watch::channel(false);
+        let expected_manifest = Arc::new(Mutex::new(None));
         Self {
             permit,
             required: CompletionRequirement {
                 permission,
                 denied: denial,
+                expected_manifest: expected_manifest.clone(),
             },
             control: CompletionControl {
                 denied,
                 cancel: Arc::new(AtomicBool::new(false)),
+                expected_manifest,
             },
         }
     }
@@ -191,6 +261,31 @@ pub(crate) fn start_instant_upload(
     metadata_lock: Arc<Mutex<()>>,
     authorization: Option<CompletionAuthorization>,
 ) -> Result<InstantUpload, String> {
+    let ownership = cap_recording::upload_resume::UploadLock::acquire(&project_path)
+        .map_err(|error| error.to_string())?;
+    let state =
+        queue::read_state(&project_path)?.ok_or("The recording has no saved upload identity")?;
+    let request_context = state.request_context()?;
+    start_instant_upload_with_ownership(
+        video,
+        project_path,
+        segment_rx,
+        metadata_lock,
+        authorization,
+        ownership,
+        Some(request_context),
+    )
+}
+
+fn start_instant_upload_with_ownership(
+    video: VideoUploadInfo,
+    project_path: PathBuf,
+    segment_rx: Option<std::sync::mpsc::Receiver<SegmentCompletedEvent>>,
+    metadata_lock: Arc<Mutex<()>>,
+    authorization: Option<CompletionAuthorization>,
+    ownership: cap_recording::upload_resume::UploadLock,
+    request_context: Option<auth::UploadRequestContext>,
+) -> Result<InstantUpload, String> {
     let (completion_permit, required, completion_control) = match authorization {
         Some(authorization) => (
             Some(authorization.permit),
@@ -203,33 +298,50 @@ pub(crate) fn start_instant_upload(
         || Arc::new(AtomicBool::new(false)),
         |control| control.cancel.clone(),
     );
+    let reads = Arc::new(UploadReads::default());
+    let mut bridge = None;
     let segment_upload = if let Some(segment_rx) = segment_rx {
         let (events_tx, events_rx) = flume::unbounded();
-        std::thread::Builder::new()
-            .name("gpui-instant-segments".to_string())
-            .spawn(move || {
-                while let Ok(event) = segment_rx.recv() {
-                    if events_tx.send(event).is_err() {
-                        break;
+        let bridge_cancel = cancel.clone();
+        bridge = Some(
+            std::thread::Builder::new()
+                .name("gpui-instant-segments".to_string())
+                .spawn(move || {
+                    while !bridge_cancel.load(Ordering::Acquire) && !events_tx.is_disconnected() {
+                        match segment_rx.recv_timeout(Duration::from_millis(20)) {
+                            Ok(event) => {
+                                if events_tx.send(event).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                        }
                     }
-                }
-            })
-            .map_err(|error| format!("Failed to start instant upload: {error}"))?;
+                })
+                .map_err(|error| format!("Failed to start instant upload: {error}"))?,
+        );
 
         let upload_video = video.clone();
         let upload_cancel = cancel.clone();
         let upload_metadata_lock = metadata_lock.clone();
-        Some(tokio::spawn(async move {
-            run_segment_upload(
-                upload_video,
-                project_path,
-                events_rx,
-                upload_cancel,
-                upload_metadata_lock,
-                required,
-            )
-            .await
-        }))
+        let context = request_context.clone();
+        let upload_reads = reads.clone();
+        Some(tokio::spawn(with_upload_context(
+            context,
+            upload_reads,
+            async move {
+                run_segment_upload(
+                    upload_video,
+                    project_path,
+                    events_rx,
+                    upload_cancel,
+                    upload_metadata_lock,
+                    required,
+                )
+                .await
+            },
+        )))
     } else {
         None
     };
@@ -241,6 +353,10 @@ pub(crate) fn start_instant_upload(
         metadata_lock,
         completion_permit,
         completion_control,
+        bridge,
+        ownership: Some(ownership),
+        request_context,
+        reads,
     })
 }
 
@@ -249,15 +365,11 @@ impl InstantUpload {
         &self.video
     }
 
-    pub fn is_segmented(&self) -> bool {
-        self.segment_upload.is_some()
-    }
-
     pub(crate) fn metadata_lock(&self) -> &Mutex<()> {
         &self.metadata_lock
     }
 
-    #[cfg(any(test, target_os = "linux"))]
+    #[cfg(test)]
     pub(crate) fn cancellation_token(&self) -> Arc<AtomicBool> {
         self.cancel.clone()
     }
@@ -279,6 +391,18 @@ impl InstantUpload {
         Ok(())
     }
 
+    fn authorize_manifest(&mut self, expected: SegmentUploadManifest) -> Result<(), String> {
+        let control = self
+            .completion_control
+            .as_ref()
+            .ok_or("Upload has no completion guard")?;
+        *control
+            .expected_manifest
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(expected);
+        self.authorize_completion()
+    }
+
     pub async fn finish_segments(&mut self) -> Result<(), String> {
         check_segment_cancelled(&self.cancel)?;
         let Some(upload) = self.segment_upload.as_mut() else {
@@ -288,8 +412,18 @@ impl InstantUpload {
             .await
             .map_err(|error| format!("Instant segment upload task failed: {error}"));
         drop(self.segment_upload.take());
+        self.join_bridge()?;
         check_segment_cancelled(&self.cancel)?;
         result?
+    }
+
+    fn join_bridge(&mut self) -> Result<(), String> {
+        if let Some(bridge) = self.bridge.take() {
+            bridge
+                .join()
+                .map_err(|_| "Instant upload event bridge failed".to_string())?;
+        }
+        Ok(())
     }
 
     pub async fn finish_screenshot(&self, project_path: &Path) -> Result<(), String> {
@@ -309,9 +443,17 @@ impl InstantUpload {
         result.map_err(|error| format!("Instant recording thumbnail upload failed: {error}"))
     }
 
-    pub async fn cancel(mut self) -> Result<(), String> {
+    pub async fn cancel(&mut self) -> Result<(), String> {
         self.abort_segments().await;
-        delete_instant_video(&self.video.id).await
+        if let Some(ownership) = &self.ownership {
+            queue::record_cancelled(ownership.project_path())?;
+        }
+        with_upload_context(
+            self.request_context.clone(),
+            self.reads.clone(),
+            delete_instant_video(&self.video.id),
+        )
+        .await
     }
 
     pub(crate) async fn abort_segments(&mut self) {
@@ -324,6 +466,10 @@ impl InstantUpload {
             upload.abort();
             let _ = upload.await;
         }
+        if let Err(error) = self.join_bridge() {
+            tracing::warn!(%error, "Instant upload bridge cleanup failed");
+        }
+        self.reads.join().await;
     }
 }
 
@@ -532,7 +678,23 @@ async fn upload_segments(
     }
 
     manifest.is_complete = true;
+    let expected = authorization.as_ref().and_then(|required| {
+        required
+            .expected_manifest
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    });
+    if expected
+        .as_ref()
+        .is_some_and(|expected| expected != &manifest)
+    {
+        return Err("Uploaded segments do not match the complete local recording".into());
+    }
     checked_segment_step(&cancel, || transport.manifest(video_id, &manifest, &cancel)).await?;
+    if expected.is_some() {
+        return Ok(());
+    }
     checked_segment_step(&cancel, || transport.complete(video_id, &cancel)).await
 }
 
@@ -676,12 +838,17 @@ async fn read_completed_segment(
     subpath: &str,
     cancel: &AtomicBool,
 ) -> Result<Vec<u8>, String> {
+    if event.file_size == 0 {
+        return Err(format!(
+            "Instant recording segment has no completed byte count: {subpath}"
+        ));
+    }
     let started = Instant::now();
     loop {
         if cancel.load(Ordering::Acquire) {
             return Err("Instant recording upload cancelled".to_string());
         }
-        let bytes = tokio::task::spawn_blocking({
+        let bytes = tracked_upload_read({
             let path = event.path.clone();
             move || std::fs::read(path)
         })
@@ -689,10 +856,7 @@ async fn read_completed_segment(
         .map_err(|error| format!("Failed to read instant segment {subpath}: {error}"))?;
 
         match bytes {
-            Ok(bytes)
-                if !bytes.is_empty()
-                    && (event.file_size == 0 || bytes.len() >= event.file_size as usize) =>
-            {
+            Ok(bytes) if !bytes.is_empty() && bytes.len() as u64 == event.file_size => {
                 return Ok(bytes);
             }
             Ok(_) if started.elapsed() >= Duration::from_secs(10) => {
@@ -808,6 +972,8 @@ struct UploadedPart {
     part_number: u32,
     etag: String,
     size: usize,
+    #[serde(skip)]
+    object_identity: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -848,10 +1014,22 @@ pub async fn upload_exported_video(
     progress: impl Fn(f64),
     cancel: std::sync::Arc<AtomicBool>,
 ) -> Result<UploadResult, String> {
+    upload_exported_video_inner(project_path, organization_id, progress, cancel, false)
+        .await
+        .map(|(result, _)| result)
+}
+
+async fn upload_exported_video_inner(
+    project_path: PathBuf,
+    organization_id: Option<String>,
+    progress: impl Fn(f64),
+    cancel: Arc<AtomicBool>,
+    defer_completion: bool,
+) -> Result<(UploadResult, Option<String>), String> {
     check_export_cancelled(&cancel).map_err(|error| error.to_string())?;
     if store_auth_missing() {
         let _ = crate::store::set_auth(None);
-        return Ok(UploadResult::NotAuthenticated);
+        return Ok((UploadResult::NotAuthenticated, None));
     }
 
     let mut meta = RecordingMeta::load_for_project(&project_path)
@@ -863,7 +1041,7 @@ pub async fn upload_exported_video(
 
     let metadata = build_video_meta(&file_path)?;
     if !crate::store::auth_snapshot().is_upgraded() && metadata.duration_in_secs > 300.0 {
-        return Ok(UploadResult::UpgradeRequired);
+        return Ok((UploadResult::UpgradeRequired, None));
     }
 
     progress(0.0);
@@ -887,9 +1065,11 @@ pub async fn upload_exported_video(
             let video_id = match checked_upload_step(&cancel, request_video_id).await {
                 Ok(video_id) => video_id,
                 Err(AuthApiError::InvalidAuthentication) => {
-                    return Ok(UploadResult::NotAuthenticated);
+                    return Ok((UploadResult::NotAuthenticated, None));
                 }
-                Err(AuthApiError::UpgradeRequired) => return Ok(UploadResult::UpgradeRequired),
+                Err(AuthApiError::UpgradeRequired) => {
+                    return Ok((UploadResult::UpgradeRequired, None));
+                }
                 Err(error) => return Err(error.to_string()),
             };
             meta.upload = Some(UploadMeta::SinglePartUpload {
@@ -916,8 +1096,10 @@ pub async fn upload_exported_video(
     .await
     {
         Ok(config) => config,
-        Err(AuthApiError::InvalidAuthentication) => return Ok(UploadResult::NotAuthenticated),
-        Err(AuthApiError::UpgradeRequired) => return Ok(UploadResult::UpgradeRequired),
+        Err(AuthApiError::InvalidAuthentication) => {
+            return Ok((UploadResult::NotAuthenticated, None));
+        }
+        Err(AuthApiError::UpgradeRequired) => return Ok((UploadResult::UpgradeRequired, None)),
         Err(error) => return Err(error.to_string()),
     };
     if s3_config.id != video_id {
@@ -938,7 +1120,7 @@ pub async fn upload_exported_video(
     })
     .await
     {
-        Ok(link) => {
+        Ok((link, object_identity)) => {
             meta.sharing = Some(SharingMeta {
                 link: link.clone(),
                 id: s3_config.id.clone(),
@@ -956,14 +1138,16 @@ pub async fn upload_exported_video(
             }
 
             check_export_cancelled(&cancel).map_err(|error| error.to_string())?;
-            meta.upload = Some(UploadMeta::Complete);
-            meta.save_for_project()
-                .map_err(|error| format!("Failed to persist completed upload: {error}"))?;
+            if !defer_completion {
+                meta.upload = Some(UploadMeta::Complete);
+                meta.save_for_project()
+                    .map_err(|error| format!("Failed to persist completed upload: {error}"))?;
+            }
             check_export_cancelled(&cancel).map_err(|error| error.to_string())?;
-            Ok(UploadResult::Success(link))
+            Ok((UploadResult::Success(link), object_identity))
         }
-        Err(AuthApiError::UpgradeRequired) => Ok(UploadResult::UpgradeRequired),
-        Err(AuthApiError::InvalidAuthentication) => Ok(UploadResult::NotAuthenticated),
+        Err(AuthApiError::UpgradeRequired) => Ok((UploadResult::UpgradeRequired, None)),
+        Err(AuthApiError::InvalidAuthentication) => Ok((UploadResult::NotAuthenticated, None)),
         Err(error) => Err(error.to_string()),
     }
 }
@@ -972,7 +1156,9 @@ fn reusable_video_id(sharing: Option<&SharingMeta>, upload: Option<&UploadMeta>)
     sharing
         .map(|sharing| sharing.id.clone())
         .or_else(|| match upload {
-            Some(UploadMeta::SinglePartUpload { video_id, .. }) => Some(video_id.clone()),
+            Some(UploadMeta::SinglePartUpload { video_id, .. })
+            | Some(UploadMeta::SegmentUpload { video_id, .. })
+            | Some(UploadMeta::MultipartUpload { video_id, .. }) => Some(video_id.clone()),
             _ => None,
         })
 }
@@ -1087,7 +1273,7 @@ async fn upload_video(
     metadata: &VideoMeta,
     progress: impl Fn(f64),
     cancel: &AtomicBool,
-) -> Result<String, AuthApiError> {
+) -> Result<(String, Option<String>), AuthApiError> {
     let initiate = checked_upload_step(cancel, || multipart_initiate(video_id)).await?;
     let is_drive = is_google_drive_upload(initiate.provider.as_deref(), &initiate.upload_id);
     let parts = upload_parts(
@@ -1102,13 +1288,24 @@ async fn upload_video(
     if cancel.load(Ordering::Relaxed) {
         return Err(AuthApiError::Other("Export cancelled".into()));
     }
-    checked_upload_step(cancel, || {
+    let completed_identity = checked_upload_step(cancel, || {
         multipart_complete(video_id, &initiate.upload_id, &parts, Some(metadata))
     })
     .await?;
     progress(1.0);
 
-    Ok(format!("{}/s/{video_id}", auth::server_url()))
+    let object_identity = if is_drive {
+        parts
+            .iter()
+            .rev()
+            .find_map(|part| part.object_identity.clone())
+    } else {
+        completed_identity
+    };
+    Ok((
+        format!("{}/s/{video_id}", auth::server_url()),
+        object_identity,
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1204,7 +1401,7 @@ async fn multipart_complete(
     upload_id: &str,
     parts: &[UploadedPart],
     meta: Option<&VideoMeta>,
-) -> Result<(), AuthApiError> {
+) -> Result<Option<String>, AuthApiError> {
     let mut body = json!({
         "videoId": video_id,
         "uploadId": upload_id,
@@ -1236,7 +1433,11 @@ async fn multipart_complete(
             "api/upload_multipart_complete/{status}: {body}"
         )));
     }
-    Ok(())
+    let response = response.json::<Value>().await.unwrap_or(Value::Null);
+    Ok(response
+        .get("objectIdentity")
+        .and_then(Value::as_str)
+        .map(str::to_string))
 }
 
 async fn upload_parts(
@@ -1384,10 +1585,22 @@ async fn put_part(
                     .unwrap_or("")
                     .trim_matches('"')
                     .to_string();
+                let object_identity = if (is_drive || is_google_drive_resumable_url(&url))
+                    && response.status().is_success()
+                {
+                    response.json::<Value>().await.ok().and_then(|value| {
+                        cap_recording::upload_verification::completed_drive_object_identity(
+                            &value, total_size,
+                        )
+                    })
+                } else {
+                    None
+                };
                 return Ok(UploadedPart {
                     part_number,
                     etag,
                     size: chunk.len(),
+                    object_identity,
                 });
             }
             Err(error) if is_network_error(&error) && attempt < 4 => {
@@ -1780,6 +1993,10 @@ mod tests {
                     metadata_lock: Arc::new(Mutex::new(())),
                     completion_permit: None,
                     completion_control: None,
+                    bridge: None,
+                    ownership: None,
+                    request_context: None,
+                    reads: Arc::new(UploadReads::default()),
                 };
 
                 {
@@ -1820,6 +2037,10 @@ mod tests {
             metadata_lock: Arc::new(Mutex::new(())),
             completion_permit: None,
             completion_control: control,
+            bridge: None,
+            ownership: None,
+            request_context: None,
+            reads: Arc::new(UploadReads::default()),
         }
     }
 
@@ -2308,6 +2529,10 @@ mod tests {
             metadata_lock: Arc::new(Mutex::new(())),
             completion_permit: Some(authorization.permit),
             completion_control: Some(control.clone()),
+            bridge: None,
+            ownership: None,
+            request_context: None,
+            reads: Arc::new(UploadReads::default()),
         };
         control.deny();
         assert!(
@@ -2499,6 +2724,10 @@ mod tests {
             metadata_lock: Arc::new(Mutex::new(())),
             completion_permit: Some(authorization.permit),
             completion_control: Some(authorization.control),
+            bridge: None,
+            ownership: None,
+            request_context: None,
+            reads: Arc::new(UploadReads::default()),
         };
         upload.abort_segments().await;
         assert!(authorization.required.permission.await.is_err());
@@ -2538,6 +2767,63 @@ mod tests {
                 .all(|complete| !complete)
         );
         assert!(authorization.permit.send(()).is_err());
+    }
+    #[tokio::test]
+    async fn finalized_manifest_must_match_all_required_local_segments() {
+        for missing_audio in [false, true] {
+            let transport = FakeSegmentTransport::default();
+            let authorization = CompletionAuthorization::new();
+            let mut expected = SegmentUploadManifest::default();
+            expected.record(&segment_event(0, 0.0, true, SegmentMediaType::Video));
+            expected.record(&segment_event(1, 1.0, false, SegmentMediaType::Video));
+            if missing_audio {
+                expected.record(&segment_event(0, 0.0, true, SegmentMediaType::Audio));
+                expected.record(&segment_event(1, 1.0, false, SegmentMediaType::Audio));
+            }
+            expected.is_complete = true;
+            *authorization.control.expected_manifest.lock().unwrap() = Some(expected);
+            authorization.permit.send(()).unwrap();
+            let result = upload_segments(
+                &transport,
+                "same-video",
+                closed_segment_events(),
+                authorization.control.cancel.clone(),
+                Some(authorization.required),
+            )
+            .await;
+            assert_eq!(result.is_err(), missing_audio);
+            assert_eq!(transport.completed.load(Ordering::Acquire), 0);
+            assert_eq!(
+                transport.manifests.lock().unwrap().contains(&true),
+                !missing_audio
+            );
+        }
+    }
+    #[tokio::test]
+    async fn cancelling_upload_waits_for_its_blocking_file_read() {
+        let reads = Arc::new(UploadReads::default());
+        let (started, entered) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let task = tokio::spawn(with_upload_context(None, reads.clone(), async move {
+            tracked_upload_read(move || {
+                started.send(()).unwrap();
+                released.recv().unwrap();
+            })
+            .await
+            .unwrap();
+        }));
+        entered.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let still_reading = tokio::time::timeout(Duration::from_millis(10), reads.join())
+            .await
+            .is_err();
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), reads.join())
+            .await
+            .unwrap();
+        assert!(still_reading);
+        assert_eq!(reads.active.load(Ordering::Acquire), 0);
     }
 }
 
@@ -2644,6 +2930,10 @@ mod exported_upload_cancellation_tests {
             metadata_lock: Arc::new(Mutex::new(())),
             completion_permit: Some(authorization.permit),
             completion_control: Some(authorization.control),
+            bridge: None,
+            ownership: None,
+            request_context: None,
+            reads: Arc::new(UploadReads::default()),
         };
         let token = upload.cancellation_token();
         assert!(Arc::ptr_eq(&token, &control.cancel));

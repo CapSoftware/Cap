@@ -158,17 +158,83 @@ pub fn is_server_url_custom() -> bool {
     !has_same_origin(&server_url(), DEFAULT_SERVER_URL)
 }
 
+#[derive(Clone)]
+pub(crate) struct UploadRequestContext {
+    server_url: String,
+    owner_id: String,
+}
+
+tokio::task_local! {
+    static UPLOAD_REQUEST: UploadRequestContext;
+}
+
+impl UploadRequestContext {
+    pub(crate) fn for_upload(
+        server_url: &str,
+        owner_id: Option<&str>,
+    ) -> Result<Self, AuthApiError> {
+        let context = Self {
+            server_url: server_url.to_string(),
+            owner_id: owner_id
+                .filter(|id| !id.is_empty())
+                .ok_or(AuthApiError::InvalidAuthentication)?
+                .to_string(),
+        };
+        context.credentials()?;
+        Ok(context)
+    }
+
+    fn credentials_from(
+        &self,
+        current_server: &str,
+        current_auth: &serde_json::Map<String, Value>,
+    ) -> Result<String, AuthApiError> {
+        if current_server != self.server_url
+            || current_auth.get("user_id").and_then(Value::as_str) != Some(self.owner_id.as_str())
+        {
+            return Err(AuthApiError::InvalidAuthentication);
+        }
+        current_auth
+            .get("secret")
+            .and_then(Value::as_object)
+            .and_then(|secret| secret.get("api_key").or_else(|| secret.get("token")))
+            .and_then(Value::as_str)
+            .filter(|token| !token.is_empty())
+            .map(str::to_string)
+            .ok_or(AuthApiError::InvalidAuthentication)
+    }
+
+    fn credentials(&self) -> Result<String, AuthApiError> {
+        self.credentials_from(&server_url(), &store::store_section("auth"))
+    }
+
+    pub(crate) async fn run<F: std::future::Future>(self, future: F) -> F::Output {
+        UPLOAD_REQUEST.scope(self, future).await
+    }
+}
+
 pub async fn authed_request(
     method: reqwest::Method,
     path: &str,
     body: Option<Value>,
 ) -> Result<reqwest::Response, AuthApiError> {
-    let auth = store::auth_snapshot();
-    let Some(token) = auth.token else {
-        return Err(AuthApiError::InvalidAuthentication);
+    let (server, token) = if let Ok(context) = UPLOAD_REQUEST.try_with(Clone::clone) {
+        let token = context.credentials()?;
+        (context.server_url, token)
+    } else {
+        let auth = store::auth_snapshot();
+        (
+            server_url(),
+            auth.token.ok_or(AuthApiError::InvalidAuthentication)?,
+        )
     };
-    let url = format!("{}{path}", server_url());
-    let mut request = reqwest::Client::new().request(method, url);
+    let url = format!("{server}{path}");
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(45))
+        .build()
+        .map_err(|error| AuthApiError::Other(error.to_string()))?;
+    let mut request = client.request(method, url);
     request = apply_desktop_headers(request).bearer_auth(token);
     if let Some(body) = body {
         request = request
@@ -463,5 +529,58 @@ mod tests {
         assert!(should_use_local_server_session("http://localhost:3000"));
         assert!(has_same_origin("https://cap.so/", "https://cap.so"));
         assert!(!has_same_origin("https://cap.so", "http://localhost:3000"));
+    }
+}
+
+#[cfg(test)]
+mod upload_context_tests {
+    use super::*;
+
+    #[test]
+    fn upload_credentials_refresh_only_for_the_same_account_and_server() {
+        let context = UploadRequestContext {
+            server_url: "https://original.invalid".into(),
+            owner_id: "owner".into(),
+        };
+        let original = json!({"user_id":"owner","secret":{"api_key":"original-credential"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            context
+                .credentials_from("https://original.invalid", &original)
+                .unwrap(),
+            "original-credential"
+        );
+        let refreshed = json!({"user_id":"owner","secret":{"api_key":"refreshed-credential"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            context
+                .credentials_from("https://original.invalid", &refreshed)
+                .unwrap(),
+            "refreshed-credential"
+        );
+        assert!(
+            context
+                .credentials_from("https://changed.invalid", &refreshed)
+                .is_err()
+        );
+        let different_owner =
+            json!({"user_id":"another-owner","secret":{"api_key":"different-credential"}})
+                .as_object()
+                .unwrap()
+                .clone();
+        assert!(
+            context
+                .credentials_from("https://original.invalid", &different_owner)
+                .is_err()
+        );
+        assert!(
+            context
+                .credentials_from("https://original.invalid", &serde_json::Map::new())
+                .is_err()
+        );
     }
 }
