@@ -1,11 +1,67 @@
+diff --git a/crates/gpui_linux/src/linux/platform.rs b/crates/gpui_linux/src/linux/platform.rs
+index 876f931663fa..062af4e8c9b9 100644
+--- a/crates/gpui_linux/src/linux/platform.rs
++++ b/crates/gpui_linux/src/linux/platform.rs
+@@ -87,6 +87,9 @@
+     fn reveal_path(&self, path: PathBuf);
+     fn write_to_primary(&self, item: ClipboardItem);
+     fn write_to_clipboard(&self, item: ClipboardItem);
++    fn try_write_to_clipboard(&self, _item: ClipboardItem) -> anyhow::Result<()> {
++        anyhow::bail!("Writing this clipboard item is unsupported")
++    }
+     fn read_from_primary(&self) -> Option<ClipboardItem>;
+     fn read_from_clipboard(&self) -> Option<ClipboardItem>;
+     fn active_window(&self) -> Option<AnyWindowHandle>;
+@@ -735,6 +738,10 @@
+         self.inner.write_to_clipboard(item)
+     }
+
++    fn try_write_to_clipboard(&self, item: ClipboardItem) -> anyhow::Result<()> {
++        self.inner.try_write_to_clipboard(item)
++    }
++
+     fn read_from_primary(&self) -> Option<ClipboardItem> {
+         self.inner.read_from_primary()
+     }
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index fdc40a3de87e..09c7fb416e8a 100644
+index fdc40a3de87e..c41fa8d6aebb 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
-@@ -1301,6 +1301,25 @@
+@@ -1121,6 +1121,30 @@
+         }
+     }
+
++    fn try_write_to_clipboard(&self, item: gpui::ClipboardItem) -> anyhow::Result<()> {
++        let mut state = self.0.borrow_mut();
++        let data_device_manager = state.globals.data_device_manager.clone().ok_or_else(|| {
++            anyhow::anyhow!("Wayland clipboard data device manager is unavailable")
++        })?;
++        let data_device = state
++            .data_device
++            .clone()
++            .ok_or_else(|| anyhow::anyhow!("Wayland clipboard data device is unavailable"))?;
++        if state.mouse_focused_window.is_none() && state.keyboard_focused_window.is_none() {
++            anyhow::bail!("Wayland clipboard requires a focused window");
++        }
++
++        let mime_types = state.clipboard.mime_types(&item)?;
++        state.clipboard.set(item);
++        let serial = state.serial_tracker.get_latest();
++        let data_source = data_device_manager.create_data_source(&state.globals.qh, ());
++        for mime_type in mime_types {
++            data_source.offer(mime_type);
++        }
++        data_device.set_selection(Some(&data_source), serial);
++        Ok(())
++    }
++
+     fn read_from_primary(&self) -> Option<gpui::ClipboardItem> {
+         self.0.borrow_mut().clipboard.read_primary()
+     }
+@@ -1301,6 +1325,25 @@
  delegate_noop!(WaylandClientStatePtr: ignore wp_viewporter::WpViewporter);
  delegate_noop!(WaylandClientStatePtr: ignore wp_viewport::WpViewport);
- 
+
 +impl Dispatch<WlCallback, super::window::VisibilitySync> for WaylandClientStatePtr {
 +    fn event(
 +        this: &mut WaylandClientStatePtr,
@@ -28,6 +84,305 @@ index fdc40a3de87e..09c7fb416e8a 100644
  impl Dispatch<WlCallback, ObjectId> for WaylandClientStatePtr {
      fn event(
          state: &mut WaylandClientStatePtr,
+diff --git a/crates/gpui_linux/src/linux/wayland/clipboard.rs b/crates/gpui_linux/src/linux/wayland/clipboard.rs
+index dfedf53f6dfa..fb40a8b391f1 100644
+--- a/crates/gpui_linux/src/linux/wayland/clipboard.rs
++++ b/crates/gpui_linux/src/linux/wayland/clipboard.rs
+@@ -1,6 +1,6 @@
+ use std::{
+     fs::File,
+-    io::{ErrorKind, Write},
++    io::{self, ErrorKind, Write},
+     os::fd::{AsRawFd, BorrowedFd, OwnedFd},
+ };
+
+@@ -15,11 +15,13 @@
+     platform::{PIPE_READ_TIMEOUT, read_fd_with_timeout},
+ };
+ use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
++use url::Url;
+
+ /// Text mime types that we'll offer to other programs.
+ pub(crate) const TEXT_MIME_TYPES: [&str; 3] =
+     ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
+ pub(crate) const FILE_LIST_MIME_TYPE: &str = "text/uri-list";
++pub(crate) const GNOME_COPY_FILES_MIME_TYPE: &str = "x-special/gnome-copied-files";
+
+ /// Text mime types that we'll accept from other programs.
+ pub(crate) const ALLOWED_TEXT_MIME_TYPES: [&str; 2] = ["text/plain;charset=utf-8", "UTF8_STRING"];
+@@ -180,20 +182,94 @@
+         self.self_mime.clone()
+     }
+
+-    pub fn send(&self, _mime_type: String, fd: OwnedFd) {
+-        if let Some(text) = self.contents.as_ref().and_then(|contents| contents.text()) {
+-            self.send_internal(fd, text.as_bytes().to_owned());
++    pub(crate) fn mime_types(&self, item: &ClipboardItem) -> anyhow::Result<Vec<String>> {
++        let has_text = item
++            .entries()
++            .iter()
++            .any(|entry| matches!(entry, ClipboardEntry::String(_)));
++        let has_image = item.entries().iter().any(
++            |entry| matches!(entry, ClipboardEntry::Image(image) if !image.bytes().is_empty()),
++        );
++        let has_files = item.entries().iter().any(|entry| {
++            matches!(entry, ClipboardEntry::ExternalPaths(paths) if !paths.paths().is_empty())
++        });
++
++        if !has_text && !has_image && !has_files {
++            anyhow::bail!("clipboard item has no transferable data");
++        }
++        if has_files {
++            file_uris(item)?;
++        }
++
++        let mut mime_types = Vec::new();
++        if has_text {
++            mime_types.extend(
++                TEXT_MIME_TYPES
++                    .iter()
++                    .map(|mime_type| (*mime_type).to_owned()),
++            );
++        }
++        for entry in item.entries() {
++            if let ClipboardEntry::Image(image) = entry
++                && !image.bytes().is_empty()
++            {
++                mime_types.push(image.format().mime_type().to_owned());
++            }
++        }
++        if has_files {
++            mime_types.push(FILE_LIST_MIME_TYPE.to_owned());
++            mime_types.push(GNOME_COPY_FILES_MIME_TYPE.to_owned());
++        }
++        mime_types.push(self.self_mime());
++        Ok(mime_types)
++    }
++
++    pub fn send(&self, mime_type: String, fd: OwnedFd) {
++        let Some(contents) = self.contents.as_ref() else {
++            return;
++        };
++        match Self::bytes_for_mime(contents, &mime_type) {
++            Ok(Some(bytes)) => self.send_internal(fd, bytes),
++            Ok(None) => log::warn!("No clipboard payload is available for MIME type {mime_type}"),
++            Err(error) => log::error!("Failed to prepare clipboard MIME type {mime_type}: {error}"),
++        }
++    }
++
++    pub fn send_primary(&self, mime_type: String, fd: OwnedFd) {
++        let Some(contents) = self.primary_contents.as_ref() else {
++            return;
++        };
++        match Self::bytes_for_mime(contents, &mime_type) {
++            Ok(Some(bytes)) => self.send_internal(fd, bytes),
++            Ok(None) => {
++                log::warn!("No primary clipboard payload is available for MIME type {mime_type}")
++            }
++            Err(error) => {
++                log::error!("Failed to prepare primary clipboard MIME type {mime_type}: {error}")
++            }
+         }
+     }
+
+-    pub fn send_primary(&self, _mime_type: String, fd: OwnedFd) {
+-        if let Some(text) = self
+-            .primary_contents
+-            .as_ref()
+-            .and_then(|contents| contents.text())
+-        {
+-            self.send_internal(fd, text.as_bytes().to_owned());
++    fn bytes_for_mime(item: &ClipboardItem, mime_type: &str) -> anyhow::Result<Option<Vec<u8>>> {
++        if TEXT_MIME_TYPES.contains(&mime_type) {
++            return Ok(text_bytes(item));
++        }
++        if mime_type == FILE_LIST_MIME_TYPE {
++            return Ok(Some(file_uris(item)?.join("\r\n").into_bytes()));
++        }
++        if mime_type == GNOME_COPY_FILES_MIME_TYPE {
++            return Ok(Some(
++                format!("copy\n{}", file_uris(item)?.join("\n")).into_bytes(),
++            ));
+         }
++        for entry in item.entries() {
++            if let ClipboardEntry::Image(image) = entry
++                && image.format().mime_type() == mime_type
++            {
++                return Ok(Some(image.bytes().to_vec()));
++            }
++        }
++        Ok(None)
+     }
+
+     pub fn read(&mut self) -> Option<ClipboardItem> {
+@@ -233,31 +309,145 @@
+     }
+
+     fn send_internal(&self, fd: OwnedFd, bytes: Vec<u8>) {
++        if let Err(error) = set_nonblocking(&fd) {
++            log::error!("Failed to set Wayland clipboard pipe nonblocking: {error}");
++            drop(fd);
++            return;
++        }
+         let mut written = 0;
+-        self.loop_handle
+-            .insert_source(
+-                calloop::generic::Generic::new(
+-                    File::from(fd),
+-                    calloop::Interest::WRITE,
+-                    calloop::Mode::Level,
+-                ),
+-                move |_, file, _| {
+-                    let file = unsafe { file.get_mut() };
+-                    loop {
+-                        match file.write(&bytes[written..]) {
+-                            Ok(n) if written + n == bytes.len() => {
+-                                written += n;
+-                                break Ok(PostAction::Remove);
+-                            }
+-                            Ok(n) => written += n,
+-                            Err(err) if err.kind() == ErrorKind::WouldBlock => {
+-                                break Ok(PostAction::Continue);
+-                            }
+-                            Err(_) => break Ok(PostAction::Remove),
++        if let Err(error) = self.loop_handle.insert_source(
++            calloop::generic::Generic::new(
++                File::from(fd),
++                calloop::Interest::WRITE,
++                calloop::Mode::Level,
++            ),
++            move |_, file, _| {
++                let file = unsafe { file.get_mut() };
++                loop {
++                    match file.write(&bytes[written..]) {
++                        Ok(n) if written + n == bytes.len() => {
++                            written += n;
++                            break Ok(PostAction::Remove);
+                         }
++                        Ok(0) => break Ok(PostAction::Remove),
++                        Ok(n) => written += n,
++                        Err(err) if err.kind() == ErrorKind::Interrupted => continue,
++                        Err(err) if err.kind() == ErrorKind::WouldBlock => {
++                            break Ok(PostAction::Continue);
++                        }
++                        Err(err) if err.kind() == ErrorKind::WriteZero => {
++                            break Ok(PostAction::Remove);
++                        }
++                        Err(_) => break Ok(PostAction::Remove),
+                     }
+-                },
++                }
++            },
++        ) {
++            log::error!("Failed to schedule Wayland clipboard transfer: {error}");
++        }
++    }
++}
++
++fn set_nonblocking(fd: &OwnedFd) -> io::Result<()> {
++    let raw_fd = fd.as_raw_fd();
++    let flags = unsafe { libc::fcntl(raw_fd, libc::F_GETFL) };
++    if flags == -1 {
++        return Err(io::Error::last_os_error());
++    }
++    if unsafe { libc::fcntl(raw_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
++        return Err(io::Error::last_os_error());
++    }
++    Ok(())
++}
++
++fn text_bytes(item: &ClipboardItem) -> Option<Vec<u8>> {
++    let mut text = String::new();
++    let mut has_text = false;
++    for entry in item.entries() {
++        if let ClipboardEntry::String(value) = entry {
++            has_text = true;
++            text.push_str(value.text());
++        }
++    }
++    has_text.then(|| text.into_bytes())
++}
++
++fn file_uris(item: &ClipboardItem) -> anyhow::Result<Vec<String>> {
++    let mut uris = Vec::new();
++    for entry in item.entries() {
++        if let ClipboardEntry::ExternalPaths(paths) = entry {
++            for path in paths.paths() {
++                let uri = Url::from_file_path(path).map_err(|_| {
++                    anyhow::anyhow!("cannot convert {} to a file URI", path.display())
++                })?;
++                uris.push(uri.to_string());
++            }
++        }
++    }
++    if uris.is_empty() {
++        anyhow::bail!("clipboard file list is empty");
++    }
++    Ok(uris)
++}
++
++#[cfg(test)]
++mod tests {
++    use std::path::PathBuf;
++
++    use super::*;
++
++    #[test]
++    fn file_uris_percent_encode_paths() {
++        let item = ClipboardItem {
++            entries: vec![ClipboardEntry::ExternalPaths(gpui::ExternalPaths(
++                smallvec::smallvec![
++                    PathBuf::from("/tmp/clip board/#café.txt"),
++                    PathBuf::from("/tmp/second.txt")
++                ],
++            ))],
++        };
++
++        assert_eq!(
++            file_uris(&item).unwrap(),
++            vec![
++                "file:///tmp/clip%20board/%23caf%C3%A9.txt".to_owned(),
++                "file:///tmp/second.txt".to_owned()
++            ]
++        );
++    }
++
++    #[test]
++    fn image_payload_uses_its_declared_mime() {
++        let bytes = vec![1, 2, 3];
++        let image = Image::from_bytes(ImageFormat::Png, bytes.clone());
++        let item = ClipboardItem::new_image(&image);
++
++        assert_eq!(
++            Clipboard::bytes_for_mime(&item, "image/png").unwrap(),
++            Some(bytes)
++        );
++        assert_eq!(
++            Clipboard::bytes_for_mime(&item, "image/jpeg").unwrap(),
++            None
++        );
++    }
++
++    #[test]
++    fn gnome_payload_contains_all_file_uris() {
++        let item = ClipboardItem {
++            entries: vec![ClipboardEntry::ExternalPaths(gpui::ExternalPaths(
++                smallvec::smallvec![PathBuf::from("/tmp/one.txt"), PathBuf::from("/tmp/two.txt")],
++            ))],
++        };
++
++        assert_eq!(
++            String::from_utf8(
++                Clipboard::bytes_for_mime(&item, GNOME_COPY_FILES_MIME_TYPE)
++                    .unwrap()
++                    .unwrap()
+             )
+-            .unwrap();
++            .unwrap(),
++            "copy\nfile:///tmp/one.txt\nfile:///tmp/two.txt"
++        );
+     }
+ }
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
 index 993b2ff3fadc..e8916c11025f 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
@@ -1033,20 +1388,51 @@ index 993b2ff3fadc..e8916c11025f 100644
 +    }
 +}
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
+index 0c8c9b4e20b8..701ae28fe440 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
-@@ -814,3 +814,2 @@
+@@ -811,11 +811,12 @@
+                 let [atom, arg1, arg2, arg3, arg4] = event.data.as_data32();
+                 let mut state = self.0.borrow_mut();
+
 -                if atom == state.atoms.WM_DELETE_WINDOW && window.should_close() {
 -                    // window "x" button clicked by user
 -                    // Rest of the close logic is handled in drop_window()
 +                if atom == state.atoms.WM_DELETE_WINDOW {
 +                    // Closing can flush app effects that open another window.
-@@ -818 +817,3 @@
+                     drop(state);
 -                    window.close();
 +                    if window.should_close() {
 +                        window.close();
 +                    }
-@@ -1797 +1798,16 @@
+                     state = self.0.borrow_mut();
+                 } else if atom == state.atoms._NET_WM_SYNC_REQUEST {
+                     window.state.borrow_mut().last_sync_counter =
+@@ -1756,6 +1757,20 @@
+         state.clipboard_item.replace(item);
+     }
+
++    fn try_write_to_clipboard(&self, item: gpui::ClipboardItem) -> anyhow::Result<()> {
++        let mut state = self.0.borrow_mut();
++        state
++            .clipboard
++            .set_item(
++                &item,
++                clipboard::ClipboardKind::Clipboard,
++                clipboard::WaitConfig::None,
++            )
++            .context("X11: Failed to write clipboard item")?;
++        state.clipboard_item.replace(item);
++        Ok(())
++    }
++
+     fn read_from_primary(&self) -> Option<gpui::ClipboardItem> {
+         let state = self.0.borrow_mut();
+         state
+@@ -1794,7 +1809,22 @@
+             return;
+         };
+
 -        event_loop.run(None, &mut self.clone(), |_| {}).log_err();
 +        let xcb_connection = self.0.borrow().xcb_connection.clone();
 +        let loop_signal = event_loop.get_signal();
@@ -1064,6 +1450,168 @@ diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/l
 +                }
 +            })
 +            .log_err();
+     }
+
+     fn active_window(&self) -> Option<AnyWindowHandle> {
+diff --git a/crates/gpui_linux/src/linux/x11/clipboard.rs b/crates/gpui_linux/src/linux/x11/clipboard.rs
+index 706e7b096588..591535333fa2 100644
+--- a/crates/gpui_linux/src/linux/x11/clipboard.rs
++++ b/crates/gpui_linux/src/linux/x11/clipboard.rs
+@@ -22,6 +22,7 @@
+     borrow::Cow,
+     cell::RefCell,
+     collections::{HashMap, hash_map::Entry},
++    path::PathBuf,
+     sync::{
+         Arc,
+         atomic::{AtomicBool, Ordering},
+@@ -47,8 +48,9 @@
+     wrapper::ConnectionExt as _,
+ };
+
+-use gpui::{ClipboardItem, Image, ImageFormat, hash};
++use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
+ use strum::IntoEnumIterator;
++use url::Url;
+
+ type Result<T, E = Error> = std::result::Result<T, E>;
+
+@@ -77,8 +79,9 @@
+         TEXT,
+         TEXT_MIME_UNKNOWN: b"text/plain",
+
+-        // HTML: b"text/html",
+-        // URI_LIST: b"text/uri-list",
++        FILE_LIST: b"text/uri-list",
++        GNOME_COPY_FILES: b"x-special/gnome-copied-files",
++        NAUTILUS_FILE_LIST: b"x-special/nautilus-clipboard",
+
+         PNG__MIME: ImageFormat::mime_type(ImageFormat::Png ).as_bytes(),
+         JPEG_MIME: ImageFormat::mime_type(ImageFormat::Jpeg).as_bytes(),
+@@ -990,6 +993,47 @@
+         self.inner.write(data, selection, wait)
+     }
+
++    pub(crate) fn set_item(
++        &self,
++        item: &ClipboardItem,
++        selection: ClipboardKind,
++        wait: WaitConfig,
++    ) -> Result<()> {
++        let mut data = Vec::new();
++        let atoms = self.inner.atoms;
++        let mut text = String::new();
++        let mut has_text = false;
++
++        for entry in item.entries() {
++            match entry {
++                ClipboardEntry::String(value) => {
++                    has_text = true;
++                    text.push_str(value.text());
++                }
++                ClipboardEntry::Image(image) => data.push(ClipboardData {
++                    bytes: image.bytes().to_vec(),
++                    format: self.image_format_atom(image.format()),
++                }),
++                ClipboardEntry::ExternalPaths(paths) => {
++                    data.extend(file_uri_list_to_clipboard_data(paths.paths(), atoms)?);
++                }
++            }
++        }
++
++        if has_text {
++            data.push(ClipboardData {
++                bytes: text.into_bytes(),
++                format: atoms.UTF8_STRING,
++            });
++        }
++
++        if data.is_empty() {
++            return Err(Error::unknown("clipboard item has no transferable data"));
++        }
++
++        self.inner.write(data, selection, wait)
++    }
++
+     fn image_format_atom(&self, format: ImageFormat) -> Atom {
+         match format {
+             ImageFormat::Png => self.inner.atoms.PNG__MIME,
+@@ -1014,7 +1058,7 @@
+         let format = self.image_format_atom(image.format);
+         let data = vec![ClipboardData {
+             bytes: image.bytes,
+-            format: self.inner.atoms.PNG__MIME,
++            format,
+         }];
+         self.inner.write(data, selection, wait)
+     }
+@@ -1138,6 +1182,66 @@
+     }
+ }
+
++fn file_uri_list_to_clipboard_data(paths: &[PathBuf], atoms: Atoms) -> Result<Vec<ClipboardData>> {
++    if paths.is_empty() {
++        return Err(Error::unknown("clipboard file list is empty"));
++    }
++
++    let uris = paths
++        .iter()
++        .map(|path| {
++            Url::from_file_path(path)
++                .map(|url| url.to_string())
++                .map_err(|_| {
++                    Error::unknown(format!("cannot convert {} to a file URI", path.display()))
++                })
++        })
++        .collect::<Result<Vec<_>>>()?;
++    let plain_paths = paths
++        .iter()
++        .map(|path| path.to_string_lossy().into_owned())
++        .collect::<Vec<_>>();
++    let plain_crlf = plain_paths.join("\r\n");
++    let plain_lf = plain_paths.join("\n");
++    let uri_crlf = uris.join("\r\n");
++    let gnome = format!("copy\n{}", uris.join("\n"));
++
++    Ok(vec![
++        ClipboardData {
++            bytes: plain_crlf.as_bytes().to_vec(),
++            format: atoms.TEXT_MIME_UNKNOWN,
++        },
++        ClipboardData {
++            bytes: plain_crlf.as_bytes().to_vec(),
++            format: atoms.UTF8_MIME_0,
++        },
++        ClipboardData {
++            bytes: plain_lf.as_bytes().to_vec(),
++            format: atoms.STRING,
++        },
++        ClipboardData {
++            bytes: plain_lf.as_bytes().to_vec(),
++            format: atoms.TEXT,
++        },
++        ClipboardData {
++            bytes: plain_lf.as_bytes().to_vec(),
++            format: atoms.UTF8_STRING,
++        },
++        ClipboardData {
++            bytes: uri_crlf.as_bytes().to_vec(),
++            format: atoms.FILE_LIST,
++        },
++        ClipboardData {
++            bytes: gnome.as_bytes().to_vec(),
++            format: atoms.GNOME_COPY_FILES,
++        },
++        ClipboardData {
++            bytes: gnome.into_bytes(),
++            format: atoms.NAUTILUS_FILE_LIST,
++        },
++    ])
++}
++
+ /// Clipboard selection
+ ///
+ /// Linux has a concept of clipboard "selections" which tend to be used in different contexts. This
 diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
 --- a/crates/gpui_linux/src/linux/x11/window.rs
 +++ b/crates/gpui_linux/src/linux/x11/window.rs

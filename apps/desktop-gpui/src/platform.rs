@@ -110,6 +110,23 @@ pub fn active_material(cx: &gpui::App) -> Option<MaterialKind> {
         .and_then(|material| material.0)
 }
 
+fn clipboard_file_path(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let path = std::path::absolute(path)
+        .map_err(|error| format!("Could not resolve the clipboard file: {error}"))?;
+    let metadata = std::fs::metadata(&path)
+        .map_err(|error| format!("Could not read the clipboard file: {error}"))?;
+    if !metadata.is_file() {
+        return Err("Only files can be copied to the clipboard".into());
+    }
+    Ok(path)
+}
+
+pub fn copy_image_to_clipboard(path: &std::path::Path, cx: &gpui::App) -> Result<(), String> {
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("Could not read the clipboard image: {error}"))?;
+    copy_image_bytes_to_clipboard(&bytes, cx)
+}
+
 #[cfg(any(not(target_os = "macos"), test))]
 fn confirmation_accepted(result: rfd::MessageDialogResult, accept: &str) -> bool {
     match result {
@@ -1187,56 +1204,62 @@ mod mac {
         }
     }
 
-    pub fn copy_file_to_clipboard(path: &std::path::Path) -> Result<(), String> {
+    pub fn copy_file_to_clipboard(path: &std::path::Path, _cx: &gpui::App) -> Result<(), String> {
+        use objc2::rc::autoreleasepool;
+        use objc2::runtime::Bool;
         use objc2::{class, msg_send};
         use objc2_foundation::NSString;
 
-        unsafe {
+        let path = super::clipboard_file_path(path)?;
+        let path = path
+            .to_str()
+            .ok_or("The clipboard file path is not valid Unicode")?;
+        autoreleasepool(|_| unsafe {
             let pasteboard: *mut AnyObject = msg_send![class!(NSPasteboard), generalPasteboard];
             if pasteboard.is_null() {
                 return Err("Clipboard unavailable".into());
             }
-            let _: isize = msg_send![pasteboard, clearContents];
             let url_class = class!(NSURL);
-            let ns_path = NSString::from_str(&path.to_string_lossy());
+            let ns_path = NSString::from_str(path);
             let url: *mut AnyObject = msg_send![url_class, fileURLWithPath: &*ns_path];
             if url.is_null() {
                 return Err("Failed to build file URL".into());
             }
             let objects: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: url];
-            let ok: bool = msg_send![pasteboard, writeObjects: objects];
-            if ok {
+            let _: isize = msg_send![pasteboard, clearContents];
+            let ok: Bool = msg_send![pasteboard, writeObjects: objects];
+            if ok.as_bool() {
                 Ok(())
             } else {
                 Err("Failed to copy file to clipboard".into())
             }
-        }
+        })
     }
 
-    pub fn copy_image_to_clipboard(path: &std::path::Path) -> Result<(), String> {
+    pub fn copy_image_bytes_to_clipboard(bytes: &[u8], _cx: &gpui::App) -> Result<(), String> {
+        use objc2::rc::autoreleasepool;
+        use objc2::runtime::Bool;
         use objc2::{class, msg_send};
-        use objc2_foundation::NSString;
+        use objc2_foundation::NSData;
 
-        unsafe {
+        autoreleasepool(|_| unsafe {
             let pasteboard: *mut AnyObject = msg_send![class!(NSPasteboard), generalPasteboard];
             if pasteboard.is_null() {
                 return Err("Clipboard unavailable".into());
             }
-            let _: isize = msg_send![pasteboard, clearContents];
-            let ns_path = NSString::from_str(&path.to_string_lossy());
+            let data = NSData::with_bytes(bytes);
             let image: *mut AnyObject = msg_send![class!(NSImage), alloc];
-            let image: *mut AnyObject = msg_send![image, initWithContentsOfFile: &*ns_path];
-            if image.is_null() {
-                return Err("Failed to load image".into());
-            }
-            let objects: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: image];
-            let ok: bool = msg_send![pasteboard, writeObjects: objects];
-            if ok {
+            let image: *mut AnyObject = msg_send![image, initWithData: &*data];
+            let image = Id::from_raw(image).ok_or("Failed to load image")?;
+            let objects: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: &*image];
+            let _: isize = msg_send![pasteboard, clearContents];
+            let ok: Bool = msg_send![pasteboard, writeObjects: objects];
+            if ok.as_bool() {
                 Ok(())
             } else {
                 Err("Failed to copy image to clipboard".into())
             }
-        }
+        })
     }
 
     fn open_file_panel(extensions: &[&str]) -> Option<std::path::PathBuf> {
@@ -1919,36 +1942,27 @@ mod stub {
         dialog.save_file()
     }
 
-    pub fn copy_file_to_clipboard(path: &std::path::Path) -> Result<(), String> {
-        #[cfg(windows)]
-        {
-            let _ = path;
-            Err("Copy to clipboard is not available yet on Windows".into())
-        }
-        #[cfg(not(windows))]
-        {
-            let uri = format!("file://{}", path.display());
-            let copied = std::process::Command::new("wl-copy")
-                .arg(&uri)
-                .status()
-                .ok()
-                .is_some_and(|status| status.success())
-                || std::process::Command::new("xclip")
-                    .args(["-selection", "clipboard"])
-                    .arg(path)
-                    .status()
-                    .ok()
-                    .is_some_and(|status| status.success());
-            if copied {
-                Ok(())
-            } else {
-                Err("Failed to copy file to clipboard".into())
-            }
-        }
+    pub fn copy_file_to_clipboard(path: &std::path::Path, cx: &gpui::App) -> Result<(), String> {
+        let path = super::clipboard_file_path(path)?;
+        cx.try_write_to_clipboard(
+            gpui::ClipboardEntry::ExternalPaths(gpui::ExternalPaths(vec![path].into())).into(),
+        )
+        .map_err(|error| format!("Could not copy the file to the clipboard: {error}"))
     }
 
-    pub fn copy_image_to_clipboard(path: &std::path::Path) -> Result<(), String> {
-        copy_file_to_clipboard(path)
+    pub fn copy_image_bytes_to_clipboard(bytes: &[u8], cx: &gpui::App) -> Result<(), String> {
+        let format = match image::guess_format(bytes).map_err(|error| error.to_string())? {
+            image::ImageFormat::Png => gpui::ImageFormat::Png,
+            image::ImageFormat::Jpeg => gpui::ImageFormat::Jpeg,
+            image::ImageFormat::WebP => gpui::ImageFormat::Webp,
+            image::ImageFormat::Gif => gpui::ImageFormat::Gif,
+            image::ImageFormat::Bmp => gpui::ImageFormat::Bmp,
+            image::ImageFormat::Tiff => gpui::ImageFormat::Tiff,
+            _ => return Err("Unsupported clipboard image format".into()),
+        };
+        let image = gpui::Image::from_bytes(format, bytes.to_vec());
+        cx.try_write_to_clipboard(gpui::ClipboardItem::new_image(&image))
+            .map_err(|error| format!("Could not copy the image to the clipboard: {error}"))
     }
     pub fn desktop_picture_path() -> Option<std::path::PathBuf> {
         None

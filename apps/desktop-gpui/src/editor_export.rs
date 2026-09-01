@@ -1,6 +1,6 @@
 //! Editor export page -- `routes/editor/ExportPage.tsx`, 1:1 layout.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -207,6 +207,10 @@ impl ExportUi {
             advanced_open: false,
             organization_id: None,
         });
+        Self::from_preferences(prefs)
+    }
+
+    fn from_preferences(prefs: ExportPrefs) -> Self {
         Self {
             destination: ExportDestination::from_slug(&prefs.export_to),
             format: ExportFormatKind::from_slug(&prefs.format),
@@ -269,6 +273,36 @@ impl ExportUi {
     fn is_custom_bpp(&self) -> bool {
         self.custom_bpp
             .is_some_and(|bpp| (bpp - self.compression.bits_per_pixel()).abs() > 0.001)
+    }
+
+    fn clipboard_retry_path(&self) -> Option<&Path> {
+        if self.phase == ExportPhase::Failed && self.destination == ExportDestination::Clipboard {
+            self.output_path.as_deref()
+        } else {
+            None
+        }
+    }
+
+    fn copy_completed_export(
+        &mut self,
+        path: PathBuf,
+        copy: impl FnOnce(&Path) -> Result<(), String>,
+    ) {
+        self.output_path = Some(path.clone());
+        self.error = None;
+        if self.close_requested || self.cancel.load(Ordering::Relaxed) {
+            self.phase = ExportPhase::Idle;
+            return;
+        }
+
+        self.phase = ExportPhase::Copying;
+        match copy(&path) {
+            Ok(()) => self.phase = ExportPhase::Done,
+            Err(error) => {
+                self.phase = ExportPhase::Failed;
+                self.error = Some(error);
+            }
+        }
     }
 }
 
@@ -643,29 +677,9 @@ impl EditorWindow {
                     if destination == ExportDestination::Clipboard {
                         let _ = this.update(cx, |this, cx| {
                             if let Some(ui) = this.export.as_mut() {
-                                ui.phase = ExportPhase::Copying;
-                            }
-                            cx.notify();
-                        });
-                        let copied = cx
-                            .background_executor()
-                            .spawn({
-                                let path = path.clone();
-                                async move { platform::copy_file_to_clipboard(&path) }
-                            })
-                            .await;
-                        let _ = this.update(cx, |this, cx| {
-                            if let Some(ui) = this.export.as_mut() {
-                                match copied {
-                                    Ok(()) => {
-                                        ui.phase = ExportPhase::Done;
-                                        ui.output_path = Some(path);
-                                    }
-                                    Err(error) => {
-                                        ui.phase = ExportPhase::Failed;
-                                        ui.error = Some(error);
-                                    }
-                                }
+                                ui.copy_completed_export(path, |path| {
+                                    platform::copy_file_to_clipboard(path, cx)
+                                });
                             }
                             cx.notify();
                         });
@@ -708,6 +722,19 @@ impl EditorWindow {
                 this.finish_requested_export_close(window, cx)
             });
         }));
+    }
+
+    fn retry_clipboard_copy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ui) = self.export.as_mut() else {
+            return;
+        };
+        let Some(path) = ui.clipboard_retry_path().map(Path::to_path_buf) else {
+            return;
+        };
+        ui.cancel = Arc::new(AtomicBool::new(false));
+        ui.copy_completed_export(path, |path| platform::copy_file_to_clipboard(path, cx));
+        cx.notify();
+        self.finish_requested_export_close(window, cx);
     }
 
     fn start_share_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1864,6 +1891,9 @@ impl EditorWindow {
             }
             ExportPhase::Done if ui.destination == ExportDestination::Link => "Upload complete",
             ExportPhase::Done => "Export complete",
+            ExportPhase::Failed if ui.clipboard_retry_path().is_some() => {
+                "Export complete; clipboard copy failed"
+            }
             ExportPhase::Failed => "Export failed",
             ExportPhase::Idle | ExportPhase::ChoosingFile => "",
         };
@@ -1982,8 +2012,24 @@ impl EditorWindow {
                 )
             })
             .when(ui.phase == ExportPhase::Done || ui.phase == ExportPhase::Failed, |this| {
-                this                .when(
-                    ui.phase == ExportPhase::Done && ui.destination == ExportDestination::File,
+                this.when(ui.clipboard_retry_path().is_some(), |this| {
+                    this.child(
+                        ui::Button::plain(
+                            &theme,
+                            "export-retry-copy",
+                            ui::ButtonVariant::Gray,
+                            ui::ButtonSize::Md,
+                        )
+                        .icon("icons/copy.svg")
+                        .label("Retry Copy")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.retry_clipboard_copy(window, cx);
+                        })),
+                    )
+                })
+                .when(
+                    (ui.phase == ExportPhase::Done && ui.destination == ExportDestination::File)
+                        || ui.clipboard_retry_path().is_some(),
                     |this| {
                         let path = ui.output_path.clone();
                         this.child(
@@ -2175,11 +2221,80 @@ async fn run_export(
 
 #[cfg(test)]
 mod tests {
-    use super::{ExportPhase, cancel_matching_export};
+    use super::{ExportDestination, ExportPhase, ExportUi, cancel_matching_export};
+    use crate::store::ExportPrefs;
+    use std::path::PathBuf;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
+
+    fn clipboard_export() -> ExportUi {
+        ExportUi::from_preferences(ExportPrefs {
+            format: "Mp4".into(),
+            fps: 30,
+            export_to: "clipboard".into(),
+            resolution: "720p".into(),
+            compression: "Maximum".into(),
+            optimize_filesize: false,
+            cursor_only: false,
+            custom_bpp: None,
+            force_ffmpeg_decoder: false,
+            advanced_open: false,
+            organization_id: None,
+        })
+    }
+
+    #[test]
+    fn failed_clipboard_copy_retries_the_completed_file() {
+        let mut ui = clipboard_export();
+        let output = PathBuf::from("finished recording.mp4");
+        ui.copy_completed_export(output.clone(), |path| {
+            assert_eq!(path, output);
+            Err("Clipboard is busy".into())
+        });
+        assert_eq!(ui.phase, ExportPhase::Failed);
+        assert_eq!(ui.error.as_deref(), Some("Clipboard is busy"));
+        let retry = ui.clipboard_retry_path().unwrap().to_path_buf();
+        assert_eq!(retry, output);
+
+        ui.copy_completed_export(retry, |path| {
+            assert_eq!(path, output);
+            Ok(())
+        });
+        assert_eq!(ui.phase, ExportPhase::Done);
+        assert_eq!(ui.output_path, Some(output));
+        assert!(ui.error.is_none());
+        assert!(ui.clipboard_retry_path().is_none());
+    }
+
+    #[test]
+    fn cancellation_or_close_prevents_late_clipboard_mutation() {
+        for closing in [false, true] {
+            let mut ui = clipboard_export();
+            ui.close_requested = closing;
+            ui.cancel.store(!closing, Ordering::Relaxed);
+            let output = PathBuf::from("finished recording.mp4");
+            ui.copy_completed_export(output.clone(), |_| {
+                panic!("cancelled exports must not replace the clipboard")
+            });
+            assert_eq!(ui.phase, ExportPhase::Idle);
+            assert_eq!(ui.output_path, Some(output));
+            assert!(ui.clipboard_retry_path().is_none());
+        }
+    }
+
+    #[test]
+    fn incomplete_or_non_clipboard_exports_cannot_retry_copy() {
+        let mut ui = clipboard_export();
+        ui.phase = ExportPhase::Failed;
+        assert!(ui.clipboard_retry_path().is_none());
+        ui.output_path = Some(PathBuf::from("finished recording.mp4"));
+        ui.destination = ExportDestination::File;
+        assert!(ui.clipboard_retry_path().is_none());
+        ui.destination = ExportDestination::Link;
+        assert!(ui.clipboard_retry_path().is_none());
+    }
 
     #[test]
     fn declining_cancel_preserves_the_running_export() {

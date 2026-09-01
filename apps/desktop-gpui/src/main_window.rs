@@ -4310,9 +4310,13 @@ impl MainWindow {
             .child(
                 self.library_action(("lib-ss-copy", index), "icons/copy.svg", {
                     let png = png.clone();
-                    move |_, _, _| {
-                        if let Err(error) = crate::platform::copy_image_to_clipboard(&png) {
+                    move |_, _, cx| {
+                        if let Err(error) = crate::platform::copy_image_to_clipboard(&png, cx) {
                             tracing::warn!("copying screenshot failed: {error}");
+                            cx.spawn(async move |_| {
+                                crate::platform::alert_dialog("Could not copy screenshot", &error);
+                            })
+                            .detach();
                         }
                     }
                 }),

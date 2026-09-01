@@ -1,8 +1,34 @@
+diff --git a/crates/gpui/src/app.rs b/crates/gpui/src/app.rs
+index 900e78a367e2..d0cab13a2cb7 100644
+--- a/crates/gpui/src/app.rs
++++ b/crates/gpui/src/app.rs
+@@ -1350,6 +1350,11 @@
+         self.platform.write_to_clipboard(item)
+     }
+
++    /// Writes data to the platform clipboard, returning an error when the platform cannot accept it.
++    pub fn try_write_to_clipboard(&self, item: ClipboardItem) -> Result<()> {
++        self.platform.try_write_to_clipboard(item)
++    }
++
+     /// Reads data from the primary selection buffer.
+     /// Only available on Linux.
+     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index 20600c3eb519..11bf6cfb0a00 100644
+index 20600c3eb519..9d92bb46f943 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
-@@ -812,6 +812,17 @@
+@@ -298,6 +298,9 @@
+
+     fn read_from_clipboard(&self) -> Option<ClipboardItem>;
+     fn write_to_clipboard(&self, item: ClipboardItem);
++    fn try_write_to_clipboard(&self, _item: ClipboardItem) -> Result<()> {
++        anyhow::bail!("Writing this clipboard item is unsupported")
++    }
+
+     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+     fn read_from_primary(&self) -> Option<ClipboardItem>;
+@@ -812,6 +815,17 @@
          detail: Option<&str>,
          answers: &[PromptButton],
      ) -> Option<oneshot::Receiver<usize>>;
