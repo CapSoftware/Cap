@@ -17,7 +17,7 @@ const mockDbChain = {
 function resetDbChain() {
 	for (const key of Object.keys(mockDbChain)) {
 		const fn = mockDbChain[key as keyof typeof mockDbChain];
-		fn.mockClear();
+		fn.mockReset();
 	}
 	mockDbChain.select.mockReturnValue(mockDbChain);
 	mockDbChain.from.mockReturnValue(mockDbChain);
@@ -108,6 +108,7 @@ vi.mock("@cap/utils", () => ({
 vi.mock("drizzle-orm", () => ({
 	and: vi.fn((...args: unknown[]) => args),
 	eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
+	inArray: vi.fn((a: unknown, b: unknown[]) => ({ inArray: [a, b] })),
 	isNull: vi.fn((a: unknown) => ({ isNull: a })),
 	ne: vi.fn((a: unknown, b: unknown) => ({ ne: [a, b] })),
 	sql: (parts: TemplateStringsArray, ...values: unknown[]) => ({
@@ -575,6 +576,34 @@ describe("Signed BAA Payment Link webhooks", () => {
 		status: "paid",
 		stripeSubscriptionId: "sub_link_baa",
 	};
+	const waivedSubscription = {
+		...subscription,
+		metadata: {
+			proRequirement: "waived",
+			baaRecordId: paid.id,
+			organizationId: paid.organizationId,
+			userId: paid.userId,
+		},
+	};
+	const legacyOwner = {
+		...owner,
+		stripeSubscriptionId: "12345",
+		stripeSubscriptionStatus: "active",
+		inviteQuota: 6,
+	};
+	const linkedRecord = {
+		id: paid.id,
+		organizationId: paid.organizationId,
+		userId: paid.userId,
+		subscriptionId: subscription.id,
+	};
+
+	function mockWaivedSubscription(value = waivedSubscription) {
+		mockStripe.subscriptions.retrieve.mockImplementation(async (id: string) => {
+			if (id === value.id) return value;
+			throw new Error(`No such subscription: ${id}`);
+		});
+	}
 
 	beforeEach(async () => {
 		vi.clearAllMocks();
@@ -615,6 +644,73 @@ describe("Signed BAA Payment Link webhooks", () => {
 		expect(mockStripe.customers.retrieve).not.toHaveBeenCalled();
 		expect(sendEmail).not.toHaveBeenCalled();
 	});
+
+	it("reconciles a waived paid checkout without retrieving or changing legacy Pro", async () => {
+		mockWaivedSubscription();
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "checkout.session.completed",
+			data: { object: session },
+		});
+		mockDbChain.limit
+			.mockResolvedValueOnce([legacyOwner])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([pending])
+			.mockResolvedValueOnce([{ ownerId: owner.id }])
+			.mockResolvedValueOnce([{ ...paid, status: "pending" }])
+			.mockResolvedValueOnce([paid]);
+		expect((await POST(makeWebhookRequest())).status).toBe(200);
+		expect(mockDbChain.set).toHaveBeenCalledWith({ status: "paid" });
+		expect(mockStripe.subscriptions.retrieve).not.toHaveBeenCalledWith("12345");
+		expect(mockStripe.subscriptions.cancel).not.toHaveBeenCalled();
+		expect(mockDbChain.update).not.toHaveBeenCalledWith(users);
+		expect(sendEmail).not.toHaveBeenCalled();
+	});
+
+	it.each(["paid", "active"])(
+		"preserves a %s waived BAA through subscription lifecycle updates",
+		async (status) => {
+			mockWaivedSubscription();
+			mockStripe.webhooks.constructEvent.mockReturnValue({
+				type: "customer.subscription.updated",
+				data: { object: waivedSubscription },
+			});
+			mockDbChain.limit
+				.mockResolvedValueOnce([
+					{
+						...paid,
+						status,
+						signedAt: status === "active" ? new Date() : null,
+					},
+				])
+				.mockResolvedValueOnce([legacyOwner]);
+			expect((await POST(makeWebhookRequest())).status).toBe(200);
+			expect(mockStripe.subscriptions.retrieve).not.toHaveBeenCalledWith(
+				"12345",
+			);
+			expect(mockStripe.subscriptions.cancel).not.toHaveBeenCalled();
+			expect(mockDbChain.set).not.toHaveBeenCalledWith(
+				expect.objectContaining({ status: "canceled" }),
+			);
+			expect(mockDbChain.update).not.toHaveBeenCalledWith(users);
+			expect(sendEmail).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["canceled", "unpaid"])(
+		"honors a waived BAA's current %s state over a stale active event",
+		async (status) => {
+			mockWaivedSubscription({ ...waivedSubscription, status });
+			mockStripe.webhooks.constructEvent.mockReturnValue({
+				type: "customer.subscription.updated",
+				data: { object: waivedSubscription },
+			});
+			expect((await POST(makeWebhookRequest())).status).toBe(200);
+			expect(mockDbChain.set).toHaveBeenCalledWith(
+				expect.objectContaining({ status: "canceled" }),
+			);
+			expect(mockDbChain.update).not.toHaveBeenCalledWith(users);
+		},
+	);
 
 	it("acknowledges an unpaid BAA checkout without granting payment or Pro", async () => {
 		mockStripe.webhooks.constructEvent.mockReturnValue({
@@ -760,12 +856,114 @@ describe("Signed BAA Payment Link webhooks", () => {
 		mockStripe.subscriptions.list.mockResolvedValue({ data: [pro] });
 		mockDbChain.limit
 			.mockResolvedValueOnce([owner])
-			.mockResolvedValueOnce([{ subscriptionId: "sub_link_baa" }]);
+			.mockResolvedValueOnce([linkedRecord]);
 		expect((await POST(makeWebhookRequest())).status).toBe(200);
 		expect(mockStripe.subscriptions.cancel).toHaveBeenCalledExactlyOnceWith(
 			"sub_link_baa",
 		);
 		expect(mockDbChain.set).toHaveBeenCalledWith({ status: "canceled" });
+	});
+
+	it.each(["customer.subscription.updated", "customer.subscription.deleted"])(
+		"preserves a bound waived BAA during %s Pro cleanup",
+		async (eventType) => {
+			const pro = {
+				...proSubscription,
+				status: eventType.endsWith("deleted") ? "canceled" : "unpaid",
+			};
+			mockWaivedSubscription();
+			mockStripe.webhooks.constructEvent.mockReturnValue({
+				type: eventType,
+				data: { object: pro },
+			});
+			mockStripe.customers.retrieve.mockResolvedValue({
+				id: "cus_pro",
+				email: owner.email,
+				metadata: { userId: owner.id },
+			});
+			mockStripe.subscriptions.list.mockResolvedValue({ data: [pro] });
+			if (eventType.endsWith("deleted")) {
+				mockDbChain.limit.mockResolvedValueOnce([linkedRecord]);
+				mockDbChain.where
+					.mockReturnValueOnce(mockDbChain)
+					.mockResolvedValueOnce([owner]);
+			} else {
+				mockDbChain.limit
+					.mockResolvedValueOnce([owner])
+					.mockResolvedValueOnce([linkedRecord]);
+			}
+			expect((await POST(makeWebhookRequest())).status).toBe(200);
+			expect(mockStripe.subscriptions.cancel).not.toHaveBeenCalled();
+			expect(mockDbChain.update).not.toHaveBeenCalledWith(signedBaas);
+		},
+	);
+
+	it.each(["mismatched record", "missing record"])(
+		"does not waive Pro cleanup for a BAA with a %s",
+		async (binding) => {
+			const pro = { ...proSubscription, status: "unpaid" };
+			mockWaivedSubscription();
+			mockStripe.webhooks.constructEvent.mockReturnValue({
+				type: "customer.subscription.updated",
+				data: { object: pro },
+			});
+			mockStripe.customers.retrieve.mockResolvedValue({
+				id: "cus_pro",
+				email: owner.email,
+				metadata: { userId: owner.id },
+			});
+			mockStripe.subscriptions.list.mockResolvedValue({
+				data: [pro, waivedSubscription],
+			});
+			mockDbChain.limit
+				.mockResolvedValueOnce([owner])
+				.mockResolvedValueOnce(
+					binding === "missing record"
+						? []
+						: [{ ...linkedRecord, id: "different-baa-record" }],
+				);
+			expect((await POST(makeWebhookRequest())).status).toBe(200);
+			expect(mockStripe.subscriptions.cancel).toHaveBeenCalledExactlyOnceWith(
+				subscription.id,
+			);
+			expect(mockDbChain.set).toHaveBeenCalledWith({ status: "canceled" });
+		},
+	);
+
+	it("resolves a bound waiver on an alternate customer while canceling ordinary BAAs", async () => {
+		const pro = { ...proSubscription, status: "unpaid", customer: "cus_link" };
+		const ordinaryBaa = { ...subscription, id: "sub_ordinary_baa" };
+		mockStripe.webhooks.constructEvent.mockReturnValue({
+			type: "customer.subscription.updated",
+			data: { object: pro },
+		});
+		mockStripe.customers.retrieve.mockResolvedValue({
+			id: "cus_link",
+			email: owner.email,
+			metadata: { userId: owner.id },
+		});
+		mockStripe.subscriptions.list.mockResolvedValue({
+			data: [pro, waivedSubscription, ordinaryBaa],
+		});
+		mockDbChain.limit
+			.mockResolvedValueOnce([owner])
+			.mockResolvedValueOnce([linkedRecord]);
+		expect((await POST(makeWebhookRequest())).status).toBe(200);
+		expect(mockDbChain.where).toHaveBeenCalledWith(
+			expect.arrayContaining([
+				expect.arrayContaining([
+					{
+						inArray: [signedBaas.stripeSubscriptionId, [subscription.id]],
+					},
+				]),
+			]),
+		);
+		expect(mockStripe.subscriptions.cancel).toHaveBeenCalledExactlyOnceWith(
+			ordinaryBaa.id,
+		);
+		expect(mockDbChain.where).not.toHaveBeenCalledWith({
+			eq: [signedBaas.stripeSubscriptionId, waivedSubscription.id],
+		});
 	});
 
 	it("preserves ordinary Pro checkout and its seat quota", async () => {
