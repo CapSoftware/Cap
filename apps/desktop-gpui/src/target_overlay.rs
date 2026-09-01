@@ -221,6 +221,7 @@ pub struct TargetSelect {
     /// A window locked in by a click (or seeded from the main window's picker),
     /// which the highlight sticks to until another window is clicked.
     pub pinned_window: Option<HoveredWindow>,
+    microphone_fill: f32,
     /// App icons by window id, fetched once per window.
     icons: HashMap<String, Arc<gpui::Image>>,
     _poll: Option<gpui::Task<()>>,
@@ -237,6 +238,7 @@ impl TargetSelect {
             cursor_display: None,
             hovered_window: None,
             pinned_window: None,
+            microphone_fill: 0.,
             icons: HashMap::new(),
             _poll: None,
         });
@@ -330,6 +332,8 @@ impl TargetSelect {
 
                 let Ok((icon_wanted, active)) = this.update(cx, |this: &mut Self, cx| {
                     let (display, window) = probe;
+                    this.microphone_fill =
+                        crate::ui::MicrophoneLevel::fill(crate::feeds::Feeds::global(cx).read(cx));
                     let changed = this.cursor_display != display || this.hovered_window != window;
                     this.cursor_display = display;
                     this.hovered_window = window;
@@ -988,6 +992,7 @@ impl OverlayWindow {
             } else {
                 "overlay-microphone"
             })
+            .relative()
             .flex()
             .items_center()
             .gap(px(8.))
@@ -1000,7 +1005,19 @@ impl OverlayWindow {
             .border_color(theme.gray_5)
             .bg(theme.gray_3)
             .text_color(theme.gray_12)
+            .overflow_hidden()
             .when(disabled, |row| row.opacity(0.7))
+            .when(!camera && enabled && !disabled, |row| {
+                row.child(
+                    crate::ui::MicrophoneLevel::snapshot(
+                        self.select.read(cx).microphone_fill,
+                        theme.blue_9.into(),
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0(),
+                )
+            })
             .child(
                 svg()
                     .path(if camera {
@@ -1009,7 +1026,8 @@ impl OverlayWindow {
                         "icons/microphone.svg"
                     })
                     .size(px(16.))
-                    .flex_shrink_0(),
+                    .flex_shrink_0()
+                    .text_color(theme.gray_11),
             )
             .child(
                 div()

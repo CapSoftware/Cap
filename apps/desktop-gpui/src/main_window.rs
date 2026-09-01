@@ -597,87 +597,6 @@ struct MicrophoneWarning {
     error: Option<String>,
 }
 
-struct MicrophoneLevel {
-    active: bool,
-    fill: f32,
-    color: Hsla,
-}
-
-impl MicrophoneLevel {
-    fn new(feeds: &Entity<Feeds>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        cx.observe_in(feeds, window, |this, feeds, window, cx| {
-            let visible = if cfg!(any(target_os = "macos", target_os = "windows")) {
-                crate::platform::window_is_visible(window)
-            } else {
-                window.is_window_active()
-            };
-            if this.active && visible {
-                let fill = Self::fill(feeds.read(cx));
-                if this.fill != fill {
-                    this.fill = fill;
-                    cx.notify();
-                }
-            }
-        })
-        .detach();
-        Self {
-            active: false,
-            fill: 0.,
-            color: gpui::transparent_black(),
-        }
-    }
-
-    fn fill(feeds: &Feeds) -> f32 {
-        if feeds.microphone.is_some() && feeds.mic_level_db.is_finite() {
-            (1. - feeds::picker_level(feeds.mic_level_db)) as f32
-        } else {
-            0.
-        }
-    }
-
-    fn configure(&mut self, active: bool, color: Hsla, cx: &mut Context<Self>) {
-        let fill = if active {
-            Self::fill(Feeds::global(cx).read(cx))
-        } else {
-            0.
-        };
-        if self.active != active || self.color != color || self.fill != fill {
-            self.active = active;
-            self.color = color;
-            self.fill = fill;
-            cx.notify();
-        }
-    }
-}
-
-impl Render for MicrophoneLevel {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let mut background = self.color;
-        background.a *= 0.1;
-        div()
-            .size_full()
-            .when(self.active && self.fill > 0., |this| {
-                this.child(
-                    div()
-                        .relative()
-                        .h_full()
-                        .w(gpui::relative(self.fill))
-                        .rounded(px(7.))
-                        .bg(background)
-                        .child(
-                            div()
-                                .absolute()
-                                .bottom_0()
-                                .left_0()
-                                .w_full()
-                                .h(px(2.))
-                                .bg(self.color),
-                        ),
-                )
-            })
-    }
-}
-
 pub struct MainWindow {
     theme: Theme,
     expanded: bool,
@@ -690,7 +609,7 @@ pub struct MainWindow {
     camera: Option<CameraOption>,
     camera_id: Option<recording::DeviceOrModelID>,
     microphone: Option<MicrophoneOption>,
-    microphone_level: Entity<MicrophoneLevel>,
+    microphone_level: Entity<ui::MicrophoneLevel>,
     pending_device_restore: crate::store::RecordingInputSettings,
     device_restore_suspended: bool,
     device_format_target: Option<DeviceFormatTarget>,
@@ -857,7 +776,7 @@ impl MainWindow {
         // meter notifies at ~20Hz and would otherwise repaint the home view
         // for a level bar only the microphone picker shows.
         let feeds = Feeds::global(cx);
-        let microphone_level = cx.new(|cx| MicrophoneLevel::new(&feeds, window, cx));
+        let microphone_level = cx.new(|cx| ui::MicrophoneLevel::new(&feeds, window, cx));
         cx.observe(&feeds, |this: &mut Self, feeds, cx| {
             let feeds = feeds.read(cx);
             let camera_id = feeds.camera.as_ref().map(|camera| &camera.id);
