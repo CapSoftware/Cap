@@ -168,6 +168,43 @@ pub(crate) fn preview_radius(state: &CameraWindowState) -> f32 {
     }
 }
 
+fn picker_preview_radius(state: &CameraWindowState, picker_size: Option<(f32, f32)>) -> f32 {
+    match (state.shape, picker_size) {
+        (CameraShape::Round, Some((width, height))) => {
+            width.max(0.).min((height - CAMERA_TOOLBAR_HEIGHT).max(0.)) / 2.
+        }
+        _ => preview_radius(state),
+    }
+}
+
+#[cfg(test)]
+mod preview_radius_tests {
+    use super::*;
+
+    #[test]
+    fn parked_circle_tracks_visible_content_and_restores_saved_radius() {
+        let state = CameraWindowState::default();
+        let saved = state;
+        assert_eq!(picker_preview_radius(&state, Some((136., 192.))), 68.);
+        assert_eq!(picker_preview_radius(&state, Some((120., 192.))), 60.);
+        assert_eq!(picker_preview_radius(&state, Some((136., 156.))), 50.);
+        assert_eq!(picker_preview_radius(&state, None), saved.size / 2.);
+        assert_eq!(state, saved);
+    }
+
+    #[test]
+    fn parked_rectangular_shapes_preserve_their_corner_style() {
+        for shape in [CameraShape::Square, CameraShape::Full] {
+            let state = CameraWindowState {
+                shape,
+                ..Default::default()
+            };
+            assert_eq!(picker_preview_radius(&state, Some((136., 192.))), 24.);
+            assert_eq!(picker_preview_radius(&state, None), 24.);
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LinuxCameraPhysicalRect {
@@ -730,7 +767,7 @@ impl Render for CameraPreviewView {
                         window.paint_surface_fitted(
                             bounds,
                             fitted,
-                            gpui::Corners::all(px(radius)),
+                            gpui::Corners::all(px(radius)).clamp_radii_for_quad_size(bounds.size),
                             buffer.clone(),
                         );
                         paints.fetch_add(1, Ordering::Relaxed);
@@ -1040,6 +1077,7 @@ impl CameraWindow {
         if self.picker_size != size {
             self.invalidate_pending_resize();
             self.picker_size = size;
+            self.sync_preview_chrome(cx);
             cx.notify();
         }
     }
@@ -1266,7 +1304,7 @@ impl CameraWindow {
     /// Pushes the chrome inputs the preview renders with (its own notify is
     /// the only thing that busts its cache).
     fn sync_preview_chrome(&mut self, cx: &mut Context<Self>) {
-        let radius = preview_radius(&self.state);
+        let radius = picker_preview_radius(&self.state, self.picker_size);
         let size = clamp_size(self.state.size);
         self.preview
             .update(cx, |preview, cx| preview.set_chrome(radius, size, cx));
@@ -1772,6 +1810,7 @@ impl CameraWindow {
                 }
                 self.picker_size = Some(next);
                 self.apply_window_size(window, cx);
+                self.sync_preview_chrome(cx);
                 cx.notify();
             }
             ResizeTarget::State(next) => {
