@@ -16,14 +16,16 @@ use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc, time::Duration};
 
 use gpui::{
     AppContext as _, Bounds, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
-    IntoElement, MouseButton, ParentElement, Pixels, Point, Render, RenderImage, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px, rgb, svg,
+    IntoElement, MouseButton, ParentElement, Pixels, Point, Render, RenderImage, ScrollAnchor,
+    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div, img,
+    prelude::FluentBuilder, px, rgb, svg,
 };
 use serde_json::Value;
 
 use crate::{
     devices::WindowOption,
     library::{self, RecordingItem, RecordingMode, ScreenshotItem},
+    main_window::Mode,
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
         GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, RECORDING_START_SAFETY,
@@ -258,6 +260,12 @@ const INSTANT_RESOLUTION_TIERS: &[(u32, &str, &str)] = &[
 
 /// `FREE_INSTANT_MODE_MAX_RESOLUTION`.
 const FREE_INSTANT_MODE_MAX_RESOLUTION: u32 = 1280;
+
+#[derive(Clone, Copy)]
+enum InstantQualityNotice {
+    UpgradeRequired,
+    SaveFailed,
+}
 
 /// `UPDATE_CHANNEL_OPTIONS`.
 const UPDATE_CHANNEL_DESCRIPTIONS: &[(UpdateChannel, &str)] = &[
@@ -602,6 +610,12 @@ pub struct SettingsWindow {
     pub(crate) page: Page,
     pub(crate) settings: GeneralSettings,
     menu: Option<OpenMenu>,
+    page_scroll: ScrollHandle,
+    instant_quality_anchor: ScrollAnchor,
+    studio_quality_anchor: ScrollAnchor,
+    quality_scroll_request: Option<Mode>,
+    has_cap_pro: bool,
+    instant_quality_notice: Option<InstantQualityNotice>,
     /// Everything the pages in `settings_pages.rs` own -- their fetch state,
     /// drafts and text-input entities.
     pub(crate) pages: crate::settings_pages::PagesState,
@@ -704,6 +718,7 @@ impl SettingsWindow {
         ];
 
         let pages = crate::settings_pages::PagesState::new(window, cx);
+        let page_scroll = ScrollHandle::new();
 
         Self {
             theme,
@@ -716,6 +731,12 @@ impl SettingsWindow {
             server_url: settings.server_url.clone(),
             settings,
             menu: None,
+            instant_quality_anchor: ScrollAnchor::for_handle(page_scroll.clone()),
+            studio_quality_anchor: ScrollAnchor::for_handle(page_scroll.clone()),
+            page_scroll,
+            quality_scroll_request: None,
+            has_cap_pro: store::auth_snapshot().is_upgraded(),
+            instant_quality_notice: None,
             project_name_input,
             server_url_input,
             _field_events: field_events,
@@ -763,6 +784,14 @@ impl SettingsWindow {
     /// Re-target an already-open window, the way `showWindow({ Settings: {
     /// page } })` navigates a live one.
     pub fn set_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page != page {
+            self.page_scroll = ScrollHandle::new();
+            self.instant_quality_anchor = ScrollAnchor::for_handle(self.page_scroll.clone());
+            self.studio_quality_anchor = ScrollAnchor::for_handle(self.page_scroll.clone());
+        }
+        self.quality_scroll_request = None;
+        self.instant_quality_notice = None;
+        self.has_cap_pro = store::auth_snapshot().is_upgraded();
         self.page = page;
         self.menu = None;
         // The store may have changed under us while the window was in the
@@ -770,6 +799,22 @@ impl SettingsWindow {
         // window position).
         self.settings = GeneralSettings::load();
         self.page_shown(window, cx);
+        cx.notify();
+    }
+
+    pub fn show_quality_settings(
+        &mut self,
+        mode: Mode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if mode == Mode::Screenshot {
+            return;
+        }
+        if self.page != Page::General {
+            self.set_page(Page::General, window, cx);
+        }
+        self.quality_scroll_request = Some(mode);
         cx.notify();
     }
 
@@ -1454,6 +1499,16 @@ impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
         let theme = self.theme;
+        if self.page == Page::General
+            && let Some(mode) = self.quality_scroll_request.take()
+        {
+            match mode {
+                Mode::Instant => self.instant_quality_anchor.scroll_to(window, cx),
+                Mode::Studio => self.studio_quality_anchor.scroll_to(window, cx),
+                Mode::Screenshot => {}
+            }
+            window.request_animation_frame();
+        }
 
         let shell = div()
             .track_focus(&self.focus)
@@ -1732,7 +1787,10 @@ impl SettingsWindow {
                     .px(px(4.))
                     .py(px(2.))
                     .rounded(px(4.))
-                    .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
+                    .child(format!(
+                        "v{} (Experimental GPUI)",
+                        env!("CARGO_PKG_VERSION")
+                    )),
             )
             .child(
                 div()
@@ -1840,6 +1898,8 @@ impl SettingsWindow {
         if !crate::auth::sign_out() {
             tracing::error!("failed to clear the auth session");
         }
+        self.has_cap_pro = store::auth_snapshot().is_upgraded();
+        self.instant_quality_notice = None;
         if !store::set_store_value("user_profile", Value::Null) {
             tracing::error!("failed to clear the cached user profile");
         }
@@ -1852,6 +1912,8 @@ impl SettingsWindow {
     }
 
     fn refresh_user_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.has_cap_pro = store::auth_snapshot().is_upgraded();
+        self.instant_quality_notice = None;
         let Some(user_id) = signed_in_user_id() else {
             return;
         };
@@ -1976,6 +2038,7 @@ impl SettingsWindow {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .track_scroll(&self.page_scroll)
                     // `.cap-settings-page > .px-6 { max-width: none; padding:
                     //  18px var(--macos-settings-content-padding-x) 28px }`,
                     //  and `space-y-7` between sections.
@@ -2964,15 +3027,33 @@ impl SettingsWindow {
         )
     }
 
-    /// `CapProSection` -- `instantModeMaxResolution`, `disableAutoOpenLinks`.
-    ///
-    /// `hasCapPro` comes from the auth store's plan, which this app does not
-    /// read, so the section renders its free-plan variant: the resolution is
-    /// pinned to 720p and the other tiers are inert (the Tauri app answers a
-    /// click on them with an upgrade toast).
+    fn select_instant_resolution(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some((resolution, _, _)) = INSTANT_RESOLUTION_TIERS.get(index).copied() else {
+            return;
+        };
+        self.has_cap_pro = store::auth_snapshot().is_upgraded();
+        if !self.has_cap_pro && resolution != FREE_INSTANT_MODE_MAX_RESOLUTION {
+            self.instant_quality_notice = Some(InstantQualityNotice::UpgradeRequired);
+        } else if store::set_store_setting(
+            GENERAL_SETTINGS,
+            "instantModeMaxResolution",
+            Value::from(resolution),
+        ) {
+            self.settings.instant_mode_max_resolution = resolution;
+            self.instant_quality_notice = None;
+        } else {
+            self.instant_quality_notice = Some(InstantQualityNotice::SaveFailed);
+        }
+        cx.notify();
+    }
+
     fn render_cap_pro(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let effective = FREE_INSTANT_MODE_MAX_RESOLUTION;
+        let effective = if self.has_cap_pro {
+            self.settings.instant_mode_max_resolution
+        } else {
+            FREE_INSTANT_MODE_MAX_RESOLUTION
+        };
         let summary = INSTANT_RESOLUTION_TIERS
             .iter()
             .find(|(value, _, _)| *value == effective)
@@ -2994,7 +3075,7 @@ impl SettingsWindow {
                         })
                         .collect(),
                     cx,
-                    |_, _, _| {},
+                    |this, index, cx| this.select_instant_resolution(index, cx),
                 ),
             )
             .child(
@@ -3011,14 +3092,55 @@ impl SettingsWindow {
             None,
             vec![
                 self.rows(vec![
-                    self.setting_row(
-                        "Instant Mode quality",
-                        Some(
-                            "Instant recordings are locked to 720p. Cap Pro unlocks higher \
-                             resolutions.",
-                        ),
-                        resolution.into_any_element(),
-                    ),
+                    div()
+                        .id("settings-instant-quality")
+                        .anchor_scroll(Some(self.instant_quality_anchor.clone()))
+                        .child(self.setting_row(
+                            "Instant Mode quality",
+                            Some(if self.has_cap_pro {
+                                "Choose the maximum upload resolution for Instant recordings."
+                            } else {
+                                "Instant recordings are locked to 720p. Cap Pro unlocks higher resolutions."
+                            }),
+                            resolution.into_any_element(),
+                        ))
+                        .when_some(self.instant_quality_notice, |this, notice| {
+                            this.child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .items_start()
+                                    .gap(px(8.))
+                                    .px(px(12.))
+                                    .pb(px(12.))
+                                    .text_size(px(12.))
+                                    .line_height(px(18.))
+                                    .text_color(Hsla::from(theme.amber_11))
+                                    .child(match notice {
+                                        InstantQualityNotice::UpgradeRequired => {
+                                            "Upgrade to Cap Pro to record Instant Mode videos above 720p."
+                                        }
+                                        InstantQualityNotice::SaveFailed => {
+                                            "Failed to save Instant Mode quality. Please try again."
+                                        }
+                                    })
+                                    .when(matches!(notice, InstantQualityNotice::UpgradeRequired), |this| {
+                                        this.child(
+                                            ui::Button::settings(
+                                                &theme,
+                                                "instant-quality-upgrade",
+                                                ui::ButtonVariant::Gray,
+                                                ui::ButtonSize::Xs,
+                                            )
+                                            .label("Upgrade")
+                                            .on_click(|_, _, cx| {
+                                                cx.open_url(&format!("{}/pricing", crate::auth::server_url()));
+                                            }),
+                                        )
+                                    }),
+                            )
+                        })
+                        .into_any_element(),
                     self.setting_row(
                         "Auto-open shareable links",
                         Some("Open the share link in your browser as soon as the upload finishes."),
@@ -3053,6 +3175,8 @@ impl SettingsWindow {
             .unwrap_or(STUDIO_QUALITY_TIERS[1]);
 
         let body = div()
+            .id("settings-studio-quality")
+            .anchor_scroll(Some(self.studio_quality_anchor.clone()))
             // `flex flex-col gap-3 px-4 py-4`
             .flex()
             .flex_col()

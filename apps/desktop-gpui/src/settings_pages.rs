@@ -10,7 +10,7 @@
 //! runtime (reqwest needs tokio); persistence goes through [`crate::store`].
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     str::FromStr as _,
     sync::{
@@ -356,10 +356,10 @@ pub(crate) struct PagesState {
     // Automations (automations.tsx)
     automations: AutomationsStore,
     automations_loaded: bool,
+    automations_save_failed: bool,
     expanded_rule: Option<String>,
     rule_editor: Option<RuleEditor>,
-    /// `testReports`, reduced to per-action `supported` flags.
-    test_reports: HashMap<String, Vec<bool>>,
+    compatibility_checks: HashSet<String>,
 
     _subscriptions: Vec<gpui::Subscription>,
 }
@@ -470,9 +470,10 @@ impl PagesState {
             switch_back_ticker: None,
             automations: AutomationsStore::default(),
             automations_loaded: false,
+            automations_save_failed: false,
             expanded_rule: None,
             rule_editor: None,
-            test_reports: HashMap::new(),
+            compatibility_checks: HashSet::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -524,9 +525,10 @@ impl SettingsWindow {
             Page::Automations => {
                 self.pages.automations = store::automations();
                 self.pages.automations_loaded = true;
+                self.pages.automations_save_failed = false;
                 self.pages.expanded_rule = None;
                 self.pages.rule_editor = None;
-                self.pages.test_reports.clear();
+                self.pages.compatibility_checks.clear();
             }
             _ => {}
         }
@@ -5875,14 +5877,6 @@ fn action_is_dangerous(kind: ActionType) -> bool {
     matches!(kind, ActionType::RunCommand | ActionType::Webhook)
 }
 
-/// The desktop host's capability set (`DesktopAutomationHost::capabilities`):
-/// everything, with OCR only where Vision/Windows-OCR exists. `skipEditor`
-/// requires no capability at all (`required_capability` returns `None`).
-fn action_supported_here(action: &Action) -> bool {
-    !matches!(action, Action::RecognizeTextToClipboard)
-        || cfg!(any(target_os = "macos", target_os = "windows"))
-}
-
 /// `ruleSummary`.
 fn rule_summary(rule: &AutomationRule) -> String {
     let trigger = trigger_phrase(rule.trigger);
@@ -6106,8 +6100,10 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    fn automations_persist(&self) {
-        if !store::set_automations(&self.pages.automations) {
+    fn automations_persist(&mut self) {
+        self.pages.compatibility_checks.clear();
+        self.pages.automations_save_failed = !store::set_automations(&self.pages.automations);
+        if self.pages.automations_save_failed {
             tracing::warn!("saving the automations store failed");
         }
     }
@@ -6145,14 +6141,11 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    /// `runTest`, evaluated locally against the same capability table the
-    /// desktop host reports.
     fn automation_test(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(rule) = self.pages.automations.rules.get(index) else {
             return;
         };
-        let checks: Vec<bool> = rule.actions.iter().map(action_supported_here).collect();
-        self.pages.test_reports.insert(rule.id.clone(), checks);
+        self.pages.compatibility_checks.insert(rule.id.clone());
         cx.notify();
     }
 
@@ -6507,6 +6500,36 @@ impl SettingsWindow {
                 .into_any_element()
         };
 
+        let mut rule_content = Vec::new();
+        if self.pages.automations_save_failed {
+            rule_content.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .gap(px(8.))
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .text_color(Hsla::from(theme.amber_11))
+                    .child("Failed to save automations. Your changes have not been saved.")
+                    .child(
+                        ui::Button::settings(
+                            &theme,
+                            "automations-retry-save",
+                            ui::ButtonVariant::Gray,
+                            ui::ButtonSize::Xs,
+                        )
+                        .label("Retry save")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.automations_persist();
+                            cx.notify();
+                        })),
+                    )
+                    .into_any_element(),
+            );
+        }
+        rule_content.push(rules_body);
+
         // `grid grid-cols-2 gap-2.5`, as rows of two.
         let mut template_rows: Vec<gpui::AnyElement> = Vec::new();
         for pair in TEMPLATES.chunks(2) {
@@ -6528,11 +6551,11 @@ impl SettingsWindow {
             self.section(
                 "Automations",
                 Some(
-                    "Run actions automatically when something happens in Cap. Rules are shared \
-                     with the Cap CLI.",
+                    "Rules are shared with classic Cap and the Cap CLI. Experimental GPUI \
+                     saves these rules but does not run automations.",
                 ),
                 None,
-                vec![rules_body],
+                rule_content,
             )
             .into_any_element(),
             self.section(
@@ -6775,13 +6798,31 @@ impl SettingsWindow {
                     })),
             )
             .child(
-                self.toggle(("rule-enabled", index), enabled, cx, move |this, cx| {
-                    if let Some(rule) = this.pages.automations.rules.get_mut(index) {
-                        rule.enabled = !rule.enabled;
-                        this.automations_persist();
-                        cx.notify();
-                    }
-                }),
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_end()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.settings_muted())
+                            .child(match (enabled, self.pages.automations_save_failed) {
+                                (true, false) => "Enabled · Saved",
+                                (false, false) => "Disabled · Saved",
+                                (true, true) => "Enabled · Not saved",
+                                (false, true) => "Disabled · Not saved",
+                            }),
+                    )
+                    .child(
+                        self.toggle(("rule-enabled", index), enabled, cx, move |this, cx| {
+                            if let Some(rule) = this.pages.automations.rules.get_mut(index) {
+                                rule.enabled = !rule.enabled;
+                                this.automations_persist();
+                                cx.notify();
+                            }
+                        }),
+                    ),
             )
             .child(
                 div()
@@ -6890,7 +6931,7 @@ impl SettingsWindow {
             .actions
             .iter()
             .any(|action| action_is_dangerous(action_type_of(action)));
-        let report = self.pages.test_reports.get(&rule.id).cloned();
+        let compatibility_checked = self.pages.compatibility_checks.contains(&rule.id);
 
         let name_field = self.editor_field("Name", self.render_editor_input(AutoField::Name));
 
@@ -7017,8 +7058,7 @@ impl SettingsWindow {
                 .flex_col()
                 .gap(px(8.))
                 .children(rule.actions.iter().enumerate().map(|(ai, action)| {
-                    let support = report.as_ref().and_then(|checks| checks.get(ai)).copied();
-                    self.render_action_row(index, ai, action, trigger, action_count, support, cx)
+                    self.render_action_row(index, ai, action, trigger, action_count, cx)
                 }));
 
         let footer = div()
@@ -7100,8 +7140,22 @@ impl SettingsWindow {
                         .line_height(px(18.))
                         .text_color(Hsla::from(theme.amber_11))
                         .child(
-                            "This automation runs commands or sends network requests. Only use \
-                             values you trust — they execute automatically with your permissions.",
+                            "In classic Cap or the Cap CLI, this automation runs commands or sends \
+                             network requests with your permissions. Only use values you trust.",
+                        ),
+                )
+            })
+            .when(compatibility_checked, |this| {
+                this.child(
+                    div()
+                        .id(("rule-compatibility-result", index))
+                        .text_size(px(12.))
+                        .line_height(px(18.))
+                        .text_color(Hsla::from(theme.amber_11))
+                        .child(
+                            "Compatibility checked: this automation cannot run in Experimental \
+                             GPUI. Saved rules remain available to classic Cap and the Cap CLI. \
+                             No actions were run.",
                         ),
                 )
             })
@@ -7264,7 +7318,6 @@ impl SettingsWindow {
     }
 
     /// `<ActionRow>`.
-    #[allow(clippy::too_many_arguments)]
     fn render_action_row(
         &self,
         rule: usize,
@@ -7272,14 +7325,13 @@ impl SettingsWindow {
         action: &Action,
         trigger: Trigger,
         action_count: usize,
-        support: Option<bool>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = self.theme;
         let kind = action_type_of(action);
         let applies = action_applies_to_trigger(kind, trigger);
 
-        let mut header = div().flex().flex_row().items_center().gap(px(8.)).child(
+        let header = div().flex().flex_row().items_center().gap(px(8.)).child(
             div().flex_1().min_w_0().child(
                 self.pages_select(
                     SharedString::from(format!("action-type-{rule}-{index}")),
@@ -7290,19 +7342,7 @@ impl SettingsWindow {
                 .stretch_label(),
             ),
         );
-        if support == Some(false) {
-            header = header.child(
-                div()
-                    .px(px(6.))
-                    .py(px(2.))
-                    .rounded(px(6.))
-                    .bg(Theme::with_alpha(theme.amber_11, 0.15))
-                    .text_size(px(10.))
-                    .text_color(Hsla::from(theme.amber_11))
-                    .child("SKIPPED HERE"),
-            );
-        }
-        header = header
+        let header = header
             .child(self.render_row_icon_button(
                 SharedString::from(format!("action-up-{rule}-{index}")),
                 "icons/chevron-up.svg",

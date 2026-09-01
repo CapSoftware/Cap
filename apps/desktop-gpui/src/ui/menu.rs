@@ -268,6 +268,7 @@ impl RenderOnce for Menu {
                     .border_1()
                     .border_color(border)
                     .bg(bg)
+                    .text_color(text)
                     .text_size(px(12.))
                     .children(items.into_iter().enumerate().map(|(index, item)| {
                         let handler = handler.clone();

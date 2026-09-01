@@ -470,7 +470,99 @@ impl ResizeCorner {
 struct ResizeDrag {
     corner: ResizeCorner,
     start_size: f32,
+    start_picker_size: Option<(f32, f32)>,
     start_position: gpui::Point<gpui::Pixels>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ResizeTarget {
+    Picker((f32, f32)),
+    State(f32),
+}
+
+fn resize_start(state_size: f32, picker_size: Option<(f32, f32)>) -> (f32, Option<(f32, f32)>) {
+    let picker_size = picker_size.filter(|(width, height)| {
+        width.is_finite() && *width > 0. && height.is_finite() && *height > CAMERA_TOOLBAR_HEIGHT
+    });
+    let start_size = picker_size
+        .map(|(_, height)| height - CAMERA_TOOLBAR_HEIGHT)
+        .unwrap_or(clamp_size(state_size));
+    (start_size, picker_size)
+}
+
+fn resize_target(
+    start_size: f32,
+    start_picker_size: Option<(f32, f32)>,
+    delta: f32,
+) -> ResizeTarget {
+    let minimum = start_picker_size.map_or(CAMERA_MIN_SIZE, |_| start_size.min(CAMERA_MIN_SIZE));
+    let next = (start_size + delta).clamp(minimum, CAMERA_MAX_SIZE);
+    if next < CAMERA_MIN_SIZE
+        && let Some((start_width, _)) = start_picker_size
+    {
+        return ResizeTarget::Picker((
+            start_width * next / start_size,
+            next + CAMERA_TOOLBAR_HEIGHT,
+        ));
+    }
+    ResizeTarget::State(next)
+}
+
+#[cfg(test)]
+mod resize_tests {
+    use super::*;
+
+    fn close(left: f32, right: f32) {
+        assert!((left - right).abs() < 0.001, "{left} != {right}");
+    }
+
+    #[test]
+    fn parked_square_resizes_from_its_visible_size() {
+        let (start, picker) = resize_start(230., Some((100., 156.)));
+        assert_eq!(start, 100.);
+        assert_eq!(
+            resize_target(start, picker, 1.),
+            ResizeTarget::Picker((101., 157.))
+        );
+    }
+
+    #[test]
+    fn parked_landscape_preserves_aspect_below_the_saved_size_floor() {
+        let (start, picker) = resize_start(180., Some((144., 137.)));
+        let ResizeTarget::Picker((width, height)) = resize_target(start, picker, 1.) else {
+            panic!("expected temporary picker geometry");
+        };
+        close(start, 81.);
+        close(height, 138.);
+        close(width / (height - CAMERA_TOOLBAR_HEIGHT), 16. / 9.);
+    }
+
+    #[test]
+    fn parked_resize_hands_off_continuously_at_the_saved_size_floor() {
+        let (start, picker) = resize_start(180., Some((144., 137.)));
+        assert_eq!(
+            resize_target(start, picker, CAMERA_MIN_SIZE - start),
+            ResizeTarget::State(CAMERA_MIN_SIZE)
+        );
+        let expected_width = 144. * CAMERA_MIN_SIZE / start;
+        let state = CameraWindowState {
+            size: CAMERA_MIN_SIZE,
+            shape: CameraShape::Full,
+            ..Default::default()
+        };
+        let (width, height) = window_size(&state, Some(16. / 9.));
+        close(width, expected_width);
+        close(height, CAMERA_MIN_SIZE + CAMERA_TOOLBAR_HEIGHT);
+    }
+
+    #[test]
+    fn parked_resize_does_not_shrink_below_its_visible_size() {
+        let (start, picker) = resize_start(230., Some((100., 156.)));
+        assert_eq!(
+            resize_target(start, picker, -50.),
+            ResizeTarget::Picker((100., 156.))
+        );
+    }
 }
 
 /// `cameraOverlayTextMetrics` (`camera.tsx:891-909`), rem resolved at 16px.
@@ -1631,9 +1723,12 @@ impl CameraWindow {
                         cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                             window.prevent_default();
                             cx.stop_propagation();
+                            let (start_size, start_picker_size) =
+                                resize_start(this.state.size, this.picker_size);
                             this.resizing = Some(ResizeDrag {
                                 corner,
-                                start_size: this.state.size,
+                                start_size,
+                                start_picker_size,
                                 start_position: event.position,
                             });
                             cx.notify();
@@ -1668,13 +1763,27 @@ impl CameraWindow {
             -delta_y
         };
         let delta = dx.max(dy);
-        let next = clamp_size(drag.start_size + delta);
-        if (next - self.state.size).abs() > 0.5 {
-            self.picker_size = None;
-            self.state.size = next;
-            self.apply_window_size(window, cx);
-            self.sync_preview_chrome(cx);
-            cx.notify();
+        match resize_target(drag.start_size, drag.start_picker_size, delta) {
+            ResizeTarget::Picker(next) => {
+                if self.picker_size.is_some_and(|current| {
+                    (current.0 - next.0).abs() <= 0.5 && (current.1 - next.1).abs() <= 0.5
+                }) {
+                    return;
+                }
+                self.picker_size = Some(next);
+                self.apply_window_size(window, cx);
+                cx.notify();
+            }
+            ResizeTarget::State(next) => {
+                if self.picker_size.is_none() && (next - self.state.size).abs() <= 0.5 {
+                    return;
+                }
+                self.picker_size = None;
+                self.state.size = next;
+                self.apply_window_size(window, cx);
+                self.sync_preview_chrome(cx);
+                cx.notify();
+            }
         }
     }
 
@@ -1721,21 +1830,37 @@ impl Render for CameraWindow {
                 }),
             )
             .when(resizing, |this| {
-                this.on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                    if event.dragging() {
-                        this.handle_resize_move(event, window, cx);
-                    } else {
-                        this.end_resize(cx);
-                    }
-                }))
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_resize(cx)),
-                )
-                .on_mouse_up_out(
-                    MouseButton::Left,
-                    cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_resize(cx)),
-                )
+                let move_camera = cx.entity().downgrade();
+                let up_camera = cx.entity().downgrade();
+                this.child(gpui::canvas(
+                    |_bounds, _window, _cx| (),
+                    move |_bounds, (), window, _cx| {
+                        let camera = move_camera.clone();
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                            if phase != gpui::DispatchPhase::Bubble {
+                                return;
+                            }
+                            camera
+                                .update(cx, |this, cx| {
+                                    if event.dragging() {
+                                        this.handle_resize_move(event, window, cx);
+                                    } else {
+                                        this.end_resize(cx);
+                                    }
+                                })
+                                .ok();
+                        });
+                        let camera = up_camera.clone();
+                        window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+                            if phase != gpui::DispatchPhase::Bubble
+                                || event.button != MouseButton::Left
+                            {
+                                return;
+                            }
+                            camera.update(cx, |this, cx| this.end_resize(cx)).ok();
+                        });
+                    },
+                ))
             })
             .child(
                 self.toolbar.clone().cached(

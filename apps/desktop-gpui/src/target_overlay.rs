@@ -25,8 +25,8 @@ use std::time::Duration;
 
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{
-    App, AppContext as _, Context, Entity, FontWeight, Global, Hsla, ImageFormat,
-    InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent,
+    Animation, AnimationExt as _, App, AppContext as _, Context, Entity, FontWeight, Global, Hsla,
+    ImageFormat, InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent,
     ParentElement as _, Pixels, Point, Render, SharedString, StatefulInteractiveElement as _,
     Styled, Window, div, img, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px,
     rgb, svg,
@@ -38,6 +38,9 @@ use scap_targets::{
 
 use crate::{
     app_windows,
+    editor_canvas::{
+        GuideAxis, NormRect, SNAP_PX, SnapGuide, build_snap_targets, snap_moving_rect,
+    },
     main_window::{Mode, TargetType},
     theme::Theme,
 };
@@ -90,6 +93,91 @@ const AREA_HANDLE_GRAB: f32 = 12.;
 /// crop; gpui has no layout read-back, so the two numbers are constants.
 const CLUSTER_WIDTH: f32 = 416.;
 const CLUSTER_HEIGHT: f32 = 88.;
+
+const COUNTDOWN_OPTIONS: &[(u32, &str)] = &[
+    (0, "Off"),
+    (3, "3 seconds"),
+    (5, "5 seconds"),
+    (10, "10 seconds"),
+];
+
+const SELECTION_HINT_CYCLE: Duration = Duration::from_millis(2800);
+
+fn material_ease(progress: f32) -> f32 {
+    let progress = progress.clamp(0., 1.);
+    if progress <= 0. {
+        return 0.;
+    }
+    if progress >= 1. {
+        return 1.;
+    }
+    let mut low = 0.;
+    let mut high = 1.;
+    for _ in 0..10 {
+        let t = (low + high) / 2.;
+        let inverse = 1. - t;
+        let x = 3. * inverse * inverse * t * 0.4 + 3. * inverse * t * t * 0.2 + t * t * t;
+        if x < progress {
+            low = t;
+        } else {
+            high = t;
+        }
+    }
+    let t = (low + high) / 2.;
+    let inverse = 1. - t;
+    3. * inverse * t * t + t * t * t
+}
+
+fn selection_drag_progress(progress: f32) -> f32 {
+    if progress <= 0.5 {
+        material_ease(progress * 2.)
+    } else {
+        1. - material_ease((progress - 0.5) * 2.)
+    }
+}
+
+fn norm_area_rect(rect: AreaRect, display_size: (f32, f32)) -> NormRect {
+    let width = f64::from(display_size.0.max(1.));
+    let height = f64::from(display_size.1.max(1.));
+    NormRect {
+        x: f64::from(rect.x) / width,
+        y: f64::from(rect.y) / height,
+        w: f64::from(rect.width) / width,
+        h: f64::from(rect.height) / height,
+    }
+}
+
+fn snap_area_rect(rect: AreaRect, display_size: (f32, f32)) -> (AreaRect, Vec<SnapGuide>) {
+    let rect = rect.clamped(display_size);
+    let targets = build_snap_targets(&[], None);
+    let normalized = norm_area_rect(rect, display_size);
+    let (dx, dy, guides) = snap_moving_rect(
+        normalized,
+        &targets,
+        SNAP_PX / f64::from(display_size.0.max(1.)),
+        SNAP_PX / f64::from(display_size.1.max(1.)),
+    );
+    (
+        AreaRect {
+            x: rect.x + (dx * f64::from(display_size.0)) as f32,
+            y: rect.y + (dy * f64::from(display_size.1)) as f32,
+            ..rect
+        }
+        .clamped(display_size),
+        guides,
+    )
+}
+
+fn snap_area_point(point: (f32, f32), display_size: (f32, f32)) -> ((f32, f32), Vec<SnapGuide>) {
+    let rect = AreaRect {
+        x: point.0,
+        y: point.1,
+        width: 0.,
+        height: 0.,
+    };
+    let (snapped, guides) = snap_area_rect(rect, display_size);
+    ((snapped.x, snapped.y), guides)
+}
 
 /// The window under the cursor, as the overlays need it.
 #[derive(Clone, Debug, PartialEq)]
@@ -460,10 +548,13 @@ pub struct OverlayWindow {
     focus: gpui::FocusHandle,
     crop: Option<AreaRect>,
     drag: Option<AreaDrag>,
+    snap_guides: Vec<SnapGuide>,
+    recording_area: bool,
     /// The mode menu the start pill's caret drops down -- `menuModes()`
     /// popped up at the event location (`target-select-overlay.tsx:2064-2090,
     /// 2206-2210`). `Some` while it is open.
     mode_menu: Option<crate::ui::MenuState>,
+    countdown_menu: Option<crate::ui::MenuState>,
     inline_camera: Option<Entity<crate::camera_window::CameraWindow>>,
     inline_camera_subscription: Option<gpui::Subscription>,
     empty_camera_state: crate::store::CameraWindowState,
@@ -535,7 +626,10 @@ impl OverlayWindow {
             focus: cx.focus_handle(),
             crop: None,
             drag: None,
+            snap_guides: Vec::new(),
+            recording_area: false,
             mode_menu: None,
+            countdown_menu: None,
             inline_camera: None,
             inline_camera_subscription: None,
             empty_camera_state: crate::store::load().camera_window.unwrap_or_default(),
@@ -551,14 +645,41 @@ impl OverlayWindow {
     /// Seed an area selection without drawing one -- the harness path
     /// (`CAP_GPUI_AUTO_AREA`), since unprivileged synthetic drags are dropped.
     pub fn set_crop(&mut self, crop: AreaRect, cx: &mut Context<Self>) {
+        if self.recording_area {
+            return;
+        }
         self.crop = Some(crop.clamped(self.display_size));
         self.sync_area_camera(cx);
         cx.notify();
     }
 
+    pub fn commit_area_for_recording(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.select.read(cx).mode != Some(TargetType::Area) || self.target(cx).is_none() {
+            return false;
+        }
+        self.recording_area = true;
+        self.drag = None;
+        self.snap_guides.clear();
+        self.mode_menu = None;
+        self.countdown_menu = None;
+        self.device_menu = None;
+        cx.notify();
+        true
+    }
+
+    pub fn is_recording_area(&self) -> bool {
+        self.recording_area
+    }
+
     /// The target this overlay would record, or `None` when it has nothing to
     /// record yet (no window under the cursor, no valid area drawn).
     pub fn target(&self, cx: &App) -> Option<ScreenCaptureTarget> {
+        if self.recording_area {
+            return self.crop.map(|crop| ScreenCaptureTarget::Area {
+                screen: self.display_id.clone(),
+                bounds: crop.to_bounds(),
+            });
+        }
         let select = self.select.read(cx);
         let min = area_min_size(select.recording_mode);
         match select.mode? {
@@ -679,6 +800,19 @@ impl Render for OverlayWindow {
             .key_context("TargetSelectOverlay")
             .on_key_down(
                 cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
+                    if let Some(menu) = &mut this.countdown_menu {
+                        match menu.on_key(&event.keystroke.key) {
+                            crate::ui::MenuKey::Commit(index) => this.choose_countdown(index, cx),
+                            crate::ui::MenuKey::Dismiss => {
+                                this.countdown_menu = None;
+                                cx.notify();
+                            }
+                            crate::ui::MenuKey::Moved => cx.notify(),
+                            crate::ui::MenuKey::Ignored => return,
+                        }
+                        cx.stop_propagation();
+                        return;
+                    }
                     if let Some(menu) = &mut this.device_menu {
                         match menu.state.on_key(&event.keystroke.key) {
                             crate::ui::MenuKey::Commit(index) => this.choose_device(index, cx),
@@ -716,16 +850,21 @@ impl Render for OverlayWindow {
             .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white());
 
-        let root = match mode {
-            Some(TargetType::Display) => root.child(self.render_display_variant(cx)),
-            Some(TargetType::Window) => root.child(self.render_window_variant(cx)),
-            Some(TargetType::Area) => root.child(self.render_area_variant(cx)),
-            Some(TargetType::CameraOnly) => root.child(self.render_camera_variant(cx)),
-            None => root,
+        let root = if self.recording_area {
+            root.child(self.render_area_variant(cx))
+        } else {
+            match mode {
+                Some(TargetType::Display) => root.child(self.render_display_variant(cx)),
+                Some(TargetType::Window) => root.child(self.render_window_variant(cx)),
+                Some(TargetType::Area) => root.child(self.render_area_variant(cx)),
+                Some(TargetType::CameraOnly) => root.child(self.render_camera_variant(cx)),
+                None => root,
+            }
         };
         // Painted after the variant so the dropdown sits above the start
         // cluster it drops from.
         root.children(self.render_mode_menu(cx))
+            .children(self.render_countdown_menu(cx))
             .children(self.render_device_menu(cx))
             .into_any_element()
     }
@@ -821,6 +960,7 @@ impl OverlayWindow {
             (items, choices)
         };
         self.mode_menu = None;
+        self.countdown_menu = None;
         self.device_menu = Some(OverlayDeviceMenu {
             state: crate::ui::MenuState::new(position, &items),
             items,
@@ -951,6 +1091,42 @@ impl OverlayWindow {
                 }))
                 .into_any_element(),
         )
+    }
+
+    fn render_countdown_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let state = self.countdown_menu.as_ref()?;
+        let current = crate::store::GeneralSettings::load()
+            .recording_countdown
+            .unwrap_or(0);
+        let items = COUNTDOWN_OPTIONS
+            .iter()
+            .map(|(value, label)| crate::ui::MenuItem::new(*label, *value == current))
+            .collect();
+        Some(
+            crate::ui::Menu::plain(&self.theme, "overlay-countdown-menu", items, state)
+                .on_select(cx.listener(|this, index: &usize, _, cx| {
+                    this.choose_countdown(*index, cx);
+                }))
+                .on_dismiss(cx.listener(|this, _, _, cx| {
+                    this.countdown_menu = None;
+                    cx.notify();
+                }))
+                .into_any_element(),
+        )
+    }
+
+    fn choose_countdown(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.countdown_menu = None;
+        if let Some((value, _)) = COUNTDOWN_OPTIONS.get(index)
+            && !crate::store::set_store_setting(
+                crate::store::GENERAL_SETTINGS,
+                "recordingCountdown",
+                serde_json::Value::from(*value),
+            )
+        {
+            tracing::warn!(value, "could not save the recording countdown");
+        }
+        cx.notify();
     }
 
     /// A `CheckMenuItem` action: `setOptions("mode", ..)` +
@@ -1209,31 +1385,34 @@ impl OverlayWindow {
     fn render_area_variant(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let interacting = self.drag.is_some();
         // `shouldShowOverlay = isInteracting() || isActiveDisplay()`.
-        let visible = interacting || self.is_active_display(cx);
+        let visible = self.recording_area || interacting || self.is_active_display(cx);
         let crop = self.crop;
         let min = area_min_size(self.select.read(cx).recording_mode);
         let valid = crop.is_some_and(|crop| crop.is_valid_for(min));
+        let interactive = !self.recording_area;
 
         let mut root = div()
             .id("area-root")
             .size_full()
             .relative()
-            .cursor(gpui::CursorStyle::Crosshair)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
-                    this.area_mouse_down(event.position, cx);
-                }),
-            )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                this.area_mouse_move(event.position, cx);
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseUpEvent, _window, cx| {
-                    this.area_mouse_up(cx);
-                }),
-            );
+            .when(interactive, |this| {
+                this.cursor(gpui::CursorStyle::Crosshair)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                            this.area_mouse_down(event.position, cx);
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                        this.area_mouse_move(event.position, cx);
+                    }))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                            this.area_mouse_up(cx);
+                        }),
+                    )
+            });
 
         if !visible {
             // `classList={{ "opacity-0 pointer-events-none": !shouldShowOverlay() }}`
@@ -1285,18 +1464,29 @@ impl OverlayWindow {
         };
 
         if let Some(crop) = crop {
-            root = root.child(self.render_crop_region(crop));
+            root = root.child(self.render_crop_region(crop, interactive));
         }
 
-        root.child(self.render_area_toolbar(crop, valid))
-            .child(self.render_area_controls(crop, valid, cx))
+        root = root.children(self.render_snap_guides());
+        if self.recording_area {
+            return root;
+        }
+        if crop.is_none() && !interacting {
+            root = root.child(self.render_selection_hint());
+        }
+        root = root.child(self.render_area_toolbar(crop, valid));
+        if crop.is_some() {
+            root.child(self.render_area_controls(crop, valid, cx))
+        } else {
+            root
+        }
     }
 
     /// `border border-white/50` around the selection, plus the eight resize
     /// zones. The zones carry only a cursor: the drag itself is dispatched from
     /// the root's mouse-down through [`Self::area_zone_at`], so a grab that
     /// starts a pixel outside the handle still resizes.
-    fn render_crop_region(&self, crop: AreaRect) -> impl IntoElement {
+    fn render_crop_region(&self, crop: AreaRect, interactive: bool) -> impl IntoElement {
         let mut region = div()
             .absolute()
             .left(px(crop.x))
@@ -1305,9 +1495,9 @@ impl OverlayWindow {
             .h(px(crop.height))
             .border_1()
             .border_color(gpui::hsla(0., 0., 1., 0.5))
-            .cursor(gpui::CursorStyle::OpenHand);
+            .when(interactive, |this| this.cursor(gpui::CursorStyle::OpenHand));
 
-        for handle in AreaHandle::ALL {
+        for handle in AreaHandle::ALL.into_iter().filter(|_| interactive) {
             let mut zone = div().id(handle.id()).absolute().cursor(handle.cursor());
             let reach = px(AREA_HANDLE_GRAB * 2.);
 
@@ -1389,6 +1579,142 @@ impl OverlayWindow {
         region
     }
 
+    fn render_snap_guides(&self) -> Vec<gpui::AnyElement> {
+        self.snap_guides
+            .iter()
+            .map(|guide| {
+                let color = gpui::rgb(0xFF3B6B);
+                match guide.axis {
+                    GuideAxis::V => div()
+                        .absolute()
+                        .left(px(guide.pos as f32 * self.display_size.0))
+                        .top(px(guide.start as f32 * self.display_size.1))
+                        .w(px(1.))
+                        .h(px((guide.end - guide.start) as f32 * self.display_size.1))
+                        .bg(color)
+                        .into_any_element(),
+                    GuideAxis::H => div()
+                        .absolute()
+                        .top(px(guide.pos as f32 * self.display_size.1))
+                        .left(px(guide.start as f32 * self.display_size.0))
+                        .h(px(1.))
+                        .w(px((guide.end - guide.start) as f32 * self.display_size.0))
+                        .bg(color)
+                        .into_any_element(),
+                }
+            })
+            .collect()
+    }
+
+    fn render_selection_hint(&self) -> impl IntoElement {
+        let cursor_path = if cfg!(target_os = "windows") {
+            "onboarding/cursor-windows.svg"
+        } else {
+            "onboarding/cursor-macos.svg"
+        };
+        let animation = || Animation::new(SELECTION_HINT_CYCLE).repeat();
+        let selection = div()
+            .absolute()
+            .left(px(41.))
+            .top(px(26.))
+            .border_1()
+            .border_color(gpui::hsla(0., 0., 1., 0.82))
+            .bg(linear_gradient(
+                135.,
+                linear_color_stop(gpui::hsla(0.55, 1., 0.72, 0.4), 0.),
+                linear_color_stop(gpui::hsla(0.62, 1., 0.59, 0.2), 1.),
+            ))
+            .with_animation("area-selection-hint-box", animation(), |this, progress| {
+                let progress = selection_drag_progress(progress);
+                this.w(px(10. + 58. * progress)).h(px(8. + 44. * progress))
+            });
+        let cursor = img(cursor_path)
+            .absolute()
+            .left(px(41.))
+            .top(px(26.))
+            .w(px(18.))
+            .h(px(26.))
+            .with_animation(
+                "area-selection-hint-cursor",
+                animation(),
+                |this, progress| {
+                    let progress = selection_drag_progress(progress);
+                    this.left(px(41. + 68. * progress))
+                        .top(px(26. + 52. * progress))
+                },
+            );
+        let click = div()
+            .absolute()
+            .rounded_full()
+            .border_2()
+            .border_color(gpui::hsla(0., 0., 1., 0.85))
+            .with_animation(
+                "area-selection-hint-click",
+                animation(),
+                |this, progress| {
+                    let (scale, opacity) = if (0.1..0.12).contains(&progress) {
+                        (
+                            (progress - 0.1) / 0.02 * 0.2,
+                            (progress - 0.1) / 0.02 * 0.95,
+                        )
+                    } else if (0.12..0.18).contains(&progress) {
+                        (
+                            0.2 + (progress - 0.12) / 0.06 * 0.65,
+                            0.95 * (1. - (progress - 0.12) / 0.06),
+                        )
+                    } else {
+                        (0., 0.)
+                    };
+                    let drag = selection_drag_progress(progress);
+                    let size = 20. * scale;
+                    this.left(px(41. + 68. * drag + 9. - size / 2.))
+                        .top(px(26. + 52. * drag + 14.3 - size / 2.))
+                        .size(px(size))
+                        .opacity(opacity)
+                },
+            );
+
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(20.))
+                    .child(
+                        div()
+                            .relative()
+                            .w(px(152.))
+                            .h(px(104.))
+                            .mb(px(24.))
+                            .child(img("icons/monitor.svg").size_full())
+                            .child(
+                                div()
+                                    .absolute()
+                                    .left(px(4.5))
+                                    .top(px(4.5))
+                                    .w(px(143.))
+                                    .h(px(94.5))
+                                    .overflow_hidden()
+                                    .child(selection)
+                                    .child(click)
+                                    .child(cursor),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(16.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Click and drag to select an area"),
+                    ),
+            )
+    }
+
     /// The floating readout: `top-12 left-1/2 -translate-x-1/2` over the
     /// liquid-glass surface, `min-w-28 px-2 text-base tabular-nums`. The
     /// aspect-ratio, reset, fill and lock controls that share this bar in the
@@ -1454,6 +1780,7 @@ impl OverlayWindow {
             height: 0.,
         });
         let (screen_width, screen_height) = self.display_size;
+        let min = area_min_size(self.select.read(cx).recording_mode);
 
         let below = crop.bottom() + MARGIN_BELOW;
         let cluster_height = CLUSTER_HEIGHT
@@ -1485,7 +1812,9 @@ impl OverlayWindow {
             .flex()
             .flex_col()
             .items_center()
-            .child(self.render_controls_cluster(self.target(cx), !valid, cx))
+            .when(valid, |this| {
+                this.child(self.render_controls_cluster(self.target(cx), false, cx))
+            })
             .when(!valid, |this| {
                 // `Minimum size is 150 x 150` / `W x H is too small`.
                 this.child(
@@ -1502,10 +1831,7 @@ impl OverlayWindow {
                         .bg(self.theme.red_2)
                         .text_size(px(14.))
                         .text_color(self.theme.gray_12)
-                        .child(format!(
-                            "Minimum size is {} x {}",
-                            AREA_MIN_SIZE as u32, AREA_MIN_SIZE as u32
-                        ))
+                        .child(format!("Minimum size is {} x {}", min as u32, min as u32))
                         .child(div().text_size(px(11.)).child(format!(
                             "{} x {} is too small",
                             crop.width.round(),
@@ -1576,11 +1902,8 @@ impl OverlayWindow {
                         .child(self.render_close_button(cx))
                         .child(self.render_start_button(target, disabled, mode, cx))
                         .child(
-                            // `size-9 rounded-full border bg-gray-6 text-gray-12`.
-                            // Inert: the countdown menu it opens needs the
-                            // settings store (same gap as the bar's settings
-                            // button).
                             div()
+                                .id("overlay-countdown")
                                 .flex()
                                 .justify_center()
                                 .items_center()
@@ -1595,7 +1918,31 @@ impl OverlayWindow {
                                         .path("icons/gear.svg")
                                         .size(px(20.))
                                         .text_color(theme.gray_12),
-                                ),
+                                )
+                                .hover(|style| style.opacity(0.8))
+                                .tooltip(move |_, cx| {
+                                    crate::ui::Tooltip::new(&theme, "Recording countdown").view(cx)
+                                })
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    let current = crate::store::GeneralSettings::load()
+                                        .recording_countdown
+                                        .unwrap_or(0);
+                                    let items = COUNTDOWN_OPTIONS
+                                        .iter()
+                                        .map(|(value, label)| {
+                                            crate::ui::MenuItem::new(*label, *value == current)
+                                        })
+                                        .collect::<Vec<_>>();
+                                    this.mode_menu = None;
+                                    this.device_menu = None;
+                                    this.countdown_menu =
+                                        Some(crate::ui::MenuState::new(event.position(), &items));
+                                    cx.notify();
+                                })),
                         ),
                 ),
             )
@@ -1668,8 +2015,8 @@ impl OverlayWindow {
             Mode::Screenshot => "icons/camera.svg",
         };
         let mode_label = match mode {
-            Mode::Instant => "Instant Mode",
-            Mode::Studio => "Studio Mode",
+            Mode::Instant => "Instant Mode — Record shareable link",
+            Mode::Studio => "Studio Mode — Record and edit locally",
             Mode::Screenshot => "Screenshot Mode",
         };
         let _ = target;
@@ -1695,6 +2042,7 @@ impl OverlayWindow {
             ))
             .child(
                 div()
+                    .id("overlay-start-action")
                     .flex()
                     .flex_1()
                     .items_center()
@@ -1712,6 +2060,7 @@ impl OverlayWindow {
                     .when(!disabled, |this| {
                         this.hover(|style| style.bg(gpui::hsla(0., 0., 1., 0.1)))
                     })
+                    .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, label).view(cx))
                     .child(
                         svg()
                             .path(icon)
@@ -1737,6 +2086,8 @@ impl OverlayWindow {
                                 div()
                                     .mt(px(-2.))
                                     .text_size(px(11.))
+                                    .whitespace_nowrap()
+                                    .truncate()
                                     // `text-[11px] ... text-white/90
                                     //  font-light` (`t-s-overlay.tsx:2200`).
                                     // `font-light` is 300 and no 300 face is
@@ -1760,6 +2111,7 @@ impl OverlayWindow {
                 // handler. Active even while start is disabled, same as the
                 // source (the disabled styling only wraps the leading half).
                 div()
+                    .id("overlay-mode-picker")
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
@@ -1773,6 +2125,7 @@ impl OverlayWindow {
                             }
                             let current = this.select.read(cx).recording_mode;
                             this.device_menu = None;
+                            this.countdown_menu = None;
                             this.mode_menu = Some(crate::ui::MenuState::new(
                                 event.position,
                                 &mode_menu_items(current),
@@ -1792,6 +2145,9 @@ impl OverlayWindow {
                     .border_l_1()
                     .border_color(gpui::hsla(0., 0., 1., 0.2))
                     .bg(gpui::hsla(0., 0., 1., 0.05))
+                    .tooltip(move |_, cx| {
+                        crate::ui::Tooltip::new(&theme, "Choose recording mode").view(cx)
+                    })
                     .child(
                         svg()
                             .path("icons/caret-down.svg")
@@ -1846,7 +2202,11 @@ impl OverlayWindow {
     }
 
     fn area_mouse_down(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.recording_area {
+            return;
+        }
         let point = (f32::from(position.x), f32::from(position.y));
+        self.snap_guides.clear();
 
         self.drag = match self.area_zone_at(point) {
             Some(AreaZone::Handle(handle)) => Some(AreaDrag::Resize {
@@ -1879,23 +2239,34 @@ impl OverlayWindow {
     }
 
     fn area_mouse_move(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.recording_area {
+            return;
+        }
         let Some(drag) = &self.drag else { return };
         let x = f32::from(position.x).clamp(0., self.display_size.0);
         let y = f32::from(position.y).clamp(0., self.display_size.1);
 
-        let next = match drag {
-            AreaDrag::Draw { anchor } => AreaRect {
-                x: anchor.0.min(x),
-                y: anchor.1.min(y),
-                width: (x - anchor.0).abs(),
-                height: (y - anchor.1).abs(),
-            },
-            AreaDrag::Move { grab, start } => AreaRect {
-                x: start.x + (x - grab.0),
-                y: start.y + (y - grab.1),
-                ..*start
+        let (next, guides) = match drag {
+            AreaDrag::Draw { anchor } => {
+                let ((x, y), guides) = snap_area_point((x, y), self.display_size);
+                (
+                    AreaRect {
+                        x: anchor.0.min(x),
+                        y: anchor.1.min(y),
+                        width: (x - anchor.0).abs(),
+                        height: (y - anchor.1).abs(),
+                    },
+                    guides,
+                )
             }
-            .clamped(self.display_size),
+            AreaDrag::Move { grab, start } => snap_area_rect(
+                AreaRect {
+                    x: start.x + (x - grab.0),
+                    y: start.y + (y - grab.1),
+                    ..*start
+                },
+                self.display_size,
+            ),
             AreaDrag::Resize { handle, start } => {
                 let mut left = start.x;
                 let mut top = start.y;
@@ -1913,24 +2284,32 @@ impl OverlayWindow {
                 if handle.south() {
                     bottom = y;
                 }
-                AreaRect {
-                    x: left.min(right),
-                    y: top.min(bottom),
-                    width: (right - left).abs(),
-                    height: (bottom - top).abs(),
-                }
+                (
+                    AreaRect {
+                        x: left.min(right),
+                        y: top.min(bottom),
+                        width: (right - left).abs(),
+                        height: (bottom - top).abs(),
+                    },
+                    Vec::new(),
+                )
             }
         };
 
         self.crop = Some(next);
+        self.snap_guides = guides;
         self.sync_area_camera(cx);
         cx.notify();
     }
 
     fn area_mouse_up(&mut self, cx: &mut Context<Self>) {
+        if self.recording_area {
+            return;
+        }
         let Some(drag) = self.drag.take() else {
             return;
         };
+        self.snap_guides.clear();
         if let Some(crop) = self.crop {
             // A click with no drag is not a selection.
             if crop.width < 2. || crop.height < 2. {
@@ -2044,5 +2423,53 @@ mod tests {
         assert_eq!(bounds.position().y(), 64.);
         assert_eq!(bounds.size().width(), 800.);
         assert_eq!(bounds.size().height(), 600.);
+    }
+
+    #[test]
+    fn moving_area_snaps_to_display_centres_and_edges() {
+        let display = (1000., 800.);
+        let (centered, center_guides) = snap_area_rect(rect(446., 180., 100., 120.), display);
+        assert_eq!(centered, rect(450., 180., 100., 120.));
+        assert!(
+            center_guides
+                .iter()
+                .any(|guide| guide.axis == GuideAxis::V && guide.pos == 0.5)
+        );
+
+        let (edge, edge_guides) = snap_area_rect(rect(894., 180., 100., 120.), display);
+        assert_eq!(edge, rect(900., 180., 100., 120.));
+        assert!(
+            edge_guides
+                .iter()
+                .any(|guide| guide.axis == GuideAxis::V && guide.pos == 1.)
+        );
+    }
+
+    #[test]
+    fn drawing_endpoint_snaps_per_axis_within_seven_pixels() {
+        let display = (1000., 800.);
+        let (snapped, guides) = snap_area_point((496., 404.), display);
+        assert_eq!(snapped, (500., 400.));
+        assert!(
+            guides
+                .iter()
+                .any(|guide| guide.axis == GuideAxis::V && guide.pos == 0.5)
+        );
+        assert!(
+            guides
+                .iter()
+                .any(|guide| guide.axis == GuideAxis::H && guide.pos == 0.5)
+        );
+
+        let (unsnapped, guides) = snap_area_point((490., 390.), display);
+        assert_eq!(unsnapped, (490., 390.));
+        assert!(guides.is_empty());
+    }
+
+    #[test]
+    fn selection_hint_curve_reaches_both_drag_extents() {
+        assert_eq!(selection_drag_progress(0.), 0.);
+        assert!((selection_drag_progress(0.5) - 1.).abs() < 0.001);
+        assert_eq!(selection_drag_progress(1.), 0.);
     }
 }

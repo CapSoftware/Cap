@@ -792,6 +792,11 @@ mod mac {
         }
     }
 
+    pub fn set_window_click_through(native: &NativeWindow, click_through: bool) -> bool {
+        native.0.setIgnoresMouseEvents(click_through);
+        unsafe { native.0.ignoresMouseEvents() == click_through }
+    }
+
     /// `orderOut:` -- hide without closing, the way the Tauri main window
     /// hides while the recording controls bar is up. Takes the retained
     /// handle for the same reason [`place_overlay_panel`] does: ordering a
@@ -1640,6 +1645,9 @@ mod stub {
     }
     pub fn set_window_capture_hidden(_native: &NativeWindow, _hidden: bool) -> usize {
         0
+    }
+    pub fn set_window_click_through(_native: &NativeWindow, _click_through: bool) -> bool {
+        false
     }
     pub fn native_window(_window: &Window) -> Option<NativeWindow> {
         None

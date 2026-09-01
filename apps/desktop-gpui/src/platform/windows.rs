@@ -161,6 +161,10 @@ pub fn set_window_capture_hidden(native: &NativeWindow, hidden: bool) -> usize {
     }
 }
 
+pub fn set_window_click_through(_native: &NativeWindow, _click_through: bool) -> bool {
+    false
+}
+
 pub fn restore_borderless_style(_native: &NativeWindow) {}
 
 pub fn remove_popup_window_chrome(_native: &NativeWindow) {}

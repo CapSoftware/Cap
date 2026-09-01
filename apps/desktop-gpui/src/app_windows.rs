@@ -357,7 +357,11 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     let escape = platform::escape_hotkey_events();
     cx.spawn(async move |cx| {
         while escape.recv_async().await.is_ok() {
-            cx.update(dismiss_target_overlays);
+            cx.update(|cx| {
+                if TargetSelect::global(cx).read(cx).mode.is_some() {
+                    dismiss_target_overlays(cx);
+                }
+            });
         }
     })
     .detach();
@@ -377,6 +381,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 return;
             }
             close_controls(&session, cx);
+            close_target_overlays(cx);
             #[cfg(target_os = "linux")]
             if !restore_clean_capture_ui(cx) {
                 return;
@@ -871,6 +876,24 @@ fn first_registered_reopen_target(
     candidates
         .into_iter()
         .find(|candidate| live.contains(&candidate.window_id()))
+}
+
+pub fn open_quality_settings(mode: Mode, cx: &mut App) {
+    if mode == Mode::Screenshot {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    if defer_window_until_capture_safe(cx) {
+        return;
+    }
+    open_settings(Page::General, cx);
+    if let Some(handle) = cx.global::<AppWindows>().settings {
+        handle
+            .update(cx, |view, window, cx| {
+                view.show_quality_settings(mode, window, cx);
+            })
+            .ok();
+    }
 }
 
 /// Open the settings window on a page, and hide the main window.
@@ -1823,12 +1846,143 @@ pub fn dismiss_target_overlays(cx: &mut App) {
 /// selection alone.
 pub fn close_target_overlays(cx: &mut App) {
     close_overlay_windows(cx);
+    disarm_target_selection(cx);
+}
+
+fn disarm_target_selection(cx: &mut App) {
     let select = TargetSelect::global(cx);
     select.update(cx, |select, cx| {
         let recording_mode = select.recording_mode;
         select.arm(None, recording_mode, None, cx);
     });
     sync_camera_presentation(cx);
+}
+
+fn area_overlay_matches(
+    target: &ScreenCaptureTarget,
+    candidate: &ScreenCaptureTarget,
+    capture_excluded: bool,
+) -> bool {
+    let (
+        ScreenCaptureTarget::Area { screen, bounds },
+        ScreenCaptureTarget::Area {
+            screen: candidate_screen,
+            bounds: candidate_bounds,
+        },
+    ) = (target, candidate)
+    else {
+        return false;
+    };
+    capture_excluded
+        && screen == candidate_screen
+        && bounds.position() == candidate_bounds.position()
+        && bounds.size() == candidate_bounds.size()
+}
+
+fn area_overlay_for_recording(
+    target: &ScreenCaptureTarget,
+    cx: &mut App,
+) -> Option<WindowHandle<OverlayWindow>> {
+    let ScreenCaptureTarget::Area { screen, .. } = target else {
+        return None;
+    };
+    let handle = overlay_handle(Some(screen.clone()), cx)?;
+    handle
+        .update(cx, |view, window, cx| {
+            let candidate = view.target(cx)?;
+            #[cfg(target_os = "macos")]
+            let capture_excluded = platform::window_is_visible(window)
+                && platform::window_number(window).is_some_and(|number| number > 0);
+            #[cfg(not(target_os = "macos"))]
+            let capture_excluded = {
+                let _ = window;
+                false
+            };
+            area_overlay_matches(target, &candidate, capture_excluded).then_some(handle)
+        })
+        .ok()
+        .flatten()
+}
+
+fn close_other_overlays(retained: WindowHandle<OverlayWindow>, cx: &mut App) {
+    let closing: Vec<_> = cx
+        .global::<AppWindows>()
+        .overlays
+        .iter()
+        .filter(|(_, handle)| *handle != retained)
+        .map(|(display, _)| display.clone())
+        .collect();
+    for display in closing {
+        close_overlay(&display, cx);
+    }
+}
+
+fn retain_recording_area(
+    target: &ScreenCaptureTarget,
+    cx: &mut App,
+) -> Option<WindowHandle<OverlayWindow>> {
+    let Some(handle) = area_overlay_for_recording(target, cx) else {
+        close_target_overlays(cx);
+        return None;
+    };
+    let committed = handle
+        .update(cx, |view, _, cx| {
+            view.is_recording_area() || view.commit_area_for_recording(cx)
+        })
+        .unwrap_or(false);
+    if !committed {
+        close_target_overlays(cx);
+        return None;
+    }
+    release_camera_park(cx);
+    close_other_overlays(handle, cx);
+    platform::unregister_escape_hotkey();
+    disarm_target_selection(cx);
+    Some(handle)
+}
+
+fn make_recording_area_passive(handle: WindowHandle<OverlayWindow>, cx: &mut App) {
+    cx.spawn(async move |cx| {
+        let native = cx.update(|cx| {
+            if RecordingSession::global(cx).read(cx).phase == Phase::Idle
+                || !cx
+                    .global::<AppWindows>()
+                    .overlays
+                    .iter()
+                    .any(|(_, current)| *current == handle)
+            {
+                return None;
+            }
+            Some(
+                handle
+                    .update(cx, |view, window, _| {
+                        view.is_recording_area()
+                            .then(|| platform::native_window(window))
+                            .flatten()
+                    })
+                    .ok()
+                    .flatten(),
+            )
+        });
+        let Some(native) = native else {
+            return;
+        };
+        if !native.is_some_and(|native| platform::set_window_click_through(&native, true)) {
+            tracing::warn!("recording area click-through failed; removing the outline");
+            cx.update(|cx| {
+                let display = cx
+                    .global::<AppWindows>()
+                    .overlays
+                    .iter()
+                    .find(|(_, current)| *current == handle)
+                    .map(|(display, _)| display.clone());
+                if let Some(display) = display {
+                    close_overlay(&display, cx);
+                }
+            });
+        }
+    })
+    .detach();
 }
 
 /// Repaint every overlay. The cursor probe runs while none of them is the
@@ -1870,33 +2024,54 @@ fn overlay_window_ids(cx: &mut App) -> Vec<scap_targets::WindowId> {
         .collect()
 }
 
-/// The overlay's Start button: overlays down, then the main window's start
-/// path with the target the overlay resolved.
 pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
+    let main = cx.global::<AppWindows>().main;
+    if RecordingSession::global(cx).read(cx).phase != Phase::Idle
+        || main
+            .update(cx, |view, _, _| view.is_preparing_recording())
+            .unwrap_or(true)
+    {
+        return;
+    }
     // Collected before the windows go away: the capture starts a beat after
     // this, and an overlay that has not finished closing must not end up in
     // the recording.
     let excluded = overlay_window_ids(cx);
-    // `onRecordingStart` nulls the saved camera bounds before the dismissal
-    // (`target-select-overlay.tsx:687-690`): a bubble parked inside the picked
-    // window stays there for the recording.
-    release_camera_park(cx);
-    close_target_overlays(cx);
-    // A "recordingStudio" dismissal does not reveal the main window -- the bar
-    // owns the foreground now, and the stop flow's reshow brings it back.
-    cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
-    // Same for an editor-owned picker (`targetModeSource === "editorRecording"`
-    // in the `ClipsSidebar` effect, `:416-419`): the editor stays hidden for
-    // the whole recording, and the session observer's finish path reveals it.
-    // The session's editor recording target survives -- that is what routes
-    // the finished capture back into the project.
-    cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
+    let retained_area =
+        cfg!(target_os = "macos") && matches!(&target, ScreenCaptureTarget::Area { .. });
+    if retained_area {
+        let handle = area_overlay_for_recording(&target, cx).filter(|handle| {
+            handle
+                .update(cx, |view, _, cx| view.commit_area_for_recording(cx))
+                .unwrap_or(false)
+        });
+        let Some(handle) = handle else {
+            dismiss_target_overlays(cx);
+            RecordingSession::global(cx).update(cx, |session, cx| {
+                session.error = Some(
+                    "The selected area changed or is no longer available. Select it again.".into(),
+                );
+                cx.notify();
+            });
+            return;
+        };
+        close_other_overlays(handle, cx);
+    } else {
+        release_camera_park(cx);
+        close_target_overlays(cx);
+        cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
+        cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
+    }
 
-    let main = cx.global::<AppWindows>().main;
-    main.update(cx, |view, window, cx| {
-        view.start_recording_with_target(target, excluded, window, cx)
-    })
-    .ok();
+    let preparing = main
+        .update(cx, |view, window, cx| {
+            view.start_recording_with_target(target, excluded, window, cx);
+            view.is_preparing_recording()
+        })
+        .unwrap_or(false);
+    if retained_area && !preparing && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+        dismiss_target_overlays(cx);
+    }
 }
 
 /// Seed an area selection on the overlay for a display (harness path -- the
@@ -1990,6 +2165,14 @@ fn open_overlay(
                 .flatten();
             let (x, y) = (bounds.position().x(), bounds.position().y());
             cx.spawn(async move |cx| {
+                if !cx.update(|cx| {
+                    cx.global::<AppWindows>()
+                        .overlays
+                        .iter()
+                        .any(|(_, current)| *current == handle)
+                }) {
+                    return;
+                }
                 if let Some(native) = &native {
                     platform::place_overlay_panel(
                         native,
@@ -2017,6 +2200,11 @@ fn open_overlay(
                         window.refresh();
                     })
                     .ok();
+                if let Some(camera) = cx.update(visible_camera_frame)
+                    && let Err(error) = camera.raise()
+                {
+                    tracing::warn!(%error, "could not raise the camera above the target picker");
+                }
             })
             .detach();
         }
@@ -3256,18 +3444,14 @@ fn begin_recording_after_preflight(config: StartConfig, cx: &mut App) {
     }
     set_teleprompter_content_protection(true, cx);
 
-    // `crate::target_select_overlay::close_target_select_overlay_windows(&app)`
-    // at `recording.rs:1758`: the pickers come down at *every* recording start,
-    // not just the ones the overlay's own Start button drove. The overlay path
-    // hands its ids in already (`start_recording_from_overlay`), but the
-    // hotkey, deeplink and tile paths pass an empty list, and an overlay that
-    // has not finished closing is still on screen when the capture opens.
     for id in overlay_window_ids(cx) {
         if !excluded.contains(&id) {
             excluded.push(id);
         }
     }
-    close_target_overlays(cx);
+    let recording_area = retain_recording_area(&config.target, cx);
+    cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
+    cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
 
     // The user-configurable half. `resolve_excluded_window_ids` (in
     // `recording::start`) walks `CGWindowList` for *other* processes' windows;
@@ -3292,6 +3476,7 @@ fn begin_recording_after_preflight(config: StartConfig, cx: &mut App) {
         own,
         move |kind| match kind {
             OwnWindow::Camera => camera_hidden,
+            OwnWindow::TargetSelect => true,
             kind => protected.contains(&kind),
         },
         cx,
@@ -3313,6 +3498,13 @@ fn begin_recording_after_preflight(config: StartConfig, cx: &mut App) {
         ..config
     };
     session.update(cx, |session, cx| session.start(config, cx));
+    if let Some(handle) = recording_area {
+        if session.read(cx).phase == Phase::Idle {
+            close_target_overlays(cx);
+        } else {
+            make_recording_area_passive(handle, cx);
+        }
+    }
 }
 
 /// Open the camera preview bubble (idempotent). Placement is the Tauri
@@ -3530,6 +3722,7 @@ const CAMERA_PARK_PADDING: f32 = 16.;
 struct CameraFrame {
     native: CameraNativeFrame,
     snapshot: CameraSnapshot,
+    visible: bool,
 }
 
 enum CameraNativeFrame {
@@ -3606,6 +3799,7 @@ fn camera_frame(cx: &mut App) -> Option<CameraFrame> {
             let (native, bounds) = camera_native_frame(window)?;
             Some(CameraFrame {
                 native,
+                visible: platform::window_is_visible(window),
                 snapshot: CameraSnapshot {
                     handle,
                     bounds,
@@ -3616,6 +3810,17 @@ fn camera_frame(cx: &mut App) -> Option<CameraFrame> {
         .ok()
         .flatten()
         .filter(|camera| camera.snapshot.bounds.width > 0. && camera.snapshot.bounds.height > 0.)
+}
+
+fn visible_camera_frame(cx: &mut App) -> Option<CameraFrame> {
+    if camera_preview_is_inline(cx) {
+        return None;
+    }
+    #[cfg(target_os = "linux")]
+    if clean_capture_active(cx) {
+        return None;
+    }
+    camera_frame(cx).filter(|camera| camera.visible)
 }
 
 fn camera_snapshot(cx: &mut App) -> Option<CameraSnapshot> {
@@ -3632,6 +3837,39 @@ fn camera_snapshot(cx: &mut App) -> Option<CameraSnapshot> {
 }
 
 impl CameraFrame {
+    fn raise(&self) -> anyhow::Result<()> {
+        match &self.native {
+            #[cfg(target_os = "macos")]
+            CameraNativeFrame::Mac { native, .. } => platform::order_front_native(native),
+            #[cfg(target_os = "windows")]
+            CameraNativeFrame::Windows(native) => platform::order_front_native(native),
+            #[cfg(target_os = "linux")]
+            CameraNativeFrame::X11 { window_id, .. } => {
+                use x11rb::connection::Connection as _;
+                use x11rb::protocol::xproto::{
+                    ConfigureWindowAux, ConnectionExt as _, MapState, StackMode,
+                };
+
+                let (connection, _) = x11rb::connect(None)?;
+                if connection
+                    .get_window_attributes(*window_id)?
+                    .reply()?
+                    .map_state
+                    == MapState::VIEWABLE
+                {
+                    connection
+                        .configure_window(
+                            *window_id,
+                            &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+                        )?
+                        .check()?;
+                    connection.flush()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn apply(self, bounds: AreaRect) -> anyhow::Result<()> {
         match self.native {
             #[cfg(target_os = "macos")]
@@ -3645,6 +3883,9 @@ impl CameraFrame {
                     f64::from(bounds.width),
                     f64::from(bounds.height),
                 );
+                if self.visible {
+                    platform::order_front_native(&native);
+                }
             }
             #[cfg(target_os = "windows")]
             CameraNativeFrame::Windows(native) => {
@@ -3655,23 +3896,32 @@ impl CameraFrame {
                     f64::from(bounds.width),
                     f64::from(bounds.height),
                 );
+                if self.visible {
+                    platform::order_front_native(&native);
+                }
             }
             #[cfg(target_os = "linux")]
             CameraNativeFrame::X11 { window_id, scale } => {
                 use x11rb::connection::Connection as _;
-                use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt as _};
+                use x11rb::protocol::xproto::{
+                    ConfigureWindowAux, ConnectionExt as _, MapState, StackMode,
+                };
 
                 let (connection, _) = x11rb::connect(None)?;
-                connection
-                    .configure_window(
-                        window_id,
-                        &ConfigureWindowAux::new()
-                            .x((f64::from(bounds.x) * scale).round() as i32)
-                            .y((f64::from(bounds.y) * scale).round() as i32)
-                            .width((f64::from(bounds.width) * scale).round().max(1.) as u32)
-                            .height((f64::from(bounds.height) * scale).round().max(1.) as u32),
-                    )?
-                    .check()?;
+                let mut changes = ConfigureWindowAux::new()
+                    .x((f64::from(bounds.x) * scale).round() as i32)
+                    .y((f64::from(bounds.y) * scale).round() as i32)
+                    .width((f64::from(bounds.width) * scale).round().max(1.) as u32)
+                    .height((f64::from(bounds.height) * scale).round().max(1.) as u32);
+                if connection
+                    .get_window_attributes(window_id)?
+                    .reply()?
+                    .map_state
+                    == MapState::VIEWABLE
+                {
+                    changes = changes.stack_mode(StackMode::ABOVE);
+                }
+                connection.configure_window(window_id, &changes)?.check()?;
                 connection.flush()?;
             }
         }
@@ -5661,6 +5911,50 @@ fn close_controls(session: &Entity<RecordingSession>, cx: &mut App) {
 mod tests {
     use super::*;
     use crate::store::{DEFAULT_EXCLUDED_WINDOW_TITLES, WindowExclusion, default_excluded_windows};
+
+    fn area_target(display: &str, x: f64, y: f64, width: f64, height: f64) -> ScreenCaptureTarget {
+        ScreenCaptureTarget::Area {
+            screen: display.parse().unwrap(),
+            bounds: scap_targets::bounds::LogicalBounds::new(
+                scap_targets::bounds::LogicalPosition::new(x, y),
+                scap_targets::bounds::LogicalSize::new(width, height),
+            ),
+        }
+    }
+
+    #[test]
+    fn recording_outline_rejects_a_crop_changed_during_start_preflight() {
+        let admitted = area_target("1", -120., 80., 640., 480.);
+        let same = area_target("1", -120., 80., 640., 480.);
+        assert!(area_overlay_matches(&admitted, &same, true));
+        for changed in [
+            area_target("1", -119., 80., 640., 480.),
+            area_target("1", -120., 81., 640., 480.),
+            area_target("1", -120., 80., 641., 480.),
+            area_target("1", -120., 80., 640., 481.),
+            area_target("2", -120., 80., 640., 480.),
+        ] {
+            assert!(!area_overlay_matches(&admitted, &changed, true));
+        }
+    }
+
+    #[test]
+    fn recording_outline_requires_an_area_and_confirmed_capture_exclusion() {
+        let area = area_target("1", 0., 0., 640., 480.);
+        assert!(!area_overlay_matches(&area, &area, false));
+        for other in [
+            ScreenCaptureTarget::Display {
+                id: "1".parse().unwrap(),
+            },
+            ScreenCaptureTarget::Window {
+                id: "1".parse().unwrap(),
+            },
+            ScreenCaptureTarget::CameraOnly,
+        ] {
+            assert!(!area_overlay_matches(&area, &other, true));
+            assert!(!area_overlay_matches(&other, &area, true));
+        }
+    }
 
     #[test]
     fn dock_reopen_uses_registered_windows_and_falls_back_after_delete() {

@@ -28,7 +28,7 @@ use crate::{
 use gpui::{Entity, Task};
 
 const EXPANDED_WIDTH: f32 = 600.;
-const EXPANDED_HEIGHT: f32 = 680.;
+const EXPANDED_HEIGHT: f32 = 672.;
 
 /// `duration: 180` in `resizeMainWindow`.
 const RESIZE_DURATION_SECS: f32 = 0.18;
@@ -175,6 +175,87 @@ impl Mode {
                  reports, and visual communication."
             }
         }
+    }
+}
+
+fn capture_hover_fill(theme: Theme, selected: bool, chevron: bool) -> Hsla {
+    if selected {
+        if chevron {
+            Theme::with_alpha(theme.blue_9, if theme.is_dark() { 0.30 } else { 0.22 })
+        } else {
+            theme.tile_selected_hover_bg()
+        }
+    } else {
+        Theme::with_alpha(theme.blue_9, if chevron { 0.16 } else { 0.07 })
+    }
+}
+
+struct ModeHoverCard {
+    mode: Mode,
+    theme: Theme,
+}
+
+impl Render for ModeHoverCard {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let mode = self.mode;
+        let description = match mode {
+            Mode::Instant => {
+                "No rendering required — uploads on the fly so you can share the link the moment you stop."
+            }
+            Mode::Studio => {
+                "Records at the highest quality for local rendering later. Opens the Cap editor when you're done."
+            }
+            Mode::Screenshot => "Capture and annotate stills.",
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .w(px(240.))
+            .px(px(12.))
+            .py(px(10.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme.gray_3)
+            .bg(theme.gray_12)
+            .text_color(theme.gray_1)
+            .shadow_lg()
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .child(format!("{} mode", mode.panel_title())),
+            )
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .line_height(px(13.75))
+                    .text_color(theme.gray_4)
+                    .child(description),
+            )
+            .when(mode != Mode::Screenshot, |this| {
+                this.child(
+                    div()
+                        .id("mode-quality-settings")
+                        .tab_index(0)
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .mx(px(-4.))
+                        .px(px(8.))
+                        .py(px(4.))
+                        .rounded(px(6.))
+                        .text_size(px(11.))
+                        .text_color(theme.gray_4)
+                        .hover(|style| style.bg(theme.gray_11).text_color(theme.gray_1))
+                        .child(svg().path("icons/settings.svg").size(px(12.)))
+                        .child("Quality settings")
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            cx.defer(move |cx| app_windows::open_quality_settings(mode, cx));
+                        }),
+                )
+            })
     }
 }
 
@@ -370,13 +451,6 @@ impl LibraryKind {
         }
     }
 
-    fn search_placeholder(self) -> &'static str {
-        match self {
-            Self::Recordings => "Search recordings",
-            Self::Screenshots => "Search screenshots",
-        }
-    }
-
     fn import_label(self) -> &'static str {
         match self {
             Self::Recordings => "Import",
@@ -483,6 +557,87 @@ struct MicrophoneWarning {
     error: Option<String>,
 }
 
+struct MicrophoneLevel {
+    active: bool,
+    fill: f32,
+    color: Hsla,
+}
+
+impl MicrophoneLevel {
+    fn new(feeds: &Entity<Feeds>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.observe_in(feeds, window, |this, feeds, window, cx| {
+            let visible = if cfg!(any(target_os = "macos", target_os = "windows")) {
+                crate::platform::window_is_visible(window)
+            } else {
+                window.is_window_active()
+            };
+            if this.active && visible {
+                let fill = Self::fill(feeds.read(cx));
+                if this.fill != fill {
+                    this.fill = fill;
+                    cx.notify();
+                }
+            }
+        })
+        .detach();
+        Self {
+            active: false,
+            fill: 0.,
+            color: gpui::transparent_black(),
+        }
+    }
+
+    fn fill(feeds: &Feeds) -> f32 {
+        if feeds.microphone.is_some() && feeds.mic_level_db.is_finite() {
+            (1. - feeds::picker_level(feeds.mic_level_db)) as f32
+        } else {
+            0.
+        }
+    }
+
+    fn configure(&mut self, active: bool, color: Hsla, cx: &mut Context<Self>) {
+        let fill = if active {
+            Self::fill(Feeds::global(cx).read(cx))
+        } else {
+            0.
+        };
+        if self.active != active || self.color != color || self.fill != fill {
+            self.active = active;
+            self.color = color;
+            self.fill = fill;
+            cx.notify();
+        }
+    }
+}
+
+impl Render for MicrophoneLevel {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let mut background = self.color;
+        background.a *= 0.1;
+        div()
+            .size_full()
+            .when(self.active && self.fill > 0., |this| {
+                this.child(
+                    div()
+                        .relative()
+                        .h_full()
+                        .w(gpui::relative(self.fill))
+                        .rounded(px(7.))
+                        .bg(background)
+                        .child(
+                            div()
+                                .absolute()
+                                .bottom_0()
+                                .left_0()
+                                .w_full()
+                                .h(px(2.))
+                                .bg(self.color),
+                        ),
+                )
+            })
+    }
+}
+
 pub struct MainWindow {
     theme: Theme,
     expanded: bool,
@@ -492,6 +647,7 @@ pub struct MainWindow {
     camera: Option<CameraOption>,
     camera_id: Option<recording::DeviceOrModelID>,
     microphone: Option<MicrophoneOption>,
+    microphone_level: Entity<MicrophoneLevel>,
     pending_device_restore: crate::store::RecordingInputSettings,
     device_restore_suspended: bool,
     device_format_target: Option<DeviceFormatTarget>,
@@ -654,6 +810,7 @@ impl MainWindow {
         // meter notifies at ~20Hz and would otherwise repaint the home view
         // for a level bar only the microphone picker shows.
         let feeds = Feeds::global(cx);
+        let microphone_level = cx.new(|cx| MicrophoneLevel::new(&feeds, window, cx));
         cx.observe(&feeds, |this: &mut Self, feeds, cx| {
             let feeds = feeds.read(cx);
             let camera_id = feeds.camera.as_ref().map(|camera| &camera.id);
@@ -723,6 +880,7 @@ impl MainWindow {
             camera: None,
             camera_id: None,
             microphone: None,
+            microphone_level,
             pending_device_restore: crate::store::RecordingInputSettings::load(),
             device_restore_suspended: false,
             device_format_target: None,
@@ -2454,6 +2612,12 @@ impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
         let theme = self.theme;
+        let meter_active = self.panel.is_none()
+            && self.microphone.is_some()
+            && self.session.read(cx).phase == Phase::Idle;
+        self.microphone_level.update(cx, |meter, cx| {
+            meter.configure(meter_active, theme.blue_9.into(), cx);
+        });
 
         div()
             .size_full()
@@ -2972,7 +3136,32 @@ impl MainWindow {
         // `IconButton::header`: a 20px hit box with no fill, `text-gray-11`
         // going to `text-gray-12` on hover.
         let icon_button = |id: &'static str, path: &'static str, size: f32| {
-            ui::IconButton::header(&theme, id, path).icon_size(px(size))
+            let label = match id {
+                "help" => "Help & Tour",
+                "expand" if expanded => "Collapse",
+                "expand" => "Expand",
+                "settings" => "Settings",
+                "screenshots" => "Screenshots",
+                "recordings" => "Recordings",
+                "teleprompter" => "Teleprompter",
+                "changelog" => "Changelog",
+                _ => unreachable!(),
+            };
+            div()
+                .id(id)
+                .when(cfg!(target_os = "windows"), |this| this.occlude())
+                .tab_index(0)
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(20.))
+                .flex_shrink_0()
+                .rounded_full()
+                .text_color(theme.gray_11)
+                .hover(|style| style.text_color(theme.gray_12))
+                .tooltip(move |_, cx| ui::Tooltip::new(&theme, label).view(cx))
+                .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                .child(svg().path(path).size(px(size)))
         };
 
         let actions = div()
@@ -3339,9 +3528,7 @@ impl MainWindow {
                     DeviceFormatTarget::Microphone(name) => name.clone(),
                 })
                 .into_any_element(),
-            Panel::Device(_) | Panel::Target(_) => {
-                self.render_search_field(panel, cx).into_any_element()
-            }
+            Panel::Device(_) | Panel::Target(_) => self.render_search_field(cx).into_any_element(),
         };
 
         div()
@@ -3499,17 +3686,9 @@ impl MainWindow {
     /// double-click-a-word, the clipboard and undo all come from
     /// `TextInputState`. What stays here is the only part the component cannot
     /// know, which is that Escape clears the filter before it closes the panel.
-    fn render_search_field(&self, panel: Panel, cx: &mut Context<Self>) -> gpui::Div {
-        let placeholder = match panel {
-            Panel::Target(TargetType::Display) => "Search displays",
-            Panel::Target(TargetType::Window) => "Search windows",
-            Panel::Device(DeviceMenu::Camera) => "Search cameras",
-            Panel::Device(DeviceMenu::Microphone) => "Search microphones",
-            Panel::Library(kind) => kind.search_placeholder(),
-            _ => "Search",
-        };
+    fn render_search_field(&self, cx: &mut Context<Self>) -> gpui::Div {
         self.search_input
-            .update(cx, |input, _| input.set_placeholder(placeholder));
+            .update(cx, |input, _| input.set_placeholder("Search"));
 
         div().flex().flex_1().min_w_0().child(ui::TextInput::search(
             &self.theme,
@@ -3526,7 +3705,7 @@ impl MainWindow {
             .min_w_0()
             .gap(px(8.))
             .items_center()
-            .child(self.render_search_field(Panel::Library(kind), cx))
+            .child(self.render_search_field(cx))
             .child(
                 ui::Button::plain(
                     &theme,
@@ -3902,6 +4081,7 @@ impl MainWindow {
                     .relative()
                     .w_full()
                     .h(px(76.))
+                    .rounded_t(px(8.))
                     .overflow_hidden()
                     .bg(theme.body_fill(4))
                     .flex()
@@ -4192,10 +4372,12 @@ impl MainWindow {
                 use gpui::StyledImage as _;
                 img(image)
                     .size_full()
+                    .rounded_t(px(8.))
                     .object_fit(gpui::ObjectFit::Cover)
                     .into_any_element()
             }
             None => div()
+                .rounded_t(px(8.))
                 .flex()
                 .size_full()
                 .items_center()
@@ -4224,6 +4406,7 @@ impl MainWindow {
                             .relative()
                             .w_full()
                             .h(px(76.))
+                            .rounded_t(px(8.))
                             .overflow_hidden()
                             .bg(theme.body_fill(4))
                             .child(thumb)
@@ -5259,8 +5442,7 @@ impl MainWindow {
             .flex_row()
             .items_center()
             .justify_between()
-            .mt(px(8.))
-            .mb(px(4.))
+            .mt(px(4.))
             .flex_shrink_0()
             .child(
                 // `flex items-center space-x-1` around the logo and its badge.
@@ -5385,6 +5567,9 @@ impl MainWindow {
             let selected = mode == selected_mode;
             div()
                 .id(SharedString::from(id))
+                .tab_index(0)
+                .hoverable_tooltip(move |_, cx| cx.new(|_| ModeHoverCard { mode, theme }).into())
+                .tooltip_show_delay(std::time::Duration::from_millis(120))
                 .when(locked && !selected, |this| this.opacity(0.5))
                 .flex()
                 .items_center()
@@ -5443,6 +5628,9 @@ impl MainWindow {
             .child(
                 div()
                     .id("mode-info")
+                    .tab_index(0)
+                    .tooltip(move |_, cx| ui::Tooltip::new(&theme, "Recording mode info").view(cx))
+                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                     .absolute()
                     .left(px(-6.))
                     .top(px(-8.))
@@ -5514,11 +5702,7 @@ impl MainWindow {
     fn render_split_target(&self, target: TargetType, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let selected = self.target == Some(target);
-        let hover_fill = if selected {
-            theme.tile_selected_hover_bg()
-        } else {
-            theme.body_hover_fill(4)
-        };
+        let hover_fill = capture_hover_fill(theme, selected, false);
 
         div()
             .group(target.label())
@@ -5549,14 +5733,32 @@ impl MainWindow {
                     .justify_center()
                     .border_l_1()
                     .border_color(theme.body_border(6))
-                    .bg(theme.body_fill(4))
-                    .child(
-                        svg()
-                            .path("icons/chevron-down.svg")
-                            .size(px(16.))
-                            .text_color(theme.gray_11),
-                    )
+                    .bg(if selected {
+                        theme.tile_selected_bg()
+                    } else {
+                        theme.body_fill(2)
+                    })
+                    .text_color(theme.gray_11)
+                    .child(svg().path("icons/chevron-down.svg").size(px(16.)))
                     .group_hover(target.label(), move |style| style.bg(hover_fill))
+                    .hover(move |style| {
+                        style
+                            .bg(capture_hover_fill(theme, selected, true))
+                            .text_color(theme.blue_11)
+                    })
+                    .active(move |style| style.bg(theme.tile_selected_hover_bg()))
+                    .tooltip(move |_, cx| {
+                        ui::Tooltip::new(
+                            &theme,
+                            match target {
+                                TargetType::Display => "Choose a display",
+                                TargetType::Window => "Choose a window",
+                                _ => unreachable!(),
+                            },
+                        )
+                        .view(cx)
+                    })
+                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_panel(Panel::Target(target), window, cx);
                     })),
@@ -5599,11 +5801,7 @@ impl MainWindow {
         let theme = self.theme;
         let selected = self.target == Some(target);
         let expanded = self.expanded;
-        let hover_fill = if selected {
-            theme.tile_selected_hover_bg()
-        } else {
-            theme.body_hover_fill(4)
-        };
+        let hover_fill = capture_hover_fill(theme, selected, false);
 
         let icon_color = if selected {
             theme.blue_10
@@ -5634,6 +5832,7 @@ impl MainWindow {
                 this.group_hover(target.label(), move |style| style.bg(hover_fill))
             })
             .when(!split, |this| this.hover(move |style| style.bg(hover_fill)))
+            .active(move |style| style.bg(theme.tile_selected_hover_bg()))
             .on_click(cx.listener(move |this, _, _window, cx| {
                 // `toggleTargetMode`: clicking the armed tile again is a
                 // cancel, which takes the overlays down with it.
@@ -6130,6 +6329,7 @@ impl MainWindow {
 
         div()
             .id(SharedString::from(id))
+            .relative()
             .flex()
             .flex_row()
             .items_center()
@@ -6144,6 +6344,17 @@ impl MainWindow {
             .bg(theme.body_fill(2))
             .cursor_default()
             .overflow_hidden()
+            .when(menu == Some(DeviceMenu::Microphone), |this| {
+                this.child(
+                    self.microphone_level.clone().cached(
+                        gpui::StyleRefinement::default()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full(),
+                    ),
+                )
+            })
             .child(
                 svg()
                     .path(icon)
