@@ -32,6 +32,7 @@ jobs:
         with:
           filters: |
             desktop:
+              - '.gitattributes'
               - '.github/actions/install-desktop-deps/**'
               - '.github/workflows/ci.yml'
               - 'apps/cli/**'
@@ -44,7 +45,8 @@ jobs:
               - 'packages/web-api-contract/**'
               - 'scripts/build-desktop-binaries*'
               - 'scripts/build-gpui-binary.sh'
-              - 'scripts/prepare-gpui-dependency.sh'
+              - 'scripts/build-macos-packages*'
+              - 'scripts/prepare-gpui-dependency*'
               - 'scripts/run-gpui-build*'
               - 'scripts/sync-desktop-versions.mjs'
               - 'scripts/verify-gpui-release-inputs.mjs'
@@ -232,6 +234,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Test desktop build preparation
+        run: node --test scripts/prepare-gpui-dependency.test.mjs scripts/build-macos-packages.test.mjs
 
       - name: Install Linux desktop dependencies
         if: ${{ runner.os == 'Linux' }}

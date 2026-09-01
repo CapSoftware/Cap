@@ -218,6 +218,14 @@ jobs:
         with:
           ref: ${{ inputs.sha }}
 
+      - name: Test GPUI patch checkout
+        if: ${{ hashFiles('scripts/prepare-gpui-dependency.test.mjs') != '' }}
+        run: node --test scripts/prepare-gpui-dependency.test.mjs
+
+      - name: Test macOS packaging retries
+        if: ${{ hashFiles('scripts/build-macos-packages.test.mjs') != '' }}
+        run: node --test scripts/build-macos-packages.test.mjs
+
       # Nightly and promoted builds carry a version that differs from the
       # committed Cargo.toml; Tauri reads the app version from package.version.
       - name: Stamp build version
@@ -340,7 +348,7 @@ jobs:
 
       - name: Build app
         working-directory: apps/desktop
-        run: ${{ runner.os == 'Linux' && 'CARGO_PROFILE_RELEASE_DEBUG=0 node ../../scripts/build-linux-packages.mjs' || 'pnpm build:tauri --target' }} ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json ${{ runner.os == 'Windows' && '--bundles nsis' || runner.os == 'Linux' && '--verbose' || '' }}
+        run: ${{ runner.os == 'Linux' && 'CARGO_PROFILE_RELEASE_DEBUG=0 node ../../scripts/build-linux-packages.mjs' || runner.os == 'macOS' && hashFiles('scripts/build-macos-packages.mjs') != '' && 'node ../../scripts/build-macos-packages.mjs' || 'pnpm build:tauri --target' }} ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json ${{ runner.os == 'Windows' && '--bundles nsis' || runner.os == 'Linux' && '--verbose' || '' }}
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
           CI: false
