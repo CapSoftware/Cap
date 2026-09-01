@@ -13,16 +13,26 @@ const CALLBACK_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
-  <title>Cap Auth</title>
+  <title>Signed in — Cap</title>
   <style>
-    html, body { width: 100%; height: 100%; margin: 0; font-family: sans-serif; }
-    body { display: flex; align-items: center; justify-center; text-align: center; background: #f8f9fa; }
-    p { font-size: 21px; line-height: 26px; color: #12161F; }
+    html { height: 100%; }
+    body { min-height: 100%; margin: 0; padding: 24px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; text-align: center; font-family: system-ui, sans-serif; background: #f8f9fa; color: #12161f; }
+    main { width: 100%; max-width: 400px; }
+    h1 { margin: 0 0 12px; font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.02em; }
+    p { margin: 0; font-size: 15px; line-height: 24px; color: #5d6470; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #18181b; color: #f4f4f5; }
+      p { color: #a1a1aa; }
+    }
   </style>
 </head>
 <body>
-  <p>You are now signed in. Please re-open the Cap desktop app to continue.</p>
+  <main>
+    <h1>You’re signed in</h1>
+    <p>You can close this tab and return to Cap.</p>
+  </main>
 </body>
 </html>
 "#;
