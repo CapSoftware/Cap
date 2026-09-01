@@ -4013,6 +4013,28 @@ function TextSegmentConfig(props: {
 							})
 						}
 					/>
+					<div class="flex items-center justify-between gap-3">
+						<span class="text-xs text-gray-11">Background</span>
+						<Toggle
+							checked={props.segment.backgroundColor != null}
+							onChange={(enabled) =>
+								updateSegment((segment) => {
+									segment.backgroundColor = enabled ? "#000000" : undefined;
+								})
+							}
+						/>
+					</div>
+					<Show when={props.segment.backgroundColor != null}>
+						<HexColorInput
+							value={props.segment.backgroundColor ?? "#000000"}
+							brandColorSwatches={props.brandColorSwatches}
+							onChange={(value) =>
+								updateSegment((segment) => {
+									segment.backgroundColor = value;
+								})
+							}
+						/>
+					</Show>
 					<div class="flex flex-col gap-1">
 						<span class="text-xs text-gray-11">Opacity</span>
 						<Slider

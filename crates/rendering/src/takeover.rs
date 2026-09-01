@@ -167,6 +167,7 @@ mod tests {
             font_weight: 700.0,
             italic: false,
             color: "#ffffff".to_string(),
+            background_color: None,
             fade_duration: 0.15,
             align: TextAlign::Center,
             letter_spacing: 0.0,

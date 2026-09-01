@@ -5649,6 +5649,19 @@ fn random_animated_gradient() -> cap_project::AnimatedGradientConfig {
     cap_project::AnimatedGradientConfig::random()
 }
 
+#[cfg(any(debug_assertions, test))]
+fn typescript_exporter() -> specta_typescript::Typescript {
+    specta_typescript::Typescript::default().formatter(|path| {
+        let source = std::fs::read_to_string(path)?;
+        let formatted = source
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(path, format!("{formatted}\n"))
+    })
+}
+
 fn specta_builder() -> tauri_specta::Builder {
     tauri_specta::Builder::new()
         .commands(tauri_specta::collect_commands![
@@ -5929,9 +5942,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
     {
         let bindings_path = std::path::Path::new("../src/utils/tauri.ts");
         if bindings_path.parent().is_some_and(|parent| parent.exists()) {
-            if let Err(err) =
-                specta_builder.export(specta_typescript::Typescript::default(), bindings_path)
-            {
+            if let Err(err) = specta_builder.export(typescript_exporter(), bindings_path) {
                 warn!(error = %err, "Failed to export TypeScript bindings");
             }
         } else {
@@ -8527,7 +8538,7 @@ mod typescript_bindings_tests {
         let bindings_path = std::path::Path::new("../src/utils/tauri.ts");
         if bindings_path.parent().is_some_and(|parent| parent.exists()) {
             super::specta_builder()
-                .export(specta_typescript::Typescript::default(), bindings_path)
+                .export(super::typescript_exporter(), bindings_path)
                 .expect("failed to export TypeScript bindings");
         }
     }

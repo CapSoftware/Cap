@@ -1034,6 +1034,7 @@ pub fn default_text_segment(start: f64, end: f64, track: u32) -> TextSegment {
         font_weight: 700.0,
         italic: false,
         color: "#ffffff".to_string(),
+        background_color: None,
         fade_duration: 0.15,
         align: Default::default(),
         letter_spacing: 0.0,

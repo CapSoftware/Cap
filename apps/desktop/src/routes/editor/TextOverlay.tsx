@@ -265,6 +265,7 @@ type SegmentWithDefaults = {
 	fontWeight: number;
 	italic: boolean;
 	color: string;
+	backgroundColor: string | null;
 	align: TextAlign;
 	letterSpacing: number;
 	lineHeight: number;
@@ -274,7 +275,12 @@ function normalizeSegment(segment: TauriTextSegment): SegmentWithDefaults {
 	// The generated bindings lag behind the Rust schema until the next debug
 	// run regenerates them; the style fields are always present at runtime.
 	const styled = segment as TauriTextSegment &
-		Partial<Pick<TextSegment, "align" | "letterSpacing" | "lineHeight">>;
+		Partial<
+			Pick<
+				TextSegment,
+				"align" | "backgroundColor" | "letterSpacing" | "lineHeight"
+			>
+		>;
 	return {
 		start: segment.start,
 		end: segment.end,
@@ -287,6 +293,7 @@ function normalizeSegment(segment: TauriTextSegment): SegmentWithDefaults {
 		fontWeight: segment.fontWeight ?? 700,
 		italic: segment.italic ?? false,
 		color: segment.color ?? "#ffffff",
+		backgroundColor: styled.backgroundColor ?? null,
 		align: styled.align ?? "center",
 		letterSpacing: styled.letterSpacing ?? 0,
 		lineHeight: styled.lineHeight ?? 1.2,
@@ -722,6 +729,8 @@ function TextSegmentOverlay(props: {
 	// fontSize; scale it to preview px the same way.
 	const letterSpacingPx = () =>
 		(segment().letterSpacing * props.size.height) / TEXT_REFERENCE_HEIGHT;
+	const backgroundPaddingPx = () => fontPx() * 0.2;
+	const backgroundRadiusPx = () => fontPx() * 0.15;
 
 	const textStyle = () => ({
 		"font-family": segment().fontFamily,
@@ -775,6 +784,35 @@ function TextSegmentOverlay(props: {
 				onMouseEnter={() => setHovered(true)}
 				onMouseLeave={() => setHovered(false)}
 			>
+				<Show when={editing() && segment().backgroundColor}>
+					<div
+						class="absolute pointer-events-none"
+						style={{
+							top: `${-backgroundPaddingPx()}px`,
+							left: `${-backgroundPaddingPx()}px`,
+							width: `calc(100% + ${backgroundPaddingPx() * 2}px)`,
+							"min-height": `calc(100% + ${backgroundPaddingPx() * 2}px)`,
+							padding: `${backgroundPaddingPx()}px`,
+							"box-sizing": "border-box",
+							"border-radius": `${backgroundRadiusPx()}px`,
+							"background-color": segment().backgroundColor ?? "transparent",
+						}}
+					>
+						<div
+							aria-hidden="true"
+							style={{
+								...textStyle(),
+								visibility: "hidden",
+								"white-space": "pre-wrap",
+								"word-break": "break-word",
+								"text-align": segment().align,
+							}}
+						>
+							{segment().content}
+							{segment().content.endsWith("\n") ? <br /> : null}
+						</div>
+					</div>
+				</Show>
 				<div
 					class="absolute inset-0 border-2 transition-colors rounded-md pointer-events-none"
 					classList={{
