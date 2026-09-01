@@ -2029,7 +2029,6 @@ pub(crate) fn start_update_handoff(cx: &mut gpui::App) {
 }
 
 fn quit_after_flushing_editors(cx: &mut gpui::App) {
-    crate::app_windows::flush_pending_editor_saves(cx);
     crate::menus::quit(cx);
 }
 
@@ -2068,7 +2067,13 @@ fn begin_update_handoff(cx: &mut gpui::App, request_handoff: fn() -> std::io::Re
     if update_handoff_blocked(cx) {
         return;
     }
-    crate::app_windows::flush_pending_editor_saves(cx);
+    if let Err(error) = crate::app_windows::flush_pending_editor_saves(cx) {
+        cx.spawn(async move |_| {
+            crate::platform::alert_dialog("Cap is still open", &error);
+        })
+        .detach();
+        return;
+    }
 
     if let Err(error) = request_handoff() {
         tracing::error!("couldn't request the Tauri updater: {error}");
@@ -2434,7 +2439,11 @@ impl SettingsWindow {
         if self.switch_back_blocked(cx) {
             return;
         }
-        crate::app_windows::flush_pending_editor_saves(cx);
+        if let Err(error) = crate::app_windows::flush_pending_editor_saves(cx) {
+            self.pages.switch_back = Some(SwitchBack::Failed(error));
+            cx.notify();
+            return;
+        }
 
         self.settings.enable_gpui_app = false;
         self.write_bool("enableGpuiApp", false, cx);

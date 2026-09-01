@@ -1346,6 +1346,7 @@ pub struct EditorWindow {
     hovering_generate_zoom: bool,
     clip_speed: Option<ClipSpeedMenu>,
     timeline_scroll: gpui::ScrollHandle,
+    minimap_drag: Option<timeline::MinimapDrag>,
     /// Magnetic edges for the live drag: playhead, clip cuts and every other
     /// segment's edges, gathered once when the drag arms.
     drag_snap_targets: Vec<f64>,
@@ -1515,6 +1516,12 @@ struct OpenToolbarMenu {
 impl EditorWindow {
     pub fn new(project_path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
         crate::theme::bind_window(window, cx);
+        cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active() && this.minimap_drag.take().is_some() {
+                cx.notify();
+            }
+        })
+        .detach();
         // `CapWindowId::Editor`'s `Destroyed` arm drops the window from
         // `EditorWindowIds`, disposes the instance and calls
         // `restore_main_windows_if_no_editors` (`lib.rs:5777-5792`). Deferred
@@ -1523,15 +1530,11 @@ impl EditorWindow {
         let window_id = window.window_handle().window_id();
         window.on_window_should_close(cx, move |window, cx| {
             let blocked = window.root::<Self>().flatten().and_then(|editor| {
-                let editor = editor.read(cx);
-                if let Some(reason) = editor.busy_reason() {
-                    return Some(reason.to_string());
-                }
-                let saved = editor.pending_save.borrow_mut().try_flush();
-                saved.err().map(|error| {
-                    format!(
-                        "Could not save the recording. Keep the editor open and try again: {error}"
-                    )
+                editor.update(cx, |editor, cx| {
+                    if let Some(reason) = editor.busy_reason() {
+                        return Some(reason.to_string());
+                    }
+                    editor.flush_pending_saves(cx).err()
                 })
             });
             if let Some(message) = blocked {
@@ -1632,6 +1635,10 @@ impl EditorWindow {
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::Header, cx)
         });
+        text_events.push(cx.observe(&name_input, {
+            let header = header.clone();
+            move |_, _, cx| header.update(cx, |_, cx| cx.notify())
+        }));
         let toolbar = cx.new({
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::Toolbar, cx)
@@ -1696,6 +1703,7 @@ impl EditorWindow {
             hovering_generate_zoom: false,
             clip_speed: None,
             timeline_scroll: gpui::ScrollHandle::new(),
+            minimap_drag: None,
             drag_snap_targets: Vec::new(),
             drag_snap_time: None,
             clip_draft: None,
@@ -1767,6 +1775,16 @@ impl EditorWindow {
     /// flushProjectConfig() })` (`ED/context.ts:1246-1252`).
     pub fn pending_save(&self) -> Rc<RefCell<PendingProjectSave>> {
         self.pending_save.clone()
+    }
+
+    pub(crate) fn flush_pending_saves(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        self.commit_pretty_name(cx)?;
+        self.pending_save.borrow_mut().try_flush().map_err(|error| {
+            format!(
+                "Could not save {}. Keep the editor open and try again: {error}",
+                self.project_path.display()
+            )
+        })
     }
 
     /// Every lazily-created field's subscription lives here for the window's
@@ -2667,6 +2685,10 @@ impl EditorWindow {
             }
             "escape" => {
                 cx.stop_propagation();
+                if self.minimap_drag.take().is_some() {
+                    cx.notify();
+                    return;
+                }
                 if self.audio_picker.is_some() {
                     self.audio_picker = None;
                     cx.notify();
@@ -2697,6 +2719,36 @@ impl EditorWindow {
             .update_zoom(zoom * factor, origin, total);
         self.note_transform("zoom", Some(origin));
         cx.notify();
+    }
+
+    fn minimap_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.button != MouseButton::Left {
+            return;
+        }
+        cx.stop_propagation();
+        let width = timeline::ruler_width(f32::from(window.viewport_size().width));
+        let total = self.total_duration();
+        self.minimap_drag = timeline::MinimapDrag::begin(
+            f32::from(event.position.x),
+            timeline::content_left(),
+            width,
+            total,
+            &mut self.view.transform,
+        );
+        if self.minimap_drag.is_some() {
+            tracing::debug!(
+                kind = ?self.minimap_drag.map(|drag| drag.kind),
+                position = ?event.position,
+                "timeline minimap drag started"
+            );
+            self.view.preview_time = None;
+            cx.notify();
+        }
     }
 
     /// One line per transform change. The zoom anchor and the pan clamp are
@@ -2830,7 +2882,7 @@ impl EditorWindow {
         // writes, so a preview time set while paused survives a play rather
         // than being cleared. The ghost is hidden by the render's own
         // `!editorState.playing` gate instead (`TL/index.tsx:1246-1253`).
-        if self.playing || self.drag.is_some() {
+        if self.playing || self.drag.is_some() || self.minimap_drag.is_some() {
             return;
         }
         let viewport_width: f32 = window.viewport_size().width.into();
@@ -4311,6 +4363,9 @@ impl EditorWindow {
                                 }))
                                 .cursor_pointer()
                                 .tab_index(0)
+                                .when(!selected, |card| {
+                                    card.hover(|style| style.border_color(theme.gray_7))
+                                })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if let Some(setup) = this.camera3d_setup.as_mut() {
                                         setup.scene_id = id;
@@ -4380,6 +4435,9 @@ impl EditorWindow {
                                             .text_color(Hsla::from(theme.gray_12))
                                         })
                                         .when(too_short, |this| this.opacity(0.4))
+                                        .when(!too_short && !selected, |button| {
+                                            button.hover(|style| style.text_color(theme.gray_12))
+                                        })
                                         .when(!too_short, |this| {
                                             this.cursor_pointer().tab_index(0).on_click(
                                                 cx.listener(move |this, _, _, cx| {
@@ -4960,20 +5018,32 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match event {
-            // `onKeyDown`: Enter and Escape both blur, which is what commits.
-            ui::TextInputEvent::Confirmed | ui::TextInputEvent::Cancelled => {
-                let focus = self.focus.clone();
-                window.focus(&focus, cx);
-            }
-            ui::TextInputEvent::Blurred => self.commit_pretty_name(cx),
-            ui::TextInputEvent::Changed => {}
+        if matches!(event, ui::TextInputEvent::Changed) {
+            return;
+        }
+        if let Err(error) = self.commit_pretty_name(cx) {
+            tracing::error!(%error, "recording title was not saved");
+            cx.spawn(async move |_, _| {
+                crate::platform::alert_dialog(
+                    "Title not saved",
+                    &format!("{error}\n\nYour title is still in the editor. Try saving it again."),
+                );
+            })
+            .detach();
+            return;
+        }
+        if matches!(
+            event,
+            ui::TextInputEvent::Confirmed | ui::TextInputEvent::Cancelled
+        ) {
+            let focus = self.focus.clone();
+            window.focus(&focus, cx);
         }
     }
 
-    fn commit_pretty_name(&mut self, cx: &mut Context<Self>) {
+    fn commit_pretty_name(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
         let Some(stored) = self.summary().map(|summary| summary.pretty_name.clone()) else {
-            return;
+            return Ok(());
         };
         let draft = self.name_input.read(cx).text().trim().to_string();
         let count = draft.chars().count();
@@ -4983,7 +5053,7 @@ impl EditorWindow {
                     .update(cx, |input, cx| input.set_text(stored, cx));
                 cx.notify();
             }
-            return;
+            return Ok(());
         }
 
         // `set_pretty_name` (`apps/desktop/src-tauri/src/lib.rs:3175-3179`):
@@ -4993,30 +5063,27 @@ impl EditorWindow {
         // history is `createStoreHistory` over the *project* store alone
         // (`ED/context.ts:1920-1930`), so a rename is not undoable there either.
         let path = self.project_path.clone();
-        match RecordingMeta::load_for_project(&path) {
-            Ok(mut meta) => {
-                meta.pretty_name = draft.clone();
-                match meta.save_for_project() {
-                    Ok(()) => {
-                        if let LoadState::Ready(summary) = &mut self.state {
-                            summary.pretty_name = draft.clone();
-                        }
-                        tracing::info!(name = %draft, "renamed project");
-                    }
-                    Err(error) => {
-                        tracing::error!(?error, "failed to save recording-meta.json");
-                        self.name_input
-                            .update(cx, |input, cx| input.set_text(stored, cx));
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::error!(?error, "failed to load recording-meta.json");
-                self.name_input
-                    .update(cx, |input, cx| input.set_text(stored, cx));
-            }
+        let mut meta = RecordingMeta::load_for_project(&path).map_err(|error| {
+            format!(
+                "Could not read the recording title for {}: {error}",
+                path.display()
+            )
+        })?;
+        meta.pretty_name = draft.clone();
+        meta.save_for_project().map_err(|error| {
+            format!(
+                "Could not save the recording title for {}: {error}",
+                path.display()
+            )
+        })?;
+        if let LoadState::Ready(summary) = &mut self.state {
+            summary.pretty_name = draft.clone();
         }
+        self.name_input
+            .update(cx, |input, cx| input.set_text(draft.clone(), cx));
+        tracing::info!(name = %draft, "renamed project");
         cx.notify();
+        Ok(())
     }
 
     pub(crate) fn hex_input(
@@ -7181,6 +7248,15 @@ impl EditorWindow {
                             .when(cfg!(target_os = "windows"), |area| {
                                 area.occlude()
                                     .window_control_area(gpui::WindowControlArea::Drag)
+                            })
+                            .when(cfg!(target_os = "macos"), |area| {
+                                area.on_mouse_down(gpui::MouseButton::Left, |event, window, _| {
+                                    if event.click_count == 2 {
+                                        window.titlebar_double_click();
+                                    } else {
+                                        window.start_window_move();
+                                    }
+                                })
                             }),
                     ),
             )
@@ -7233,6 +7309,15 @@ impl EditorWindow {
                             .when(cfg!(target_os = "windows"), |area| {
                                 area.occlude()
                                     .window_control_area(gpui::WindowControlArea::Drag)
+                            })
+                            .when(cfg!(target_os = "macos"), |area| {
+                                area.on_mouse_down(gpui::MouseButton::Left, |event, window, _| {
+                                    if event.click_count == 2 {
+                                        window.titlebar_double_click();
+                                    } else {
+                                        window.start_window_move();
+                                    }
+                                })
                             }),
                     )
                     // `Button` (gray), `flex gap-1.5 justify-center h-[40px]`.
@@ -7320,6 +7405,20 @@ impl EditorWindow {
                 gpui::linear_color_stop(gpui::rgb(0x3b82f6), 0.),
                 gpui::linear_color_stop(gpui::rgb(0x2563eb), 1.),
             ))
+            .hover(|style| {
+                style.bg(gpui::linear_gradient(
+                    180.,
+                    gpui::linear_color_stop(gpui::rgb(0x408cff), 0.),
+                    gpui::linear_color_stop(gpui::rgb(0x286bfe), 1.),
+                ))
+            })
+            .active(|style| {
+                style.bg(gpui::linear_gradient(
+                    180.,
+                    gpui::linear_color_stop(gpui::rgb(0x387cea), 0.),
+                    gpui::linear_color_stop(gpui::rgb(0x235ede), 1.),
+                ))
+            })
             .text_size(px(13.))
             .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white())
@@ -7660,7 +7759,9 @@ impl EditorWindow {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .when(live, |this| this.cursor_pointer())
+                                    .when(live, |this| {
+                                        this.cursor_pointer().hover(|style| style.opacity(0.7))
+                                    })
                                     .child(
                                         svg()
                                             .path("icons/prev.svg")
@@ -7694,7 +7795,9 @@ impl EditorWindow {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .when(live, |this| this.cursor_pointer())
+                                    .when(live, |this| {
+                                        this.cursor_pointer().hover(|style| style.opacity(0.7))
+                                    })
                                     .child(
                                         svg()
                                             .path("icons/next.svg")
@@ -7802,18 +7905,6 @@ impl EditorWindow {
 
     // -- Timeline ------------------------------------------------------------
 
-    /// The timeline strip at its default 260px, 1:1 and read-only.
-    ///
-    /// Source order top to bottom (`TL/index.tsx:1141-1500`): the minimap
-    /// floating at `top: 2px`, the 32px ruler strip with the "Add track"
-    /// trigger in its bottom-left and the scrub surface over the rest of it,
-    /// the hover ghost, the playhead, and then the scroll body carrying one row
-    /// per visible track behind the edge fade.
-    ///
-    /// Editing is live: the rows carry the press and hover handlers, and the
-    /// root carries the window-wide move/up pair while a drag or a scrub is
-    /// running. What is still absent is the track manager's popover and the
-    /// minimap's own drag.
     fn render_timeline(&self, viewport_width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let content_width = timeline::content_width(viewport_width);
@@ -7910,18 +8001,29 @@ impl EditorWindow {
                         .on_pinch(cx.listener(|this, event: &gpui::PinchEvent, window, cx| {
                             this.timeline_pinch(event, window, cx);
                         }))
-                        // The minimap: `absolute z-30` at `top: 2px`,
-                        // `left: 128px`, `right: 16px`, `height: 12px`
-                        // (`TL/index.tsx:1209-1219`). Read-only -- its drag,
-                        // its two 8px resize handles and its click-to-centre
-                        // are E4's.
                         .child(
                             div()
+                                .id("timeline-minimap")
                                 .absolute()
                                 .top(px(MINIMAP_TOP))
                                 .left(px(TIMELINE_PADDING + TRACK_GUTTER))
                                 .right(px(TIMELINE_PADDING))
                                 .h(px(MINIMAP_HEIGHT))
+                                .when(
+                                    live && self.total_duration() - self.view.transform.zoom > 0.01,
+                                    |bar| {
+                                        bar.cursor_pointer()
+                                            .capture_any_mouse_down(
+                                                cx.listener(Self::minimap_mouse_down),
+                                            )
+                                            .on_mouse_move(cx.listener(|this, _, window, cx| {
+                                                if this.minimap_drag.is_none() {
+                                                    this.timeline_hover_leave(window, cx);
+                                                    cx.stop_propagation();
+                                                }
+                                            }))
+                                    },
+                                )
                                 .child(timeline::render_minimap(
                                     &theme,
                                     &self.timeline,
@@ -8021,6 +8123,20 @@ impl EditorWindow {
                         gpui::linear_color_stop(gpui::rgb(0x3b82f6), 0.),
                         gpui::linear_color_stop(gpui::rgb(0x2563eb), 1.),
                     ))
+                    .hover(|style| {
+                        style.bg(gpui::linear_gradient(
+                            180.,
+                            gpui::linear_color_stop(gpui::rgb(0x3f8aff), 0.),
+                            gpui::linear_color_stop(gpui::rgb(0x2769f9), 1.),
+                        ))
+                    })
+                    .active(|style| {
+                        style.bg(gpui::linear_gradient(
+                            180.,
+                            gpui::linear_color_stop(gpui::rgb(0x387cea), 0.),
+                            gpui::linear_color_stop(gpui::rgb(0x235ede), 1.),
+                        ))
+                    })
                     .text_size(px(11.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(gpui::white())
@@ -8285,6 +8401,7 @@ impl EditorWindow {
                                         gpui::linear_color_stop(gpui::rgb(0xef4444), 0.),
                                         gpui::linear_color_stop(gpui::rgb(0xdc2626), 1.),
                                     ))
+                                    .active(|style| style.bg(gpui::rgb(0xc92222)))
                                     .text_color(gpui::white())
                                     .on_mouse_down(
                                         MouseButton::Left,
@@ -8448,7 +8565,6 @@ impl Render for EditorWindow {
         // this window is resizable, so read them off the viewport rather than
         // assuming the default width.
         let viewport_width: f32 = window.viewport_size().width.into();
-        let scrubbing = self.scrub.is_some() || self.drag.is_some();
 
         // `onMount`'s `checkBounds` (`TL/index.tsx:689-703`): once the
         // timeline has a width, zoom in until a segment would be at least
@@ -8472,7 +8588,7 @@ impl Render for EditorWindow {
                 .bg(self.root_bg())
                 .text_color(Hsla::from(theme.gray_12))
                 .track_focus(&self.focus)
-                .child(self.render_export_page(cx));
+                .child(self.render_export_page(window, cx));
         }
 
         div()
@@ -8498,10 +8614,12 @@ impl Render for EditorWindow {
             // land and the drag would stay armed; window-level listeners are
             // not gated, and macOS keeps routing drag events to the mouse-down
             // window wherever the pointer is.
-            .when(scrubbing, |this| {
+            // A fast drag can finish before the next frame, so its listeners
+            // must already exist when the mouse-down arms it.
+            .child({
                 let move_editor = cx.entity().downgrade();
                 let up_editor = cx.entity().downgrade();
-                this.child(gpui::canvas(
+                gpui::canvas(
                     |_bounds, _window, _cx| (),
                     move |_bounds, (), window, _cx| {
                         let editor = move_editor.clone();
@@ -8512,6 +8630,12 @@ impl Render for EditorWindow {
                             let event = event.clone();
                             editor
                                 .update(cx, |this, cx| {
+                                    if this.scrub.is_none()
+                                        && this.drag.is_none()
+                                        && this.minimap_drag.is_none()
+                                    {
+                                        return;
+                                    }
                                     if !event.dragging() {
                                         // The release happened somewhere the
                                         // window never heard about (another
@@ -8519,6 +8643,15 @@ impl Render for EditorWindow {
                                         // drag at its last state.
                                         this.window_mouse_up(cx);
                                         this.drag_mouse_up(window, cx);
+                                        if this.minimap_drag.take().is_some() {
+                                            cx.notify();
+                                        }
+                                        return;
+                                    }
+                                    if let Some(drag) = this.minimap_drag {
+                                        this.view.transform = drag.update(f32::from(event.position.x), this.total_duration());
+                                        this.view.preview_time = None;
+                                        cx.notify();
                                         return;
                                     }
                                     this.timeline_mouse_move(&event, window, cx);
@@ -8540,13 +8673,25 @@ impl Render for EditorWindow {
                             }
                             editor
                                 .update(cx, |this, cx| {
+                                    if this.scrub.is_none()
+                                        && this.drag.is_none()
+                                        && this.minimap_drag.is_none()
+                                    {
+                                        return;
+                                    }
                                     this.window_mouse_up(cx);
                                     this.drag_mouse_up(window, cx);
+                                    if this.minimap_drag.take().is_some() {
+                                        this.note_transform("minimap", None);
+                                        cx.notify();
+                                    }
                                 })
                                 .ok();
                         });
                     },
-                ))
+                )
+                .absolute()
+                .inset_0()
             })
             .child(
                 self.header
@@ -8703,6 +8848,18 @@ impl Render for EditorWindow {
                         cx.notify();
                     }),
                 )
+            }))
+            .children(self.minimap_drag.map(|drag| {
+                div()
+                    .id("timeline-minimap-drag")
+                    .absolute()
+                    .inset_0()
+                    .cursor(match drag.kind {
+                        timeline::MinimapDragKind::Move => gpui::CursorStyle::ClosedHand,
+                        timeline::MinimapDragKind::Left | timeline::MinimapDragKind::Right => {
+                            gpui::CursorStyle::ResizeLeftRight
+                        }
+                    })
             }))
             // The config sidebar's sliders take the same layer, for the same
             // reason -- and its release is what closes the undo bracket, so a

@@ -2601,11 +2601,8 @@ impl Render for MainWindow {
             .flex()
             .flex_col()
             .overflow_hidden()
-            // `rounded-[16px]` on `.cap-window-shell`, matched natively by
-            // `apply_squircle_corners(&window, 16.0)` in the Tauri app -- and,
-            // when a material is installed, by the content-view squircle clip
-            // in `platform::install_window_material`.
-            .rounded(px(16.))
+            // Windows keeps its native frame, so DWM supplies the outer corners.
+            .when(!cfg!(target_os = "windows"), |shell| shell.rounded(px(16.)))
             // Opaque `bg-gray-1` with no material; a translucent tint over the
             // live `NSGlassEffectView`/`NSVisualEffectView` backdrop with one.
             .bg(theme.shell_bg())
@@ -3369,6 +3366,8 @@ impl MainWindow {
         let phase = self.session.read(cx).phase;
         let stopping = phase == Phase::Stopping;
         let starting = phase == Phase::Starting;
+        let countdown = self.session.read(cx).countdown_remaining();
+        let can_stop = !stopping && (!starting || countdown.is_some());
         #[cfg(target_os = "linux")]
         let can_resume = clean_capture_resume_available(
             phase,
@@ -3391,6 +3390,15 @@ impl MainWindow {
             .px(px(24.))
             .pb(px(32.))
             .bg(wash)
+            .when_some(countdown, |this, remaining| {
+                this.child(
+                    div()
+                        .mb(px(16.))
+                        .text_size(px(18.))
+                        .text_center()
+                        .child(format!("Recording starts in {remaining}")),
+                )
+            })
             .when_some(self.session.read(cx).error.clone(), |this, error| {
                 this.child(
                     div()
@@ -3462,8 +3470,8 @@ impl MainWindow {
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(gpui::white())
                     // `disabled:opacity-60` while pending.
-                    .when(stopping || starting, |this| this.opacity(0.6))
-                    .when(!stopping && !starting, |this| {
+                    .when(!can_stop, |this| this.opacity(0.6))
+                    .when(can_stop, |this| {
                         this.hover(|style| style.bg(theme.red_10))
                             .on_click(cx.listener(|this, _, _window, cx| {
                                 this.session.update(cx, |session, cx| session.stop(cx));
@@ -3476,6 +3484,7 @@ impl MainWindow {
                             .text_color(gpui::white()),
                     )
                     .child(match phase {
+                        Phase::Starting if countdown.is_some() => "Cancel Recording",
                         Phase::Starting => "Starting...",
                         Phase::Stopping => "Stopping...",
                         _ => "Stop Recording",
@@ -5979,7 +5988,7 @@ impl MainWindow {
 
     /// `BaseControls`: camera, microphone, system audio.
     fn render_base_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let gap = if self.expanded { 10. } else { 6. };
+        let gap = if self.expanded { 10. } else { 8. };
 
         div()
             .flex()

@@ -277,7 +277,11 @@ fn main() {
                     // rather than by AppKit, so mark the content view as app-owned
                     // titlebar content.
                     app_owns_titlebar_drag: true,
-                    window_background: gpui::WindowBackgroundAppearance::Transparent,
+                    window_background: if cfg!(target_os = "windows") {
+                        gpui::WindowBackgroundAppearance::Opaque
+                    } else {
+                        gpui::WindowBackgroundAppearance::Transparent
+                    },
                     is_resizable: false,
                     is_minimizable: false,
                     ..Default::default()

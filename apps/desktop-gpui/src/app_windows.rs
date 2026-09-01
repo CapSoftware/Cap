@@ -300,9 +300,9 @@ pub(crate) fn export_in_flight(cx: &App) -> bool {
     })
 }
 
-pub(crate) fn flush_pending_editor_saves(cx: &mut App) {
+pub(crate) fn flush_pending_editor_saves(cx: &mut App) -> Result<(), String> {
     if !cx.has_global::<AppWindows>() {
-        return;
+        return Ok(());
     }
 
     let windows = cx.global::<AppWindows>();
@@ -314,8 +314,8 @@ pub(crate) fn flush_pending_editor_saves(cx: &mut App) {
         .collect();
 
     for handle in editors {
-        if let Ok(pending) = handle.update(cx, |editor, _, _| editor.pending_save()) {
-            pending.borrow_mut().flush();
+        if let Ok(result) = handle.update(cx, |editor, _, cx| editor.flush_pending_saves(cx)) {
+            result?;
         }
     }
 
@@ -324,6 +324,7 @@ pub(crate) fn flush_pending_editor_saves(cx: &mut App) {
             pending.borrow_mut().flush();
         }
     }
+    Ok(())
 }
 
 /// Install the registry and wire the session observer that tears the bar down
@@ -4372,6 +4373,7 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
                 appears_transparent: true,
                 traffic_light_position: editor_window::TRAFFIC_LIGHTS,
             }),
+            app_owns_titlebar_drag: true,
             // An ordinary window that activates the dock icon
             // (`activates_dock()` lists Editor); no level or Spaces treatment.
             kind: WindowKind::Normal,

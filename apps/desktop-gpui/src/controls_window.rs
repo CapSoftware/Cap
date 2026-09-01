@@ -113,8 +113,12 @@ impl ControlsWindow {
         let session = self.session.read(cx);
         let starting = session.phase == Phase::Starting;
         let stopping = session.phase == Phase::Stopping;
+        let countdown = session.countdown_remaining();
+        let can_stop = (!starting && !stopping) || countdown.is_some();
         let error = session.error.clone();
-        let label: SharedString = if starting {
+        let label: SharedString = if let Some(countdown) = countdown {
+            countdown.to_string().into()
+        } else if starting {
             "Starting".into()
         } else if stopping {
             "Saving…".into()
@@ -143,14 +147,14 @@ impl ControlsWindow {
             .py(px(4.))
             .px(px(8.))
             .text_color(theme.red_300)
-            .when(!starting && !stopping, |this| {
+            .when(can_stop, |this| {
                 this.hover(|style| style.bg(Theme::with_alpha(theme.red_300, 0.08)))
                     .active(|style| style.bg(Theme::with_alpha(theme.red_300, 0.12)))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.session.update(cx, |session, cx| session.stop(cx));
                     }))
             })
-            .when(stopping, |this| this.opacity(0.6))
+            .when(!can_stop, |this| this.opacity(0.6))
             .when_some(error, |this, error| {
                 this.tooltip(move |_, cx| ui::Tooltip::new(&theme, error.clone()).view(cx))
             })
@@ -382,6 +386,7 @@ impl ControlsWindow {
             .child(
                 div()
                     .id("drag")
+                    .cursor_move()
                     .flex()
                     .items_center()
                     .justify_center()

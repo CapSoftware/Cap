@@ -1007,49 +1007,77 @@ impl EditorWindow {
         }));
     }
 
-    pub(crate) fn render_export_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_export_page(
+        &self,
+        _window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = self.theme;
         let Some(ui) = self.export.as_ref() else {
             return div().into_any_element();
         };
+
+        let header = div()
+            .relative()
+            .h(px(56.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .border_b_1()
+            .border_color(Hsla::from(theme.gray_3))
+            .when(cfg!(target_os = "windows"), |header| {
+                header.window_control_area(gpui::WindowControlArea::Drag)
+            })
+            .when(!cfg!(target_os = "windows"), |header| {
+                header.on_mouse_down(gpui::MouseButton::Left, |event, window, _| {
+                    if event.click_count == 2 {
+                        window.titlebar_double_click();
+                    } else {
+                        window.start_window_move();
+                    }
+                })
+            })
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(Hsla::from(theme.gray_12))
+                    .child("Export"),
+            );
+        #[cfg(target_os = "windows")]
+        let header = header.child(div().absolute().right_0().top_0().h_full().child(
+            ui::windows_caption_controls(
+                theme,
+                _window.is_window_active(),
+                _window.is_maximized(),
+                true,
+                true,
+            ),
+        ));
 
         div()
             .size_full()
             .flex()
             .flex_col()
             .relative()
+            .child(header)
             .child(
                 div()
-                    .h(px(56.))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_center()
-                    .border_b_1()
-                    .border_color(Hsla::from(theme.gray_3))
-                    .child(
-                        div()
-                            .text_size(px(14.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_12))
-                            .child("Export"),
-                    ),
-            )
-            .child(
-                div()
+                    .relative()
                     .flex()
                     .flex_row()
                     .flex_1()
                     .min_h_0()
                     .child(self.render_export_preview_pane(ui))
-                    .child(self.render_export_sidebar(ui, cx)),
+                    .child(self.render_export_sidebar(ui, cx))
+                    .when(ui.phase.shows_progress(), |this| {
+                        this.child(self.render_export_overlay(ui, cx))
+                    })
+                    .when(ui.phase == ExportPhase::ChoosingFile, |this| {
+                        this.child(div().absolute().inset_0().occlude())
+                    }),
             )
-            .when(ui.phase.shows_progress(), |this| {
-                this.child(self.render_export_overlay(ui, cx))
-            })
-            .when(ui.phase == ExportPhase::ChoosingFile, |this| {
-                this.child(div().absolute().inset_0().occlude())
-            })
             .into_any_element()
     }
 
@@ -1656,6 +1684,18 @@ impl EditorWindow {
                     .flex_row()
                     .items_center()
                     .justify_between()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(if ui.advanced_open {
+                        theme.gray_5
+                    } else {
+                        theme.gray_4
+                    })
+                    .when(ui.advanced_open, |button| button.bg(theme.gray_3))
+                    .hover(|style| style.bg(theme.gray_3).border_color(theme.gray_5))
+                    .active(|style| style.bg(theme.gray_4))
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, _window, cx| {
                         if let Some(ui) = this.export.as_mut() {
@@ -1834,6 +1874,7 @@ impl EditorWindow {
         div()
             .absolute()
             .inset_0()
+            .occlude()
             .flex()
             .flex_col()
             .items_center()

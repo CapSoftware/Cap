@@ -23,6 +23,29 @@ pub enum Phase {
     Stopping,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CountdownAdvance {
+    Ignore,
+    Tick(u32),
+    Start,
+}
+
+fn countdown_advance(
+    phase: Phase,
+    current_generation: u64,
+    countdown_generation: u64,
+    remaining: Option<u32>,
+) -> CountdownAdvance {
+    if phase != Phase::Starting || current_generation != countdown_generation {
+        return CountdownAdvance::Ignore;
+    }
+    match remaining {
+        Some(remaining) if remaining > 1 => CountdownAdvance::Tick(remaining - 1),
+        Some(1) => CountdownAdvance::Start,
+        _ => CountdownAdvance::Ignore,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PauseControlTicket {
     generation: u64,
@@ -350,6 +373,7 @@ pub struct RecordingSession {
     storage_monitor: Option<Task<()>>,
     failure_monitor: Option<Task<()>>,
     recording_generation: u64,
+    countdown_remaining: Option<u32>,
     pause_control: PauseControlState,
     pause_control_error: Option<String>,
     #[cfg(target_os = "linux")]
@@ -389,6 +413,7 @@ impl RecordingSession {
             storage_monitor: None,
             failure_monitor: None,
             recording_generation: 0,
+            countdown_remaining: None,
             pause_control: PauseControlState::default(),
             pause_control_error: None,
             #[cfg(target_os = "linux")]
@@ -514,6 +539,10 @@ impl RecordingSession {
         }
     }
 
+    pub fn countdown_remaining(&self) -> Option<u32> {
+        self.countdown_remaining
+    }
+
     pub fn start(&mut self, config: StartConfig, cx: &mut Context<Self>) {
         if self.phase != Phase::Idle {
             return;
@@ -525,14 +554,17 @@ impl RecordingSession {
         self.storage_monitor = None;
         self.failure_monitor = None;
         self.recording_generation = self.recording_generation.wrapping_add(1);
+        let generation = self.recording_generation;
+        let countdown = crate::store::GeneralSettings::load()
+            .recording_countdown
+            .unwrap_or(0);
         self.pause_control.invalidate();
         self.pause_control.uncertain = false;
         self.pause_control_error = None;
         self.pipeline_failed = false;
         #[cfg(target_os = "linux")]
         {
-            self.instant_attempt = (config.mode == recording::RecordingMode::Instant)
-                .then(recording::InstantAttempt::new);
+            self.instant_attempt = None;
             self.clean_control.invalidate();
             self.clean_control.uncertain = false;
         }
@@ -543,10 +575,65 @@ impl RecordingSession {
         self.stopped_for_low_storage = false;
         self.stopped_elapsed = None;
         self.last_config = Some(config.clone());
+        self.countdown_remaining = (countdown > 0).then_some(countdown);
         cx.notify();
 
+        if countdown == 0 {
+            self.start_engine(config, generation, cx);
+            return;
+        }
+
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let keep_waiting = this
+                    .update(cx, |this, cx| {
+                        match countdown_advance(
+                            this.phase,
+                            this.recording_generation,
+                            generation,
+                            this.countdown_remaining,
+                        ) {
+                            CountdownAdvance::Ignore => false,
+                            CountdownAdvance::Tick(remaining) => {
+                                this.countdown_remaining = Some(remaining);
+                                cx.notify();
+                                true
+                            }
+                            CountdownAdvance::Start => {
+                                this.countdown_remaining = None;
+                                cx.notify();
+                                this.start_engine(config.clone(), generation, cx);
+                                false
+                            }
+                        }
+                    })
+                    .unwrap_or(false);
+                if !keep_waiting {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn start_engine(&mut self, config: StartConfig, generation: u64, cx: &mut Context<Self>) {
+        if self.phase != Phase::Starting
+            || self.recording_generation != generation
+            || self.countdown_remaining.is_some()
+        {
+            return;
+        }
+        if !crate::menus::recording_start_allowed(cx) {
+            self.finish(cx);
+            return;
+        }
+
         #[cfg(target_os = "linux")]
-        let generation = self.recording_generation;
+        {
+            self.instant_attempt = (config.mode == recording::RecordingMode::Instant)
+                .then(recording::InstantAttempt::new);
+        }
         #[cfg(target_os = "linux")]
         let attempt = self.instant_attempt.clone();
         #[cfg(target_os = "linux")]
@@ -758,6 +845,11 @@ impl RecordingSession {
     }
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
+        if self.phase == Phase::Starting && self.countdown_remaining.is_some() {
+            self.countdown_remaining = None;
+            self.finish(cx);
+            return;
+        }
         #[cfg(target_os = "linux")]
         if matches!(self.phase, Phase::Starting | Phase::Stopping)
             && let Some(attempt) = self.instant_attempt.clone()
@@ -1551,6 +1643,7 @@ impl RecordingSession {
         self.pause_control_error = None;
         self.pipeline_failed = false;
         self.storage_monitor = None;
+        self.countdown_remaining = None;
         self.phase = Phase::Idle;
         self.mic_muted = false;
         self.storage_warning = false;
@@ -1564,6 +1657,47 @@ impl RecordingSession {
 
 fn recording_failure_is_current(phase: Phase, current: u64, completed: u64) -> bool {
     current == completed && matches!(phase, Phase::Recording { .. })
+}
+
+#[cfg(test)]
+mod countdown_tests {
+    use super::*;
+
+    #[test]
+    fn countdown_ticks_until_the_final_step_before_start() {
+        assert_eq!(
+            countdown_advance(Phase::Starting, 7, 7, Some(3)),
+            CountdownAdvance::Tick(2)
+        );
+        assert_eq!(
+            countdown_advance(Phase::Starting, 7, 7, Some(2)),
+            CountdownAdvance::Tick(1)
+        );
+        assert_eq!(
+            countdown_advance(Phase::Starting, 7, 7, Some(1)),
+            CountdownAdvance::Start
+        );
+        assert_eq!(
+            countdown_advance(Phase::Starting, 7, 7, None),
+            CountdownAdvance::Ignore
+        );
+    }
+
+    #[test]
+    fn cancelled_or_superseded_countdown_cannot_start_capture() {
+        assert_eq!(
+            countdown_advance(Phase::Idle, 7, 7, Some(1)),
+            CountdownAdvance::Ignore
+        );
+        assert_eq!(
+            countdown_advance(Phase::Starting, 8, 7, Some(1)),
+            CountdownAdvance::Ignore
+        );
+        assert_eq!(
+            countdown_advance(Phase::Recording { paused: false }, 7, 7, Some(1)),
+            CountdownAdvance::Ignore
+        );
+    }
 }
 
 #[cfg(target_os = "linux")]

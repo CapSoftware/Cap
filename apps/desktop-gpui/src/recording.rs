@@ -2122,41 +2122,11 @@ pub fn recordings_dir() -> PathBuf {
     crate::store::app_data_dir().join("recordings")
 }
 
-/// `delete_recording_directory` (`src-tauri/src/lib.rs:4006-4051`), for the
-/// clip the editor-append flow just copied out of: reject `..` components,
-/// require the path to live inside the recordings library (canonically, so a
-/// symlink cannot escape it), then `remove_dir_all`. The Tauri command accepts
-/// every known storage folder; this app resolves exactly one
-/// ([`recordings_dir`]), so that one is the whole allow-list.
+/// Deletes the clip the editor-append flow just copied from, using the same
+/// guarded recursive delete as the library with the active recordings folder
+/// as its only allowed root.
 pub fn delete_recording_directory(path: &std::path::Path) -> Result<(), String> {
-    if path
-        .components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Err("Invalid path".to_string());
-    }
-
-    let recordings = recordings_dir();
-    if !path.starts_with(&recordings) {
-        return Err("Path is not inside the recordings directory".to_string());
-    }
-
-    if path.exists() {
-        let canonical = path
-            .canonicalize()
-            .map_err(|e| format!("Failed to resolve recording path: {e}"))?;
-        let inside = recordings
-            .canonicalize()
-            .map(|dir| canonical.starts_with(&dir))
-            .unwrap_or(false);
-        if !inside {
-            return Err("Path is not inside the recordings directory".to_string());
-        }
-        std::fs::remove_dir_all(&canonical)
-            .map_err(|e| format!("Failed to delete recording: {e}"))?;
-    }
-
-    Ok(())
+    crate::library::delete_recording_directory_in(&[recordings_dir()], path)
 }
 
 /// `format_project_name` with the default template

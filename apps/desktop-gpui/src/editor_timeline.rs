@@ -38,8 +38,8 @@ use cap_project::{
     TimelineConfiguration, ZoomMode,
 };
 use gpui::{
-    AnyElement, FontWeight, Hsla, IntoElement, ParentElement, Pixels, SharedString, Styled, div,
-    prelude::FluentBuilder, px, svg,
+    AnyElement, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
+    SharedString, Styled, div, prelude::FluentBuilder, px, svg,
 };
 
 use crate::{
@@ -1559,10 +1559,101 @@ pub fn render_ruler(theme: &Theme, view: TimelineView, viewport_width: f32) -> A
         .into_any_element()
 }
 
-/// The minimap (`TL/Minimap.tsx`): a 12px pill above the ruler carrying a
-/// viewport chip and a tick per clip boundary. Hidden -- `opacity-0
-/// pointer-events-none` -- until the viewport is narrower than the whole
-/// timeline (`total - zoom > 0.01`).
+pub fn minimap_chip(transform: Transform, total_duration: f64, bar_width: f32) -> (f32, f32) {
+    let total = total_duration.max(0.001);
+    let bar_width = bar_width.max(1.);
+    let chip_width = ((transform.zoom * bar_width as f64 / total) as f32)
+        .clamp(MINIMAP_MIN_CHIP_WIDTH.min(bar_width), bar_width);
+    let max_position = (total - transform.zoom).max(0.001);
+    let chip_left = ((transform.position / max_position).clamp(0., 1.) as f32)
+        * (bar_width - chip_width).max(0.);
+    (chip_left, chip_width)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MinimapDragKind {
+    Move,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MinimapDrag {
+    pub kind: MinimapDragKind,
+    start_x: f32,
+    start: Transform,
+    seconds_per_pixel: f64,
+    move_scale: f64,
+}
+
+impl MinimapDrag {
+    pub fn begin(
+        x: f32,
+        bar_left: f32,
+        bar_width: f32,
+        total: f64,
+        transform: &mut Transform,
+    ) -> Option<Self> {
+        if !x.is_finite()
+            || !bar_left.is_finite()
+            || !bar_width.is_finite()
+            || !total.is_finite()
+            || !transform.zoom.is_finite()
+            || !transform.position.is_finite()
+            || bar_width <= 0.
+            || total - transform.zoom <= 0.01
+        {
+            return None;
+        }
+        let (chip_left, chip_width) = minimap_chip(*transform, total, bar_width);
+        let offset = x - bar_left;
+        let kind = if offset < chip_left || offset > chip_left + chip_width {
+            transform.set_position(
+                offset as f64 / bar_width as f64 * total - transform.zoom / 2.,
+                total,
+            );
+            MinimapDragKind::Move
+        } else if offset < chip_left + 8. {
+            MinimapDragKind::Left
+        } else if offset > chip_left + chip_width - 8. {
+            MinimapDragKind::Right
+        } else {
+            MinimapDragKind::Move
+        };
+        Some(Self {
+            kind,
+            start_x: x,
+            start: *transform,
+            seconds_per_pixel: total / bar_width as f64,
+            move_scale: (total - transform.zoom) / (bar_width - chip_width).max(1.) as f64,
+        })
+    }
+
+    pub fn update(self, x: f32, total: f64) -> Transform {
+        let mut transform = self.start;
+        if !x.is_finite() {
+            return transform;
+        }
+        let delta = (x - self.start_x) as f64;
+        match self.kind {
+            MinimapDragKind::Move => {
+                transform.set_position(self.start.position + delta * self.move_scale, total);
+            }
+            MinimapDragKind::Left => transform.update_zoom(
+                self.start.zoom - delta * self.seconds_per_pixel,
+                self.start.position + self.start.zoom,
+                total,
+            ),
+            MinimapDragKind::Right => transform.update_zoom(
+                self.start.zoom + delta * self.seconds_per_pixel,
+                self.start.position,
+                total,
+            ),
+        }
+        transform
+    }
+}
+
 pub fn render_minimap(
     theme: &Theme,
     model: &TimelineModel,
@@ -1571,15 +1662,8 @@ pub fn render_minimap(
 ) -> AnyElement {
     let total = model.total_duration.max(0.001);
     let bar_width = bar_width.max(1.);
-    let px_per_sec = bar_width as f64 / total;
     let zoomed_in = total - view.transform.zoom > 0.01;
-
-    let chip_width = ((view.transform.zoom * px_per_sec) as f32)
-        .max(MINIMAP_MIN_CHIP_WIDTH)
-        .min(bar_width);
-    let max_position = (total - view.transform.zoom).max(0.001);
-    let chip_left = ((view.transform.position / max_position).min(1.) as f32)
-        * (bar_width - chip_width).max(0.);
+    let (chip_left, chip_width) = minimap_chip(view.transform, total, bar_width);
 
     let mut bar = div()
         .relative()
@@ -1609,6 +1693,7 @@ pub fn render_minimap(
 
     bar.child(
         div()
+            .id("timeline-minimap-chip")
             .absolute()
             .top_0()
             .bottom_0()
@@ -1617,7 +1702,19 @@ pub fn render_minimap(
             .rounded_full()
             .border_1()
             .border_color(with_alpha(Hsla::from(theme.gray_7), 0.8))
-            .bg(with_alpha(Hsla::from(theme.gray_6), 0.7)),
+            .bg(with_alpha(Hsla::from(theme.gray_6), 0.7))
+            .cursor(gpui::CursorStyle::OpenHand)
+            .hover(|style| style.bg(with_alpha(Hsla::from(theme.gray_7), 0.7)))
+            .children([true, false].map(|left| {
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(8.))
+                    .when(left, |handle| handle.left_0())
+                    .when(!left, |handle| handle.right_0())
+                    .cursor(gpui::CursorStyle::ResizeLeftRight)
+            })),
     )
     .into_any_element()
 }
@@ -4064,16 +4161,94 @@ mod tests {
 
     #[test]
     fn the_minimap_chip_never_shrinks_below_its_floor() {
-        // A 1-second viewport of an hour, on a 1000px bar: 0.28px of chip,
-        // lifted to the 20px floor.
-        let total = 3_600.0f64;
-        let bar = 1_000.0f32;
-        let zoom = 1.0f64;
-        let px_per_sec = bar as f64 / total;
-        let chip = ((zoom * px_per_sec) as f32)
-            .max(MINIMAP_MIN_CHIP_WIDTH)
-            .min(bar);
+        let (_, chip) = minimap_chip(
+            Transform {
+                zoom: 1.,
+                position: 0.,
+            },
+            3600.,
+            1000.,
+        );
         assert_eq!(chip, MINIMAP_MIN_CHIP_WIDTH);
+    }
+
+    #[test]
+    fn minimap_drag_moves_the_viewport_and_clamps_outside_the_track() {
+        let mut transform = Transform {
+            zoom: 20.,
+            position: 20.,
+        };
+        let drag = MinimapDrag::begin(400., 100., 1000., 100., &mut transform).unwrap();
+        assert_eq!(drag.kind, MinimapDragKind::Move);
+        assert_eq!(
+            drag.update(600., 100.),
+            Transform {
+                zoom: 20.,
+                position: 40.
+            }
+        );
+        assert_eq!(drag.update(-1000., 100.).position, 0.);
+        assert_eq!(drag.update(3000., 100.).position, 84.);
+    }
+
+    #[test]
+    fn minimap_track_click_centers_then_drags_from_the_new_position() {
+        let mut transform = Transform {
+            zoom: 20.,
+            position: 0.,
+        };
+        let drag = MinimapDrag::begin(850., 100., 1000., 100., &mut transform).unwrap();
+        assert_eq!(drag.kind, MinimapDragKind::Move);
+        assert_eq!(transform.position, 65.);
+        assert_eq!(drag.update(950., 100.).position, 75.);
+    }
+
+    #[test]
+    fn minimap_resize_keeps_the_opposite_edge_fixed() {
+        let mut transform = Transform {
+            zoom: 20.,
+            position: 20.,
+        };
+        let left = MinimapDrag::begin(301., 100., 1000., 100., &mut transform).unwrap();
+        assert_eq!(left.kind, MinimapDragKind::Left);
+        let resized = left.update(251., 100.);
+        assert_eq!(
+            resized,
+            Transform {
+                zoom: 25.,
+                position: 15.
+            }
+        );
+        assert_eq!(resized.position + resized.zoom, 40.);
+        let right = MinimapDrag::begin(499., 100., 1000., 100., &mut transform).unwrap();
+        assert_eq!(right.kind, MinimapDragKind::Right);
+        assert_eq!(
+            right.update(599., 100.),
+            Transform {
+                zoom: 30.,
+                position: 20.
+            }
+        );
+        assert_eq!(
+            right.update(0., 100.),
+            Transform {
+                zoom: MAX_ZOOM_IN,
+                position: 20.
+            }
+        );
+    }
+
+    #[test]
+    fn minimap_drag_uses_the_chip_floor_without_dividing_by_zero() {
+        let mut transform = Transform {
+            zoom: 3.,
+            position: 0.,
+        };
+        let drag = MinimapDrag::begin(10., 0., 1000., 3600., &mut transform).unwrap();
+        assert_eq!(drag.kind, MinimapDragKind::Move);
+        assert!((drag.update(990., 3600.).position - 3597.).abs() < 1e-9);
+        assert!(MinimapDrag::begin(10., 0., 0., 3600., &mut transform).is_none());
+        assert!(MinimapDrag::begin(10., 0., 1000., 3., &mut transform).is_none());
     }
 
     // -- The edge fade ------------------------------------------------------

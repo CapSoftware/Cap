@@ -377,6 +377,7 @@ impl CameraWindowCloseGate {
 pub struct AppExitState {
     exiting: AtomicBool,
     restarting: AtomicBool,
+    title_flush_pending: AtomicBool,
     admission: std::sync::Mutex<()>,
 }
 
@@ -385,12 +386,24 @@ impl Default for AppExitState {
         Self {
             exiting: AtomicBool::new(false),
             restarting: AtomicBool::new(false),
+            title_flush_pending: AtomicBool::new(false),
             admission: std::sync::Mutex::new(()),
         }
     }
 }
 
 impl AppExitState {
+    fn begin_title_flush(&self) -> Option<PendingTitleExit<'_>> {
+        self.title_flush_pending
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| PendingTitleExit(self))
+    }
+
+    fn exit_pending(&self) -> bool {
+        self.is_exiting() || self.title_flush_pending.load(Ordering::Acquire)
+    }
+
     pub fn begin(&self) -> bool {
         self.exiting
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -408,6 +421,14 @@ impl AppExitState {
 
     pub fn is_restarting(&self) -> bool {
         self.restarting.load(Ordering::Acquire)
+    }
+}
+
+struct PendingTitleExit<'a>(&'a AppExitState);
+
+impl Drop for PendingTitleExit<'_> {
+    fn drop(&mut self) {
+        self.0.title_flush_pending.store(false, Ordering::Release);
     }
 }
 
@@ -1112,7 +1133,9 @@ impl App {
         target: ScreenCaptureTarget,
     ) -> Result<(), String> {
         recording_start_allowed(
-            app_is_exiting(&self.handle),
+            self.handle
+                .try_state::<AppExitState>()
+                .is_some_and(|state| state.exit_pending()),
             updates::recording_start_blocked(&self.handle),
         )?;
         #[cfg(target_os = "linux")]
@@ -2776,6 +2799,15 @@ pub(crate) fn with_idle_app<T>(
     include_exports: bool,
     begin: impl FnOnce() -> T,
 ) -> Result<T, ExitBlocked> {
+    with_idle_app_for_title_flush(app, include_exports, false, begin)
+}
+
+fn with_idle_app_for_title_flush<T>(
+    app: &AppHandle,
+    include_exports: bool,
+    owns_title_flush: bool,
+    begin: impl FnOnce() -> T,
+) -> Result<T, ExitBlocked> {
     let exit_state = app
         .try_state::<AppExitState>()
         .ok_or(ExitBlocked::StateUnavailable)?;
@@ -2783,7 +2815,9 @@ pub(crate) fn with_idle_app<T>(
         .admission
         .try_lock()
         .map_err(|_| ExitBlocked::StateUnavailable)?;
-    if exit_state.is_exiting() {
+    if exit_state.is_exiting()
+        || (!owns_title_flush && exit_state.title_flush_pending.load(Ordering::Acquire))
+    {
         return Err(ExitBlocked::AlreadyExiting);
     }
     let state = app
@@ -2865,6 +2899,96 @@ fn show_exit_blocked(app: &AppHandle, reason: ExitBlocked) {
         .show(|_| {});
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EditorTitleSaveRequest {
+    request_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EditorTitleSaveResponse {
+    request_id: String,
+    window_label: String,
+    error: Option<String>,
+}
+
+async fn wait_for_editor_title_saves(
+    request_id: &str,
+    mut pending: HashSet<String>,
+    mut responses: tokio::sync::mpsc::UnboundedReceiver<EditorTitleSaveResponse>,
+    timeout: Duration,
+) -> Result<(), String> {
+    tokio::time::timeout(timeout, async {
+        while !pending.is_empty() {
+            let response = responses
+                .recv()
+                .await
+                .ok_or("The editor title save connection closed before saving finished.")?;
+            if response.request_id != request_id || !pending.remove(&response.window_label) {
+                continue;
+            }
+            if let Some(error) = response.error {
+                return Err(format!("Could not save the recording title: {error}"));
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| {
+        "Could not confirm that all recording titles were saved. Try Quit again.".to_string()
+    })?
+}
+
+async fn flush_editor_titles_for_exit(
+    app: &AppHandle,
+) -> Result<Option<EditorTitleSaveRequest>, String> {
+    let labels: HashSet<_> = app
+        .webview_windows()
+        .into_keys()
+        .filter(|label| matches!(CapWindowId::from_str(label), Ok(CapWindowId::Editor { .. })))
+        .collect();
+    if labels.is_empty() {
+        return Ok(None);
+    }
+
+    let request = EditorTitleSaveRequest {
+        request_id: uuid::Uuid::new_v4().to_string(),
+    };
+    let (sender, responses) = tokio::sync::mpsc::unbounded_channel();
+    let listener = app.listen_any("editor-title-save-finished", move |event| {
+        if let Ok(response) = serde_json::from_str(event.payload()) {
+            let _ = sender.send(response);
+        }
+    });
+    let result = async {
+        for label in &labels {
+            app.emit_to(label, "editor-title-save-request", &request)
+                .map_err(|error| format!("Could not request an editor title save: {error}"))?;
+        }
+        wait_for_editor_title_saves(
+            &request.request_id,
+            labels.clone(),
+            responses,
+            Duration::from_secs(5),
+        )
+        .await?;
+        if app.webview_windows().keys().any(|label| {
+            !labels.contains(label)
+                && matches!(CapWindowId::from_str(label), Ok(CapWindowId::Editor { .. }))
+        }) {
+            return Err("Another editor opened while preparing to quit. Try Quit again.".into());
+        }
+        Ok(())
+    }
+    .await;
+    app.unlisten(listener);
+    if result.is_err() {
+        let _ = app.emit("editor-title-save-cancelled", &request);
+    }
+    result.map(|()| Some(request))
+}
+
 #[tauri::command]
 #[specta::specta]
 fn restart_app(app: AppHandle) -> Result<(), String> {
@@ -2879,12 +3003,45 @@ fn restart_app(app: AppHandle) -> Result<(), String> {
 }
 
 pub async fn request_app_exit(app: AppHandle) {
-    match begin_app_exit_if_idle(&app, false) {
-        Ok(true) => {}
-        Ok(false) => return,
+    let Some(exit_state) = app.try_state::<AppExitState>() else {
+        show_exit_blocked(&app, ExitBlocked::StateUnavailable);
+        return;
+    };
+    let pending = match with_idle_app(&app, false, || exit_state.begin_title_flush()) {
+        Ok(Some(pending)) => pending,
+        Ok(None) => return,
         Err(ExitBlocked::AlreadyExiting) => return,
         Err(reason) => {
             show_exit_blocked(&app, reason);
+            return;
+        }
+    };
+    let request = match flush_editor_titles_for_exit(&app).await {
+        Ok(request) => request,
+        Err(error) => {
+            drop(pending);
+            warn!(%error, "Quit canceled because an editor title could not be saved");
+            app.dialog()
+                .message(format!(
+                    "{error}\n\nCap is still open. Your title is still in the editor."
+                ))
+                .title("Title not saved")
+                .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
+                .show(|_| {});
+            return;
+        }
+    };
+    let admission = with_idle_app_for_title_flush(&app, true, true, || exit_state.begin());
+    drop(pending);
+    match admission {
+        Ok(true) => {}
+        result => {
+            if let Some(request) = request {
+                let _ = app.emit("editor-title-save-cancelled", request);
+            }
+            if let Err(reason) = result {
+                show_exit_blocked(&app, reason);
+            }
             return;
         }
     }
@@ -4765,6 +4922,55 @@ fn acquire_recording_delete_lock(
     cap_recording::upload_resume::UploadLock::acquire(path).map_err(|error| error.to_string())
 }
 
+fn recording_delete_target(
+    recordings_dirs: &[PathBuf],
+    path: &Path,
+) -> Result<Option<PathBuf>, String> {
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("Invalid path".to_string());
+    }
+
+    let canonical_dirs: Vec<_> = recordings_dirs
+        .iter()
+        .filter_map(|dir| dir.canonicalize().ok())
+        .collect();
+    if recordings_dirs
+        .iter()
+        .chain(&canonical_dirs)
+        .any(|dir| path == dir)
+    {
+        return Err("Path is not inside a recordings directory".to_string());
+    }
+
+    if path
+        .try_exists()
+        .map_err(|error| format!("Failed to inspect recording path: {error}"))?
+    {
+        let canonical_path = path
+            .canonicalize()
+            .map_err(|error| format!("Failed to resolve recording path: {error}"))?;
+        if canonical_dirs.iter().any(|dir| &canonical_path == dir)
+            || !canonical_dirs
+                .iter()
+                .any(|dir| canonical_path.starts_with(dir))
+        {
+            return Err("Path is not inside a recordings directory".to_string());
+        }
+        Ok(Some(canonical_path))
+    } else if recordings_dirs
+        .iter()
+        .chain(&canonical_dirs)
+        .any(|dir| path.starts_with(dir))
+    {
+        Ok(None)
+    } else {
+        Err("Path is not inside a recordings directory".to_string())
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
@@ -4773,36 +4979,7 @@ async fn delete_recording_directory(app: AppHandle, path: PathBuf) -> Result<(),
     // deletion must accept the same set — but nothing outside it.
     let recordings_dirs = recordings_locations::known_recordings_dirs(&app);
 
-    // Reject `..` components up front: `Path::starts_with` compares raw components
-    // and does not normalize them, so a path like `<recordings_dir>/../../etc` would
-    // otherwise pass the prefix check below.
-    if path
-        .components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Err("Invalid path".to_string());
-    }
-
-    if !recordings_dirs.iter().any(|dir| path.starts_with(dir)) {
-        return Err("Path is not inside a recordings directory".to_string());
-    }
-
-    if path.exists() {
-        // Canonicalize both paths so symlinks can't be used to escape the
-        // recordings directories before we recursively delete.
-        let canonical_path = path
-            .canonicalize()
-            .map_err(|e| format!("Failed to resolve recording path: {e}"))?;
-
-        let inside_known_dir = recordings_dirs.iter().any(|dir| {
-            dir.canonicalize()
-                .map(|dir| canonical_path.starts_with(&dir))
-                .unwrap_or(false)
-        });
-        if !inside_known_dir {
-            return Err("Path is not inside a recordings directory".to_string());
-        }
-
+    if let Some(canonical_path) = recording_delete_target(&recordings_dirs, &path)? {
         upload::lifecycle::cancel(&canonical_path).await;
         let ownership = acquire_recording_delete_lock(&canonical_path)?;
         upload::lifecycle::mark_cancelled(&canonical_path).map_err(|error| error.to_string())?;
@@ -6234,8 +6411,13 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 let camera_preview = CameraPreviewManager::new(&app);
                 let camera_session_id_handle = camera_preview.session_id_handle();
 
-                let requested_settings = RecordingSettingsStore::get(&app)?
-                    .unwrap_or_default();
+                let requested_settings = match RecordingSettingsStore::get(&app) {
+                    Ok(settings) => settings.unwrap_or_default(),
+                    Err(error) => {
+                        warn!(%error, "Failed to load recording settings during startup");
+                        RecordingSettingsStore::default()
+                    }
+                };
                 app.manage(linux_instant_camera::PresentationBroker::default());
                 app.manage(RequestedInputsState::new(
                     requested_settings.mic_name,
@@ -7765,6 +7947,112 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
 }
 
 #[cfg(test)]
+mod editor_title_save_tests {
+    use super::{AppExitState, EditorTitleSaveResponse, wait_for_editor_title_saves};
+    use std::{collections::HashSet, time::Duration};
+    use tokio::sync::mpsc;
+
+    fn response(request: &str, window: &str, error: Option<&str>) -> EditorTitleSaveResponse {
+        EditorTitleSaveResponse {
+            request_id: request.into(),
+            window_label: window.into(),
+            error: error.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn failed_title_flush_releases_admission_without_stopping_device_watchers() {
+        let state = AppExitState::default();
+        let pending = state.begin_title_flush().unwrap();
+        assert!(state.exit_pending());
+        assert!(!state.is_exiting());
+        assert!(state.begin_title_flush().is_none());
+        drop(pending);
+        assert!(!state.exit_pending());
+        assert!(!state.is_exiting());
+        let pending = state.begin_title_flush().unwrap();
+        assert!(state.begin());
+        drop(pending);
+        assert!(state.is_exiting());
+        assert!(state.exit_pending());
+    }
+
+    #[tokio::test]
+    async fn quit_waits_for_every_editor_and_ignores_stale_or_duplicate_responses() {
+        let (sender, responses) = mpsc::unbounded_channel();
+        let pending = HashSet::from(["editor-1".into(), "editor-2".into()]);
+        sender.send(response("previous", "editor-1", None)).unwrap();
+        sender.send(response("current", "unknown", None)).unwrap();
+        sender.send(response("current", "editor-1", None)).unwrap();
+        sender.send(response("current", "editor-1", None)).unwrap();
+        let waiting =
+            wait_for_editor_title_saves("current", pending, responses, Duration::from_secs(1));
+        tokio::pin!(waiting);
+        assert!(futures::poll!(&mut waiting).is_pending());
+        sender.send(response("current", "editor-2", None)).unwrap();
+        assert_eq!(waiting.await, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn one_editor_save_failure_prevents_quit() {
+        let (sender, responses) = mpsc::unbounded_channel();
+        sender
+            .send(response("current", "editor-1", Some("disk full")))
+            .unwrap();
+        let result = wait_for_editor_title_saves(
+            "current",
+            HashSet::from(["editor-1".into(), "editor-2".into()]),
+            responses,
+            Duration::from_secs(1),
+        )
+        .await;
+        assert!(result.unwrap_err().contains("disk full"));
+    }
+
+    #[tokio::test]
+    async fn missing_editor_acknowledgement_does_not_authorize_quit() {
+        let (_sender, responses) = mpsc::unbounded_channel();
+        let result = wait_for_editor_title_saves(
+            "current",
+            HashSet::from(["editor-1".into()]),
+            responses,
+            Duration::from_millis(1),
+        )
+        .await;
+        assert!(result.unwrap_err().contains("Could not confirm"));
+    }
+
+    #[tokio::test]
+    async fn closed_response_channel_does_not_authorize_quit() {
+        let (sender, responses) = mpsc::unbounded_channel();
+        drop(sender);
+        let result = wait_for_editor_title_saves(
+            "current",
+            HashSet::from(["editor-1".into()]),
+            responses,
+            Duration::from_secs(1),
+        )
+        .await;
+        assert!(result.unwrap_err().contains("connection closed"));
+    }
+
+    #[tokio::test]
+    async fn no_editor_requires_no_acknowledgement() {
+        let (_sender, responses) = mpsc::unbounded_channel();
+        assert_eq!(
+            wait_for_editor_title_saves(
+                "current",
+                HashSet::new(),
+                responses,
+                Duration::from_millis(1),
+            )
+            .await,
+            Ok(())
+        );
+    }
+}
+
+#[cfg(test)]
 mod studio_microphone_ownership_tests {
     use super::{
         MicrophoneRemovalError, RequestedInputsState, acknowledge_studio_microphone,
@@ -8528,6 +8816,109 @@ mod screenshot_share_cache_tests {
         let link = screenshot_share_link_for_hash(Some(&sharing(None)), "hash-a");
 
         assert!(link.is_none());
+    }
+}
+
+#[cfg(test)]
+mod recording_delete_path_tests {
+    use super::recording_delete_target;
+
+    #[test]
+    fn delete_target_rejects_an_allowed_root_nested_in_another_allowed_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let recordings = temp.path().join("recordings");
+        let nested = recordings.join("nested");
+        let bundle = nested.join("keep-me.cap");
+        std::fs::create_dir_all(&bundle).unwrap();
+        let dirs = [recordings, nested.clone()];
+
+        for path in [&nested, &nested.canonicalize().unwrap()] {
+            assert_eq!(
+                recording_delete_target(&dirs, path),
+                Err("Path is not inside a recordings directory".to_string())
+            );
+            assert!(bundle.is_dir());
+        }
+        assert_eq!(
+            recording_delete_target(&dirs, &bundle),
+            Ok(Some(bundle.canonicalize().unwrap()))
+        );
+    }
+
+    #[test]
+    fn delete_target_accepts_only_strict_children_of_a_recordings_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let recordings = temp.path().join("recordings");
+        let bundle = recordings.join("delete-me.cap");
+        let outside = temp.path().join("outside.cap");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        assert_eq!(
+            recording_delete_target(std::slice::from_ref(&recordings), &bundle),
+            Ok(Some(bundle.canonicalize().unwrap()))
+        );
+        assert_eq!(
+            recording_delete_target(std::slice::from_ref(&recordings), &recordings),
+            Err("Path is not inside a recordings directory".to_string())
+        );
+        assert_eq!(
+            recording_delete_target(std::slice::from_ref(&recordings), &outside),
+            Err("Path is not inside a recordings directory".to_string())
+        );
+        assert_eq!(
+            recording_delete_target(
+                std::slice::from_ref(&recordings),
+                &recordings.join("..").join("outside.cap"),
+            ),
+            Err("Invalid path".to_string())
+        );
+        assert_eq!(
+            recording_delete_target(
+                std::slice::from_ref(&recordings),
+                &recordings.join("already-gone.cap"),
+            ),
+            Ok(None)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_target_rejects_a_symlink_escape() {
+        let temp = tempfile::tempdir().unwrap();
+        let recordings = temp.path().join("recordings");
+        let victim = temp.path().join("victim");
+        let escape = recordings.join("escape.cap");
+        std::fs::create_dir_all(&recordings).unwrap();
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("keep.txt"), b"keep").unwrap();
+        std::os::unix::fs::symlink(&victim, &escape).unwrap();
+
+        assert_eq!(
+            recording_delete_target(&[recordings], &escape),
+            Err("Path is not inside a recordings directory".to_string())
+        );
+        assert!(victim.join("keep.txt").is_file());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn delete_target_accepts_a_canonical_windows_project_under_a_raw_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let recordings = temp.path().join("recordings");
+        let bundle = recordings.join("delete-me.cap");
+        std::fs::create_dir_all(&bundle).unwrap();
+        let canonical_bundle = bundle.canonicalize().unwrap();
+
+        assert_eq!(
+            recording_delete_target(std::slice::from_ref(&recordings), &canonical_bundle),
+            Ok(Some(canonical_bundle.clone()))
+        );
+        std::fs::remove_dir_all(&canonical_bundle).unwrap();
+        assert_eq!(
+            recording_delete_target(&[recordings], &canonical_bundle),
+            Ok(None)
+        );
     }
 }
 
