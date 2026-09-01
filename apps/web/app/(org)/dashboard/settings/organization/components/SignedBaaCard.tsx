@@ -461,7 +461,7 @@ function SignedBaaCardContent() {
 					<div className="flex flex-col gap-4 p-5 border-t border-gray-4">
 						<p className="text-xs leading-5 text-gray-11">
 							{isPaid ? (
-								"Payment has already been received. Signing completes your Business Associate Agreement with no additional charge. Your existing $99/month BAA subscription continues on its current billing schedule, separately from Cap Pro, and ends if your Cap Pro subscription is canceled."
+								"Payment has already been received. Signing completes your Business Associate Agreement with no additional charge. Your existing $99/month BAA subscription continues on its current billing schedule, separately from Cap Pro."
 							) : (
 								<>
 									By signing, you execute the Business Associate Agreement and

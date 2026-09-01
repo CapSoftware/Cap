@@ -1,10 +1,10 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { sendEmail } from "@cap/database/emails/config";
-import { signedBaas } from "@cap/database/schema";
+import { signedBaas, users } from "@cap/database/schema";
 import { STRIPE_SIGNED_BAA_PRICE_IDS } from "@cap/utils";
 import type Stripe from "stripe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { attachPaidBaaCheckout } from "@/lib/baa/billing";
+import { attachPaidBaaCheckout, hasBaaProWaiver } from "@/lib/baa/billing";
 import { generateSignedBaaPdf } from "@/lib/baa/generate-signed-baa-pdf";
 
 const mockDb = {
@@ -106,7 +106,7 @@ const mockGetCurrentUser = getCurrentUser as ReturnType<typeof vi.fn>;
 function resetMockDb() {
 	for (const key of Object.keys(mockDb)) {
 		const fn = mockDb[key as keyof typeof mockDb];
-		fn.mockClear();
+		fn.mockReset();
 	}
 	mockDb.select.mockReturnValue(mockDb);
 	mockDb.insert.mockReturnValue(mockDb);
@@ -251,6 +251,28 @@ describe("Signed BAA entitlement", () => {
 		).rejects.toThrow("active Cap Pro subscription");
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
 	});
+
+	it("does not treat a legacy Pro placeholder as permission for a new BAA purchase", async () => {
+		mockOwner({
+			stripeCustomerId: "cus_pro",
+			stripeSubscriptionId: "12345",
+			stripeSubscriptionStatus: "active",
+			inviteQuota: 6,
+		});
+		mockStripe.subscriptions.retrieve.mockRejectedValue(
+			new Error("No such subscription: 12345"),
+		);
+		const { purchaseSignedBaa } = await import(
+			"@/actions/organization/signed-baa"
+		);
+		await expect(
+			purchaseSignedBaa("org-1" as never, VALID_INPUT),
+		).rejects.toThrow("active Cap Pro subscription");
+		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+		expect(mockStripe.subscriptions.cancel).not.toHaveBeenCalled();
+		expect(mockDb.update).not.toHaveBeenCalled();
+		expect(mockDb.insert).not.toHaveBeenCalled();
+	});
 });
 
 const VALID_INPUT = {
@@ -277,7 +299,10 @@ async function setupPurchaseAttempt() {
 	});
 	mockDb.limit.mockResolvedValueOnce([]);
 	vi.mocked(generateSignedBaaPdf).mockResolvedValue(new Uint8Array([1, 2, 3]));
-	vi.mocked(sendEmail).mockResolvedValue(undefined as never);
+	vi.mocked(sendEmail).mockResolvedValue({
+		data: { id: "email-1" },
+		error: null,
+	});
 	mockStripe.subscriptions.retrieve.mockResolvedValue({
 		id: "sub_active",
 		customer: "cus_1",
@@ -376,7 +401,10 @@ describe("Signed BAA Stripe recovery", () => {
 			.mockReturnValueOnce(mockDb)
 			.mockReturnValueOnce({ affectedRows: 1 });
 		vi.mocked(generateSignedBaaPdf).mockResolvedValue(new Uint8Array([1]));
-		vi.mocked(sendEmail).mockResolvedValue(undefined as never);
+		vi.mocked(sendEmail).mockResolvedValue({
+			data: { id: "email-1" },
+			error: null,
+		});
 		mockStripe.subscriptions.retrieve.mockResolvedValue({
 			id: "sub_active",
 			customer: "cus_1",
@@ -504,12 +532,12 @@ describe("Signed BAA Stripe recovery", () => {
 
 const paidRecord = {
 	id: "baa-record-1",
-	organizationId: "org-1",
-	userId: "owner-1",
+	organizationId: "org-1" as never,
+	userId: "owner-1" as never,
 	status: "paid",
 	stripeSubscriptionId: "sub_baa_paid" as string | null,
-	signedAt: null,
-	emailSentAt: null,
+	signedAt: null as Date | null,
+	emailSentAt: null as Date | null,
 	updatedAt: new Date(),
 	...VALID_INPUT,
 	signatureData: VALID_INPUT.signatureDataUrl,
@@ -523,6 +551,16 @@ const paidSubscription = {
 	items: { data: [{ price: { id: STRIPE_SIGNED_BAA_PRICE_IDS.development } }] },
 	latest_invoice: { status: "paid" },
 } as unknown as Stripe.Subscription;
+
+const waivedSubscription: Stripe.Subscription = {
+	...paidSubscription,
+	metadata: {
+		proRequirement: "waived",
+		baaRecordId: paidRecord.id,
+		organizationId: paidRecord.organizationId,
+		userId: paidRecord.userId,
+	},
+};
 
 const paidSession = {
 	id: "cs_paid_baa",
@@ -548,6 +586,63 @@ const proSubscription = {
 	metadata: {},
 };
 
+describe("Signed BAA Pro waiver scope", () => {
+	it.each(["active", "trialing", "past_due"] as const)(
+		"accepts a bound waiver while the BAA is %s",
+		(status) => {
+			expect(
+				hasBaaProWaiver({ ...waivedSubscription, status }, paidRecord),
+			).toBe(true);
+		},
+	);
+
+	it.each(["proRequirement", "baaRecordId", "organizationId", "userId"])(
+		"rejects a waiver with mismatched %s",
+		(field) => {
+			expect(
+				hasBaaProWaiver(
+					{
+						...waivedSubscription,
+						metadata: {
+							...waivedSubscription.metadata,
+							[field]: "different",
+						},
+					},
+					paidRecord,
+				),
+			).toBe(false);
+		},
+	);
+
+	it("requires a known BAA price even when the metadata claims a BAA waiver", () => {
+		expect(
+			hasBaaProWaiver(
+				{
+					...waivedSubscription,
+					metadata: { ...waivedSubscription.metadata, type: "signed_baa" },
+					items: {
+						...waivedSubscription.items,
+						data: waivedSubscription.items.data.map((item) => ({
+							...item,
+							price: { ...item.price, id: "price_pro" },
+						})),
+					},
+				},
+				paidRecord,
+			),
+		).toBe(false);
+	});
+
+	it.each(["canceled", "unpaid", "incomplete"] as const)(
+		"does not preserve the waiver when the BAA is %s",
+		(status) => {
+			expect(
+				hasBaaProWaiver({ ...waivedSubscription, status }, paidRecord),
+			).toBe(false);
+		},
+	);
+});
+
 describe("Paid BAA signing", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -557,23 +652,28 @@ describe("Paid BAA signing", () => {
 			.mockResolvedValue(proSubscription);
 	});
 
-	async function setupPaidSigning(record = paidRecord) {
+	async function setupPaidSigning(
+		record = paidRecord,
+		subscription = paidSubscription,
+		owner: Record<string, unknown> = {},
+	) {
 		mockOwner({
 			stripeCustomerId: "cus_pro",
 			stripeSubscriptionId: "sub_pro",
 			stripeSubscriptionStatus: "active",
+			...owner,
 		});
 		mockDb.limit.mockResolvedValueOnce([record]);
-		mockStripe.subscriptions.retrieve.mockResolvedValueOnce({
-			id: "sub_pro",
-			customer: "cus_pro",
-			status: "active",
+		mockStripe.subscriptions.retrieve.mockImplementation(async (id: string) => {
+			if (id === subscription.id) return subscription;
+			if (id === proSubscription.id) return proSubscription;
+			throw new Error(`No such subscription: ${id}`);
 		});
-		if (record.stripeSubscriptionId) {
-			mockStripe.subscriptions.retrieve.mockResolvedValueOnce(paidSubscription);
-		}
 		vi.mocked(generateSignedBaaPdf).mockResolvedValue(new Uint8Array([1]));
-		vi.mocked(sendEmail).mockResolvedValue(undefined as never);
+		vi.mocked(sendEmail).mockResolvedValue({
+			data: { id: "email-1" },
+			error: null,
+		});
 		return import("@/actions/organization/signed-baa");
 	}
 
@@ -596,6 +696,165 @@ describe("Paid BAA signing", () => {
 		const { purchaseSignedBaa } = await setupPaidSigning();
 		await purchaseSignedBaa("org-1" as never, VALID_INPUT);
 		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+	});
+
+	it.each(["signPaidBaa", "purchaseSignedBaa"] as const)(
+		"%s signs a waived paid BAA without changing legacy Pro or charging again",
+		async (action) => {
+			const actions = await setupPaidSigning(paidRecord, waivedSubscription, {
+				stripeSubscriptionId: "12345",
+				inviteQuota: 6,
+			});
+			await expect(
+				actions[action]("org-1" as never, VALID_INPUT),
+			).resolves.toEqual({ success: true, emailSent: true });
+			expect(mockStripe.subscriptions.retrieve).not.toHaveBeenCalledWith(
+				"12345",
+			);
+			expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+			expect(mockStripe.subscriptions.cancel).not.toHaveBeenCalled();
+			expect(mockStripe.paymentMethods.list).not.toHaveBeenCalled();
+			expect(mockDb.update).not.toHaveBeenCalledWith(users);
+			expect(mockDb.set).toHaveBeenCalledWith(
+				expect.objectContaining({
+					status: "active",
+					stripeSubscriptionId: paidSubscription.id,
+					signedAt: expect.any(Date),
+				}),
+			);
+		},
+	);
+
+	it("still requires real Pro for a paid BAA without a waiver", async () => {
+		const { signPaidBaa } = await setupPaidSigning(
+			paidRecord,
+			paidSubscription,
+			{
+				stripeSubscriptionId: "12345",
+			},
+		);
+		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).rejects.toThrow(
+			"active Cap Pro subscription",
+		);
+		expect(mockDb.update).not.toHaveBeenCalled();
+		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+		expect(mockStripe.subscriptions.cancel).not.toHaveBeenCalled();
+	});
+
+	it("does not use an old owner's waiver for the current organization owner", async () => {
+		const previousOwnerRecord = {
+			...paidRecord,
+			userId: "former-owner" as never,
+		};
+		const { signPaidBaa } = await setupPaidSigning(
+			previousOwnerRecord,
+			{
+				...waivedSubscription,
+				metadata: { ...waivedSubscription.metadata, userId: "former-owner" },
+			},
+			{ stripeSubscriptionId: "12345" },
+		);
+		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).rejects.toThrow(
+			"active Cap Pro subscription",
+		);
+		expect(mockDb.update).not.toHaveBeenCalled();
+		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+	});
+
+	it("does not turn a pending unpaid BAA into a paid agreement through its waiver", async () => {
+		const { signPaidBaa } = await setupPaidSigning(
+			{ ...paidRecord, status: "pending" },
+			{
+				...waivedSubscription,
+				latest_invoice: { status: "open" } as Stripe.Invoice,
+			},
+			{ stripeSubscriptionId: "12345" },
+		);
+		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).rejects.toThrow(
+			"payment is not confirmed",
+		);
+		expect(mockDb.update).not.toHaveBeenCalled();
+		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+		expect(sendEmail).not.toHaveBeenCalled();
+	});
+
+	it.each(["canceled", "unpaid"] as const)(
+		"does not sign or charge a waived BAA whose subscription is %s",
+		async (status) => {
+			const { signPaidBaa } = await setupPaidSigning(
+				paidRecord,
+				{ ...waivedSubscription, status },
+				{ stripeSubscriptionId: "12345" },
+			);
+			await expect(signPaidBaa("org-1" as never, VALID_INPUT)).rejects.toThrow(
+				"payment is not confirmed",
+			);
+			expect(mockDb.update).not.toHaveBeenCalled();
+			expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+			expect(mockStripe.subscriptions.cancel).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		{
+			failure: "provider rejection",
+			response: {
+				data: null,
+				error: { name: "validation_error" as const, message: "Email rejected" },
+			},
+		},
+		{ failure: "unconfigured provider", response: undefined },
+	])(
+		"keeps the signed agreement retryable after $failure",
+		async ({ response }) => {
+			const { signPaidBaa } = await setupPaidSigning(
+				paidRecord,
+				waivedSubscription,
+				{
+					stripeSubscriptionId: "12345",
+				},
+			);
+			vi.mocked(sendEmail).mockResolvedValueOnce(response);
+			await expect(signPaidBaa("org-1" as never, VALID_INPUT)).resolves.toEqual(
+				{
+					success: true,
+					emailSent: false,
+				},
+			);
+			expect(mockDb.set).toHaveBeenCalledWith(
+				expect.objectContaining({
+					status: "active",
+					signedAt: expect.any(Date),
+				}),
+			);
+			expect(mockDb.set).not.toHaveBeenCalledWith(
+				expect.objectContaining({ emailSentAt: expect.any(Date) }),
+			);
+			expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+		},
+	);
+
+	it("retries a waived agreement's email without changing its signing date or charging", async () => {
+		const signedAt = new Date("2026-09-01T19:45:00.000Z");
+		const { signPaidBaa } = await setupPaidSigning(
+			{ ...paidRecord, status: "active", signedAt },
+			waivedSubscription,
+			{ stripeSubscriptionId: "12345" },
+		);
+		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).resolves.toEqual({
+			success: true,
+			emailSent: true,
+		});
+		expect(generateSignedBaaPdf).toHaveBeenCalledWith(
+			expect.objectContaining({ signedAt, executionId: paidRecord.id }),
+		);
+		expect(sendEmail).toHaveBeenCalledWith(
+			expect.objectContaining({
+				idempotencyKey: `signed-baa-email-${paidRecord.id}`,
+			}),
+		);
+		expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+		expect(mockStripe.subscriptions.cancel).not.toHaveBeenCalled();
 	});
 
 	it("keeps payment when the new signature cannot generate a PDF", async () => {
@@ -624,9 +883,10 @@ describe("Paid BAA signing", () => {
 	it("rejects a canceled paid subscription without attempting a new purchase", async () => {
 		const { signPaidBaa } = await setupPaidSigning();
 		mockStripe.subscriptions.retrieve.mockReset();
-		mockStripe.subscriptions.retrieve
-			.mockResolvedValueOnce({ id: "sub_pro", status: "active" })
-			.mockResolvedValueOnce({ ...paidSubscription, status: "canceled" });
+		mockStripe.subscriptions.retrieve.mockResolvedValueOnce({
+			...paidSubscription,
+			status: "canceled",
+		});
 		await expect(signPaidBaa("org-1" as never, VALID_INPUT)).rejects.toThrow(
 			"payment is not confirmed",
 		);
