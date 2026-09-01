@@ -483,12 +483,14 @@ static DOCK_SYNC_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::A
 /// `schedule_macos_dock_visibility_sync`: coalesce a burst of window changes
 /// into one policy change, 100ms later.
 pub fn schedule_dock_sync(cx: &mut App) {
+    schedule_dock_sync_after(cx, std::time::Duration::from_millis(100));
+}
+
+fn schedule_dock_sync_after(cx: &mut App, delay: std::time::Duration) {
     use std::sync::atomic::Ordering;
     let generation = DOCK_SYNC_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     cx.spawn(async move |cx| {
-        cx.background_executor()
-            .timer(std::time::Duration::from_millis(100))
-            .await;
+        cx.background_executor().timer(delay).await;
         if DOCK_SYNC_GENERATION.load(Ordering::Acquire) != generation {
             return;
         }
@@ -519,7 +521,18 @@ pub fn sync_dock_visibility(cx: &mut App) {
     if before == want {
         return;
     }
-    platform::set_activation_policy(show);
+    #[cfg(target_os = "macos")]
+    if !show {
+        let delay = platform::dock_hide_delay();
+        if !delay.is_zero() {
+            schedule_dock_sync_after(cx, delay);
+            return;
+        }
+    }
+    if !platform::set_activation_policy(show) && cfg!(target_os = "macos") {
+        tracing::warn!(show, "Could not change Dock activation policy");
+        return;
+    }
     tracing::info!(
         hide_dock_icon,
         panel_visible = panel,

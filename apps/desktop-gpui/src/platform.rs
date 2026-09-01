@@ -15,6 +15,28 @@
 /// auto-hide reveal, below context menus.
 pub const MAIN_WINDOW_LEVEL: isize = 100;
 
+#[cfg(any(target_os = "macos", test))]
+struct DockActivationTiming {
+    last_show: std::time::Instant,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl DockActivationTiming {
+    fn new(now: std::time::Instant) -> Self {
+        Self { last_show: now }
+    }
+
+    fn record_show(&mut self, now: std::time::Instant) {
+        self.last_show = now;
+    }
+
+    fn hide_delay(&self, now: std::time::Instant) -> std::time::Duration {
+        // Tao's macOS dock implementation keeps this gap to prevent duplicate Dock tiles.
+        std::time::Duration::from_secs(1)
+            .saturating_sub(now.saturating_duration_since(self.last_show))
+    }
+}
+
 /// Which native material sits behind a window's content.
 ///
 /// `applyMacOSWindowMaterial` in
@@ -1512,6 +1534,19 @@ mod mac {
     /// putting the policy back.
     const NS_ACTIVATION_POLICY_ACCESSORY: isize = 1;
 
+    static DOCK_ACTIVATION_TIMING: std::sync::LazyLock<
+        std::sync::Mutex<super::DockActivationTiming>,
+    > = std::sync::LazyLock::new(|| {
+        std::sync::Mutex::new(super::DockActivationTiming::new(std::time::Instant::now()))
+    });
+
+    pub fn dock_hide_delay() -> std::time::Duration {
+        DOCK_ACTIVATION_TIMING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .hide_delay(std::time::Instant::now())
+    }
+
     /// `macos_sync_activation_policy` (`src-tauri/src/permissions.rs:173-183`):
     /// `Regular` when the dock icon should show, `Accessory` when it should
     /// not. Tauri's `set_dock_visibility` is the same `setActivationPolicy:`
@@ -1524,23 +1559,34 @@ mod mac {
     /// direction.
     pub fn set_activation_policy(regular: bool) -> bool {
         use objc2::{class, msg_send};
+        if !regular && !dock_hide_delay().is_zero() {
+            return false;
+        }
         let policy = if regular {
             NS_ACTIVATION_POLICY_REGULAR
         } else {
             NS_ACTIVATION_POLICY_ACCESSORY
         };
-        unsafe {
+        let applied = unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             if app.is_null() {
                 return false;
             }
             msg_send![app, setActivationPolicy: policy]
+        };
+        if applied && regular {
+            DOCK_ACTIVATION_TIMING
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .record_show(std::time::Instant::now());
         }
+        applied
     }
 
     /// The policy AppKit currently reports, for the dock-policy probe.
     pub fn activation_policy() -> isize {
         use objc2::{class, msg_send};
+        std::sync::LazyLock::force(&DOCK_ACTIVATION_TIMING);
         unsafe {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             if app.is_null() {
@@ -1921,6 +1967,31 @@ pub use stub::*;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dock_hide_waits_for_the_latest_show_without_extending_on_read() {
+        use std::time::{Duration, Instant};
+
+        let start = Instant::now();
+        let mut timing = super::DockActivationTiming::new(start);
+        assert_eq!(
+            timing.hide_delay(start + Duration::from_millis(100)),
+            Duration::from_millis(900)
+        );
+        assert_eq!(
+            timing.hide_delay(start + Duration::from_secs(1)),
+            Duration::ZERO
+        );
+        timing.record_show(start + Duration::from_secs(2));
+        assert_eq!(
+            timing.hide_delay(start + Duration::from_millis(2500)),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            timing.hide_delay(start + Duration::from_secs(3)),
+            Duration::ZERO
+        );
+    }
+
     #[test]
     fn native_quit_permission_is_consumed_by_exactly_one_callback() {
         let (requests, receiver) = super::NativeQuitRequests::new();
