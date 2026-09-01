@@ -165,6 +165,19 @@ export type TargetModeDismissal =
 	| "superseded"
 	| "cancelled";
 
+function isStoredCameraId(value: unknown): value is DeviceOrModelID | null {
+	if (value === null) return true;
+	if (typeof value !== "object" || Object.keys(value).length !== 1)
+		return false;
+	if ("DeviceID" in value) {
+		return typeof value.DeviceID === "string" && value.DeviceID.length > 0;
+	}
+	if ("ModelID" in value) {
+		return typeof value.ModelID === "string" && value.ModelID.includes(":");
+	}
+	return false;
+}
+
 export function createOptionsQuery() {
 	const PERSIST_KEY = "recording-options-query-2";
 	const [_state, _setState] = createStore<{
@@ -205,8 +218,17 @@ export function createOptionsQuery() {
 		if (e.key === PERSIST_KEY) {
 			const update: unknown = JSON.parse(e.newValue ?? "{}");
 			if (typeof update === "object" && update !== null) {
-				markInputChanges(update);
-				_setState(update);
+				const options =
+					"cameraID" in update
+						? {
+								...update,
+								cameraID: isStoredCameraId(update.cameraID)
+									? update.cameraID
+									: null,
+							}
+						: update;
+				markInputChanges(options);
+				_setState(options);
 			}
 		}
 	});
@@ -221,8 +243,12 @@ export function createOptionsQuery() {
 			if (data?.micName !== undefined && microphoneRevision === 0) {
 				_setState("micName", data.micName);
 			}
-			if (data?.cameraId !== undefined && cameraRevision === 0) {
-				_setState("cameraID", data.cameraId);
+			if (
+				data?.cameraId !== undefined &&
+				cameraRevision === 0 &&
+				isStoredCameraId(data.cameraId)
+			) {
+				_setState("cameraID", reconcile(data.cameraId));
 			}
 			if (data?.mode && data.mode !== _state.mode) {
 				_setState("mode", data.mode);
@@ -262,6 +288,9 @@ export function createOptionsQuery() {
 	const [state, setState] = makePersisted([_state, _setState], {
 		name: PERSIST_KEY,
 	});
+	if (state.cameraID !== undefined && !isStoredCameraId(state.cameraID)) {
+		setState("cameraID", null);
+	}
 
 	const setOptions = new Proxy(setState, {
 		apply(target, thisArg, args) {
