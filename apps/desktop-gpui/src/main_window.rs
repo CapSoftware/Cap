@@ -3562,25 +3562,35 @@ impl MainWindow {
             )
             .child(
                 div()
-                    .id("panel-body")
                     .flex()
                     .flex_col()
                     .flex_1()
                     .min_h_0()
                     .pt(px(16.))
-                    .px(px(8.))
-                    .gap(px(8.))
-                    .overflow_y_scroll()
-                    .child(match panel {
-                        Panel::Device(menu) => self.render_device_list(menu, cx).into_any_element(),
-                        Panel::Target(target) => {
-                            self.render_target_grid(target, cx).into_any_element()
-                        }
-                        Panel::ModeInfo => self.render_mode_info(cx).into_any_element(),
-                        Panel::Library(kind) => {
-                            self.render_library_grid(kind, cx).into_any_element()
-                        }
-                    }),
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .id("panel-body")
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h_0()
+                            .px(px(8.))
+                            .gap(px(8.))
+                            .overflow_y_scroll()
+                            .child(match panel {
+                                Panel::Device(menu) => {
+                                    self.render_device_list(menu, cx).into_any_element()
+                                }
+                                Panel::Target(target) => {
+                                    self.render_target_grid(target, cx).into_any_element()
+                                }
+                                Panel::ModeInfo => self.render_mode_info(cx).into_any_element(),
+                                Panel::Library(kind) => {
+                                    self.render_library_grid(kind, cx).into_any_element()
+                                }
+                            }),
+                    ),
             )
     }
 

@@ -2287,7 +2287,7 @@ impl SettingsWindow {
                 div()
                     .w_full()
                     .truncate()
-                    .text_size(px(16.))
+                    .text_size(px(14.))
                     .child(item.pretty_name.clone()),
             );
 
@@ -2587,14 +2587,10 @@ impl SettingsWindow {
                     .gap(px(8.))
                     .min_w_0()
                     .child(
-                        // A bare `<span>`: no text class, so the 16px document
-                        // default. Truncated rather than allowed to push the
-                        // buttons off a window that cannot be widened past its
-                        // own content.
                         div()
                             .w_full()
                             .truncate()
-                            .text_size(px(16.))
+                            .text_size(px(14.))
                             .child(item.pretty_name.clone()),
                     )
                     .child(self.render_recording_badges(item)),

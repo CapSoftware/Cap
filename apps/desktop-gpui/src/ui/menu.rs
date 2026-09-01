@@ -160,6 +160,8 @@ impl Menu {
         items: Vec<MenuItem>,
         state: &MenuState,
     ) -> Self {
+        let mut bg = theme.settings_card_bg();
+        bg.a = 1.;
         Self {
             id: id.into(),
             items,
@@ -167,7 +169,7 @@ impl Menu {
             highlighted: state.visible_highlight(),
             min_width: px(180.),
             max_height: px(320.),
-            bg: theme.settings_card_bg(),
+            bg,
             border: theme.settings_border(),
             hover: theme.settings_hover(),
             text: theme.settings_text(),
@@ -213,7 +215,7 @@ impl Menu {
 }
 
 impl RenderOnce for Menu {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let Menu {
             id,
             items,
@@ -234,6 +236,9 @@ impl RenderOnce for Menu {
             other => SharedString::from(format!("{other:?}")),
         };
         let handler: Option<std::rc::Rc<SelectHandler>> = on_select.map(std::rc::Rc::new);
+        let viewport = window.viewport_size();
+        let max_width = (viewport.width - px(24.)).max(px(0.));
+        let max_height = max_height.min((viewport.height - px(24.)).max(px(0.)));
 
         div()
             .absolute()
@@ -253,47 +258,56 @@ impl RenderOnce for Menu {
                     }),
             )
             .child(
-                div()
-                    .id(id)
-                    .absolute()
-                    .left(origin.x)
-                    .top(origin.y)
-                    .flex()
-                    .flex_col()
-                    .min_w(min_width)
-                    .max_h(max_height)
-                    .overflow_y_scroll()
-                    .p(px(4.))
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(border)
-                    .bg(bg)
-                    .text_color(text)
-                    .text_size(px(12.))
-                    .children(items.into_iter().enumerate().map(|(index, item)| {
-                        let handler = handler.clone();
+                gpui::anchored()
+                    .position(origin)
+                    .snap_to_window_with_margin(px(12.))
+                    .child(
                         div()
-                            .id(SharedString::from(format!("{prefix}-item-{index}")))
+                            .id(id)
+                            .occlude()
                             .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(6.))
-                            .h(px(24.))
-                            .px(px(6.))
-                            .rounded(px(4.))
-                            // The keyboard highlight paints the same fill the
-                            // pointer does -- `data-highlighted:bg-gray-3` is
-                            // one rule in Kobalte, driven by either input.
-                            .when(highlighted == Some(index), |this| this.bg(hover))
-                            .hover(move |style| style.bg(hover))
-                            .child(div().w(px(12.)).flex_shrink_0().children(item.checked.then(
-                                || svg().path("icons/check.svg").size(px(12.)).text_color(text),
-                            )))
-                            .child(div().flex_1().min_w_0().truncate().child(item.label))
-                            .when_some(handler, |this, handler| {
-                                this.on_click(move |_, window, cx| handler(&index, window, cx))
-                            })
-                    })),
+                            .flex_col()
+                            .min_w(min_width.min(max_width))
+                            .max_w(max_width)
+                            .max_h(max_height)
+                            .overflow_y_scroll()
+                            .p(px(4.))
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(border)
+                            .bg(bg)
+                            .text_color(text)
+                            .text_size(px(12.))
+                            .children(items.into_iter().enumerate().map(|(index, item)| {
+                                let handler = handler.clone();
+                                div()
+                                    .id(SharedString::from(format!("{prefix}-item-{index}")))
+                                    .flex()
+                                    .flex_row()
+                                    .flex_shrink_0()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .h(px(24.))
+                                    .px(px(6.))
+                                    .rounded(px(4.))
+                                    .when(highlighted == Some(index), |this| this.bg(hover))
+                                    .hover(move |style| style.bg(hover))
+                                    .child(div().w(px(12.)).flex_shrink_0().children(
+                                        item.checked.then(|| {
+                                            svg()
+                                                .path("icons/check.svg")
+                                                .size(px(12.))
+                                                .text_color(text)
+                                        }),
+                                    ))
+                                    .child(div().flex_1().min_w_0().truncate().child(item.label))
+                                    .when_some(handler, |this, handler| {
+                                        this.on_click(move |_, window, cx| {
+                                            handler(&index, window, cx)
+                                        })
+                                    })
+                            })),
+                    ),
             )
     }
 }
