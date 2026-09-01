@@ -282,7 +282,7 @@ jobs:
           pnpm --dir apps/desktop exec vitest run scripts/prepare.test.js
           cargo test --locked -p cap-utils -p cap-cli-install --lib
           cargo test --locked -p cap --bin cap record::tests
-          cargo test --locked -p cap-recording --lib
+          cargo test --locked -p cap-recording --lib -- --test-threads=1
           cargo test --locked -p cap-enc-ffmpeg
         env:
           LD_LIBRARY_PATH: ${{ format('{0}/target/native-deps/lib:{0}/target/debug:{0}/target/{1}/debug', github.workspace, matrix.settings.target) }}

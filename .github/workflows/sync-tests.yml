@@ -136,7 +136,7 @@ jobs:
         shell: bash
         run: |
           cargo test --locked -p cap-timestamp -p cap-enc-ffmpeg
-          cargo test --locked -p cap-recording --lib
+          cargo test --locked -p cap-recording --lib -- --test-threads=1
           # --nocapture so a WARP-adapter notch skip prints instead of
           # looking identical to a pass in the CI log.
           cargo test --locked -p cap-rendering -- --nocapture
