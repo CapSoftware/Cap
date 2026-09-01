@@ -862,6 +862,26 @@ fn spawn_detached(path: &std::path::Path, args: &[String]) -> Result<(), String>
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn retire_foreground_parent_for_handoff(app: &AppHandle) {
+    if app
+        .webview_windows()
+        .values()
+        .any(|window| !window.is_fullscreen().is_ok_and(|fullscreen| !fullscreen))
+    {
+        warn!(
+            "Keeping the handoff parent's activation policy because fullscreen state is active or unavailable"
+        );
+        return;
+    }
+
+    // A foreground parent exiting with a surviving child leaves a macOS background Dock tile.
+    match app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
+        Ok(()) => info!("Requested retirement of Tauri's Dock presence for the GPUI handoff"),
+        Err(error) => warn!(%error, "Could not retire Tauri's Dock presence for the GPUI handoff"),
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn gpui_app_available(app: AppHandle) -> bool {
@@ -919,6 +939,27 @@ pub async fn switch_to_gpui_app(app: AppHandle) -> Result<(), String> {
         }
         Ok(())
     })?;
+    #[cfg(target_os = "macos")]
+    {
+        let handle = app.clone();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        match app.run_on_main_thread(move || {
+            retire_foreground_parent_for_handoff(&handle);
+            let _ = sender.send(());
+        }) {
+            Ok(()) => {
+                if !matches!(
+                    tokio::time::timeout(std::time::Duration::from_secs(2), receiver).await,
+                    Ok(Ok(()))
+                ) {
+                    warn!(
+                        "The GPUI handoff's Dock transition was not acknowledged before shutdown"
+                    );
+                }
+            }
+            Err(error) => warn!(%error, "Could not schedule the GPUI handoff's Dock transition"),
+        }
+    }
     crate::complete_admitted_app_exit(app).await;
     Ok(())
 }

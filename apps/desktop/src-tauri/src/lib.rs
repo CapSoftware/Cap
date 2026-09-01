@@ -6075,6 +6075,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     if app.try_state::<gpui_app::StartupRedirectState>().is_none() {
                         app.manage(gpui_app::StartupRedirectState::default());
                     }
+                    gpui_app::retire_foreground_parent_for_handoff(&app);
                     let app = app.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(Duration::from_millis(750)).await;
