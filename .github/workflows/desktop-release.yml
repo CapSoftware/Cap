@@ -359,6 +359,55 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
+      # Tauri patches Cap.exe with the NSIS marker during the first bundle.
+      # Sign those patched bytes, then rebundle with the same package type.
+      - name: Stage Windows payload for Authenticode signing
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          ./scripts/windows-release-signing.ps1 -Operation Stage -Target "${{ matrix.settings.target }}" -WorkspaceRoot "$env:GITHUB_WORKSPACE"
+
+      - name: Upload unsigned Windows payload
+        if: ${{ runner.os == 'Windows' }}
+        id: upload_unsigned_windows_payload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: unsigned-windows-payload
+          path: target/${{ matrix.settings.target }}/release/windows-signing/payload
+          if-no-files-found: error
+
+      - name: Submit SignPath payload signing request
+        if: ${{ runner.os == 'Windows' }}
+        timeout-minutes: 90
+        id: submit_signpath_payload_signing_request
+        uses: signpath/github-action-submit-signing-request@ced31329c0317e779dad2eec2a7c3bb46ea1343e # v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ secrets.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload_unsigned_windows_payload.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 5400
+          service-unavailable-timeout-in-seconds: 5400
+          output-artifact-directory: signed-windows-payload
+
+      - name: Restore and verify signed Windows payload
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          ./scripts/windows-release-signing.ps1 -Operation Restore -Target "${{ matrix.settings.target }}" -WorkspaceRoot "$env:GITHUB_WORKSPACE"
+
+      - name: Bundle Windows installer
+        if: ${{ runner.os == 'Windows' }}
+        working-directory: apps/desktop
+        shell: bash
+        run: pnpm tauri bundle --target ${{ matrix.settings.target }} --bundles nsis --config src-tauri/tauri.prod.conf.json
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
       - name: Verify macOS app contents and signing
         if: ${{ runner.os == 'macOS' }}
         shell: bash
@@ -659,8 +708,9 @@ jobs:
 
       - name: Submit SignPath signing request
         if: ${{ runner.os == 'Windows' }}
+        timeout-minutes: 90
         id: submit_signpath_signing_request
-        uses: signpath/github-action-submit-signing-request@v1
+        uses: signpath/github-action-submit-signing-request@ced31329c0317e779dad2eec2a7c3bb46ea1343e # v1
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
@@ -669,20 +719,11 @@ jobs:
           artifact-configuration-slug: ${{ secrets.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
           github-artifact-id: ${{ steps.upload_unsigned_windows_installer.outputs.artifact-id }}
           wait-for-completion: true
-          # SignPath Foundation requires a human to approve each signing
-          # request, so this step blocks until someone clicks approve. Raising
-          # wait-for-completion-timeout-in-seconds alone did NOT extend the
-          # window: while a request sits "WaitingForApproval" the action's
-          # per-call retry budget (service-unavailable-timeout-in-seconds,
-          # default 600s) is what expires and fails the job at ~10 min, so both
-          # must be raised. GitHub-hosted jobs are hard-capped at 6h total and
-          # the Windows build already consumes part of that, so ~4h is the
-          # practical ceiling for a blocking wait; the action times out cleanly
-          # here rather than letting GitHub kill the runner mid-build. For a
-          # genuinely longer (12h+) window the signing has to be decoupled from
-          # the build job (submit without waiting, finalise in a later job).
-          wait-for-completion-timeout-in-seconds: 14400
-          service-unavailable-timeout-in-seconds: 14400
+          # Both signing stages share the six-hour job budget with the build.
+          # Match the approval and retry budgets so waiting for approval does
+          # not expire at the action's shorter default retry timeout.
+          wait-for-completion-timeout-in-seconds: 5400
+          service-unavailable-timeout-in-seconds: 5400
           output-artifact-directory: signed-windows-installer
 
       - name: Restore signed Windows installer
@@ -722,6 +763,18 @@ jobs:
             }
           }
 
+      - name: Verify extracted Windows payload signatures and hashes
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $installers = Get-ChildItem -Path "target/${{ matrix.settings.target }}/release/bundle/nsis" -Filter *.exe
+          if (-not $installers) {
+            throw "No Windows installer exists for extracted payload verification."
+          }
+          foreach ($installer in $installers) {
+            ./scripts/windows-release-signing.ps1 -Operation VerifyInstaller -Target "${{ matrix.settings.target }}" -WorkspaceRoot "$env:GITHUB_WORKSPACE" -InstallerPath $installer.FullName
+          }
+
       - name: Re-sign Windows installer for Tauri updater
         if: ${{ runner.os == 'Windows' }}
         shell: bash
@@ -751,6 +804,7 @@ jobs:
             target/${{ matrix.settings.target }}/release/bundle/dmg/*.dmg
             target/${{ matrix.settings.target }}/release/bundle/nsis/*.exe
             target/${{ matrix.settings.target }}/release/bundle/nsis/*.sig
+            target/${{ matrix.settings.target }}/release/windows-signing/payload-manifest.json
             target/${{ matrix.settings.target }}/release/bundle/deb/*.deb
             target/${{ matrix.settings.target }}/release/bundle/deb/*.sig
             target/${{ matrix.settings.target }}/release/bundle/appimage/*.AppImage
