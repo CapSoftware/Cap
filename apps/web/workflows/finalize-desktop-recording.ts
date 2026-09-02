@@ -510,9 +510,11 @@ export async function startDesktopRecordingJob(
 }
 
 export async function pollDesktopRecordingAttempt({
+	videoId,
+	generation,
+	attemptId,
 	jobId,
 	deadline,
-	...fence
 }: DesktopRecordingAttemptFence & {
 	jobId: string;
 	deadline: Date;
@@ -521,6 +523,7 @@ export async function pollDesktopRecordingAttempt({
 > {
 	"use step";
 
+	const fence = { videoId, generation, attemptId };
 	let current = await getProcessingState(fence);
 	if (!current) return "superseded";
 	if (current.state === "verified") return "verified";
@@ -574,18 +577,19 @@ export async function pollDesktopRecordingAttempt({
 }
 
 async function retryDesktopRecordingAttempt(
-	attempt: DesktopRecordingAttemptFence,
+	{ videoId, generation, attemptId }: DesktopRecordingAttemptFence,
 	errorMessage: string,
 	sourceErrorCode: ReturnType<typeof getSourceErrorCode>,
 ): Promise<"retry" | "source-blocked" | "superseded"> {
 	"use step";
 
-	const current = await getProcessingState(attempt);
-	if (!current || current.attemptId !== attempt.attemptId) return "superseded";
+	const fence = { videoId, generation, attemptId };
+	const current = await getProcessingState(fence);
+	if (!current || current.attemptId !== attemptId) return "superseded";
 	if (current.state === "source-blocked") return "source-blocked";
 	if (sourceErrorCode) {
 		return (await markSourceBlocked({
-			...attempt,
+			...fence,
 			errorCode: sourceErrorCode,
 			errorMessage,
 		}))
@@ -593,7 +597,7 @@ async function retryDesktopRecordingAttempt(
 			: "superseded";
 	}
 	return (await scheduleRetry({
-		...attempt,
+		...fence,
 		errorCode: "processing-interrupted",
 		errorMessage,
 	}))
