@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
 	mkdtemp,
@@ -10,7 +10,12 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EncodedPacketSink, FilePathSource, Input, MP4 } from "mediabunny";
 import { muxMediaTracksToMp4 } from "../../lib/media-video";
+import {
+	RecordingTimingError,
+	readRecordingVideoTiming,
+} from "../../lib/recording-timing";
 import {
 	inspectRecordingSources,
 	isRetryableRecordingVerificationError,
@@ -157,22 +162,29 @@ async function fragmentedSource(
 }
 
 async function videoPackets(input: string) {
-	const result: { packets: { pts: number; duration: number }[] } = JSON.parse(
-		await run([
-			"ffprobe",
-			"-v",
-			"error",
-			"-select_streams",
-			"v:0",
-			"-show_packets",
-			"-show_entries",
-			"packet=pts,duration",
-			"-of",
-			"json",
-			input,
-		]),
-	);
-	return result.packets;
+	const source = new Input({
+		formats: [MP4],
+		source: new FilePathSource(input),
+	});
+	try {
+		const [track] = await source.getVideoTracks();
+		if (!track) throw new Error("Fixture has no video track");
+		const resolution = await track.getTimeResolution();
+		const sink = new EncodedPacketSink(track);
+		const packets: { pts: number; duration: number }[] = [];
+		for await (const packet of sink.packets(undefined, undefined, {
+			metadataOnly: true,
+			skipLiveWait: true,
+		})) {
+			packets.push({
+				pts: Math.round(packet.timestamp * resolution),
+				duration: Math.round(packet.duration * resolution),
+			});
+		}
+		return packets;
+	} finally {
+		source.dispose();
+	}
 }
 
 beforeAll(async () => {
@@ -435,6 +447,39 @@ describe("source-preserving recording mux", () => {
 		},
 	);
 
+	test.each([-1, 1, -23_333])(
+		"preserves a true partial final frame with duration offset %d ticks when muxing",
+		async (offsetTicks) => {
+			const input = await fragmentedSource(0, { last: offsetTicks });
+			const sourceEvidence = await inspectRecordingSources(input, null);
+			const output = join(
+				directory,
+				`preserved-partial-tail-${offsetTicks}.mp4`,
+			);
+			await muxMediaTracksToMp4(input, null, output);
+			const [sourcePackets, outputPackets] = await Promise.all([
+				videoPackets(input),
+				videoPackets(output),
+			]);
+			expect(outputPackets.map((packet) => packet.pts)).toEqual(
+				sourcePackets.map((packet) => packet.pts),
+			);
+			const sourceTail = sourcePackets.at(-1);
+			const outputTail = outputPackets.at(-1);
+			if (!sourceTail || !outputTail)
+				throw new Error("Fixture has no final packet");
+			expect(sourceTail.duration).toBe(33_333 + offsetTicks);
+			expect(outputTail.duration).toBe(sourceTail.duration);
+			const verified = await verifyRecording(output, {
+				requireAudio: false,
+				sourceEvidence,
+			});
+			expect(verified.sourcePreserved).toBe(true);
+			expect(verified.video.frameCount).toBe(31);
+			expect(verified.integrity).toEqual(sourceEvidence.integrity);
+		},
+	);
+
 	test.each(["dropped-frame", "retimed-frame", "shortened-tail"])(
 		"rejects a real %s change in a fully decodable fragmented recording",
 		async (damage) => {
@@ -596,9 +641,11 @@ describe("source-preserving recording mux", () => {
 			expect(outputPackets.map((packet) => packet.pts)).toEqual(
 				sourcePackets.map((packet) => packet.pts),
 			);
-			expect(
-				outputEvidence.video.endTime - sourceEvidence.video.endTime,
-			).toBeCloseTo(offsetTicks / 1_000_000, 12);
+			const sourceTail = sourcePackets.at(-1);
+			const outputTail = outputPackets.at(-1);
+			if (!sourceTail || !outputTail)
+				throw new Error("Fixture has no final packet");
+			expect(outputTail.duration).toBe(sourceTail.duration + offsetTicks);
 			await expect(
 				verifyRecording(output, { requireAudio: false, sourceEvidence }),
 			).rejects.toThrow(
@@ -623,9 +670,51 @@ describe("source-preserving recording mux", () => {
 		expect(outputPackets.map((packet) => packet.pts)).toEqual(
 			sourcePackets.map((packet) => packet.pts),
 		);
+		const sourceTail = sourcePackets.at(-1);
+		const outputTail = outputPackets.at(-1);
+		if (!sourceTail || !outputTail)
+			throw new Error("Fixture has no final packet");
+		expect(outputTail.duration).toBe(sourceTail.duration - 1);
 		await expect(
 			verifyRecording(output, { requireAudio: false, sourceEvidence }),
 		).rejects.toThrow("does not preserve source video: presentation timeline");
+	});
+
+	test("preserves presentation order and terminal duration for real B-frames", async () => {
+		const input = join(directory, "b-frame-source.mp4");
+		await generate(input, "anullsrc=r=48000:cl=mono:d=5", [
+			"-bf",
+			"2",
+			"-g",
+			"30",
+			"-video_track_timescale",
+			"90000",
+		]);
+		const probe: { streams: { has_b_frames: number }[] } = JSON.parse(
+			await run([
+				"ffprobe",
+				"-v",
+				"error",
+				"-select_streams",
+				"v:0",
+				"-show_entries",
+				"stream=has_b_frames",
+				"-of",
+				"json",
+				input,
+			]),
+		);
+		expect(probe.streams[0]?.has_b_frames).toBeGreaterThan(0);
+		const sourceEvidence = await inspectRecordingSources(input, input);
+		const output = join(directory, "b-frame-output.mp4");
+		await muxMediaTracksToMp4(input, input, output);
+		const verified = await verifyRecording(output, {
+			requireAudio: true,
+			sourceEvidence,
+		});
+		expect(verified.sourcePreserved).toBe(true);
+		expect(verified.video.frameCount).toBe(150);
+		expect(verified.integrity).toEqual(sourceEvidence.integrity);
 	});
 
 	test("preserves sparse screenshot timestamps without inventing missing frames", async () => {
@@ -902,6 +991,141 @@ async function decoderPids(input: string): Promise<number[]> {
 function expectExited(pid: number) {
 	expect(() => process.kill(pid, 0)).toThrow();
 }
+
+describe("recording timing metadata lifetime", () => {
+	test.each(["pre-format", "post-format"])(
+		"joins a cancelled %s metadata read without leaking a rejected read",
+		async (stage) => {
+			const identity = '"metadata-cancellation"';
+			const getFormat = Input.prototype.getFormat;
+			let formatReady = false;
+			const format = spyOn(Input.prototype, "getFormat").mockImplementation(
+				async function (this: Input) {
+					const result = await getFormat.call(this);
+					formatReady = true;
+					return result;
+				},
+			);
+			let started: (() => void) | undefined;
+			const request = new Promise<void>((resolve) => {
+				started = resolve;
+			});
+			let stopped: (() => void) | undefined;
+			const closed = new Promise<void>((resolve) => {
+				stopped = resolve;
+			});
+			const requests: Request[] = [];
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch(request) {
+					requests.push(request);
+					const range = request.headers
+						.get("range")
+						?.match(/^bytes=(\d+)-(\d+)$/);
+					if (!range) throw new Error("Metadata request has no bounded range");
+					const start = Number(range[1]);
+					const end = Number(range[2]) + 1;
+					const body = silentBytes.subarray(start, end);
+					const stalled = stage === "pre-format" || formatReady;
+					return new Response(
+						stalled
+							? new ReadableStream({
+									start(controller) {
+										controller.enqueue(body.subarray(0, 1));
+										started?.();
+									},
+									cancel() {
+										stopped?.();
+									},
+								})
+							: body,
+						{
+							status: 206,
+							headers: {
+								ETag: identity,
+								"Content-Length": String(end - start),
+								"Content-Range": `bytes ${start}-${end - 1}/${silentBytes.length}`,
+							},
+						},
+					);
+				},
+			});
+			const controller = new AbortController();
+			try {
+				const outcome = readRecordingVideoTiming(
+					`http://127.0.0.1:${server.port}/recording.mp4?signature=private-value`,
+					{
+						timeoutMs: 5_000,
+						abortSignal: controller.signal,
+						remoteObject: {
+							objectIdentity: identity,
+							fileSize: silentBytes.length,
+						},
+					},
+				).catch((error: unknown) => error);
+				await request;
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				controller.abort();
+				const error = await outcome;
+				expect(error).toBeInstanceOf(RecordingTimingError);
+				if (!(error instanceof RecordingTimingError)) {
+					throw new Error("Cancelled metadata read unexpectedly succeeded");
+				}
+				expect(error.message).toContain("cancelled");
+				expect(error.message).not.toContain("private-value");
+				expect(error.retryable).toBe(false);
+				expect(formatReady).toBe(stage === "post-format");
+				await closed;
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				expect(requests.length).toBeGreaterThan(0);
+				for (const request of requests) {
+					expect(request.headers.get("if-match")).toBe(identity);
+				}
+			} finally {
+				controller.abort();
+				await server.stop(true);
+				format.mockRestore();
+			}
+		},
+		10_000,
+	);
+
+	test.each([412, 503])(
+		"classifies metadata HTTP %d failures without exposing provider details",
+		async (status) => {
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch() {
+					return new Response("Synthetic provider failure", { status });
+				},
+			});
+			try {
+				const error = await readRecordingVideoTiming(
+					`http://127.0.0.1:${server.port}/recording.mp4?signature=private-value`,
+					{
+						timeoutMs: 1_000,
+						remoteObject: {
+							objectIdentity: '"metadata-failure"',
+							fileSize: silentBytes.length,
+						},
+					},
+				).catch((error: unknown) => error);
+				expect(error).toBeInstanceOf(RecordingTimingError);
+				if (!(error instanceof RecordingTimingError)) {
+					throw new Error("Failed metadata request unexpectedly succeeded");
+				}
+				expect(error.message).toContain(`HTTP ${status}`);
+				expect(error.message).not.toContain("private-value");
+				expect(error.retryable).toBe(status === 503);
+				await new Promise<void>((resolve) => setImmediate(resolve));
+			} finally {
+				await server.stop(true);
+			}
+		},
+	);
+});
 
 describe("recording verification lifetime", () => {
 	test("does not start work for an already cancelled request", async () => {

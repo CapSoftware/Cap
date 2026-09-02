@@ -11,6 +11,10 @@ import {
 	withTimeout,
 } from "./media-common";
 import { probeVideoFile } from "./media-probe";
+import {
+	RecordingTimingError,
+	readRecordingVideoTiming,
+} from "./recording-timing";
 import { registerSubprocess, terminateProcess } from "./subprocess";
 import {
 	createTempFile,
@@ -989,6 +993,7 @@ async function runFfmpegCommand(
 	timeoutMs: number,
 	abortSignal?: AbortSignal,
 ): Promise<void> {
+	if (abortSignal?.aborted) throw new Error("Video processing was cancelled");
 	const proc = registerSubprocess(
 		spawn({
 			cmd: args,
@@ -1005,6 +1010,7 @@ async function runFfmpegCommand(
 	}
 
 	try {
+		if (abortSignal?.aborted) throw new Error("Video processing was cancelled");
 		await withTimeout(
 			(async () => {
 				void drainStream(proc.stdout as ReadableStream<Uint8Array>);
@@ -2402,6 +2408,15 @@ export async function muxMediaTracksToMp4(
 	abortSignal?: AbortSignal,
 ): Promise<void> {
 	if (abortSignal?.aborted) throw new Error("Recording mux was cancelled");
+	const startedAt = performance.now();
+	const timing = await readRecordingVideoTiming(videoInputPath, {
+		abortSignal,
+		timeoutMs: PROCESS_TIMEOUT_MS,
+	});
+	if (abortSignal?.aborted) throw new Error("Recording mux was cancelled");
+	const lastTimestamp = timing.lastTimestampTicks - timing.firstTimestampTicks;
+	// FFmpeg 7 can discard a fragmented MP4's stored final sample duration.
+	const videoTimingFilter = `setts=pts=PTS:dts=DTS:duration=if(eq(PTS-STARTPTS\\,${lastTimestamp})\\,${timing.lastDurationTicks}\\,DURATION)`;
 	const args = audioInputPath
 		? [
 				"ffmpeg",
@@ -2418,6 +2433,8 @@ export async function muxMediaTracksToMp4(
 				"1:a:0",
 				"-c",
 				"copy",
+				"-bsf:v",
+				videoTimingFilter,
 				"-avoid_negative_ts",
 				"disabled",
 				"-movie_timescale",
@@ -2437,6 +2454,8 @@ export async function muxMediaTracksToMp4(
 				"0:v:0",
 				"-c:v",
 				"copy",
+				"-bsf:v",
+				videoTimingFilter,
 				"-an",
 				"-avoid_negative_ts",
 				"disabled",
@@ -2447,5 +2466,9 @@ export async function muxMediaTracksToMp4(
 				outputPath,
 			];
 
-	await runFfmpegCommand(args, PROCESS_TIMEOUT_MS, abortSignal);
+	const remainingMs = PROCESS_TIMEOUT_MS - (performance.now() - startedAt);
+	if (remainingMs <= 0) {
+		throw new RecordingTimingError("Recording mux timed out", true);
+	}
+	await runFfmpegCommand(args, remainingMs, abortSignal);
 }

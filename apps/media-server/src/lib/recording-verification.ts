@@ -4,6 +4,11 @@ import { lstat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { spawn } from "bun";
 import { PROCESS_TIMEOUT_MS } from "./media-common";
+import {
+	RecordingTimingError,
+	type RecordingVideoTiming,
+	readRecordingVideoTiming,
+} from "./recording-timing";
 import { registerSubprocess, unregisterSubprocess } from "./subprocess";
 
 const MAX_OUTPUT_LINE_LENGTH = 16_384;
@@ -21,7 +26,11 @@ class RecordingVerificationError extends Error {
 }
 
 export function isRetryableRecordingVerificationError(error: unknown): boolean {
-	return error instanceof RecordingVerificationError && error.retryable;
+	return (
+		(error instanceof RecordingVerificationError ||
+			error instanceof RecordingTimingError) &&
+		error.retryable
+	);
 }
 
 export interface RecordingVerificationOptions {
@@ -104,6 +113,7 @@ interface DecodedStream {
 	timeBaseNumerator?: bigint;
 	timeBaseDenominator?: bigint;
 	firstVideoPts?: bigint;
+	lastVideoPts?: bigint;
 	lastVideoEndPts?: bigint;
 	sampleRate?: number;
 	frameCount: number;
@@ -146,6 +156,45 @@ function relativeVideoNanoseconds(
 	const scaled =
 		(timestamp - firstVideoPts) * timeBaseNumerator * 1_000_000_000n;
 	return (scaled + timeBaseDenominator / 2n) / timeBaseDenominator;
+}
+
+function videoTailIntegrity(
+	stream: DecodedStream,
+	timing: RecordingVideoTiming | undefined,
+): string {
+	const {
+		firstVideoPts,
+		lastVideoPts,
+		lastVideoEndPts,
+		timeBaseNumerator,
+		timeBaseDenominator,
+	} = stream;
+	if (
+		firstVideoPts === undefined ||
+		lastVideoPts === undefined ||
+		lastVideoEndPts === undefined ||
+		!timeBaseNumerator ||
+		!timeBaseDenominator
+	) {
+		throw new Error("Decoded recording video endpoint is missing");
+	}
+	if (!timing) {
+		return `end:${relativeVideoNanoseconds(stream, lastVideoEndPts)}\n`;
+	}
+	const timeScale = BigInt(timing.timeScale);
+	if (
+		(timing.lastTimestampTicks - timing.firstTimestampTicks) *
+			timeBaseDenominator !==
+		(lastVideoPts - firstVideoPts) * timeBaseNumerator * timeScale
+	) {
+		throw new Error("Recording container timing does not match decoded video");
+	}
+	let numerator = timing.lastDurationTicks;
+	let denominator = timeScale;
+	while (denominator !== 0n) {
+		[numerator, denominator] = [denominator, numerator % denominator];
+	}
+	return `tail:${timing.lastDurationTicks / numerator}/${timeScale / numerator}\n`;
 }
 
 function decodeLine(line: string, streams: Map<number, DecodedStream>): void {
@@ -236,6 +285,7 @@ function decodeLine(line: string, streams: Map<number, DecodedStream>): void {
 	if (stream.kind === "video") {
 		const timestamp = BigInt(pts);
 		stream.firstVideoPts ??= timestamp;
+		stream.lastVideoPts = timestamp;
 		stream.lastVideoEndPts = timestamp + BigInt(ticks);
 		stream.timeline.update(
 			`${relativeVideoNanoseconds(stream, timestamp)},${bytes}\n`,
@@ -316,6 +366,7 @@ function validateEvidence(
 	streams: Map<number, DecodedStream>,
 	options: RecordingVerificationOptions,
 	inspectingSource: boolean,
+	videoTiming: RecordingVideoTiming | undefined,
 ): RecordingSourceEvidence {
 	const video = streams.get(0);
 	const audio = streams.get(1);
@@ -362,14 +413,9 @@ function validateEvidence(
 			throw new Error("Decoded recording content digest is missing");
 		}
 		if (stream.kind === "video") {
-			if (stream.lastVideoEndPts === undefined) {
-				throw new Error("Decoded recording video endpoint is missing");
-			}
 			// Remuxing can change a fragment's nominal packet duration without changing
-			// presentation timestamps. The final frame's endpoint must still match.
-			stream.timeline.update(
-				`end:${relativeVideoNanoseconds(stream, stream.lastVideoEndPts)}\n`,
-			);
+			// presentation timestamps. FFmpeg 7 can also omit the true final duration.
+			stream.timeline.update(videoTailIntegrity(stream, videoTiming));
 		}
 		return {
 			contentSha256: stream.contentSha256,
@@ -484,6 +530,7 @@ async function decodeRecording(
 	objectIdentity?: string,
 	sourceAudioInput?: string | null,
 ): Promise<RecordingSourceEvidence> {
+	const startedAt = performance.now();
 	const timeoutMs = options.timeoutMs ?? PROCESS_TIMEOUT_MS;
 	if (
 		(options.expectedDuration !== undefined &&
@@ -522,6 +569,60 @@ async function decodeRecording(
 	}
 	if (options.abortSignal?.aborted) {
 		throw new Error("Recording verification was cancelled");
+	}
+	let videoTiming: RecordingVideoTiming | undefined;
+	if (sourceAudioInput !== undefined || options.sourceEvidence) {
+		const deadline = new AbortController();
+		const remainingMs = timeoutMs - (performance.now() - startedAt);
+		if (remainingMs <= 0) {
+			throw new RecordingVerificationError(
+				"Recording verification timed out",
+				true,
+			);
+		}
+		const timeout = setTimeout(() => deadline.abort(), remainingMs);
+		const signal = options.abortSignal
+			? AbortSignal.any([deadline.signal, options.abortSignal])
+			: deadline.signal;
+		try {
+			const remoteObject = remote
+				? await readRemoteIdentity(input, signal, objectIdentity)
+				: undefined;
+			objectIdentity = remoteObject?.objectIdentity ?? objectIdentity;
+			const timingBudgetMs = timeoutMs - (performance.now() - startedAt);
+			if (timingBudgetMs <= 0) {
+				throw new RecordingVerificationError(
+					"Recording verification timed out",
+					true,
+				);
+			}
+			videoTiming = await readRecordingVideoTiming(input, {
+				remoteObject,
+				abortSignal: signal,
+				timeoutMs: Math.ceil(timingBudgetMs),
+			});
+		} catch (error) {
+			if (options.abortSignal?.aborted) {
+				throw new Error("Recording verification was cancelled");
+			}
+			if (deadline.signal.aborted) {
+				throw new RecordingVerificationError(
+					"Recording verification timed out",
+					true,
+				);
+			}
+			throw error;
+		} finally {
+			clearTimeout(timeout);
+			deadline.abort();
+		}
+	}
+	const decodeBudgetMs = timeoutMs - (performance.now() - startedAt);
+	if (decodeBudgetMs <= 0) {
+		throw new RecordingVerificationError(
+			"Recording verification timed out",
+			true,
+		);
 	}
 	const proc = registerSubprocess(
 		spawn({
@@ -612,7 +713,7 @@ async function decodeRecording(
 			true,
 		);
 		stop();
-	}, timeoutMs);
+	}, decodeBudgetMs);
 	const streams = new Map<number, DecodedStream>();
 	const frames = readFrameEvidence(proc.stdout, streams);
 	const errors = readDecoderErrors(proc.stderr, input);
@@ -634,7 +735,12 @@ async function decodeRecording(
 					),
 			);
 		}
-		result = validateEvidence(streams, options, sourceAudioInput !== undefined);
+		result = validateEvidence(
+			streams,
+			options,
+			sourceAudioInput !== undefined,
+			videoTiming,
+		);
 	} finally {
 		clearTimeout(timeout);
 		options.abortSignal?.removeEventListener("abort", cancel);
