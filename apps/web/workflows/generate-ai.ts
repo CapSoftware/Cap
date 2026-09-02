@@ -15,6 +15,7 @@ import { Effect, Option } from "effect";
 import { FatalError } from "workflow";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { AiUnavailableError, runWithAiProviders } from "@/lib/ai/run";
+import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -44,6 +45,16 @@ interface AiResult {
 	summary?: string;
 	chapters?: { title: string; start: number }[];
 }
+
+const getAffectedRows = (result: unknown) => {
+	if (Array.isArray(result)) {
+		return (
+			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
+		);
+	}
+
+	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
+};
 
 const MAX_CHARS_PER_CHUNK = 24000;
 const LEGACY_AI_TITLE_FALLBACK = "Generated Title";
@@ -94,7 +105,7 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 		const transcript = await fetchTranscript(videoId, userId, videoData.video);
 
 		if (!transcript) {
-			await markSkipped(videoId, videoData.metadata);
+			await markSkipped(videoId);
 			return {
 				success: true,
 				message: "Transcript empty or too short - skipped",
@@ -147,21 +158,18 @@ async function validateAndSetProcessing(videoId: string): Promise<VideoData> {
 		throw new FatalError("AI metadata already generated");
 	}
 
-	const processingMetadata = { ...metadata };
-	if (processingMetadata.aiTitle === LEGACY_AI_TITLE_FALLBACK) {
-		delete processingMetadata.aiTitle;
-	}
-	if (processingMetadata.summary === LEGACY_AI_SUMMARY_FALLBACK) {
-		delete processingMetadata.summary;
+	let processingMetadata = sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiGenerationStatus', 'PROCESSING')`;
+	for (const [metadataPath, fallback] of [
+		["$.aiTitle", LEGACY_AI_TITLE_FALLBACK],
+		["$.summary", LEGACY_AI_SUMMARY_FALLBACK],
+	] as const) {
+		processingMetadata = sql`IF(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, ${metadataPath})) = ${fallback}, JSON_REMOVE(${processingMetadata}, ${metadataPath}), ${processingMetadata})`;
 	}
 
 	await db()
 		.update(videos)
 		.set({
-			metadata: {
-				...processingMetadata,
-				aiGenerationStatus: "PROCESSING",
-			},
+			metadata: processingMetadata,
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
 
@@ -225,21 +233,13 @@ async function markError(videoId: string): Promise<void> {
 		);
 }
 
-async function markSkipped(
-	videoId: string,
-	metadata: VideoMetadata,
-): Promise<void> {
+async function markSkipped(videoId: string): Promise<void> {
 	"use step";
-
-	const currentMetadata = await getCurrentVideoMetadata(videoId, metadata);
 
 	await db()
 		.update(videos)
 		.set({
-			metadata: {
-				...currentMetadata,
-				aiGenerationStatus: "SKIPPED",
-			},
+			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiGenerationStatus', 'SKIPPED')`,
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
 }
@@ -371,17 +371,21 @@ async function saveResults(
 		: metadata;
 	const currentTitle = currentVideo?.name ?? video.name;
 
-	const updatedMetadata: VideoMetadata = {
-		...currentMetadata,
-		aiTitle: generatedTitle || currentMetadata.aiTitle,
-		summary: result.summary || currentMetadata.summary,
-		chapters: result.chapters || currentMetadata.chapters,
-		aiGenerationStatus: "COMPLETE",
-	};
+	let metadataUpdate = sql`COALESCE(${videos.metadata}, JSON_OBJECT())`;
+	if (generatedTitle) {
+		metadataUpdate = sql`JSON_SET(${metadataUpdate}, '$.aiTitle', ${generatedTitle})`;
+	}
+	if (result.summary) {
+		metadataUpdate = sql`JSON_SET(${metadataUpdate}, '$.summary', ${result.summary})`;
+	}
+	if (result.chapters) {
+		metadataUpdate = sql`JSON_SET(${metadataUpdate}, '$.chapters', CAST(${JSON.stringify(result.chapters)} AS JSON))`;
+	}
+	metadataUpdate = sql`JSON_SET(${metadataUpdate}, '$.aiGenerationStatus', 'COMPLETE')`;
 
 	await db()
 		.update(videos)
-		.set({ metadata: updatedMetadata })
+		.set({ metadata: metadataUpdate })
 		.where(eq(videos.id, videoId as Video.VideoId));
 
 	if (
@@ -394,15 +398,19 @@ async function saveResults(
 			titleManuallyEdited: currentMetadata.titleManuallyEdited,
 		})
 	) {
-		await db()
+		const titleUpdate = await db()
 			.update(videos)
 			.set({ name: generatedTitle })
 			.where(
 				and(
 					eq(videos.id, videoId as Video.VideoId),
 					eq(videos.name, currentTitle),
+					sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.titleManuallyEdited')), 'false') <> 'true'`,
 				),
 			);
+		if (getAffectedRows(titleUpdate) > 0) {
+			await enqueueVideoStorageNameSync(videoId as Video.VideoId);
+		}
 	}
 }
 
@@ -415,16 +423,6 @@ async function getCurrentVideo(
 		.where(eq(videos.id, videoId as Video.VideoId));
 
 	return currentVideo ?? null;
-}
-
-async function getCurrentVideoMetadata(
-	videoId: string,
-	fallback: VideoMetadata,
-): Promise<VideoMetadata> {
-	const currentVideo = await getCurrentVideo(videoId);
-	return currentVideo
-		? (currentVideo.metadata as VideoMetadata) || {}
-		: fallback;
 }
 
 function parseVttWithTimestamps(vttContent: string): VttSegment[] {

@@ -157,6 +157,7 @@ function databaseFixture(video = recording()) {
 	const uploads = new Map<string, typeof Db.videoUploads.$inferSelect>();
 	const mutations: DatabaseMutation[] = [];
 	const events: string[] = [];
+	const objectDeleteConditions: SQL[] = [];
 	let beforeJobDelete: (() => Promise<void>) | undefined;
 	let beforePrepareDelete: (() => Promise<void>) | undefined;
 	let loseNextCreateResponse = false;
@@ -289,9 +290,10 @@ function databaseFixture(video = recording()) {
 			}),
 		}),
 		delete: (table: unknown) => ({
-			where: async () => {
+			where: async (condition: SQL) => {
 				if (table !== Db.storageObjects)
 					throw new Error("Unexpected direct delete");
+				objectDeleteConditions.push(condition);
 				return [{ affectedRows: 1 }];
 			},
 		}),
@@ -303,6 +305,7 @@ function databaseFixture(video = recording()) {
 		uploads,
 		mutations,
 		events,
+		objectDeleteConditions,
 		transaction,
 		beforeJobDelete: (callback: () => Promise<void>) => {
 			beforeJobDelete = callback;
@@ -593,7 +596,7 @@ async function storageFixture(seed: Iterable<readonly [string, string]>) {
 }
 
 async function driveFixture() {
-	databaseFixture();
+	const database = databaseFixture();
 	const integrationId =
 		StorageDomain.StorageIntegrationId.make("drive-integration");
 	const now = new Date();
@@ -652,20 +655,38 @@ async function driveFixture() {
 	const getIndex = vi
 		.spyOn(repo, "getObjectByKey")
 		.mockImplementation((_integration, key) =>
-			Effect.sync(() => Option.fromNullable(records.get(key))),
+			Effect.sync(() =>
+				Option.map(Option.fromNullable(records.get(key)), (object) =>
+					structuredClone(object),
+				),
+			),
 		);
-	const upsertIndex = vi
-		.spyOn(repo, "upsertObject")
-		.mockImplementation((input) =>
+	const updateIndex = vi
+		.spyOn(repo, "updateObjectIfCurrent")
+		.mockImplementation((object, input) =>
 			Effect.sync(() => {
-				records.set(input.objectKey, {
-					...(records.get(input.objectKey) ?? original),
-					objectKey: input.objectKey,
+				const current = records.get(object.objectKey);
+				if (
+					!current ||
+					current.id !== object.id ||
+					current.integrationId !== object.integrationId ||
+					current.objectKey !== object.objectKey ||
+					current.objectKeyHash !== object.objectKeyHash ||
+					current.providerObjectId !== object.providerObjectId ||
+					current.uploadStatus !== object.uploadStatus
+				)
+					return false;
+				records.set(object.objectKey, {
+					...current,
 					providerObjectId: input.providerObjectId,
+					uploadStatus: input.uploadStatus ?? "pending",
 					contentType: input.contentType ?? null,
 					contentLength: input.contentLength ?? null,
-					metadata: input.metadata ?? null,
+					metadata: input.preserveMetadata
+						? current.metadata
+						: (input.metadata ?? null),
 				});
+				return true;
 			}),
 		);
 	const deleteFromRepo = repo.deleteObjectByKey;
@@ -673,7 +694,15 @@ async function driveFixture() {
 		.spyOn(repo, "deleteObjectByKey")
 		.mockImplementation((...args) =>
 			deleteFromRepo(...args).pipe(
-				Effect.tap(() => Effect.sync(() => records.delete(args[1]))),
+				Effect.tap(() =>
+					Effect.sync(() => {
+						if (
+							args[2] === undefined ||
+							records.get(args[1])?.providerObjectId === args[2]
+						)
+							records.delete(args[1]);
+					}),
+				),
 			),
 		);
 	mocks.driveDelete.mockReset().mockReturnValue(Effect.void);
@@ -730,8 +759,9 @@ async function driveFixture() {
 		files,
 		integrationId,
 		deleteIndex,
+		deleteConditions: database.objectDeleteConditions,
 		getIndex,
-		upsertIndex,
+		updateIndex,
 	};
 }
 
@@ -1346,7 +1376,7 @@ describe("recording storage lifecycle", () => {
 			expect(Option.getOrThrow(Cause.failureOption(result.cause))).toBe(error);
 			expect(drive.records.get(key)?.providerObjectId).toBe("original-file");
 			expect(mocks.driveFind).not.toHaveBeenCalled();
-			expect(drive.upsertIndex).not.toHaveBeenCalled();
+			expect(drive.updateIndex).not.toHaveBeenCalled();
 		},
 	);
 
@@ -1398,7 +1428,7 @@ describe("recording storage lifecycle", () => {
 			Option.getOrThrow(Cause.failureOption(databaseResult.cause)).cause,
 		).toBe(databaseError);
 		expect(mocks.driveFind).not.toHaveBeenCalled();
-		expect(drive.upsertIndex).not.toHaveBeenCalled();
+		expect(drive.updateIndex).not.toHaveBeenCalled();
 	});
 
 	it("returns none for a genuinely missing Drive file with no replacement", async () => {
@@ -1417,7 +1447,7 @@ describe("recording storage lifecycle", () => {
 		expect(drive.records.get(outputKey)?.providerObjectId).toBe(
 			"original-file",
 		);
-		expect(drive.upsertIndex).not.toHaveBeenCalled();
+		expect(drive.updateIndex).not.toHaveBeenCalled();
 	});
 
 	it("returns none for a missing index without requesting or recovering a Drive file", async () => {
@@ -1458,12 +1488,16 @@ describe("recording storage lifecycle", () => {
 			expect(cause).toBeInstanceOf(GoogleDriveRequestError);
 			expect(cause).toHaveProperty("status", 404);
 			expect(mocks.driveFind).toHaveBeenCalledTimes(origin === "index" ? 0 : 1);
-			expect(drive.upsertIndex).not.toHaveBeenCalled();
+			expect(drive.updateIndex).not.toHaveBeenCalled();
 		},
 	);
 
 	it("recovers an indexed 404 to the replacement file before returning its text", async () => {
 		const drive = await driveFixture();
+		const original = drive.records.get(outputKey);
+		if (!original) throw new Error("Missing indexed Drive object");
+		const metadata = { fileName: "Original recording.mp4", videoId };
+		drive.records.set(outputKey, { ...original, metadata });
 		const text = '{"source":"retained"}';
 		mocks.driveText
 			.mockReturnValueOnce(
@@ -1478,6 +1512,7 @@ describe("recording storage lifecycle", () => {
 			Effect.succeed(
 				Option.some({
 					id: "recovered-file",
+					name: "Stale Drive name.mp4",
 					size: String(text.length),
 					mimeType: "application/json",
 				}),
@@ -1493,7 +1528,8 @@ describe("recording storage lifecycle", () => {
 		expect(drive.records.get(outputKey)?.providerObjectId).toBe(
 			"recovered-file",
 		);
-		expect(drive.upsertIndex).toHaveBeenCalledTimes(1);
+		expect(drive.records.get(outputKey)?.metadata).toEqual(metadata);
+		expect(drive.updateIndex).toHaveBeenCalledTimes(1);
 	});
 
 	it("propagates a provider failure while looking for a replacement of an indexed 404", async () => {
@@ -1518,7 +1554,7 @@ describe("recording storage lifecycle", () => {
 		expect(drive.records.get(outputKey)?.providerObjectId).toBe(
 			"original-file",
 		);
-		expect(drive.upsertIndex).not.toHaveBeenCalled();
+		expect(drive.updateIndex).not.toHaveBeenCalled();
 	});
 
 	it.each([403, 503])(
@@ -1561,6 +1597,7 @@ describe("recording storage lifecycle", () => {
 		expect(drive.deleteIndex).toHaveBeenCalledExactlyOnceWith(
 			drive.integrationId,
 			outputKey,
+			"original-file",
 		);
 		expect(mocks.driveDelete).toHaveBeenCalledTimes(1);
 	});
@@ -1581,6 +1618,64 @@ describe("recording storage lifecycle", () => {
 		await pending;
 		expect(drive.records.has(outputKey)).toBe(false);
 	});
+
+	it.each([204, 404])(
+		"preserves a concurrent Drive remapping when deleting the old file returns %s",
+		async (status) => {
+			const drive = await driveFixture();
+			const original = drive.records.get(outputKey);
+			if (!original) throw new Error("Missing indexed Drive object");
+			let release: (() => void) | undefined;
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			mocks.driveDelete.mockReturnValue(
+				Effect.promise(() => gate).pipe(
+					Effect.zipRight(
+						status === 404
+							? Effect.fail(
+									new StorageDomain.StorageError({
+										cause: new GoogleDriveRequestError(404, "Old file missing"),
+									}),
+								)
+							: Effect.void,
+					),
+				),
+			);
+			const pending = Effect.runPromise(drive.access.deleteObject(outputKey));
+			await vi.waitFor(() =>
+				expect(mocks.driveDelete).toHaveBeenCalledTimes(1),
+			);
+			const replacement = {
+				...original,
+				providerObjectId: "new-pending-file",
+				uploadStatus: "pending" as const,
+			};
+			drive.records.set(outputKey, replacement);
+			if (!release) throw new Error("Missing Drive delete resolver");
+			release();
+			await pending;
+			expect(drive.records.get(outputKey)).toEqual(replacement);
+			expect(mocks.driveDelete).toHaveBeenCalledWith(
+				expect.anything(),
+				"original-file",
+				expect.anything(),
+			);
+			expect(drive.deleteIndex).toHaveBeenCalledExactlyOnceWith(
+				drive.integrationId,
+				outputKey,
+				"original-file",
+			);
+			expect(drive.deleteConditions).toHaveLength(1);
+			const [condition] = drive.deleteConditions;
+			if (!condition) throw new Error("Missing Drive index delete condition");
+			expect(new MySqlDialect().sqlToQuery(condition).params).toEqual([
+				drive.integrationId,
+				expect.stringMatching(/^[a-f0-9]{64}$/),
+				"original-file",
+			]);
+		},
+	);
 
 	it("copies the published Drive object and checks both file identities after native copy", async () => {
 		const drive = await driveFixture();

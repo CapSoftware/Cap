@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { serverEnv } from "@cap/env";
 import { Storage, type User, type Video } from "@cap/web-domain";
 import { Effect, Either, Option, Schedule } from "effect";
+import { getGoogleDriveVideoNames } from "./google-drive-names.ts";
 import type {
 	GoogleDriveAccessTokenCache,
 	GoogleDriveIntegrationConfig,
@@ -26,7 +27,12 @@ export type GoogleDriveFile = {
 	mimeType?: string;
 	size?: string;
 	version?: string;
+	md5Checksum?: string;
 	modifiedTime?: string;
+	parents?: string[];
+	trashed?: boolean;
+	appProperties?: Record<string, string>;
+	capabilities?: { canRename?: boolean };
 };
 
 type GoogleDriveListResponse = {
@@ -78,6 +84,7 @@ export type CreateGoogleDriveUploadInput = {
 	key: string;
 	contentType: string;
 	contentLength?: number;
+	videoTitle?: string;
 };
 
 const normalizeContentType = (contentType?: string | null) =>
@@ -484,6 +491,40 @@ const getDriveFileName = (key: string) => {
 	return parts.at(-1) ?? "file";
 };
 
+const getVideoNamesForUpload = (
+	repo: StorageRepo,
+	input: CreateGoogleDriveUploadInput,
+) =>
+	Effect.gen(function* () {
+		const [ownerId, videoId] = input.key.split("/");
+		if (!input.videoId || input.videoId !== videoId) return null;
+		if (input.videoTitle !== undefined) {
+			return getGoogleDriveVideoNames(input.videoTitle);
+		}
+		const video = yield* repo.getVideoForNameSync(input.videoId);
+		if (
+			Option.isNone(video) ||
+			video.value.ownerId !== ownerId ||
+			video.value.storageIntegrationId !== input.integrationId
+		) {
+			return null;
+		}
+		return getGoogleDriveVideoNames(video.value.name);
+	}).pipe(Effect.mapError((cause) => new Storage.StorageError({ cause })));
+
+const getNewDriveFileName = (
+	repo: StorageRepo,
+	input: CreateGoogleDriveUploadInput,
+) =>
+	Effect.gen(function* () {
+		const parts = input.key.split("/");
+		if (parts.length === 3 && parts[2] === "result.mp4") {
+			const names = yield* getVideoNamesForUpload(repo, input);
+			if (names) return names.fileName;
+		}
+		return getDriveFileName(input.key);
+	});
+
 const getDriveFolderParts = (
 	key: string,
 	config: GoogleDriveIntegrationConfig,
@@ -769,6 +810,7 @@ const getOrCreateGoogleDriveFolder = ({
 	folderPath,
 	name,
 	parentId,
+	isVideoFolder,
 	tokenStore,
 }: {
 	repo: StorageRepo;
@@ -777,6 +819,7 @@ const getOrCreateGoogleDriveFolder = ({
 	folderPath: string;
 	name: string;
 	parentId: string;
+	isVideoFolder: boolean;
 	tokenStore?: GoogleDriveTokenStore;
 }) =>
 	Effect.gen(function* () {
@@ -820,15 +863,24 @@ const getOrCreateGoogleDriveFolder = ({
 			);
 		}
 
-		yield* createGoogleDriveFolderWithId(
-			config,
-			folderId,
-			name,
-			parentId,
-			tokenStore,
-		).pipe(
+		yield* Effect.gen(function* () {
+			const names = isVideoFolder
+				? yield* getVideoNamesForUpload(repo, input)
+				: null;
+			const displayName = names?.folderName ?? name;
+			if (displayName !== name) {
+				yield* repo.updateObjectFileName(reserved, displayName);
+			}
+			yield* createGoogleDriveFolderWithId(
+				config,
+				folderId,
+				displayName,
+				parentId,
+				tokenStore,
+			);
+		}).pipe(
 			Effect.tapError(() =>
-				repo.deleteObjectByKey(input.integrationId, folderObjectKey),
+				repo.deleteObjectByKey(input.integrationId, folderObjectKey, folderId),
 			),
 		);
 		yield* repo.markObjectComplete(input.integrationId, folderObjectKey);
@@ -933,6 +985,9 @@ const getGoogleDriveUploadParentId = (
 				folderPath: pathParts.join("/"),
 				name: folderName,
 				parentId,
+				isVideoFolder:
+					pathParts.length === (config.folderLayout === "userVideo" ? 2 : 1) &&
+					folderName === input.videoId,
 				tokenStore,
 			});
 			if (pathParts.length === 1) {
@@ -1021,128 +1076,161 @@ export const createGoogleDriveResumableUpload = (
 				{
 					method: "PATCH",
 					headers,
-					body: JSON.stringify({
-						name: getDriveFileName(input.key),
-						mimeType: contentType,
-						appProperties: {
-							capObjectKey: input.key,
-						},
-					}),
+					body: JSON.stringify({ mimeType: contentType }),
 				},
 				tokenStore,
 			).pipe(Effect.flatMap(requireUploadUrl));
 
 		const startSessionForNewFile = (fileId: string, parentId: string) =>
-			driveFetch(
-				config,
-				appendSharedDriveCreateParams(
-					`${DRIVE_UPLOAD_BASE}/files?uploadType=resumable&fields=id,name,mimeType,size,version`,
-				),
-				{
-					method: "POST",
-					headers,
-					body: JSON.stringify({
-						id: fileId,
-						name: getDriveFileName(input.key),
-						mimeType: contentType,
-						parents: [parentId],
-						appProperties: {
-							capObjectKey: input.key,
-						},
-					}),
-				},
-				tokenStore,
-			).pipe(Effect.flatMap(requireUploadUrl));
+			Effect.gen(function* () {
+				const fileName = yield* getNewDriveFileName(repo, input);
+				const uploadUrl = yield* driveFetch(
+					config,
+					appendSharedDriveCreateParams(
+						`${DRIVE_UPLOAD_BASE}/files?uploadType=resumable&fields=id,name,mimeType,size,version`,
+					),
+					{
+						method: "POST",
+						headers,
+						body: JSON.stringify({
+							id: fileId,
+							name: fileName,
+							mimeType: contentType,
+							parents: [parentId],
+							appProperties: { capObjectKey: input.key },
+						}),
+					},
+					tokenStore,
+				).pipe(Effect.flatMap(requireUploadUrl));
+				return { uploadUrl, fileName };
+			});
 
 		const existing = yield* repo.getObjectByKey(input.integrationId, input.key);
+		let object: Option.Option.Value<typeof existing>;
+		let newReservation = false;
 		if (Option.isSome(existing)) {
-			const existingFileId = existing.value.providerObjectId;
-			let resolvedFileId = existingFileId;
-
-			const patched = yield* startSessionForExistingFile(existingFileId).pipe(
-				Effect.either,
-			);
-			let uploadUrl: string;
-			if (Either.isRight(patched)) {
-				uploadUrl = patched.right;
-			} else if (isDriveRequestStatus(patched.left, 404, 410)) {
-				// The stored file id was reserved (files.generateIds) but its upload
-				// session never completed, so the file doesn't exist on Drive yet and
-				// can't be PATCHed. Create it instead, reusing the reserved id so
-				// concurrent presigns converge on the same file.
-				const parentId = yield* getGoogleDriveUploadParentId(
-					repo,
-					config,
-					input,
-					tokenStore,
-				);
-				const created = yield* startSessionForNewFile(
-					existingFileId,
-					parentId,
-				).pipe(Effect.either);
-				if (Either.isRight(created)) {
-					uploadUrl = created.right;
-				} else if (isDriveRequestStatus(created.left, 409)) {
-					// The file materialized between the two calls; PATCH now works.
-					uploadUrl = yield* startSessionForExistingFile(existingFileId);
-				} else {
-					// The reserved id itself is unusable (e.g. the integration was
-					// reconnected to a different account) — start over with a fresh id.
-					const freshFileId = yield* generateGoogleDriveFileId(
-						config,
-						tokenStore,
-					);
-					uploadUrl = yield* startSessionForNewFile(freshFileId, parentId);
-					resolvedFileId = freshFileId;
-				}
-			} else {
-				return yield* Effect.fail(patched.left);
-			}
-
-			yield* repo.upsertObject({
+			object = existing.value;
+		} else {
+			const fileId = yield* generateGoogleDriveFileId(config, tokenStore);
+			object = yield* repo.reserveObject({
 				integrationId: input.integrationId,
 				ownerId: input.ownerId,
 				videoId: input.videoId,
 				objectKey: input.key,
-				providerObjectId: resolvedFileId,
-				uploadSessionUrl: uploadUrl,
-				uploadStatus: "pending",
+				providerObjectId: fileId,
 				contentType,
-				contentLength: input.contentLength ?? existing.value.contentLength,
+				contentLength: input.contentLength ?? null,
 				metadata: {
-					...(existing.value.metadata ?? {}),
 					videoId: input.videoId ?? undefined,
 					fileName: getDriveFileName(input.key),
 					contentType,
 				},
 			});
-			return uploadUrl;
+			newReservation = object.providerObjectId === fileId;
 		}
 
-		const [parentId, fileId] = yield* Effect.all([
-			getGoogleDriveUploadParentId(repo, config, input, tokenStore),
-			generateGoogleDriveFileId(config, tokenStore),
-		]);
+		let resolvedFileId = object.providerObjectId;
+		let fileName = object.metadata?.fileName;
+		let createdFile = false;
+		let uploadUrl: string | undefined;
+		if (!newReservation) {
+			const patched = yield* startSessionForExistingFile(resolvedFileId).pipe(
+				Effect.either,
+			);
+			if (Either.isRight(patched)) {
+				uploadUrl = patched.right;
+			} else if (!isDriveRequestStatus(patched.left, 404, 410)) {
+				return yield* Effect.fail(patched.left);
+			}
+		}
+		if (uploadUrl === undefined) {
+			const parentId = yield* getGoogleDriveUploadParentId(
+				repo,
+				config,
+				input,
+				tokenStore,
+			);
+			const created = yield* startSessionForNewFile(
+				resolvedFileId,
+				parentId,
+			).pipe(Effect.either);
+			if (Either.isRight(created)) {
+				uploadUrl = created.right.uploadUrl;
+				fileName = created.right.fileName;
+				createdFile = true;
+			} else if (isDriveRequestStatus(created.left, 409)) {
+				uploadUrl = yield* startSessionForExistingFile(resolvedFileId);
+			} else if (
+				!newReservation &&
+				object.uploadStatus === "complete" &&
+				isDriveRequestStatus(created.left, 400, 404, 410)
+			) {
+				const freshFileId = yield* generateGoogleDriveFileId(
+					config,
+					tokenStore,
+				);
+				const reserved = yield* repo.updateObjectIfCurrent(object, {
+					providerObjectId: freshFileId,
+					uploadStatus: "pending",
+					contentType,
+					contentLength: input.contentLength ?? null,
+					preserveMetadata: true,
+				});
+				if (!reserved) {
+					return yield* Effect.fail(
+						new Storage.StorageError({
+							cause: new Error(
+								"Storage object changed while reserving a replacement upload; retry",
+							),
+						}),
+					);
+				}
+				resolvedFileId = freshFileId;
+				object = {
+					...object,
+					providerObjectId: freshFileId,
+					uploadStatus: "pending",
+				};
+				const fresh = yield* startSessionForNewFile(freshFileId, parentId).pipe(
+					Effect.either,
+				);
+				if (Either.isRight(fresh)) {
+					uploadUrl = fresh.right.uploadUrl;
+					fileName = fresh.right.fileName;
+					createdFile = true;
+				} else if (isDriveRequestStatus(fresh.left, 409)) {
+					uploadUrl = yield* startSessionForExistingFile(freshFileId);
+				} else {
+					return yield* Effect.fail(fresh.left);
+				}
+			} else {
+				return yield* Effect.fail(created.left);
+			}
+		}
 
-		const uploadUrl = yield* startSessionForNewFile(fileId, parentId);
-
-		yield* repo.upsertObject({
-			integrationId: input.integrationId,
-			ownerId: input.ownerId,
-			videoId: input.videoId,
-			objectKey: input.key,
-			providerObjectId: fileId,
+		const saved = yield* repo.updateObjectIfCurrent(object, {
+			providerObjectId: resolvedFileId,
 			uploadSessionUrl: uploadUrl,
 			uploadStatus: "pending",
 			contentType,
 			contentLength: input.contentLength ?? null,
+			preserveMetadata: !createdFile,
 			metadata: {
+				...(object.metadata ?? {}),
 				videoId: input.videoId ?? undefined,
-				fileName: getDriveFileName(input.key),
+				fileName,
 				contentType,
 			},
 		});
-
+		if (!saved) {
+			return yield* Effect.fail(
+				new Storage.StorageError({
+					cause: new Error(
+						"Storage object changed while starting an upload; retry",
+					),
+				}),
+			);
+		}
 		return uploadUrl;
 	});
 
@@ -1154,7 +1242,7 @@ export const getGoogleDriveFileMetadata = (
 	driveFetch(
 		config,
 		appendSharedDriveCreateParams(
-			`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size,version`,
+			`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size,version,md5Checksum,parents,trashed,appProperties,capabilities(canRename)`,
 		),
 		undefined,
 		tokenStore,
@@ -1246,8 +1334,41 @@ export const getGoogleDriveObjectResponse = (
 			{ headers },
 			tokenStore,
 		);
+
 		return response;
 	});
+
+const discardGoogleDriveResponseBody = (response: Response) =>
+	Effect.tryPromise({
+		try: async () => {
+			await response.body?.cancel();
+			return response.status;
+		},
+		catch: (cause) => new Storage.StorageError({ cause }),
+	});
+
+const getUsableGoogleDriveFileSize = (file: GoogleDriveFile) => {
+	const size = Number(file.size);
+	return Number.isSafeInteger(size) && size > 0 ? size : null;
+};
+
+const googleDriveFileMatchesTarget = (
+	file: GoogleDriveFile,
+	input: {
+		providerObjectId: string;
+		mimeType: string;
+		parentId: string | null;
+		key: string;
+	},
+) =>
+	input.parentId !== null &&
+	file.id === input.providerObjectId &&
+	!file.trashed &&
+	file.mimeType === input.mimeType &&
+	file.parents?.length === 1 &&
+	file.parents[0] === input.parentId &&
+	(input.mimeType === GOOGLE_DRIVE_FOLDER_MIME_TYPE ||
+		file.appProperties?.capObjectKey === input.key);
 
 export const deleteGoogleDriveFile = (
 	config: GoogleDriveIntegrationConfig,
@@ -1285,6 +1406,7 @@ export const copyGoogleDriveFile = ({
 			input,
 			tokenStore,
 		);
+		const fileName = yield* getNewDriveFileName(repo, input);
 		const response = yield* driveFetch(
 			config,
 			appendSharedDriveCreateParams(
@@ -1294,7 +1416,7 @@ export const copyGoogleDriveFile = ({
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
-					name: getDriveFileName(input.key),
+					name: fileName,
 					parents: [parentId],
 					appProperties: {
 						capObjectKey: input.key,
@@ -1323,8 +1445,198 @@ export const copyGoogleDriveFile = ({
 			uploadStatus: "complete",
 			contentType: copied.mimeType ?? input.contentType,
 			contentLength: copied.size ? Number(copied.size) : null,
+			metadata: {
+				videoId: input.videoId ?? undefined,
+				fileName: copied.name ?? fileName,
+				contentType: copied.mimeType ?? input.contentType,
+			},
 		});
 	});
+
+export const syncGoogleDriveVideoNames = (
+	repo: StorageRepo,
+	config: GoogleDriveIntegrationConfig,
+	video: {
+		id: Video.VideoId;
+		ownerId: User.UserId;
+		name: string;
+		storageIntegrationId: Storage.StorageIntegrationId;
+	},
+	tokenStore?: GoogleDriveTokenStore,
+) =>
+	Effect.gen(function* () {
+		const names = getGoogleDriveVideoNames(video.name);
+		if (!names) {
+			return yield* Effect.fail(
+				new Storage.StorageError({
+					cause: new Error("Video title cannot be used as a Google Drive name"),
+				}),
+			);
+		}
+		const integrationId = video.storageIntegrationId;
+		const folderKey = getDriveFolderObjectKey(
+			config.folderLayout === "userVideo"
+				? `${video.ownerId}/${video.id}`
+				: video.id,
+		);
+		const folder = yield* repo.getObjectByKey(integrationId, folderKey);
+		const fileKey = `${video.ownerId}/${video.id}/result.mp4`;
+		const file = yield* repo.getObjectByKey(integrationId, fileKey);
+		let folderParentId = config.folderId;
+		if (config.folderLayout === "userVideo" && Option.isSome(folder)) {
+			const userFolder = yield* repo.getObjectByKey(
+				integrationId,
+				getDriveFolderObjectKey(video.ownerId),
+			);
+			if (
+				Option.isNone(userFolder) ||
+				userFolder.value.uploadStatus !== "complete"
+			) {
+				return yield* Effect.fail(
+					new Storage.StorageError({
+						cause: new Error("Google Drive user folder is not ready"),
+					}),
+				);
+			}
+			folderParentId = userFolder.value.providerObjectId;
+		}
+		const targets = [
+			{
+				object: folder,
+				name: names.folderName,
+				key: folderKey,
+				parentId: folderParentId,
+				mimeType: GOOGLE_DRIVE_FOLDER_MIME_TYPE,
+			},
+			{
+				object: file,
+				name: names.fileName,
+				key: fileKey,
+				parentId: Option.isSome(folder) ? folder.value.providerObjectId : null,
+				mimeType: "video/mp4",
+			},
+		];
+		const verifiedTargets: Array<{
+			target: (typeof targets)[number];
+			object: Option.Option.Value<(typeof targets)[number]["object"]>;
+			before: GoogleDriveFile;
+		}> = [];
+		for (const target of targets) {
+			if (Option.isNone(target.object)) continue;
+			const object = target.object.value;
+			if (
+				object.videoId !== video.id ||
+				object.integrationId !== integrationId ||
+				object.objectKey !== target.key ||
+				!target.parentId ||
+				(object.uploadStatus !== "complete" &&
+					!(object.uploadStatus === "pending" && target.key === fileKey))
+			) {
+				return yield* Effect.fail(
+					new Storage.StorageError({
+						cause: new Error("Google Drive name target is not ready"),
+					}),
+				);
+			}
+		}
+		for (const target of targets) {
+			if (Option.isNone(target.object)) continue;
+			const object = target.object.value;
+			const before = yield* getGoogleDriveFileMetadata(
+				config,
+				object.providerObjectId,
+				tokenStore,
+			);
+			if (
+				!googleDriveFileMatchesTarget(before, {
+					providerObjectId: object.providerObjectId,
+					mimeType: target.mimeType,
+					parentId: target.parentId,
+					key: target.key,
+				})
+			) {
+				return yield* Effect.fail(
+					new Storage.StorageError({
+						cause: new Error("Google Drive name target identity changed"),
+					}),
+				);
+			}
+			if (object.uploadStatus === "pending") {
+				const usableSize = getUsableGoogleDriveFileSize(before);
+				if (
+					usableSize === null ||
+					(object.contentLength !== null && object.contentLength !== usableSize)
+				) {
+					return yield* Effect.fail(
+						new Storage.StorageError({
+							cause: new Error("Google Drive file is not ready to rename"),
+						}),
+					);
+				}
+			}
+			verifiedTargets.push({ target, object, before });
+		}
+		for (const { target, object, before } of verifiedTargets) {
+			if (before.name !== target.name) {
+				if (before.capabilities?.canRename === false) {
+					return yield* Effect.fail(
+						new Storage.StorageError({
+							cause: new Error("Google Drive file cannot be renamed"),
+						}),
+					);
+				}
+				const renameResponse = yield* driveFetch(
+					config,
+					appendSharedDriveCreateParams(
+						`${DRIVE_API_BASE}/files/${encodeURIComponent(object.providerObjectId)}?fields=id,name`,
+					),
+					{
+						method: "PATCH",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ name: target.name }),
+					},
+					tokenStore,
+				);
+				yield* discardGoogleDriveResponseBody(renameResponse);
+				const after = yield* getGoogleDriveFileMetadata(
+					config,
+					object.providerObjectId,
+					tokenStore,
+				);
+				if (
+					after.id !== before.id ||
+					after.name !== target.name ||
+					after.mimeType !== before.mimeType ||
+					after.size !== before.size ||
+					after.md5Checksum !== before.md5Checksum ||
+					after.trashed !== before.trashed ||
+					JSON.stringify(after.parents) !== JSON.stringify(before.parents) ||
+					JSON.stringify(after.appProperties) !==
+						JSON.stringify(before.appProperties)
+				) {
+					return yield* Effect.fail(
+						new Storage.StorageError({
+							cause: new Error("Google Drive name update did not verify"),
+						}),
+					);
+				}
+			}
+			if (object.metadata?.fileName !== target.name) {
+				const updated = yield* repo.updateObjectFileName(object, target.name);
+				if (!updated) {
+					const current = yield* repo.getObjectByKey(integrationId, target.key);
+					if (
+						Option.isNone(current) ||
+						current.value.id !== object.id ||
+						current.value.providerObjectId !== object.providerObjectId ||
+						current.value.metadata?.fileName !== target.name
+					)
+						return false;
+				}
+			}
+		}
+		return true;
+	}).pipe(Effect.mapError((cause) => new Storage.StorageError({ cause })));
 
 export const parseVideoIdFromObjectKey = (key: string) =>
 	Option.fromNullable(key.split("/")[1]).pipe(Option.filter((id) => id !== ""));
