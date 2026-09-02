@@ -29,6 +29,8 @@ let audioGap: string;
 let variableFrameRate: string;
 let silentBytes: Uint8Array<ArrayBuffer>;
 let corruptBytes: Uint8Array<ArrayBuffer>;
+let fragmentInit: Buffer;
+let videoFragments: Buffer[];
 
 async function run(command: string[]): Promise<string> {
 	const proc = Bun.spawn(command, { stdout: "pipe", stderr: "pipe" });
@@ -69,6 +71,110 @@ async function generate(path: string, audio: string, filters: string[] = []) {
 	]);
 }
 
+function visitFragmentBoxes(
+	bytes: Buffer,
+	visit: (type: string, offset: number) => void,
+	start = 0,
+	end = bytes.length,
+): void {
+	for (let offset = start; offset + 8 <= end; ) {
+		const size = bytes.readUInt32BE(offset);
+		const type = bytes.toString("ascii", offset + 4, offset + 8);
+		if (size < 8 || offset + size > end) {
+			throw new Error("Invalid fragmented fixture box");
+		}
+		if (type === "moof" || type === "traf") {
+			visitFragmentBoxes(bytes, visit, offset + 8, offset + size);
+		} else {
+			visit(type, offset);
+		}
+		offset += size;
+	}
+}
+
+function shiftFragmentClocks(bytes: Buffer, offsetTicks: number): void {
+	visitFragmentBoxes(bytes, (type, offset) => {
+		if (type !== "sidx" && type !== "tfdt") return;
+		const version = bytes[offset + 8];
+		const position = offset + (type === "tfdt" ? 12 : 20);
+		if (version === 1) {
+			bytes.writeBigUInt64BE(
+				bytes.readBigUInt64BE(position) + BigInt(offsetTicks),
+				position,
+			);
+		} else if (version === 0) {
+			bytes.writeUInt32BE(bytes.readUInt32BE(position) + offsetTicks, position);
+		} else {
+			throw new Error("Unsupported fragmented fixture clock");
+		}
+	});
+}
+
+function changeLastFragmentSampleDuration(bytes: Buffer, offsetTicks: number) {
+	let changed = false;
+	visitFragmentBoxes(bytes, (type, offset) => {
+		if (type !== "trun") return;
+		const flags = bytes.readUIntBE(offset + 9, 3);
+		const sampleCount = bytes.readUInt32BE(offset + 12);
+		if (!(flags & 0x100) || sampleCount === 0) {
+			throw new Error("Fragmented fixture has no per-sample durations");
+		}
+		const sampleSize =
+			[0x100, 0x200, 0x400, 0x800].filter((flag) => flags & flag).length * 4;
+		const position =
+			offset +
+			16 +
+			(flags & 1 ? 4 : 0) +
+			(flags & 4 ? 4 : 0) +
+			(sampleCount - 1) * sampleSize;
+		bytes.writeUInt32BE(bytes.readUInt32BE(position) + offsetTicks, position);
+		changed = true;
+	});
+	if (!changed) throw new Error("Fragmented fixture has no sample run");
+}
+
+async function fragmentedSource(
+	offsetTicks: number,
+	durationOffsets: { first?: number; last?: number } = {},
+): Promise<string> {
+	const input = join(
+		directory,
+		`fragmented-${offsetTicks}-${durationOffsets.first ?? 0}-${durationOffsets.last ?? 0}.mp4`,
+	);
+	const fragments = videoFragments.map((fragment, index) => {
+		const bytes = Buffer.from(fragment);
+		if (index > 0) shiftFragmentClocks(bytes, offsetTicks);
+		if (index === 0 && durationOffsets.first) {
+			changeLastFragmentSampleDuration(bytes, durationOffsets.first);
+		}
+		if (index === videoFragments.length - 1 && durationOffsets.last) {
+			changeLastFragmentSampleDuration(bytes, durationOffsets.last);
+		}
+		return bytes;
+	});
+	await writeFile(input, Buffer.concat([fragmentInit, ...fragments]));
+	return input;
+}
+
+async function videoPackets(input: string) {
+	const result: { packets: { pts: number; duration: number }[] } = JSON.parse(
+		await run([
+			"ffprobe",
+			"-v",
+			"error",
+			"-select_streams",
+			"v:0",
+			"-show_packets",
+			"-show_entries",
+			"packet=pts,duration",
+			"-of",
+			"json",
+			input,
+		]),
+	);
+	return result.packets;
+}
+
 beforeAll(async () => {
 	directory = await mkdtemp(join(tmpdir(), "cap-recording-verification-"));
 	silent = join(directory, "silent.mp4");
@@ -94,6 +200,57 @@ beforeAll(async () => {
 		"-video_track_timescale",
 		"90000",
 	]);
+	const fragmentDirectory = await mkdtemp(join(directory, "dash-"));
+	await run([
+		"ffmpeg",
+		"-v",
+		"error",
+		"-f",
+		"lavfi",
+		"-i",
+		"testsrc2=size=160x90:rate=30",
+		"-frames:v",
+		"31",
+		"-fps_mode",
+		"passthrough",
+		"-enc_time_base:v",
+		"1:1000000",
+		"-c:v",
+		"libx264",
+		"-preset",
+		"ultrafast",
+		"-bf",
+		"0",
+		"-g",
+		"6",
+		"-pix_fmt",
+		"yuv420p",
+		"-threads",
+		"1",
+		"-f",
+		"dash",
+		"-seg_duration",
+		"0.4",
+		"-use_template",
+		"1",
+		"-use_timeline",
+		"1",
+		"-init_seg_name",
+		"init.mp4",
+		"-media_seg_name",
+		"fragment-$Number%05d$.m4s",
+		join(fragmentDirectory, "manifest.mpd"),
+	]);
+	fragmentInit = await readFile(join(fragmentDirectory, "init.mp4"));
+	const fragmentNames = (await readdir(fragmentDirectory))
+		.filter((name) => /^fragment-\d+\.m4s$/.test(name))
+		.sort();
+	if (fragmentNames.length !== 3) {
+		throw new Error("Fragmented fixture must have three video segments");
+	}
+	videoFragments = await Promise.all(
+		fragmentNames.map((name) => readFile(join(fragmentDirectory, name))),
+	);
 	silentBytes = new Uint8Array(await readFile(silent));
 	const packets: {
 		packets: { pos: string; size: string; pts_time: string }[];
@@ -246,6 +403,231 @@ describe("complete recording decode", () => {
 });
 
 describe("source-preserving recording mux", () => {
+	test.each([-1, 1, 100_000])(
+		"preserves fragment boundary clock offsets of %d microseconds",
+		async (offsetTicks) => {
+			const input = await fragmentedSource(offsetTicks);
+			const sourceEvidence = await inspectRecordingSources(input, null);
+			const output = join(directory, `preserved-fragmented-${offsetTicks}.mp4`);
+			await muxMediaTracksToMp4(input, null, output);
+			const [sourcePackets, outputPackets] = await Promise.all([
+				videoPackets(input),
+				videoPackets(output),
+			]);
+			const sourceBoundary = sourcePackets[11];
+			const outputBoundary = outputPackets[11];
+			if (!sourceBoundary || !outputBoundary) {
+				throw new Error("Fragmented fixture has no boundary packet");
+			}
+			expect(outputPackets.map((packet) => packet.pts)).toEqual(
+				sourcePackets.map((packet) => packet.pts),
+			);
+			expect(outputBoundary.duration).toBe(
+				sourceBoundary.duration + offsetTicks,
+			);
+			const verified = await verifyRecording(output, {
+				requireAudio: false,
+				sourceEvidence,
+			});
+			expect(verified.sourcePreserved).toBe(true);
+			expect(verified.video).toEqual(sourceEvidence.video);
+			expect(verified.integrity).toEqual(sourceEvidence.integrity);
+		},
+	);
+
+	test.each(["dropped-frame", "retimed-frame", "shortened-tail"])(
+		"rejects a real %s change in a fully decodable fragmented recording",
+		async (damage) => {
+			const input = await fragmentedSource(0);
+			const sourceEvidence = await inspectRecordingSources(input, null);
+			const output = join(directory, `fragmented-${damage}.mp4`);
+			const modification =
+				damage === "dropped-frame"
+					? ["-frames:v", "30"]
+					: [
+							"-bsf:v",
+							damage === "retimed-frame"
+								? "setts=ts=TS+if(eq(N\\,15)\\,1000\\,0)"
+								: "setts=duration=if(eq(N\\,30)\\,10000\\,DURATION)",
+						];
+			await run([
+				"ffmpeg",
+				"-v",
+				"error",
+				"-copyts",
+				"-i",
+				input,
+				"-map",
+				"0:v:0",
+				"-c:v",
+				"copy",
+				"-an",
+				"-movie_timescale",
+				"1000000",
+				...modification,
+				output,
+			]);
+			const outputEvidence = await inspectRecordingSources(output, null);
+			if (damage === "dropped-frame") {
+				expect(outputEvidence.video.frameCount).toBe(
+					sourceEvidence.video.frameCount - 1,
+				);
+			} else {
+				expect(outputEvidence.video.frameCount).toBe(
+					sourceEvidence.video.frameCount,
+				);
+				expect(outputEvidence.integrity.video.contentSha256).toBe(
+					sourceEvidence.integrity.video.contentSha256,
+				);
+				const [sourcePackets, outputPackets] = await Promise.all([
+					videoPackets(input),
+					videoPackets(output),
+				]);
+				if (damage === "retimed-frame") {
+					expect(outputEvidence.video.endTime).toBe(
+						sourceEvidence.video.endTime,
+					);
+					expect(outputPackets.map((packet) => packet.pts)).not.toEqual(
+						sourcePackets.map((packet) => packet.pts),
+					);
+				} else {
+					expect(outputPackets.map((packet) => packet.pts)).toEqual(
+						sourcePackets.map((packet) => packet.pts),
+					);
+					expect(outputEvidence.video.endTime).toBeLessThan(
+						sourceEvidence.video.endTime,
+					);
+				}
+			}
+			await expect(
+				verifyRecording(output, { requireAudio: false, sourceEvidence }),
+			).rejects.toThrow(
+				damage === "dropped-frame"
+					? "does not preserve source video: frame count"
+					: "does not preserve source video: presentation timeline",
+			);
+		},
+	);
+
+	test("preserves sub-frame timestamps after a two-hour absolute clock shift", async () => {
+		const original = await fragmentedSource(0);
+		const input = join(directory, "fractional-timestamps.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-copyts",
+			"-i",
+			original,
+			"-map",
+			"0:v:0",
+			"-c:v",
+			"copy",
+			"-an",
+			"-bsf:v",
+			"setts=ts=if(eq(N\\,1)\\,586\\,TS)",
+			"-video_track_timescale",
+			"15360",
+			"-movie_timescale",
+			"1000000",
+			input,
+		]);
+		const output = join(directory, "shifted-fractional-timestamps.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-copyts",
+			"-itsoffset",
+			"7200",
+			"-i",
+			input,
+			"-map",
+			"0:v:0",
+			"-c:v",
+			"copy",
+			"-an",
+			"-video_track_timescale",
+			"15360",
+			"-movie_timescale",
+			"1000000",
+			"-avoid_negative_ts",
+			"disabled",
+			output,
+		]);
+		const sourceEvidence = await inspectRecordingSources(input, null);
+		const [sourcePackets, outputPackets] = await Promise.all([
+			videoPackets(input),
+			videoPackets(output),
+		]);
+		expect(sourcePackets[1]?.pts).toBe(9);
+		expect(outputPackets.map((packet) => packet.pts - 7_200 * 15_360)).toEqual(
+			sourcePackets.map((packet) => packet.pts),
+		);
+		const verified = await verifyRecording(output, {
+			requireAudio: false,
+			sourceEvidence,
+		});
+		expect(verified.sourcePreserved).toBe(true);
+		expect(verified.integrity).toEqual(sourceEvidence.integrity);
+		expect(verified.video.duration).toBeCloseTo(
+			sourceEvidence.video.duration,
+			6,
+		);
+	});
+
+	test.each([-1, 1])(
+		"rejects a %d tick final-duration change without changed frames or PTS",
+		async (offsetTicks) => {
+			const input = await fragmentedSource(0);
+			const output = await fragmentedSource(0, { last: offsetTicks });
+			const sourceEvidence = await inspectRecordingSources(input, null);
+			const outputEvidence = await inspectRecordingSources(output, null);
+			expect(outputEvidence.video.frameCount).toBe(
+				sourceEvidence.video.frameCount,
+			);
+			expect(outputEvidence.integrity.video.contentSha256).toBe(
+				sourceEvidence.integrity.video.contentSha256,
+			);
+			const [sourcePackets, outputPackets] = await Promise.all([
+				videoPackets(input),
+				videoPackets(output),
+			]);
+			expect(outputPackets.map((packet) => packet.pts)).toEqual(
+				sourcePackets.map((packet) => packet.pts),
+			);
+			expect(
+				outputEvidence.video.endTime - sourceEvidence.video.endTime,
+			).toBeCloseTo(offsetTicks / 1_000_000, 12);
+			await expect(
+				verifyRecording(output, { requireAudio: false, sourceEvidence }),
+			).rejects.toThrow(
+				"does not preserve source video: presentation timeline",
+			);
+		},
+	);
+
+	test("rejects a shortened final frame hidden by an earlier fragment's endpoint", async () => {
+		const input = await fragmentedSource(0, { first: 2_000_000 });
+		const output = await fragmentedSource(0, { first: 2_000_000, last: -1 });
+		const sourceEvidence = await inspectRecordingSources(input, null);
+		const outputEvidence = await inspectRecordingSources(output, null);
+		expect(outputEvidence.video).toEqual(sourceEvidence.video);
+		expect(outputEvidence.integrity.video.contentSha256).toBe(
+			sourceEvidence.integrity.video.contentSha256,
+		);
+		const [sourcePackets, outputPackets] = await Promise.all([
+			videoPackets(input),
+			videoPackets(output),
+		]);
+		expect(outputPackets.map((packet) => packet.pts)).toEqual(
+			sourcePackets.map((packet) => packet.pts),
+		);
+		await expect(
+			verifyRecording(output, { requireAudio: false, sourceEvidence }),
+		).rejects.toThrow("does not preserve source video: presentation timeline");
+	});
+
 	test("preserves sparse screenshot timestamps without inventing missing frames", async () => {
 		const input = join(directory, "sparse-video.mp4");
 		await generate(input, "anullsrc=r=48000:cl=mono:d=5", [
@@ -442,7 +824,7 @@ describe("source-preserving recording mux", () => {
 		]);
 		await expect(
 			verifyRecording(reversed, { requireAudio: true, sourceEvidence }),
-		).rejects.toThrow("does not preserve source video");
+		).rejects.toThrow("does not preserve source video: decoded content");
 		const changedAudio = join(directory, "changed-audio.mp4");
 		await run([
 			"ffmpeg",

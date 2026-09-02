@@ -101,6 +101,10 @@ export interface RemoteRecordingBytesResult {
 interface DecodedStream {
 	kind?: "video" | "audio";
 	timeBase?: number;
+	timeBaseNumerator?: bigint;
+	timeBaseDenominator?: bigint;
+	firstVideoPts?: bigint;
+	lastVideoEndPts?: bigint;
 	sampleRate?: number;
 	frameCount: number;
 	sampleCount: number;
@@ -125,6 +129,23 @@ function streamEvidence(stream: DecodedStream): DecodedVideoEvidence {
 		endTime: stream.endTime,
 		duration: stream.endTime - stream.startTime,
 	};
+}
+
+function relativeVideoNanoseconds(
+	stream: DecodedStream,
+	timestamp: bigint,
+): bigint {
+	const { firstVideoPts, timeBaseNumerator, timeBaseDenominator } = stream;
+	if (
+		firstVideoPts === undefined ||
+		!timeBaseNumerator ||
+		!timeBaseDenominator
+	) {
+		throw new Error("Decoded recording frame has no stream metadata");
+	}
+	const scaled =
+		(timestamp - firstVideoPts) * timeBaseNumerator * 1_000_000_000n;
+	return (scaled + timeBaseDenominator / 2n) / timeBaseDenominator;
 }
 
 function decodeLine(line: string, streams: Map<number, DecodedStream>): void {
@@ -165,6 +186,8 @@ function decodeLine(line: string, streams: Map<number, DecodedStream>): void {
 				throw new Error("Invalid decoded recording timebase");
 			}
 			stream.timeBase = ratio[0] / ratio[1];
+			stream.timeBaseNumerator = BigInt(ratio[0]);
+			stream.timeBaseDenominator = BigInt(ratio[1]);
 		} else if (metadata[1] === "media_type") {
 			if (metadata[3] !== "video" && metadata[3] !== "audio") {
 				throw new Error("Invalid decoded recording stream type");
@@ -211,8 +234,11 @@ function decodeLine(line: string, streams: Map<number, DecodedStream>): void {
 	stream.previousTime = startTime;
 	stream.frameCount++;
 	if (stream.kind === "video") {
+		const timestamp = BigInt(pts);
+		stream.firstVideoPts ??= timestamp;
+		stream.lastVideoEndPts = timestamp + BigInt(ticks);
 		stream.timeline.update(
-			`${Math.round((startTime - stream.startTime) * 1e9)},${Math.round(duration * 1e9)},${bytes}\n`,
+			`${relativeVideoNanoseconds(stream, timestamp)},${bytes}\n`,
 		);
 	}
 	if (stream.kind === "audio") {
@@ -335,6 +361,16 @@ function validateEvidence(
 		if (!stream.contentSha256) {
 			throw new Error("Decoded recording content digest is missing");
 		}
+		if (stream.kind === "video") {
+			if (stream.lastVideoEndPts === undefined) {
+				throw new Error("Decoded recording video endpoint is missing");
+			}
+			// Remuxing can change a fragment's nominal packet duration without changing
+			// presentation timestamps. The final frame's endpoint must still match.
+			stream.timeline.update(
+				`end:${relativeVideoNanoseconds(stream, stream.lastVideoEndPts)}\n`,
+			);
+		}
 		return {
 			contentSha256: stream.contentSha256,
 			timelineSha256: stream.timeline.digest("hex"),
@@ -365,11 +401,35 @@ function assertSourcePreserved(
 		a.contentSha256 === b.contentSha256 &&
 		a.timelineSha256 === b.timelineSha256 &&
 		a.format === b.format;
-	if (
-		source.video.frameCount !== output.video.frameCount ||
-		!sameIntegrity(source.integrity.video, output.integrity.video)
-	) {
-		throw new Error("Recording output does not preserve source video");
+	const videoMismatches = [
+		{
+			preserved: source.video.frameCount === output.video.frameCount,
+			name: "frame count",
+		},
+		{
+			preserved:
+				source.integrity.video.contentSha256 ===
+				output.integrity.video.contentSha256,
+			name: "decoded content",
+		},
+		{
+			preserved:
+				source.integrity.video.timelineSha256 ===
+				output.integrity.video.timelineSha256,
+			name: "presentation timeline",
+		},
+		{
+			preserved:
+				source.integrity.video.format === output.integrity.video.format,
+			name: "display format",
+		},
+	]
+		.filter(({ preserved }) => !preserved)
+		.map(({ name }) => name);
+	if (videoMismatches.length > 0) {
+		throw new Error(
+			`Recording output does not preserve source video: ${videoMismatches.join(", ")}`,
+		);
 	}
 	if (Boolean(source.audio) !== Boolean(output.audio)) {
 		throw new Error("Recording output does not preserve source audio");
