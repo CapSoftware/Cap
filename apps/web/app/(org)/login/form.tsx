@@ -1,7 +1,6 @@
 "use client";
 
 import { Button, Input, LogoBadge } from "@cap/ui";
-import { Organisation } from "@cap/web-domain";
 import {
 	faArrowLeft,
 	faEnvelope,
@@ -22,6 +21,7 @@ import {
 	useId,
 	useRef,
 	useState,
+	useTransition,
 } from "react";
 import { toast } from "sonner";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
@@ -43,15 +43,24 @@ export function LoginForm() {
 	const [loading, setLoading] = useState(false);
 	const [emailSent, setEmailSent] = useState(false);
 	const [oauthError, setOauthError] = useState(false);
-	const [showOrgInput, setShowOrgInput] = useState(false);
-	const [organizationId, setOrganizationId] = useState("");
+	const [showOrgInput, setShowOrgInput] = useState(
+		Boolean(
+			searchParams?.get("organizationId") ||
+				searchParams?.get("connection_id") ||
+				searchParams?.get("sso") === "1" ||
+				searchParams?.get("mobileProvider") === "workos",
+		),
+	);
+	const [ssoIdentifier, setSsoIdentifier] = useState("");
+	const [ssoLoading, startSsoTransition] = useTransition();
 	const [organizationName, setOrganizationName] = useState<string | null>(null);
 	const [lastEmailSentTime, setLastEmailSentTime] = useState<number | null>(
 		null,
 	);
 	const mobileAppleSignInStarted = useRef(false);
 	const mobileGoogleSignInStarted = useRef(false);
-	const mobileWorkosSignInStarted = useRef(false);
+	const workosSignInStarted = useRef(false);
+	const workosSignInPending = useRef(false);
 	const loginFormMounted = useRef(false);
 	const theme = Cookies.get("theme") || "light";
 	const getNextPath = useCallback(
@@ -75,23 +84,35 @@ export function LoginForm() {
 
 	useEffect(() => {
 		const error = searchParams?.get("error");
-		const errorDesc = searchParams?.get("error_description");
 
 		const handleErrors = () => {
-			if (error === "OAuthAccountNotLinked" && !errorDesc) {
+			if (error === "OAuthAccountNotLinked") {
 				setOauthError(true);
 				return toast.error(
-					"This email is already associated with a different sign-in method",
+					"This email already has a Cap account. Sign in using your original sign-in method.",
 				);
-			} else if (
-				error === "profile_not_allowed_outside_organization" &&
-				!errorDesc
-			) {
+			} else if (error === "SsoSessionExpired") {
+				setShowOrgInput(true);
+				return toast.error(
+					"Your SSO sign-in session expired. Enter your work email or domain to start again.",
+				);
+			} else if (error === "SsoSignInFailed") {
+				setShowOrgInput(true);
+				return toast.error(
+					"SSO sign-in could not be completed. Start again with your work email or domain, or contact your organization's administrator.",
+				);
+			} else if (error === "profile_not_allowed_outside_organization") {
 				return toast.error(
 					"Your email domain is not authorized for SSO access. Please use your work email or contact your administrator.",
 				);
-			} else if (error && errorDesc) {
-				return toast.error(errorDesc);
+			} else if (error === "signin_consent_denied") {
+				return toast.error(
+					"SSO sign-in was canceled. Only continue if you recognize your organization's identity provider.",
+				);
+			} else if (error) {
+				return toast.error(
+					"Sign-in could not be completed. Please try again, or contact your organization's administrator if you use SSO.",
+				);
 			}
 		};
 		handleErrors();
@@ -150,16 +171,43 @@ export function LoginForm() {
 	}, [getNextPath]);
 
 	const handleWorkosSignIn = useCallback(
-		async (orgId: string) => {
-			const nextPath = getNextPath();
-			const data = await getOrganizationSSOData(
-				Organisation.OrganisationId.make(orgId),
-			);
-			setOrganizationName(data.name);
+		(identifier: string, connectionId?: string) => {
+			if (workosSignInPending.current) return;
+			workosSignInPending.current = true;
+			setOrganizationName(null);
 
-			signIn("workos", nextPath ? { callbackUrl: nextPath } : undefined, {
-				organization: data.organizationId,
-				connection: data.connectionId,
+			startSsoTransition(async () => {
+				try {
+					const data = await getOrganizationSSOData(
+						identifier,
+						connectionId,
+						getNextPath() ?? "/dashboard",
+					);
+					if (!loginFormMounted.current) return;
+					setOrganizationName(data.name);
+					trackEvent("auth_started", {
+						method: "workos",
+						is_signup: false,
+						auth_surface: "login",
+					});
+					await signIn(
+						"workos",
+						{ callbackUrl: getNextPath() ?? "/dashboard" },
+						{
+							connection: data.connectionId,
+						},
+					);
+				} catch {
+					if (!loginFormMounted.current) return;
+					setOrganizationName(null);
+					setSsoIdentifier(identifier);
+					setShowOrgInput(true);
+					toast.error(
+						"SSO is not available for this organization yet. Check your work email or domain, or contact your administrator.",
+					);
+				} finally {
+					workosSignInPending.current = false;
+				}
 			});
 		},
 		[getNextPath],
@@ -180,36 +228,33 @@ export function LoginForm() {
 			return;
 		}
 
-		if (searchParams?.get("mobileProvider") !== "workos") return;
-		const mobileOrganizationId = searchParams.get("organizationId");
-		if (!mobileOrganizationId) {
-			setShowOrgInput(true);
+		if (searchParams?.get("error")) return;
+		const organizationId = searchParams?.get("organizationId");
+		const connectionId = searchParams?.get("connection_id");
+		if (
+			searchParams?.get("mobileProvider") !== "workos" &&
+			!organizationId &&
+			!connectionId
+		) {
 			return;
 		}
-		if (mobileWorkosSignInStarted.current) return;
-		mobileWorkosSignInStarted.current = true;
-
-		handleWorkosSignIn(mobileOrganizationId).catch(() => {
-			if (!loginFormMounted.current) return;
-			setOrganizationId(mobileOrganizationId);
-			setShowOrgInput(true);
-			toast.error("Organization not found or SSO not configured");
-		});
+		setShowOrgInput(true);
+		if (!organizationId && !connectionId) return;
+		if (workosSignInStarted.current) return;
+		workosSignInStarted.current = true;
+		setSsoIdentifier(organizationId ?? "");
+		handleWorkosSignIn(organizationId ?? "", connectionId ?? undefined);
 	}, [handleAppleSignIn, handleGoogleSignIn, handleWorkosSignIn, searchParams]);
 
-	const handleOrganizationLookup = async (e: React.FormEvent) => {
+	const handleOrganizationLookup = (e: React.FormEvent) => {
 		e.preventDefault();
-		if (!organizationId) {
-			toast.error("Please enter an organization ID");
+		const identifier = ssoIdentifier.trim();
+		if (!identifier) {
+			toast.error("Enter your work email or domain.");
 			return;
 		}
 
-		try {
-			await handleWorkosSignIn(organizationId);
-		} catch (error) {
-			console.error("Lookup Error:", error);
-			toast.error("Organization not found or SSO not configured");
-		}
+		handleWorkosSignIn(identifier);
 	};
 
 	return (
@@ -221,7 +266,8 @@ export function LoginForm() {
 			}}
 			className="overflow-hidden relative w-[calc(100%-5%)] p-[28px] max-w-[432px] bg-gray-3 border border-gray-5 rounded-2xl"
 		>
-			<motion.div
+			<motion.button
+				type="button"
 				layout="position"
 				key="back-button"
 				initial={{ opacity: 0, display: "none" }}
@@ -231,13 +277,14 @@ export function LoginForm() {
 					transition: { duration: 0.1, delay: 0.2 },
 				}}
 				onClick={() => setShowOrgInput(false)}
+				disabled={ssoLoading}
 				className="absolute overflow-hidden top-5 rounded-full left-5 z-20 hover:bg-gray-1 gap-2 items-center py-1.5 px-3 text-gray-12 bg-transparent border border-gray-4 transition-colors duration-300 cursor-pointer"
 			>
 				<FontAwesomeIcon className="w-2" icon={faArrowLeft} />
 				<motion.p layout="position" className="text-xs text-inherit">
 					Back
 				</motion.p>
-			</motion.div>
+			</motion.button>
 			<MotionLink layout="position" className="flex mx-auto size-fit" href="/">
 				<MotionLogoBadge layout="position" className="size-12" />
 			</MotionLink>
@@ -297,9 +344,10 @@ export function LoginForm() {
 									>
 										<LoginWithSSO
 											handleOrganizationLookup={handleOrganizationLookup}
-											organizationId={organizationId}
-											setOrganizationId={setOrganizationId}
+											identifier={ssoIdentifier}
+											setIdentifier={setSsoIdentifier}
 											organizationName={organizationName}
+											loading={ssoLoading}
 										/>
 									</motion.div>
 								) : (
@@ -411,16 +459,18 @@ export function LoginForm() {
 
 const LoginWithSSO = ({
 	handleOrganizationLookup,
-	organizationId,
-	setOrganizationId,
+	identifier,
+	setIdentifier,
 	organizationName,
+	loading,
 }: {
 	handleOrganizationLookup: (e: React.FormEvent) => void;
-	organizationId: string;
-	setOrganizationId: (organizationId: string) => void;
+	identifier: string;
+	setIdentifier: (identifier: string) => void;
 	organizationName: string | null;
+	loading: boolean;
 }) => {
-	const organizationIdInputId = useId();
+	const identifierInputId = useId();
 
 	return (
 		<motion.form
@@ -428,19 +478,36 @@ const LoginWithSSO = ({
 			onSubmit={handleOrganizationLookup}
 			className="relative space-y-2"
 		>
+			<label htmlFor={identifierInputId} className="text-sm text-gray-12">
+				Work email or domain
+			</label>
 			<MotionInput
-				id={organizationIdInputId}
-				placeholder="Enter your Organization ID..."
-				value={organizationId}
-				onChange={(e) => setOrganizationId(e.target.value)}
+				id={identifierInputId}
+				name="organization"
+				placeholder="you@company.com or company.com"
+				autoComplete="username"
+				autoCapitalize="none"
+				autoCorrect="off"
+				required
+				value={identifier}
+				disabled={loading}
+				onChange={(e) => setIdentifier(e.target.value)}
 				className="w-full max-w-full"
 			/>
-			{organizationName && (
-				<p className="text-sm text-gray-1">Signing in to: {organizationName}</p>
-			)}
+			<p className="text-xs leading-5 text-gray-10" aria-live="polite">
+				{organizationName
+					? `Signing in to ${organizationName}…`
+					: "Your organization must have SSO set up before you can continue."}
+			</p>
 			<div>
-				<Button type="submit" variant="dark" className="w-full max-w-full">
-					Continue with SSO
+				<Button
+					type="submit"
+					variant="dark"
+					className="w-full max-w-full"
+					disabled={loading}
+					spinner={loading}
+				>
+					{loading ? "Connecting to SSO…" : "Continue with SSO"}
 				</Button>
 			</div>
 		</motion.form>

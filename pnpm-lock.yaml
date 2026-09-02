@@ -1242,6 +1242,9 @@ importers:
       '@react-email/tailwind':
         specifier: ^1.0.5
         version: 1.2.2(react@19.2.4)
+      '@workos-inc/node':
+        specifier: ^7.34.0
+        version: 7.82.0(express@5.2.1)(next@16.3.0(@opentelemetry/api@1.9.1)(@playwright/test@1.61.1)(@types/node@20.19.43)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))
       drizzle-orm:
         specifier: 0.44.6
         version: 0.44.6(@cloudflare/workers-types@4.20260630.1)(@opentelemetry/api@1.9.1)(@planetscale/database@1.20.1)(bun-types@1.4.0)(mysql2@3.22.5(@types/node@20.19.43))

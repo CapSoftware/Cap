@@ -7,9 +7,38 @@ import { SignupForm } from "./form";
 
 export const dynamic = "force-dynamic";
 
-export default async function SignupPage() {
-	const session = await getCurrentUser();
-	if (session) {
+export default async function SignupPage(props: {
+	searchParams: Promise<{
+		next?: string | string[];
+		organizationId?: string | string[];
+		connection_id?: string | string[];
+		mobileProvider?: string | string[];
+		sso?: string | string[];
+		error?: string | string[];
+	}>;
+}) {
+	const [searchParams, session] = await Promise.all([
+		props.searchParams,
+		getCurrentUser(),
+	]);
+	const [organizationId, connectionId, mobileProvider, sso, error] = [
+		searchParams.organizationId,
+		searchParams.connection_id,
+		searchParams.mobileProvider,
+		searchParams.sso,
+		searchParams.error,
+	].map((value) => (Array.isArray(value) ? value[0] : value));
+	const isSsoEntry = Boolean(
+		organizationId ||
+			connectionId ||
+			mobileProvider === "workos" ||
+			sso === "1" ||
+			error === "SsoSessionExpired" ||
+			error === "SsoSignInFailed" ||
+			error === "profile_not_allowed_outside_organization" ||
+			error === "signin_consent_denied",
+	);
+	if (session && !isSsoEntry) {
 		redirect("/dashboard");
 	}
 	return (

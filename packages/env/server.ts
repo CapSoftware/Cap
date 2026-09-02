@@ -139,6 +139,7 @@ function createServerEnv() {
 			/// Cap Cloud
 			// These are only needed for Cap Cloud (https://cap.so)
 			STRIPE_SECRET_KEY: z.string().optional(),
+			STRIPE_SAML_SSO_PRICE_ID: z.string().optional(),
 			STRIPE_WEBHOOK_SECRET: z.string().optional(),
 			DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),
 			DISCORD_LOGS_WEBHOOK_URL: z.string().optional(),

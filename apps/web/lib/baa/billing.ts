@@ -1,6 +1,10 @@
 import { db } from "@cap/database";
 import { organizations, signedBaas, users } from "@cap/database/schema";
-import { STRIPE_SIGNED_BAA_PRICE_IDS, stripe } from "@cap/utils";
+import {
+	isProSubscription,
+	STRIPE_SIGNED_BAA_PRICE_IDS,
+	stripe,
+} from "@cap/utils";
 import type { Organisation, User } from "@cap/web-domain";
 import { and, eq, isNull, ne, or } from "drizzle-orm";
 import type Stripe from "stripe";
@@ -81,7 +85,7 @@ export async function ensureBaaHasPro(
 	if (
 		proSubscription &&
 		proCustomerId === owner.stripeCustomerId &&
-		!isSignedBaaSubscription(proSubscription) &&
+		isProSubscription(proSubscription) &&
 		BAA_ENTITLED_STATUSES.has(proSubscription.status)
 	) {
 		return true;

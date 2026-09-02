@@ -9,7 +9,12 @@ import {
 	users,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { STRIPE_AVAILABLE, stripe, userIsPro } from "@cap/utils";
+import {
+	isProSubscription,
+	STRIPE_AVAILABLE,
+	stripe,
+	userIsPro,
+} from "@cap/utils";
 import { OrganizationBrandingPatchBody } from "@cap/web-api-contract";
 import { ImageUploads } from "@cap/web-backend";
 import { type ImageUpload, Organisation } from "@cap/web-domain";
@@ -484,7 +489,7 @@ app.get("/plan", withAuth, async (c) => {
 				customer: user.stripeCustomerId,
 			});
 			const activeSubscription = subscriptions.data.find(
-				(sub) => sub.status === "active",
+				(sub) => sub.status === "active" && isProSubscription(sub),
 			);
 			if (activeSubscription) {
 				isSubscribed = true;
