@@ -24,6 +24,7 @@ import {
 	getGoogleDriveObjectResponse,
 	getGoogleDriveObjectText,
 	parseVideoIdFromObjectKey,
+	syncGoogleDriveVideoNames,
 } from "./GoogleDrive.ts";
 import { createStorageObjectToken } from "./SignedObject.ts";
 import type { GoogleDriveIntegrationConfig } from "./StorageRepo.ts";
@@ -34,6 +35,7 @@ type UploadTargetInput = {
 	contentLength?: number;
 	fields?: Record<string, string>;
 	method?: "post" | "put";
+	videoTitle?: string;
 };
 
 type MultipartAccess = {
@@ -372,6 +374,7 @@ const makeGoogleDriveAccess = ({
 								providerObjectId: file.id,
 								uploadStatus: "complete",
 								contentType,
+								preserveMetadata: true,
 								contentLength:
 									parseGoogleDriveContentLength(file) ??
 									previous.contentLength ??
@@ -720,6 +723,7 @@ const makeGoogleDriveAccess = ({
 					key,
 					contentType: input.contentType,
 					contentLength: input.contentLength,
+					videoTitle: input.videoTitle,
 				},
 				tokenStore,
 			).pipe(
@@ -899,6 +903,57 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 			return yield* access.createUploadTarget(key, input);
 		});
 
+		const syncVideoDisplayNames = Effect.fn("Storage.syncVideoDisplayNames")(
+			function* (videoId: Video.VideoId) {
+				for (let attempt = 0; attempt < 3; attempt++) {
+					const current = yield* mapStorageError(
+						repo.getVideoForNameSync(videoId),
+					);
+					if (Option.isNone(current) || !current.value.storageIntegrationId)
+						return;
+					const video = current.value;
+					const integrationId = current.value.storageIntegrationId;
+					const integration = yield* mapStorageError(
+						repo.getIntegrationById(integrationId),
+					);
+					if (Option.isNone(integration)) {
+						return yield* Effect.fail(
+							new StorageDomain.StorageError({
+								cause: new Error("Storage integration not found"),
+							}),
+						);
+					}
+					const config = yield* mapStorageError(
+						repo.getGoogleDriveConfig(integration.value),
+					);
+					const synced = yield* syncGoogleDriveVideoNames(
+						repo,
+						config,
+						{ ...video, storageIntegrationId: integrationId },
+						makeGoogleDriveTokenStore(repo, integration.value),
+					);
+					const latest = yield* mapStorageError(
+						repo.getVideoForNameSync(videoId),
+					);
+					if (Option.isNone(latest)) return;
+					if (
+						synced &&
+						latest.value.name === video.name &&
+						latest.value.ownerId === video.ownerId &&
+						latest.value.storageIntegrationId === integrationId
+					)
+						return;
+				}
+				return yield* Effect.fail(
+					new StorageDomain.StorageError({
+						cause: new Error(
+							"Video changed during Google Drive name synchronization",
+						),
+					}),
+				);
+			},
+		);
+
 		return {
 			getS3WritableAccessForUser,
 			getOrganizationWritableAccess,
@@ -906,6 +961,7 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 			getAccessForVideo,
 			createUploadTargetForUser,
 			createUploadTargetForVideo,
+			syncVideoDisplayNames,
 		};
 	}),
 	dependencies: [StorageRepo.Default, S3Buckets.Default],
@@ -932,6 +988,10 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 		);
 	static getAccessForVideo = (video: Video.Video) =>
 		Effect.flatMap(Storage, (storage) => storage.getAccessForVideo(video));
+	static syncVideoDisplayNames = (videoId: Video.VideoId) =>
+		Effect.flatMap(Storage, (storage) =>
+			storage.syncVideoDisplayNames(videoId),
+		);
 	static createUploadTargetForUser = (
 		userId: User.UserId,
 		key: string,

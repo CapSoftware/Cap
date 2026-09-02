@@ -57,6 +57,7 @@ export type StorageObjectInput = {
 	contentType?: string | null;
 	contentLength?: number | null;
 	metadata?: Storage.StorageObjectMetadata | null;
+	preserveMetadata?: boolean;
 };
 
 const getAffectedRows = (result: unknown) => {
@@ -338,7 +339,9 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 									uploadStatus: value.uploadStatus,
 									contentType: value.contentType,
 									contentLength: value.contentLength,
-									metadata: value.metadata,
+									metadata: input.preserveMetadata
+										? Dz.sql`${Db.storageObjects.metadata}`
+										: value.metadata,
 									updatedAt: new Date(),
 								},
 							}),
@@ -418,6 +421,53 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 				}),
 		);
 
+		const getVideoForNameSync = Effect.fn("StorageRepo.getVideoForNameSync")(
+			(videoId: Video.VideoId) =>
+				db
+					.use((db) =>
+						db
+							.select({
+								id: Db.videos.id,
+								name: Db.videos.name,
+								ownerId: Db.videos.ownerId,
+								storageIntegrationId: Db.videos.storageIntegrationId,
+							})
+							.from(Db.videos)
+							.where(Dz.eq(Db.videos.id, videoId))
+							.limit(1),
+					)
+					.pipe(Effect.map((rows) => Option.fromNullable(rows[0]))),
+		);
+
+		const updateObjectFileName = Effect.fn("StorageRepo.updateObjectFileName")(
+			(object: typeof Db.storageObjects.$inferSelect, fileName: string) =>
+				db
+					.use((db) =>
+						db
+							.update(Db.storageObjects)
+							.set({
+								metadata: Dz.sql`JSON_SET(COALESCE(${Db.storageObjects.metadata}, JSON_OBJECT()), '$.fileName', ${fileName})`,
+								updatedAt: new Date(),
+							})
+							.where(
+								Dz.and(
+									Dz.eq(Db.storageObjects.id, object.id),
+									Dz.eq(Db.storageObjects.integrationId, object.integrationId),
+									Dz.eq(
+										Db.storageObjects.objectKeyHash,
+										getObjectKeyHash(object.objectKey),
+									),
+									Dz.eq(Db.storageObjects.objectKey, object.objectKey),
+									Dz.eq(
+										Db.storageObjects.providerObjectId,
+										object.providerObjectId,
+									),
+								),
+							),
+					)
+					.pipe(Effect.map((result) => getAffectedRows(result) > 0)),
+		);
+
 		const listObjectsByPrefix = Effect.fn("StorageRepo.listObjectsByPrefix")(
 			(
 				integrationId: Storage.StorageIntegrationId,
@@ -476,7 +526,11 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 		);
 
 		const deleteObjectByKey = Effect.fn("StorageRepo.deleteObjectByKey")(
-			(integrationId: Storage.StorageIntegrationId, key: string) =>
+			(
+				integrationId: Storage.StorageIntegrationId,
+				key: string,
+				providerObjectId?: string,
+			) =>
 				db.use((db) =>
 					db
 						.delete(Db.storageObjects)
@@ -484,6 +538,9 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 							Dz.and(
 								Dz.eq(Db.storageObjects.integrationId, integrationId),
 								Dz.eq(Db.storageObjects.objectKeyHash, getObjectKeyHash(key)),
+								providerObjectId
+									? Dz.eq(Db.storageObjects.providerObjectId, providerObjectId)
+									: undefined,
 							),
 						),
 				),
@@ -502,6 +559,8 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 			upsertObject,
 			reserveObject,
 			getObjectByKey,
+			getVideoForNameSync,
+			updateObjectFileName,
 			listObjectsByPrefix,
 			markObjectComplete,
 			deleteObjectByKey,
