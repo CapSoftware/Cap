@@ -229,6 +229,41 @@ export const organizations = mysqlTable(
 			table.tombstoneAt,
 		),
 		customDomainIndex: index("custom_domain_idx").on(table.customDomain),
+		workosOrganizationIdIndex: uniqueIndex("workos_organization_id_idx").on(
+			table.workosOrganizationId,
+		),
+	}),
+);
+
+export const organizationSso = mysqlTable(
+	"organization_sso",
+	{
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.primaryKey()
+			.$type<Organisation.OrganisationId>(),
+		purchasedByUserId: nanoId("purchasedByUserId")
+			.notNull()
+			.$type<User.UserId>(),
+		stripeCustomerId: varchar("stripeCustomerId", { length: 255 }),
+		stripeSubscriptionId: varchar("stripeSubscriptionId", { length: 255 }),
+		stripePriceId: varchar("stripePriceId", { length: 255 }),
+		status: varchar("status", { length: 32 }).notNull().default("unpaid"),
+		paidThrough: datetime("paidThrough"),
+		currentPeriodEnd: datetime("currentPeriodEnd"),
+		cancelAtPeriodEnd: boolean("cancelAtPeriodEnd").notNull().default(false),
+		checkoutAttemptId: varchar("checkoutAttemptId", { length: 36 }),
+		checkoutCurrency: varchar("checkoutCurrency", { length: 3 }),
+		checkoutPriceId: varchar("checkoutPriceId", { length: 255 }),
+		checkoutSessionId: varchar("checkoutSessionId", { length: 255 }),
+		checkoutStartedAt: datetime("checkoutStartedAt"),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		stripeSubscriptionIdIndex: uniqueIndex("sso_stripe_subscription_id_idx").on(
+			table.stripeSubscriptionId,
+		),
 	}),
 );
 
