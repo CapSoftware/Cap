@@ -363,14 +363,22 @@ const makeGoogleDriveAccess = ({
 							}),
 						),
 					onSome: (file) => {
+						if (
+							file.id !== previous.providerObjectId &&
+							previous.uploadStatus !== "complete"
+						) {
+							return Effect.fail(
+								new StorageDomain.StorageError({
+									cause: new Error(
+										"Cannot replace a Google Drive upload that is not complete",
+									),
+								}),
+							);
+						}
 						const videoId = parseObjectKeyVideoId(key);
 						const contentType = file.mimeType ?? previous.contentType;
 						return mapStorageError(
-							repo.upsertObject({
-								integrationId,
-								ownerId,
-								videoId,
-								objectKey: key,
+							repo.updateObjectIfCurrent(previous, {
 								providerObjectId: file.id,
 								uploadStatus: "complete",
 								contentType,
@@ -386,7 +394,19 @@ const makeGoogleDriveAccess = ({
 									contentType: file.mimeType ?? previous.metadata?.contentType,
 								},
 							}),
-						).pipe(Effect.as(file.id));
+						).pipe(
+							Effect.flatMap((saved) =>
+								saved
+									? Effect.succeed(file.id)
+									: Effect.fail(
+											new StorageDomain.StorageError({
+												cause: new Error(
+													"Storage object changed during Google Drive recovery; retry",
+												),
+											}),
+										),
+							),
+						);
 					},
 				}),
 			),

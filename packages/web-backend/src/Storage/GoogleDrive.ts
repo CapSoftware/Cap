@@ -1161,27 +1161,53 @@ export const createGoogleDriveResumableUpload = (
 				uploadUrl = yield* startSessionForExistingFile(resolvedFileId);
 			} else if (
 				!newReservation &&
+				object.uploadStatus === "complete" &&
 				isDriveRequestStatus(created.left, 400, 404, 410)
 			) {
 				const freshFileId = yield* generateGoogleDriveFileId(
 					config,
 					tokenStore,
 				);
-				const fresh = yield* startSessionForNewFile(freshFileId, parentId);
-				uploadUrl = fresh.uploadUrl;
-				fileName = fresh.fileName;
-				createdFile = true;
+				const reserved = yield* repo.updateObjectIfCurrent(object, {
+					providerObjectId: freshFileId,
+					uploadStatus: "pending",
+					contentType,
+					contentLength: input.contentLength ?? null,
+					preserveMetadata: true,
+				});
+				if (!reserved) {
+					return yield* Effect.fail(
+						new Storage.StorageError({
+							cause: new Error(
+								"Storage object changed while reserving a replacement upload; retry",
+							),
+						}),
+					);
+				}
 				resolvedFileId = freshFileId;
+				object = {
+					...object,
+					providerObjectId: freshFileId,
+					uploadStatus: "pending",
+				};
+				const fresh = yield* startSessionForNewFile(freshFileId, parentId).pipe(
+					Effect.either,
+				);
+				if (Either.isRight(fresh)) {
+					uploadUrl = fresh.right.uploadUrl;
+					fileName = fresh.right.fileName;
+					createdFile = true;
+				} else if (isDriveRequestStatus(fresh.left, 409)) {
+					uploadUrl = yield* startSessionForExistingFile(freshFileId);
+				} else {
+					return yield* Effect.fail(fresh.left);
+				}
 			} else {
 				return yield* Effect.fail(created.left);
 			}
 		}
 
-		yield* repo.upsertObject({
-			integrationId: input.integrationId,
-			ownerId: input.ownerId,
-			videoId: input.videoId,
-			objectKey: input.key,
+		const saved = yield* repo.updateObjectIfCurrent(object, {
 			providerObjectId: resolvedFileId,
 			uploadSessionUrl: uploadUrl,
 			uploadStatus: "pending",
@@ -1195,6 +1221,15 @@ export const createGoogleDriveResumableUpload = (
 				contentType,
 			},
 		});
+		if (!saved) {
+			return yield* Effect.fail(
+				new Storage.StorageError({
+					cause: new Error(
+						"Storage object changed while starting an upload; retry",
+					),
+				}),
+			);
+		}
 		return uploadUrl;
 	});
 

@@ -1,4 +1,4 @@
-import { Storage, User, Video } from "@cap/web-domain";
+import { Organisation, Storage, User, Video } from "@cap/web-domain";
 import { Effect, Layer, Option } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -23,6 +23,7 @@ import { getGoogleDriveVideoNames } from "../../../../packages/web-backend/src/S
 import {
 	type GoogleDriveIntegrationConfig,
 	type StorageObjectInput,
+	type StorageObjectUpdate,
 	StorageRepo,
 } from "../../../../packages/web-backend/src/Storage/StorageRepo";
 
@@ -62,6 +63,7 @@ type RepoHarness = {
 	objects: Map<string, StoredObject>;
 	reservations: StorageObjectInput[];
 	upserts: StorageObjectInput[];
+	updates: Array<{ object: StoredObject; input: StorageObjectUpdate }>;
 	fileNameUpdates: Array<{ object: StoredObject; fileName: string }>;
 	putObject: (input: StorageObjectInput) => StoredObject;
 	setVideo: (video: VideoForNameSync) => void;
@@ -75,10 +77,19 @@ const objectMapKey = (
 	key: string,
 ) => `${storageIntegrationId}:${key}`;
 
+const snapshotObject = (object: StoredObject): StoredObject => ({
+	...object,
+	metadata: object.metadata ? { ...object.metadata } : null,
+	createdAt: new Date(object.createdAt),
+	updatedAt: new Date(object.updatedAt),
+});
+
 const makeRepoHarness = (videos: VideoForNameSync[] = []): RepoHarness => {
 	const objects = new Map<string, StoredObject>();
 	const reservations: StorageObjectInput[] = [];
 	const upserts: StorageObjectInput[] = [];
+	const updates: Array<{ object: StoredObject; input: StorageObjectUpdate }> =
+		[];
 	const fileNameUpdates: Array<{ object: StoredObject; fileName: string }> = [];
 	const videoMap = new Map(videos.map((video) => [video.id, video]));
 	let objectSequence = 0;
@@ -147,7 +158,7 @@ const makeRepoHarness = (videos: VideoForNameSync[] = []): RepoHarness => {
 			Effect.succeed(
 				Option.fromNullable(
 					objects.get(objectMapKey(storageIntegrationId, key)),
-				),
+				).pipe(Option.map(snapshotObject)),
 			),
 		getVideoForNameSync: (id: Video.VideoId) =>
 			Effect.succeed(Option.fromNullable(videoMap.get(id))),
@@ -155,12 +166,41 @@ const makeRepoHarness = (videos: VideoForNameSync[] = []): RepoHarness => {
 			Effect.sync(() => {
 				reservations.push(input);
 				const key = objectMapKey(input.integrationId, input.objectKey);
-				return objects.get(key) ?? putObject(input);
+				return snapshotObject(objects.get(key) ?? putObject(input));
 			}),
 		upsertObject: (input: StorageObjectInput) =>
 			Effect.sync(() => {
 				upserts.push(input);
 				putObject(input);
+			}),
+		updateObjectIfCurrent: (object: StoredObject, input: StorageObjectUpdate) =>
+			Effect.sync(() => {
+				updates.push({ object, input });
+				const current = objects.get(
+					objectMapKey(object.integrationId, object.objectKey),
+				);
+				if (
+					!current ||
+					current.id !== object.id ||
+					current.integrationId !== object.integrationId ||
+					current.objectKey !== object.objectKey ||
+					current.objectKeyHash !== object.objectKeyHash ||
+					current.providerObjectId !== object.providerObjectId ||
+					current.uploadStatus !== object.uploadStatus
+				)
+					return false;
+				const metadata = input.preserveMetadata
+					? current.metadata
+					: (input.metadata ?? null);
+				putObject({
+					...input,
+					integrationId: current.integrationId,
+					ownerId: current.ownerId,
+					videoId: current.videoId,
+					objectKey: current.objectKey,
+					metadata,
+				});
+				return true;
 			}),
 		markObjectComplete: (
 			storageIntegrationId: Storage.StorageIntegrationId,
@@ -198,6 +238,7 @@ const makeRepoHarness = (videos: VideoForNameSync[] = []): RepoHarness => {
 		objects,
 		reservations,
 		upserts,
+		updates,
 		fileNameUpdates,
 		putObject,
 		setVideo: (video) => {
@@ -380,7 +421,7 @@ describe("Google Drive video names", () => {
 				],
 				appProperties: { capObjectKey: resultKey },
 			});
-			expect(harness.upserts.at(-1)).toMatchObject({
+			expect(harness.updates.at(-1)?.input).toMatchObject({
 				providerObjectId: "result-id",
 				metadata: { fileName: "Café / roadmap 🚀.mp4" },
 			});
@@ -523,7 +564,7 @@ describe("Google Drive upload updates and copies", () => {
 		expect(url).toContain("/files/existing-file-id?uploadType=resumable");
 		expect(init.method).toBe("PATCH");
 		expect(requestBody(init)).toEqual({ mimeType: "video/mp4" });
-		expect(harness.upserts.at(-1)).toMatchObject({
+		expect(harness.updates.at(-1)?.input).toMatchObject({
 			providerObjectId: "existing-file-id",
 			contentLength: null,
 			preserveMetadata: true,
@@ -604,8 +645,7 @@ describe("Google Drive upload updates and copies", () => {
 				parents: ["folder-id"],
 				appProperties: { capObjectKey: resultKey },
 			});
-			expect(harness.upserts.at(-1)).toMatchObject({
-				objectKey: resultKey,
+			expect(harness.updates.at(-1)?.input).toMatchObject({
 				providerObjectId: "missing-file-id",
 				preserveMetadata: false,
 				metadata: {
@@ -617,13 +657,22 @@ describe("Google Drive upload updates and copies", () => {
 		},
 	);
 
-	it.each([404, 410])(
-		"reuses a reserved id after %i and recovers a concurrent POST conflict with PATCH",
-		async (missingStatus) => {
+	it.each([
+		[404, false],
+		[410, false],
+		[404, true],
+		[410, true],
+	] as const)(
+		"reuses a reserved id after %i (replacement: %s) when POST conflicts",
+		async (missingStatus, useReplacement) => {
 			const harness = makeRepoHarness();
-			harness.putObject(
+			const finalFileId = useReplacement
+				? "replacement-file-id"
+				: "reserved-file-id";
+			const reserved = harness.putObject(
 				storedObjectInput(resultKey, "reserved-file-id", {
-					status: "pending",
+					status: useReplacement ? "complete" : "pending",
+					fileName: "Reserved display.mp4",
 				}),
 			);
 			harness.putObject(
@@ -641,14 +690,22 @@ describe("Google Drive upload updates and copies", () => {
 			let patchCount = 0;
 			vi.stubGlobal(
 				"fetch",
-				vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+				vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+					if (String(input).includes("/files/generateIds"))
+						return jsonResponse({ ids: [finalFileId] });
 					if (init?.method === "PATCH") {
 						patchCount += 1;
 						return patchCount === 1
 							? response(missingStatus)
 							: response(200, { Location: "https://upload.test/recovered" });
 					}
-					if (init?.method === "POST") return response(409);
+					if (init?.method === "POST") {
+						return response(
+							useReplacement && requestBody(init)?.id === "reserved-file-id"
+								? 400
+								: 409,
+						);
+					}
 					throw new Error(`Unexpected Drive method: ${init?.method}`);
 				}),
 			);
@@ -670,12 +727,243 @@ describe("Google Drive upload updates and copies", () => {
 
 			expect(uploadUrl).toBe("https://upload.test/recovered");
 			expect(patchCount).toBe(2);
-			expect(harness.upserts.at(-1)).toMatchObject({
-				providerObjectId: "reserved-file-id",
+			expect(harness.updates.at(-1)?.input).toMatchObject({
+				providerObjectId: finalFileId,
 				preserveMetadata: true,
 			});
+			expect(
+				harness.objects.get(objectMapKey(integrationId, resultKey))?.metadata,
+			).toEqual(reserved.metadata);
 		},
 	);
+
+	it("allows only one concurrent replacement CAS winner after the old file disappears", async () => {
+		const harness = makeRepoHarness([
+			{
+				id: videoId,
+				name: "Concurrent replacement",
+				ownerId: videoOwnerId,
+				storageIntegrationId: integrationId,
+			},
+		]);
+		harness.putObject(storedObjectInput(resultKey, "missing-file-id"));
+		harness.putObject(
+			storedObjectInput(".cap-folders/video-1", "folder-id", {
+				contentType: GOOGLE_DRIVE_FOLDER_MIME_TYPE,
+			}),
+		);
+		harness.putObject(
+			storedObjectInput(
+				".cap-warnings/video-1/DO_NOT_EDIT_OR_DELETE.txt",
+				"warning-id",
+				{ contentType: "text/plain" },
+			),
+		);
+		let releaseInitialPatch!: () => void;
+		const initialPatchBarrier = new Promise<void>((resolve) => {
+			releaseInitialPatch = resolve;
+		});
+		let patchCount = 0;
+		let generatedIdCount = 0;
+		let replacementPostCompleted = false;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input);
+				if (
+					init?.method === "PATCH" &&
+					(url.includes("missing-file-id") || url.includes("replacement-"))
+				) {
+					patchCount += 1;
+					if (patchCount === 2) releaseInitialPatch();
+					if (patchCount <= 2) await initialPatchBarrier;
+					return response(404);
+				}
+				if (url.includes("/files/generateIds")) {
+					const id =
+						generatedIdCount++ === 0 ? "replacement-a" : "replacement-b";
+					return jsonResponse({ ids: [id] });
+				}
+				if (init?.method === "POST") {
+					const body = requestBody(init);
+					if (typeof body?.id === "string" && body.id === "missing-file-id")
+						return response(404);
+					if (
+						typeof body?.id === "string" &&
+						body.id.startsWith("replacement-")
+					) {
+						if (replacementPostCompleted) return response(404);
+						replacementPostCompleted = true;
+					}
+					return response(200, {
+						Location: `https://upload.test/${body?.id}`,
+					});
+				}
+				throw new Error(
+					`Unexpected Drive request: ${init?.method ?? "GET"} ${url}`,
+				);
+			}),
+		);
+
+		const upload = () =>
+			Effect.runPromise(
+				createGoogleDriveResumableUpload(
+					harness.repo,
+					makeConfig(),
+					{
+						integrationId,
+						ownerId: integrationOwnerId,
+						videoId,
+						key: resultKey,
+						contentType: "video/mp4",
+					},
+					makeTokenStore(),
+				),
+			);
+		const results = await Promise.allSettled([upload(), upload()]);
+		const fulfilled = results.filter(
+			(result): result is PromiseFulfilledResult<string> =>
+				result.status === "fulfilled",
+		);
+		const successfulPosts = vi
+			.mocked(fetch)
+			.mock.calls.map(([, init]) => requestBody(init))
+			.filter(
+				(body): body is Record<string, unknown> =>
+					typeof body?.id === "string" && body.id.startsWith("replacement-"),
+			);
+		const mapped = harness.objects.get(objectMapKey(integrationId, resultKey));
+
+		expect(
+			results.filter((result) => result.status === "rejected"),
+		).toHaveLength(1);
+		expect(fulfilled).toHaveLength(1);
+		expect(successfulPosts).toHaveLength(1);
+		expect(mapped?.providerObjectId).toBe(successfulPosts[0]?.id);
+		expect(mapped?.uploadSessionUrl).toBe(fulfilled[0]?.value);
+		expect(
+			harness.updates.filter(({ input }) =>
+				input.providerObjectId.startsWith("replacement-"),
+			),
+		).toHaveLength(3);
+		expect(
+			harness.updates.filter(
+				({ input }) =>
+					input.providerObjectId.startsWith("replacement-") &&
+					input.uploadSessionUrl === undefined,
+			),
+		).toHaveLength(2);
+		const lateResult = await Promise.allSettled([upload()]);
+		expect(lateResult[0]?.status).toBe("rejected");
+		expect(generatedIdCount).toBe(2);
+		expect(
+			new Set(
+				vi
+					.mocked(fetch)
+					.mock.calls.filter(([, init]) => init?.method === "POST")
+					.map(([, init]) => requestBody(init)?.id)
+					.filter(
+						(id): id is string =>
+							typeof id === "string" && id.startsWith("replacement-"),
+					),
+			),
+		).toHaveLength(1);
+	});
+
+	it("does not let a stale session finalization replace a newer provider mapping", async () => {
+		const harness = makeRepoHarness([
+			{
+				id: videoId,
+				name: "Stale session race",
+				ownerId: videoOwnerId,
+				storageIntegrationId: integrationId,
+			},
+		]);
+		harness.putObject(storedObjectInput(resultKey, "missing-file-id"));
+		harness.putObject(
+			storedObjectInput(".cap-folders/video-1", "folder-id", {
+				contentType: GOOGLE_DRIVE_FOLDER_MIME_TYPE,
+			}),
+		);
+		harness.putObject(
+			storedObjectInput(
+				".cap-warnings/video-1/DO_NOT_EDIT_OR_DELETE.txt",
+				"warning-id",
+				{ contentType: "text/plain" },
+			),
+		);
+		let releaseStalePatch!: () => void;
+		let firstPatchSeen!: () => void;
+		const stalePatchSeen = new Promise<void>((resolve) => {
+			firstPatchSeen = resolve;
+		});
+		const stalePatchRelease = new Promise<void>((resolve) => {
+			releaseStalePatch = resolve;
+		});
+		let patchCount = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input);
+				if (init?.method === "PATCH" && url.includes("missing-file-id")) {
+					patchCount += 1;
+					if (patchCount === 1) {
+						firstPatchSeen();
+						await stalePatchRelease;
+						return response(200, {
+							Location: "https://upload.test/stale-session",
+						});
+					}
+					return response(404);
+				}
+				if (url.includes("/files/generateIds"))
+					return jsonResponse({ ids: ["replacement-id"] });
+				if (init?.method === "POST") {
+					const body = requestBody(init);
+					if (body?.id === "missing-file-id") return response(404);
+					return response(200, {
+						Location: "https://upload.test/replacement-session",
+					});
+				}
+				throw new Error(
+					`Unexpected Drive request: ${init?.method ?? "GET"} ${url}`,
+				);
+			}),
+		);
+
+		const uploadInput = {
+			integrationId,
+			ownerId: integrationOwnerId,
+			videoId,
+			key: resultKey,
+			contentType: "video/mp4",
+		};
+		const stale = Effect.runPromise(
+			createGoogleDriveResumableUpload(
+				harness.repo,
+				makeConfig(),
+				uploadInput,
+				makeTokenStore(),
+			),
+		);
+		await stalePatchSeen;
+		const replacement = await Effect.runPromise(
+			createGoogleDriveResumableUpload(
+				harness.repo,
+				makeConfig(),
+				uploadInput,
+				makeTokenStore(),
+			),
+		);
+		releaseStalePatch();
+		const staleResult = await Promise.allSettled([stale]);
+		const mapped = harness.objects.get(objectMapKey(integrationId, resultKey));
+
+		expect(replacement).toBe("https://upload.test/replacement-session");
+		expect(staleResult[0]?.status).toBe("rejected");
+		expect(mapped?.providerObjectId).toBe("replacement-id");
+		expect(mapped?.uploadSessionUrl).toBe(replacement);
+	});
 
 	it("copies a final MP4 with the target title and records its managed metadata", async () => {
 		const harness = makeRepoHarness([
@@ -844,7 +1132,131 @@ const syncVideo = {
 	storageIntegrationId: integrationId,
 };
 
+const makeStorageVideo = (): Video.Video =>
+	new Video.Video({
+		id: videoId,
+		ownerId: videoOwnerId,
+		orgId: Organisation.OrganisationId.make("org-1"),
+		name: "Recovery test",
+		public: false,
+		source: { type: "webMP4" },
+		metadata: Option.none(),
+		bucketId: Option.none(),
+		storageIntegrationId: Option.some(integrationId),
+		folderId: Option.none(),
+		transcriptionStatus: Option.none(),
+		width: Option.none(),
+		height: Option.none(),
+		duration: Option.none(),
+		createdAt: new Date("2026-01-01T00:00:00.000Z"),
+		updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+	});
+
+const getStorageObject = (harness: RepoHarness) => {
+	const dependencies = Layer.merge(
+		Layer.succeed(StorageRepo, harness.repo),
+		Layer.succeed(S3Buckets, {} as S3Buckets),
+	);
+	const storageLayer = StorageService.DefaultWithoutDependencies.pipe(
+		Layer.provide(dependencies),
+	);
+	return Effect.runPromise(
+		StorageService.getAccessForVideo(makeStorageVideo()).pipe(
+			Effect.provide(storageLayer),
+			Effect.flatMap(([access]) => access.getObject(resultKey)),
+		),
+	);
+};
+
 describe("Google Drive title synchronization", () => {
+	it("does not serve or clobber a newer pending mapping during Drive recovery", async () => {
+		const harness = makeRepoHarness();
+		harness.putObject(
+			storedObjectInput(resultKey, "stale-file-id", { status: "complete" }),
+		);
+		let switched = false;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request) => {
+				const url = String(input);
+				if (url.includes("alt=media")) return response(404);
+				if (url.includes("/files?")) {
+					if (!switched) {
+						switched = true;
+						harness.putObject(
+							storedObjectInput(resultKey, "new-pending-id", {
+								status: "pending",
+							}),
+						);
+					}
+					return jsonResponse({
+						files: [
+							{
+								id: "recovered-stale-id",
+								name: "Recovered.mp4",
+								mimeType: "video/mp4",
+								size: "123",
+								modifiedTime: "2026-01-01T00:00:00.000Z",
+							},
+						],
+					});
+				}
+				throw new Error(`Unexpected Drive request: ${url}`);
+			}),
+		);
+
+		await expect(getStorageObject(harness)).resolves.toEqual(Option.none());
+		const mapped = harness.objects.get(objectMapKey(integrationId, resultKey));
+		expect(mapped).toMatchObject({
+			providerObjectId: "new-pending-id",
+			uploadStatus: "pending",
+		});
+		expect(
+			vi
+				.mocked(fetch)
+				.mock.calls.some(([input]) =>
+					String(input).includes("recovered-stale-id"),
+				),
+		).toBe(false);
+		expect(harness.updates).toHaveLength(1);
+	});
+
+	it("rejects a different Drive candidate when the stored object is still pending", async () => {
+		const harness = makeRepoHarness();
+		const pending = harness.putObject(
+			storedObjectInput(resultKey, "pending-file-id", { status: "pending" }),
+		);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request) => {
+				const url = String(input);
+				if (url.includes("alt=media")) return response(404);
+				if (url.includes("/files?"))
+					return jsonResponse({
+						files: [
+							{
+								id: "different-file-id",
+								name: "Different.mp4",
+								mimeType: "video/mp4",
+								size: "123",
+								modifiedTime: "2026-01-01T00:00:00.000Z",
+							},
+						],
+					});
+				throw new Error(`Unexpected Drive request: ${url}`);
+			}),
+		);
+
+		await expect(getStorageObject(harness)).resolves.toEqual(Option.none());
+		expect(
+			harness.objects.get(objectMapKey(integrationId, resultKey)),
+		).toMatchObject({
+			providerObjectId: pending.providerObjectId,
+			uploadStatus: "pending",
+		});
+		expect(harness.updates).toHaveLength(0);
+	});
+
 	it("re-reads the current title and converges when it changes during the first patch", async () => {
 		const initialVideo = { ...syncVideo, name: "First title" };
 		const latestVideo = { ...syncVideo, name: "Latest title" };

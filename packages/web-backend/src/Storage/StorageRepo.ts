@@ -60,6 +60,11 @@ export type StorageObjectInput = {
 	preserveMetadata?: boolean;
 };
 
+export type StorageObjectUpdate = Omit<
+	StorageObjectInput,
+	"integrationId" | "ownerId" | "videoId" | "objectKey"
+>;
+
 const getAffectedRows = (result: unknown) => {
 	if (Array.isArray(result)) {
 		return (
@@ -349,6 +354,57 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 				}),
 		);
 
+		const updateObjectIfCurrent = Effect.fn(
+			"StorageRepo.updateObjectIfCurrent",
+		)(
+			(
+				object: typeof Db.storageObjects.$inferSelect,
+				input: StorageObjectUpdate,
+			) =>
+				Effect.gen(function* () {
+					const uploadSessionUrl = input.uploadSessionUrl
+						? yield* Effect.tryPromise({
+								try: () => encrypt(input.uploadSessionUrl as string),
+								catch: (cause) => new Storage.StorageError({ cause }),
+							})
+						: null;
+
+					const result = yield* db.use((db) =>
+						db
+							.update(Db.storageObjects)
+							.set({
+								providerObjectId: input.providerObjectId,
+								uploadSessionUrl,
+								uploadStatus: input.uploadStatus ?? "pending",
+								contentType: input.contentType ?? null,
+								contentLength: input.contentLength ?? null,
+								metadata: input.preserveMetadata
+									? Dz.sql`${Db.storageObjects.metadata}`
+									: (input.metadata ?? null),
+								updatedAt: new Date(),
+							})
+							.where(
+								Dz.and(
+									Dz.eq(Db.storageObjects.id, object.id),
+									Dz.eq(Db.storageObjects.integrationId, object.integrationId),
+									Dz.eq(
+										Db.storageObjects.objectKeyHash,
+										getObjectKeyHash(object.objectKey),
+									),
+									Dz.eq(Db.storageObjects.objectKey, object.objectKey),
+									Dz.eq(
+										Db.storageObjects.providerObjectId,
+										object.providerObjectId,
+									),
+									Dz.eq(Db.storageObjects.uploadStatus, object.uploadStatus),
+								),
+							),
+					);
+
+					return getAffectedRows(result) > 0;
+				}),
+		);
+
 		const reserveObject = Effect.fn("StorageRepo.reserveObject")(
 			(input: StorageObjectInput) =>
 				Effect.gen(function* () {
@@ -557,6 +613,7 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 			saveGoogleDriveAccessTokenCache,
 			releaseGoogleDriveTokenRefreshLease,
 			upsertObject,
+			updateObjectIfCurrent,
 			reserveObject,
 			getObjectByKey,
 			getVideoForNameSync,
