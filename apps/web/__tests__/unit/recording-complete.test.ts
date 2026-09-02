@@ -1,8 +1,11 @@
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import type { Context, Next } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	rows: [] as unknown[][],
+	userId: "owner" as string | null,
+	where: vi.fn(),
 	queue: vi.fn(),
 	verify: vi.fn(),
 	validate: vi.fn(),
@@ -10,21 +13,21 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@cap/database", () => ({
 	db: () => ({
-		select: () => ({
-			from: () => ({ where: async () => mocks.rows.shift() ?? [] }),
-		}),
+		select: () => ({ from: () => ({ where: mocks.where }) }),
 	}),
 }));
 vi.mock("@cap/database/schema", () => ({
 	videos: { id: "id", ownerId: "ownerId" },
 	videoUploads: { videoId: "videoId", phase: "phase" },
+	videoProcessingJobs: { videoId: "videoId" },
 }));
 vi.mock("@cap/web-domain", () => ({
 	Video: { VideoId: { make: (id: string) => id } },
 }));
 vi.mock("@/app/api/utils", () => ({
 	withAuth: async (context: Context, next: Next) => {
-		context.set("user", { id: "owner" });
+		if (!mocks.userId) return context.json({ error: "Unauthorized" }, 401);
+		context.set("user", { id: mocks.userId });
 		await next();
 	},
 }));
@@ -37,6 +40,10 @@ vi.mock("@/lib/desktop-recording-upload-status", () => ({
 }));
 
 import { app } from "@/app/api/upload/[...route]/recording-complete";
+import {
+	DesktopRecordingSourceBlockedError,
+	SourceCommitPendingError,
+} from "@/lib/desktop-recording-jobs";
 
 const verification = {
 	version: 1,
@@ -44,111 +51,162 @@ const verification = {
 	requiredAudio: true,
 };
 
-function request(verify = true) {
+async function request(body: unknown = { videoId: "recording", verification }) {
 	return app.request("/", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({
-			videoId: "recording",
-			...(verify ? { verification } : {}),
-		}),
+		body: JSON.stringify(body),
 	});
+}
+
+function setSource(type: "desktopMP4" | "desktopSegments" | "local") {
+	mocks.rows[0] = [{ id: "recording", ownerId: "owner", source: { type } }];
 }
 
 describe("recording completion acknowledgement", () => {
 	beforeEach(() => {
-		mocks.rows = [
-			[{ id: "recording", ownerId: "owner", source: { type: "desktopMP4" } }],
-			[],
-		];
-		mocks.queue.mockResolvedValue("queued");
-		mocks.verify.mockResolvedValue(null);
-		mocks.validate.mockResolvedValue(undefined);
+		mocks.rows = [[], []];
+		setSource("desktopMP4");
+		mocks.userId = "owner";
+		mocks.where.mockImplementation(async () => mocks.rows.shift() ?? []);
+		mocks.queue.mockReset().mockResolvedValue("queued");
+		mocks.verify.mockReset().mockResolvedValue(null);
+		mocks.validate.mockReset().mockResolvedValue(undefined);
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
 	});
 
-	it("preserves the legacy client acknowledgement without granting verified cleanup", async () => {
-		const response = await request(false);
+	it.each([false, true])(
+		"returns a retryable non-2xx until the source is secured (proof: %s)",
+		async (hasProof) => {
+			mocks.queue.mockRejectedValueOnce(new SourceCommitPendingError());
+			const response = await request({
+				videoId: "recording",
+				...(hasProof ? { verification } : {}),
+			});
+			expect(response.status).toBe(503);
+			expect(response.headers.get("Retry-After")).toBe("5");
+			expect(await response.json()).toMatchObject({
+				success: false,
+				status: "source-commit-pending",
+			});
+			expect(mocks.queue).toHaveBeenCalledWith({
+				videoId: "recording",
+				userId: "owner",
+				verification: hasProof ? verification : undefined,
+			});
+		},
+	);
+
+	it.each([
+		["processing", false],
+		["processing", true],
+		["error", false],
+		["error", true],
+		["complete", false],
+		["complete", true],
+	])(
+		"does not acknowledge from an old %s upload row (proof: %s)",
+		async (phase, hasProof) => {
+			mocks.rows[1] = [{ videoId: "recording", phase }];
+			mocks.queue.mockRejectedValueOnce(new SourceCommitPendingError());
+			const response = await request({
+				videoId: "recording",
+				...(hasProof ? { verification } : {}),
+			});
+			expect(response.status).toBe(503);
+			expect(mocks.queue).toHaveBeenCalledOnce();
+		},
+	);
+
+	it("waits for the source queue before acknowledging a legacy client", async () => {
+		let release: (() => void) | undefined;
+		const committed = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		mocks.queue.mockImplementation(async () => {
+			await committed;
+			return "queued";
+		});
+		let settled = false;
+		const pending = request({ videoId: "recording" }).then((response) => {
+			settled = true;
+			return response;
+		});
+		await vi.waitFor(() => expect(mocks.queue).toHaveBeenCalledOnce());
+		expect(settled).toBe(false);
+		if (!release) throw new Error("Missing source commit resolver");
+		release();
+		const response = await pending;
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ success: true, status: "queued" });
+		expect(mocks.verify).not.toHaveBeenCalled();
+	});
+
+	it("attaches a late proof even when the earlier upload row says processing", async () => {
+		setSource("desktopSegments");
+		mocks.rows[1] = [{ videoId: "recording", phase: "processing" }];
+		mocks.queue.mockResolvedValueOnce("already-processing");
+		const response = await request();
+		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({
 			success: true,
-			status: "already-complete",
+			status: "already-processing",
 		});
-		expect(mocks.queue).not.toHaveBeenCalled();
-	});
-
-	it("reconciles a legacy completed upload missing its verification receipt", async () => {
-		const response = await request();
-		expect(await response.json()).toEqual({ success: true, status: "queued" });
 		expect(mocks.validate).toHaveBeenCalledOnce();
 		expect(mocks.queue).toHaveBeenCalledWith({
 			videoId: "recording",
 			userId: "owner",
 			verification,
 		});
+		expect(mocks.verify).not.toHaveBeenCalled();
 	});
 
-	it("does not enqueue a second job while verification is processing", async () => {
-		mocks.rows[1] = [{ videoId: "recording", phase: "processing" }];
-		const response = await request();
-		expect(await response.json()).toEqual({
-			success: true,
-			status: "already-processing",
-		});
-		expect(mocks.queue).not.toHaveBeenCalled();
-	});
-
-	it("queues verification after upload bytes finish but the progress row remains", async () => {
-		mocks.rows[1] = [{ videoId: "recording", phase: "uploading" }];
-		const response = await request();
+	it("retries processing after an old worker error when the source is secured", async () => {
+		mocks.rows[1] = [{ videoId: "recording", phase: "error" }];
+		const response = await request({ videoId: "recording" });
+		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({ success: true, status: "queued" });
 		expect(mocks.queue).toHaveBeenCalledOnce();
 	});
 
-	it("validates required tracks before finalizing a segmented upload", async () => {
-		mocks.rows[0] = [
-			{
-				id: "recording",
-				ownerId: "owner",
-				source: { type: "desktopSegments" },
-			},
-		];
-		mocks.validate.mockRejectedValueOnce(new Error("Missing final audio"));
+	it.each([false, true])(
+		"requests retransmission only for a confirmed blocked source (proof: %s)",
+		async (hasProof) => {
+			mocks.queue.mockRejectedValueOnce(
+				new DesktopRecordingSourceBlockedError(
+					"source-missing",
+					"The final video segment is missing",
+				),
+			);
+			const response = await request({
+				videoId: "recording",
+				...(hasProof ? { verification } : {}),
+			});
+			expect(response.status).toBe(409);
+			expect(response.headers.get("Retry-After")).toBeNull();
+			expect(await response.json()).toEqual({
+				success: false,
+				status: "reupload-required",
+				code: "source-missing",
+				error: "The final video segment is missing",
+			});
+		},
+	);
+
+	it("keeps local data when required-track validation is unavailable", async () => {
+		setSource("desktopSegments");
+		mocks.validate.mockRejectedValueOnce(new Error("Storage unavailable"));
 		const response = await request();
 		expect(response.status).toBe(503);
-		expect(mocks.queue).not.toHaveBeenCalled();
-	});
-
-	it("requests retransmission after a segmented upload failed verification", async () => {
-		mocks.rows[0] = [
-			{
-				id: "recording",
-				ownerId: "owner",
-				source: { type: "desktopSegments" },
-			},
-		];
-		mocks.rows[1] = [{ videoId: "recording", phase: "error" }];
-		const response = await request();
-		expect(response.status).toBe(409);
-		expect(mocks.queue).not.toHaveBeenCalled();
-	});
-
-	it("asks for retransmission when a completed remote recording failed validation", async () => {
-		mocks.rows[1] = [{ videoId: "recording", phase: "error" }];
-		const response = await request();
-		expect(response.status).toBe(409);
-		expect(await response.json()).toEqual({
+		expect(response.headers.get("Retry-After")).toBe("5");
+		expect(await response.json()).toMatchObject({
 			success: false,
-			status: "reupload-required",
+			error: expect.stringContaining("retain the local recording"),
 		});
-	});
-
-	it("does not issue a ready receipt when verification or manifest validation fails", async () => {
-		mocks.validate.mockRejectedValueOnce(new Error("Missing final audio"));
-		const response = await request();
-		expect(response.status).toBe(503);
 		expect(mocks.queue).not.toHaveBeenCalled();
 	});
 
-	it("returns only the verified result for the owned recording", async () => {
+	it("returns an existing verified receipt without starting another job", async () => {
 		const receipt = {
 			version: 1,
 			videoId: "recording",
@@ -165,6 +223,55 @@ describe("recording completion acknowledgement", () => {
 			status: "verified",
 			verification: receipt,
 		});
+		expect(mocks.validate).not.toHaveBeenCalled();
+		expect(mocks.queue).not.toHaveBeenCalled();
+	});
+
+	it("looks up the video using the authenticated owner, not a supplied owner", async () => {
+		mocks.rows[0] = [];
+		const response = await request({
+			videoId: "recording",
+			ownerId: "somebody-else",
+			verification,
+		});
+		expect(response.status).toBe(404);
+		const [condition] = mocks.where.mock.calls[0] ?? [];
+		if (!condition) throw new Error("Missing owned-video query");
+		expect(new MySqlDialect().sqlToQuery(condition).params).toEqual([
+			"id",
+			"recording",
+			"ownerId",
+			"owner",
+		]);
+		expect(mocks.queue).not.toHaveBeenCalled();
+	});
+
+	it("rejects unauthenticated and non-desktop requests before queueing", async () => {
+		mocks.userId = null;
+		expect((await request()).status).toBe(401);
+		expect(mocks.where).not.toHaveBeenCalled();
+		mocks.userId = "owner";
+		setSource("local");
+		expect((await request()).status).toBe(400);
+		expect(mocks.queue).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{},
+		{ videoId: 123 },
+		{ videoId: "recording", verification: null },
+		{ videoId: "recording", verification: { ...verification, version: 2 } },
+		{
+			videoId: "recording",
+			verification: { ...verification, artifact: { kind: "segments" } },
+		},
+		{
+			videoId: "recording",
+			verification: { ...verification, requiredAudio: "true" },
+		},
+	])("does not downgrade malformed completion proof %#", async (body) => {
+		expect((await request(body)).status).toBe(400);
+		expect(mocks.where).not.toHaveBeenCalled();
 		expect(mocks.queue).not.toHaveBeenCalled();
 	});
 });

@@ -11,6 +11,7 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { FatalError, sleep } from "workflow";
+import { retireDesktopRecordingJobForOutputReplacement } from "@/lib/desktop-recording-jobs";
 import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
@@ -376,27 +377,62 @@ async function processExistingResultOnMediaServer(
 	};
 }
 
-async function saveMetadataAndComplete(
+export async function saveMetadataAndComplete(
 	videoId: string,
 	metadata: { duration: number; width: number; height: number; fps: number },
 ): Promise<void> {
 	"use step";
 
 	const duration = getValidDuration(metadata.duration);
-
-	await db()
-		.update(videos)
-		.set({
-			width: metadata.width,
-			height: metadata.height,
-			fps: metadata.fps,
-			...(duration === undefined ? {} : { duration }),
-		})
-		.where(eq(videos.id, videoId as Video.VideoId));
-
-	await db()
-		.delete(videoUploads)
-		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+	const [video] = await db()
+		.select()
+		.from(videos)
+		.where(eq(videos.id, Video.VideoId.make(videoId)));
+	if (!video) throw new Error("Video does not exist");
+	const [bucket] = await Storage.getAccessForVideo(decodeStorageVideo(video), {
+		resolvePublishedOutput: false,
+	}).pipe(runWorkflowPromise);
+	const head = await bucket
+		.headObject(`${video.ownerId}/${video.id}/result.mp4`)
+		.pipe(runWorkflowPromise);
+	if (!head.ETag || !head.ContentLength || head.ContentLength <= 0) {
+		throw new Error("Reprocessed recording output is missing or empty");
+	}
+	await db().transaction(async (tx) => {
+		await retireDesktopRecordingJobForOutputReplacement(tx, {
+			videoId: video.id,
+			userId: video.ownerId,
+		});
+		const [lockedVideo] = await tx
+			.select()
+			.from(videos)
+			.where(eq(videos.id, video.id))
+			.for("update");
+		if (
+			!lockedVideo ||
+			lockedVideo.ownerId !== video.ownerId ||
+			lockedVideo.bucket !== video.bucket ||
+			lockedVideo.storageIntegrationId !== video.storageIntegrationId
+		) {
+			throw new Error("Recording storage changed during reprocessing");
+		}
+		const nextMetadata = { ...(lockedVideo.metadata ?? {}) };
+		delete nextMetadata.desktopRecordingUpload;
+		await tx
+			.update(videos)
+			.set({
+				width: metadata.width,
+				height: metadata.height,
+				fps: metadata.fps,
+				metadata: nextMetadata,
+				...(lockedVideo.source.type === "desktopMP4"
+					? { source: { type: "desktopMP4" as const } }
+					: {}),
+				...(duration === undefined ? {} : { duration }),
+			})
+			.where(eq(videos.id, video.id));
+		await tx.delete(videoUploads).where(eq(videoUploads.videoId, video.id));
+	});
 }
 
 async function invalidateResultCache(

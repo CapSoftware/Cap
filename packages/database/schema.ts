@@ -389,7 +389,12 @@ export const videos = mysqlTable(
 			.$type<
 				| { type: "MediaConvert" }
 				| { type: "local" }
-				| { type: "desktopMP4" }
+				| {
+						type: "desktopMP4";
+						outputKey?: string;
+						thumbnailKey?: string;
+						previewKey?: string;
+				  }
 				| { type: "desktopSegments" }
 				| { type: "webMP4" }
 			>()
@@ -1381,6 +1386,56 @@ export const videoUploads = mysqlTable(
 		index("phase_updated_at_video_id_idx").on(
 			table.phase,
 			table.updatedAt,
+			table.videoId,
+		),
+	],
+);
+
+export const videoProcessingJobs = mysqlTable(
+	"video_processing_jobs",
+	{
+		videoId: nanoId("video_id").primaryKey().notNull().$type<Video.VideoId>(),
+		ownerId: nanoId("owner_id").notNull().$type<User.UserId>(),
+		generation: varchar("generation", { length: 64 }).notNull(),
+		manifestSha256: varchar("manifest_sha256", { length: 64 }),
+		state: varchar("state", { length: 32 })
+			.$type<
+				| "committing"
+				| "queued"
+				| "processing"
+				| "retry"
+				| "verified"
+				| "source-blocked"
+			>()
+			.notNull()
+			.default("committing"),
+		attemptId: varchar("attempt_id", { length: 64 }),
+		attemptCount: int("attempt_count").notNull().default(0),
+		leaseExpiresAt: datetime("lease_expires_at", { fsp: 3 }),
+		nextRetryAt: datetime("next_retry_at", { fsp: 3 }).notNull(),
+		workflowRunId: varchar("workflow_run_id", { length: 255 }),
+		remoteJobId: varchar("remote_job_id", { length: 255 }),
+		source: json("source").$type<unknown>(),
+		verification: json("verification").$type<unknown>(),
+		output: json("output").$type<unknown>(),
+		errorCode: varchar("error_code", { length: 64 }),
+		errorMessage: text("error_message"),
+		createdAt: datetime("created_at", { fsp: 3 })
+			.notNull()
+			.$defaultFn(() => new Date()),
+		updatedAt: datetime("updated_at", { fsp: 3 })
+			.notNull()
+			.$defaultFn(() => new Date()),
+	},
+	(table) => [
+		index("processing_state_retry_video_idx").on(
+			table.state,
+			table.nextRetryAt,
+			table.videoId,
+		),
+		index("processing_state_lease_video_idx").on(
+			table.state,
+			table.leaseExpiresAt,
 			table.videoId,
 		),
 	],

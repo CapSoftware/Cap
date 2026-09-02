@@ -22,6 +22,7 @@ import { Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { FatalError, sleep } from "workflow";
+import { retireDesktopRecordingJobForOutputReplacement } from "@/lib/desktop-recording-jobs";
 import {
 	type EditTranscript,
 	editTranscriptWordsToCaptionVtt,
@@ -330,7 +331,11 @@ async function renderVideoEditOnMediaServer(
 		)
 		.pipe(runWorkflowPromise);
 
-	const outputVerificationUrl = await bucket
+	const [outputBucket] = await Storage.getAccessForVideo(
+		decodeStorageVideo(video),
+		{ resolvePublishedOutput: false },
+	).pipe(runWorkflowPromise);
+	const outputVerificationUrl = await outputBucket
 		.getInternalSignedObjectUrl(outputKey, {
 			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
 		})
@@ -475,7 +480,7 @@ async function probeVideoOnMediaServer(
 	return metadata;
 }
 
-async function verifyRenderedEditOutput(
+export async function verifyRenderedEditOutput(
 	videoId: string,
 	userId: string,
 	editSpec: VideoEditSpec,
@@ -504,9 +509,9 @@ async function verifyRenderedEditOutput(
 		throw new FatalError("Video does not exist");
 	}
 
-	const [bucket] = await Storage.getAccessForVideo(
-		decodeStorageVideo(video),
-	).pipe(runWorkflowPromise);
+	const [bucket] = await Storage.getAccessForVideo(decodeStorageVideo(video), {
+		resolvePublishedOutput: false,
+	}).pipe(runWorkflowPromise);
 	const outputKey = `${userId}/${videoId}/result.mp4`;
 	const outputUrl = await bucket
 		.getInternalSignedObjectUrl(outputKey, {
@@ -810,7 +815,7 @@ async function invalidateEditedVideoCache(
 	}
 }
 
-async function saveEditResultAndComplete(
+export async function saveEditResultAndComplete(
 	videoId: string,
 	sourceKey: string,
 	previousSpec: VideoEditSpec,
@@ -829,7 +834,6 @@ async function saveEditResultAndComplete(
 		throw new FatalError("Video does not exist");
 	}
 
-	const nextMetadata = clearAiMetadata(video.metadata as VideoMetadata | null);
 	let originalTranscript: EditTranscript | null = null;
 	try {
 		originalTranscript = await loadOriginalEditTranscript(video, editSpec);
@@ -841,6 +845,25 @@ async function saveEditResultAndComplete(
 	}
 
 	await db().transaction(async (tx) => {
+		await retireDesktopRecordingJobForOutputReplacement(tx, {
+			videoId: video.id,
+			userId: video.ownerId,
+		});
+		const [lockedVideo] = await tx
+			.select()
+			.from(videos)
+			.where(eq(videos.id, video.id))
+			.for("update");
+		if (
+			!lockedVideo ||
+			lockedVideo.ownerId !== video.ownerId ||
+			lockedVideo.bucket !== video.bucket ||
+			lockedVideo.storageIntegrationId !== video.storageIntegrationId
+		) {
+			throw new Error("Recording storage changed while the edit was rendering");
+		}
+		const nextMetadata = clearAiMetadata(lockedVideo.metadata);
+		delete nextMetadata.desktopRecordingUpload;
 		await tx
 			.update(videos)
 			.set({
@@ -848,6 +871,9 @@ async function saveEditResultAndComplete(
 				height: metadata.height,
 				fps: metadata.fps,
 				metadata: nextMetadata,
+				...(lockedVideo.source.type === "desktopMP4"
+					? { source: { type: "desktopMP4" as const } }
+					: {}),
 				// Derivable captions keep the transcription COMPLETE; only legacy
 				// videos without a stored word transcript get re-transcribed.
 				...(originalTranscript ? {} : { transcriptionStatus: null }),

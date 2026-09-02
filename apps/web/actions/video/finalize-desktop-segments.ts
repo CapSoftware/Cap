@@ -33,6 +33,11 @@ export async function finalizeDesktopSegmentsRecording({
 	if (result.status === "manifest-changed") {
 		throw new Error("Segment manifest changed while finalizing");
 	}
+	if (result.status === "source-incomplete") {
+		throw new Error(
+			"This recording has not finished uploading. Keep Cap open on the recording device to complete the upload. Uploaded files are retained.",
+		);
+	}
 
 	return result;
 }

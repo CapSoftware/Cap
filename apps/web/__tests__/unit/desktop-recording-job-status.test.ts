@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { reconcileDesktopRecordingJob } from "@/lib/desktop-recording-job-status";
+import {
+	observeDesktopRecordingJob,
+	reconcileDesktopRecordingJob,
+} from "@/lib/desktop-recording-job-status";
 
 const input = {
 	videoId: "video",
@@ -68,5 +71,60 @@ describe("recording job completion reconciliation", () => {
 			.mockResolvedValueOnce(new Response(null, { status: 503 }));
 		vi.stubGlobal("fetch", fetcher);
 		expect(await reconcileDesktopRecordingJob(input)).toBe(false);
+	});
+
+	it.each([
+		{ generation: "old", attemptId: "attempt", inventorySha256: "inventory" },
+		{
+			generation: "generation",
+			attemptId: "old",
+			inventorySha256: "inventory",
+		},
+		{ generation: "generation", attemptId: "attempt", inventorySha256: "old" },
+		{},
+	])(
+		"never forwards a completion outside the current immutable attempt %j",
+		async (context) => {
+			const fetcher = vi.fn().mockResolvedValueOnce(
+				Response.json({
+					jobId: "job",
+					videoId: "video",
+					phase: "complete",
+					...context,
+				}),
+			);
+			vi.stubGlobal("fetch", fetcher);
+			expect(
+				await observeDesktopRecordingJob({
+					...input,
+					generation: "generation",
+					attemptId: "attempt",
+					inventorySha256: "inventory",
+				}),
+			).toEqual({ status: "unavailable", delivered: false });
+			expect(fetcher).toHaveBeenCalledOnce();
+		},
+	);
+
+	it("distinguishes a positively observed active attempt from a lost worker", async () => {
+		const context = {
+			generation: "generation",
+			attemptId: "attempt",
+			inventorySha256: "inventory",
+		};
+		const fetcher = vi.fn().mockResolvedValueOnce(
+			Response.json({
+				jobId: "job",
+				videoId: "video",
+				phase: "processing",
+				...context,
+			}),
+		);
+		vi.stubGlobal("fetch", fetcher);
+		expect(await observeDesktopRecordingJob({ ...input, ...context })).toEqual({
+			status: "active",
+			delivered: false,
+		});
+		expect(fetcher).toHaveBeenCalledOnce();
 	});
 });

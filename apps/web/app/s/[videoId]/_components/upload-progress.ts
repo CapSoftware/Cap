@@ -98,7 +98,9 @@ export function getStalledProcessingMessage(input: {
 		| "error";
 	updatedAt: Date;
 	processingProgress: number;
+	automaticRetry?: boolean;
 }): string | null {
+	if (input.automaticRetry) return null;
 	const ageMs = Date.now() - input.updatedAt.getTime();
 
 	if (input.phase === "processing") {
