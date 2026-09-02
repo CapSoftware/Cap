@@ -119,8 +119,8 @@ export async function queueDesktopSegmentsFinalization({
 		await queueEarlySegmentsTranscription({ videoId, userId }).catch(
 			(error) => {
 				console.warn(
-					`[queueDesktopSegmentsFinalization] Early transcription queue failed for ${videoId}`,
-					error,
+					"[queueDesktopSegmentsFinalization] Early transcription queue failed",
+					{ videoId, error },
 				);
 			},
 		);

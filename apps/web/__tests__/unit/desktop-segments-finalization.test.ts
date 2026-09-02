@@ -112,6 +112,23 @@ describe("durable finalization acknowledgement", () => {
 		expect(mocks.dispatchFailure).toHaveBeenCalledOnce();
 	});
 
+	it("keeps transcription errors and recording ids out of the log format string", async () => {
+		const request = { ...input, videoId: "%s%d" as Video.VideoId };
+		const retained = { ...committed, videoId: request.videoId };
+		const error = new Error("Transcription unavailable");
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		mocks.ensure.mockResolvedValue({ job: retained, created: true });
+		mocks.state.mockResolvedValue(retained);
+		mocks.transcribe.mockRejectedValueOnce(error);
+		await expect(queueDesktopSegmentsFinalization(request)).resolves.toBe(
+			"queued",
+		);
+		expect(warning).toHaveBeenCalledWith(
+			"[queueDesktopSegmentsFinalization] Early transcription queue failed",
+			{ videoId: request.videoId, error },
+		);
+	});
+
 	it("does not launch another workflow while an attempt has a live lease", async () => {
 		mocks.ensure.mockResolvedValue({ job: committed, created: false });
 		mocks.state.mockResolvedValue(committed);
