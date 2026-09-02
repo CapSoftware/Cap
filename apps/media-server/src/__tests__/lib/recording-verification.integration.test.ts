@@ -1198,20 +1198,35 @@ describe("source-preserving recording mux", () => {
 
 	test("preserves a short audio track that ends before the video starts", async () => {
 		const input = join(directory, "early-audio.mp4");
-		await generate(input, "sine=frequency=700:sample_rate=48000:duration=0.1", [
-			"-vf",
-			"setpts=PTS+5/TB",
-			"-fps_mode",
-			"passthrough",
-			"-movie_timescale",
-			"1000000",
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-map",
+			"0:v:0",
+			"-c:v",
+			"copy",
+			"-video_track_timescale",
+			"90000",
+			"-movflags",
+			"empty_moov+frag_keyframe+default_base_moof",
+			input,
 		]);
-		const sourceEvidence = await inspectRecordingSources(input, input);
+		const bytes = await readFile(input);
+		shiftFragmentClocks(bytes, 450000);
+		await writeFile(input, bytes);
+		const timing = await readRecordingVideoTiming(input, { timeoutMs: 5000 });
+		expect(timing.firstTimestampTicks).toBe(450000n);
+		expect(timing.lastTimestampTicks).toBe(897000n);
+		expect(timing.lastDurationTicks).toBe(3000n);
+		const sourceEvidence = await inspectRecordingSources(input, shortAudio);
 		expect(sourceEvidence.audio?.endTime).toBeLessThan(
 			sourceEvidence.video.startTime,
 		);
 		const output = join(directory, "preserved-early-audio.mp4");
-		await muxMediaTracksToMp4(input, input, output);
+		await muxMediaTracksToMp4(input, shortAudio, output);
 		const verified = await verifyRecording(output, {
 			requireAudio: true,
 			sourceEvidence,
