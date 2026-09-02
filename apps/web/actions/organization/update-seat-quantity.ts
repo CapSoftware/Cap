@@ -7,7 +7,7 @@ import {
 	organizations,
 	users,
 } from "@cap/database/schema";
-import { stripe } from "@cap/utils";
+import { isProSubscription, stripe } from "@cap/utils";
 import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -46,6 +46,16 @@ async function getOwnerSubscription(
 	const subscription = await stripe().subscriptions.retrieve(
 		owner.stripeSubscriptionId,
 	);
+	const customerId =
+		typeof subscription.customer === "string"
+			? subscription.customer
+			: subscription.customer.id;
+	if (
+		!isProSubscription(subscription) ||
+		customerId !== owner.stripeCustomerId
+	) {
+		throw new Error("No matching Cap Pro subscription found");
+	}
 
 	const subscriptionItem = subscription.items.data[0];
 	if (!subscriptionItem) {

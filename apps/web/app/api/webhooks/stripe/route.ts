@@ -8,7 +8,7 @@ import {
 	users,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { stripe } from "@cap/utils";
+import { isProSubscription, isSsoSubscription, stripe } from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
 import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
@@ -23,6 +23,11 @@ import {
 } from "@/lib/baa/billing";
 import { addCreditsToAccount } from "@/lib/developer-credits";
 import { trackServerEvent } from "@/lib/server-analytics";
+import {
+	attachSsoCheckout,
+	getSsoBillingForSubscription,
+	syncSsoSubscription,
+} from "@/lib/sso/billing";
 
 const relevantEvents = new Set([
 	"checkout.session.completed",
@@ -30,6 +35,7 @@ const relevantEvents = new Set([
 	"customer.subscription.created",
 	"customer.subscription.updated",
 	"customer.subscription.deleted",
+	"invoice.paid",
 	"invoice.payment_failed",
 ]);
 
@@ -113,8 +119,7 @@ const ENTITLED_SUBSCRIPTION_STATUSES = new Set([
 function hasEntitledProSubscription(subscriptions: Stripe.Subscription[]) {
 	return subscriptions.some(
 		(sub) =>
-			!isSignedBaaSubscription(sub) &&
-			ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status),
+			isProSubscription(sub) && ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status),
 	);
 }
 
@@ -397,12 +402,60 @@ export const POST = async (req: Request) => {
 
 	if (relevantEvents.has(event.type)) {
 		try {
+			if (
+				event.type === "customer.subscription.created" ||
+				event.type === "customer.subscription.updated" ||
+				event.type === "customer.subscription.deleted"
+			) {
+				const subscription = event.data.object as Stripe.Subscription;
+				if (
+					isSsoSubscription(subscription) ||
+					(await getSsoBillingForSubscription(subscription.id))
+				) {
+					await syncSsoSubscription(subscription.id);
+					return NextResponse.json({ received: true });
+				}
+			}
+			if (
+				event.type === "invoice.paid" ||
+				event.type === "invoice.payment_failed"
+			) {
+				const invoice = event.data.object as Stripe.Invoice;
+				const subscriptionId =
+					typeof invoice.subscription === "string"
+						? invoice.subscription
+						: invoice.subscription?.id;
+				const ssoInvoice = isSsoSubscription({
+					metadata: invoice.subscription_details?.metadata,
+					items: { data: invoice.lines?.data ?? [] },
+				});
+				if (
+					ssoInvoice ||
+					(event.type === "invoice.payment_failed" &&
+						subscriptionId &&
+						(await getSsoBillingForSubscription(subscriptionId)))
+				) {
+					if (!subscriptionId) {
+						throw new Error("SAML SSO invoice is missing its subscription.");
+					}
+					await syncSsoSubscription(subscriptionId);
+					return NextResponse.json({ received: true });
+				}
+				if (event.type === "invoice.paid") {
+					if (subscriptionId) await syncSsoSubscription(subscriptionId);
+					return NextResponse.json({ received: true });
+				}
+			}
 			let checkoutSubscription: Stripe.Subscription | undefined;
 			if (
 				event.type === "checkout.session.completed" ||
 				event.type === "checkout.session.async_payment_succeeded"
 			) {
 				const session = event.data.object as Stripe.Checkout.Session;
+				if (session.metadata?.type === "saml_sso") {
+					await attachSsoCheckout(session.id);
+					return NextResponse.json({ received: true });
+				}
 				const subscriptionId =
 					typeof session.subscription === "string"
 						? session.subscription
@@ -410,6 +463,13 @@ export const POST = async (req: Request) => {
 				if (subscriptionId) {
 					checkoutSubscription =
 						await stripe().subscriptions.retrieve(subscriptionId);
+					if (
+						isSsoSubscription(checkoutSubscription) ||
+						(await getSsoBillingForSubscription(subscriptionId))
+					) {
+						await attachSsoCheckout(session.id);
+						return NextResponse.json({ received: true });
+					}
 					if (isSignedBaaSubscription(checkoutSubscription)) {
 						const record = await attachPaidBaaCheckout(
 							session,
@@ -679,7 +739,7 @@ export const POST = async (req: Request) => {
 					.filter(
 						(sub) =>
 							ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status) &&
-							!isSignedBaaSubscription(sub),
+							isProSubscription(sub),
 					)
 					.reduce((total, sub) => {
 						return (
