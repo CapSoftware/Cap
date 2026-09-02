@@ -155,6 +155,43 @@ const isDriveRequestStatus = (
 const escapeDriveQueryValue = (value: string) =>
 	value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 
+const getGoogleDriveObjectKeyHash = (key: string) =>
+	createHash("sha256").update(key, "utf8").digest("hex");
+
+const getGoogleDriveObjectKeyProperty = (key: string) =>
+	Buffer.byteLength(`capObjectKey${key}`, "utf8") <= 124
+		? { name: "capObjectKey", value: key }
+		: { name: "capObjectKeySha256", value: getGoogleDriveObjectKeyHash(key) };
+
+const getGoogleDriveObjectKeyProperties = (
+	key: string,
+	clearInherited = false,
+): Record<string, string | null> => {
+	const property = getGoogleDriveObjectKeyProperty(key);
+	const properties: Record<string, string | null> = clearInherited
+		? { capObjectKey: null, capObjectKeySha256: null }
+		: {};
+	properties[property.name] = property.value;
+	return properties;
+};
+
+const googleDriveFileMatchesObjectKey = (
+	file: GoogleDriveFile,
+	key: string,
+) => {
+	const properties = file.appProperties;
+	if (!properties) return false;
+	const keyHash = getGoogleDriveObjectKeyHash(key);
+	return (
+		(properties.capObjectKey === key ||
+			properties.capObjectKeySha256 === keyHash) &&
+		(properties.capObjectKey === undefined ||
+			properties.capObjectKey === key) &&
+		(properties.capObjectKeySha256 === undefined ||
+			properties.capObjectKeySha256 === keyHash)
+	);
+};
+
 const GOOGLE_DRIVE_ACCESS_TOKEN_EXPIRY_MARGIN_MS = 60_000;
 const GOOGLE_DRIVE_TOKEN_REFRESH_LEASE_MS = 15_000;
 const googleDriveAccessTokenCache = new Map<
@@ -1097,7 +1134,7 @@ export const createGoogleDriveResumableUpload = (
 							name: fileName,
 							mimeType: contentType,
 							parents: [parentId],
-							appProperties: { capObjectKey: input.key },
+							appProperties: getGoogleDriveObjectKeyProperties(input.key),
 						}),
 					},
 					tokenStore,
@@ -1260,13 +1297,17 @@ export const findGoogleDriveFileByObjectKey = (
 	key: string,
 	tokenStore?: GoogleDriveTokenStore,
 ) => {
+	const property = getGoogleDriveObjectKeyProperty(key);
+	const legacyQuery = `appProperties has { key='capObjectKey' and value='${escapeDriveQueryValue(key)}' }`;
 	const query = [
-		`appProperties has { key='capObjectKey' and value='${escapeDriveQueryValue(key)}' }`,
+		property.name === "capObjectKey"
+			? legacyQuery
+			: `(${legacyQuery} or appProperties has { key='capObjectKeySha256' and value='${property.value}' })`,
 		"trashed=false",
 	].join(" and ");
 	const params = new URLSearchParams({
 		q: query,
-		fields: "files(id,name,mimeType,size,modifiedTime)",
+		fields: "files(id,name,mimeType,size,modifiedTime,appProperties)",
 		orderBy: "modifiedTime desc",
 		pageSize: "10",
 		spaces: "drive",
@@ -1288,7 +1329,9 @@ export const findGoogleDriveFileByObjectKey = (
 			}),
 		),
 		Effect.map((body) => {
-			const files = body.files ?? [];
+			const files = (body.files ?? []).filter((file) =>
+				googleDriveFileMatchesObjectKey(file, key),
+			);
 			return Option.fromNullable(
 				files.find((file) => Number(file.size ?? 0) > 0) ?? files[0],
 			);
@@ -1368,7 +1411,7 @@ const googleDriveFileMatchesTarget = (
 	file.parents?.length === 1 &&
 	file.parents[0] === input.parentId &&
 	(input.mimeType === GOOGLE_DRIVE_FOLDER_MIME_TYPE ||
-		file.appProperties?.capObjectKey === input.key);
+		googleDriveFileMatchesObjectKey(file, input.key));
 
 export const deleteGoogleDriveFile = (
 	config: GoogleDriveIntegrationConfig,
@@ -1418,9 +1461,7 @@ export const copyGoogleDriveFile = ({
 				body: JSON.stringify({
 					name: fileName,
 					parents: [parentId],
-					appProperties: {
-						capObjectKey: input.key,
-					},
+					appProperties: getGoogleDriveObjectKeyProperties(input.key, true),
 				}),
 			},
 			tokenStore,
