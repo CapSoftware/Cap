@@ -2766,14 +2766,16 @@ const ApiLive = HttpApiBuilder.api(Mobile.MobileApiContract).pipe(
 								serverEnv().APPLE_CLIENT_ID && serverEnv().APPLE_CLIENT_SECRET,
 							),
 							googleAuthAvailable: Boolean(serverEnv().GOOGLE_CLIENT_ID),
-							workosAuthAvailable: Boolean(serverEnv().WORKOS_CLIENT_ID),
+							workosAuthAvailable: Boolean(
+								serverEnv().WORKOS_CLIENT_ID && serverEnv().WORKOS_API_KEY,
+							),
 						}),
 					)
 					.handle("requestSession", ({ request, urlParams }) =>
 						withMappedErrors(
 							Effect.gen(function* () {
 								const user = yield* getCurrentUser;
-								if (Option.isNone(user)) {
+								if (Option.isNone(user) || urlParams.provider === "workos") {
 									const loginRedirectUrl =
 										Mobile.createMobileSessionLoginRedirectUrl({
 											deploymentOrigin: getDeploymentOrigin(),

@@ -94,6 +94,10 @@ export const createMobileSessionLoginRedirectUrl = ({
 		`${incomingUrl.pathname}${incomingUrl.search}`,
 		canonicalOrigin,
 	);
+	if (provider === "workos") {
+		continuationUrl.searchParams.delete("provider");
+		continuationUrl.searchParams.delete("organizationId");
+	}
 	const loginRedirectUrl = new URL("/login", canonicalOrigin);
 	loginRedirectUrl.searchParams.set("next", continuationUrl.toString());
 
