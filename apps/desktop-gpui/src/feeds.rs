@@ -14,21 +14,101 @@
 
 use std::time::{Duration, Instant};
 
-#[cfg(any(not(target_os = "macos"), test))]
 use std::sync::Arc;
 #[cfg(not(target_os = "macos"))]
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cap_recording::feeds::{
     camera::{self, CameraFeed},
     microphone::{self, MicrophoneFeed, MicrophoneSamples},
+};
+use futures_util::{
+    FutureExt as _,
+    future::{BoxFuture, Shared},
 };
 use gpui::{App, AppContext as _, Context, Entity, Global};
 use kameo::{Actor as _, actor::ActorRef};
 
 pub use cap_recording::feeds::camera::DeviceOrModelID;
 
+pub type InputReady =
+    Shared<BoxFuture<'static, Result<crate::store::RecordingDeviceSettings, String>>>;
+
+#[derive(Clone, Default)]
+pub struct InputReadiness {
+    pub camera: Option<InputReady>,
+    pub microphone: Option<InputReady>,
+}
+
+fn owned_input_readiness(
+    input: impl std::future::Future<Output = Result<crate::store::RecordingDeviceSettings, String>>
+    + Send
+    + 'static,
+    current_epoch: Arc<AtomicU64>,
+    epoch: u64,
+) -> InputReady {
+    async move {
+        let result = input.await;
+        if current_epoch.load(Ordering::Acquire) != epoch {
+            return Err("Device selection changed before it was ready".to_string());
+        }
+        result
+    }
+    .boxed()
+    .shared()
+}
+
 use crate::app_windows;
+
+#[cfg(target_os = "macos")]
+type PreviewCameraFrame = cap_recording::NativeCameraFrame;
+#[cfg(not(target_os = "macos"))]
+type PreviewCameraFrame = cap_recording::FFmpegVideoFrame;
+
+async fn attach_camera_preview_sender(
+    actor: &ActorRef<CameraFeed>,
+    sender: &flume::Sender<PreviewCameraFrame>,
+) -> Result<(), String> {
+    if sender.is_disconnected() {
+        return Err("Camera preview worker is unavailable".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    let result = actor.ask(camera::AddNativeSender(sender.clone())).await;
+    #[cfg(not(target_os = "macos"))]
+    let result = actor.ask(camera::AddSender(sender.clone())).await;
+    result.map_err(|error| error.to_string())
+}
+
+async fn camera_input_operation<T>(
+    gate: &tokio::sync::Mutex<()>,
+    current_epoch: &AtomicU64,
+    epoch: u64,
+    operation: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<Option<T>, String> {
+    let _operation = gate.lock().await;
+    if current_epoch.load(Ordering::Acquire) != epoch {
+        return Ok(None);
+    }
+    operation.await.map(Some)
+}
+
+fn configuration_result(
+    current_epoch: u64,
+    epoch: u64,
+    pending: bool,
+    error: Option<&str>,
+) -> Option<Result<(), String>> {
+    if current_epoch != epoch {
+        Some(Err(
+            "Device selection changed before the format was applied".into(),
+        ))
+    } else if pending {
+        None
+    } else {
+        Some(error.map_or(Ok(()), |error| Err(error.to_string())))
+    }
+}
 
 /// How the pickers map dB to a 0..1 bar: `DeviceListPanel` in `index.tsx`
 /// (`DB_SCALE = 40`, inverted, square-rooted). 1 = silence, 0 = full scale --
@@ -43,9 +123,531 @@ pub fn bar_level(db: f64) -> f64 {
     ((db + 60.0) / 60.0).clamp(0.0, 1.0)
 }
 
+#[cfg(not(target_os = "macos"))]
+enum CameraWorkerCommand {
+    Reset,
+    #[cfg(target_os = "linux")]
+    Record(RecordingCameraWorker),
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone)]
+pub struct CameraProcessingFactory {
+    commands: flume::Sender<CameraWorkerCommand>,
+    actor: ActorRef<CameraFeed>,
+    selected: DeviceOrModelID,
+    epoch: u64,
+    current_epoch: Arc<std::sync::atomic::AtomicU64>,
+    recording_active: Arc<AtomicBool>,
+    next_generation: Arc<std::sync::atomic::AtomicU64>,
+}
+
+#[cfg(target_os = "linux")]
+struct CameraRecordingReservation(Arc<AtomicBool>);
+
+#[cfg(target_os = "linux")]
+impl CameraRecordingReservation {
+    fn try_acquire(active: &Arc<AtomicBool>) -> Option<Self> {
+        active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self(active.clone()))
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for CameraRecordingReservation {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct RecordingCameraAttachment {
+    feed: ActorRef<CameraFeed>,
+    sender: flume::Sender<cap_recording::FFmpegVideoFrame>,
+    runtime: tokio::runtime::Handle,
+    _reservation: CameraRecordingReservation,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for RecordingCameraAttachment {
+    fn drop(&mut self) {
+        let feed = self.feed.clone();
+        let sender = self.sender.clone();
+        drop(self.runtime.spawn(async move {
+            let _ = feed.ask(camera::RemoveSender(sender)).await;
+        }));
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct RecordingCameraWorker {
+    frames: flume::Receiver<cap_recording::FFmpegVideoFrame>,
+    publisher: cap_recording::instant_recording::LinuxCameraPublisher,
+    processing: cap_recording::instant_recording::LinuxCameraProcessing,
+    epoch: u64,
+    current_epoch: Arc<std::sync::atomic::AtomicU64>,
+    generation: u64,
+    not_before: Instant,
+    _attachment: RecordingCameraAttachment,
+}
+
+#[cfg(target_os = "linux")]
+impl CameraProcessingFactory {
+    pub async fn subscribe(
+        &self,
+        feed: Arc<camera::CameraFeedLock>,
+        processing: cap_recording::instant_recording::LinuxCameraProcessing,
+    ) -> anyhow::Result<cap_recording::instant_recording::LinuxProcessedCameraSource> {
+        let info = feed.camera_info();
+        let matches = match &self.selected {
+            DeviceOrModelID::DeviceID(id) => info.device_id() == id,
+            DeviceOrModelID::ModelID(id) => info.model_id() == Some(id),
+        };
+        anyhow::ensure!(
+            matches && feed.id() == self.actor.id(),
+            "Processed camera factory does not match the locked camera"
+        );
+        anyhow::ensure!(
+            self.current_epoch.load(Ordering::Acquire) == self.epoch,
+            "Camera selection changed before recording"
+        );
+        let reservation = tokio::time::timeout(Duration::from_millis(1500), async {
+            loop {
+                if let Some(reservation) =
+                    CameraRecordingReservation::try_acquire(&self.recording_active)
+                {
+                    break reservation;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("A processed camera recording is already active"))?;
+        let (sender, frames) = flume::bounded(2);
+        let attachment = RecordingCameraAttachment {
+            feed: self.actor.clone(),
+            sender: sender.clone(),
+            runtime: tokio::runtime::Handle::current(),
+            _reservation: reservation,
+        };
+        anyhow::ensure!(
+            self.current_epoch.load(Ordering::Acquire) == self.epoch,
+            "Camera selection changed while waiting for recording processing"
+        );
+        let not_before = Instant::now();
+        let generation = self.next_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let (publisher, mut source) =
+            cap_recording::instant_recording::LinuxProcessedCameraSource::channel(
+                feed.clone(),
+                processing,
+                generation,
+                not_before,
+            );
+        tokio::time::timeout(
+            Duration::from_millis(1500),
+            feed.ask(camera::AddSender(sender)),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out attaching processed camera"))?
+        .map_err(|error| anyhow::anyhow!("Attaching processed camera: {error}"))?;
+        tokio::time::timeout(
+            Duration::from_millis(1500),
+            self.commands
+                .send_async(CameraWorkerCommand::Record(RecordingCameraWorker {
+                    frames,
+                    publisher,
+                    processing,
+                    epoch: self.epoch,
+                    current_epoch: self.current_epoch.clone(),
+                    generation,
+                    not_before,
+                    _attachment: attachment,
+                })),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("Camera processing worker command deadline exceeded"))?
+        .map_err(|_| anyhow::anyhow!("Camera preview processing worker is unavailable"))?;
+        source.wait_ready(Duration::from_secs(10)).await?;
+        anyhow::ensure!(
+            self.current_epoch.load(Ordering::Acquire) == self.epoch,
+            "Camera selection changed while preparing recording effects"
+        );
+        Ok(source)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl RecordingCameraWorker {
+    fn publish(
+        &self,
+        image: &gpui::RenderImage,
+        dims: (usize, usize),
+        timestamp: cap_timestamp::Timestamp,
+        mask: Option<cap_recording::instant_recording::LinuxCameraMaskReceipt>,
+    ) {
+        if self.publisher.is_cancelled() {
+            return;
+        }
+        match validate_recording_camera_frame(
+            timestamp,
+            self.not_before,
+            self.epoch,
+            self.current_epoch.load(Ordering::Acquire),
+        ) {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                self.publisher.fail(error);
+                return;
+            }
+        }
+        let Some(bytes) = image.as_bytes(0) else {
+            self.publisher
+                .fail("Processed camera pixels unavailable".to_string());
+            return;
+        };
+        self.publisher.publish(
+            cap_recording::instant_recording::LinuxProcessedCameraFrame {
+                bgra: Arc::from(bytes),
+                dimensions: (dims.0 as u32, dims.1 as u32),
+                stride: dims.0 * 4,
+                timestamp,
+                generation: self.generation,
+                processing: self.processing,
+                mask,
+            },
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn validate_recording_camera_frame(
+    timestamp: cap_timestamp::Timestamp,
+    not_before: Instant,
+    epoch: u64,
+    current_epoch: u64,
+) -> Result<bool, String> {
+    if epoch != current_epoch {
+        return Err("Camera selection changed during recording".to_string());
+    }
+    let cap_timestamp::Timestamp::Instant(captured_at) = timestamp else {
+        return Err("Camera capture timestamp is not monotonic".to_string());
+    };
+    Ok(captured_at >= not_before)
+}
+
+#[cfg(target_os = "linux")]
+fn checked_recording_blur(
+    status: &cap_camera_effects::BlurOutputStatus,
+    expected_mode: cap_camera_effects::BlurMode,
+    dimensions: (u32, u32),
+    now: Instant,
+) -> Result<Option<cap_recording::instant_recording::LinuxCameraMaskReceipt>, String> {
+    match status.applied_at(
+        now,
+        cap_recording::instant_recording::LINUX_CAMERA_MAX_MASK_AGE,
+    ) {
+        Ok(applied) if applied.mode == expected_mode && applied.output_dimensions == dimensions => {
+            Ok(Some(
+                cap_recording::instant_recording::LinuxCameraMaskReceipt {
+                    generation: applied.mask.generation,
+                    submitted_at: applied.mask.input_submitted_at,
+                    completed_at: applied.mask.inference_completed_at,
+                },
+            ))
+        }
+        Err(cap_camera_effects::BlurOutputUnavailable::Pending) => Ok(None),
+        other => Err(format!("Requested camera blur was not applied: {other:?}")),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn frozen_processing_state(
+    processing: cap_recording::instant_recording::LinuxCameraProcessing,
+) -> (u8, bool) {
+    use cap_recording::instant_recording::LinuxCameraBlur;
+    (
+        match processing.blur {
+            LinuxCameraBlur::Off => 0,
+            LinuxCameraBlur::Light => 1,
+            LinuxCameraBlur::Heavy => 2,
+        },
+        processing.mirrored,
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+struct CameraPreviewWorkerConfig {
+    frames: flume::Receiver<cap_recording::FFmpegVideoFrame>,
+    previews: flume::Sender<crate::camera_window::CameraPreviewFrame>,
+    commands: flume::Receiver<CameraWorkerCommand>,
+    mirrored: Arc<AtomicBool>,
+    active: Arc<AtomicBool>,
+    blur: Arc<AtomicU8>,
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
+    let CameraPreviewWorkerConfig {
+        frames: frame_rx,
+        previews: preview_tx,
+        commands: reset_rx,
+        mirrored,
+        active,
+        blur,
+    } = config;
+    let mut scaler = None;
+    let mut processor = None;
+    let mut previous_blur = 0;
+    let mut blur_failed = false;
+    #[cfg(target_os = "linux")]
+    let mut recording: Option<RecordingCameraWorker> = None;
+    loop {
+        #[cfg(target_os = "linux")]
+        if recording
+            .as_ref()
+            .is_some_and(|recording| recording.publisher.is_cancelled())
+        {
+            recording = None;
+            scaler = None;
+            processor = None;
+            previous_blur = 0;
+            blur_failed = false;
+        }
+        enum Event {
+            Frame(Result<cap_recording::FFmpegVideoFrame, flume::RecvError>),
+            Command(Result<CameraWorkerCommand, flume::RecvError>),
+        }
+        let input = &frame_rx;
+        #[cfg(target_os = "linux")]
+        let input = recording
+            .as_ref()
+            .map_or(input, |recording| &recording.frames);
+        let selector = flume::Selector::new()
+            .recv(input, Event::Frame)
+            .recv(&reset_rx, Event::Command);
+        #[cfg(target_os = "linux")]
+        let poll_cancellation = recording.is_some();
+        #[cfg(not(target_os = "linux"))]
+        let poll_cancellation = false;
+        let event = if poll_cancellation {
+            selector.wait_timeout(Duration::from_millis(50)).ok()
+        } else {
+            Some(selector.wait())
+        };
+        let mut frame = match event {
+            Some(Event::Frame(Ok(frame))) => frame,
+            Some(Event::Command(Ok(command))) => {
+                match command {
+                    CameraWorkerCommand::Reset =>
+                    {
+                        #[cfg(target_os = "linux")]
+                        if let Some(recording) = &recording {
+                            recording
+                                .publisher
+                                .fail("Camera preview was reset during recording".to_string());
+                        }
+                    }
+                    #[cfg(target_os = "linux")]
+                    CameraWorkerCommand::Record(next) => {
+                        if recording.is_some() {
+                            next.publisher
+                                .fail("Another processed camera lease is still active".to_string());
+                            continue;
+                        }
+                        recording = Some(next);
+                    }
+                }
+                scaler = None;
+                processor = None;
+                previous_blur = 0;
+                blur_failed = false;
+                continue;
+            }
+            Some(Event::Frame(Err(_)) | Event::Command(Err(_))) => break,
+            None => continue,
+        };
+        let processing_active = active.load(Ordering::Acquire);
+        #[cfg(target_os = "linux")]
+        let processing_active = processing_active || recording.is_some();
+        if !processing_active {
+            continue;
+        }
+        while let Ok(newer) = input.try_recv() {
+            frame = newer;
+        }
+        let requested_blur = blur.load(Ordering::Relaxed);
+        let requested_mirror = mirrored.load(Ordering::Relaxed);
+        #[cfg(target_os = "linux")]
+        let (requested_blur, requested_mirror) = if let Some(recording) = &recording {
+            match validate_recording_camera_frame(
+                frame.timestamp,
+                recording.not_before,
+                recording.epoch,
+                recording.current_epoch.load(Ordering::Acquire),
+            ) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(error) => {
+                    recording.publisher.fail(error);
+                    continue;
+                }
+            }
+            frozen_processing_state(recording.processing)
+        } else {
+            (requested_blur, requested_mirror)
+        };
+        if requested_blur != previous_blur {
+            processor = None;
+            blur_failed = false;
+            previous_blur = requested_blur;
+        }
+        let blur_mode = match requested_blur {
+            1 => Some(cap_camera_effects::BlurMode::Light),
+            2 => Some(cap_camera_effects::BlurMode::Heavy),
+            _ => None,
+        }
+        .filter(|_| !blur_failed && crate::camera_blur_portable::blur_allowed());
+        #[cfg(target_os = "linux")]
+        if requested_blur != 0
+            && blur_mode.is_none()
+            && let Some(recording) = &recording
+        {
+            recording
+                .publisher
+                .fail("Requested camera blur is unavailable".to_string());
+        }
+        let max_dims = blur_mode.map(|_| crate::camera_blur_portable::MAX_DIMS);
+        let Some((mut image, dims)) =
+            camera_preview_image(&frame.inner, &mut scaler, requested_mirror, max_dims)
+        else {
+            #[cfg(target_os = "linux")]
+            if let Some(recording) = &recording {
+                recording
+                    .publisher
+                    .fail("Camera frame conversion failed".to_string());
+            }
+            continue;
+        };
+        #[cfg(target_os = "linux")]
+        let mut applied_mask = None;
+        #[cfg(target_os = "linux")]
+        let mut effects_ready = requested_blur == 0;
+        if let Some(mode) = blur_mode
+            && !blur_failed
+        {
+            if processor.is_none() {
+                match crate::camera_blur_portable::PortableCameraBlur::new() {
+                    Ok(worker) => {
+                        tracing::info!("camera blur preview initialized");
+                        processor = Some(worker);
+                    }
+                    Err(error) => {
+                        tracing::warn!("camera blur preview unavailable: {error:#}");
+                        blur_failed = true;
+                        #[cfg(target_os = "linux")]
+                        if let Some(recording) = &recording {
+                            recording.publisher.fail(format!(
+                                "Requested camera blur initialization failed: {error:#}"
+                            ));
+                        }
+                    }
+                }
+            }
+            if let Some(worker) = processor.as_mut() {
+                #[cfg(target_os = "linux")]
+                let require_verified_output = recording.is_some();
+                #[cfg(not(target_os = "linux"))]
+                let require_verified_output = false;
+                let processed = if require_verified_output {
+                    worker
+                        .process_with_status(&image, dims, mode)
+                        .map(|(image, status)| (image, Some(status)))
+                } else {
+                    worker
+                        .process(&image, dims, mode)
+                        .map(|image| (image, None))
+                };
+                match processed {
+                    Ok((blurred, status)) => {
+                        image = blurred;
+                        #[cfg(not(target_os = "linux"))]
+                        drop(status);
+                        #[cfg(target_os = "linux")]
+                        if let Some(recording) = &recording {
+                            let applied = status
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    "Requested camera blur has no output receipt".to_string()
+                                })
+                                .and_then(|status| {
+                                    checked_recording_blur(
+                                        status,
+                                        mode,
+                                        (dims.0 as u32, dims.1 as u32),
+                                        Instant::now(),
+                                    )
+                                });
+                            match applied {
+                                Ok(mask) => {
+                                    effects_ready = mask.is_some();
+                                    applied_mask = mask;
+                                }
+                                Err(error) => recording.publisher.fail(error),
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!("camera blur preview stopped: {error:#}");
+                        processor = None;
+                        blur_failed = true;
+                        #[cfg(target_os = "linux")]
+                        if let Some(recording) = &recording {
+                            recording
+                                .publisher
+                                .fail(format!("Requested camera blur failed: {error:#}"));
+                        }
+                    }
+                }
+            }
+        }
+        #[cfg(target_os = "linux")]
+        if effects_ready && let Some(recording) = &recording {
+            recording.publish(&image, dims, frame.timestamp, applied_mask);
+        }
+        if active.load(Ordering::Acquire) {
+            match preview_tx.try_send(crate::camera_window::CameraPreviewFrame { image, dims }) {
+                Ok(()) | Err(flume::TrySendError::Full(_)) => {}
+                Err(flume::TrySendError::Disconnected(_)) => {
+                    #[cfg(target_os = "linux")]
+                    if recording.is_some() {
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
 pub struct Feeds {
     camera_actor: Option<ActorRef<CameraFeed>>,
+    camera_preview_sender: Option<flume::Sender<PreviewCameraFrame>>,
+    camera_input_gate: Arc<tokio::sync::Mutex<()>>,
+    mic_input_gate: Arc<tokio::sync::Mutex<()>>,
+    mic_input_epoch: Arc<AtomicU64>,
     mic_actor: Option<ActorRef<MicrophoneFeed>>,
+    camera_settings: Option<camera::CameraDeviceSettings>,
+    microphone_settings: Option<microphone::MicrophoneDeviceSettings>,
+    applied_settings: crate::store::RecordingDeviceSettings,
+    camera_input_pending: bool,
+    mic_input_pending: bool,
+    mic_input_released: bool,
+    microphone_error: Option<String>,
+    camera_ready: Option<InputReady>,
+    microphone_ready: Option<InputReady>,
     /// Selected camera; `Some` while the preview window should exist.
     pub camera: Option<SelectedCamera>,
     /// Selected microphone name.
@@ -65,7 +667,12 @@ pub struct Feeds {
     #[cfg(not(target_os = "macos"))]
     camera_preview_blur: Arc<AtomicU8>,
     #[cfg(not(target_os = "macos"))]
-    camera_preview_reset: Option<flume::Sender<()>>,
+    camera_preview_reset: Option<flume::Sender<CameraWorkerCommand>>,
+    camera_input_epoch: Arc<AtomicU64>,
+    #[cfg(target_os = "linux")]
+    camera_recording_active: Arc<AtomicBool>,
+    #[cfg(target_os = "linux")]
+    camera_recording_generation: Arc<std::sync::atomic::AtomicU64>,
     // Channel-holding tasks; dropping them ends the pumps.
     _frame_pump: Option<gpui::Task<()>>,
     _meter_pump: Option<gpui::Task<()>>,
@@ -77,6 +684,8 @@ pub struct Feeds {
 pub struct SelectedCamera {
     pub id: DeviceOrModelID,
     pub label: String,
+    pub device_id: String,
+    pub model_id: Option<cap_camera::ModelID>,
 }
 
 struct FeedsGlobal(Entity<Feeds>);
@@ -86,7 +695,20 @@ impl Feeds {
     pub fn init(cx: &mut App) -> Entity<Self> {
         let feeds = cx.new(|_| Self {
             camera_actor: None,
+            camera_preview_sender: None,
+            camera_input_gate: Arc::new(tokio::sync::Mutex::new(())),
+            mic_input_gate: Arc::new(tokio::sync::Mutex::new(())),
+            mic_input_epoch: Arc::new(AtomicU64::new(0)),
             mic_actor: None,
+            camera_settings: None,
+            microphone_settings: None,
+            applied_settings: crate::store::RecordingDeviceSettings::default(),
+            camera_input_pending: false,
+            mic_input_pending: false,
+            mic_input_released: false,
+            microphone_error: None,
+            camera_ready: None,
+            microphone_ready: None,
             camera: None,
             microphone: None,
             mic_level_db: -96.0,
@@ -102,6 +724,11 @@ impl Feeds {
             camera_preview_blur: Arc::new(AtomicU8::new(0)),
             #[cfg(not(target_os = "macos"))]
             camera_preview_reset: None,
+            camera_input_epoch: Arc::new(AtomicU64::new(0)),
+            #[cfg(target_os = "linux")]
+            camera_recording_active: Arc::new(AtomicBool::new(false)),
+            #[cfg(target_os = "linux")]
+            camera_recording_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             _frame_pump: None,
             _meter_pump: None,
             _mic_errors: None,
@@ -125,9 +752,51 @@ impl Feeds {
         self.camera_actor.clone().filter(|actor| actor.is_alive())
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn camera_processing_factory(&self) -> Option<CameraProcessingFactory> {
+        Some(CameraProcessingFactory {
+            commands: self.camera_preview_reset.clone()?,
+            actor: self.camera_actor()?,
+            selected: self.camera.as_ref()?.id.clone(),
+            epoch: self.camera_epoch,
+            current_epoch: self.camera_input_epoch.clone(),
+            recording_active: self.camera_recording_active.clone(),
+            next_generation: self.camera_recording_generation.clone(),
+        })
+    }
+
     pub fn mic_actor(&self) -> Option<ActorRef<MicrophoneFeed>> {
         self.microphone.as_ref()?;
         self.mic_actor.clone().filter(|actor| actor.is_alive())
+    }
+
+    pub fn input_readiness(&self) -> InputReadiness {
+        InputReadiness {
+            camera: self
+                .camera_ready
+                .clone()
+                .filter(|_| self.camera_actor().is_some()),
+            microphone: self
+                .microphone_ready
+                .clone()
+                .filter(|_| self.mic_actor().is_some()),
+        }
+    }
+
+    pub fn applied_device_settings(&self) -> crate::store::RecordingDeviceSettings {
+        self.applied_settings
+    }
+
+    pub fn requested_device_settings(&self) -> crate::store::RecordingDeviceSettings {
+        crate::store::RecordingDeviceSettings {
+            camera: self.camera_settings,
+            microphone: self.microphone_settings,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn set_camera_preview_rendering(&self, enabled: bool) -> bool {
+        self.camera_preview_active.swap(enabled, Ordering::AcqRel)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -147,11 +816,35 @@ impl Feeds {
     /// Select (or deselect) the camera. Opens/closes the preview window and
     /// points the app-scoped feed at the device.
     pub fn set_camera(&mut self, selection: Option<SelectedCamera>, cx: &mut Context<Self>) {
-        if self.camera == selection {
-            return;
+        let settings = selection.as_ref().and_then(|selection| {
+            crate::store::RecordingDeviceSettings::for_camera(
+                &selection.device_id,
+                selection.model_id.as_ref(),
+            )
+        });
+        self.set_camera_with_settings(selection, settings, cx);
+    }
+
+    pub fn set_camera_with_settings(
+        &mut self,
+        selection: Option<SelectedCamera>,
+        settings: Option<camera::CameraDeviceSettings>,
+        cx: &mut Context<Self>,
+    ) -> u64 {
+        if self.camera == selection
+            && self.camera_settings == settings
+            && self.camera_error.is_none()
+        {
+            return self.camera_epoch;
         }
         self.camera_epoch += 1;
+        self.camera_input_epoch
+            .store(self.camera_epoch, Ordering::Release);
         self.camera = selection.clone();
+        self.camera_ready = None;
+        self.camera_settings = settings;
+        self.applied_settings.camera = None;
+        self.camera_input_pending = false;
         self.camera_error = None;
         cx.notify();
 
@@ -159,17 +852,31 @@ impl Feeds {
             Some(selection) if !self.camera_preview_parked => {
                 self.start_camera_preview(selection, cx);
             }
-            Some(_) => {}
+            Some(_) => self.remove_camera_input(cx),
             None => {
-                if let Some(actor) = self.camera_actor.clone() {
-                    gpui_tokio::Tokio::spawn(cx, async move {
-                        let _ = actor.ask(camera::RemoveInput).await;
-                    })
-                    .detach();
-                }
+                self.remove_camera_input(cx);
                 cx.defer(app_windows::close_camera_window);
             }
         }
+        self.camera_epoch
+    }
+
+    pub fn camera_configuration_result(&self, epoch: u64) -> Option<Result<(), String>> {
+        configuration_result(
+            self.camera_epoch,
+            epoch,
+            self.camera_input_pending,
+            self.camera_error.as_deref(),
+        )
+    }
+
+    pub fn microphone_configuration_result(&self, epoch: u64) -> Option<Result<(), String>> {
+        configuration_result(
+            self.mic_epoch,
+            epoch,
+            self.mic_input_pending,
+            self.microphone_error.as_deref(),
+        )
     }
 
     pub fn park_camera_preview(&mut self, cx: &mut Context<Self>) {
@@ -178,24 +885,21 @@ impl Feeds {
         }
 
         self.camera_preview_parked = true;
+        self.applied_settings.camera = None;
+        self.camera_input_pending = false;
         self.camera_epoch += 1;
+        self.camera_input_epoch
+            .store(self.camera_epoch, Ordering::Release);
 
         #[cfg(not(target_os = "macos"))]
         {
             self.camera_preview_active.store(false, Ordering::Release);
             if let Some(reset) = &self.camera_preview_reset {
-                let _ = reset.try_send(());
+                let _ = reset.try_send(CameraWorkerCommand::Reset);
             }
         }
 
-        if let Some(actor) = self.camera_actor.clone() {
-            gpui_tokio::Tokio::spawn(cx, async move {
-                if let Err(error) = actor.ask(camera::RemoveInput).await {
-                    tracing::warn!("parking the camera preview: {error}");
-                }
-            })
-            .detach();
-        }
+        self.remove_camera_input(cx);
 
         tracing::info!("camera preview parked");
     }
@@ -210,36 +914,73 @@ impl Feeds {
         self.camera_preview_active.store(true, Ordering::Release);
         if let Some(selection) = self.camera.clone() {
             self.camera_epoch += 1;
+            self.camera_input_epoch
+                .store(self.camera_epoch, Ordering::Release);
             self.start_camera_preview(selection, cx);
             tracing::info!("camera preview resumed");
         }
     }
 
     fn start_camera_preview(&mut self, selection: SelectedCamera, cx: &mut Context<Self>) {
+        self.camera_error = None;
+        self.camera_input_pending = true;
+        self.applied_settings.camera = None;
         let epoch = self.camera_epoch;
+        let settings = self.camera_settings;
         let actor = self.ensure_camera_actor(cx);
+        let sender = self.camera_preview_sender.clone();
+        let gate = self.camera_input_gate.clone();
+        let current_epoch = self.camera_input_epoch.clone();
+        let readiness_epoch = current_epoch.clone();
         let set = gpui_tokio::Tokio::spawn(cx, async move {
-            let ready = actor
-                .ask(camera::SetInput {
-                    id: selection.id,
-                    settings: None,
+            let ready = camera_input_operation(&gate, &current_epoch, epoch, async {
+                let sender = sender
+                    .as_ref()
+                    .ok_or_else(|| "Camera preview subscription is unavailable".to_string())?;
+                attach_camera_preview_sender(&actor, sender).await?;
+                actor
+                    .ask(camera::SetInput {
+                        id: selection.id,
+                        settings,
+                    })
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .await?;
+            let camera = if let Some(ready) = ready {
+                let (_, info) = ready.await.map_err(|error| error.to_string())?;
+                Some(camera::CameraDeviceSettings {
+                    width: Some(info.width),
+                    height: Some(info.height),
+                    frame_rate: Some(info.frame_rate.0 as f32 / info.frame_rate.1 as f32),
                 })
-                .await
-                .map_err(|error| error.to_string())?;
-            ready.await.map_err(|error| error.to_string())
-        });
-        cx.spawn(async move |this, cx| {
-            let result = match set.await {
-                Ok(result) => result.map(|_| ()),
-                Err(error) => Err(error.to_string()),
+            } else {
+                None
             };
+            Ok::<_, String>(crate::store::RecordingDeviceSettings {
+                camera,
+                microphone: None,
+            })
+        });
+        let ready = owned_input_readiness(
+            async move { set.await.unwrap_or_else(|error| Err(error.to_string())) },
+            readiness_epoch,
+            epoch,
+        );
+        self.camera_ready = Some(ready.clone());
+        cx.spawn(async move |this, cx| {
+            let result = ready.await;
             this.update(cx, |this, cx| {
                 if this.camera_epoch != epoch {
                     return;
                 }
-                if let Err(error) = result {
-                    tracing::error!("camera input failed: {error}");
-                    this.camera_error = Some(error);
+                this.camera_input_pending = false;
+                match result {
+                    Ok(settings) => this.applied_settings.camera = settings.camera,
+                    Err(error) => {
+                        tracing::error!("camera input failed: {error}");
+                        this.camera_error = Some(error);
+                    }
                 }
                 cx.notify();
             })
@@ -249,47 +990,123 @@ impl Feeds {
         cx.defer(app_windows::open_camera_window);
     }
 
+    fn remove_camera_input(&self, cx: &Context<Self>) {
+        let Some(actor) = self.camera_actor.clone() else {
+            return;
+        };
+        let gate = self.camera_input_gate.clone();
+        let current_epoch = self.camera_input_epoch.clone();
+        let epoch = self.camera_epoch;
+        gpui_tokio::Tokio::spawn(cx, async move {
+            if let Err(error) = camera_input_operation(&gate, &current_epoch, epoch, async {
+                actor
+                    .ask(camera::RemoveInput)
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .await
+            {
+                tracing::warn!("releasing the camera preview input: {error}");
+            }
+        })
+        .detach();
+    }
+
     /// Select (or deselect) the microphone. The feed keeps running between
     /// recordings so the pickers and bar have a live level.
     pub fn set_microphone(&mut self, label: Option<String>, cx: &mut Context<Self>) {
-        if self.microphone == label {
-            return;
+        let settings = label
+            .as_deref()
+            .and_then(crate::store::RecordingDeviceSettings::for_microphone);
+        self.set_microphone_with_settings(label, settings, cx);
+    }
+
+    pub fn set_microphone_with_settings(
+        &mut self,
+        label: Option<String>,
+        settings: Option<microphone::MicrophoneDeviceSettings>,
+        cx: &mut Context<Self>,
+    ) -> u64 {
+        if self.microphone == label
+            && self.microphone_settings == settings
+            && !self.mic_input_released
+            && self.microphone_error.is_none()
+        {
+            return self.mic_epoch;
         }
         self.mic_epoch += 1;
+        self.mic_input_epoch
+            .store(self.mic_epoch, Ordering::Release);
         self.microphone = label.clone();
+        self.microphone_settings = settings;
+        self.applied_settings.microphone = None;
+        self.microphone_error = None;
+        self.mic_input_pending = label.is_some();
+        self.mic_input_released = false;
         self.mic_level_db = -96.0;
-        cx.notify();
-
+        let epoch = self.mic_epoch;
         let actor = self.ensure_mic_actor(cx);
-        match label {
-            Some(label) => {
-                gpui_tokio::Tokio::spawn(cx, async move {
-                    match actor
-                        .ask(microphone::SetInput {
-                            label: label.clone(),
-                            settings: None,
-                        })
+        let gate = self.mic_input_gate.clone();
+        let current_epoch = self.mic_input_epoch.clone();
+        let readiness_epoch = current_epoch.clone();
+        let task = gpui_tokio::Tokio::spawn(cx, async move {
+            let ready = camera_input_operation(&gate, &current_epoch, epoch, async {
+                if let Some(label) = label {
+                    actor
+                        .ask(microphone::SetInput { label, settings })
                         .await
-                    {
-                        Ok(ready) => {
-                            if let Err(error) = ready.await {
-                                tracing::warn!("microphone '{label}' failed to open: {error}");
-                            }
-                        }
-                        Err(error) => {
-                            tracing::warn!("microphone '{label}' set-input failed: {error}")
-                        }
+                        .map(Some)
+                        .map_err(|error| error.to_string())
+                } else {
+                    actor
+                        .ask(microphone::RemoveInput)
+                        .await
+                        .map(|()| None)
+                        .map_err(|error| error.to_string())
+                }
+            })
+            .await?;
+            let microphone = if let Some(Some(ready)) = ready {
+                let config = ready.await.map_err(|error| error.to_string())?;
+                Some(microphone::MicrophoneDeviceSettings {
+                    sample_rate: Some(config.sample_rate().0),
+                    channels: Some(config.channels()),
+                })
+            } else {
+                None
+            };
+            Ok::<_, String>(crate::store::RecordingDeviceSettings {
+                camera: None,
+                microphone,
+            })
+        });
+        let ready = owned_input_readiness(
+            async move { task.await.unwrap_or_else(|error| Err(error.to_string())) },
+            readiness_epoch,
+            epoch,
+        );
+        self.microphone_ready = Some(ready.clone());
+        cx.spawn(async move |this, cx| {
+            let result = ready.await;
+            this.update(cx, |this, cx| {
+                if this.mic_epoch != epoch {
+                    return;
+                }
+                this.mic_input_pending = false;
+                match result {
+                    Ok(settings) => this.applied_settings.microphone = settings.microphone,
+                    Err(error) => {
+                        tracing::warn!("microphone input failed: {error}");
+                        this.microphone_error = Some(error);
                     }
-                })
-                .detach();
-            }
-            None => {
-                gpui_tokio::Tokio::spawn(cx, async move {
-                    let _ = actor.ask(microphone::RemoveInput).await;
-                })
-                .detach();
-            }
-        }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+        epoch
     }
 
     /// Drop the live camera and microphone inputs without forgetting what was
@@ -301,17 +1118,27 @@ impl Feeds {
     /// frontend's `rawOptions` -- the pickers still show the device that was
     /// chosen -- so neither does this: only the hardware is released.
     pub fn release_inputs(&mut self, cx: &mut Context<Self>) {
-        if let Some(actor) = self.camera_actor.clone() {
-            gpui_tokio::Tokio::spawn(cx, async move {
-                if let Err(error) = actor.ask(camera::RemoveInput).await {
-                    tracing::warn!("releasing the camera feed: {error}");
-                }
-            })
-            .detach();
-        }
+        self.park_camera_preview(cx);
+        self.mic_epoch += 1;
+        self.mic_input_epoch
+            .store(self.mic_epoch, Ordering::Release);
+        self.mic_input_pending = false;
+        self.mic_input_released = true;
+        self.applied_settings.microphone = None;
+        self.microphone_ready = None;
         if let Some(actor) = self.mic_actor.clone() {
+            let gate = self.mic_input_gate.clone();
+            let current_epoch = self.mic_input_epoch.clone();
+            let epoch = self.mic_epoch;
             gpui_tokio::Tokio::spawn(cx, async move {
-                if let Err(error) = actor.ask(microphone::RemoveInput).await {
+                if let Err(error) = camera_input_operation(&gate, &current_epoch, epoch, async {
+                    actor
+                        .ask(microphone::RemoveInput)
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+                .await
+                {
                     tracing::warn!("releasing the microphone feed: {error}");
                 }
             })
@@ -322,19 +1149,23 @@ impl Feeds {
     }
 
     fn ensure_camera_actor(&mut self, cx: &mut Context<Self>) -> ActorRef<CameraFeed> {
-        if let Some(actor) = self.camera_actor.clone()
-            && actor.is_alive()
+        let actor = self.camera_actor.clone().filter(|actor| actor.is_alive());
+        if let Some(actor) = actor.as_ref()
+            && self
+                .camera_preview_sender
+                .as_ref()
+                .is_some_and(|sender| !sender.is_disconnected())
         {
-            return actor;
+            return actor.clone();
         }
 
         // kameo spawns onto the ambient tokio runtime; this method runs on
         // gpui's main thread, so enter the gpui_tokio runtime first or the
         // spawn panics (unwind across the objc frame aborts the process).
-        let actor = {
+        let actor = actor.unwrap_or_else(|| {
             let _runtime = gpui_tokio::Tokio::handle(cx).enter();
             CameraFeed::spawn(CameraFeed::default())
-        };
+        });
 
         // The preview channel: bounded(4) so a stalled UI drops frames instead
         // of ballooning; the pump drains on the main thread and hands each
@@ -342,15 +1173,7 @@ impl Feeds {
         #[cfg(target_os = "macos")]
         let pump = {
             let (frame_tx, frame_rx) = flume::bounded::<cap_recording::NativeCameraFrame>(4);
-            {
-                let actor = actor.clone();
-                gpui_tokio::Tokio::spawn(cx, async move {
-                    if let Err(error) = actor.ask(camera::AddNativeSender(frame_tx)).await {
-                        tracing::error!("attaching camera preview sender: {error}");
-                    }
-                })
-                .detach();
-            }
+            self.camera_preview_sender = Some(frame_tx);
 
             cx.spawn(async move |_this, cx| {
                 while let Ok(frame) = frame_rx.recv_async().await {
@@ -362,8 +1185,9 @@ impl Feeds {
         #[cfg(not(target_os = "macos"))]
         let pump = {
             let (frame_tx, frame_rx) = flume::bounded::<cap_recording::FFmpegVideoFrame>(4);
+            self.camera_preview_sender = Some(frame_tx);
             let (preview_tx, preview_rx) = flume::bounded(2);
-            let (reset_tx, reset_rx) = flume::bounded(1);
+            let (reset_tx, reset_rx) = flume::bounded(4);
             self.camera_preview_reset = Some(reset_tx);
             let mirrored = self.camera_preview_mirrored.clone();
             let active = self.camera_preview_active.clone();
@@ -371,101 +1195,17 @@ impl Feeds {
             if let Err(error) = std::thread::Builder::new()
                 .name("camera-preview".into())
                 .spawn(move || {
-                    let mut scaler = None;
-                    let mut processor = None;
-                    let mut previous_blur = 0;
-                    let mut blur_failed = false;
-                    loop {
-                        let received = flume::Selector::new()
-                            .recv(&frame_rx, |result| result.map(Some))
-                            .recv(&reset_rx, |result| result.map(|()| None))
-                            .wait();
-                        let mut frame = match received {
-                            Ok(Some(frame)) => frame,
-                            Ok(None) => {
-                                scaler = None;
-                                processor = None;
-                                previous_blur = 0;
-                                blur_failed = false;
-                                continue;
-                            }
-                            Err(_) => break,
-                        };
-                        if !active.load(Ordering::Acquire) {
-                            continue;
-                        }
-                        while let Ok(newer) = frame_rx.try_recv() {
-                            frame = newer;
-                        }
-                        let requested_blur = blur.load(Ordering::Relaxed);
-                        if requested_blur != previous_blur {
-                            processor = None;
-                            blur_failed = false;
-                            previous_blur = requested_blur;
-                        }
-                        let blur_mode = match requested_blur {
-                            1 => Some(cap_camera_effects::BlurMode::Light),
-                            2 => Some(cap_camera_effects::BlurMode::Heavy),
-                            _ => None,
-                        }
-                        .filter(|_| !blur_failed && crate::camera_blur_portable::blur_allowed());
-                        let max_dims = blur_mode.map(|_| crate::camera_blur_portable::MAX_DIMS);
-                        let Some((mut image, dims)) = camera_preview_image(
-                            &frame.inner,
-                            &mut scaler,
-                            mirrored.load(Ordering::Relaxed),
-                            max_dims,
-                        ) else {
-                            continue;
-                        };
-                        if let Some(mode) = blur_mode
-                            && !blur_failed
-                        {
-                            if processor.is_none() {
-                                match crate::camera_blur_portable::PortableCameraBlur::new() {
-                                    Ok(worker) => {
-                                        tracing::info!("camera blur preview initialized");
-                                        processor = Some(worker);
-                                    }
-                                    Err(error) => {
-                                        tracing::warn!(
-                                            "camera blur preview unavailable: {error:#}"
-                                        );
-                                        blur_failed = true;
-                                    }
-                                }
-                            }
-                            if let Some(worker) = processor.as_mut() {
-                                match worker.process(&image, dims, mode) {
-                                    Ok(blurred) => image = blurred,
-                                    Err(error) => {
-                                        tracing::warn!("camera blur preview stopped: {error:#}");
-                                        processor = None;
-                                        blur_failed = true;
-                                    }
-                                }
-                            }
-                        }
-                        match preview_tx
-                            .try_send(crate::camera_window::CameraPreviewFrame { image, dims })
-                        {
-                            Ok(()) | Err(flume::TrySendError::Full(_)) => {}
-                            Err(flume::TrySendError::Disconnected(_)) => break,
-                        }
-                    }
+                    run_camera_preview_worker(CameraPreviewWorkerConfig {
+                        frames: frame_rx,
+                        previews: preview_tx,
+                        commands: reset_rx,
+                        mirrored,
+                        active,
+                        blur,
+                    });
                 })
             {
                 tracing::error!("starting camera preview worker: {error}");
-            }
-
-            {
-                let actor = actor.clone();
-                gpui_tokio::Tokio::spawn(cx, async move {
-                    if let Err(error) = actor.ask(camera::AddSender(frame_tx)).await {
-                        tracing::error!("attaching camera preview sender: {error}");
-                    }
-                })
-                .detach();
             }
 
             cx.spawn(async move |_this, cx| {
@@ -684,6 +1424,349 @@ fn db_fs(samples: &MicrophoneSamples) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn same_device_format_change_discards_queued_previous_configuration() {
+        let gate = tokio::sync::Mutex::new(());
+        let current = AtomicU64::new(1);
+        let guard = gate.lock().await;
+        let first = camera_input_operation(&gate, &current, 1, async {
+            Ok((
+                "same-device",
+                camera::CameraDeviceSettings {
+                    width: Some(1280),
+                    height: Some(720),
+                    frame_rate: Some(30.),
+                },
+            ))
+        });
+        tokio::pin!(first);
+        assert!(futures_util::poll!(&mut first).is_pending());
+        current.store(2, Ordering::Release);
+        let second = camera_input_operation(&gate, &current, 2, async {
+            Ok((
+                "same-device",
+                camera::CameraDeviceSettings {
+                    width: Some(1920),
+                    height: Some(1080),
+                    frame_rate: Some(60.),
+                },
+            ))
+        });
+        tokio::pin!(second);
+        assert!(futures_util::poll!(&mut second).is_pending());
+        drop(guard);
+        assert_eq!(first.await.unwrap(), None);
+        let (device, settings) = second.await.unwrap().unwrap();
+        assert_eq!(device, "same-device");
+        assert_eq!(settings.width, Some(1920));
+        assert_eq!(settings.frame_rate, Some(60.));
+        assert!(configuration_result(2, 1, false, None).unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn input_readiness_rejects_late_ack_for_preview_and_recording_waiters() {
+        let current = Arc::new(AtomicU64::new(7));
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let ready = owned_input_readiness(
+            async move { receive.await.map_err(|error| error.to_string()) },
+            current.clone(),
+            7,
+        );
+        let mut recording_waiter = ready.clone();
+        assert!(futures_util::poll!(&mut recording_waiter).is_pending());
+        current.store(8, Ordering::Release);
+        send.send(crate::store::RecordingDeviceSettings::default())
+            .unwrap();
+        assert!(ready.await.unwrap_err().contains("selection changed"));
+        assert!(recording_waiter.await.is_err());
+        let applied = crate::store::RecordingDeviceSettings {
+            camera: Some(camera::CameraDeviceSettings {
+                width: Some(1280),
+                height: Some(720),
+                frame_rate: Some(29.97),
+            }),
+            microphone: None,
+        };
+        let ready = owned_input_readiness(async move { Ok(applied) }, current, 8);
+        assert_eq!(ready.clone().await.unwrap(), applied);
+        assert_eq!(ready.await.unwrap(), applied);
+    }
+
+    #[test]
+    fn input_configuration_status_never_reports_pending_or_failed_as_ready() {
+        assert_eq!(configuration_result(3, 3, true, None), None);
+        assert_eq!(
+            configuration_result(3, 3, false, Some("unavailable")),
+            Some(Err("unavailable".into()))
+        );
+        assert_eq!(configuration_result(3, 3, false, None), Some(Ok(())));
+        assert!(configuration_result(4, 3, false, None).unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn camera_preview_subscription_survives_removal_and_reattaches_once() {
+        let actor = CameraFeed::spawn(CameraFeed::default());
+        let (sender, receiver) = flume::bounded(1);
+        attach_camera_preview_sender(&actor, &sender).await.unwrap();
+        assert_eq!(receiver.sender_count(), 2);
+
+        actor.ask(camera::RemoveInput).await.unwrap();
+        assert_eq!(receiver.sender_count(), 1);
+        assert!(!receiver.is_disconnected());
+
+        attach_camera_preview_sender(&actor, &sender).await.unwrap();
+        attach_camera_preview_sender(&actor, &sender).await.unwrap();
+        assert_eq!(receiver.sender_count(), 2);
+        drop(sender);
+        assert!(!receiver.is_disconnected());
+        actor.ask(camera::RemoveInput).await.unwrap();
+        assert!(receiver.is_disconnected());
+        actor.stop_gracefully().await.unwrap();
+        actor.wait_for_shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn camera_preview_reconnect_waits_for_started_removal() {
+        let actor = CameraFeed::spawn(CameraFeed::default());
+        let (sender, receiver) = flume::bounded(1);
+        attach_camera_preview_sender(&actor, &sender).await.unwrap();
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        let epoch = Arc::new(AtomicU64::new(1));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let removal = tokio::spawn({
+            let actor = actor.clone();
+            let gate = gate.clone();
+            let epoch = epoch.clone();
+            async move {
+                camera_input_operation(&gate, &epoch, 1, async {
+                    started_tx.send(()).unwrap();
+                    release_rx.await.unwrap();
+                    actor
+                        .ask(camera::RemoveInput)
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+                .await
+            }
+        });
+        started_rx.await.unwrap();
+        epoch.store(2, Ordering::Release);
+        let reconnect = camera_input_operation(
+            &gate,
+            &epoch,
+            2,
+            attach_camera_preview_sender(&actor, &sender),
+        );
+        tokio::pin!(reconnect);
+        assert!(futures_util::poll!(&mut reconnect).is_pending());
+        release_tx.send(()).unwrap();
+        assert_eq!(removal.await.unwrap().unwrap(), Some(()));
+        assert_eq!(reconnect.await.unwrap(), Some(()));
+        assert_eq!(receiver.sender_count(), 2);
+        actor.stop_gracefully().await.unwrap();
+        actor.wait_for_shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn camera_preview_stale_removal_cannot_erase_new_subscription() {
+        let actor = CameraFeed::spawn(CameraFeed::default());
+        let (sender, receiver) = flume::bounded(1);
+        let gate = tokio::sync::Mutex::new(());
+        let epoch = AtomicU64::new(2);
+        let stale_removal = camera_input_operation(&gate, &epoch, 1, async {
+            actor
+                .ask(camera::RemoveInput)
+                .await
+                .map_err(|error| error.to_string())
+        });
+        assert_eq!(
+            camera_input_operation(
+                &gate,
+                &epoch,
+                2,
+                attach_camera_preview_sender(&actor, &sender),
+            )
+            .await
+            .unwrap(),
+            Some(())
+        );
+        assert_eq!(stale_removal.await.unwrap(), None);
+        drop(sender);
+        assert!(!receiver.is_disconnected());
+        actor.stop_gracefully().await.unwrap();
+        actor.wait_for_shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn camera_preview_failed_attachment_releases_input_gate() {
+        let actor = CameraFeed::spawn(CameraFeed::default());
+        let (sender, receiver) = flume::bounded(1);
+        drop(receiver);
+        let gate = tokio::sync::Mutex::new(());
+        let epoch = AtomicU64::new(1);
+        let error = camera_input_operation(
+            &gate,
+            &epoch,
+            1,
+            attach_camera_preview_sender(&actor, &sender),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "Camera preview worker is unavailable");
+        let (sender, receiver) = flume::bounded(1);
+        assert_eq!(
+            camera_input_operation(
+                &gate,
+                &epoch,
+                1,
+                attach_camera_preview_sender(&actor, &sender),
+            )
+            .await
+            .unwrap(),
+            Some(())
+        );
+        assert_eq!(receiver.sender_count(), 2);
+        actor.stop_gracefully().await.unwrap();
+        actor.wait_for_shutdown().await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recording_blur_pending_failure_stale_and_wrong_effect_cannot_certify_pixels() {
+        use cap_camera_effects::{
+            BlurFailure, BlurMaskReceipt, BlurMaskStatus, BlurMode, BlurOutputStatus,
+        };
+        let now = Instant::now();
+        let mut status = BlurOutputStatus {
+            mode: BlurMode::Light,
+            output_sequence: 1,
+            output_dimensions: (4, 2),
+            mask: BlurMaskStatus::Pending,
+        };
+        assert!(
+            checked_recording_blur(&status, BlurMode::Light, (4, 2), now)
+                .unwrap()
+                .is_none()
+        );
+        for failure in [
+            BlurFailure::Inference("failed".into()),
+            BlurFailure::Readback("failed".into()),
+        ] {
+            status.mask = BlurMaskStatus::Failed(failure);
+            assert!(checked_recording_blur(&status, BlurMode::Light, (4, 2), now).is_err());
+        }
+        status.mask = BlurMaskStatus::Ready(BlurMaskReceipt {
+            generation: 7,
+            input_submitted_at: now,
+            inference_completed_at: now,
+            input_dimensions: (4, 2),
+        });
+        let applied = checked_recording_blur(&status, BlurMode::Light, (4, 2), now)
+            .unwrap()
+            .unwrap();
+        assert_eq!(applied.generation, 7);
+        assert_eq!(applied.submitted_at, now);
+        assert!(checked_recording_blur(&status, BlurMode::Heavy, (4, 2), now).is_err());
+        assert!(checked_recording_blur(&status, BlurMode::Light, (2, 4), now).is_err());
+        assert!(
+            checked_recording_blur(
+                &status,
+                BlurMode::Light,
+                (4, 2),
+                now + cap_recording::instant_recording::LINUX_CAMERA_MAX_MASK_AGE
+                    + Duration::from_millis(1)
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recording_camera_reservation_releases_only_its_owned_attempt() {
+        let active = Arc::new(AtomicBool::new(false));
+        let first = CameraRecordingReservation::try_acquire(&active).unwrap();
+        assert!(active.load(Ordering::Acquire));
+        assert!(CameraRecordingReservation::try_acquire(&active).is_none());
+        assert!(active.load(Ordering::Acquire));
+        drop(first);
+        assert!(!active.load(Ordering::Acquire));
+        let restarted = CameraRecordingReservation::try_acquire(&active).unwrap();
+        assert!(CameraRecordingReservation::try_acquire(&active).is_none());
+        drop(restarted);
+        assert!(!active.load(Ordering::Acquire));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recording_camera_rejects_queued_frames_and_changed_selection() {
+        let old = Instant::now();
+        let subscribed = old + Duration::from_millis(1);
+        assert_eq!(
+            validate_recording_camera_frame(
+                cap_timestamp::Timestamp::Instant(old),
+                subscribed,
+                7,
+                7
+            ),
+            Ok(false)
+        );
+        assert_eq!(
+            validate_recording_camera_frame(
+                cap_timestamp::Timestamp::Instant(subscribed),
+                subscribed,
+                7,
+                7
+            ),
+            Ok(true)
+        );
+        assert!(
+            validate_recording_camera_frame(
+                cap_timestamp::Timestamp::Instant(subscribed),
+                subscribed,
+                7,
+                8
+            )
+            .is_err()
+        );
+        assert!(
+            validate_recording_camera_frame(
+                cap_timestamp::Timestamp::Instant(old),
+                subscribed,
+                7,
+                8
+            )
+            .is_err()
+        );
+        assert!(
+            validate_recording_camera_frame(
+                cap_timestamp::Timestamp::SystemTime(std::time::SystemTime::now()),
+                subscribed,
+                7,
+                7,
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recording_processing_keeps_exact_mirror_and_light_heavy_identity() {
+        use cap_recording::instant_recording::{LinuxCameraBlur, LinuxCameraProcessing};
+        for (blur, encoded) in [
+            (LinuxCameraBlur::Off, 0),
+            (LinuxCameraBlur::Light, 1),
+            (LinuxCameraBlur::Heavy, 2),
+        ] {
+            for mirrored in [false, true] {
+                assert_eq!(
+                    frozen_processing_state(LinuxCameraProcessing { mirrored, blur }),
+                    (encoded, mirrored)
+                );
+            }
+        }
+    }
 
     /// Both level mappings keep the web app's orientation: `picker_level` is 1
     /// at silence (it is the overlay's *right* offset), `bar_level` is 0 at

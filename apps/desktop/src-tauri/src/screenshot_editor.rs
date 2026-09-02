@@ -1142,7 +1142,11 @@ async fn recognize_screenshot_ocr_image(
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 async fn recognize_screenshot_ocr_image(
-    _image: ScreenshotOcrImage,
+    ScreenshotOcrImage {
+        bgra: _bgra,
+        width: _width,
+        height: _height,
+    }: ScreenshotOcrImage,
 ) -> Result<ScreenshotOcrResult, String> {
     Err("OCR is only available on macOS and Windows".to_string())
 }

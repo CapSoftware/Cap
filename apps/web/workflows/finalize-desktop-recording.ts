@@ -7,6 +7,11 @@ import { and, eq } from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
 import { FatalError, sleep } from "workflow";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import { reconcileDesktopRecordingJob } from "@/lib/desktop-recording-job-status";
+import {
+	type RecordingVerification,
+	readCompletedRecordingManifest,
+} from "@/lib/desktop-recording-verification";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota-cache";
 import {
 	createMediaServerCapacityError,
@@ -19,6 +24,7 @@ import { runWorkflowPromise } from "@/lib/workflow-runtime";
 interface FinalizeDesktopRecordingWorkflowPayload {
 	videoId: string;
 	userId: User.UserId;
+	verification?: RecordingVerification;
 }
 
 type DesktopSegmentsOutputUpload =
@@ -39,6 +45,9 @@ type DesktopSegmentsOutputUpload =
 	  };
 
 interface DesktopSegmentsMuxBody {
+	manifestSha256?: string;
+	expectedDuration?: number;
+	outputVerificationUrl: string;
 	videoId: string;
 	userId: string;
 	outputPresignedUrl: string;
@@ -55,7 +64,7 @@ interface DesktopSegmentsMuxBody {
 
 const MEDIA_SERVER_START_MAX_ATTEMPTS = 8;
 const MEDIA_SERVER_START_RETRY_BASE_MS = 15_000;
-const MEDIA_SERVER_COMPLETION_MAX_ATTEMPTS = 720;
+const MEDIA_SERVER_COMPLETION_MAX_ATTEMPTS = 1_440;
 const MEDIA_SERVER_COMPLETION_POLL_INTERVAL_MS = 5_000;
 const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
 const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
@@ -134,7 +143,7 @@ export async function finalizeDesktopRecordingWorkflow(
 ): Promise<{ success: true; jobId?: string }> {
 	"use workflow";
 
-	const { videoId, userId } = payload;
+	const { videoId, userId, verification } = payload;
 
 	try {
 		await validateDesktopSegmentsRecording(videoId, userId);
@@ -147,8 +156,15 @@ export async function finalizeDesktopRecordingWorkflow(
 		for (let attempt = 0; ; attempt++) {
 			try {
 				await markMuxProcessing(videoId);
-				const jobId = await startDesktopSegmentsMuxJob(videoId, userId);
-				await waitForDesktopSegmentsMuxCompletion(videoId);
+				const jobId =
+					verification?.artifact.kind === "mp4"
+						? await startDesktopMp4VerificationJob(
+								videoId,
+								userId,
+								verification,
+							)
+						: await startDesktopSegmentsMuxJob(videoId, userId);
+				await waitForDesktopSegmentsMuxCompletion(videoId, jobId);
 				await queueFinalizedRecordingTranscription(videoId, userId);
 				return { success: true, jobId };
 			} catch (error) {
@@ -337,7 +353,7 @@ async function buildDesktopSegmentsMuxBody(
 		throw new Error("Invalid segment manifest JSON");
 	}
 
-	let manifest = await Schema.decodeUnknown(Video.SegmentManifest)(parsed)
+	const manifest = await Schema.decodeUnknown(Video.SegmentManifest)(parsed)
 		.pipe(Effect.mapError(() => new Error("Invalid segment manifest format")))
 		.pipe(runWorkflowPromise);
 
@@ -346,18 +362,14 @@ async function buildDesktopSegmentsMuxBody(
 	}
 
 	if (!manifest.is_complete) {
-		manifest = {
-			...manifest,
-			is_complete: true,
-		};
-		const body = JSON.stringify(manifest, null, 2);
-		await bucket
-			.putObject(segSource.getManifestKey(), body, {
-				contentType: "application/json",
-				contentLength: Buffer.byteLength(body),
-			})
-			.pipe(runWorkflowPromise);
+		throw new Error("Segment manifest is not marked as complete");
 	}
+	const completedManifest = [
+		...manifest.video_segments,
+		...manifest.audio_segments,
+	].every((entry) => typeof entry !== "number")
+		? readCompletedRecordingManifest(manifestJson)
+		: undefined;
 
 	const videoInitUrl = await bucket
 		.getSignedObjectUrl(segSource.getVideoInitKey(), {
@@ -402,6 +414,11 @@ async function buildDesktopSegmentsMuxBody(
 	}
 
 	const outputKey = `${userId}/${videoId}/result.mp4`;
+	const outputVerificationUrl = await bucket
+		.getInternalSignedObjectUrl(outputKey, {
+			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
+		})
+		.pipe(runWorkflowPromise);
 	const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
 	const previewGifKey = `${userId}/${videoId}/preview/animated-preview.gif`;
 	const env = serverEnv();
@@ -481,6 +498,9 @@ async function buildDesktopSegmentsMuxBody(
 	}
 
 	return {
+		manifestSha256: completedManifest?.manifestSha256,
+		expectedDuration: completedManifest?.duration,
+		outputVerificationUrl,
 		videoId,
 		userId,
 		outputPresignedUrl,
@@ -494,6 +514,87 @@ async function buildDesktopSegmentsMuxBody(
 		webhookUrl: `${webhookBaseUrl}/api/webhooks/media-server/progress?retryable=true`,
 		webhookSecret: webhookSecret || undefined,
 	};
+}
+
+async function startDesktopMp4VerificationJob(
+	videoId: string,
+	userId: User.UserId,
+	verification: RecordingVerification,
+): Promise<string> {
+	"use step";
+
+	if (verification.artifact.kind !== "mp4") {
+		throw new FatalError("An MP4 verification identity is required");
+	}
+	const [video] = await db()
+		.select()
+		.from(videos)
+		.where(
+			and(
+				eq(videos.id, Video.VideoId.make(videoId)),
+				eq(videos.ownerId, userId),
+			),
+		);
+	if (!video || video.source.type !== "desktopMP4") {
+		throw new FatalError("Completed desktop recording does not exist");
+	}
+	const [bucket] = await Storage.getAccessForVideo(
+		decodeStorageVideo(video),
+	).pipe(runWorkflowPromise);
+	const key = `${userId}/${videoId}/result.mp4`;
+	const head = await bucket.headObject(key).pipe(runWorkflowPromise);
+	if (
+		head.ETag !== verification.artifact.objectIdentity ||
+		head.ContentLength !== verification.artifact.fileSize
+	) {
+		throw new Error(
+			"Uploaded recording does not match the completed local file",
+		);
+	}
+	const videoUrl = await bucket
+		.getInternalSignedObjectUrl(key, {
+			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
+		})
+		.pipe(runWorkflowPromise);
+	const env = serverEnv();
+	if (!env.MEDIA_SERVER_URL || !env.MEDIA_SERVER_WEBHOOK_SECRET) {
+		throw new Error("Recording content verification is not configured");
+	}
+	const webhookBaseUrl = env.MEDIA_SERVER_WEBHOOK_URL || env.WEB_URL;
+	const response = await fetch(
+		`${env.MEDIA_SERVER_URL}/video/verify-recording`,
+		{
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"x-media-server-secret": env.MEDIA_SERVER_WEBHOOK_SECRET,
+			},
+			body: JSON.stringify({
+				videoId,
+				userId,
+				videoUrl,
+				fileSize: verification.artifact.fileSize,
+				duration: verification.artifact.duration,
+				requiredAudio: verification.requiredAudio,
+				objectIdentity: verification.artifact.objectIdentity,
+				webhookUrl: getMediaServerWebhookUrl(
+					webhookBaseUrl,
+					"/api/webhooks/media-server/progress?retryable=true",
+				),
+				webhookSecret: env.MEDIA_SERVER_WEBHOOK_SECRET,
+			}),
+			signal: AbortSignal.timeout(30_000),
+		},
+	);
+	if (!response.ok) {
+		throw new Error(
+			`Failed to start recording verification: ${response.status}`,
+		);
+	}
+	const result: { jobId?: string } = await response.json();
+	if (!result.jobId)
+		throw new Error("Media server did not return a verification job id");
+	return result.jobId;
 }
 
 async function startDesktopSegmentsMuxJob(
@@ -566,6 +667,7 @@ async function startDesktopSegmentsMuxJob(
 
 async function waitForDesktopSegmentsMuxCompletion(
 	videoId: string,
+	jobId: string,
 ): Promise<void> {
 	"use step";
 
@@ -630,6 +732,21 @@ async function waitForDesktopSegmentsMuxCompletion(
 		]
 			.filter(Boolean)
 			.join(" ");
+
+		const env = serverEnv();
+		const mediaServerUrl = env.MEDIA_SERVER_URL;
+		if (mediaServerUrl && attempt % 3 === 0) {
+			await reconcileDesktopRecordingJob({
+				videoId,
+				jobId,
+				mediaServerUrl,
+				webhookUrl: getMediaServerWebhookUrl(
+					env.MEDIA_SERVER_WEBHOOK_URL || env.WEB_URL,
+					"/api/webhooks/media-server/progress?retryable=true",
+				),
+				secret: env.MEDIA_SERVER_WEBHOOK_SECRET,
+			});
+		}
 	}
 
 	throw new Error(`Segment muxing timed out while ${lastStatus}`);

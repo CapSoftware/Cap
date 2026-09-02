@@ -5,6 +5,7 @@ use specta::Type;
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
+    io::Write,
     path::{Path, PathBuf},
 };
 use tracing::{debug, info, warn};
@@ -186,9 +187,64 @@ impl RecordingMeta {
     }
 
     pub fn save_for_project(&self) -> Result<(), Either<serde_json::Error, std::io::Error>> {
-        let meta_path = &self.project_path.join("recording-meta.json");
-        let meta = serde_json::to_string_pretty(&self).map_err(Either::Left)?;
-        std::fs::write(meta_path, meta).map_err(Either::Right)?;
+        self.save_for_project_with(|file, bytes| {
+            file.write_all(bytes)?;
+            file.sync_all()
+        })
+    }
+
+    fn save_for_project_with(
+        &self,
+        prepare: impl FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+    ) -> Result<(), Either<serde_json::Error, std::io::Error>> {
+        let meta = serde_json::to_string_pretty(self).map_err(Either::Left)?;
+        let meta_path = self.project_path.join("recording-meta.json");
+        let permissions = match std::fs::symlink_metadata(&meta_path) {
+            Ok(metadata) if !metadata.is_file() => {
+                return Err(Either::Right(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Recording metadata must be a regular file",
+                )));
+            }
+            Ok(metadata) if metadata.permissions().readonly() => {
+                return Err(Either::Right(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Recording metadata is read-only",
+                )));
+            }
+            Ok(metadata) => Some(metadata.permissions()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(Either::Right(error)),
+        };
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".recording-meta-")
+            .suffix(".json.tmp")
+            .tempfile_in(&self.project_path)
+            .map_err(Either::Right)?;
+        if let Some(permissions) = permissions {
+            temporary
+                .as_file()
+                .set_permissions(permissions)
+                .map_err(Either::Right)?;
+        }
+        prepare(temporary.as_file_mut(), meta.as_bytes()).map_err(Either::Right)?;
+        #[cfg(windows)]
+        {
+            // tempfile 3.23 lacks Rust's Windows rename fallback for open readers.
+            let (file, path) = temporary
+                .keep()
+                .map_err(|error| Either::Right(error.error))?;
+            let mut path = tempfile::TempPath::from_path(path);
+            std::fs::rename(&path, &meta_path).map_err(Either::Right)?;
+            path.disable_cleanup(true);
+            drop(file);
+        }
+        #[cfg(not(windows))]
+        drop(
+            temporary
+                .persist(&meta_path)
+                .map_err(|error| Either::Right(error.error))?,
+        );
         Ok(())
     }
 
@@ -365,6 +421,82 @@ impl StudioRecordingMeta {
                 .clone()
                 .unwrap_or(StudioRecordingStatus::Complete),
         }
+    }
+
+    pub fn ensure_ordinary_media_access(&self, project_path: &Path) -> Result<(), String> {
+        if let StudioRecordingStatus::Failed { error } = self.status() {
+            return Err(format!(
+                "This recording failed: {error}. Its original files are preserved and may contain incomplete tracks. Open the recording folder to inspect them."
+            ));
+        }
+
+        let path = project_path.join("recording-diagnostics.json");
+        let raw = match std::fs::read(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(format!(
+                    "Cannot verify preserved recording diagnostics: {error}. Original files are unchanged."
+                ));
+            }
+        };
+        let diagnostics: serde_json::Value = serde_json::from_slice(&raw).map_err(|error| {
+            format!("Cannot verify preserved recording diagnostics: {error}. Original files are unchanged.")
+        })?;
+        let failed = diagnostics
+            .get("segments")
+            .and_then(serde_json::Value::as_array)
+            .is_none_or(|segments| {
+                segments.iter().any(|segment| {
+                    segment
+                        .get("trackFailures")
+                        .and_then(serde_json::Value::as_array)
+                        .is_none_or(|failures| !failures.is_empty())
+                })
+            });
+        if failed && self.legacy_omitted_track_failures(&diagnostics).is_none() {
+            return Err(
+                "This recording retains a requested-track failure or incomplete diagnostics. Its original files are preserved. Open the recording folder to inspect them."
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn legacy_omitted_track_failures(
+        &self,
+        diagnostics: &serde_json::Value,
+    ) -> Option<Vec<(usize, &'static str)>> {
+        let Self::MultipleSegments { inner } = self else {
+            return None;
+        };
+        if !matches!(
+            inner.status,
+            Some(StudioRecordingStatus::Complete | StudioRecordingStatus::NeedsRemux)
+        ) || diagnostics.get("version")?.as_u64()? != 1
+        {
+            return None;
+        }
+
+        let mut omitted = Vec::new();
+        for segment in diagnostics.get("segments")?.as_array()? {
+            let index = usize::try_from(segment.get("segmentIndex")?.as_u64()?).ok()?;
+            let recorded = inner.segments.get(index)?;
+            for failure in segment.get("trackFailures")?.as_array()? {
+                if !matches!(failure.get("stage")?.as_str()?, "runtime" | "stop") {
+                    return None;
+                }
+                failure.get("error")?.as_str()?;
+                let track = match failure.get("track")?.as_str()? {
+                    "microphone" if recorded.mic.is_none() => "microphone",
+                    "camera" if recorded.camera.is_none() => "camera",
+                    "systemAudio" if recorded.system_audio.is_none() => "systemAudio",
+                    _ => return None,
+                };
+                omitted.push((index, track));
+            }
+        }
+        Some(omitted)
     }
 
     pub fn camera_path(&self) -> Option<RelativePathBuf> {
@@ -655,6 +787,191 @@ impl MultipleSegment {
 }
 
 #[cfg(test)]
+mod metadata_save_tests {
+    use super::*;
+    use std::io::Read;
+
+    const LEGACY_METADATA: &str = r#"{"platform":"MacOS","pretty_name":"Cap 0.5.9 recording","sharing":null,"segments":[{"display":{"path":"content/segments/segment-0/display.mp4","fps":30,"start_time":0.0}}],"cursors":{},"status":{"status":"NeedsRemux"}}"#;
+
+    fn recording(project: &Path) -> RecordingMeta {
+        let mut meta: RecordingMeta = serde_json::from_str(LEGACY_METADATA).unwrap();
+        meta.project_path = project.to_path_buf();
+        meta
+    }
+
+    fn assert_no_temporary_metadata(project: &Path) {
+        assert!(std::fs::read_dir(project).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".recording-meta-")
+        }));
+    }
+
+    #[test]
+    fn new_metadata_preserves_legacy_serialization_and_loads() {
+        let project = tempfile::tempdir().unwrap();
+        let meta = recording(project.path());
+        meta.save_for_project().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("recording-meta.json")).unwrap(),
+            serde_json::to_string_pretty(&meta).unwrap()
+        );
+        let loaded = RecordingMeta::load_for_project(project.path()).unwrap();
+        assert_eq!(
+            serde_json::to_value(loaded).unwrap(),
+            serde_json::to_value(meta).unwrap()
+        );
+        assert_no_temporary_metadata(project.path());
+    }
+
+    #[test]
+    fn replacing_metadata_does_not_modify_the_previous_file() {
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("recording-meta.json");
+        std::fs::write(&path, LEGACY_METADATA).unwrap();
+        let mut previous = std::fs::File::open(&path).unwrap();
+        let mut meta = recording(project.path());
+        meta.pretty_name = "Finished recording".into();
+
+        meta.save_for_project().unwrap();
+
+        let mut previous_bytes = String::new();
+        previous.read_to_string(&mut previous_bytes).unwrap();
+        assert_eq!(previous_bytes, LEGACY_METADATA);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            serde_json::to_string_pretty(&meta).unwrap()
+        );
+        assert_eq!(
+            RecordingMeta::load_for_project(project.path())
+                .unwrap()
+                .pretty_name,
+            "Finished recording"
+        );
+        assert_no_temporary_metadata(project.path());
+    }
+
+    #[test]
+    fn failed_staged_write_or_sync_preserves_previous_metadata() {
+        for partial_write in [true, false] {
+            let project = tempfile::tempdir().unwrap();
+            let path = project.path().join("recording-meta.json");
+            std::fs::write(&path, LEGACY_METADATA).unwrap();
+            let mut meta = recording(project.path());
+            meta.pretty_name = "Must not be published".into();
+            let failure = if partial_write {
+                "injected incomplete write"
+            } else {
+                "injected file sync failure"
+            };
+
+            let result = meta.save_for_project_with(|file, bytes| {
+                let count = if partial_write {
+                    bytes.len() / 2
+                } else {
+                    bytes.len()
+                };
+                file.write_all(&bytes[..count])?;
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), LEGACY_METADATA);
+                Err(std::io::Error::other(failure))
+            });
+
+            assert!(matches!(result, Err(Either::Right(error)) if error.to_string() == failure));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), LEGACY_METADATA);
+            assert_eq!(
+                RecordingMeta::load_for_project(project.path())
+                    .unwrap()
+                    .pretty_name,
+                "Cap 0.5.9 recording"
+            );
+            assert_no_temporary_metadata(project.path());
+        }
+    }
+
+    #[test]
+    fn non_file_metadata_destination_is_preserved() {
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("recording-meta.json");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("retained"), b"original").unwrap();
+
+        assert!(recording(project.path()).save_for_project().is_err());
+
+        assert_eq!(std::fs::read(path.join("retained")).unwrap(), b"original");
+        assert_no_temporary_metadata(project.path());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn denied_metadata_replacement_preserves_previous_metadata() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("recording-meta.json");
+        std::fs::write(&path, LEGACY_METADATA).unwrap();
+        let mut locked = None;
+        let result = recording(project.path()).save_for_project_with(|file, bytes| {
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            locked = Some(
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(0)
+                    .open(&path)?,
+            );
+            Ok(())
+        });
+
+        assert!(locked.is_some());
+        drop(locked);
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), LEGACY_METADATA);
+        assert_no_temporary_metadata(project.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_replacement_preserves_existing_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("recording-meta.json");
+        std::fs::write(&path, LEGACY_METADATA).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        recording(project.path()).save_for_project().unwrap();
+
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_metadata_and_its_target_are_preserved() {
+        let project = tempfile::tempdir().unwrap();
+        let target = project.path().join("original.json");
+        let path = project.path().join("recording-meta.json");
+        std::fs::write(&target, LEGACY_METADATA).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+
+        assert!(recording(project.path()).save_for_project().is_err());
+
+        assert!(
+            std::fs::symlink_metadata(path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(target).unwrap(), LEGACY_METADATA);
+        assert_no_temporary_metadata(project.path());
+    }
+}
+
+#[cfg(test)]
 mod test {
     use super::RecordingMeta;
 
@@ -912,5 +1229,245 @@ mod display_notch_tests {
         .unwrap();
 
         assert_eq!(studio(&meta).display_notch(), None);
+    }
+}
+
+#[cfg(test)]
+mod ordinary_media_access_tests {
+    use super::{
+        Cursors, MultipleSegments, RecordingMeta, StudioRecordingMeta, StudioRecordingStatus,
+    };
+
+    fn studio(status: Option<StudioRecordingStatus>) -> StudioRecordingMeta {
+        StudioRecordingMeta::MultipleSegments {
+            inner: MultipleSegments {
+                segments: Vec::new(),
+                cursors: Cursors::default(),
+                status,
+            },
+        }
+    }
+
+    fn check_diagnostics(raw: &[u8], expected_ok: bool) {
+        let project = tempfile::tempdir().unwrap();
+        let diagnostics = project.path().join("recording-diagnostics.json");
+        let media = project.path().join("surviving-track.bin");
+        let config = project.path().join("project-config.json");
+        std::fs::write(&diagnostics, raw).unwrap();
+        std::fs::write(&media, b"incomplete original media").unwrap();
+        std::fs::write(&config, b"original config").unwrap();
+        let meta = studio(Some(StudioRecordingStatus::Complete));
+        let before = serde_json::to_vec(&meta).unwrap();
+        assert_eq!(
+            meta.ensure_ordinary_media_access(project.path()).is_ok(),
+            expected_ok
+        );
+        assert_eq!(std::fs::read(diagnostics).unwrap(), raw);
+        assert_eq!(std::fs::read(media).unwrap(), b"incomplete original media");
+        assert_eq!(std::fs::read(config).unwrap(), b"original config");
+        assert_eq!(serde_json::to_vec(&meta).unwrap(), before);
+    }
+
+    fn legacy_optional_failure() -> (StudioRecordingMeta, serde_json::Value) {
+        let recording: RecordingMeta = serde_json::from_str(
+            r#"{"platform":"MacOS","pretty_name":"Cap recording","sharing":null,"segments":[{"display":{"path":"content/segments/segment-0/display.mp4","fps":30,"start_time":0.0}}],"cursors":{},"status":{"status":"Complete"}}"#,
+        )
+        .unwrap();
+        let diagnostics = serde_json::json!({
+            "version": 1,
+            "segments": [{
+                "segmentIndex": 0,
+                "start": 10.0,
+                "end": 20.0,
+                "trackFailures": [{
+                    "track": "microphone",
+                    "stage": "runtime",
+                    "error": "microphone writer failed"
+                }]
+            }]
+        });
+        (recording.studio_meta().unwrap().clone(), diagnostics)
+    }
+
+    #[test]
+    fn released_059_omitted_optional_failures_remain_accessible() {
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("recording-diagnostics.json");
+        for status in [
+            StudioRecordingStatus::Complete,
+            StudioRecordingStatus::NeedsRemux,
+        ] {
+            for track in ["microphone", "camera", "systemAudio"] {
+                let (mut meta, mut diagnostics) = legacy_optional_failure();
+                let StudioRecordingMeta::MultipleSegments { inner } = &mut meta else {
+                    unreachable!();
+                };
+                inner.status = Some(status.clone());
+                diagnostics["segments"][0]["trackFailures"][0]["track"] = track.into();
+                let raw = serde_json::to_vec(&diagnostics).unwrap();
+                std::fs::write(&path, &raw).unwrap();
+                let original_meta = serde_json::to_vec(&meta).unwrap();
+                assert!(meta.ensure_ordinary_media_access(project.path()).is_ok());
+                assert_eq!(std::fs::read(&path).unwrap(), raw);
+                assert_eq!(serde_json::to_vec(&meta).unwrap(), original_meta);
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_diagnostics_do_not_override_failed_or_uncertain_status() {
+        let project = tempfile::tempdir().unwrap();
+        for status in [
+            None,
+            Some(StudioRecordingStatus::InProgress),
+            Some(StudioRecordingStatus::Failed {
+                error: "requested microphone failed".into(),
+            }),
+        ] {
+            let (mut meta, diagnostics) = legacy_optional_failure();
+            let StudioRecordingMeta::MultipleSegments { inner } = &mut meta else {
+                unreachable!();
+            };
+            inner.status = status;
+            std::fs::write(
+                project.path().join("recording-diagnostics.json"),
+                serde_json::to_vec(&diagnostics).unwrap(),
+            )
+            .unwrap();
+            assert!(meta.ensure_ordinary_media_access(project.path()).is_err());
+        }
+    }
+
+    #[test]
+    fn current_or_unresolved_failures_cannot_use_legacy_compatibility() {
+        let project = tempfile::tempdir().unwrap();
+        for (pointer, value) in [
+            ("/version", serde_json::json!(2)),
+            ("/version", serde_json::json!(0)),
+            ("/segments/0/segmentIndex", serde_json::json!(1)),
+            (
+                "/segments/0/trackFailures/0/track",
+                serde_json::json!("display"),
+            ),
+            (
+                "/segments/0/trackFailures/0/track",
+                serde_json::json!("unknown"),
+            ),
+            ("/segments/0/trackFailures/0/stage", serde_json::Value::Null),
+            ("/segments/0/trackFailures/0/error", serde_json::Value::Null),
+        ] {
+            let (meta, mut diagnostics) = legacy_optional_failure();
+            *diagnostics.pointer_mut(pointer).unwrap() = value;
+            std::fs::write(
+                project.path().join("recording-diagnostics.json"),
+                serde_json::to_vec(&diagnostics).unwrap(),
+            )
+            .unwrap();
+            assert!(meta.ensure_ordinary_media_access(project.path()).is_err());
+        }
+
+        let (meta, diagnostics) = legacy_optional_failure();
+        let mut raw_meta = serde_json::to_value(&meta).unwrap();
+        raw_meta["segments"][0]["mic"] = serde_json::json!({
+            "path": "content/segments/segment-0/audio-input.ogg"
+        });
+        let meta: StudioRecordingMeta = serde_json::from_value(raw_meta).unwrap();
+        std::fs::write(
+            project.path().join("recording-diagnostics.json"),
+            serde_json::to_vec(&diagnostics).unwrap(),
+        )
+        .unwrap();
+        assert!(meta.ensure_ordinary_media_access(project.path()).is_err());
+    }
+
+    #[test]
+    fn failed_status_refuses_without_changing_metadata_or_media() {
+        let project = tempfile::tempdir().unwrap();
+        let media = project.path().join("raw.bin");
+        std::fs::write(&media, b"retained").unwrap();
+        let meta = studio(Some(StudioRecordingStatus::Failed {
+            error: "microphone lost".into(),
+        }));
+        let before = serde_json::to_vec(&meta).unwrap();
+        let error = meta
+            .ensure_ordinary_media_access(project.path())
+            .unwrap_err();
+        assert!(error.contains("microphone lost"));
+        assert!(!error.contains("may need to be recovered"));
+        assert_eq!(serde_json::to_vec(&meta).unwrap(), before);
+        assert_eq!(std::fs::read(media).unwrap(), b"retained");
+    }
+
+    #[test]
+    fn absent_diagnostics_preserves_legacy_and_existing_status_policy() {
+        let project = tempfile::tempdir().unwrap();
+        for status in [
+            None,
+            Some(StudioRecordingStatus::Complete),
+            Some(StudioRecordingStatus::InProgress),
+            Some(StudioRecordingStatus::NeedsRemux),
+        ] {
+            assert!(
+                studio(status)
+                    .ensure_ordinary_media_access(project.path())
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_single_segment_without_diagnostics_remains_allowed() {
+        let project = tempfile::tempdir().unwrap();
+        let meta: StudioRecordingMeta =
+            serde_json::from_str(r#"{"display":{"path":"content/display.mp4"}}"#).unwrap();
+        assert!(meta.ensure_ordinary_media_access(project.path()).is_ok());
+    }
+
+    #[test]
+    fn clean_track_diagnostics_remain_allowed() {
+        check_diagnostics(br#"{"segments":[{"trackFailures":[]}]}"#, true);
+    }
+
+    #[test]
+    fn retained_failure_refuses_even_if_status_is_complete() {
+        check_diagnostics(
+            br#"{"segments":[{"trackFailures":["system audio lost"]}]}"#,
+            false,
+        );
+    }
+
+    #[test]
+    fn malformed_diagnostics_refuse_without_modification() {
+        check_diagnostics(b"{", false);
+    }
+
+    #[test]
+    fn incomplete_diagnostic_schema_refuses_without_modification() {
+        for raw in [
+            b"{}".as_slice(),
+            br#"{"segments":[{}]}"#,
+            br#"{"segments":null}"#,
+            br#"{"segments":[{"trackFailures":null}]}"#,
+        ] {
+            check_diagnostics(raw, false);
+        }
+    }
+
+    #[test]
+    fn empty_segment_diagnostics_preserve_existing_recovery_policy() {
+        check_diagnostics(br#"{"segments":[]}"#, true);
+    }
+
+    #[test]
+    fn diagnostics_read_error_refuses_without_changing_directory() {
+        let project = tempfile::tempdir().unwrap();
+        let diagnostics = project.path().join("recording-diagnostics.json");
+        std::fs::create_dir(&diagnostics).unwrap();
+        assert!(
+            studio(None)
+                .ensure_ordinary_media_access(project.path())
+                .is_err()
+        );
+        assert!(diagnostics.is_dir());
     }
 }

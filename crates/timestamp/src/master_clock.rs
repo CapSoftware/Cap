@@ -169,6 +169,7 @@ pub struct SourceClockState {
     timing_set: bool,
     timing_adjust: i64,
     next_expected_ns: Option<i64>,
+    last_cadence_output_ns: Option<u64>,
     snap_count: u64,
     hard_reset_count: u64,
     resync_count: u64,
@@ -183,6 +184,7 @@ impl SourceClockState {
             timing_set: false,
             timing_adjust: 0,
             next_expected_ns: None,
+            last_cadence_output_ns: None,
             snap_count: 0,
             hard_reset_count: 0,
             resync_count: 0,
@@ -233,8 +235,35 @@ impl SourceClockState {
         source_ts: Timestamp,
         frame_duration_ns: u64,
     ) -> SourceClockRemap {
-        let raw_ns = clock.remap_raw_ns(source_ts);
-        let now_ns = clock.elapsed_ns() as i64;
+        self.remap_ns(
+            clock.remap_raw_ns(source_ts),
+            clock.elapsed_ns() as i64,
+            frame_duration_ns,
+            true,
+        )
+    }
+
+    pub fn remap_preserving_cadence(
+        &mut self,
+        clock: &MasterClock,
+        source_ts: Timestamp,
+        frame_duration_ns: u64,
+    ) -> SourceClockRemap {
+        self.remap_ns(
+            clock.remap_raw_ns(source_ts),
+            clock.elapsed_ns() as i64,
+            frame_duration_ns,
+            false,
+        )
+    }
+
+    fn remap_ns(
+        &mut self,
+        raw_ns: i64,
+        now_ns: i64,
+        frame_duration_ns: u64,
+        smooth: bool,
+    ) -> SourceClockRemap {
         self.frame_count = self.frame_count.saturating_add(1);
 
         let using_direct_ts = abs_diff_u64(raw_ns, now_ns) < MAX_TS_VAR_NS;
@@ -262,7 +291,7 @@ impl SourceClockState {
                 self.hard_reset_count = self.hard_reset_count.saturating_add(1);
                 self.resync_count = self.resync_count.saturating_add(1);
                 outcome = SourceClockOutcome::HardReset;
-            } else if diff < TS_SMOOTHING_THRESHOLD_NS {
+            } else if smooth && diff < TS_SMOOTHING_THRESHOLD_NS {
                 // Snap jitter onto the expected cadence, but cap how far the
                 // ladder may lead the source clock. Each snap re-anchors
                 // next_expected, so a source delivering faster than the
@@ -288,7 +317,19 @@ impl SourceClockState {
         }
         self.next_expected_ns = Some(ts_ns.saturating_add(duration_ns));
 
-        let output_ns = ts_ns.saturating_add(self.timing_adjust).max(0) as u64;
+        let mut output_ns = ts_ns.saturating_add(self.timing_adjust).max(0) as u64;
+        if smooth {
+            self.last_cadence_output_ns = None;
+        } else {
+            if let Some(previous) = self.last_cadence_output_ns
+                && !matches!(outcome, SourceClockOutcome::HardReset)
+                && output_ns < previous
+            {
+                output_ns = previous;
+                outcome = SourceClockOutcome::Smoothed;
+            }
+            self.last_cadence_output_ns = Some(output_ns);
+        }
 
         SourceClockRemap {
             master_ns: output_ns,
@@ -301,6 +342,7 @@ impl SourceClockState {
         self.timing_set = false;
         self.timing_adjust = 0;
         self.next_expected_ns = None;
+        self.last_cadence_output_ns = None;
     }
 }
 
@@ -651,5 +693,209 @@ mod tests {
         );
         let result = state.remap(&clock, ts, frame_ns);
         assert!(result.master_ns == 0 || result.master_ns <= 1_000_000_000);
+    }
+    #[test]
+    fn preserving_cadence_does_not_release_recorded_smoothing_lag() {
+        let samples = [
+            (46154413, 78690394),
+            (65568721, 135377154),
+            (110897087, 172279669),
+            (132556133, 193694100),
+            (194257322, 206714730),
+            (210630064, 228600321),
+            (295866539, 326602031),
+            (331422825, 390005096),
+            (358539718, 429724051),
+            (391572010, 454430003),
+            (419586633, 474622237),
+            (463879066, 499774959),
+            (472447881, 533644768),
+            (513265949, 568866386),
+            (553800082, 589048951),
+            (612231200, 650842341),
+            (659399095, 685934536),
+        ];
+        let mut legacy = SourceClockState::new("legacy-video");
+        let mut preserving = SourceClockState::new("continuous-video");
+        let mut legacy_output = Vec::new();
+        let mut preserved_output = Vec::new();
+        for (raw, now) in samples {
+            legacy_output.push(legacy.remap_ns(raw, now, 33_333_333, true).master_ns);
+            preserved_output.push(preserving.remap_ns(raw, now, 33_333_333, false).master_ns);
+        }
+        assert_eq!(legacy_output[16] - legacy_output[15], 113_244_687);
+        assert_eq!(preserved_output[16] - preserved_output[15], 47_167_895);
+        assert_eq!(legacy_output[0], preserved_output[0]);
+        assert_eq!(preserving.snap_count(), 0);
+        assert_eq!(preserving.hard_reset_count(), 0);
+    }
+
+    #[test]
+    fn preserving_cadence_replays_every_recorded_interval() {
+        let samples: [i64; 166] = [
+            46154413, 65568721, 110897087, 132556133, 194257322, 210630064, 295866539, 331422825,
+            358539718, 391572010, 419586633, 463879066, 472447881, 513265949, 553800082, 612231200,
+            659399095, 684859793, 703765590, 771137903, 816569916, 829567548, 863610545, 926770792,
+            969115079, 983414049, 1040848452, 1050334828, 1099575914, 1159724806, 1175198241,
+            1207247075, 1239602166, 1305713087, 1336115915, 1367591857, 1429003927, 1450650105,
+            1482563646, 1507565298, 1548602526, 1608592995, 1615701319, 1683213311, 1697719775,
+            1742772459, 1775887617, 1801167715, 1858162227, 1910977942, 1955903885, 1977035872,
+            2006647063, 2044937201, 2127620053, 2149847594, 2170967171, 2221614788, 2279627404,
+            2289253362, 2333763286, 2382028011, 2412563172, 2444953954, 2490800736, 2549402425,
+            2584977585, 2615680580, 2650109725, 2665944218, 2745574052, 2781041320, 2820631617,
+            2842908220, 2871194752, 2915919941, 2962020029, 2991660101, 3038647128, 3057869964,
+            3092459053, 3158726868, 3166722481, 3246562870, 3281329262, 3313973509, 3371634807,
+            3398569941, 3461197437, 3499790112, 3509911781, 3588729118, 3626970626, 3632929245,
+            3696523572, 3743563090, 3770569195, 3793558443, 3831804481, 3856646119, 3898780811,
+            3940568105, 3980226504, 4016559191, 4052128431, 4066657406, 4120152494, 4151270637,
+            4184461316, 4206797820, 4275284412, 4307124812, 4323324283, 4350754207, 4400827291,
+            4450575108, 4463290634, 4517560479, 4541563458, 4574001281, 4627021529, 4639667832,
+            4701963641, 4715851742, 4756979912, 4799046093, 4825566377, 4857078700, 4888566231,
+            4915249779, 4957961094, 4987293889, 5048028694, 5071025932, 5112782536, 5148460569,
+            5180622435, 5197751016, 5247952933, 5275295305, 5331623674, 5360745415, 5382814833,
+            5433875878, 5461561168, 5491354103, 5521647539, 5567574883, 5599380402, 5623347371,
+            5664391349, 5692765944, 5731586034, 5753006938, 5774332970, 5848158628, 5884141787,
+            5911433118, 5926586376, 5998337740, 6012802883, 6052260307, 6129125352, 6162385302,
+            6196413748, 6214714645,
+        ];
+        let mut state = SourceClockState::new("recorded-video");
+        let mut previous = None;
+        for raw in samples {
+            let mapped = state.remap_ns(raw, raw + 30_000_000, 33_333_333, false);
+            assert_eq!(mapped.master_ns, raw as u64);
+            if let Some((previous_raw, previous_output)) = previous {
+                assert_eq!(
+                    mapped.master_ns - previous_output,
+                    (raw - previous_raw) as u64
+                );
+                assert!(mapped.master_ns - previous_output < 100_000_000);
+            }
+            previous = Some((raw, mapped.master_ns));
+        }
+    }
+
+    #[test]
+    fn preserving_cadence_matches_each_interval_across_rates_and_jitter() {
+        for nominal in [24.0, 30.0, 60.0] {
+            for actual in [
+                10.0, 15.0, 20.0, 24.0, 25.0, 29.97, 30.0, 48.0, 60.0, 90.0, 120.0, 240.0, 500.0,
+                1000.0,
+            ] {
+                for jitter in [0.0, 0.3] {
+                    let mut state = SourceClockState::new("cadence-matrix");
+                    let mut rng = TestRng(0xCA9_5EED);
+                    let mut previous = None;
+                    for frame in 0..300 {
+                        let raw = ((frame as f64 + (rng.next_f64() * 2.0 - 1.0) * jitter)
+                            * 1_000_000_000.0
+                            / actual)
+                            .max(0.0) as i64;
+                        let mapped = state.remap_ns(
+                            raw,
+                            raw + 25_000_000,
+                            (1_000_000_000.0 / nominal) as u64,
+                            false,
+                        );
+                        assert_eq!(mapped.master_ns, raw as u64);
+                        if let Some((previous_raw, previous_output)) = previous {
+                            assert!(raw >= previous_raw);
+                            assert_eq!(
+                                mapped.master_ns - previous_output,
+                                (raw - previous_raw) as u64
+                            );
+                        }
+                        previous = Some((raw, mapped.master_ns));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn preserving_cadence_floors_backward_and_duplicate_inputs() {
+        let mut state = SourceClockState::new("backward-video");
+        for (raw, expected) in [
+            (100_000_000, 100_000_000),
+            (120_000_000, 120_000_000),
+            (110_000_000, 120_000_000),
+            (120_000_000, 120_000_000),
+            (130_000_000, 130_000_000),
+        ] {
+            assert_eq!(
+                state
+                    .remap_ns(raw, 200_000_000, 33_333_333, false)
+                    .master_ns,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn preserving_cadence_retains_real_gaps() {
+        let mut state = SourceClockState::new("gapped-video");
+        for raw in [0, 30_000_000, 430_000_000, 460_000_000, 3_460_000_000] {
+            let mapped = state.remap_ns(raw, raw + 30_000_000, 33_333_333, false);
+            assert_eq!(mapped.master_ns, raw as u64);
+            assert_ne!(mapped.outcome, SourceClockOutcome::HardReset);
+        }
+    }
+
+    #[test]
+    fn preserving_cadence_retains_initial_adjust_and_hard_reset_recovery() {
+        let mut state = SourceClockState::new("reset-video");
+        let first = state.remap_ns(-10_000_000_000, 0, 33_333_333, false);
+        assert_eq!(first.outcome, SourceClockOutcome::InitialAdjust);
+        assert_eq!(first.master_ns, 0);
+        assert_eq!(
+            state
+                .remap_ns(-9_966_666_667, 33_333_333, 33_333_333, false)
+                .master_ns,
+            33_333_333
+        );
+        let reset = state.remap_ns(-4_966_666_667, 66_666_666, 33_333_333, false);
+        assert_eq!(reset.outcome, SourceClockOutcome::HardReset);
+        assert_eq!(reset.master_ns, 66_666_666);
+        assert_eq!(
+            state
+                .remap_ns(-4_933_333_334, 99_999_999, 33_333_333, false)
+                .master_ns,
+            99_999_999
+        );
+        assert_eq!(state.hard_reset_count(), 1);
+    }
+
+    #[test]
+    fn preserving_cadence_reset_releases_previous_epoch_floor() {
+        let mut state = SourceClockState::new("new-epoch");
+        assert_eq!(
+            state
+                .remap_ns(1_000_000_000, 1_000_000_000, 33_333_333, false)
+                .master_ns,
+            1_000_000_000
+        );
+        state.reset();
+        assert_eq!(
+            state
+                .remap_ns(10_000_000, 10_000_000, 33_333_333, false)
+                .master_ns,
+            10_000_000
+        );
+    }
+
+    #[test]
+    fn preserving_cadence_public_method_keeps_source_delta() {
+        let clock = clock();
+        let mut state = SourceClockState::new("public-video");
+        let first = state.remap_preserving_cadence(
+            &clock,
+            Timestamp::Instant(clock.start_instant() + Duration::from_millis(100)),
+            33_333_333,
+        );
+        let second = state.remap_preserving_cadence(
+            &clock,
+            Timestamp::Instant(clock.start_instant() + Duration::from_millis(147)),
+            33_333_333,
+        );
+        assert_eq!(second.master_ns - first.master_ns, 47_000_000);
     }
 }

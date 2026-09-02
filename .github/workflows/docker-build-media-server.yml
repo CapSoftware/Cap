@@ -60,6 +60,16 @@ jobs:
           cache-from: type=gha,scope=media-server-${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=media-server-${{ matrix.platform }}
 
+      - name: Verify recording decode in the production image
+        env:
+          MEDIA_IMAGE: ghcr.io/${{ env.REPOSITORY_OWNER }}/cap-media-server@${{ steps.build.outputs.digest }}
+        run: |
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/recording-verification.integration.test.ts \
+            src/__tests__/lib/job-manager.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/routes/recording-verification.test.ts
+
       - name: Export Digest
         run: |
           mkdir -p /tmp/digests

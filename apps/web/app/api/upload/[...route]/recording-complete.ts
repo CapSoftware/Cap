@@ -5,6 +5,11 @@ import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
+import {
+	validateDesktopRecordingRequest,
+	verifyDesktopRecordingUpload,
+} from "@/lib/desktop-recording-upload-status";
+import { recordingVerificationSchema } from "@/lib/desktop-recording-verification";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import { withAuth } from "../../utils";
 
@@ -15,11 +20,12 @@ export const app = new Hono().post(
 		"json",
 		z.object({
 			videoId: z.string(),
+			verification: recordingVerificationSchema.optional(),
 		}),
 	),
 	async (c) => {
 		const user = c.get("user");
-		const { videoId: videoIdRaw } = c.req.valid("json");
+		const { videoId: videoIdRaw, verification } = c.req.valid("json");
 		const videoId = Video.VideoId.make(videoIdRaw);
 
 		const [video] = await db()
@@ -31,12 +37,62 @@ export const app = new Hono().post(
 			return c.json({ error: "Video not found" }, 404);
 		}
 
-		if (video.source?.type === "desktopMP4") {
-			return c.json({ success: true, status: "already-complete" });
+		if (
+			video.source?.type !== "desktopMP4" &&
+			video.source?.type !== "desktopSegments"
+		) {
+			return c.json({ error: "Video is not a desktop recording" }, 400);
 		}
 
-		if (video.source?.type !== "desktopSegments") {
-			return c.json({ error: "Video is not a segmented recording" }, 400);
+		if (verification) {
+			const [upload] = await db()
+				.select({
+					videoId: Db.videoUploads.videoId,
+					phase: Db.videoUploads.phase,
+				})
+				.from(Db.videoUploads)
+				.where(eq(Db.videoUploads.videoId, videoId));
+			if (upload?.phase === "error") {
+				return c.json({ success: false, status: "reupload-required" }, 409);
+			}
+			if (
+				upload?.phase === "processing" ||
+				upload?.phase === "generating_thumbnail"
+			) {
+				return c.json({ success: true, status: "already-processing" });
+			}
+			try {
+				const receipt =
+					video.source.type === "desktopMP4"
+						? await verifyDesktopRecordingUpload(video, verification)
+						: null;
+				if (!receipt) {
+					await validateDesktopRecordingRequest(video, verification);
+					const status = await queueDesktopSegmentsFinalization({
+						videoId,
+						userId: user.id,
+						verification,
+					});
+					return c.json({ success: true, status });
+				}
+				return c.json({
+					success: true,
+					status: "verified",
+					verification: receipt,
+				});
+			} catch {
+				return c.json(
+					{
+						error:
+							"Recording verification is unavailable; retain the local recording",
+					},
+					503,
+				);
+			}
+		}
+
+		if (video.source.type === "desktopMP4") {
+			return c.json({ success: true, status: "already-complete" });
 		}
 
 		try {

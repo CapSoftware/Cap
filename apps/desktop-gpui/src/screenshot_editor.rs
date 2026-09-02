@@ -1967,59 +1967,22 @@ impl ScreenshotEditorWindow {
             match result {
                 Ok(bytes) => match destination {
                     ExportDestination::Clipboard => {
-                        // The clipboard seam this app has is "NSImage from a
-                        // path" (`platform::copy_image_to_clipboard`); a temp
-                        // file bridges the rendered bytes to it.
-                        let path = std::env::temp_dir()
-                            .join(format!("cap-screenshot-copy-{}.png", std::process::id()));
-                        let written =
-                            cx.background_executor()
-                                .spawn({
-                                    let path = path.clone();
-                                    async move {
-                                        std::fs::write(&path, &bytes).map_err(|e| e.to_string())
-                                    }
-                                })
-                                .await;
-                        match written {
-                            Ok(()) => {
-                                let copied = this.update_in(cx, |_, _, _| {
-                                    crate::platform::copy_image_to_clipboard(&path)
-                                });
-                                match copied {
-                                    Ok(Err(error)) => {
-                                        tracing::error!("copying the screenshot failed: {error}");
-                                        this.update_in(cx, |this, window, cx| {
-                                            this.toast_error(error, window, cx)
-                                        })
-                                        .ok();
-                                    }
-                                    Ok(Ok(())) => {
-                                        this.update_in(cx, |this, window, cx| {
-                                            this.toast_success(
-                                                "Screenshot copied to clipboard!",
-                                                window,
-                                                cx,
-                                            )
-                                        })
-                                        .ok();
-                                    }
-                                    Err(_) => {}
+                        this.update_in(cx, |this, window, cx| {
+                            match crate::platform::copy_image_bytes_to_clipboard(&bytes, cx) {
+                                Ok(()) => {
+                                    this.toast_success(
+                                        "Screenshot copied to clipboard!",
+                                        window,
+                                        cx,
+                                    );
                                 }
-                                cx.background_executor()
-                                    .spawn(async move {
-                                        let _ = std::fs::remove_file(&path);
-                                    })
-                                    .detach();
+                                Err(error) => {
+                                    tracing::error!("copying the screenshot failed: {error}");
+                                    this.toast_error(error, window, cx);
+                                }
                             }
-                            Err(error) => {
-                                tracing::error!("writing the clipboard temp file failed: {error}");
-                                this.update_in(cx, |this, window, cx| {
-                                    this.toast_error(error, window, cx)
-                                })
-                                .ok();
-                            }
-                        }
+                        })
+                        .ok();
                     }
                     ExportDestination::File => {
                         let dest =

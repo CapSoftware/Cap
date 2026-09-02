@@ -119,7 +119,7 @@ impl EncoderBase {
         output: &mut format::context::Output,
         encoder: &mut encoder::encoder::Encoder,
     ) -> Result<(), ffmpeg::Error> {
-        while encoder.receive_packet(&mut self.packet).is_ok() {
+        while packet_available(encoder.receive_packet(&mut self.packet))? {
             self.packet.set_stream(self.stream_index);
             self.packet.rescale_ts(
                 encoder.time_base(),
@@ -195,6 +195,15 @@ impl EncoderBase {
     }
 }
 
+fn packet_available(result: Result<(), ffmpeg::Error>) -> Result<bool, ffmpeg::Error> {
+    match result {
+        Ok(()) => Ok(true),
+        Err(ffmpeg::Error::Eof) => Ok(false),
+        Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 fn nominal_packet_duration(time_base: Rational, frame_rate: Rational) -> Option<i64> {
     let time_base_num = time_base.numerator();
     let time_base_den = time_base.denominator();
@@ -248,5 +257,110 @@ mod tests {
         // the next into correction too, re-timing the whole recording.
         assert_eq!(normalize_input_pts(90_000, Some(100_000)), 100_001);
         assert_eq!(normalize_input_pts(100_000, Some(100_000)), 100_001);
+    }
+
+    #[test]
+    fn receive_success_exposes_one_packet() {
+        assert_eq!(packet_available(Ok(())), Ok(true));
+    }
+
+    #[test]
+    fn receive_eof_finishes_packet_drain() {
+        assert_eq!(packet_available(Err(ffmpeg::Error::Eof)), Ok(false));
+    }
+
+    #[test]
+    fn receive_eagain_requests_more_input_without_error() {
+        assert_eq!(
+            packet_available(Err(ffmpeg::Error::Other {
+                errno: ffmpeg::error::EAGAIN,
+            })),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn unexpected_receive_errors_keep_their_exact_error() {
+        for error in [
+            ffmpeg::Error::InvalidData,
+            ffmpeg::Error::Bug,
+            ffmpeg::Error::External,
+            ffmpeg::Error::Exit,
+            ffmpeg::Error::Other {
+                errno: ffmpeg::error::EINVAL,
+            },
+            ffmpeg::Error::Other {
+                errno: ffmpeg::error::EIO,
+            },
+            ffmpeg::Error::Other {
+                errno: ffmpeg::error::ENOMEM,
+            },
+            ffmpeg::Error::Other {
+                errno: ffmpeg::error::EINTR,
+            },
+        ] {
+            assert_eq!(packet_available(Err(error)), Err(error));
+        }
+    }
+
+    #[test]
+    fn receive_failure_after_output_does_not_read_another_packet() {
+        let mut results = [Ok(()), Err(ffmpeg::Error::InvalidData), Ok(())].into_iter();
+        let mut processed = 0;
+        let outcome = (|| {
+            while packet_available(results.next().unwrap())? {
+                processed += 1;
+            }
+            Ok::<(), ffmpeg::Error>(())
+        })();
+        assert_eq!(outcome, Err(ffmpeg::Error::InvalidData));
+        assert_eq!(processed, 1);
+        assert_eq!(results.next(), Some(Ok(())));
+    }
+
+    #[test]
+    fn normal_receive_states_do_not_consume_next_input_opportunity() {
+        for terminal in [
+            ffmpeg::Error::Eof,
+            ffmpeg::Error::Other {
+                errno: ffmpeg::error::EAGAIN,
+            },
+        ] {
+            let mut results = [Ok(()), Err(terminal), Ok(())].into_iter();
+            let mut processed = 0;
+            while packet_available(results.next().unwrap()).unwrap() {
+                processed += 1;
+            }
+            assert_eq!(processed, 1);
+            assert_eq!(results.next(), Some(Ok(())));
+        }
+    }
+
+    #[test]
+    fn actual_unopened_encoder_receive_is_not_success_and_keeps_held_packet() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("unopened.mp4");
+        let mut output = format::output_as(&path, "mp4").unwrap();
+        let mut encoder = ffmpeg::codec::context::Context::new().encoder();
+        let mut base = EncoderBase::new(0);
+        let mut previous = Packet::copy(b"held-packet");
+        previous.set_pts(Some(42));
+        previous.set_dts(Some(40));
+        previous.set_duration(1024);
+        base.held_packet = Some((previous, true));
+        let error = base.process_packets(&mut output, &mut encoder).unwrap_err();
+        assert_eq!(
+            error,
+            ffmpeg::Error::Other {
+                errno: ffmpeg::error::EINVAL
+            }
+        );
+        let (previous, synthesized) = base.held_packet.as_ref().unwrap();
+        assert_eq!(previous.data(), Some(b"held-packet".as_slice()));
+        assert_eq!(previous.pts(), Some(42));
+        assert_eq!(previous.dts(), Some(40));
+        assert_eq!(previous.duration(), 1024);
+        assert!(*synthesized);
+        assert!(path.exists());
     }
 }

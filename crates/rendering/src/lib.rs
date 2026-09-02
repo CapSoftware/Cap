@@ -1648,7 +1648,7 @@ pub async fn render_video_to_channel_nv12(
     }
 
     if !stopped_after_frame_limit
-        && let Some(Ok(final_frame)) = frame_renderer.flush_pipeline_nv12().await
+        && let Some(final_frame) = frame_renderer.flush_pipeline_nv12().await.transpose()?
         && final_frame.width > 0
         && final_frame.height > 0
     {
@@ -5056,6 +5056,131 @@ pub struct FrameRenderStageTimings {
     pub immediate_flush_duration: std::time::Duration,
 }
 
+#[cfg(test)]
+mod nv12_flush_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn nv12_flush_drains_the_active_readback_pipeline() {
+        for software in [true, false] {
+            let instance = create_wgpu_instance_sync();
+            let Ok(adapter) = instance
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+            else {
+                eprintln!("No graphics adapter available for NV12 flush regression test");
+                return;
+            };
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor::default())
+                .await
+                .expect("graphics device");
+            let recording_meta: RecordingMeta = serde_json::from_value(serde_json::json!({
+                "pretty_name": "nv12-flush",
+                "display": { "path": "display.mp4", "fps": 60 },
+                "camera": null,
+                "audio": null,
+                "cursor": null
+            }))
+            .expect("recording metadata");
+            let constants = RenderVideoConstants {
+                adapter_name: adapter.get_info().name,
+                _instance: instance,
+                _adapter: adapter,
+                device,
+                queue,
+                options: RenderOptions {
+                    screen_size: XY::new(4, 4),
+                    camera_size: None,
+                    preserve_screen_alpha: false,
+                },
+                meta: recording_meta
+                    .studio_meta()
+                    .expect("studio metadata")
+                    .clone(),
+                recording_meta,
+                background_textures: Arc::new(BackgroundTextureCache::default()),
+                is_software_adapter: software,
+            };
+            let mut project = ProjectConfiguration::default();
+            project.background.padding = 0.0;
+            let cursor = CursorEvents {
+                clicks: vec![],
+                moves: vec![],
+            };
+            let frames = DecodedSegmentFrames {
+                screen_frame: None,
+                camera_frame: None,
+                segment_time: 0.0,
+                recording_time: 0.0,
+                segment_has_camera: false,
+            };
+            let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 1.0, XY::new(4, 4));
+            let uniforms = ProjectUniforms::new(
+                &constants,
+                &project,
+                7,
+                60,
+                XY::new(4, 4),
+                &cursor,
+                &frames,
+                1.0,
+                &zoom,
+            );
+            let mut renderer = FrameRenderer::new(&constants);
+            assert!(renderer.flush_pipeline_nv12().await.is_none());
+            let mut session = RenderSession::new(&constants.device, 4, 4);
+            let encoder = constants
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
+            if software {
+                assert!(
+                    frame_pipeline::finish_encoder(
+                        &mut session,
+                        &constants.device,
+                        &constants.queue,
+                        &uniforms,
+                        encoder,
+                    )
+                    .await
+                    .expect("RGBA readback submission")
+                    .is_none()
+                );
+            } else {
+                let mut converter = frame_pipeline::RgbaToNv12Converter::new(&constants.device);
+                assert!(
+                    frame_pipeline::finish_encoder_nv12_pooled(
+                        &mut session,
+                        &mut converter,
+                        &constants.device,
+                        &constants.queue,
+                        &uniforms,
+                        encoder,
+                        Some(&mut renderer.nv12_buffer_pool),
+                    )
+                    .await
+                    .expect("NV12 readback submission")
+                    .is_none()
+                );
+                renderer.nv12_converter = Some(converter);
+            }
+            renderer.session = Some(session);
+
+            let frame = renderer
+                .flush_pipeline_nv12()
+                .await
+                .expect("final frame remains pending")
+                .expect("final frame readback completes");
+            assert_eq!((frame.width, frame.height), (4, 4));
+            assert_eq!(frame.frame_number, 7);
+            assert_eq!(frame.target_time_ns, 116_666_666);
+            assert!(frame.data.len() >= 24);
+            assert!(renderer.flush_pipeline_nv12().await.is_none());
+        }
+    }
+}
+
 pub struct FrameRenderer<'a> {
     constants: &'a RenderVideoConstants,
     session: Option<RenderSession>,
@@ -5464,6 +5589,11 @@ impl<'a> FrameRenderer<'a> {
     pub async fn flush_pipeline_nv12(
         &mut self,
     ) -> Option<Result<frame_pipeline::Nv12RenderedFrame, RenderingError>> {
+        if self.constants.is_software_adapter {
+            let frame = self.flush_pipeline().await?;
+            return Some(frame.map(|frame| self.convert_rgba_to_nv12(frame)));
+        }
+
         let nv12_converter = self.nv12_converter.as_mut()?;
         let pending = nv12_converter.take_pending()?;
         Some(

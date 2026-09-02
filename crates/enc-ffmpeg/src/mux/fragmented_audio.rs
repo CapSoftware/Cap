@@ -29,6 +29,40 @@ pub enum FinishError {
     WriteTrailerFailed(ffmpeg::Error),
 }
 
+fn option_result(value: i32) -> Result<(), ffmpeg::Error> {
+    if value < 0 {
+        Err(ffmpeg::Error::from(value))
+    } else {
+        Ok(())
+    }
+}
+
+fn configure_fragmentation(output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
+    // Audio-only streams cannot trigger frag_keyframe. Fragment cuts and AVIO
+    // flushes are separate requirements for exposing bytes before finalization.
+    unsafe {
+        let context = output.as_mut_ptr();
+        option_result(ffmpeg::ffi::av_opt_set(
+            (*context).priv_data,
+            c"movflags".as_ptr(),
+            c"frag_keyframe+empty_moov+default_base_moof+skip_trailer".as_ptr(),
+            0,
+        ))?;
+        option_result(ffmpeg::ffi::av_opt_set_int(
+            (*context).priv_data,
+            c"frag_duration".as_ptr(),
+            2_000_000,
+            0,
+        ))?;
+        option_result(ffmpeg::ffi::av_opt_set_int(
+            context.cast(),
+            c"flush_packets".as_ptr(),
+            1,
+            0,
+        ))
+    }
+}
+
 impl FragmentedAudioFile {
     pub fn init(mut output_path: PathBuf, audio_config: AudioInfo) -> Result<Self, InitError> {
         output_path.set_extension("m4a");
@@ -39,14 +73,7 @@ impl FragmentedAudioFile {
 
         let mut output = format::output_as(&output_path, "mp4")?;
 
-        unsafe {
-            let opts = output.as_mut_ptr();
-            let key = std::ffi::CString::new("movflags").unwrap();
-            let value =
-                std::ffi::CString::new("frag_keyframe+empty_moov+default_base_moof+skip_trailer")
-                    .unwrap();
-            ffmpeg::ffi::av_opt_set((*opts).priv_data, key.as_ptr(), value.as_ptr(), 0);
-        }
+        configure_fragmentation(&mut output)?;
 
         let encoder = AACEncoder::init(audio_config, &mut output)?;
 
@@ -87,27 +114,213 @@ impl FragmentedAudioFile {
 
         self.finished = true;
 
-        if self.has_frames {
-            if let Err(flush_err) = self.encoder.flush(&mut self.output) {
-                tracing::warn!(
-                    "Audio encoder flush reported a non-fatal error (fragments on disk are valid): {flush_err}"
-                );
-            }
-            if let Err(trailer_err) = self.output.write_trailer() {
-                tracing::warn!(
-                    "Audio fragmented MP4 write_trailer reported a non-fatal error (fragments on disk are valid, file remains playable): {trailer_err}"
-                );
-            }
-            Ok(Ok(()))
+        let flush_result = if self.has_frames {
+            self.encoder.flush(&mut self.output)
         } else {
-            let _ = self.output.write_trailer();
-            Ok(Ok(()))
-        }
+            Ok(())
+        };
+        let trailer_result = self.output.write_trailer();
+        finish_result(flush_result, trailer_result)
     }
+}
+
+fn finish_result(
+    flush_result: Result<(), ffmpeg::Error>,
+    trailer_result: Result<(), ffmpeg::Error>,
+) -> Result<Result<(), ffmpeg::Error>, FinishError> {
+    trailer_result.map_err(FinishError::WriteTrailerFailed)?;
+    Ok(flush_result)
 }
 
 impl Drop for FragmentedAudioFile {
     fn drop(&mut self) {
         let _ = self.finish_with_timestamp(Duration::ZERO);
+    }
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+    use ffmpeg::{ChannelLayout, format::Sample, format::sample::Type};
+    use std::ffi::CStr;
+
+    fn value(output: &mut format::context::Output, name: &CStr, private: bool) -> i64 {
+        unsafe {
+            let context = output.as_mut_ptr();
+            let target = if private {
+                (*context).priv_data
+            } else {
+                context.cast()
+            };
+            let mut result = 0;
+            assert_eq!(
+                ffmpeg::ffi::av_opt_get_int(target, name.as_ptr(), 0, &mut result),
+                0
+            );
+            result
+        }
+    }
+
+    fn queue_tone(output: &mut FragmentedAudioFile, blocks: i64) {
+        for block in 0..blocks {
+            let mut frame =
+                ffmpeg::frame::Audio::new(Sample::F32(Type::Packed), 1024, ChannelLayout::MONO);
+            frame.set_rate(48_000);
+            for (index, value) in frame.data_mut(0)[..1024 * 4]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let position = (block * 1024) as f32 + index as f32;
+                let sample = 0.125 * (position * 880.0 * std::f32::consts::TAU / 48_000.0).sin();
+                value.copy_from_slice(&sample.to_ne_bytes());
+            }
+            output
+                .queue_frame(
+                    frame,
+                    Duration::from_secs_f64(block as f64 * 1024.0 / 48_000.0),
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn fragmented_audio_sets_both_publication_options() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut output = format::output_as(&directory.path().join("options.m4a"), "mp4").unwrap();
+        configure_fragmentation(&mut output).unwrap();
+        assert_eq!(value(&mut output, c"frag_duration", true), 2_000_000);
+        assert_eq!(value(&mut output, c"flush_packets", false), 1);
+        assert_ne!(value(&mut output, c"movflags", true), 0);
+    }
+
+    #[test]
+    fn fragmented_audio_rejects_unsupported_mux_options() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut output = format::output_as(&directory.path().join("wrong.ogg"), "ogg").unwrap();
+        assert!(configure_fragmentation(&mut output).is_err());
+    }
+
+    #[test]
+    fn fragmented_audio_option_errors_are_not_ignored() {
+        assert!(option_result(0).is_ok());
+        assert!(option_result(-22).is_err());
+        assert!(option_result(ffmpeg::ffi::AVERROR_OPTION_NOT_FOUND).is_err());
+    }
+
+    #[test]
+    fn fragmented_audio_exposes_packets_before_finish() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("before-finish.m4a");
+        let info = AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 1);
+        let mut output = FragmentedAudioFile::init(path.clone(), info).unwrap();
+        queue_tone(&mut output, 120);
+        let mut input = format::input(&path).unwrap();
+        assert!(input.packets().next().is_some());
+        drop(input);
+        output.finish().unwrap().unwrap();
+    }
+
+    #[test]
+    fn short_fragmented_audio_remains_readable_after_finish() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("short.m4a");
+        let info = AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 1);
+        let mut output = FragmentedAudioFile::init(path.clone(), info).unwrap();
+        queue_tone(&mut output, 10);
+        output.finish().unwrap().unwrap();
+        let mut input = format::input(&path).unwrap();
+        assert!(input.packets().next().is_some());
+    }
+
+    #[test]
+    fn fragmented_audio_terminal_success_requires_both_stages() {
+        assert!(matches!(finish_result(Ok(()), Ok(())), Ok(Ok(()))));
+    }
+
+    #[test]
+    fn fragmented_audio_preserves_encoder_flush_failure() {
+        assert!(matches!(
+            finish_result(Err(ffmpeg::Error::InvalidData), Ok(())),
+            Ok(Err(ffmpeg::Error::InvalidData))
+        ));
+    }
+
+    #[test]
+    fn fragmented_audio_reports_trailer_failure() {
+        assert!(matches!(
+            finish_result(Ok(()), Err(ffmpeg::Error::InvalidData)),
+            Err(FinishError::WriteTrailerFailed(ffmpeg::Error::InvalidData))
+        ));
+    }
+
+    #[test]
+    fn fragmented_audio_reports_trailer_failure_after_failed_flush() {
+        assert!(matches!(
+            finish_result(Err(ffmpeg::Error::InvalidData), Err(ffmpeg::Error::Bug)),
+            Err(FinishError::WriteTrailerFailed(ffmpeg::Error::Bug))
+        ));
+    }
+
+    #[test]
+    fn fragmented_audio_does_not_assume_reported_eof_is_benign() {
+        assert!(matches!(
+            finish_result(Err(ffmpeg::Error::Eof), Ok(())),
+            Ok(Err(ffmpeg::Error::Eof))
+        ));
+        assert!(matches!(
+            finish_result(Ok(()), Err(ffmpeg::Error::Eof)),
+            Err(FinishError::WriteTrailerFailed(ffmpeg::Error::Eof))
+        ));
+    }
+
+    #[test]
+    fn fragmented_audio_empty_track_without_io_error_can_finish() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("empty-finish.m4a");
+        let info = AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 1);
+        let mut output = FragmentedAudioFile::init(path, info).unwrap();
+        output.finish().unwrap().unwrap();
+    }
+
+    fn set_output_error(output: &mut FragmentedAudioFile) {
+        unsafe {
+            let context = output.output.as_mut_ptr();
+            assert!(!(*context).pb.is_null());
+            (*(*context).pb).error = ffmpeg::Error::Other {
+                errno: ffmpeg::error::EIO,
+            }
+            .into();
+        }
+    }
+
+    #[test]
+    fn fragmented_audio_sticky_io_error_cannot_report_terminal_success() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("failed-finish.m4a");
+        let info = AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 1);
+        let mut output = FragmentedAudioFile::init(path.clone(), info).unwrap();
+        queue_tone(&mut output, 120);
+        let prefix = std::fs::read(&path).unwrap();
+        assert!(!prefix.is_empty());
+        set_output_error(&mut output);
+        assert!(!matches!(output.finish(), Ok(Ok(()))));
+        assert!(matches!(output.finish(), Err(FinishError::AlreadyFinished)));
+        drop(output);
+        assert!(std::fs::read(&path).unwrap().starts_with(&prefix));
+    }
+
+    #[test]
+    fn fragmented_audio_empty_track_trailer_error_is_reported() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("empty-failed-finish.m4a");
+        let info = AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 1);
+        let mut output = FragmentedAudioFile::init(path.clone(), info).unwrap();
+        set_output_error(&mut output);
+        assert!(matches!(
+            output.finish(),
+            Err(FinishError::WriteTrailerFailed(_))
+        ));
+        drop(output);
+        assert!(path.exists());
     }
 }

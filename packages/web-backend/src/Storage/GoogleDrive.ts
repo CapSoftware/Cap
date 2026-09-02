@@ -25,6 +25,7 @@ export type GoogleDriveFile = {
 	name?: string;
 	mimeType?: string;
 	size?: string;
+	version?: string;
 	modifiedTime?: string;
 };
 
@@ -1015,7 +1016,7 @@ export const createGoogleDriveResumableUpload = (
 			driveFetch(
 				config,
 				appendSharedDriveCreateParams(
-					`${DRIVE_UPLOAD_BASE}/files/${encodeURIComponent(fileId)}?uploadType=resumable&fields=id,name,mimeType,size`,
+					`${DRIVE_UPLOAD_BASE}/files/${encodeURIComponent(fileId)}?uploadType=resumable&fields=id,name,mimeType,size,version`,
 				),
 				{
 					method: "PATCH",
@@ -1035,7 +1036,7 @@ export const createGoogleDriveResumableUpload = (
 			driveFetch(
 				config,
 				appendSharedDriveCreateParams(
-					`${DRIVE_UPLOAD_BASE}/files?uploadType=resumable&fields=id,name,mimeType,size`,
+					`${DRIVE_UPLOAD_BASE}/files?uploadType=resumable&fields=id,name,mimeType,size,version`,
 				),
 				{
 					method: "POST",
@@ -1153,7 +1154,7 @@ export const getGoogleDriveFileMetadata = (
 	driveFetch(
 		config,
 		appendSharedDriveCreateParams(
-			`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size`,
+			`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size,version`,
 		),
 		undefined,
 		tokenStore,

@@ -161,6 +161,10 @@ pub fn set_window_capture_hidden(native: &NativeWindow, hidden: bool) -> usize {
     }
 }
 
+pub fn set_window_click_through(_native: &NativeWindow, _click_through: bool) -> bool {
+    false
+}
+
 pub fn restore_borderless_style(_native: &NativeWindow) {}
 
 pub fn remove_popup_window_chrome(_native: &NativeWindow) {}
@@ -608,12 +612,29 @@ pub fn save_file_panel(suggested: &str, extensions: &[&str]) -> Option<PathBuf> 
     dialog.save_file()
 }
 
-pub fn copy_file_to_clipboard(_path: &Path) -> Result<(), String> {
-    Err("Copy to clipboard is not available yet on Windows".into())
+pub fn copy_file_to_clipboard(path: &Path, _cx: &gpui::App) -> Result<(), String> {
+    use clipboard_rs::{Clipboard, ClipboardContext};
+
+    let path = super::clipboard_file_path(path)?;
+    let path = path
+        .to_str()
+        .ok_or("The clipboard file path is not valid Unicode")?;
+    ClipboardContext::new()
+        .map_err(|error| format!("Clipboard unavailable: {error}"))?
+        .set_files(vec![path.to_owned()])
+        .map_err(|error| format!("Could not copy the file to the clipboard: {error}"))
 }
 
-pub fn copy_image_to_clipboard(path: &Path) -> Result<(), String> {
-    copy_file_to_clipboard(path)
+pub fn copy_image_bytes_to_clipboard(bytes: &[u8], _cx: &gpui::App) -> Result<(), String> {
+    use clipboard_rs::common::RustImage;
+    use clipboard_rs::{Clipboard, ClipboardContext, RustImageData};
+
+    let image = RustImageData::from_bytes(bytes)
+        .map_err(|error| format!("Could not load the clipboard image: {error}"))?;
+    ClipboardContext::new()
+        .map_err(|error| format!("Clipboard unavailable: {error}"))?
+        .set_image(image)
+        .map_err(|error| format!("Could not copy the image to the clipboard: {error}"))
 }
 
 pub fn desktop_picture_path() -> Option<PathBuf> {

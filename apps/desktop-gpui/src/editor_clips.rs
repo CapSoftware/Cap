@@ -3,8 +3,6 @@
 //! list, rename, reorder and delete the timeline's clip segments, plus the
 //! import and record-a-new-clip entry points.
 //!
-//! Three seams differ from the Tauri app, each marked where it bites:
-//!
 //! * **Thumbnails** are decoded in-process off the main thread and cached in
 //!   memory keyed by `(recording segment, start ms)` -- `get_clip_thumbnail`
 //!   (`src-tauri/src/clip_thumbnails.rs`) writes a JPEG cache under the
@@ -14,27 +12,17 @@
 //!   copied into this bundle, the metas and the timeline extended, and the
 //!   editor reloaded -- `window.location.reload()`'s native spelling is
 //!   [`crate::app_windows::reload_editor`].
-//! * **"Record a new clip"** is the whole `setEditorRecordingTarget` flow,
-//!   natively: the modal's start actions arm the session's editor recording
-//!   target (`EditorRecordingTarget`, `src-tauri/src/windows.rs:3679-3697`)
-//!   and open the target-select overlays with the editor hidden for the
-//!   picker; the capture is forced into Studio mode; and when it stops
-//!   cleanly the session observer reveals this editor and hands it the
-//!   bundle, which lands through the same whole-segment-copy the import path
-//!   uses, followed by the recording directory's deletion and an editor
-//!   reload -- the `EditorRecordingAdded` listener (`Editor.tsx:312-335`),
-//!   transcribed. The Display/Window chevron menus list the same enumeration
-//!   the main window's pickers use, with the same live ScreenCaptureKit
-//!   thumbnails and app icons -- `ClipsSidebar.tsx:378-385` runs the same two
-//!   `*WithThumbnails` queries the main window does, through the same
-//!   `TargetCard`.
 
 use std::{
     cell::RefCell,
     collections::HashMap,
+    io::Write as _,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use cap_project::{
@@ -44,35 +32,22 @@ use cap_project::{
     XY,
 };
 use gpui::{
-    AnyElement, AppContext as _, Bounds, Context, CursorStyle, Entity, FontWeight, Hsla,
+    AnyElement, App, AppContext as _, Bounds, Context, CursorStyle, Entity, FontWeight, Hsla,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement, Pixels, Point, RenderImage, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled, StyledImage as _, Task, Window, div, img,
+    StatefulInteractiveElement as _, Styled, StyledImage as _, Window, WindowHandle, div, img,
     prelude::FluentBuilder, px, svg,
 };
 
 use crate::{
     app_windows,
-    devices::{CameraOption, DeviceSnapshot, DisplayOption, MicrophoneOption, WindowOption},
     editor_edits::{self as edits, TrackSegmentOps},
     editor_timeline::clip_timeline_offsets,
     editor_window::EditorWindow,
-    main_window::{Mode, TargetType},
     session::{Phase, RecordingSession},
-    target_thumbnails,
     theme::Theme,
     ui,
 };
-
-/// The width one target card gets in the record modal, computed rather than
-/// flexed.
-///
-/// The modal is `w-full max-w-[460px]` and the editor's minimum window width is
-/// 1275, so 460 is always what it gets; its body is `p-5`, and the grid has an
-/// 8px gutter: `(460 - 40 - 8) / 2`. Stating the width keeps `flex_1` off a
-/// text-bearing card in a grid that can hold every window on the machine --
-/// the same reason `MainWindow::target_card_width` exists.
-const RECORD_TARGET_CARD_WIDTH: f32 = 206.;
 
 // ---------------------------------------------------------------------------
 // Naming (`ClipsSidebar.tsx:558-609`)
@@ -314,51 +289,21 @@ pub(crate) struct ClipDrag {
     active: bool,
 }
 
-/// Which of the record modal's device selects is unfolded --
-/// `CameraSelectBase` / `MicrophoneSelectBase`'s open dropdown
-/// (`ClipsSidebar.tsx:1084-1122`), drawn here as an in-modal list the way the
-/// chevron target menus are (a KSelect popover has no gpui counterpart).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RecordDeviceMenu {
-    Camera,
-    Microphone,
-}
-
 /// Everything the clips layout mode owns. Lives on [`EditorWindow`] so the
 /// mode is hidden, not destroyed, while closed -- the Tauri sidebar stays
 /// mounted with `class="hidden"` (`Editor.tsx:739-746`).
 pub(crate) struct ClipsState {
     /// `isClipsMode()` (`Editor.tsx:347-350`).
     pub(crate) open: bool,
-    /// `recordOpen`.
-    record_open: bool,
-    /// `displayMenuOpen` / `windowMenuOpen` (`:292-296`) -- which chevron
-    /// target menu the modal body is showing. Only `Display` and `Window`
-    /// ever land here.
-    record_target_menu: Option<TargetType>,
-    /// Which device select is unfolded.
-    record_device_menu: Option<RecordDeviceMenu>,
-    /// `targetSearch`, as the shared text-input entity (created on first use,
-    /// like the rename field -- it needs a window).
-    target_search_input: Option<Entity<ui::TextInputState>>,
-    /// `createDevicesQuery` (`:365`): enumerated when the modal opens, `None`
-    /// while the scan is in flight so the menus can say "Loading...".
-    record_devices: Option<DeviceSnapshot>,
-    /// Thumbnails and app icons for the record modal's target cards.
-    /// `ClipsSidebar.tsx:378-385` runs the same
-    /// `listDisplaysWithThumbnails`/`listWindowsWithThumbnails` queries the
-    /// main window does, so the cards look the same -- but on this route's own
-    /// `QueryClient`, which is why this cache is per-view too.
-    record_thumbnails: target_thumbnails::ThumbnailCache,
-    /// The in-flight sweep for whichever target menu is open. Dropping it
-    /// stops the loop; the loop also stops itself the moment the menu closes.
-    record_thumbnail_task: Option<Task<()>>,
     /// The import menu's anchor, while it is up. A native `Menu.popup()` in
     /// the Tauri app (`:541-556`); here the `ui::Menu` shape -- full-window
     /// backdrop, panel at the click position.
     import_menu: Option<Point<Pixels>>,
     /// `importing`.
     importing: bool,
+    import_cancelled: Option<Arc<AtomicBool>>,
+    import_reload_subscription: Option<gpui::Subscription>,
+    prepared_mp4_import: Option<PreparedMp4Import>,
     /// `editingIndex`.
     editing: Option<usize>,
     /// The inline rename field, created on first use (it needs a window).
@@ -378,15 +323,11 @@ impl Default for ClipsState {
     fn default() -> Self {
         Self {
             open: false,
-            record_open: false,
-            record_target_menu: None,
-            record_device_menu: None,
-            target_search_input: None,
-            record_devices: None,
-            record_thumbnails: target_thumbnails::ThumbnailCache::default(),
-            record_thumbnail_task: None,
             import_menu: None,
             importing: false,
+            import_cancelled: None,
+            import_reload_subscription: None,
+            prepared_mp4_import: None,
             editing: None,
             rename_input: None,
             drag: None,
@@ -395,6 +336,20 @@ impl Default for ClipsState {
             scroll: ScrollHandle::new(),
             thumbs: HashMap::new(),
             thumbs_inflight: 0,
+        }
+    }
+}
+
+impl ClipsState {
+    pub(crate) fn is_importing(&self) -> bool {
+        self.importing
+    }
+}
+
+impl Drop for ClipsState {
+    fn drop(&mut self) {
+        if let Some(cancelled) = &self.import_cancelled {
+            cancelled.store(true, Ordering::Release);
         }
     }
 }
@@ -468,28 +423,36 @@ impl EditorWindow {
         cx.notify();
     }
 
-    /// `backToEditor` and the close half of the `createEffect(on(open))`
-    /// cleanup (`ClipsSidebar.tsx:278, 343-363`), `resetRecordingTarget`
-    /// included: a target armed by the modal but never recorded is cleared so
-    /// it cannot redirect a later capture. Guarded on Idle -- mid-recording
-    /// the target belongs to the live capture and must survive (the Tauri
-    /// effect runs unguarded, but its editor window is hidden then, so the
-    /// guard only closes a hole rather than changing behaviour). A live
-    /// rename commits first: hiding the DOM input blurs it, and blur commits.
     pub(crate) fn close_clips(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.clips.editing.is_some() {
             self.commit_clip_rename(window, cx);
         }
         self.clips.open = false;
-        self.clips.record_open = false;
-        self.clips.record_target_menu = None;
-        self.clips.record_device_menu = None;
         self.clips.import_menu = None;
         self.clips.drag = None;
         self.clips.drop_index = None;
         let session = RecordingSession::global(cx);
-        if session.read(cx).phase == Phase::Idle {
-            session.update(cx, |session, _| session.set_editor_recording_target(None));
+        if session.read(cx).phase == Phase::Idle
+            && session.read(cx).editor_recording_target().as_ref() == Some(&self.project_path)
+        {
+            let main = cx.global::<app_windows::AppWindows>().main;
+            main.update(cx, |view, _, _| view.cancel_deep_link_start())
+                .ok();
+            let editor_path = self.project_path.clone();
+            cx.defer(move |cx| {
+                if RecordingSession::global(cx)
+                    .read(cx)
+                    .editor_recording_target()
+                    .as_ref()
+                    == Some(&editor_path)
+                {
+                    if app_windows::clean_capture_owned(cx) {
+                        app_windows::cancel_clean_capture(cx);
+                    } else {
+                        app_windows::abort_editor_recording_flow(cx);
+                    }
+                }
+            });
         }
         cx.notify();
     }
@@ -499,18 +462,6 @@ impl EditorWindow {
     pub(crate) fn clips_overlay_escape(&mut self, cx: &mut Context<Self>) -> bool {
         if self.clips.import_menu.is_some() {
             self.clips.import_menu = None;
-            cx.notify();
-            return true;
-        }
-        if self.clips.record_open {
-            // The modal's own Escape ladder (`ClipsSidebar.tsx:764-775`): an
-            // open target or device menu closes first, the modal second.
-            if self.clips.record_target_menu.is_some() || self.clips.record_device_menu.is_some() {
-                self.clips.record_target_menu = None;
-                self.clips.record_device_menu = None;
-            } else {
-                self.clips.record_open = false;
-            }
             cx.notify();
             return true;
         }
@@ -856,9 +807,16 @@ impl EditorWindow {
                             .gap(px(8.))
                             .font_weight(FontWeight::MEDIUM)
                             .full_width()
+                            .disabled(self.clips.importing)
                             .on_click(cx.listener(
-                                |this, _, window, cx| {
-                                    this.open_record_modal(window, cx);
+                                |this, _, _window, cx| {
+                                    if !this.begin_editor_recording(cx) {
+                                        return;
+                                    }
+                                    let project_path = this.project_path.clone();
+                                    cx.defer(move |cx| {
+                                        app_windows::open_editor_recording_main(project_path, cx);
+                                    });
                                 },
                             )),
                         ),
@@ -871,7 +829,11 @@ impl EditorWindow {
                             ui::ButtonSize::Md,
                         )
                         .icon("icons/circle-plus.svg")
-                        .label("Import")
+                        .label(if self.clips.importing {
+                            "Importing…"
+                        } else {
+                            "Import"
+                        })
                         .height(px(40.))
                         .gap(px(8.))
                         .font_weight(FontWeight::MEDIUM)
@@ -1237,447 +1199,42 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    // -- Record a new clip (`ClipsSidebar.tsx:434-501`, `Editor.tsx:312-335`) --
-
-    /// The action row's blue button: open the modal and refresh the device
-    /// enumeration behind it (`createDevicesQuery` is enabled by
-    /// `props.open && recordOpen()`, so the lists are re-read per opening).
-    fn open_record_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.clips.record_open = true;
-        self.clips.record_target_menu = None;
-        self.clips.record_device_menu = None;
-        // Whatever the last session cached is stale by now (and the queries
-        // would refetch on mount anyway), so release the sprite-atlas tiles
-        // rather than carry them for the life of the editor window.
-        for image in self.clips.record_thumbnails.reset() {
-            let _ = window.drop_image(image);
-        }
-        self.clips.record_thumbnail_task = None;
-        self.refresh_record_devices(cx);
-        cx.notify();
-    }
-
-    /// The record modal's thumbnail loop.
-    ///
-    /// `ClipsSidebar.tsx:378-385` enables each thumbnail query on
-    /// `props.open && recordOpen() && <kind>MenuOpen()` and takes the query's
-    /// own `refetchInterval` -- 10s for displays (`utils/queries.ts:75`),
-    /// none for windows (`:66`). So: capture once when the menu opens, and for
-    /// displays keep re-capturing every `THUMBNAIL_STALE_TIME` until it closes.
-    ///
-    /// Unlike the main window there is no cheap-list poll and no signature
-    /// comparison, because the sidebar does not run `listScreens`/`listWindows`
-    /// at all. Each sweep re-enumerates, so the target rows still refresh.
-    fn start_record_thumbnails(
-        &mut self,
-        kind: TargetType,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if matches!(kind, TargetType::Area | TargetType::CameraOnly) {
-            self.clips.record_thumbnail_task = None;
-            return;
-        }
-
-        self.clips.record_thumbnail_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let mut captured = false;
-            loop {
-                // The loop owns its own lifetime: every path that closes the
-                // modal or the menu is a state change, so reading the state
-                // here beats hunting down six call sites to cancel a task.
-                let Ok(open) = this.update(cx, |this, _| {
-                    this.clips.record_open && this.clips.record_target_menu == Some(kind)
-                }) else {
-                    return;
-                };
-                if !open {
-                    // Closing the modal releases the atlas tiles; closing just
-                    // the menu keeps them, the way a 60s `gcTime` would.
-                    this.update_in(cx, |this, window, _| {
-                        if !this.clips.record_open {
-                            for image in this.clips.record_thumbnails.reset() {
-                                let _ = window.drop_image(image);
-                            }
-                        }
-                    })
-                    .ok();
-                    return;
-                }
-
-                // Displays re-capture on every tick (`refetchInterval:
-                // 10_000`); windows capture once and the loop stays only to
-                // notice the menu closing (`refetchInterval: false`).
-                if kind == TargetType::Display || !captured {
-                    let Ok(sweep) = this.update_in(cx, |this, window, cx| {
-                        this.start_record_capture(kind, window, cx)
-                    }) else {
-                        return;
-                    };
-                    if let Some(sweep) = sweep {
-                        sweep.await;
-                        captured = true;
-                    }
-                }
-
-                cx.background_executor()
-                    .timer(target_thumbnails::THUMBNAIL_STALE_TIME)
-                    .await;
-            }
-        }));
-    }
-
-    /// One sweep, the editor twin of `MainWindow::start_capture` -- same
-    /// in-flight guard, same off-thread split, same reconcile-by-id install.
-    fn start_record_capture(
-        &mut self,
-        kind: TargetType,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<Task<()>> {
-        match kind {
-            TargetType::Display => {
-                if self.clips.record_thumbnails.display_inflight() {
-                    return None;
-                }
-                self.clips.record_thumbnails.set_display_inflight(true);
-
-                let (events_tx, events) = flume::unbounded();
-                let capture = gpui_tokio::Tokio::spawn(cx, async move {
-                    target_thumbnails::capture_displays(events_tx).await;
-                });
-
-                Some(cx.spawn_in(window, async move |this, cx| {
-                    let _capture = capture;
-                    while let Ok(first) = events.recv_async().await {
-                        let mut batch = vec![first];
-                        batch.extend(events.try_iter());
-                        if this
-                            .update_in(cx, |this, window, cx| {
-                                this.apply_record_display_events(batch, window, cx)
-                            })
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    this.update(cx, |this, _| {
-                        this.clips.record_thumbnails.set_display_inflight(false)
-                    })
-                    .ok();
-                }))
-            }
-            TargetType::Window => {
-                if self.clips.record_thumbnails.window_inflight() {
-                    return None;
-                }
-                self.clips.record_thumbnails.set_window_inflight(true);
-
-                let (events_tx, events) = flume::unbounded();
-                let capture = gpui_tokio::Tokio::spawn(cx, async move {
-                    target_thumbnails::capture_windows(events_tx).await;
-                });
-
-                Some(cx.spawn_in(window, async move |this, cx| {
-                    let _capture = capture;
-                    while let Ok(first) = events.recv_async().await {
-                        let mut batch = vec![first];
-                        batch.extend(events.try_iter());
-                        if this
-                            .update_in(cx, |this, window, cx| {
-                                this.apply_record_window_events(batch, window, cx)
-                            })
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    this.update(cx, |this, _| {
-                        this.clips.record_thumbnails.set_window_inflight(false)
-                    })
-                    .ok();
-                }))
-            }
-            TargetType::Area | TargetType::CameraOnly => None,
-        }
-    }
-
-    fn apply_record_display_events(
-        &mut self,
-        batch: Vec<target_thumbnails::DisplayEvent>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        for event in batch {
-            match event {
-                target_thumbnails::DisplayEvent::Listed(list) => {
-                    for image in self.clips.record_thumbnails.retain_displays(&list) {
-                        let _ = window.drop_image(image);
-                    }
-                    if let Some(devices) = self.clips.record_devices.as_mut() {
-                        devices.displays = list;
-                    }
-                }
-                target_thumbnails::DisplayEvent::Captured(id, image) => {
-                    if let Some(old) = self.clips.record_thumbnails.insert_display(&id, image) {
-                        let _ = window.drop_image(old);
-                    }
-                }
-            }
-        }
-        cx.notify();
-        // The editor is not necessarily the active window while a sweep lands,
-        // and an inactive window only repaints when asked.
-        window.refresh();
-    }
-
-    fn apply_record_window_events(
-        &mut self,
-        batch: Vec<target_thumbnails::WindowEvent>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        for event in batch {
-            match event {
-                target_thumbnails::WindowEvent::Listed(list) => {
-                    for image in self.clips.record_thumbnails.retain_windows(&list) {
-                        let _ = window.drop_image(image);
-                    }
-                    if let Some(devices) = self.clips.record_devices.as_mut() {
-                        devices.windows = list;
-                    }
-                }
-                target_thumbnails::WindowEvent::Captured {
-                    id,
-                    image,
-                    app_icon,
-                } => {
-                    let icon = app_icon.map(|bytes| {
-                        Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, bytes))
-                    });
-                    if let Some(old) = self.clips.record_thumbnails.insert_window(&id, image, icon)
-                    {
-                        let _ = window.drop_image(old);
-                    }
-                }
-            }
-        }
-        cx.notify();
-        window.refresh();
-    }
-
-    /// The enumeration hits AVFoundation and the window server, so it runs on
-    /// the background executor -- the `start_enumeration` rule from the main
-    /// window, which shares `DeviceSnapshot`.
-    fn refresh_record_devices(&mut self, cx: &mut Context<Self>) {
-        self.clips.record_devices = None;
-        cx.spawn(async move |this, cx| {
-            let snapshot = cx
-                .background_executor()
-                .spawn(async move { DeviceSnapshot::enumerate() })
-                .await;
-            this.update(cx, |this, cx| {
-                this.clips.record_devices = Some(snapshot);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// The chevron menus' search field, created on first use like the rename
-    /// input. Escape with text clears it (the source input's own
-    /// `onKeyDown`, `:1155-1161`); Escape empty falls back to closing the
-    /// menu, which is what bubbling to the window handler would do.
-    fn ensure_target_search_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.clips.target_search_input.is_some() {
-            return;
-        }
-        let input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
-        let subscription = cx.subscribe_in(
-            &input,
-            window,
-            |this: &mut Self, input, event: &ui::TextInputEvent, _window, cx| match event {
-                ui::TextInputEvent::Changed => cx.notify(),
-                ui::TextInputEvent::Cancelled => {
-                    if input.read(cx).text().is_empty() {
-                        this.clips.record_target_menu = None;
-                        this.clips.record_device_menu = None;
-                    } else {
-                        input.update(cx, |input, cx| input.set_text("", cx));
-                    }
-                    cx.notify();
-                }
-                ui::TextInputEvent::Confirmed | ui::TextInputEvent::Blurred => {}
-            },
-        );
-        self.push_text_subscription(subscription);
-        self.clips.target_search_input = Some(input);
-    }
-
-    fn target_search_text(&self, cx: &Context<Self>) -> String {
-        self.clips
-            .target_search_input
-            .as_ref()
-            .map(|input| input.read(cx).text().trim().to_lowercase())
-            .unwrap_or_default()
-    }
-
-    /// Toggle a chevron target menu open (`:1029-1035, 1062-1068`), focusing
-    /// the search field the way the Tauri menu's `Input` autofocuses.
-    fn toggle_record_target_menu(
-        &mut self,
-        kind: TargetType,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.clips.record_target_menu == Some(kind) {
-            self.clips.record_target_menu = None;
-        } else {
-            self.ensure_target_search_input(window, cx);
-            if let Some(input) = self.clips.target_search_input.clone() {
-                input.update(cx, |input, cx| {
-                    // `placeholder={... ? "Search windows" : "Search displays"}`
-                    // (`:1162-1166`).
-                    input.set_placeholder(if kind == TargetType::Window {
-                        "Search windows"
-                    } else {
-                        "Search displays"
-                    });
-                    input.set_text("", cx);
-                    input.focus_and_select_all(window, cx);
-                });
-            }
-            self.clips.record_target_menu = Some(kind);
-            self.clips.record_device_menu = None;
-            // `enabled: props.open && recordOpen() && <kind>MenuOpen()` --
-            // the thumbnail query only runs while this menu is up, and each
-            // sweep re-enumerates, so the list refreshes with it.
-            self.start_record_thumbnails(kind, window, cx);
-        }
-        cx.notify();
-    }
-
-    /// `beginEditorRecording` (`ClipsSidebar.tsx:434-445`): close the modal,
-    /// stop playback, persist the live project config (the `setProjectConfig`
-    /// call -- the finish-time append merges into what is on disk), and arm
-    /// the session's editor recording target. Studio mode is forced app-side
-    /// (`begin_recording`), so the persisted recording-mode setting is left
-    /// alone -- the sidebar's `previousMode` save/restore dance nets out to
-    /// exactly that.
-    ///
-    /// Returns false without arming when a recording is already live: the
-    /// Tauri backend refuses the second start in `set_pending_recording`, and
-    /// refusing *before* the target write means the modal cannot re-point a
-    /// live recording's append at a different project.
     fn begin_editor_recording(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.clips.importing {
+            return false;
+        }
         let session = RecordingSession::global(cx);
-        if session.read(cx).phase != Phase::Idle {
+        if session.read(cx).phase != Phase::Idle || app_windows::clean_capture_owned(cx) {
             tracing::warn!("a recording is already live; not starting another from the editor");
             return false;
         }
-        self.clips.record_open = false;
-        self.clips.record_target_menu = None;
-        self.clips.record_device_menu = None;
         if self.playing {
             self.stop_playback(cx);
         }
         self.pending_save().borrow_mut().flush();
         if let Err(error) = self.project.write(&self.project_path) {
             tracing::error!("failed to persist the project config before recording: {error}");
+            let message = format!("Could not save the current project before recording: {error}");
+            cx.spawn(async move |_, _| show_append_error(&message))
+                .detach();
+            return false;
         }
-        session.update(cx, |session, _| {
-            session.set_editor_recording_target(Some(self.project_path.clone()))
+        let main = cx.global::<app_windows::AppWindows>().main;
+        if let Err(error) = main.update(cx, |view, _, _| view.cancel_deep_link_start()) {
+            let message = format!("Could not prepare the recording controls: {error}");
+            cx.spawn(async move |_, _| show_append_error(&message))
+                .detach();
+            return false;
+        }
+        session.update(cx, |session, cx| {
+            session.set_editor_recording_target(Some(self.project_path.clone()));
+            cx.notify();
         });
         cx.notify();
         true
     }
 
-    /// `openTargetMode` (`:447-463`): arm the target, then the picker
-    /// overlays with the editor hidden behind them.
-    fn open_editor_target_mode(&mut self, kind: TargetType, cx: &mut Context<Self>) {
-        if !self.begin_editor_recording(cx) {
-            return;
-        }
-        if kind == TargetType::CameraOnly {
-            // `setOptions("captureSystemAudio", false)` (`:452-458`): a
-            // camera-only capture records no system audio, and the option is
-            // the shared one the main window owns.
-            let main = cx.global::<app_windows::AppWindows>().main;
-            cx.defer(move |cx: &mut gpui::App| {
-                main.update(cx, |view, _window, cx| view.set_system_audio(false, cx))
-                    .ok();
-            });
-        }
-        let project_path = self.project_path.clone();
-        let request = app_windows::OverlayRequest {
-            mode: kind,
-            recording_mode: Mode::Studio,
-            display: None,
-            pinned_window: None,
-        };
-        cx.defer(move |cx: &mut gpui::App| {
-            app_windows::open_editor_target_overlays(project_path, request, cx)
-        });
-    }
-
-    /// `selectDisplayTarget` (`:465-479`): the overlays narrowed to the
-    /// picked display, editor hidden.
-    fn select_record_display(&mut self, display: DisplayOption, cx: &mut Context<Self>) {
-        if !self.begin_editor_recording(cx) {
-            return;
-        }
-        let project_path = self.project_path.clone();
-        let request = app_windows::OverlayRequest {
-            mode: TargetType::Display,
-            recording_mode: Mode::Studio,
-            display: Some(display.id),
-            pinned_window: None,
-        };
-        cx.defer(move |cx: &mut gpui::App| {
-            app_windows::open_editor_target_overlays(project_path, request, cx)
-        });
-    }
-
-    /// `selectWindowTarget` (`:481-501`): the overlays pinned to the picked
-    /// window, and then the picked window's app brought forward -- the
-    /// trailing `commands.focusWindow(target.id)` (`:497`), which the main
-    /// window's own window list does too. Only windows: `selectDisplayTarget`
-    /// has no such call, and neither has a click on the overlay itself.
-    fn select_record_window(&mut self, target: WindowOption, cx: &mut Context<Self>) {
-        if !self.begin_editor_recording(cx) {
-            return;
-        }
-        let project_path = self.project_path.clone();
-        let focus = target.id.clone();
-        let request = app_windows::OverlayRequest {
-            mode: TargetType::Window,
-            recording_mode: Mode::Studio,
-            display: None,
-            pinned_window: Some(target.id),
-        };
-        cx.defer(move |cx: &mut gpui::App| {
-            app_windows::open_editor_target_overlays(project_path, request, cx);
-            // After the overlays, the way the source awaits `focusWindow` last,
-            // and off the main thread: the Tauri command runs on an async
-            // command thread, and activating another application inside this
-            // update would re-enter gpui's window callbacks.
-            cx.background_executor()
-                .spawn(async move {
-                    crate::platform::focus_capture_target_window(&focus);
-                })
-                .detach();
-        });
-    }
-
-    /// The picker was cancelled while this editor was hidden for it
-    /// (`rawOptions.targetMode == null && hiddenForPicker`,
-    /// `ClipsSidebar.tsx:413-426`): the reveal and the target clear happen in
-    /// `app_windows::dismiss_target_overlays`; this is the modal-state half
-    /// (`restoreMode(); closeRecord()`).
     pub(crate) fn editor_picker_dismissed(&mut self, cx: &mut Context<Self>) {
-        self.clips.record_open = false;
-        self.clips.record_target_menu = None;
-        self.clips.record_device_menu = None;
         cx.notify();
     }
 
@@ -1758,15 +1315,10 @@ impl EditorWindow {
         .detach();
     }
 
-    // -- Overlays: import menu, record modal, drag ghost -----------------------
-
     pub(crate) fn render_clips_overlays(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut overlays = Vec::new();
         if let Some(menu) = self.render_clips_import_menu(cx) {
             overlays.push(menu);
-        }
-        if let Some(modal) = self.render_clips_record_modal(cx) {
-            overlays.push(modal);
         }
         if let Some(layer) = self.render_clips_drag_layer(cx) {
             overlays.push(layer);
@@ -1774,10 +1326,6 @@ impl EditorWindow {
         overlays
     }
 
-    /// The import menu (`:541-556`): a native `Menu.popup()` in the Tauri
-    /// app, here the `ui::Menu` shape -- backdrop plus a panel at the click
-    /// position -- because it needs a disabled row, which `ui::Menu` has no
-    /// arm for.
     fn render_clips_import_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let origin = self.clips.import_menu?;
         let theme = self.theme;
@@ -1815,35 +1363,39 @@ impl EditorWindow {
                         })),
                 )
                 .child(
-                    div()
-                        .absolute()
-                        .left(origin.x)
-                        .top(origin.y)
-                        .flex()
-                        .flex_col()
-                        .min_w(px(180.))
-                        .p(px(4.))
-                        .rounded(px(8.))
-                        .border_1()
-                        .border_color(Hsla::from(theme.gray_3))
-                        .bg(Hsla::from(theme.gray_1))
-                        .text_size(px(12.))
-                        .text_color(Hsla::from(theme.gray_12))
+                    gpui::anchored()
+                        .position(origin)
+                        .snap_to_window_with_margin(px(12.))
                         .child(
-                            row("clips-import-existing", "Existing recording")
-                                .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.clips.import_menu = None;
-                                    this.pick_existing_recording(window, cx);
-                                })),
-                        )
-                        .child(
-                            // Disabled: `crate::import` only creates *new*
-                            // library bundles (`pick_and_import_video`);
-                            // appending an MP4 to the open project
-                            // (`append_mp4_to_editor_project`) has no seam
-                            // here yet.
-                            row("clips-import-mp4", "MP4 Video…").opacity(0.5),
+                            div()
+                                .flex()
+                                .flex_col()
+                                .min_w(px(180.))
+                                .p(px(4.))
+                                .rounded(px(8.))
+                                .border_1()
+                                .border_color(Hsla::from(theme.gray_3))
+                                .bg(Hsla::from(theme.gray_1))
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.gray_12))
+                                .child(
+                                    row("clips-import-existing", "Existing recording")
+                                        .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.clips.import_menu = None;
+                                            cx.notify();
+                                            this.pick_existing_recording(window, cx);
+                                        })),
+                                )
+                                .child(
+                                    row("clips-import-mp4", "MP4 Video…")
+                                        .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.clips.import_menu = None;
+                                            cx.notify();
+                                            this.pick_mp4(window, cx);
+                                        })),
+                                ),
                         ),
                 )
                 .into_any_element(),
@@ -1901,844 +1453,6 @@ impl EditorWindow {
         )
     }
 
-    /// The record modal (`:969-1222`), chrome 1:1 and live: the four target
-    /// actions arm the session's editor recording target and open the picker
-    /// overlays, the chevron menus unfold the concrete display/window lists,
-    /// and the device selects read and write the shared recording options on
-    /// the main window (the gpui home of `rawOptions`).
-    fn render_clips_record_modal(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.clips.record_open {
-            return None;
-        }
-        let theme = self.theme;
-
-        // `activeTargetMenu()` swaps the whole body (`:1001-1217`); the
-        // device selects reuse the same swap where the Tauri KSelect floats a
-        // popover, which has no gpui counterpart here.
-        let body: AnyElement = if let Some(kind) = self.clips.record_target_menu {
-            self.render_record_target_menu(kind, cx).into_any_element()
-        } else if let Some(menu) = self.clips.record_device_menu {
-            self.render_record_device_menu(menu, cx).into_any_element()
-        } else {
-            self.render_record_modal_home(cx).into_any_element()
-        };
-
-        Some(
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .p(px(24.))
-                .child(
-                    // `backdrop-blur-sm bg-black/60` -- gpui elements cannot
-                    // blur what is behind them, so the wash carries it alone.
-                    div()
-                        .id("clips-record-backdrop")
-                        .absolute()
-                        .inset_0()
-                        .bg(gpui::hsla(0., 0., 0., 0.6))
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.clips.record_open = false;
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    // The panel (`:977`): `max-w-[460px] h-[480px] rounded-2xl
-                    // border shadow-2xl bg-gray-1 dark:bg-gray-2 border-gray-3`.
-                    div()
-                        .occlude()
-                        .relative()
-                        .flex()
-                        .flex_col()
-                        .w_full()
-                        .max_w(px(460.))
-                        .h(px(480.))
-                        .overflow_hidden()
-                        .rounded(px(16.))
-                        .border_1()
-                        .border_color(Hsla::from(theme.gray_3))
-                        .bg(self.panel_bg())
-                        .shadow_lg()
-                        // The header (`:978-998`).
-                        .child(
-                            div()
-                                .flex()
-                                .flex_none()
-                                .flex_row()
-                                .gap(px(12.))
-                                .items_center()
-                                .px(px(20.))
-                                .py(px(16.))
-                                .border_b_1()
-                                .border_color(Hsla::from(theme.gray_3))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_none()
-                                        .justify_center()
-                                        .items_center()
-                                        .size(px(40.))
-                                        .rounded(px(12.))
-                                        .bg(Hsla::from(theme.blue_3))
-                                        .child(
-                                            svg()
-                                                .path("icons/clapperboard.svg")
-                                                .size(px(20.))
-                                                .text_color(Hsla::from(theme.blue_10)),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(2.))
-                                        .min_w_0()
-                                        .child(
-                                            div()
-                                                .text_size(px(14.))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(Hsla::from(theme.gray_12))
-                                                .child("Record a new clip"),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(12.))
-                                                .text_color(Hsla::from(theme.gray_10))
-                                                .child(
-                                                    "Captured in Studio Mode and added to \
-                                                     this project.",
-                                                ),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .id("clips-record-close")
-                                        .flex()
-                                        .flex_none()
-                                        .justify_center()
-                                        .items_center()
-                                        .ml_auto()
-                                        .rounded(px(6.))
-                                        .size(px(28.))
-                                        .text_color(Hsla::from(theme.gray_11))
-                                        .hover(move |style| {
-                                            style
-                                                .bg(Hsla::from(theme.gray_4))
-                                                .text_color(Hsla::from(theme.gray_12))
-                                        })
-                                        .child(svg().path("icons/x.svg").size(px(12.)))
-                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                            this.clips.record_open = false;
-                                            cx.notify();
-                                        })),
-                                ),
-                        )
-                        // The body container (`:1000`): `flex flex-col flex-1
-                        // p-5 min-h-0`.
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .flex_1()
-                                .p(px(20.))
-                                .min_h_0()
-                                .child(body),
-                        ),
-                )
-                .into_any_element(),
-        )
-    }
-
-    /// The modal's home body (`:1004-1125`): the target grid over the device
-    /// selects.
-    fn render_record_modal_home(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let (camera, microphone, system_audio) = record_input_snapshot(cx);
-
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .gap(px(16.))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .w_full()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap(px(8.))
-                            .w_full()
-                            .child(self.record_split_target(
-                                "clips-record-display",
-                                "icons/monitor.svg",
-                                "Display",
-                                TargetType::Display,
-                                cx,
-                            ))
-                            .child(self.record_split_target(
-                                "clips-record-window",
-                                "icons/app-window-mac.svg",
-                                "Window",
-                                TargetType::Window,
-                                cx,
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap(px(8.))
-                            .w_full()
-                            .child(self.record_type_button(
-                                "clips-record-area",
-                                "icons/area.svg",
-                                "Area",
-                                TargetType::Area,
-                                true,
-                                cx,
-                            ))
-                            .child(self.record_type_button(
-                                "clips-record-camera-only",
-                                "icons/video.svg",
-                                "Camera Only",
-                                TargetType::CameraOnly,
-                                true,
-                                cx,
-                            )),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .child(self.record_select_row(
-                        "clips-record-camera",
-                        "icons/camera.svg",
-                        camera.unwrap_or_else(|| "No Camera".to_string()),
-                        true,
-                        cx.listener(|this, _, _window, cx| {
-                            this.clips.record_device_menu = Some(RecordDeviceMenu::Camera);
-                            this.clips.record_target_menu = None;
-                            cx.notify();
-                        }),
-                    ))
-                    .child(self.record_select_row(
-                        "clips-record-mic",
-                        "icons/microphone.svg",
-                        microphone.unwrap_or_else(|| "No Microphone".to_string()),
-                        true,
-                        cx.listener(|this, _, _window, cx| {
-                            this.clips.record_device_menu = Some(RecordDeviceMenu::Microphone);
-                            this.clips.record_target_menu = None;
-                            cx.notify();
-                        }),
-                    ))
-                    .child(self.record_select_row(
-                        "clips-record-system-audio",
-                        "icons/volume-2.svg",
-                        if system_audio {
-                            "Record System Audio".to_string()
-                        } else {
-                            "No System Audio".to_string()
-                        },
-                        false,
-                        cx.listener(|_this, _, _window, cx| {
-                            // A plain toggle, like the main window's own
-                            // system-audio row -- on the shared option, so it
-                            // goes through that window's entity, deferred.
-                            let main = cx.global::<app_windows::AppWindows>().main;
-                            cx.defer(move |cx: &mut gpui::App| {
-                                main.update(cx, |view, _window, cx| {
-                                    let next = !view.system_audio_enabled();
-                                    view.set_system_audio(next, cx);
-                                })
-                                .ok();
-                            });
-                            cx.notify();
-                        }),
-                    )),
-            )
-    }
-
-    /// `TargetTypeButton` (`new-main/TargetTypeButton.tsx:28-48`), the
-    /// name-only variant: `flex flex-col items-center gap-1 rounded-lg
-    /// border py-2 justify-end`, icon `size-5 text-gray-10`, text-xs.
-    fn record_type_button(
-        &self,
-        id: &'static str,
-        icon: &'static str,
-        name: &'static str,
-        kind: TargetType,
-        bordered: bool,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
-        let theme = self.theme;
-        div()
-            .id(id)
-            .flex()
-            .flex_1()
-            .flex_col()
-            .items_center()
-            .justify_end()
-            .gap(px(4.))
-            .py(px(8.))
-            .when(bordered, |this| {
-                this.rounded(px(8.))
-                    .border_1()
-                    .border_color(Hsla::from(theme.gray_6))
-                    .bg(Hsla::from(theme.gray_2))
-            })
-            .cursor(CursorStyle::PointingHand)
-            .hover(move |style| style.bg(Hsla::from(theme.gray_4)))
-            .text_color(Hsla::from(theme.gray_12))
-            .child(
-                svg()
-                    .path(icon)
-                    .size(px(20.))
-                    .flex_shrink_0()
-                    .text_color(Hsla::from(theme.gray_10)),
-            )
-            .child(div().text_size(px(12.)).child(name))
-            .on_click(cx.listener(move |this, _, _window, cx| {
-                this.open_editor_target_mode(kind, cx);
-            }))
-    }
-
-    /// The Display/Window split buttons (`:1006-1072`): a shared `rounded-lg
-    /// border border-gray-5 bg-gray-3` shell -- the type half opens the
-    /// picker across every display, the `border-l border-gray-6` chevron
-    /// unfolds the concrete list.
-    fn record_split_target(
-        &self,
-        id: &'static str,
-        icon: &'static str,
-        name: &'static str,
-        kind: TargetType,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        let theme = self.theme;
-        div()
-            .flex()
-            .flex_1()
-            .overflow_hidden()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(Hsla::from(theme.gray_5))
-            .bg(Hsla::from(theme.gray_3))
-            .child(self.record_type_button(id, icon, name, kind, false, cx))
-            .child(
-                div()
-                    .id(SharedString::from(format!("{id}-menu")))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .px(px(8.))
-                    .border_l_1()
-                    .border_color(Hsla::from(theme.gray_6))
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(move |style| style.bg(Hsla::from(theme.gray_5)))
-                    .child(
-                        svg()
-                            .path("icons/chevron-down.svg")
-                            .size(px(14.))
-                            .text_color(Hsla::from(theme.gray_10)),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.toggle_record_target_menu(kind, window, cx);
-                    })),
-            )
-    }
-
-    /// `CameraSelectBase` / `MicrophoneSelectBase`'s shell (`:1106, 1119`):
-    /// `h-[42px] rounded-lg border border-gray-5 bg-gray-3 px-2 gap-2`, live.
-    /// `chevron` marks the two pickers; the system-audio toggle goes without.
-    fn record_select_row(
-        &self,
-        id: &'static str,
-        icon: &'static str,
-        label: String,
-        chevron: bool,
-        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
-    ) -> gpui::Stateful<gpui::Div> {
-        let theme = self.theme;
-        div()
-            .id(id)
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(8.))
-            .px(px(8.))
-            .w_full()
-            .h(px(42.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(Hsla::from(theme.gray_5))
-            .bg(Hsla::from(theme.gray_3))
-            .cursor(CursorStyle::PointingHand)
-            .hover(move |style| style.bg(Hsla::from(theme.gray_4)))
-            .text_size(px(13.))
-            .text_color(Hsla::from(theme.gray_12))
-            .child(
-                svg()
-                    .path(icon)
-                    .size(px(16.))
-                    .flex_shrink_0()
-                    .text_color(Hsla::from(theme.gray_10)),
-            )
-            .child(div().flex_1().min_w_0().truncate().child(label))
-            .when(chevron, |this| {
-                this.child(
-                    svg()
-                        .path("icons/chevron-down.svg")
-                        .size(px(12.))
-                        .flex_shrink_0()
-                        .text_color(Hsla::from(theme.gray_10)),
-                )
-            })
-            .on_click(on_click)
-    }
-
-    /// The back row shared by the unfolded menus (`:1129-1145`).
-    fn record_menu_back(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let theme = self.theme;
-        div()
-            .id("clips-record-menu-back")
-            .flex()
-            .flex_none()
-            .flex_row()
-            .items_center()
-            .gap(px(4.))
-            .h(px(36.))
-            .px(px(8.))
-            .rounded(px(6.))
-            .text_size(px(12.))
-            .text_color(Hsla::from(theme.gray_11))
-            .cursor(CursorStyle::PointingHand)
-            .hover(move |style| style.bg(Hsla::from(theme.gray_4)))
-            .child(
-                svg()
-                    .path("icons/move-left.svg")
-                    .size(px(12.))
-                    .flex_shrink_0()
-                    .text_color(Hsla::from(theme.gray_11)),
-            )
-            .child(
-                div()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.gray_12))
-                    .child("Back"),
-            )
-            .on_click(cx.listener(|this, _, _window, cx| {
-                this.clips.record_target_menu = None;
-                this.clips.record_device_menu = None;
-                cx.notify();
-            }))
-    }
-
-    /// A chevron menu's body (`:1128-1216`): back, search, and the concrete
-    /// targets -- `TargetMenuGrid` as two columns of cards, each leading with
-    /// the live ScreenCaptureKit thumbnail `target_thumbnails` captures.
-    fn render_record_target_menu(&self, kind: TargetType, cx: &mut Context<Self>) -> gpui::Div {
-        let theme = self.theme;
-        let query = self.target_search_text(cx);
-        let matches = |value: &str| query.is_empty() || value.to_lowercase().contains(&query);
-
-        let loading = self.clips.record_devices.is_none();
-        let mut cards: Vec<AnyElement> = Vec::new();
-        if let Some(devices) = &self.clips.record_devices {
-            match kind {
-                TargetType::Display => {
-                    for display in devices
-                        .displays
-                        .iter()
-                        .filter(|display| matches(&display.label))
-                    {
-                        let chosen = display.clone();
-                        cards.push(
-                            self.record_target_card(
-                                SharedString::from(format!("record-display-{}", display.id)),
-                                self.clips.record_thumbnails.display(&display.id),
-                                "icons/monitor.svg",
-                                display.label.clone(),
-                                None,
-                                display.describe_refresh_rate(),
-                                cx.listener(move |this, _, _window, cx| {
-                                    this.select_record_display(chosen.clone(), cx);
-                                }),
-                            )
-                            .into_any_element(),
-                        );
-                    }
-                }
-                TargetType::Window => {
-                    for target in devices
-                        .windows
-                        .iter()
-                        .filter(|window| matches(&window.label) || matches(&window.app))
-                    {
-                        let chosen = target.clone();
-                        cards.push(
-                            self.record_target_card(
-                                SharedString::from(format!("record-window-{}", target.id)),
-                                self.clips.record_thumbnails.window(&target.id),
-                                "icons/app-window-mac.svg",
-                                target.label.clone(),
-                                Some(target.app.clone()),
-                                target.describe_metadata(),
-                                cx.listener(move |this, _, _window, cx| {
-                                    this.select_record_window(chosen.clone(), cx);
-                                }),
-                            )
-                            .into_any_element(),
-                        );
-                    }
-                }
-                TargetType::Area | TargetType::CameraOnly => {}
-            }
-        }
-
-        let empty_message = |theme: &Theme, message: &'static str| {
-            div()
-                .py(px(24.))
-                .w_full()
-                .text_size(px(13.))
-                .text_color(Hsla::from(theme.gray_11))
-                .child(message)
-        };
-
-        let content: AnyElement = if loading {
-            empty_message(&theme, "Loading...").into_any_element()
-        } else if cards.is_empty() {
-            empty_message(
-                &theme,
-                match (kind, query.is_empty()) {
-                    (TargetType::Display, true) => "No displays found",
-                    (TargetType::Display, false) => "No matching displays",
-                    (_, true) => "No windows found",
-                    (_, false) => "No matching windows",
-                },
-            )
-            .into_any_element()
-        } else {
-            // Two columns as rows of two, the `render_target_grid` layout. The
-            // cards carry their own width, so a lone trailing card keeps half
-            // the row without a spacer holding the other half open.
-            let mut grid = div().flex().flex_col().gap(px(8.)).w_full();
-            let mut cards = cards.into_iter();
-            while let Some(first) = cards.next() {
-                let mut row = div()
-                    .flex()
-                    .flex_row()
-                    .gap(px(8.))
-                    .w_full()
-                    .items_stretch()
-                    .child(first);
-                if let Some(second) = cards.next() {
-                    row = row.child(second);
-                }
-                grid = grid.child(row);
-            }
-            grid.into_any_element()
-        };
-
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(12.))
-                    .min_h(px(36.))
-                    .child(self.record_menu_back(cx))
-                    .children(self.clips.target_search_input.as_ref().map(|input| {
-                        div().flex_1().min_w_0().child(
-                            ui::TextInput::plain(&theme, "clips-record-target-search", input)
-                                .height(px(36.))
-                                .text_size(px(13.))
-                                .padding_x(px(8.))
-                                .radius(px(6.))
-                                .bg(Hsla::from(theme.gray_3))
-                                .border(Hsla::from(theme.gray_5))
-                                .flex(true),
-                        )
-                    })),
-            )
-            .child(
-                div()
-                    .id("clips-record-menu-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .pt(px(16.))
-                    .overflow_y_scroll()
-                    .child(content),
-            )
-    }
-
-    /// `TargetCard`: the live thumbnail block over three 11px lines, the same
-    /// component the main window's picker renders.
-    #[allow(clippy::too_many_arguments)]
-    fn record_target_card(
-        &self,
-        id: SharedString,
-        thumb: target_thumbnails::TargetThumb,
-        icon: &'static str,
-        label: String,
-        subtitle: Option<String>,
-        metadata: Option<String>,
-        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
-    ) -> gpui::Stateful<gpui::Div> {
-        let theme = self.theme;
-        div()
-            .id(id)
-            .flex()
-            .flex_col()
-            .w(px(RECORD_TARGET_CARD_WIDTH))
-            .flex_none()
-            .min_w_0()
-            .overflow_hidden()
-            .rounded(px(8.))
-            .bg(theme.body_fill(3))
-            .cursor(CursorStyle::PointingHand)
-            .child(target_thumbnails::render_thumbnail_slot(thumb, icon, theme))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .w_full()
-                    .min_w_0()
-                    .px(px(8.))
-                    .py(px(6.))
-                    .text_size(px(11.))
-                    .child(
-                        div()
-                            .w_full()
-                            .truncate()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_12))
-                            .child(label),
-                    )
-                    .children(subtitle.map(|subtitle| {
-                        div()
-                            .w_full()
-                            .truncate()
-                            .text_color(Hsla::from(theme.gray_11))
-                            .child(subtitle)
-                    }))
-                    .children(metadata.map(|metadata| {
-                        div()
-                            .w_full()
-                            .truncate()
-                            .text_color(Hsla::from(theme.gray_10))
-                            .child(metadata)
-                    })),
-            )
-            .hover(move |style| style.bg(theme.body_hover_fill(4)))
-            .on_click(on_click)
-    }
-
-    /// A device select unfolded (`:1084-1122`): the "none" row first --
-    /// turning the device off is not a search result -- then the enumerated
-    /// options, exactly the main window panel's ordering. The selection
-    /// lands on the shared options through the same setters that window's
-    /// own rows use, deferred because it is another window's entity.
-    fn render_record_device_menu(
-        &self,
-        menu: RecordDeviceMenu,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        let theme = self.theme;
-        let (camera, microphone, _) = record_input_snapshot(cx);
-
-        let mut rows: Vec<AnyElement> = Vec::new();
-
-        let none_selected = match menu {
-            RecordDeviceMenu::Camera => camera.is_none(),
-            RecordDeviceMenu::Microphone => microphone.is_none(),
-        };
-        rows.push(
-            self.record_device_row(
-                SharedString::from("clips-record-device-none"),
-                "icons/circle-x.svg",
-                match menu {
-                    RecordDeviceMenu::Camera => "No Camera",
-                    RecordDeviceMenu::Microphone => "No Microphone",
-                }
-                .to_string(),
-                none_selected,
-                cx.listener(move |this, _, _window, cx| match menu {
-                    RecordDeviceMenu::Camera => this.set_record_camera(None, cx),
-                    RecordDeviceMenu::Microphone => this.set_record_microphone(None, cx),
-                }),
-            )
-            .into_any_element(),
-        );
-
-        match &self.clips.record_devices {
-            None => rows.push(
-                div()
-                    .py(px(16.))
-                    .w_full()
-                    .text_size(px(13.))
-                    .text_color(Hsla::from(theme.gray_11))
-                    .child("Loading...")
-                    .into_any_element(),
-            ),
-            Some(devices) => match menu {
-                RecordDeviceMenu::Camera => {
-                    for option in &devices.cameras {
-                        let selected = camera.as_deref() == Some(option.label.as_str());
-                        let chosen = option.clone();
-                        rows.push(
-                            self.record_device_row(
-                                SharedString::from(format!(
-                                    "clips-record-camera-{}",
-                                    option.device_id
-                                )),
-                                "icons/camera.svg",
-                                option.label.clone(),
-                                selected,
-                                cx.listener(move |this, _, _window, cx| {
-                                    this.set_record_camera(Some(chosen.clone()), cx);
-                                }),
-                            )
-                            .into_any_element(),
-                        );
-                    }
-                }
-                RecordDeviceMenu::Microphone => {
-                    for option in &devices.microphones {
-                        let selected = microphone.as_deref() == Some(option.name.as_str());
-                        let chosen = option.clone();
-                        rows.push(
-                            self.record_device_row(
-                                SharedString::from(format!("clips-record-mic-{}", option.name)),
-                                "icons/microphone.svg",
-                                option.name.clone(),
-                                selected,
-                                cx.listener(move |this, _, _window, cx| {
-                                    this.set_record_microphone(Some(chosen.clone()), cx);
-                                }),
-                            )
-                            .into_any_element(),
-                        );
-                    }
-                }
-            },
-        }
-
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .flex_row()
-                    .items_center()
-                    .min_h(px(36.))
-                    .child(self.record_menu_back(cx)),
-            )
-            .child(
-                div()
-                    .id("clips-record-device-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .pt(px(16.))
-                    .overflow_y_scroll()
-                    .child(div().flex().flex_col().gap(px(8.)).children(rows)),
-            )
-    }
-
-    /// One row of a device select.
-    fn record_device_row(
-        &self,
-        id: SharedString,
-        icon: &'static str,
-        label: String,
-        selected: bool,
-        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
-    ) -> gpui::Stateful<gpui::Div> {
-        let theme = self.theme;
-        div()
-            .id(id)
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(8.))
-            .px(px(8.))
-            .w_full()
-            .h(px(42.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(if selected {
-                Hsla::from(theme.blue_9)
-            } else {
-                Hsla::from(theme.gray_5)
-            })
-            .bg(Hsla::from(theme.gray_3))
-            .cursor(CursorStyle::PointingHand)
-            .hover(move |style| style.bg(Hsla::from(theme.gray_4)))
-            .text_size(px(13.))
-            .text_color(Hsla::from(theme.gray_12))
-            .child(
-                svg()
-                    .path(icon)
-                    .size(px(16.))
-                    .flex_shrink_0()
-                    .text_color(Hsla::from(theme.gray_10)),
-            )
-            .child(div().flex_1().min_w_0().truncate().child(label))
-            .on_click(on_click)
-    }
-
-    /// `createCameraMutation` from the modal (`:1089-1103`), routed through
-    /// the main window's setter (state plus the app-scoped feed, preview
-    /// bubble included). The `skipCameraWindow: isCameraOnly` refinement has
-    /// no seam here -- the bubble opens either way, as it does for every
-    /// other selection path in this app.
-    fn set_record_camera(&mut self, camera: Option<CameraOption>, cx: &mut Context<Self>) {
-        self.clips.record_device_menu = None;
-        let main = cx.global::<app_windows::AppWindows>().main;
-        cx.defer(move |cx: &mut gpui::App| {
-            main.update(cx, |view, _window, cx| {
-                view.set_camera_selection(camera, cx)
-            })
-            .ok();
-        });
-        cx.notify();
-    }
-
-    /// `setOptions("micName", ...) + commands.setMicInput` (`:1113-1116`).
-    fn set_record_microphone(
-        &mut self,
-        microphone: Option<MicrophoneOption>,
-        cx: &mut Context<Self>,
-    ) {
-        self.clips.record_device_menu = None;
-        let main = cx.global::<app_windows::AppWindows>().main;
-        cx.defer(move |cx: &mut gpui::App| {
-            main.update(cx, |view, _window, cx| {
-                view.set_microphone_selection(microphone, cx)
-            })
-            .ok();
-        });
-        cx.notify();
-    }
-
     // -- Import (`ClipsSidebar.tsx:503-539`) -----------------------------------
 
     /// `pickCapRecording` (`:533-539`): the `.cap` picker, rooted at the
@@ -2761,6 +1475,27 @@ impl EditorWindow {
         .detach();
     }
 
+    fn pick_mp4(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.clips.importing {
+            return;
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            #[cfg(target_os = "macos")]
+            let source = crate::platform::open_image_panel(&["mp4"]);
+            #[cfg(not(target_os = "macos"))]
+            let source = rfd::FileDialog::new()
+                .add_filter("MP4 Video", &["mp4"])
+                .pick_file();
+            if let Some(source) = source {
+                this.update_in(cx, |this, window, cx| {
+                    this.import_recording_path(source, window, cx);
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
     /// `importRecordingPath` (`:503-523`): stop playback, persist the live
     /// config (the `setProjectConfig` call -- the import merges into what is
     /// on disk), run the import off-thread, then reload the editor the way
@@ -2768,7 +1503,7 @@ impl EditorWindow {
     fn import_recording_path(
         &mut self,
         source: PathBuf,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.clips.importing {
@@ -2780,23 +1515,43 @@ impl EditorWindow {
         self.pending_save().borrow_mut().flush();
         if let Err(error) = self.project.write(&self.project_path) {
             tracing::error!("failed to persist the project config before import: {error}");
+            cx.spawn(async move |_, _| show_import_error(&error.to_string()))
+                .detach();
+            return;
         }
+        if source.is_file() && has_allowed_extension(&source.to_string_lossy(), &["mp4"]) {
+            self.import_mp4(source, window, cx);
+            return;
+        }
+        let Some(editor) = window.window_handle().downcast::<Self>() else {
+            return;
+        };
         self.clips.importing = true;
         cx.notify();
 
         let target = self.project_path.clone();
+        let in_flight = crate::import::InFlightImport::begin();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn({
                     let target = target.clone();
-                    async move { append_cap_project_to_editor(&target, &source) }
+                    async move {
+                        let _in_flight = in_flight;
+                        append_cap_project_to_editor(&target, &source)
+                    }
                 })
                 .await;
             match result {
                 Ok(count) => {
                     tracing::info!(count, path = %target.display(), "clips imported");
-                    cx.update(|cx| crate::app_windows::reload_editor(&target, cx));
+                    cx.update(|cx| {
+                        if import_editor_is_open(editor, cx) {
+                            editor
+                                .update(cx, |view, _, cx| view.schedule_import_reload(editor, cx))
+                                .ok();
+                        }
+                    });
                 }
                 Err(error) => {
                     tracing::error!("failed to import clip: {error}");
@@ -2812,6 +1567,402 @@ impl EditorWindow {
             }
         })
         .detach();
+    }
+
+    fn import_mp4(&mut self, source: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor) = window.window_handle().downcast::<Self>() else {
+            return;
+        };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.clips.import_cancelled = Some(cancelled.clone());
+        self.clips.importing = true;
+        cx.notify();
+        let target = self.project_path.clone();
+        let in_flight = crate::import::InFlightImport::begin();
+        let worker_cancelled = cancelled.clone();
+        let config = self.project.clone();
+        let (send, receive) = flume::bounded(1);
+        let worker = std::thread::Builder::new()
+            .name("cap-editor-import".to_string())
+            .spawn(move || {
+                let result = PreparedMp4Import::prepare(
+                    &target,
+                    &source,
+                    &config,
+                    worker_cancelled,
+                    in_flight,
+                );
+                let _ = send.send(result);
+            });
+        if let Err(error) = worker {
+            self.clips.import_cancelled = None;
+            self.clips.importing = false;
+            cx.notify();
+            cx.spawn(async move |_, _| show_import_error(&error.to_string()))
+                .detach();
+            return;
+        }
+        cx.spawn(async move |_, cx| {
+            let result = receive
+                .recv_async()
+                .await
+                .map_err(|error| format!("Video import worker failed: {error}"))
+                .and_then(std::convert::identity);
+            let completion = cx.update(|cx| {
+                if cancelled.load(Ordering::Acquire) || !import_editor_is_open(editor, cx) {
+                    return None;
+                }
+                editor
+                    .update(cx, |view, _, cx| {
+                        if !view
+                            .clips
+                            .import_cancelled
+                            .as_ref()
+                            .is_some_and(|current| Arc::ptr_eq(current, &cancelled))
+                        {
+                            return None;
+                        }
+                        match result {
+                            Ok(prepared) => {
+                                view.clips.prepared_mp4_import = Some(prepared);
+                                view.schedule_import_reload(editor, cx);
+                                None
+                            }
+                            Err(error) => {
+                                view.clips.import_cancelled = None;
+                                view.clips.importing = false;
+                                cx.notify();
+                                Some(error)
+                            }
+                        }
+                    })
+                    .ok()
+                    .flatten()
+            });
+            if let Some(error) = completion {
+                show_import_error(&error);
+            }
+        })
+        .detach();
+    }
+
+    fn schedule_import_reload(&mut self, editor: WindowHandle<Self>, cx: &mut Context<Self>) {
+        let cancelled = self.clips.import_cancelled.clone();
+        let observed_cancelled = cancelled.clone();
+        let session = RecordingSession::global(cx);
+        self.clips.import_reload_subscription =
+            Some(cx.observe(&session, move |_, session, cx| {
+                if session.read(cx).phase == Phase::Idle {
+                    let cancelled = observed_cancelled.clone();
+                    cx.defer(move |cx| reload_imported_editor_if_idle(editor, cancelled, cx));
+                }
+            }));
+        cx.defer(move |cx| reload_imported_editor_if_idle(editor, cancelled, cx));
+    }
+}
+
+fn reload_imported_editor_if_idle(
+    editor: WindowHandle<EditorWindow>,
+    cancelled: Option<Arc<AtomicBool>>,
+    cx: &mut App,
+) {
+    if cancelled
+        .as_ref()
+        .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
+        || !import_editor_is_open(editor, cx)
+        || RecordingSession::global(cx).read(cx).phase != Phase::Idle
+    {
+        return;
+    }
+    let outcome = editor
+        .update(cx, |view, window, cx| {
+            let owns_import = match (&view.clips.import_cancelled, &cancelled) {
+                (Some(current), Some(expected)) => Arc::ptr_eq(current, expected),
+                (None, None) => view.clips.importing,
+                _ => false,
+            };
+            if !owns_import {
+                return None;
+            }
+            let phase = RecordingSession::global(cx).read(cx).phase;
+            if phase != Phase::Idle {
+                return None;
+            }
+            if view.clips.prepared_mp4_import.is_some() {
+                view.pending_save().borrow_mut().flush();
+            }
+            match PreparedMp4Import::commit_if_idle(
+                &mut view.clips.prepared_mp4_import,
+                phase,
+                &view.project,
+            ) {
+                Ok(Some(config)) => view.project = config,
+                Ok(None) => {}
+                Err(error) => {
+                    view.clips.import_cancelled = None;
+                    view.clips.importing = false;
+                    view.clips.import_reload_subscription = None;
+                    cx.notify();
+                    window.refresh();
+                    return Some(Err(error));
+                }
+            }
+            Some(Ok(view.project_path.clone()))
+        })
+        .ok()
+        .flatten();
+    match outcome {
+        Some(Ok(target)) => app_windows::reload_editor(&target, cx),
+        Some(Err(error)) => {
+            cx.spawn(async move |_| show_import_error(&error)).detach();
+        }
+        None => {}
+    }
+}
+
+fn import_editor_is_open(editor: WindowHandle<EditorWindow>, cx: &App) -> bool {
+    cx.try_global::<app_windows::AppWindows>()
+        .is_some_and(|windows| windows.editors.iter().any(|(_, handle)| *handle == editor))
+}
+
+struct PendingImportDirectory {
+    path: PathBuf,
+    retain: bool,
+}
+
+impl Drop for PendingImportDirectory {
+    fn drop(&mut self) {
+        if self.retain {
+            return;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(&self.path) else {
+            return;
+        };
+        if !metadata.is_dir() {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(&self.path)
+            .and_then(|entries| entries.collect::<Result<Vec<_>, _>>())
+        else {
+            return;
+        };
+        if entries.iter().any(|entry| {
+            !matches!(
+                entry.file_name().to_str(),
+                Some("display.mp4" | "audio.ogg")
+            ) || !entry.file_type().is_ok_and(|kind| kind.is_file())
+        }) {
+            tracing::warn!(path = %self.path.display(), "retaining unexpected import staging contents");
+            return;
+        }
+        for entry in entries {
+            if let Err(error) = std::fs::remove_file(entry.path()) {
+                tracing::warn!(%error, path = %entry.path().display(), "could not remove partial import");
+            }
+        }
+        if let Err(error) = std::fs::remove_dir(&self.path) {
+            tracing::warn!(%error, path = %self.path.display(), "could not remove import staging directory");
+        }
+    }
+}
+
+struct PreparedMp4Import {
+    target: PathBuf,
+    original_meta: Vec<u8>,
+    meta: RecordingMeta,
+    fallback_timeline: Option<TimelineConfiguration>,
+    segment: MultipleSegment,
+    duration: f64,
+    cancelled: Arc<AtomicBool>,
+    directory: PendingImportDirectory,
+    _upload_lock: cap_recording::upload_resume::UploadLock,
+    _in_flight: crate::import::InFlightImport,
+}
+
+impl PreparedMp4Import {
+    fn commit_if_idle(
+        pending: &mut Option<Self>,
+        phase: Phase,
+        latest: &ProjectConfiguration,
+    ) -> Result<Option<ProjectConfiguration>, String> {
+        if phase != Phase::Idle {
+            return Ok(None);
+        }
+        pending
+            .take()
+            .map(|prepared| prepared.commit(latest))
+            .transpose()
+    }
+
+    fn prepare(
+        target: &Path,
+        source: &Path,
+        config: &ProjectConfiguration,
+        cancelled: Arc<AtomicBool>,
+        in_flight: crate::import::InFlightImport,
+    ) -> Result<Self, String> {
+        if cancelled.load(Ordering::Acquire) {
+            return Err("Import cancelled".to_string());
+        }
+        let target = target.canonicalize().map_err(|error| error.to_string())?;
+        let upload_lock = cap_recording::upload_resume::UploadLock::acquire(&target)
+            .map_err(|error| format!("Cannot import while this recording is in use: {error}"))?;
+        let original_meta =
+            std::fs::read(target.join("recording-meta.json")).map_err(|error| error.to_string())?;
+        let mut meta = RecordingMeta::load_for_project(&target)
+            .map_err(|error| format!("Failed to load target project metadata: {error}"))?;
+        let RecordingMetaInner::Studio(studio) = &meta.inner else {
+            return Err("Instant mode recordings cannot be edited".to_string());
+        };
+        if !matches!(studio.status(), StudioRecordingStatus::Complete) {
+            return Err("Finish or recover this recording before importing a clip".to_string());
+        }
+        let segments = ensure_multiple_segments(&mut meta)?.segments.clone();
+        let fallback_timeline = if config.timeline.is_none() {
+            let mut fallback = ProjectConfiguration::default();
+            Some(ensure_project_timeline(&mut fallback, &target, &segments)?.clone())
+        } else {
+            None
+        };
+        if cancelled.load(Ordering::Acquire) {
+            return Err("Import cancelled".to_string());
+        }
+        let index = u32::try_from(segments.len()).map_err(|error| error.to_string())?;
+        let (directory, relative) = unique_segment_dir(&target, index)?;
+        let directory = PendingImportDirectory {
+            path: directory,
+            retain: false,
+        };
+        let display_path = directory.path.join("display.mp4");
+        let audio_path = directory.path.join("audio.ogg");
+        let (fps, sample_rate) = crate::import::transcode_editor_video(
+            source,
+            &display_path,
+            &audio_path,
+            &target,
+            &cancelled,
+        )?;
+        let duration = get_video_duration_secs(&display_path)?;
+        if !duration.is_finite() || duration <= 0.0 {
+            return Err("Imported video has no valid duration".to_string());
+        }
+        let system_audio = sample_rate.map(|_| AudioMeta {
+            path: format!("{relative}/audio.ogg").into(),
+            start_time: Some(0.0),
+            device_id: None,
+            gap_summary: None,
+        });
+        Ok(Self {
+            target,
+            original_meta,
+            meta,
+            fallback_timeline,
+            segment: MultipleSegment {
+                display: VideoMeta {
+                    path: format!("{relative}/display.mp4").into(),
+                    fps,
+                    start_time: Some(0.0),
+                    device_id: None,
+                },
+                camera: None,
+                mic: None,
+                system_audio,
+                cursor: None,
+                keyboard: None,
+                display_notch: None,
+            },
+            duration,
+            cancelled,
+            directory,
+            _upload_lock: upload_lock,
+            _in_flight: in_flight,
+        })
+    }
+
+    fn commit(self, latest: &ProjectConfiguration) -> Result<ProjectConfiguration, String> {
+        self.commit_with(latest, |config, path| config.write(path))
+    }
+
+    fn commit_with(
+        mut self,
+        latest: &ProjectConfiguration,
+        write_config: impl FnOnce(&ProjectConfiguration, &Path) -> std::io::Result<()>,
+    ) -> Result<ProjectConfiguration, String> {
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err("Import cancelled".to_string());
+        }
+        let meta_path = self.target.join("recording-meta.json");
+        if std::fs::read(&meta_path).map_err(|error| error.to_string())? != self.original_meta {
+            return Err(
+                "Recording metadata changed during import; the original project was retained"
+                    .to_string(),
+            );
+        }
+        let mut config = latest.clone();
+        let inner = ensure_multiple_segments(&mut self.meta)?;
+        let index = u32::try_from(inner.segments.len()).map_err(|error| error.to_string())?;
+        inner.segments.push(self.segment.clone());
+        if config.timeline.is_none() {
+            config.timeline = self.fallback_timeline.clone();
+        }
+        let timeline = config.timeline.as_mut().ok_or("Missing project timeline")?;
+        timeline.segments.push(TimelineSegment {
+            recording_clip: index,
+            timescale: 1.0,
+            start: 0.0,
+            end: self.duration,
+            name: None,
+            speed_audio_mode: None,
+        });
+        add_clip_configs(&mut config, index, std::slice::from_ref(&self.segment));
+        config.validate().map_err(|error| error.to_string())?;
+        let backup_path = self
+            .directory
+            .path
+            .join("recording-meta-before-import.json");
+        let mut backup = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&backup_path)
+            .map_err(|error| error.to_string())?;
+        backup
+            .write_all(&self.original_meta)
+            .map_err(|error| error.to_string())?;
+        backup
+            .set_permissions(
+                std::fs::metadata(&meta_path)
+                    .map_err(|error| error.to_string())?
+                    .permissions(),
+            )
+            .map_err(|error| error.to_string())?;
+        backup.sync_all().map_err(|error| error.to_string())?;
+        drop(backup);
+        self.directory.retain = true;
+        self.meta
+            .save_for_project()
+            .map_err(|error| format!("Failed to save project metadata: {error:?}"))?;
+        if let Err(error) = write_config(&config, &self.target) {
+            let published =
+                serde_json::to_vec_pretty(&self.meta).map_err(|error| error.to_string())?;
+            if std::fs::read(&meta_path).is_ok_and(|bytes| bytes == published) {
+                if let Err(restore_error) = std::fs::rename(&backup_path, &meta_path) {
+                    return Err(format!(
+                        "Failed to save imported clip: {error}; metadata backup retained at {}: {restore_error}",
+                        backup_path.display()
+                    ));
+                }
+            } else {
+                return Err(format!(
+                    "Failed to save imported clip: {error}; recording changed, so metadata backup was retained at {}",
+                    backup_path.display()
+                ));
+            }
+            return Err(format!("Failed to save project config: {error}"));
+        }
+        if let Err(error) = std::fs::remove_file(&backup_path) {
+            tracing::warn!(%error, path = %backup_path.display(), "could not remove completed import backup");
+        }
+        Ok(config)
     }
 }
 
@@ -2853,22 +2004,6 @@ fn show_append_error(message: &str) {
         .set_level(rfd::MessageLevel::Error)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
-}
-
-/// The shared recording options, read off the main window -- the gpui home of
-/// `rawOptions`: the selected camera's label, the microphone name, and the
-/// system-audio flag, in that order.
-fn record_input_snapshot(cx: &gpui::App) -> (Option<String>, Option<String>, bool) {
-    let main = cx.global::<app_windows::AppWindows>().main;
-    main.read(cx)
-        .map(|view| {
-            (
-                view.camera_selection().map(|camera| camera.label.clone()),
-                view.microphone_selection().map(|mic| mic.name.clone()),
-                view.system_audio_enabled(),
-            )
-        })
-        .unwrap_or((None, None, false))
 }
 
 // ---------------------------------------------------------------------------
@@ -3249,9 +2384,23 @@ fn add_clip_configs(
 
 /// `unique_segment_dir` (`import.rs:414-435`).
 fn unique_segment_dir(project_path: &Path, index: u32) -> Result<(PathBuf, String), String> {
-    let segments_root = project_path.join("content").join("segments");
-    std::fs::create_dir_all(&segments_root)
-        .map_err(|e| format!("Failed to create imported segment directory: {e}"))?;
+    let content = project_path.join("content");
+    let segments_root = content.join("segments");
+    for directory in [&content, &segments_root] {
+        match std::fs::create_dir(directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if !std::fs::symlink_metadata(directory).is_ok_and(|metadata| metadata.is_dir()) {
+                    return Err("Imported segment parent must be a directory".to_string());
+                }
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Failed to create imported segment directory: {error}"
+                ));
+            }
+        }
+    }
 
     let mut counter = 0;
     loop {
@@ -3261,12 +2410,15 @@ fn unique_segment_dir(project_path: &Path, index: u32) -> Result<(PathBuf, Strin
             format!("segment-{index}-import-{counter}")
         };
         let path = segments_root.join(&name);
-        if !path.exists() {
-            std::fs::create_dir_all(&path)
-                .map_err(|e| format!("Failed to create imported segment directory: {e}"))?;
-            return Ok((path, format!("content/segments/{name}")));
+        match std::fs::create_dir(&path) {
+            Ok(()) => return Ok((path, format!("content/segments/{name}"))),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => counter += 1,
+            Err(error) => {
+                return Err(format!(
+                    "Failed to create imported segment directory: {error}"
+                ));
+            }
         }
-        counter += 1;
     }
 }
 
@@ -4107,6 +3259,360 @@ pub(crate) fn append_cap_project_to_editor(
 mod tests {
     use super::*;
     use gpui::{point, size};
+
+    const MP4_WITHOUT_AUDIO: &[u8] =
+        include_bytes!("../../media-server/src/__tests__/fixtures/test-no-audio.mp4");
+    const MP4_WITH_AUDIO: &[u8] =
+        include_bytes!("../../media-server/src/__tests__/fixtures/test-with-audio.mp4");
+
+    struct ImportFixture {
+        root: PathBuf,
+        project: PathBuf,
+        source: PathBuf,
+        config: ProjectConfiguration,
+        _imports: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ImportFixture {
+        fn new(source_bytes: &[u8]) -> Self {
+            let imports = crate::import::IMPORT_TEST_LOCK.lock().unwrap();
+            ffmpeg::init().unwrap();
+            let root = std::env::temp_dir().join(format!(
+                "cap-editor-import-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir(&root).unwrap();
+            let project = root.join("target.cap");
+            let segment_dir = project.join("content/segments/segment-0");
+            std::fs::create_dir_all(&segment_dir).unwrap();
+            std::fs::write(segment_dir.join("display.mp4"), MP4_WITHOUT_AUDIO).unwrap();
+            let source = root.join("source.mp4");
+            std::fs::write(&source, source_bytes).unwrap();
+            let recording_segment = MultipleSegment {
+                display: VideoMeta {
+                    path: "content/segments/segment-0/display.mp4".into(),
+                    fps: 30,
+                    start_time: Some(0.0),
+                    device_id: None,
+                },
+                camera: None,
+                mic: None,
+                system_audio: None,
+                cursor: None,
+                keyboard: None,
+                display_notch: None,
+            };
+            RecordingMeta {
+                project_path: project.clone(),
+                platform: Some(cap_project::Platform::default()),
+                pretty_name: "Existing project".to_string(),
+                sharing: None,
+                inner: RecordingMetaInner::Studio(Box::new(
+                    StudioRecordingMeta::MultipleSegments {
+                        inner: MultipleSegments {
+                            segments: vec![recording_segment.clone()],
+                            cursors: Cursors::default(),
+                            status: Some(StudioRecordingStatus::Complete),
+                        },
+                    },
+                )),
+                upload: None,
+            }
+            .save_for_project()
+            .unwrap();
+            let mut config = ProjectConfiguration::default();
+            config.timeline = Some(timeline(vec![segment(0, 0.0, 0.5)]));
+            add_clip_configs(&mut config, 0, &[recording_segment]);
+            config.write(&project).unwrap();
+            Self {
+                root,
+                project,
+                source,
+                config,
+                _imports: imports,
+            }
+        }
+
+        fn prepare(&self, cancelled: Arc<AtomicBool>) -> PreparedMp4Import {
+            PreparedMp4Import::prepare(
+                &self.project,
+                &self.source,
+                &self.config,
+                cancelled,
+                crate::import::InFlightImport::begin(),
+            )
+            .unwrap()
+        }
+
+        fn corrupt_last_packet(&self, kind: ffmpeg::media::Type) -> Vec<u8> {
+            let mut input = ffmpeg::format::input(&self.source).unwrap();
+            let stream_index = input.streams().best(kind).unwrap().index();
+            let packet = input
+                .packets()
+                .filter(|(stream, _)| stream.index() == stream_index)
+                .map(|(_, packet)| packet)
+                .last()
+                .unwrap();
+            let start = usize::try_from(packet.position()).unwrap();
+            let end = start.checked_add(packet.size()).unwrap();
+            let mut bytes = std::fs::read(&self.source).unwrap();
+            assert!(packet.size() > 0 && end <= bytes.len());
+            bytes[start..end].fill(0xff);
+            drop(input);
+            std::fs::write(&self.source, &bytes).unwrap();
+            bytes
+        }
+
+        fn project_bytes(&self) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+            (
+                std::fs::read(self.project.join("recording-meta.json")).unwrap(),
+                std::fs::read(self.project.join("project-config.json")).unwrap(),
+                std::fs::read(self.project.join("content/segments/segment-0/display.mp4")).unwrap(),
+            )
+        }
+    }
+
+    impl Drop for ImportFixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+
+    #[test]
+    fn mp4_append_preserves_existing_media_and_edits_made_during_conversion() {
+        for source in [MP4_WITHOUT_AUDIO, MP4_WITH_AUDIO] {
+            let fixture = ImportFixture::new(source);
+            let before = fixture.project_bytes();
+            let prepared = fixture.prepare(Arc::new(AtomicBool::new(false)));
+            let mut latest = fixture.config.clone();
+            latest.background.padding = 37.0;
+            latest.timeline.as_mut().unwrap().segments[0].name =
+                Some("Edited during import".to_string());
+            let result = prepared.commit(&latest).unwrap();
+            let meta = RecordingMeta::load_for_project(&fixture.project).unwrap();
+            let RecordingMetaInner::Studio(studio) = &meta.inner else {
+                panic!("Expected Studio")
+            };
+            let StudioRecordingMeta::MultipleSegments { inner } = studio.as_ref() else {
+                panic!("Expected multiple segments")
+            };
+            assert_eq!(inner.segments.len(), 2);
+            let imported = &inner.segments[1];
+            assert!(imported.camera.is_none() && imported.mic.is_none());
+            assert_eq!(imported.system_audio.is_some(), source == MP4_WITH_AUDIO);
+            assert!(
+                cap_enc_ffmpeg::remux::probe_video_can_decode(&meta.path(&imported.display.path))
+                    .unwrap()
+            );
+            if let Some(audio) = &imported.system_audio {
+                let input = ffmpeg::format::input(&meta.path(&audio.path)).unwrap();
+                assert!(input.streams().best(ffmpeg::media::Type::Audio).is_some());
+                assert!(input.duration() > 0);
+            }
+            assert_eq!(std::fs::read(&fixture.source).unwrap(), source);
+            assert_eq!(fixture.project_bytes().2, before.2);
+            let timeline = result.timeline.as_ref().unwrap();
+            assert_eq!(timeline.segments.len(), 2);
+            assert_eq!(timeline.segments[1].recording_clip, 1);
+            assert!(timeline.segments[1].end > 0.0);
+            let mut without_append = result;
+            let _ = without_append.timeline.as_mut().unwrap().segments.pop();
+            without_append.clips.retain(|clip| clip.index != 1);
+            assert_eq!(
+                serde_json::to_value(without_append).unwrap(),
+                serde_json::to_value(latest).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn mp4_publication_waits_for_capture_to_be_idle_and_uses_the_latest_edits() {
+        let fixture = ImportFixture::new(MP4_WITH_AUDIO);
+        let before = fixture.project_bytes();
+        let mut pending = Some(fixture.prepare(Arc::new(AtomicBool::new(false))));
+        for phase in [
+            Phase::Starting,
+            Phase::Recording { paused: false },
+            Phase::Recording { paused: true },
+            Phase::Stopping,
+        ] {
+            assert!(
+                PreparedMp4Import::commit_if_idle(&mut pending, phase, &fixture.config)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(pending.is_some());
+            assert_eq!(fixture.project_bytes(), before);
+        }
+        let mut latest = fixture.config.clone();
+        latest.background.padding = 41.0;
+        let config = PreparedMp4Import::commit_if_idle(&mut pending, Phase::Idle, &latest)
+            .unwrap()
+            .unwrap();
+        assert!(pending.is_none());
+        assert_eq!(config.background.padding, 41.0);
+        assert_eq!(config.timeline.unwrap().segments.len(), 2);
+        assert_eq!(fixture.project_bytes().2, before.2);
+        let meta = RecordingMeta::load_for_project(&fixture.project).unwrap();
+        let RecordingMetaInner::Studio(studio) = meta.inner else {
+            panic!("Studio expected")
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = studio.as_ref() else {
+            panic!("Multiple segments expected")
+        };
+        assert_eq!(inner.segments.len(), 2);
+    }
+
+    #[test]
+    fn closing_while_mp4_publication_waits_keeps_the_original_project() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let before = fixture.project_bytes();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let prepared = fixture.prepare(cancelled.clone());
+        let directory = prepared.directory.path.clone();
+        let mut clips = ClipsState::default();
+        clips.import_cancelled = Some(cancelled.clone());
+        clips.prepared_mp4_import = Some(prepared);
+        assert!(
+            PreparedMp4Import::commit_if_idle(
+                &mut clips.prepared_mp4_import,
+                Phase::Recording { paused: false },
+                &fixture.config
+            )
+            .unwrap()
+            .is_none()
+        );
+        drop(clips);
+        assert!(cancelled.load(Ordering::Acquire));
+        assert_eq!(fixture.project_bytes(), before);
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn corrupt_video_and_audio_tails_never_publish_an_import() {
+        for kind in [ffmpeg::media::Type::Video, ffmpeg::media::Type::Audio] {
+            let fixture = ImportFixture::new(MP4_WITH_AUDIO);
+            let before = fixture.project_bytes();
+            let source = fixture.corrupt_last_packet(kind);
+            let result = PreparedMp4Import::prepare(
+                &fixture.project,
+                &fixture.source,
+                &fixture.config,
+                Arc::new(AtomicBool::new(false)),
+                crate::import::InFlightImport::begin(),
+            );
+            assert!(result.is_err(), "corrupt {kind:?} was accepted");
+            assert_eq!(fixture.project_bytes(), before);
+            assert_eq!(std::fs::read(&fixture.source).unwrap(), source);
+        }
+    }
+
+    #[test]
+    fn unsupported_audio_is_not_imported_as_a_silent_clip() {
+        let mut source = MP4_WITH_AUDIO.to_vec();
+        let tag = source
+            .windows(4)
+            .position(|bytes| bytes == b"mp4a")
+            .unwrap();
+        source[tag..tag + 4].copy_from_slice(b"zzzz");
+        let descriptor = source
+            .windows(4)
+            .position(|bytes| bytes == b"esds")
+            .unwrap();
+        source[descriptor..descriptor + 4].copy_from_slice(b"free");
+        let fixture = ImportFixture::new(&source);
+        let before = fixture.project_bytes();
+        let input = ffmpeg::format::input(&fixture.source).unwrap();
+        let audio = input
+            .streams()
+            .find(|stream| stream.parameters().medium() == ffmpeg::media::Type::Audio)
+            .unwrap();
+        assert_eq!(audio.parameters().id(), ffmpeg::codec::Id::None);
+        drop(input);
+        let result = PreparedMp4Import::prepare(
+            &fixture.project,
+            &fixture.source,
+            &fixture.config,
+            Arc::new(AtomicBool::new(false)),
+            crate::import::InFlightImport::begin(),
+        );
+        assert!(result.is_err());
+        assert_eq!(fixture.project_bytes(), before);
+        assert_eq!(std::fs::read(&fixture.source).unwrap(), source);
+    }
+
+    #[test]
+    fn dropping_editor_state_cancels_prepared_mp4_without_publishing() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let before = fixture.project_bytes();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut clips = ClipsState::default();
+        clips.import_cancelled = Some(cancelled.clone());
+        let prepared = fixture.prepare(cancelled.clone());
+        let directory = prepared.directory.path.clone();
+        drop(clips);
+        assert!(cancelled.load(Ordering::Acquire));
+        assert!(prepared.commit(&fixture.config).is_err());
+        assert_eq!(fixture.project_bytes(), before);
+        assert_eq!(std::fs::read(&fixture.source).unwrap(), MP4_WITHOUT_AUDIO);
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn invalid_mp4_import_preserves_existing_project() {
+        let fixture = ImportFixture::new(b"not an MP4");
+        let before = fixture.project_bytes();
+        let result = PreparedMp4Import::prepare(
+            &fixture.project,
+            &fixture.source,
+            &fixture.config,
+            Arc::new(AtomicBool::new(false)),
+            crate::import::InFlightImport::begin(),
+        );
+        assert!(result.is_err());
+        assert_eq!(fixture.project_bytes(), before);
+        assert_eq!(std::fs::read(&fixture.source).unwrap(), b"not an MP4");
+        assert!(!fixture.project.join("content/segments/segment-1").exists());
+    }
+
+    #[test]
+    fn failed_mp4_config_commit_restores_original_metadata_bytes() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let before = fixture.project_bytes();
+        let prepared = fixture.prepare(Arc::new(AtomicBool::new(false)));
+        let result = prepared.commit_with(&fixture.config, |_, _| {
+            Err(std::io::Error::other(
+                "injected project config write failure",
+            ))
+        });
+        assert!(result.is_err());
+        assert_eq!(fixture.project_bytes(), before);
+        assert_eq!(std::fs::read(&fixture.source).unwrap(), MP4_WITHOUT_AUDIO);
+    }
+
+    #[test]
+    fn mp4_import_refuses_metadata_changed_during_conversion() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let prepared = fixture.prepare(Arc::new(AtomicBool::new(false)));
+        let mut meta = RecordingMeta::load_for_project(&fixture.project).unwrap();
+        meta.pretty_name = "Changed by another operation".to_string();
+        meta.save_for_project().unwrap();
+        let changed = fixture.project_bytes();
+        assert!(prepared.commit(&fixture.config).is_err());
+        assert_eq!(fixture.project_bytes(), changed);
+    }
+
+    #[test]
+    fn import_segment_allocation_never_recreates_a_deleted_project() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        std::fs::remove_dir_all(&fixture.project).unwrap();
+        assert!(unique_segment_dir(&fixture.project, 1).is_err());
+        assert!(!fixture.project.exists());
+    }
 
     fn segment(recording_clip: u32, start: f64, end: f64) -> TimelineSegment {
         TimelineSegment {

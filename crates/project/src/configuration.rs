@@ -1134,6 +1134,8 @@ pub struct TextSegment {
     pub italic: bool,
     #[serde(default = "TextSegment::default_color")]
     pub color: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<String>,
     /// Legacy symmetric fade. Superseded by the animation fields below; kept
     /// so configs written by new builds still fade in old builds. The
     /// `text_anim_version` migration seeds the animation durations from it.
@@ -2663,6 +2665,7 @@ mod tests {
             font_weight: 700.0,
             italic: false,
             color: "#ffffff".to_string(),
+            background_color: None,
             fade_duration: 0.15,
             align: TextAlign::Center,
             letter_spacing: 0.0,
@@ -3142,6 +3145,7 @@ mod tests {
                     font_weight: 700.0,
                     italic: false,
                     color: "#ffffff".to_string(),
+                    background_color: None,
                     fade_duration: 0.15,
                     align: TextAlign::Center,
                     letter_spacing: 0.0,
@@ -3242,6 +3246,7 @@ mod tests {
                     font_weight: 700.0,
                     italic: false,
                     color: "#ffffff".to_string(),
+                    background_color: None,
                     fade_duration,
                     align: TextAlign::Center,
                     letter_spacing: 0.0,
@@ -3323,6 +3328,30 @@ mod tests {
         assert_eq!(segment.animation_out, TextAnimation::None);
         assert_eq!(segment.animation_in_duration, 0.0);
         assert_eq!(segment.animation_out_duration, 0.0);
+    }
+
+    #[test]
+    fn text_background_color_is_optional_and_omitted_when_unset() {
+        let segment: TextSegment = serde_json::from_value(serde_json::json!({
+            "start": 0.0,
+            "end": 1.0,
+        }))
+        .unwrap();
+        assert_eq!(segment.background_color, None);
+        assert!(
+            serde_json::to_value(segment)
+                .unwrap()
+                .get("backgroundColor")
+                .is_none()
+        );
+
+        let segment: TextSegment = serde_json::from_value(serde_json::json!({
+            "start": 0.0,
+            "end": 1.0,
+            "backgroundColor": "#102030",
+        }))
+        .unwrap();
+        assert_eq!(segment.background_color.as_deref(), Some("#102030"));
     }
 
     #[test]

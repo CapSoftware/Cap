@@ -105,6 +105,16 @@ impl PortableCameraBlur {
         dimensions: (usize, usize),
         mode: cap_camera_effects::BlurMode,
     ) -> anyhow::Result<Arc<gpui::RenderImage>> {
+        self.process_with_status(image, dimensions, mode)
+            .map(|(image, _)| image)
+    }
+
+    pub fn process_with_status(
+        &mut self,
+        image: &gpui::RenderImage,
+        dimensions: (usize, usize),
+        mode: cap_camera_effects::BlurMode,
+    ) -> anyhow::Result<(Arc<gpui::RenderImage>, cap_camera_effects::BlurOutputStatus)> {
         let width = u32::try_from(dimensions.0).context("camera frame width")?;
         let height = u32::try_from(dimensions.1).context("camera frame height")?;
         let row_bytes = width.checked_mul(4).context("camera frame row size")?;
@@ -215,9 +225,16 @@ impl PortableCameraBlur {
 
         let image = image::RgbaImage::from_raw(width, height, pixels)
             .context("camera blur output image")?;
-        Ok(Arc::new(gpui::RenderImage::new(smallvec::smallvec![
-            image::Frame::new(image)
-        ])))
+        let status = self
+            .processor
+            .output_status()
+            .context("camera blur output status missing")?;
+        Ok((
+            Arc::new(gpui::RenderImage::new(smallvec::smallvec![
+                image::Frame::new(image)
+            ])),
+            status,
+        ))
     }
 
     fn ensure_resources(&mut self, width: u32, height: u32) -> anyhow::Result<()> {
@@ -299,10 +316,13 @@ mod tests {
         let image = image::RgbaImage::from_raw(64, 32, pixels).unwrap();
         let input = gpui::RenderImage::new(smallvec::smallvec![image::Frame::new(image)]);
         let mut processor = PortableCameraBlur::new().expect("portable camera blur initialized");
-        let output = processor
-            .process(&input, (64, 32), cap_camera_effects::BlurMode::Heavy)
+        let (output, status) = processor
+            .process_with_status(&input, (64, 32), cap_camera_effects::BlurMode::Heavy)
             .expect("portable camera blur processed a frame");
 
+        assert_eq!(status.mode, cap_camera_effects::BlurMode::Heavy);
+        assert_eq!(status.output_sequence, 1);
+        assert_eq!(status.output_dimensions, (64, 32));
         assert_eq!(output.size(0).width.0, 64);
         assert_eq!(output.size(0).height.0, 32);
         assert_eq!(output.as_bytes(0).unwrap().len(), 64 * 32 * 4);

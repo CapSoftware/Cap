@@ -3880,6 +3880,8 @@ impl EditorWindow {
         let italic = segment.italic;
         let enabled = segment.enabled;
         let color = segment.color.clone();
+        let background_color = segment.background_color.clone();
+        let background_enabled = background_color.is_some();
         let family = segment.font_family.clone();
         let weight_label = TEXT_SEGMENT_WEIGHTS
             .iter()
@@ -4179,6 +4181,42 @@ impl EditorWindow {
                                 &color,
                                 cx,
                             ))
+                            .child(
+                                self.labelled_small(
+                                    "Background",
+                                    ui::Toggle::plain(
+                                        &theme,
+                                        SharedString::from(format!(
+                                            "text-background-enabled-{index}"
+                                        )),
+                                        background_enabled,
+                                    )
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.edit_text_segment(
+                                            "text-background",
+                                            index,
+                                            window,
+                                            cx,
+                                            move |segment| {
+                                                segment.background_color = if background_enabled {
+                                                    None
+                                                } else {
+                                                    Some("#000000".to_string())
+                                                };
+                                                true
+                                            },
+                                        );
+                                    }))
+                                    .into_any_element(),
+                                ),
+                            )
+                            .when_some(background_color, |this, background_color| {
+                                this.child(self.render_color_input(
+                                    ColorTarget::TextBackground(index),
+                                    &background_color,
+                                    cx,
+                                ))
+                            })
                             .child(
                                 self.labelled_small(
                                     "Opacity",
@@ -6091,6 +6129,9 @@ impl EditorWindow {
                         for index in indices(timeline.text_segments.len()) {
                             fields.push(FieldKey::TextContent(index));
                             colors.push(ColorTarget::TextColor(index));
+                            if timeline.text_segments[index].background_color.is_some() {
+                                colors.push(ColorTarget::TextBackground(index));
+                            }
                         }
                     }
                     TrackKind::Caption => {

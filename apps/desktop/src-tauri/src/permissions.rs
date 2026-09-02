@@ -149,6 +149,10 @@ fn macos_focus_permission_window(app: &tauri::AppHandle) {
 
 #[cfg(target_os = "macos")]
 fn macos_activate_permission_request(app: &tauri::AppHandle) {
+    if crate::app_is_exiting(app) {
+        return;
+    }
+
     if let Err(err) = app.set_dock_visibility(true) {
         tracing::warn!("Failed to show dock icon for permission request: {err}");
     }
@@ -210,7 +214,7 @@ pub(crate) fn prepare_macos_panel_window(
 
 #[cfg(target_os = "macos")]
 pub(crate) fn sync_macos_dock_visibility(app: &tauri::AppHandle) {
-    if MACOS_PENDING_PANEL_WINDOWS.load(Ordering::Acquire) > 0 {
+    if crate::app_is_exiting(app) || MACOS_PENDING_PANEL_WINDOWS.load(Ordering::Acquire) > 0 {
         return;
     }
 

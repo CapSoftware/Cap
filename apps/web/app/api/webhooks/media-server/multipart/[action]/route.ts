@@ -159,7 +159,11 @@ export async function POST(
 				})
 				.pipe(runPromise);
 
-			return NextResponse.json({ success: true, location: result.Location });
+			return NextResponse.json({
+				success: true,
+				location: result.Location,
+				objectIdentity: result.ETag,
+			});
 		}
 
 		if (action === "abort") {

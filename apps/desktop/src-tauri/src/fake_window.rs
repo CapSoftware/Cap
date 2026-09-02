@@ -170,6 +170,30 @@ fn should_ignore_cursor_events(
     default_ignore || !allow_default_interaction
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn macos_cursor_in_window_scale(
+    cursor: tauri::PhysicalPosition<f64>,
+    primary_scale: f64,
+    window_scale: f64,
+) -> Option<tauri::PhysicalPosition<f64>> {
+    if !primary_scale.is_finite()
+        || primary_scale <= 0.0
+        || !window_scale.is_finite()
+        || window_scale <= 0.0
+        || !cursor.x.is_finite()
+        || !cursor.y.is_finite()
+    {
+        return None;
+    }
+    // Tao scales global mouse coordinates by the primary display, but window
+    // positions and DOM bounds use the window's display scale.
+    let factor = window_scale / primary_scale;
+    Some(tauri::PhysicalPosition::new(
+        cursor.x * factor,
+        cursor.y * factor,
+    ))
+}
+
 fn recording_controls_size_allows_default_interaction(
     window_size: tauri::PhysicalSize<u32>,
     scale_factor: f64,
@@ -466,6 +490,18 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
             };
 
             consecutive_errors = 0;
+            #[cfg(target_os = "macos")]
+            let mouse_position = match window.primary_monitor().ok().flatten().and_then(|monitor| {
+                macos_cursor_in_window_scale(mouse_position, monitor.scale_factor(), scale_factor)
+            }) {
+                Some(position) => position,
+                None => {
+                    let ignore = !is_recording_controls
+                        || !prepare_recording_controls_default_interaction(&window);
+                    let _ = window.set_ignore_cursor_events(ignore);
+                    continue;
+                }
+            };
             let allow_default_interaction = if is_recording_controls {
                 prepare_recording_controls_default_interaction(&window)
             } else {
@@ -531,6 +567,48 @@ mod tests {
 
     fn bounds(x: f64, y: f64, width: f64, height: f64) -> LogicalBounds {
         LogicalBounds::new(LogicalPosition::new(x, y), LogicalSize::new(width, height))
+    }
+
+    #[test]
+    fn macos_hit_testing_uses_the_same_scale_on_secondary_displays() {
+        let mut windows = HashMap::new();
+        windows.insert("controls".to_string(), bounds(10.0, 20.0, 100.0, 40.0));
+        for (origin, primary_scale, window_scale) in [
+            ((1920.0, 100.0), 2.0, 1.0),
+            ((-1280.0, 100.0), 1.0, 2.0),
+            ((0.0, -900.0), 2.0, 1.0),
+            ((0.0, 0.0), 2.0, 2.0),
+        ] {
+            let position =
+                tauri::LogicalPosition::new(origin.0, origin.1).to_physical::<i32>(window_scale);
+            for (offset, ignored) in [((30.0, 30.0), false), ((150.0, 80.0), true)] {
+                let mouse = tauri::LogicalPosition::new(origin.0 + offset.0, origin.1 + offset.1)
+                    .to_physical::<f64>(primary_scale);
+                let mouse =
+                    macos_cursor_in_window_scale(mouse, primary_scale, window_scale).unwrap();
+                assert_eq!(
+                    should_ignore_cursor_events(
+                        position,
+                        mouse,
+                        window_scale,
+                        &windows,
+                        false,
+                        true,
+                    ),
+                    ignored,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn macos_hit_testing_rejects_invalid_coordinate_scales() {
+        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(
+                macos_cursor_in_window_scale(tauri::PhysicalPosition::new(20.0, 30.0), scale, 2.0,)
+                    .is_none()
+            );
+        }
     }
 
     #[test]

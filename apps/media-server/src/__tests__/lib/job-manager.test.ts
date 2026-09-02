@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+	beginRecordingVerification,
 	cleanupExpiredJobs,
 	createJob,
 	deleteJob,
@@ -21,6 +22,31 @@ afterEach(() => {
 });
 
 describe("job cleanup", () => {
+	test("gives verification a separate finite budget after a long mux", () => {
+		const job = createTrackedJob("job-verification-budget");
+		job.phase = "uploading";
+		job.createdAt = Date.now() - 55 * 60 * 1000;
+		expect(beginRecordingVerification(job.jobId, 50 * 60 * 1000)).toBe(true);
+		job.createdAt -= 10 * 60 * 1000;
+		expect(cleanupExpiredJobs()).toBe(0);
+		const deadline = job.recordingVerificationDeadlineAt;
+		touchJob(job.jobId);
+		expect(beginRecordingVerification(job.jobId, 50 * 60 * 1000)).toBe(false);
+		expect(job.recordingVerificationDeadlineAt).toBe(deadline);
+		job.recordingVerificationDeadlineAt = Date.now() - 1;
+		expect(cleanupExpiredJobs()).toBe(1);
+		expect(job.error).toBe("Recording verification timed out");
+	});
+
+	test("cannot revive an aborted job for verification", () => {
+		const job = createTrackedJob("job-verification-cancelled");
+		job.phase = "uploading";
+		job.abortController = new AbortController();
+		job.abortController.abort();
+		expect(beginRecordingVerification(job.jobId, 50 * 60 * 1000)).toBe(false);
+		expect(job.recordingVerificationDeadlineAt).toBeUndefined();
+	});
+
 	test("keeps a processing job alive after a heartbeat", () => {
 		const job = createTrackedJob("job-heartbeat");
 		const now = Date.now();

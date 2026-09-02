@@ -126,7 +126,7 @@ fn fs_surface(input: VertexOutput) -> @location(0) vec4<f32> {
 		detail,
 	);
 	let displacement = guide.value * 0.57 + flowing.value * 0.43;
-	let gradient_position = clamp(base_position + displacement * u.flow.z * 0.30, 0.0, 1.0);
+	let gradient_position = clamp(base_position + displacement * u.flow.z * 0.60, 0.0, 1.0);
 	var color = palette(gradient_position);
 
 	let ripple_size = max(u.lighting.w, 0.05);

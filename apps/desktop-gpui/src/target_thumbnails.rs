@@ -208,25 +208,6 @@ impl ThumbnailCache {
         dropped
     }
 
-    /// Empty the cache, handing back every image for atlas eviction.
-    ///
-    /// Clears the in-flight flags as well, because the only caller that resets
-    /// is one that is also dropping the tasks those flags belong to (the record
-    /// modal reopening). Leaving a flag set behind a dropped task would wedge
-    /// that kind's refresh permanently. A sweep whose `flume` receiver went
-    /// with the task stops at its next `send`, so at worst one extra screenshot
-    /// overlaps the new sweep.
-    #[must_use = "the images have to be dropped from the window's atlas"]
-    pub fn reset(&mut self) -> Vec<Arc<RenderImage>> {
-        let mut images: Vec<_> = self.displays.drain().map(|(_, image)| image).collect();
-        images.extend(self.windows.drain().filter_map(|(_, thumb)| thumb.image));
-        self.display_signature = None;
-        self.window_signature = None;
-        self.display_inflight = false;
-        self.window_inflight = false;
-        images
-    }
-
     pub fn display_inflight(&self) -> bool {
         self.display_inflight
     }
@@ -1626,34 +1607,5 @@ mod tests {
             let _ = tx.send("captured");
         }));
         assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec!["captured"]);
-    }
-
-    #[test]
-    fn reset_returns_every_image_and_clears_the_inflight_flags() {
-        let mut cache = ThumbnailCache::default();
-        let _ = cache.insert_display(
-            &DisplayId::from_str("1").unwrap(),
-            crate::library::rgba_to_render_image(solid(2, 2, [1; 4])),
-        );
-        let _ = cache.insert_window(
-            &WindowId::from_str("2").unwrap(),
-            Some(crate::library::rgba_to_render_image(solid(2, 2, [2; 4]))),
-            None,
-        );
-        cache.set_display_inflight(true);
-        cache.set_window_inflight(true);
-        cache.set_display_signature("stale".into());
-
-        let images = cache.reset();
-        assert_eq!(images.len(), 2);
-        assert!(!cache.display_inflight());
-        assert!(!cache.window_inflight());
-        assert!(cache.displays_stale(&[]));
-        assert!(
-            cache
-                .display(&DisplayId::from_str("1").unwrap())
-                .image
-                .is_none()
-        );
     }
 }

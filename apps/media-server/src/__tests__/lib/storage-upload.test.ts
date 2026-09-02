@@ -27,6 +27,112 @@ describe("uploadFileToStorage", () => {
 		globalThis.fetch = originalFetch;
 	});
 
+	test("returns the successful PUT identity without a later HEAD lookup", async () => {
+		const uploadFile = await createTempUploadFile(11);
+		const methods: string[] = [];
+		globalThis.fetch = (async (_input, init) => {
+			methods.push(init?.method ?? "GET");
+			return methods.length === 1
+				? new Response("Unavailable", {
+						status: 503,
+						headers: { ETag: '"failed-attempt"' },
+					})
+				: new Response(null, {
+						status: 200,
+						headers: { ETag: '"written-version"' },
+					});
+		}) as typeof fetch;
+		try {
+			const receipt = await uploadFileToStorage(
+				uploadFile.path,
+				{ type: "put", url: "https://storage.example.com/recording.mp4" },
+				"video/mp4",
+			);
+			expect(receipt.objectIdentity).toBe('"written-version"');
+			expect(methods).toEqual(["PUT", "PUT"]);
+		} finally {
+			await uploadFile.cleanup();
+		}
+	});
+
+	test.each([undefined, 'W/"weak-version"'])(
+		"keeps successful legacy uploads compatible without claiming identity (%s)",
+		async (identity) => {
+			const uploadFile = await createTempUploadFile(11);
+			globalThis.fetch = (async (_input, _init) =>
+				new Response(null, {
+					headers: identity ? { ETag: identity } : {},
+				})) as typeof fetch;
+			try {
+				const receipt = await uploadFileToStorage(
+					uploadFile.path,
+					{ type: "put", url: "https://storage.example.com/recording.mp4" },
+					"video/mp4",
+				);
+				expect(receipt.objectIdentity).toBeUndefined();
+			} finally {
+				await uploadFile.cleanup();
+			}
+		},
+	);
+
+	test("binds a Drive upload to its completed response version without rounding", async () => {
+		const uploadFile = await createTempUploadFile(11);
+		const methods: string[] = [];
+		globalThis.fetch = (async (_input, init) => {
+			methods.push(init?.method ?? "GET");
+			expect(new Headers(init?.headers).get("content-range")).toBe(
+				"bytes 0-10/11",
+			);
+			return Response.json({
+				id: "drive-file-1",
+				version: "9007199254740993",
+				size: "11",
+			});
+		}) as typeof fetch;
+		try {
+			const receipt = await uploadFileToStorage(
+				uploadFile.path,
+				{
+					type: "put",
+					url: "https://www.googleapis.com/upload/drive/v3/files?upload_id=session",
+				},
+				"video/mp4",
+			);
+			expect(receipt.objectIdentity).toBe('"drive-file-1:9007199254740993"');
+			expect(methods).toEqual(["PUT"]);
+		} finally {
+			await uploadFile.cleanup();
+		}
+	});
+
+	test.each([
+		{ id: "drive-file-1", size: "11" },
+		{ id: 'invalid"id', version: "1", size: "11" },
+		{ id: "drive-file-1", version: "0", size: "11" },
+		{ id: "drive-file-1", version: "1", size: "12" },
+	])(
+		"withholds incomplete or inconsistent Drive upload identity: %j",
+		async (metadata) => {
+			const uploadFile = await createTempUploadFile(11);
+			globalThis.fetch = (async (_input, _init) =>
+				Response.json(metadata)) as typeof fetch;
+			try {
+				const receipt = await uploadFileToStorage(
+					uploadFile.path,
+					{
+						type: "put",
+						url: "https://www.googleapis.com/upload/drive/v3/files?upload_id=session",
+					},
+					"video/mp4",
+				);
+				expect(receipt.objectIdentity).toBeUndefined();
+			} finally {
+				await uploadFile.cleanup();
+			}
+		},
+	);
+
 	test("uploads multipart files in signed parts and completes them", async () => {
 		const uploadFile = await createTempUploadFile(partSize + 3);
 		const requests: Array<{
@@ -57,7 +163,10 @@ describe("uploadFileToStorage", () => {
 					});
 				}
 
-				return Response.json({ success: true });
+				return Response.json({
+					success: true,
+					objectIdentity: '"completed-object-version"',
+				});
 			}
 
 			const body = init?.body as Blob;
@@ -75,7 +184,7 @@ describe("uploadFileToStorage", () => {
 		}) as typeof fetch;
 
 		try {
-			await uploadFileToStorage(
+			const receipt = await uploadFileToStorage(
 				uploadFile.path,
 				{
 					type: "multipart",
@@ -90,6 +199,7 @@ describe("uploadFileToStorage", () => {
 				},
 				"video/mp4",
 			);
+			expect(receipt.objectIdentity).toBe('"completed-object-version"');
 		} finally {
 			await uploadFile.cleanup();
 		}

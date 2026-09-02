@@ -71,6 +71,11 @@ const INSTALLED_APP: &str = "/Applications/Cap.app";
 /// both apps' logs -- and every other platform uses
 /// `<local data>/so.cap.desktop/logs`, matching `main.rs` over there.
 pub fn logs_dir() -> PathBuf {
+    if let Ok(directory) = std::env::var("CAP_GPUI_LOG_DIR")
+        && !directory.trim().is_empty()
+    {
+        return PathBuf::from(directory);
+    }
     #[cfg(target_os = "macos")]
     {
         dirs::home_dir()
