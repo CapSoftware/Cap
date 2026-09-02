@@ -73,7 +73,24 @@ This feature does **not** enforce SSO-only login, implement SCIM/deprovisioning,
 
 ## Rollout and verification
 
-Deploy the additive `0041_saml_sso` migration before the application changes. Preflight existing non-null WorkOS mappings for duplicates before adding the unique index. Reconcile existing mapped organizations rather than silently granting them unpaid access. Do not push schema directly to a shared local or production database as part of a test.
+Before applying `0041_saml_sso`, pause changes to WorkOS organization bindings and run this read-only preflight on the exact target database's primary connection:
+
+```sql
+SELECT COUNT(*) AS duplicate_mapping_groups
+FROM (
+	SELECT workosOrganizationId
+	FROM organizations
+	WHERE workosOrganizationId IS NOT NULL
+	GROUP BY workosOrganizationId
+	HAVING COUNT(*) > 1
+) AS duplicate_mappings;
+```
+
+The result **must be zero immediately before any schema deployment**. This checks all organizations, including tombstoned rows and empty-string bindings, because the unique constraint applies to them too. If the query fails or returns a nonzero count, stop before applying any migration DDL. Independently verify the conflicting Cap and WorkOS identities and reconcile their bindings with compare-and-set updates; never automatically delete, merge, or reassign organizations. Repeat the query after reconciliation, and keep binding writes paused until the unique constraint is installed.
+
+After that gate passes, deploy the additive migration before the application changes. Reconcile existing mapped organizations rather than silently granting them unpaid access. A successful preflight in one environment or at an earlier time does not authorize another deployment. Do not push schema directly to a shared local or production database as part of a test.
+
+The migration is generated from `packages/database/schema.ts` with `pnpm db:generate --name=saml_sso`. Commit its generated SQL and snapshot/journal metadata together; do not hand-edit the SQL. Migration `0041` follows the existing recording-jobs migration and retains its snapshot ancestry.
 
 Focused tests live under `apps/web/__tests__/unit/sso-*.test.ts`, alongside the existing auth, mobile, Pro, BAA, and webhook regression suites. `apps/web/__tests__/integration/sso-database.test.ts` uses actual MySQL and requires `CAP_SSO_TEST_DATABASE_URL` to point to a local, session-scoped database named `cap_sso_*` with the generated schema. It refuses production/non-local URLs and retains its synthetic fixtures for inspection.
 
