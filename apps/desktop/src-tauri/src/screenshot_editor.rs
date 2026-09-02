@@ -105,14 +105,9 @@ impl ScreenshotEditorInstances {
     async fn create_standalone_instance(
         app_handle: &AppHandle,
         path: PathBuf,
+        start_preview: bool,
     ) -> Result<Arc<ScreenshotEditorInstance>, String> {
         let create_started = Instant::now();
-        let (frame_tx, frame_rx) = watch::channel(None);
-        let (ws_port, ws_shutdown_token) =
-            create_watch_frame_ws(frame_rx, Default::default()).await;
-        if ws_port == 0 {
-            return Err("Failed to start screenshot editor frame websocket".to_string());
-        }
 
         let (data, width, height) = {
             let key = path
@@ -221,6 +216,35 @@ impl ScreenshotEditorInstances {
         } else {
             (None, None)
         };
+
+        if !start_preview {
+            let pretty_name = recording_meta
+                .as_ref()
+                .map(|meta| meta.pretty_name.clone())
+                .unwrap_or_else(|| "Screenshot".to_string());
+            let (config_tx, _) = watch::channel(ScreenshotConfigUpdate {
+                revision: 0,
+                config: loaded_config.unwrap_or_default(),
+            });
+
+            return Ok(Arc::new(ScreenshotEditorInstance {
+                ws_port: 0,
+                ws_shutdown_token: CancellationToken::new(),
+                config_tx,
+                path,
+                pretty_name,
+                image_width: width,
+                image_height: height,
+                source_rgba: Arc::new(data),
+            }));
+        }
+
+        let (frame_tx, frame_rx) = watch::channel(None);
+        let (ws_port, ws_shutdown_token) =
+            create_watch_frame_ws(frame_rx, Default::default()).await;
+        if ws_port == 0 {
+            return Err("Failed to start screenshot editor frame websocket".to_string());
+        }
 
         let recording_meta = if let Some(meta) = recording_meta {
             meta
@@ -512,7 +536,8 @@ impl ScreenshotEditorInstances {
                     }
                 }
 
-                let instance = Self::create_standalone_instance(window.app_handle(), path).await?;
+                let instance =
+                    Self::create_standalone_instance(window.app_handle(), path, true).await?;
                 entry.insert(instance.clone());
                 Ok(instance)
             }
@@ -592,7 +617,8 @@ impl PendingScreenshotEditorInstances {
         }
 
         tokio::spawn(async move {
-            let result = ScreenshotEditorInstances::create_standalone_instance(&app, path).await;
+            let result =
+                ScreenshotEditorInstances::create_standalone_instance(&app, path, true).await;
             tx.send(Some(result)).ok();
         });
     }
@@ -1468,7 +1494,7 @@ pub async fn render_screenshot_project_for_export(
     app: AppHandle,
     path: PathBuf,
 ) -> Result<ScreenshotProjectExport, String> {
-    let instance = ScreenshotEditorInstances::create_standalone_instance(&app, path).await?;
+    let instance = ScreenshotEditorInstances::create_standalone_instance(&app, path, false).await?;
     let config = instance.config_tx.borrow().config.clone();
     let image_width = instance.image_width;
     let image_height = instance.image_height;
