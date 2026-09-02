@@ -7,9 +7,8 @@ use tracing::error;
 use wgpu::{BindGroup, FilterMode, include_wgsl, util::DeviceExt};
 
 use crate::{
-    Coord, DecodedSegmentFrames, FrameSpace, ProjectUniforms, RawDisplayUVSpace,
-    RenderVideoConstants, STANDARD_CURSOR_HEIGHT, composite_frame::ColorGradeUniformParams,
-    zoom::InterpolatedZoom,
+    Coord, DecodedSegmentFrames, FrameSpace, ProjectUniforms, RenderVideoConstants,
+    STANDARD_CURSOR_HEIGHT, composite_frame::ColorGradeUniformParams,
 };
 
 const CURSOR_CLICK_DURATION: f64 = 0.13;
@@ -378,9 +377,7 @@ impl CursorLayer {
     pub fn prepare(
         &mut self,
         segment_frames: &DecodedSegmentFrames,
-        resolution_base: XY<u32>,
         cursor: &CursorEvents,
-        zoom: &InterpolatedZoom,
         uniforms: &ProjectUniforms,
         constants: &RenderVideoConstants,
     ) {
@@ -407,7 +404,6 @@ impl CursorLayer {
         }
 
         let fps = uniforms.frame_rate.max(1) as f32;
-        let screen_size = constants.options.screen_size;
         let fps_scale = fps / CURSOR_BASELINE_FPS;
         let cursor_strength = (uniforms.motion_blur_amount * CURSOR_MULTIPLIER * fps_scale)
             .clamp(0.0, CURSOR_MAX_STRENGTH);
@@ -416,14 +412,11 @@ impl CursorLayer {
             .as_ref()
             .filter(|prev| prev.cursor_id == interpolated_cursor.cursor_id)
             .map(|prev| {
-                let delta_uv = XY::new(
-                    (interpolated_cursor.position.coord.x - prev.position.coord.x) as f32,
-                    (interpolated_cursor.position.coord.y - prev.position.coord.y) as f32,
-                );
-                XY::new(
-                    delta_uv.x * screen_size.x as f32,
-                    delta_uv.y * screen_size.y as f32,
-                )
+                let current = uniforms
+                    .display
+                    .source_uv_to_target(interpolated_cursor.position.coord);
+                let previous = uniforms.display.source_uv_to_target(prev.position.coord);
+                (current - previous).map(|value| value as f32)
             })
             .unwrap_or_else(|| XY::new(0.0, 0.0));
 
@@ -512,16 +505,11 @@ impl CursorLayer {
         let size = {
             let click_t = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0);
             let click_scale_factor = click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE;
-            let crop = ProjectUniforms::get_crop(&constants.options, &uniforms.project);
-            let display_size = ProjectUniforms::display_size(
-                &constants.options,
-                &uniforms.project,
-                resolution_base,
-            );
+            let display = &uniforms.display;
             let size = cursor_height_px(
-                constants.options.screen_size.y as f32,
-                crop.size.y as f32,
-                display_size.y as f32,
+                display.frame_size[1],
+                display.crop_bounds[3] - display.crop_bounds[1],
+                display.target_size[1],
                 uniforms.cursor_size,
                 click_scale_factor,
             );
@@ -542,13 +530,7 @@ impl CursorLayer {
             })
         };
 
-        let (position_size, cursor_opacity) = CursorPlacement {
-            constants,
-            uniforms,
-            resolution_base,
-            zoom,
-        }
-        .map(
+        let (position_size, cursor_opacity) = CursorPlacement { uniforms }.map(
             interpolated_cursor.position.coord,
             size,
             cursor_texture.hotspot,
@@ -614,15 +596,8 @@ impl CursorLayer {
     }
 }
 
-/// The cursor sprite's output-rect chain: frame space minus hotspot -> zoomed
-/// frame space -> split-screen pane remap -> text-takeover affine. The click
-/// ripple has to land in exactly the same place as the sprite it sits under,
-/// so both go through here.
 pub(crate) struct CursorPlacement<'a> {
-    pub constants: &'a RenderVideoConstants,
     pub uniforms: &'a ProjectUniforms,
-    pub resolution_base: XY<u32>,
-    pub zoom: &'a InterpolatedZoom,
 }
 
 impl CursorPlacement<'_> {
@@ -633,115 +608,17 @@ impl CursorPlacement<'_> {
         hotspot_frac: XY<f64>,
         opacity: f32,
     ) -> ([f32; 4], f32) {
-        let hotspot = Coord::<FrameSpace>::new(size.coord * hotspot_frac);
-
-        let position = Coord::<RawDisplayUVSpace>::new(position_uv).to_frame_space(
-            &self.constants.options,
-            &self.uniforms.project,
-            self.resolution_base,
-        ) - hotspot;
-
-        // Transform to zoomed space
-        let zoomed_position = position.to_zoomed_frame_space(
-            &self.constants.options,
-            &self.uniforms.project,
-            self.resolution_base,
-            self.zoom,
-        );
-
-        let zoomed_size = (position + size).to_zoomed_frame_space(
-            &self.constants.options,
-            &self.uniforms.project,
-            self.resolution_base,
-            self.zoom,
-        ) - zoomed_position;
-
-        // In split-screen the screen only occupies a half-rect, so remap the
-        // cursor from its raw source UV into that pane (matching the display
-        // layer's split crop -> half-rect mapping) and scale the sprite by the
-        // same factor. The cursor shader's screen_bounds clip already follows
-        // uniforms.display.target_bounds (the morphing half), so a cursor that
-        // lands outside the visible crop is confined automatically.
-        let position_size = match &self.uniforms.split {
-            Some(split) if split.factor > 0.001 => {
-                let screen_size = self.constants.options.screen_size;
-                let crop =
-                    ProjectUniforms::get_crop(&self.constants.options, &self.uniforms.project);
-                let display_size = ProjectUniforms::display_size(
-                    &self.constants.options,
-                    &self.uniforms.project,
-                    self.resolution_base,
-                );
-
-                let scrop = split.screen.crop;
-                let starget = split.screen.target;
-                let crop_w = (scrop[2] - scrop[0]).max(f32::EPSILON);
-                let crop_h = (scrop[3] - scrop[1]).max(f32::EPSILON);
-                let target_w = starget[2] - starget[0];
-                let target_h = starget[3] - starget[1];
-
-                let cursor_px = [
-                    position_uv.x as f32 * screen_size.x as f32,
-                    position_uv.y as f32 * screen_size.y as f32,
-                ];
-                let tip = [
-                    starget[0] + (cursor_px[0] - scrop[0]) / crop_w * target_w,
-                    starget[1] + (cursor_px[1] - scrop[1]) / crop_h * target_h,
-                ];
-
-                // Source->pane scale (uniform; the split crop matches the pane
-                // aspect) relative to the normal source->frame scale.
-                let normal_scale = display_size.x as f32 / (crop.size.x as f32).max(f32::EPSILON);
-                let size_factor = (target_w / crop_w) / normal_scale.max(f32::EPSILON);
-
-                let split_pos = [
-                    tip[0] - hotspot.x as f32 * size_factor,
-                    tip[1] - hotspot.y as f32 * size_factor,
-                ];
-                let split_size = [size.x as f32 * size_factor, size.y as f32 * size_factor];
-
-                let t = split.factor as f32;
-                [
-                    crate::lerp_f32(zoomed_position.x as f32, split_pos[0], t),
-                    crate::lerp_f32(zoomed_position.y as f32, split_pos[1], t),
-                    crate::lerp_f32(zoomed_size.x as f32, split_size[0], t),
-                    crate::lerp_f32(zoomed_size.y as f32, split_size[1], t),
-                ]
-            }
-            _ => [
-                zoomed_position.x as f32,
-                zoomed_position.y as f32,
-                zoomed_size.x as f32,
-                zoomed_size.y as f32,
-            ],
-        };
-
-        // A text takeover relocates the display card by a uniform scale +
-        // translate (the takeover target preserves the card's aspect), so the
-        // cursor follows with the same affine map — and fades with the card
-        // when a Fullscreen takeover hides it.
-        let (position_size, opacity) = match &self.uniforms.takeover {
-            Some(takeover) if takeover.t > 0.001 => {
-                let from_w = (takeover.from[2] - takeover.from[0]).max(f32::EPSILON);
-                let scale = (takeover.to[2] - takeover.to[0]) / from_w;
-                let mapped = [
-                    takeover.to[0] + (position_size[0] - takeover.from[0]) * scale,
-                    takeover.to[1] + (position_size[1] - takeover.from[1]) * scale,
-                    position_size[2] * scale,
-                    position_size[3] * scale,
-                ];
-                let t = takeover.t;
-                (
-                    [
-                        crate::lerp_f32(position_size[0], mapped[0], t),
-                        crate::lerp_f32(position_size[1], mapped[1], t),
-                        crate::lerp_f32(position_size[2], mapped[2], t),
-                        crate::lerp_f32(position_size[3], mapped[3], t),
-                    ],
-                    opacity * takeover.overlay_fade,
-                )
-            }
-            _ => (position_size, opacity),
+        let hotspot = size.coord * hotspot_frac;
+        let position = self.uniforms.display.source_uv_to_target(position_uv) - hotspot;
+        let position_size = [
+            position.x as f32,
+            position.y as f32,
+            size.x as f32,
+            size.y as f32,
+        ];
+        let opacity = match &self.uniforms.takeover {
+            Some(takeover) if takeover.t > 0.001 => opacity * takeover.overlay_fade,
+            _ => opacity,
         };
         (position_size, opacity)
     }
@@ -1267,32 +1144,11 @@ mod tests {
     }
 
     #[test]
-    fn cursor_height_is_zoomed_once_by_frame_transform() {
-        let options = crate::RenderOptions {
-            camera_size: None,
-            screen_size: XY::new(1080, 1080),
-            preserve_screen_alpha: false,
-        };
-        let mut project = ProjectConfiguration::default();
-        project.background.padding = 0.0;
-        let resolution_base = XY::new(1080, 1080);
-        let zoom = InterpolatedZoom {
-            t: 1.0,
-            bounds: crate::zoom::SegmentBounds::new(XY::new(0.0, 0.0), XY::new(2.0, 2.0)),
-        };
-        let position = Coord::<FrameSpace>::new(XY::new(0.0, 0.0));
-        let size = Coord::<FrameSpace>::new(XY::new(
-            0.0,
-            cursor_height_px(1080.0, 1080.0, 1080.0, 100.0, 1.0) as f64,
-        ));
-
-        let zoomed_position =
-            position.to_zoomed_frame_space(&options, &project, resolution_base, &zoom);
-        let zoomed_size =
-            (position + size).to_zoomed_frame_space(&options, &project, resolution_base, &zoom)
-                - zoomed_position;
-
-        assert!((zoomed_size.y as f32 - STANDARD_CURSOR_HEIGHT * 2.0).abs() < 0.001);
+    fn cursor_height_uses_the_fitted_zoomed_display_once() {
+        for source_height in [540.0, 1080.0, 2160.0] {
+            let height = cursor_height_px(source_height, source_height, 2160.0, 100.0, 1.0);
+            assert!((height - STANDARD_CURSOR_HEIGHT * 2.0).abs() < 0.001);
+        }
     }
 
     #[test]

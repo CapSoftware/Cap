@@ -407,6 +407,10 @@ impl ScreenshotEditorInstances {
                     break;
                 }
                 let segment_frames = DecodedSegmentFrames {
+                    screen_size: cap_project::XY::new(
+                        decoded_frame.width(),
+                        decoded_frame.height(),
+                    ),
                     screen_frame: Some(DecodedFrame::new(
                         decoded_frame.data().to_vec(),
                         decoded_frame.width(),
@@ -876,6 +880,7 @@ pub async fn prewarm_screenshot_renderer() {
     );
 
     let segment_frames = DecodedSegmentFrames {
+        screen_size: cap_project::XY::new(width, height),
         screen_frame: Some(DecodedFrame::new(
             vec![255u8; (width * height * 4) as usize],
             width,
@@ -1681,6 +1686,7 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
     );
     let decoded_frame = DecodedFrame::new(data, width, height);
     let segment_frames = DecodedSegmentFrames {
+        screen_size: cap_project::XY::new(width, height),
         screen_frame: Some(DecodedFrame::new(
             decoded_frame.data().to_vec(),
             decoded_frame.width(),

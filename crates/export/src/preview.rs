@@ -104,7 +104,7 @@ async fn render_preview_with_base(
         .decoders
         .get_frames(
             segment_time as f32,
-            !exporter_base.project_config.camera.hide,
+            !exporter_base.project_config.camera.hide && !settings.cursor_only,
             !settings.cursor_only,
             clip_config.map(|v| v.offsets).unwrap_or_default(),
         )
@@ -165,7 +165,7 @@ async fn render_preview_with_base(
             .decoders
             .get_frames(
                 outgoing.source_time as f32,
-                !exporter_base.project_config.camera.hide,
+                !exporter_base.project_config.camera.hide && !settings.cursor_only,
                 !settings.cursor_only,
                 outgoing_offsets,
             )

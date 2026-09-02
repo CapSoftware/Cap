@@ -401,6 +401,7 @@ mod tests {
         let project = ProjectConfiguration::default();
         let cursor = CursorEvents::default();
         let frames = DecodedSegmentFrames {
+            screen_size: constants.options.screen_size,
             screen_frame: None,
             camera_frame: None,
             segment_time: frame as f32 / 30.0,

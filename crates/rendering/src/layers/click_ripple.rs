@@ -3,7 +3,7 @@ use cap_project::XY;
 use wgpu::{include_wgsl, util::DeviceExt};
 
 use super::cursor::{CursorPlacement, cursor_height_px};
-use crate::{Coord, FrameSpace, ProjectUniforms, RenderVideoConstants, zoom::InterpolatedZoom};
+use crate::{Coord, FrameSpace, ProjectUniforms, RenderVideoConstants};
 
 /// Ripples older than this are dropped rather than queued, so a burst of
 /// clicks can never grow the uniform buffer.
@@ -145,13 +145,7 @@ impl ClickRippleLayer {
         }
     }
 
-    pub fn prepare(
-        &mut self,
-        uniforms: &ProjectUniforms,
-        resolution_base: XY<u32>,
-        zoom: &InterpolatedZoom,
-        constants: &RenderVideoConstants,
-    ) {
+    pub fn prepare(&mut self, uniforms: &ProjectUniforms, constants: &RenderVideoConstants) {
         self.instance_count = 0;
 
         if uniforms.click_ripples.is_empty() {
@@ -166,13 +160,11 @@ impl ClickRippleLayer {
             ripple.strength_clamped(),
         ];
 
-        let crop = ProjectUniforms::get_crop(&constants.options, &uniforms.project);
-        let display_size =
-            ProjectUniforms::display_size(&constants.options, &uniforms.project, resolution_base);
+        let display = &uniforms.display;
         let radius = cursor_height_px(
-            constants.options.screen_size.y as f32,
-            crop.size.y as f32,
-            display_size.y as f32,
+            display.frame_size[1],
+            display.crop_bounds[3] - display.crop_bounds[1],
+            display.target_size[1],
             uniforms.cursor_size,
             1.0,
         ) * RIPPLE_RADIUS_SCALE
@@ -185,12 +177,7 @@ impl ClickRippleLayer {
         let quad_side = (radius * 2.0 * RIPPLE_QUAD_EXTENT) as f64;
         let size = Coord::<FrameSpace>::new(XY::new(quad_side, quad_side));
         let hotspot = XY::new(0.5, 0.5);
-        let placement = CursorPlacement {
-            constants,
-            uniforms,
-            resolution_base,
-            zoom,
-        };
+        let placement = CursorPlacement { uniforms };
 
         let mut slots = [0u8; MAX_CLICK_RIPPLES * SLOT_SIZE as usize];
         let mut count = 0usize;

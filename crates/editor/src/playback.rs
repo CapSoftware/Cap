@@ -1767,6 +1767,7 @@ mod tests {
 
     fn decoded_frames(bytes: usize) -> DecodedSegmentFrames {
         DecodedSegmentFrames {
+            screen_size: XY::new(1, 1),
             screen_frame: Some(DecodedFrame::new(vec![0; bytes], 1, 1)),
             camera_frame: None,
             segment_time: 0.0,
