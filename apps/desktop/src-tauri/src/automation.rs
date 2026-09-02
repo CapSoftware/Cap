@@ -64,6 +64,25 @@ fn clipboard_write_retry_delay(attempt: usize) -> Option<std::time::Duration> {
         .then(|| std::time::Duration::from_millis(CLIPBOARD_WRITE_RETRY_BASE_MS << attempt))
 }
 
+enum ClipboardImage {
+    File(PathBuf),
+    Encoded(Vec<u8>),
+}
+
+impl ClipboardImage {
+    fn load(&self) -> Result<clipboard_rs::RustImageData, String> {
+        match self {
+            Self::File(path) => {
+                let path = path.to_string_lossy().to_string();
+                clipboard_rs::RustImageData::from_path(&path)
+                    .map_err(|e| format!("Failed to load image for clipboard: {e}"))
+            }
+            Self::Encoded(bytes) => clipboard_rs::RustImageData::from_bytes(bytes)
+                .map_err(|e| format!("Failed to load rendered screenshot for clipboard: {e}")),
+        }
+    }
+}
+
 pub struct DesktopAutomationHost {
     app: AppHandle,
     clipboard: Arc<RwLock<ClipboardContext>>,
@@ -74,11 +93,12 @@ impl DesktopAutomationHost {
         Self { app, clipboard }
     }
 
-    async fn set_clipboard_image(&self, image: clipboard_rs::RustImageData) -> Result<(), String> {
+    async fn set_clipboard_image(&self, image: &ClipboardImage) -> Result<(), String> {
         for attempt in 0..CLIPBOARD_WRITE_ATTEMPTS {
+            let image_data = image.load()?;
             let result = {
                 let clipboard = self.clipboard.write().await;
-                clipboard.set_image(image.clone())
+                clipboard.set_image(image_data)
             };
 
             match result {
@@ -131,9 +151,7 @@ impl AutomationHost for DesktopAutomationHost {
         let image = match source {
             ClipboardImageSource::File(path) => {
                 info!(path = %path.display(), "Automation: copying file to clipboard");
-                let path = path.to_string_lossy().to_string();
-                clipboard_rs::RustImageData::from_path(&path)
-                    .map_err(|e| format!("Failed to load image for clipboard: {e}"))?
+                ClipboardImage::File(path)
             }
             ClipboardImageSource::ScreenshotProject(path) => {
                 info!(project = %path.display(), "Automation: rendering screenshot for clipboard");
@@ -142,12 +160,11 @@ impl AutomationHost for DesktopAutomationHost {
                     path,
                 )
                 .await?;
-                clipboard_rs::RustImageData::from_bytes(&rendered.image_bytes)
-                    .map_err(|e| format!("Failed to load rendered screenshot for clipboard: {e}"))?
+                ClipboardImage::Encoded(rendered.image_bytes)
             }
         };
 
-        self.set_clipboard_image(image).await
+        self.set_clipboard_image(&image).await
     }
 
     async fn save_to_location(
