@@ -5,6 +5,7 @@ import {
 	VideosRepo,
 	verifyStorageObjectToken,
 } from "@cap/web-backend";
+import { isInternalRecordingKey } from "@cap/web-backend/src/Storage/recording-output";
 import { Storage as StorageDomain, Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
@@ -120,6 +121,20 @@ export async function GET(request: NextRequest) {
 				: yield* getPolicyVideo(videoId);
 
 		if (!key.startsWith(`${video.ownerId}/${video.id}/`)) {
+			return yield* Effect.fail("not-found" as const);
+		}
+		if (
+			isInternalRecordingKey(key) &&
+			!(tokenPayload?.videoId === videoIdParam && tokenPayload.key === key) &&
+			!(
+				video.source.type === "desktopMP4" &&
+				[
+					key === video.source.outputKey,
+					key === video.source.thumbnailKey,
+					key === video.source.previewKey,
+				].some(Boolean)
+			)
+		) {
 			return yield* Effect.fail("not-found" as const);
 		}
 

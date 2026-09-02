@@ -41,16 +41,20 @@ const MAX_LEVEL_5_1_WIDTH = 4096;
 const MAX_LEVEL_5_1_HEIGHT = 2304;
 const MULTIPART_MIN_PART_SIZE_BYTES = 5 * 1024 * 1024;
 const MULTIPART_MAX_PARTS = 10_000;
+const MULTIPART_ABORT_TIMEOUT_MS = 30_000;
 const STORAGE_ERROR_BODY_LIMIT_BYTES = 2_048;
 
 export type StorageUploadTarget =
 	| {
 			type: "put";
 			url: string;
+			ifNoneMatch?: "*";
 	  }
 	| {
 			type: "multipart";
 			videoId: string;
+			generation?: string;
+			attemptId?: string;
 			key: string;
 			uploadId: string;
 			partSize: number;
@@ -2013,15 +2017,23 @@ async function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function uploadSignal(abortSignal?: AbortSignal) {
+	const timeout = AbortSignal.timeout(UPLOAD_TIMEOUT_MS);
+	return abortSignal ? AbortSignal.any([abortSignal, timeout]) : timeout;
+}
+
 async function uploadWithRetry(
 	presignedUrl: string,
 	contentType: string,
 	contentLength: number,
 	bodyFactory: () => Blob | BunFile,
+	ifNoneMatch?: "*",
+	abortSignal?: AbortSignal,
 ): Promise<StorageUploadReceipt> {
 	let lastError: Error | undefined;
 
 	for (let attempt = 0; attempt <= UPLOAD_MAX_RETRIES; attempt++) {
+		abortSignal?.throwIfAborted();
 		let response: Response;
 
 		try {
@@ -2029,6 +2041,7 @@ async function uploadWithRetry(
 				"Content-Type": contentType,
 				"Content-Length": contentLength.toString(),
 			};
+			if (ifNoneMatch) headers["If-None-Match"] = ifNoneMatch;
 			if (isGoogleDriveResumableUrl(presignedUrl) && contentLength > 0) {
 				headers["Content-Range"] =
 					`bytes 0-${contentLength - 1}/${contentLength}`;
@@ -2038,9 +2051,10 @@ async function uploadWithRetry(
 				method: "PUT",
 				headers,
 				body: bodyFactory(),
-				signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+				signal: uploadSignal(abortSignal),
 			});
 		} catch (err) {
+			abortSignal?.throwIfAborted();
 			const uploadError = err instanceof Error ? err : new Error(String(err));
 
 			if (attempt === UPLOAD_MAX_RETRIES) {
@@ -2053,7 +2067,13 @@ async function uploadWithRetry(
 		}
 
 		if (response.ok) {
-			return readUploadReceipt(response, presignedUrl, contentLength);
+			const receipt = await readUploadReceipt(
+				response,
+				presignedUrl,
+				contentLength,
+			);
+			abortSignal?.throwIfAborted();
+			return receipt;
 		}
 
 		const responseError = await storageResponseError(
@@ -2104,7 +2124,9 @@ async function postMultipartJson<TBody extends Record<string, unknown>>(
 	url: string,
 	body: TBody,
 	webhookSecret: string | undefined,
+	abortSignal?: AbortSignal,
 ): Promise<Response> {
+	abortSignal?.throwIfAborted();
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
 	};
@@ -2116,7 +2138,7 @@ async function postMultipartJson<TBody extends Record<string, unknown>>(
 		method: "POST",
 		headers,
 		body: JSON.stringify(body),
-		signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+		signal: uploadSignal(abortSignal),
 	});
 }
 
@@ -2124,17 +2146,21 @@ async function getMultipartPartUrl(
 	target: Extract<StorageUploadTarget, { type: "multipart" }>,
 	partNumber: number,
 	contentLength: number,
+	abortSignal?: AbortSignal,
 ): Promise<string> {
 	const response = await postMultipartJson(
 		target.signPartUrl,
 		{
 			videoId: target.videoId,
+			generation: target.generation,
+			attemptId: target.attemptId,
 			key: target.key,
 			uploadId: target.uploadId,
 			partNumber,
 			contentLength,
 		},
 		target.webhookSecret,
+		abortSignal,
 	);
 
 	if (!response.ok) {
@@ -2142,6 +2168,7 @@ async function getMultipartPartUrl(
 	}
 
 	const data = await response.json().catch(() => null);
+	abortSignal?.throwIfAborted();
 	const url = (data as { url?: unknown } | null)?.url;
 	if (typeof url !== "string" || !url) {
 		throw new Error("Multipart part signing returned an invalid URL");
@@ -2155,10 +2182,12 @@ async function uploadMultipartPart(
 	body: Blob,
 	contentLength: number,
 	partNumber: number,
+	abortSignal?: AbortSignal,
 ): Promise<string> {
 	let lastError: Error | undefined;
 
 	for (let attempt = 0; attempt <= UPLOAD_MAX_RETRIES; attempt++) {
+		abortSignal?.throwIfAborted();
 		let response: Response;
 		try {
 			response = await fetch(url, {
@@ -2167,9 +2196,10 @@ async function uploadMultipartPart(
 					"Content-Length": contentLength.toString(),
 				},
 				body,
-				signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+				signal: uploadSignal(abortSignal),
 			});
 		} catch (err) {
+			abortSignal?.throwIfAborted();
 			const uploadError = err instanceof Error ? err : new Error(String(err));
 
 			if (attempt === UPLOAD_MAX_RETRIES) {
@@ -2183,6 +2213,8 @@ async function uploadMultipartPart(
 
 		if (response.ok) {
 			const etag = response.headers.get("etag");
+			await response.body?.cancel().catch(() => {});
+			abortSignal?.throwIfAborted();
 			if (!etag) {
 				throw new Error(`Multipart upload part ${partNumber} missing ETag`);
 			}
@@ -2211,16 +2243,20 @@ async function uploadMultipartPart(
 async function completeMultipartUpload(
 	target: Extract<StorageUploadTarget, { type: "multipart" }>,
 	parts: UploadedPart[],
+	abortSignal?: AbortSignal,
 ): Promise<StorageUploadReceipt> {
 	const response = await postMultipartJson(
 		target.completeUrl,
 		{
 			videoId: target.videoId,
+			generation: target.generation,
+			attemptId: target.attemptId,
 			key: target.key,
 			uploadId: target.uploadId,
 			parts,
 		},
 		target.webhookSecret,
+		abortSignal,
 	);
 
 	if (!response.ok) {
@@ -2230,6 +2266,7 @@ async function completeMultipartUpload(
 		);
 	}
 	const result: unknown = await response.json().catch(() => null);
+	abortSignal?.throwIfAborted();
 	return {
 		objectIdentity: strongUploadIdentity(
 			result && typeof result === "object" && "objectIdentity" in result
@@ -2246,20 +2283,25 @@ async function abortMultipartUpload(
 		target.abortUrl,
 		{
 			videoId: target.videoId,
+			generation: target.generation,
+			attemptId: target.attemptId,
 			key: target.key,
 			uploadId: target.uploadId,
 		},
 		target.webhookSecret,
+		AbortSignal.timeout(MULTIPART_ABORT_TIMEOUT_MS),
 	);
 
 	if (!response.ok) {
 		throw await storageResponseError("Multipart upload abort failed", response);
 	}
+	await response.body?.cancel().catch(() => {});
 }
 
 async function uploadFileMultipart(
 	filePath: string,
 	target: Extract<StorageUploadTarget, { type: "multipart" }>,
+	abortSignal?: AbortSignal,
 ): Promise<StorageUploadReceipt> {
 	const fileHandle = file(filePath);
 	const contentLength = fileHandle.size;
@@ -2267,6 +2309,7 @@ async function uploadFileMultipart(
 	const parts: UploadedPart[] = [];
 
 	try {
+		abortSignal?.throwIfAborted();
 		if (contentLength <= 0) {
 			throw new Error("Multipart upload requires a non-empty file");
 		}
@@ -2286,17 +2329,23 @@ async function uploadFileMultipart(
 			const start = (partNumber - 1) * partSize;
 			const end = Math.min(start + partSize, contentLength);
 			const partLength = end - start;
-			const url = await getMultipartPartUrl(target, partNumber, partLength);
+			const url = await getMultipartPartUrl(
+				target,
+				partNumber,
+				partLength,
+				abortSignal,
+			);
 			const etag = await uploadMultipartPart(
 				url,
 				fileHandle.slice(start, end),
 				partLength,
 				partNumber,
+				abortSignal,
 			);
 			parts.push({ partNumber, etag, size: partLength });
 		}
 
-		return await completeMultipartUpload(target, parts);
+		return await completeMultipartUpload(target, parts, abortSignal);
 	} catch (error) {
 		await abortMultipartUpload(target).catch((abortError) => {
 			console.warn(
@@ -2319,12 +2368,20 @@ export async function uploadFileToStorage(
 	filePath: string,
 	target: StorageUploadTarget,
 	contentType: string,
+	abortSignal?: AbortSignal,
 ): Promise<StorageUploadReceipt> {
 	if (target.type === "put") {
-		return uploadFileToS3(filePath, target.url, contentType);
+		return uploadWithRetry(
+			target.url,
+			contentType,
+			file(filePath).size,
+			() => file(filePath),
+			target.ifNoneMatch,
+			abortSignal,
+		);
 	}
 
-	return uploadFileMultipart(filePath, target);
+	return uploadFileMultipart(filePath, target, abortSignal);
 }
 
 export async function copyFileToMp4(
@@ -2344,11 +2401,13 @@ export async function muxMediaTracksToMp4(
 	outputPath: string,
 	abortSignal?: AbortSignal,
 ): Promise<void> {
+	if (abortSignal?.aborted) throw new Error("Recording mux was cancelled");
 	const args = audioInputPath
 		? [
 				"ffmpeg",
 				"-hide_banner",
 				"-y",
+				"-copyts",
 				"-i",
 				videoInputPath,
 				"-i",
@@ -2359,7 +2418,10 @@ export async function muxMediaTracksToMp4(
 				"1:a:0",
 				"-c",
 				"copy",
-				"-shortest",
+				"-avoid_negative_ts",
+				"disabled",
+				"-movie_timescale",
+				"1000000",
 				"-movflags",
 				"+faststart",
 				outputPath,
@@ -2368,6 +2430,7 @@ export async function muxMediaTracksToMp4(
 				"ffmpeg",
 				"-hide_banner",
 				"-y",
+				"-copyts",
 				"-i",
 				videoInputPath,
 				"-map",
@@ -2375,6 +2438,10 @@ export async function muxMediaTracksToMp4(
 				"-c:v",
 				"copy",
 				"-an",
+				"-avoid_negative_ts",
+				"disabled",
+				"-movie_timescale",
+				"1000000",
 				"-movflags",
 				"+faststart",
 				outputPath,

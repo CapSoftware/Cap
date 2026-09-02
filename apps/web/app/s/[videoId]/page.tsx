@@ -439,7 +439,9 @@ async function AuthorizedContent({
 				userId: user.id,
 			});
 			recoveredDesktopSegmentsUpload =
-				result.status === "queued" || result.status === "already-processing";
+				result.status === "queued" ||
+				result.status === "already-processing" ||
+				result.status === "source-committing";
 		} catch (error) {
 			console.error(
 				`[ShareVideoPage] Failed to recover desktop segments upload ${videoId}:`,

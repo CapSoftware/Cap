@@ -31,6 +31,9 @@ export class Video extends Schema.Class<Video>("Video")({
 	name: Schema.String,
 	public: Schema.Boolean,
 	source: Schema.Struct({
+		outputKey: Schema.optional(Schema.String),
+		thumbnailKey: Schema.optional(Schema.String),
+		previewKey: Schema.optional(Schema.String),
 		type: Schema.Literal(
 			"MediaConvert",
 			"local",
@@ -75,7 +78,11 @@ export class Video extends Schema.Class<Video>("Video")({
 			return new SegmentsSource({ videoId: self.id, ownerId: self.ownerId });
 
 		if (self.source.type === "desktopMP4" || self.source.type === "webMP4")
-			return new Mp4Source({ videoId: self.id, ownerId: self.ownerId });
+			return new Mp4Source({
+				videoId: self.id,
+				ownerId: self.ownerId,
+				outputKey: self.source.outputKey,
+			});
 	}
 }
 
@@ -100,6 +107,7 @@ export class UploadProgress extends Schema.Class<UploadProgress>(
 	processingMessage: Schema.OptionFromNullOr(Schema.String),
 	processingError: Schema.OptionFromNullOr(Schema.String),
 	hasRawFallback: Schema.Boolean,
+	automaticRetry: Schema.optional(Schema.Boolean),
 }) {}
 
 export const UploadProgressUpdateInput = Schema.Struct({
@@ -137,12 +145,35 @@ export class ImportSource extends Schema.Class<ImportSource>("ImportSource")({
 	id: Schema.String,
 }) {}
 
+export function getRetainedRecordingOutputKey(
+	ownerId: string,
+	videoId: string,
+	key: string | undefined,
+) {
+	if (
+		!key?.startsWith(`${ownerId}/${videoId}/.recording/`) ||
+		!key.endsWith(".mp4") ||
+		key.includes("..") ||
+		!/^[a-zA-Z0-9_./-]+$/.test(key)
+	) {
+		return undefined;
+	}
+	return key;
+}
+
 export class Mp4Source extends Schema.TaggedClass<Mp4Source>()("Mp4Source", {
 	videoId: Schema.String,
 	ownerId: Schema.String,
+	outputKey: Schema.optional(Schema.String),
 }) {
 	getFileKey() {
-		return `${this.ownerId}/${this.videoId}/result.mp4`;
+		return (
+			getRetainedRecordingOutputKey(
+				this.ownerId,
+				this.videoId,
+				this.outputKey,
+			) ?? `${this.ownerId}/${this.videoId}/result.mp4`
+		);
 	}
 }
 

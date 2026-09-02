@@ -1,5 +1,5 @@
 import { Organisation, Storage, User, Video } from "@cap/web-domain";
-import { Effect, Layer, Option } from "effect";
+import { Cause, Effect, Exit, Layer, Option } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@cap/env", () => ({
@@ -216,9 +216,15 @@ const makeRepoHarness = (videos: VideoForNameSync[] = []): RepoHarness => {
 		deleteObjectByKey: (
 			storageIntegrationId: Storage.StorageIntegrationId,
 			key: string,
+			providerObjectId?: string,
 		) =>
 			Effect.sync(() => {
-				objects.delete(objectMapKey(storageIntegrationId, key));
+				const mapKey = objectMapKey(storageIntegrationId, key);
+				if (
+					providerObjectId === undefined ||
+					objects.get(mapKey)?.providerObjectId === providerObjectId
+				)
+					objects.delete(mapKey);
 			}),
 		updateObjectFileName: (object: StoredObject, fileName: string) =>
 			Effect.sync(() => {
@@ -1185,9 +1191,9 @@ const getStorageAccess = (harness: RepoHarness) => {
 	);
 };
 
-const getStorageObject = async (harness: RepoHarness) => {
+const getStorageObjectExit = async (harness: RepoHarness) => {
 	const access = await getStorageAccess(harness);
-	return Effect.runPromise(access.getObject(resultKey));
+	return Effect.runPromiseExit(access.getObject(resultKey));
 };
 
 describe("Google Drive title synchronization", () => {
@@ -1227,7 +1233,11 @@ describe("Google Drive title synchronization", () => {
 			}),
 		);
 
-		await expect(getStorageObject(harness)).resolves.toEqual(Option.none());
+		const result = await getStorageObjectExit(harness);
+		if (Exit.isSuccess(result)) throw new Error("Recovery conflict was hidden");
+		expect(Option.getOrThrow(Cause.failureOption(result.cause)).cause).toEqual(
+			new Error("Storage object changed during Google Drive recovery; retry"),
+		);
 		const mapped = harness.objects.get(objectMapKey(integrationId, resultKey));
 		expect(mapped).toMatchObject({
 			providerObjectId: "new-pending-id",
@@ -1269,7 +1279,11 @@ describe("Google Drive title synchronization", () => {
 			}),
 		);
 
-		await expect(getStorageObject(harness)).resolves.toEqual(Option.none());
+		const result = await getStorageObjectExit(harness);
+		if (Exit.isSuccess(result)) throw new Error("Pending upload was hidden");
+		expect(Option.getOrThrow(Cause.failureOption(result.cause)).cause).toEqual(
+			new Error("Cannot replace a Google Drive upload that is not complete"),
+		);
 		expect(
 			harness.objects.get(objectMapKey(integrationId, resultKey)),
 		).toMatchObject({

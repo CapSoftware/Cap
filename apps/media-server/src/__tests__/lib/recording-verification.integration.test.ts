@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
 	mkdtemp,
 	readdir,
@@ -9,10 +10,13 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { muxMediaTracksToMp4 } from "../../lib/media-video";
 import {
+	inspectRecordingSources,
 	isRetryableRecordingVerificationError,
 	verifyRecording,
 	verifyRemoteRecording,
+	verifyRemoteRecordingBytes,
 } from "../../lib/recording-verification";
 
 const FIXTURES = join(import.meta.dir, "..", "fixtures");
@@ -138,6 +142,32 @@ describe("complete recording decode", () => {
 		expect(evidence.audio?.sampleCount).toBeGreaterThanOrEqual(240_000);
 		expect(evidence.audio?.sampleRate).toBe(48_000);
 		expect(evidence.audio?.decodedDuration).toBeCloseTo(5, 1);
+		const hashes = await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-map",
+			"0:v:0",
+			"-map",
+			"0:a:0",
+			"-c:v",
+			"rawvideo",
+			"-c:a",
+			"pcm_f64le",
+			"-f",
+			"streamhash",
+			"-hash",
+			"sha256",
+			"-",
+		]);
+		expect(hashes).toContain(
+			`0,v,SHA256=${evidence.integrity?.video.contentSha256}`,
+		);
+		expect(hashes).toContain(
+			`1,a,SHA256=${evidence.integrity?.audio?.contentSha256}`,
+		);
 	});
 
 	test("accepts legacy video without audio only when audio was not requested", async () => {
@@ -212,6 +242,246 @@ describe("complete recording decode", () => {
 		await expect(
 			verifyRecording(link, { expectedDuration: 5, requireAudio: true }),
 		).rejects.toThrow("regular MP4 file");
+	});
+});
+
+describe("source-preserving recording mux", () => {
+	test("preserves sparse screenshot timestamps without inventing missing frames", async () => {
+		const input = join(directory, "sparse-video.mp4");
+		await generate(input, "anullsrc=r=48000:cl=mono:d=5", [
+			"-vf",
+			"select=eq(n\\,0)+eq(n\\,149)",
+			"-fps_mode",
+			"vfr",
+		]);
+		const sourceEvidence = await inspectRecordingSources(input, input);
+		const output = join(directory, "preserved-sparse-video.mp4");
+		await muxMediaTracksToMp4(input, input, output);
+		const verified = await verifyRecording(output, {
+			requireAudio: true,
+			sourceEvidence,
+		});
+		expect(verified.sourcePreserved).toBe(true);
+		expect(verified.video.frameCount).toBe(2);
+		expect(verified.video.duration).toBeCloseTo(5, 3);
+	});
+
+	test("refuses source truth when the source itself does not decode completely", async () => {
+		await expect(inspectRecordingSources(corruptTail, silent)).rejects.toThrow(
+			"full decode failed",
+		);
+	});
+
+	test.each(["vfr", "short-audio", "audio-gap"])(
+		"preserves actual %s media despite an inaccurate legacy duration",
+		async (kind) => {
+			const input =
+				kind === "vfr"
+					? variableFrameRate
+					: kind === "short-audio"
+						? shortAudio
+						: audioGap;
+			const sourceEvidence = await inspectRecordingSources(input, input);
+			const output = join(directory, `preserved-${kind}.mp4`);
+			await muxMediaTracksToMp4(input, input, output);
+			const verified = await verifyRecording(output, {
+				expectedDuration: 0.5,
+				requireAudio: true,
+				sourceEvidence,
+			});
+			expect(verified.sourcePreserved).toBe(true);
+			expect(verified.video.frameCount).toBe(sourceEvidence.video.frameCount);
+			expect(verified.audio?.sampleCount).toBe(
+				sourceEvidence.audio?.sampleCount,
+			);
+			expect(verified.integrity).toEqual(sourceEvidence.integrity);
+		},
+	);
+
+	test("preserves an audio tail beyond the video and rejects the old shortest mux", async () => {
+		const input = join(directory, "long-audio.mp4");
+		await generate(input, "sine=frequency=700:sample_rate=48000:duration=6");
+		const sourceEvidence = await inspectRecordingSources(input, input);
+		const output = join(directory, "preserved-audio-tail.mp4");
+		await muxMediaTracksToMp4(input, input, output);
+		const verified = await verifyRecording(output, {
+			requireAudio: true,
+			sourceEvidence,
+		});
+		expect(verified.audio?.decodedDuration).toBeGreaterThan(5.9);
+		expect(verified.sourcePreserved).toBe(true);
+		const truncated = join(directory, "shortest-audio-tail.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			input,
+			"-map",
+			"0:v:0",
+			"-map",
+			"0:a:0",
+			"-c",
+			"copy",
+			"-shortest",
+			truncated,
+		]);
+		await expect(
+			verifyRecording(truncated, {
+				requireAudio: true,
+				sourceEvidence,
+			}),
+		).rejects.toThrow("does not preserve source audio");
+	});
+
+	test("preserves AAC priming and a nonzero audio offset", async () => {
+		const input = join(directory, "offset-source.mp4");
+		await generate(input, "sine=frequency=700:sample_rate=48000:duration=5", [
+			"-af",
+			"asetpts=PTS+0.137/TB",
+			"-movie_timescale",
+			"1000000",
+		]);
+		const sourceEvidence = await inspectRecordingSources(input, input);
+		const output = join(directory, "offset-output.mp4");
+		await muxMediaTracksToMp4(input, input, output);
+		const verified = await verifyRecording(output, {
+			requireAudio: true,
+			sourceEvidence,
+		});
+		expect(verified.sourcePreserved).toBe(true);
+		expect(verified.audio?.startTime).toBeCloseTo(
+			sourceEvidence.audio?.startTime ?? 0,
+			6,
+		);
+		const shifted = join(directory, "offset-lost.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			output,
+			"-itsoffset",
+			"0.25",
+			"-i",
+			output,
+			"-map",
+			"0:v:0",
+			"-map",
+			"1:a:0",
+			"-c",
+			"copy",
+			shifted,
+		]);
+		await expect(
+			verifyRecording(shifted, { requireAudio: true, sourceEvidence }),
+		).rejects.toThrow("source A/V sync");
+	});
+
+	test("compares audio samples independently of PCM packetization", async () => {
+		const input = join(directory, "pcm-source.mp4");
+		const output = join(directory, "pcm-repacketized.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-c:v",
+			"copy",
+			"-c:a",
+			"pcm_s16le",
+			"-f",
+			"mov",
+			input,
+		]);
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-copyts",
+			"-i",
+			input,
+			"-c:v",
+			"copy",
+			"-af",
+			"asetnsamples=n=777:p=0",
+			"-c:a",
+			"pcm_s16le",
+			"-f",
+			"mov",
+			output,
+		]);
+		const sourceEvidence = await inspectRecordingSources(input, input);
+		const verified = await verifyRecording(output, {
+			requireAudio: true,
+			sourceEvidence,
+		});
+		expect(verified.sourcePreserved).toBe(true);
+		expect(verified.audio?.sampleCount).toBe(sourceEvidence.audio?.sampleCount);
+	});
+
+	test("rejects changed video order and changed audio with unchanged durations", async () => {
+		const sourceEvidence = await inspectRecordingSources(silent, silent);
+		const reversed = join(directory, "reversed.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-vf",
+			"reverse",
+			"-c:v",
+			"libx264",
+			"-preset",
+			"ultrafast",
+			"-c:a",
+			"copy",
+			reversed,
+		]);
+		await expect(
+			verifyRecording(reversed, { requireAudio: true, sourceEvidence }),
+		).rejects.toThrow("does not preserve source video");
+		const changedAudio = join(directory, "changed-audio.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-f",
+			"lavfi",
+			"-i",
+			"sine=frequency=300:sample_rate=48000:duration=5",
+			"-map",
+			"0:v:0",
+			"-map",
+			"1:a:0",
+			"-c:v",
+			"copy",
+			"-c:a",
+			"aac",
+			changedAudio,
+		]);
+		await expect(
+			verifyRecording(changedAudio, { requireAudio: true, sourceEvidence }),
+		).rejects.toThrow("does not preserve source audio");
+	});
+
+	test("preserves video-only sources without inventing audio", async () => {
+		const sourceEvidence = await inspectRecordingSources(
+			variableFrameRate,
+			null,
+		);
+		const output = join(directory, "preserved-video-only.mp4");
+		await muxMediaTracksToMp4(variableFrameRate, null, output);
+		const verified = await verifyRecording(output, {
+			requireAudio: false,
+			sourceEvidence,
+		});
+		expect(verified.sourcePreserved).toBe(true);
+		expect(verified.audio).toBeNull();
 	});
 });
 
@@ -371,6 +641,297 @@ function objectResponse(
 }
 
 describe("remote recording object identity", () => {
+	test("binds remote bytes without manufacturing decoded evidence", async () => {
+		const identity = '"byte-bound-output"';
+		const sha256 = createHash("sha256").update(silentBytes).digest("hex");
+		const requests: Request[] = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request) {
+				requests.push(request);
+				return objectResponse(request, identity);
+			},
+		});
+		try {
+			const result = await verifyRemoteRecordingBytes(
+				`http://127.0.0.1:${server.port}/recording.mp4`,
+				{
+					expectedObjectIdentity: identity,
+					expectedSha256: sha256,
+					expectedFileSize: silentBytes.byteLength,
+				},
+			);
+			expect(result).toEqual({
+				objectIdentity: identity,
+				fileSize: silentBytes.byteLength,
+				remoteSha256: sha256,
+			});
+			expect(requests.map((request) => request.headers.get("range"))).toEqual([
+				"bytes=0-0",
+				null,
+				"bytes=0-0",
+			]);
+			for (const request of requests) {
+				expect(request.headers.get("if-match")).toBe(identity);
+				expect(request.headers.get("x-cap-recording-verification")).toBe("1");
+			}
+		} finally {
+			await server.stop(true);
+		}
+	});
+
+	test.each(["changed", "oversized", "truncated", "post-identity"])(
+		"refuses bytes-only proof for %s storage",
+		async (fault) => {
+			const identity = '"byte-bound-output"';
+			const changed = silentBytes.slice();
+			changed[changed.length - 1] ^= 1;
+			let bodyRead = false;
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch(request) {
+					if (request.headers.has("range")) {
+						return objectResponse(
+							request,
+							fault === "post-identity" && bodyRead ? '"changed"' : identity,
+						);
+					}
+					bodyRead = true;
+					const bytes =
+						fault === "changed"
+							? changed
+							: fault === "oversized"
+								? new Uint8Array(silentBytes.byteLength + 1)
+								: fault === "truncated"
+									? silentBytes.subarray(0, -1)
+									: silentBytes;
+					return new Response(bytes, { headers: { ETag: identity } });
+				},
+			});
+			try {
+				await expect(
+					verifyRemoteRecordingBytes(
+						`http://127.0.0.1:${server.port}/recording.mp4`,
+						{
+							expectedObjectIdentity: identity,
+							expectedSha256: createHash("sha256")
+								.update(silentBytes)
+								.digest("hex"),
+							expectedFileSize: silentBytes.byteLength,
+						},
+					),
+				).rejects.toThrow(
+					fault === "changed"
+						? "bytes do not match"
+						: fault === "post-identity"
+							? "changed during verification"
+							: "size changed",
+				);
+			} finally {
+				await server.stop(true);
+			}
+		},
+	);
+
+	test.each(["cancel", "timeout"])(
+		"stops bytes-only readback on %s",
+		async (cause) => {
+			let started: (() => void) | undefined;
+			const reading = new Promise<void>((resolve) => {
+				started = resolve;
+			});
+			const identity = '"stalled-byte-output"';
+			const controller = new AbortController();
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch(request) {
+					if (request.headers.has("range"))
+						return objectResponse(request, identity);
+					started?.();
+					return new Response(
+						new ReadableStream({
+							start(stream) {
+								stream.enqueue(silentBytes.subarray(0, 32));
+							},
+						}),
+						{ headers: { ETag: identity } },
+					);
+				},
+			});
+			try {
+				const result = verifyRemoteRecordingBytes(
+					`http://127.0.0.1:${server.port}/recording.mp4`,
+					{
+						expectedObjectIdentity: identity,
+						expectedSha256: createHash("sha256")
+							.update(silentBytes)
+							.digest("hex"),
+						expectedFileSize: silentBytes.byteLength,
+						abortSignal: controller.signal,
+						timeoutMs: cause === "timeout" ? 100 : 5_000,
+					},
+				).catch((error: unknown) => error);
+				await reading;
+				if (cause === "cancel") controller.abort();
+				const error = await result;
+				expect(error).toBeInstanceOf(Error);
+				expect((error as Error).message).toContain(
+					cause === "cancel" ? "cancelled" : "timed out",
+				);
+				expect(isRetryableRecordingVerificationError(error)).toBe(
+					cause === "timeout",
+				);
+			} finally {
+				controller.abort();
+				await server.stop(true);
+			}
+		},
+	);
+
+	test.each(["cancel", "timeout"])(
+		"stops a stalled byte readback after %s without a receipt",
+		async (cause) => {
+			let started: (() => void) | undefined;
+			const reading = new Promise<void>((resolve) => {
+				started = resolve;
+			});
+			const identity = '"stalled-readback"';
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch(request) {
+					if (request.headers.has("range"))
+						return objectResponse(request, identity);
+					started?.();
+					return new Response(
+						new ReadableStream({
+							start(controller) {
+								controller.enqueue(silentBytes.subarray(0, 32));
+							},
+						}),
+						{ headers: { ETag: identity } },
+					);
+				},
+			});
+			const controller = new AbortController();
+			try {
+				const outcome = verifyRemoteRecording(
+					`http://127.0.0.1:${server.port}/recording.mp4`,
+					{
+						expectedDuration: 5,
+						requireAudio: true,
+						expectedSha256: createHash("sha256")
+							.update(silentBytes)
+							.digest("hex"),
+						expectedFileSize: silentBytes.byteLength,
+						abortSignal: controller.signal,
+						timeoutMs: cause === "timeout" ? 500 : 5_000,
+					},
+				).catch((error: unknown) => error);
+				await reading;
+				if (cause === "cancel") controller.abort();
+				const error = await outcome;
+				expect(error).toBeInstanceOf(Error);
+				expect((error as Error).message).toContain(
+					cause === "cancel" ? "cancelled" : "timed out",
+				);
+				expect(isRetryableRecordingVerificationError(error)).toBe(
+					cause === "timeout",
+				);
+			} finally {
+				controller.abort();
+				await server.stop(true);
+			}
+		},
+		10_000,
+	);
+
+	test.each(["changed", "oversized"])(
+		"rejects %s readback bytes even when storage reuses the ETag",
+		async (fault) => {
+			const identity = '"dishonest-storage"';
+			const sha256 = createHash("sha256").update(silentBytes).digest("hex");
+			const changed = silentBytes.slice();
+			changed[changed.length - 1] ^= 1;
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch(request) {
+					if (request.headers.has("range")) {
+						return objectResponse(request, identity);
+					}
+					return new Response(
+						fault === "changed"
+							? changed
+							: new Uint8Array(silentBytes.byteLength + 1),
+						{ headers: { ETag: identity } },
+					);
+				},
+			});
+			try {
+				await expect(
+					verifyRemoteRecording(
+						`http://127.0.0.1:${server.port}/recording.mp4`,
+						{
+							expectedDuration: 5,
+							requireAudio: true,
+							expectedObjectIdentity: identity,
+							expectedFileSize: silentBytes.byteLength,
+							expectedSha256: sha256,
+						},
+					),
+				).rejects.toThrow(
+					fault === "changed" ? "bytes do not match" : "size changed",
+				);
+			} finally {
+				await server.stop(true);
+			}
+		},
+	);
+
+	test("checks exact remote bytes as well as a stable object identity", async () => {
+		const identity = '"verified-content"';
+		const sha256 = createHash("sha256").update(silentBytes).digest("hex");
+		const sourceEvidence = await inspectRecordingSources(silent, silent);
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request) {
+				return objectResponse(request, identity);
+			},
+		});
+		try {
+			const options = {
+				requireAudio: true,
+				sourceEvidence,
+				expectedObjectIdentity: identity,
+				expectedFileSize: silentBytes.byteLength,
+				expectedSha256: sha256,
+			};
+			const url = `http://127.0.0.1:${server.port}/recording.mp4`;
+			const verified = await verifyRemoteRecording(url, options);
+			expect(verified.remoteSha256).toBe(sha256);
+			expect(verified.sourcePreserved).toBe(true);
+			await expect(
+				verifyRemoteRecording(url, {
+					...options,
+					expectedSha256: "0".repeat(64),
+				}),
+			).rejects.toThrow("bytes do not match");
+			await expect(
+				verifyRemoteRecording(url, {
+					...options,
+					expectedFileSize: silentBytes.byteLength + 1,
+				}),
+			).rejects.toThrow("size does not match");
+		} finally {
+			await server.stop(true);
+		}
+	});
+
 	test("binds the decode and receipt to a strong opaque object version", async () => {
 		const requests: { match: string | null; optIn: string | null }[] = [];
 		const identity = '"drive-file:42"';

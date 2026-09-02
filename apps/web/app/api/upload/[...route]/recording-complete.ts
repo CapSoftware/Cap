@@ -6,6 +6,10 @@ import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import {
+	DesktopRecordingSourceBlockedError,
+	SourceCommitPendingError,
+} from "@/lib/desktop-recording-jobs";
+import {
 	validateDesktopRecordingRequest,
 	verifyDesktopRecordingUpload,
 } from "@/lib/desktop-recording-upload-status";
@@ -44,67 +48,55 @@ export const app = new Hono().post(
 			return c.json({ error: "Video is not a desktop recording" }, 400);
 		}
 
-		if (verification) {
-			const [upload] = await db()
-				.select({
-					videoId: Db.videoUploads.videoId,
-					phase: Db.videoUploads.phase,
-				})
-				.from(Db.videoUploads)
-				.where(eq(Db.videoUploads.videoId, videoId));
-			if (upload?.phase === "error") {
-				return c.json({ success: false, status: "reupload-required" }, 409);
-			}
-			if (
-				upload?.phase === "processing" ||
-				upload?.phase === "generating_thumbnail"
-			) {
-				return c.json({ success: true, status: "already-processing" });
-			}
-			try {
+		try {
+			if (verification) {
 				const receipt =
 					video.source.type === "desktopMP4"
 						? await verifyDesktopRecordingUpload(video, verification)
 						: null;
-				if (!receipt) {
-					await validateDesktopRecordingRequest(video, verification);
-					const status = await queueDesktopSegmentsFinalization({
-						videoId,
-						userId: user.id,
-						verification,
+				if (receipt) {
+					return c.json({
+						success: true,
+						status: "verified",
+						verification: receipt,
 					});
-					return c.json({ success: true, status });
 				}
-				return c.json({
-					success: true,
-					status: "verified",
-					verification: receipt,
-				});
-			} catch {
-				return c.json(
-					{
-						error:
-							"Recording verification is unavailable; retain the local recording",
-					},
-					503,
-				);
+				await validateDesktopRecordingRequest(video, verification);
 			}
-		}
-
-		if (video.source.type === "desktopMP4") {
-			return c.json({ success: true, status: "already-complete" });
-		}
-
-		try {
 			const status = await queueDesktopSegmentsFinalization({
 				videoId,
 				userId: user.id,
+				verification,
 			});
-
 			return c.json({ success: true, status });
 		} catch (error) {
-			console.error("[recording-complete] Error queueing mux:", error);
-			return c.json({ error: "Failed to queue muxing" }, 500);
+			if (error instanceof DesktopRecordingSourceBlockedError) {
+				return c.json(
+					{
+						success: false,
+						status: "reupload-required",
+						code: error.code,
+						error: error.message,
+					},
+					409,
+				);
+			}
+			c.header("Retry-After", "5");
+			if (error instanceof SourceCommitPendingError) {
+				return c.json(
+					{ success: false, status: error.code, error: error.message },
+					503,
+				);
+			}
+			console.error("[recording-complete] Finalization unavailable:", error);
+			return c.json(
+				{
+					success: false,
+					error:
+						"Recording verification is unavailable; retain the local recording. Processing will retry automatically.",
+				},
+				503,
+			);
 		}
 	},
 );
