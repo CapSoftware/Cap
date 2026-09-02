@@ -190,20 +190,17 @@ pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> Pro
     project_config.background.shadow = 0.0;
     project_config.background.advanced_shadow = None;
     project_config.background.border = None;
-    project_config.camera.hide = true;
     project_config.captions = None;
     project_config.keyboard = None;
 
     if let Some(timeline) = project_config.timeline.as_mut() {
         timeline.mask_segments.clear();
         // Fullscreen text segments pause the recording clock (holds), which
-        // shapes the frame count and cursor motion; dropping them would
-        // desync this overlay pass from the main render. Keep them as
-        // invisible placeholders (empty content draws nothing) and only
-        // remove overlay-layout texts.
+        // shapes the frame count and cursor motion. Split titles also move
+        // the cursor with the display, so both need invisible placeholders.
         timeline
             .text_segments
-            .retain(|text| text.layout == cap_project::TextLayout::Fullscreen);
+            .retain(|text| text.layout != cap_project::TextLayout::Overlay);
         for text in &mut timeline.text_segments {
             text.content.clear();
         }
@@ -243,6 +240,61 @@ impl ExporterBase {
             config: None,
             output_path: None,
             force_ffmpeg_decoder: false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod cursor_only_tests {
+    use super::*;
+    use cap_project::TextLayout;
+
+    #[test]
+    fn cursor_only_preserves_layout_and_recording_time_without_title_pixels() {
+        for hide_camera in [false, true] {
+            let mut project = ProjectConfiguration::default();
+            project.camera.hide = hide_camera;
+            project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{ "start": 0.0, "end": 8.0, "timescale": 1.0 }],
+                    "zoomSegments": [],
+                    "sceneSegments": [{ "start": 1.0, "end": 3.0, "mode": "splitScreen" }],
+                    "textSegments": [
+                        { "start": 0.0, "end": 1.0, "layout": "overlay" },
+                        { "start": 1.0, "end": 2.0, "layout": "fullscreen" },
+                        { "start": 2.0, "end": 3.0, "layout": "splitLeft" },
+                        { "start": 3.0, "end": 4.0, "layout": "splitRight" }
+                    ]
+                }))
+                .unwrap(),
+            );
+            let duration = project.timeline.as_ref().unwrap().duration();
+            let cursor_only = make_cursor_only_project(project);
+            let timeline = cursor_only.timeline.unwrap();
+            assert_eq!(cursor_only.camera.hide, hide_camera);
+            assert_eq!(timeline.duration(), duration);
+            assert_eq!(
+                timeline
+                    .text_segments
+                    .iter()
+                    .map(|text| text.layout)
+                    .collect::<Vec<_>>(),
+                [
+                    TextLayout::Fullscreen,
+                    TextLayout::SplitLeft,
+                    TextLayout::SplitRight
+                ],
+            );
+            assert!(
+                timeline
+                    .text_segments
+                    .iter()
+                    .all(|text| text.content.is_empty())
+            );
+            assert!(matches!(
+                timeline.scene_segments[0].mode,
+                cap_project::SceneMode::SplitScreen
+            ));
         }
     }
 }

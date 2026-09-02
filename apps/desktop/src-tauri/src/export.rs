@@ -1575,7 +1575,7 @@ async fn generate_export_preview_inner(
         .decoders
         .get_frames(
             segment_time as f32,
-            !project_config.camera.hide,
+            !project_config.camera.hide && render_segment.render_display,
             render_segment.render_display,
             clip_config.map(|v| v.offsets).unwrap_or_default(),
         )
@@ -1629,7 +1629,7 @@ async fn generate_export_preview_inner(
             .decoders
             .get_frames(
                 outgoing.source_time as f32,
-                !project_config.camera.hide,
+                !project_config.camera.hide && outgoing_segment.render_display,
                 outgoing_segment.render_display,
                 outgoing_offsets,
             )
@@ -1933,7 +1933,7 @@ async fn generate_export_preview_fast_inner(
         .decoders
         .get_frames(
             segment_time as f32,
-            !project_config.camera.hide,
+            !project_config.camera.hide && !settings.cursor_only,
             !settings.cursor_only,
             clip_config.map(|v| v.offsets).unwrap_or_default(),
         )
@@ -1987,7 +1987,7 @@ async fn generate_export_preview_fast_inner(
             .decoders
             .get_frames(
                 outgoing.source_time as f32,
-                !project_config.camera.hide,
+                !project_config.camera.hide && !settings.cursor_only,
                 !settings.cursor_only,
                 outgoing_offsets,
             )

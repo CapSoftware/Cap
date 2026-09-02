@@ -451,6 +451,8 @@ impl RecordingSegmentDecoders {
         offsets: ClipOffsets,
     ) -> Option<DecodedSegmentFrames> {
         let camera_request_time = segment_time + offsets.camera;
+        let (screen_width, screen_height) = self.screen_video_dimensions();
+        let screen_size = XY::new(screen_width, screen_height);
 
         if needs_display {
             let (screen, camera) = tokio::join!(
@@ -472,6 +474,7 @@ impl RecordingSegmentDecoders {
             }
 
             Some(DecodedSegmentFrames {
+                screen_size,
                 screen_frame: Some(screen?),
                 camera_frame,
                 segment_time,
@@ -497,6 +500,7 @@ impl RecordingSegmentDecoders {
             );
 
             Some(DecodedSegmentFrames {
+                screen_size,
                 screen_frame: None,
                 camera_frame,
                 segment_time,
@@ -514,6 +518,8 @@ impl RecordingSegmentDecoders {
         offsets: ClipOffsets,
     ) -> Option<DecodedSegmentFrames> {
         let camera_request_time = segment_time + offsets.camera;
+        let (screen_width, screen_height) = self.screen_video_dimensions();
+        let screen_size = XY::new(screen_width, screen_height);
 
         if needs_display {
             let (screen, camera) = tokio::join!(
@@ -531,6 +537,7 @@ impl RecordingSegmentDecoders {
             let camera_frame = camera.flatten();
 
             Some(DecodedSegmentFrames {
+                screen_size,
                 screen_frame: Some(screen?),
                 camera_frame,
                 segment_time,
@@ -556,6 +563,7 @@ impl RecordingSegmentDecoders {
             );
 
             Some(DecodedSegmentFrames {
+                screen_size,
                 screen_frame: None,
                 camera_frame,
                 segment_time,
@@ -772,7 +780,7 @@ pub async fn render_video_to_channel(
                     decode_segment_frames_with_retry(
                         &render_segment.decoders,
                         segment_time,
-                        needs_camera,
+                        needs_camera && render_segment.render_display,
                         render_segment.render_display,
                         clip_config.map(|v| v.offsets).unwrap_or_default(),
                         current_frame_number,
@@ -785,7 +793,7 @@ pub async fn render_video_to_channel(
                 decode_segment_frames_with_retry(
                     &render_segment.decoders,
                     segment_time,
-                    needs_camera,
+                    needs_camera && render_segment.render_display,
                     render_segment.render_display,
                     clip_config.map(|v| v.offsets).unwrap_or_default(),
                     current_frame_number,
@@ -849,7 +857,7 @@ pub async fn render_video_to_channel(
                     Some(decode_segment_frames_with_retry(
                         &next_render_segment.decoders,
                         next_seg_time,
-                        needs_camera,
+                        needs_camera && next_render_segment.render_display,
                         next_render_segment.render_display,
                         next_clip_config.map(|v| v.offsets).unwrap_or_default(),
                         next_frame_number,
@@ -1246,7 +1254,7 @@ pub async fn render_video_to_channel_nv12(
                     decode_segment_frames_with_retry(
                         &render_segment.decoders,
                         segment_time,
-                        needs_camera,
+                        needs_camera && render_segment.render_display,
                         render_segment.render_display,
                         clip_config.map(|v| v.offsets).unwrap_or_default(),
                         current_frame_number,
@@ -1259,7 +1267,7 @@ pub async fn render_video_to_channel_nv12(
                 decode_segment_frames_with_retry(
                     &render_segment.decoders,
                     segment_time,
-                    needs_camera,
+                    needs_camera && render_segment.render_display,
                     render_segment.render_display,
                     clip_config.map(|v| v.offsets).unwrap_or_default(),
                     current_frame_number,
@@ -1324,7 +1332,7 @@ pub async fn render_video_to_channel_nv12(
                     Some(decode_segment_frames_with_retry(
                         &next_render_segment.decoders,
                         next_seg_time,
-                        needs_camera,
+                        needs_camera && next_render_segment.render_display,
                         next_render_segment.render_display,
                         next_clip_config.map(|v| v.offsets).unwrap_or_default(),
                         next_frame_number,
@@ -1696,7 +1704,7 @@ async fn decode_timeline_source_frames(
     decode_segment_frames_with_retry(
         &render_segment.decoders,
         source.source_time,
-        needs_camera,
+        needs_camera && render_segment.render_display,
         render_segment.render_display,
         clip_config.map(|clip| clip.offsets).unwrap_or_default(),
         current_frame_number,
@@ -4126,6 +4134,19 @@ impl ProjectUniforms {
             )
         };
 
+        let source_size = segment_frames
+            .screen_frame
+            .as_ref()
+            .map_or(segment_frames.screen_size, |frame| {
+                XY::new(frame.width(), frame.height())
+            });
+        let display = display.for_source_frame(source_size);
+        let display_outer_bounds = if frame_chrome.is_none() {
+            display.target_bounds
+        } else {
+            display_outer_bounds
+        };
+
         let camera = options
             .camera_size
             .filter(|_| !project.camera.hide && scene.should_render_camera())
@@ -5020,6 +5041,7 @@ mod tests {
 
 #[derive(Clone)]
 pub struct DecodedSegmentFrames {
+    pub screen_size: XY<u32>,
     pub screen_frame: Option<DecodedFrame>,
     pub camera_frame: Option<DecodedFrame>,
     pub segment_time: f32,
@@ -5109,6 +5131,7 @@ mod nv12_flush_tests {
                 moves: vec![],
             };
             let frames = DecodedSegmentFrames {
+                screen_size: XY::new(4, 4),
                 screen_frame: None,
                 camera_frame: None,
                 segment_time: 0.0,
@@ -6225,21 +6248,10 @@ impl RendererLayers {
             );
         }
 
-        self.click_ripple.prepare(
-            uniforms,
-            uniforms.resolution_base,
-            &uniforms.zoom,
-            constants,
-        );
+        self.click_ripple.prepare(uniforms, constants);
 
-        self.cursor.prepare(
-            segment_frames,
-            uniforms.resolution_base,
-            cursor,
-            &uniforms.zoom,
-            uniforms,
-            constants,
-        );
+        self.cursor
+            .prepare(segment_frames, cursor, uniforms, constants);
 
         let camera_frame_data = if segment_frames.segment_has_camera {
             constants.options.camera_size.and_then(|_| {
@@ -6263,7 +6275,7 @@ impl RendererLayers {
         self.camera.prepare(
             &constants.device,
             &constants.queue,
-            if segment_frames.segment_has_camera {
+            if render_display && segment_frames.segment_has_camera {
                 uniforms.camera
             } else {
                 None
@@ -6274,7 +6286,7 @@ impl RendererLayers {
         self.camera_only.prepare(
             &constants.device,
             &constants.queue,
-            if segment_frames.segment_has_camera {
+            if render_display && segment_frames.segment_has_camera {
                 uniforms.camera_only
             } else {
                 None
@@ -6373,7 +6385,6 @@ impl RendererLayers {
                 &constants.device,
                 &constants.queue,
                 segment_frames,
-                constants.options.screen_size,
                 uniforms.display,
                 encoder,
             );
@@ -6387,20 +6398,9 @@ impl RendererLayers {
         timings.display_prepare_duration = start.elapsed();
 
         let start = Instant::now();
-        self.click_ripple.prepare(
-            uniforms,
-            uniforms.resolution_base,
-            &uniforms.zoom,
-            constants,
-        );
-        self.cursor.prepare(
-            segment_frames,
-            uniforms.resolution_base,
-            cursor,
-            &uniforms.zoom,
-            uniforms,
-            constants,
-        );
+        self.click_ripple.prepare(uniforms, constants);
+        self.cursor
+            .prepare(segment_frames, cursor, uniforms, constants);
         timings.cursor_prepare_duration = start.elapsed();
 
         let camera_frame_data = if segment_frames.segment_has_camera {
@@ -6426,7 +6426,7 @@ impl RendererLayers {
         self.camera.prepare_with_encoder(
             &constants.device,
             &constants.queue,
-            if segment_frames.segment_has_camera {
+            if render_display && segment_frames.segment_has_camera {
                 uniforms.camera
             } else {
                 None
@@ -6440,7 +6440,7 @@ impl RendererLayers {
         self.camera_only.prepare_with_encoder(
             &constants.device,
             &constants.queue,
-            if segment_frames.segment_has_camera {
+            if render_display && segment_frames.segment_has_camera {
                 uniforms.camera_only
             } else {
                 None
@@ -7088,7 +7088,374 @@ mod notch_bounds_tests {
 #[cfg(test)]
 mod project_uniforms_tests {
     use super::*;
-    use cap_project::CursorMoveEvent;
+    use cap_project::{BackgroundSource, CursorMoveEvent};
+
+    async fn cursor_test_constants() -> RenderVideoConstants {
+        let recording_meta: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "mixed-aspect-cursor",
+            "display": { "path": "display.mp4", "fps": 30 },
+            "camera": null,
+            "audio": null,
+            "cursor": null
+        }))
+        .unwrap();
+        let meta = recording_meta.studio_meta().unwrap().clone();
+        let screen_size = XY::new(1600, 900);
+        RenderVideoConstants::new_with_options(
+            RenderOptions {
+                screen_size,
+                camera_size: None,
+                preserve_screen_alpha: false,
+            },
+            recording_meta,
+            meta,
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn cursor_tracks_each_clips_display_aspect_ratio() {
+        let constants = cursor_test_constants().await;
+        let screen_size = constants.options.screen_size;
+        let mut project = ProjectConfiguration::default();
+        project.background.padding = 0.0;
+        let events = CursorEvents::default();
+        let zoom_timeline =
+            ZoomTransformTimeline::from_project(&project, &events, 1.0, screen_size);
+
+        for (source_size, bounds) in [
+            (XY::new(1600, 900), [0.0, 0.0, 1600.0, 900.0]),
+            (XY::new(1600, 776), [0.0, 62.0, 1600.0, 838.0]),
+            (XY::new(900, 1600), [546.875, 0.0, 1053.125, 900.0]),
+            (XY::new(800, 450), [0.0, 0.0, 1600.0, 900.0]),
+        ] {
+            let mut frames = DecodedSegmentFrames {
+                screen_size: source_size,
+                screen_frame: Some(DecodedFrame::new(Vec::new(), source_size.x, source_size.y)),
+                camera_frame: None,
+                segment_time: 0.0,
+                recording_time: 0.0,
+                segment_has_camera: false,
+            };
+            for decode_display in [true, false] {
+                frames.screen_size = if decode_display {
+                    screen_size
+                } else {
+                    source_size
+                };
+                if !decode_display {
+                    frames.screen_frame = None;
+                }
+                let uniforms = ProjectUniforms::new(
+                    &constants,
+                    &project,
+                    0,
+                    30,
+                    screen_size,
+                    &events,
+                    &frames,
+                    1.0,
+                    &zoom_timeline,
+                );
+                for (actual, expected) in uniforms.frame_layout().display.iter().zip(bounds) {
+                    assert!((*actual - expected).abs() < 0.001);
+                }
+                let placement = layers::CursorPlacement {
+                    uniforms: &uniforms,
+                };
+
+                for position in [
+                    XY::new(0.1, 0.1),
+                    XY::new(0.5, 0.5),
+                    XY::new(0.9, 0.9),
+                    XY::new(-0.1, 1.1),
+                ] {
+                    let (rect, _) = placement.map(
+                        position,
+                        Coord::new(XY::new(24.0, 36.0)),
+                        XY::new(0.25, 0.75),
+                        1.0,
+                    );
+                    let expected = [
+                        bounds[0] + position.x as f32 * (bounds[2] - bounds[0]),
+                        bounds[1] + position.y as f32 * (bounds[3] - bounds[1]),
+                    ];
+                    let tip = [rect[0] + 6.0, rect[1] + 27.0];
+                    for (axis, (actual, expected)) in tip.iter().zip(expected).enumerate() {
+                        assert!(
+                            (*actual - expected).abs() < 0.001,
+                            "source {source_size:?}, position {position:?}, axis {axis}: {actual} != {expected}",
+                        );
+                    }
+                    assert_eq!(rect[2..], [24.0, 36.0]);
+                }
+            }
+        }
+    }
+
+    fn pixel_center(
+        frame: &RenderedFrame,
+        selected: impl Fn(&[u8], usize, usize) -> bool,
+    ) -> XY<f64> {
+        let mut sum = XY::new(0.0, 0.0);
+        let mut count = 0;
+        for (y, row) in frame
+            .data
+            .chunks_exact(frame.padded_bytes_per_row as usize)
+            .take(frame.height as usize)
+            .enumerate()
+        {
+            for (x, pixel) in row.chunks_exact(4).take(frame.width as usize).enumerate() {
+                if selected(pixel, x, y) {
+                    sum = sum + XY::new(x as f64 + 0.5, y as f64 + 0.5);
+                    count += 1;
+                }
+            }
+        }
+        assert!(count > 0, "expected visible pixels");
+        sum / count as f64
+    }
+
+    #[tokio::test]
+    async fn cursor_and_ripple_pixels_follow_the_display_through_layout_changes() {
+        let mut constants = cursor_test_constants().await;
+        constants.options.camera_size = Some(XY::new(1280, 720));
+        let mut project = ProjectConfiguration::default();
+        project.background.source = BackgroundSource::Color {
+            value: [255, 255, 255],
+            alpha: 255,
+        };
+        project.background.shadow = 0.0;
+        project.screen_motion_blur = 0.0;
+        project.cursor.motion_blur = 0.0;
+        project.cursor.raw = true;
+        project.cursor.set_cursor_type(CursorType::Circle);
+        project.cursor.ripple.enabled = true;
+        project.cursor.ripple.color = [0, 255, 0];
+        project.cursor.ripple.strength = 1.0;
+        project.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [{ "start": 0.0, "end": 4.0, "timescale": 1.0 }],
+                "zoomSegments": []
+            }))
+            .unwrap(),
+        );
+        let short = XY::new(1600, 776);
+        let mut cases = vec![
+            ("original", project.clone(), XY::new(1600, 900), 120),
+            ("shorter", project.clone(), short, 120),
+            ("portrait", project.clone(), XY::new(900, 1600), 120),
+            (
+                "same-aspect-low-resolution",
+                project.clone(),
+                XY::new(800, 450),
+                120,
+            ),
+        ];
+
+        let mut cropped = project.clone();
+        cropped.background.crop = Some(Crop {
+            position: XY::new(160, 90),
+            size: XY::new(1280, 630),
+        });
+        cropped.background.padding = 20.0;
+        cropped.background.display_position = Some(XY::new(0.55, 0.45));
+        cases.push(("crop-padding-position", cropped, short, 120));
+
+        let mut framed = project.clone();
+        framed.background.frame = Some(FrameConfiguration {
+            style: FrameStyle::Browser,
+            ..Default::default()
+        });
+        cases.push(("decorative-frame", framed, short, 120));
+
+        let mut zoomed = project.clone();
+        zoomed.timeline.as_mut().unwrap().zoom_segments = vec![
+            serde_json::from_value(serde_json::json!({
+                "start": 0.0, "end": 4.0, "amount": 2.0,
+                "mode": { "manual": { "x": 0.6, "y": 0.4 } },
+                "instantAnimation": true
+            }))
+            .unwrap(),
+        ];
+        cases.push(("zoom", zoomed, short, 120));
+
+        for (name, mode, frame_number) in [
+            ("split-morph", SceneMode::SplitScreen, 105),
+            ("split", SceneMode::SplitScreen, 150),
+            ("floating", SceneMode::Floating, 150),
+        ] {
+            let mut split = project.clone();
+            split.timeline.as_mut().unwrap().scene_segments = vec![cap_project::SceneSegment {
+                start: 2.0,
+                end: 4.0,
+                mode,
+                split_layout: None,
+                transition_in: 0.5,
+                transition_out: 0.5,
+            }];
+            cases.push((name, split, short, frame_number));
+        }
+
+        for layout in ["fullscreen", "splitLeft", "splitRight"] {
+            let mut takeover = project.clone();
+            takeover.timeline.as_mut().unwrap().text_segments = vec![
+                serde_json::from_value(serde_json::json!({
+                    "start": 0.0, "end": 4.0, "content": "",
+                    "layout": layout, "layoutTransition": 0.5
+                }))
+                .unwrap(),
+            ];
+            cases.push((layout, takeover, short, 15));
+        }
+
+        let mut renderer = FrameRenderer::new(&constants);
+        let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+        for (index, (name, project, source_size, frame_number)) in cases.into_iter().enumerate() {
+            let marker = XY::new(
+                source_size.x * (55 + index as u32 % 3) / 100,
+                source_size.y * (30 + index as u32 % 4) / 100,
+            );
+            let position = XY::new(
+                (marker.x as f64 + 0.5) / source_size.x as f64,
+                (marker.y as f64 + 0.5) / source_size.y as f64,
+            );
+            let mut pixels = vec![255; (source_size.x * source_size.y * 4) as usize];
+            for y in marker.y - 5..=marker.y + 5 {
+                for x in marker.x - 5..=marker.x + 5 {
+                    let offset = ((y * source_size.x + x) * 4) as usize;
+                    pixels[offset..offset + 4].copy_from_slice(&[0, 0, 255, 255]);
+                }
+            }
+            let frames = DecodedSegmentFrames {
+                screen_size: source_size,
+                screen_frame: Some(DecodedFrame::new(pixels, source_size.x, source_size.y)),
+                camera_frame: Some(DecodedFrame::new(vec![255; 1280 * 720 * 4], 1280, 720)),
+                segment_time: index as f32 * 0.125,
+                recording_time: index as f32 * 0.125,
+                segment_has_camera: true,
+            };
+            let events = CursorEvents {
+                moves: vec![cursor_move(0.0, position.x, position.y)],
+                clicks: vec![],
+            };
+            let zoom_timeline = ZoomTransformTimeline::from_project(
+                &project,
+                &events,
+                4.0,
+                constants.options.screen_size,
+            );
+            let uniforms = ProjectUniforms::new(
+                &constants,
+                &project,
+                frame_number,
+                60,
+                XY::new(800, 450),
+                &events,
+                &frames,
+                4.0,
+                &zoom_timeline,
+            );
+            if let Some(chrome) = &uniforms.frame_chrome {
+                assert_eq!(
+                    uniforms.frame_layout().display,
+                    chrome.composite.target_bounds
+                );
+            }
+            if matches!(name, "fullscreen" | "splitLeft" | "splitRight") {
+                let (_, opacity) = layers::CursorPlacement {
+                    uniforms: &uniforms,
+                }
+                .map(
+                    position,
+                    Coord::new(XY::new(24.0, 36.0)),
+                    XY::new(0.25, 0.75),
+                    0.8,
+                );
+                let expected = if name == "fullscreen" { 0.4 } else { 0.8 };
+                assert!((opacity - expected).abs() < 0.001);
+            }
+            let mut display_uniforms = uniforms.clone();
+            display_uniforms.project.cursor.hide = true;
+            let display = renderer
+                .render_immediate(frames.clone(), display_uniforms, &events, true, &mut layers)
+                .await
+                .unwrap();
+            let marker_center = pixel_center(&display, |pixel, _, _| {
+                pixel[2] > pixel[0].saturating_add(50) && pixel[2] > pixel[1].saturating_add(50)
+            });
+
+            for ripple_only in [false, true] {
+                let mut overlay_uniforms = uniforms.clone();
+                if ripple_only {
+                    overlay_uniforms.project.cursor.hide = true;
+                    overlay_uniforms.click_ripples = vec![ClickRipple {
+                        position: Coord::new(position),
+                        progress: 0.35,
+                    }];
+                }
+                let overlay = renderer
+                    .render_immediate(frames.clone(), overlay_uniforms, &events, true, &mut layers)
+                    .await
+                    .unwrap();
+                let overlay_center = pixel_center(&overlay, |pixel, x, y| {
+                    let offset = y * display.padded_bytes_per_row as usize + x * 4;
+                    pixel[..3]
+                        .iter()
+                        .zip(&display.data[offset..offset + 3])
+                        .any(|(actual, base)| actual.abs_diff(*base) > 12)
+                });
+                assert!(
+                    (marker_center.x - overlay_center.x).abs() < 1.5
+                        && (marker_center.y - overlay_center.y).abs() < 1.5,
+                    "{name}, ripple={ripple_only}: marker {marker_center:?}, overlay {overlay_center:?}",
+                );
+
+                let mut cursor_only_frames = frames.clone();
+                cursor_only_frames.screen_frame = None;
+                cursor_only_frames.camera_frame = None;
+                let mut cursor_only_uniforms = ProjectUniforms::new(
+                    &constants,
+                    &project,
+                    frame_number,
+                    60,
+                    XY::new(800, 450),
+                    &events,
+                    &cursor_only_frames,
+                    4.0,
+                    &zoom_timeline,
+                );
+                cursor_only_uniforms.project.background.source = BackgroundSource::Color {
+                    value: [0, 0, 0],
+                    alpha: 0,
+                };
+                if ripple_only {
+                    cursor_only_uniforms.project.cursor.hide = true;
+                    cursor_only_uniforms.click_ripples = vec![ClickRipple {
+                        position: Coord::new(position),
+                        progress: 0.35,
+                    }];
+                }
+                let cursor_only = renderer
+                    .render_immediate(
+                        cursor_only_frames,
+                        cursor_only_uniforms,
+                        &events,
+                        false,
+                        &mut layers,
+                    )
+                    .await
+                    .unwrap();
+                let cursor_only_center = pixel_center(&cursor_only, |pixel, _, _| pixel[3] > 12);
+                assert!(
+                    (marker_center.x - cursor_only_center.x).abs() < 1.5
+                        && (marker_center.y - cursor_only_center.y).abs() < 1.5,
+                    "{name}, ripple={ripple_only}: marker {marker_center:?}, cursor-only {cursor_only_center:?}",
+                );
+            }
+        }
+    }
 
     fn cursor_move(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
         CursorMoveEvent {

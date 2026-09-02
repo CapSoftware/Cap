@@ -291,6 +291,7 @@ async fn render_still(
     resolution_base: Option<cap_project::XY<u32>>,
 ) -> Result<RenderedFrame, String> {
     let segment_frames = DecodedSegmentFrames {
+        screen_size: cap_project::XY::new(source.width(), source.height()),
         screen_frame: Some(source.clone()),
         camera_frame: None,
         segment_time: 0.0,
