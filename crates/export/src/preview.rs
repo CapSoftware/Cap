@@ -3,9 +3,14 @@ use std::path::PathBuf;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use cap_project::{RecordingMeta, TimelineFrameMapping, XY};
 use cap_rendering::{
-    FrameRenderer, ProjectUniforms, RendererLayers, TransitionRenderInput, ZoomTransformTimeline,
+    FrameRenderer, ProjectUniforms, RenderedFrame, RendererLayers, TransitionRenderInput,
+    ZoomTransformTimeline,
 };
-use image::codecs::jpeg::JpegEncoder;
+use image::{
+    Rgba,
+    codecs::jpeg::JpegEncoder,
+    flat::{FlatSamples, SampleLayout},
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{ExportError, ExporterBase, make_cursor_only_project};
@@ -221,26 +226,8 @@ async fn render_preview_with_base(
     let width = frame.width;
     let height = frame.height;
 
-    let rgb_data: Vec<u8> = frame
-        .data
-        .chunks(frame.padded_bytes_per_row as usize)
-        .flat_map(|row| {
-            row[0..(frame.width * 4) as usize]
-                .chunks(4)
-                .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
-        })
-        .collect();
-
-    let mut jpeg_buffer = Vec::new();
-    {
-        let mut encoder = JpegEncoder::new_with_quality(
-            &mut jpeg_buffer,
-            bpp_to_jpeg_quality(settings.compression_bpp),
-        );
-        encoder
-            .encode(&rgb_data, width, height, image::ExtendedColorType::Rgb8)
-            .map_err(|e| ExportError::Other(format!("Failed to encode JPEG: {e}")))?;
-    }
+    let jpeg_buffer = encode_preview_jpeg(&frame, bpp_to_jpeg_quality(settings.compression_bpp))?;
+    drop(frame);
 
     let duration_seconds = total_duration;
     let fps_f64 = settings.fps as f64;
@@ -275,4 +262,154 @@ fn estimate_cursor_only_size_mb(total_pixels: f64, total_frames: f64) -> f64 {
 
 fn bpp_to_jpeg_quality(bpp: f32) -> u8 {
     ((bpp - 0.04) / (0.3 - 0.04) * (95.0 - 40.0) + 40.0).clamp(40.0, 95.0) as u8
+}
+
+fn encode_preview_jpeg(frame: &RenderedFrame, quality: u8) -> Result<Vec<u8>, ExportError> {
+    let width = usize::try_from(frame.width)
+        .map_err(|_| ExportError::Other("Preview frame width is too large".to_string()))?;
+    let height = usize::try_from(frame.height)
+        .map_err(|_| ExportError::Other("Preview frame height is too large".to_string()))?;
+    if width == 0 || height == 0 {
+        return Err(ExportError::Other(
+            "Preview frame dimensions must be non-zero".to_string(),
+        ));
+    }
+
+    let row_bytes = width
+        .checked_mul(4)
+        .ok_or_else(|| ExportError::Other("Preview frame row is too large".to_string()))?;
+    let height_stride = usize::try_from(frame.padded_bytes_per_row)
+        .map_err(|_| ExportError::Other("Preview frame row stride is too large".to_string()))?;
+    if height_stride < row_bytes {
+        return Err(ExportError::Other("Preview frame rows overlap".to_string()));
+    }
+    let required_len = height_stride
+        .checked_mul(height - 1)
+        .and_then(|offset| offset.checked_add(row_bytes))
+        .ok_or_else(|| ExportError::Other("Preview frame buffer is too large".to_string()))?;
+    if frame.data.len() < required_len {
+        return Err(ExportError::Other(
+            "Preview frame buffer is shorter than its layout".to_string(),
+        ));
+    }
+
+    let samples = FlatSamples {
+        samples: frame.data.as_ref().as_slice(),
+        layout: SampleLayout {
+            channels: 4,
+            channel_stride: 1,
+            width: frame.width,
+            width_stride: 4,
+            height: frame.height,
+            height_stride,
+        },
+        color_hint: None,
+    };
+    let view = samples
+        .as_view::<Rgba<u8>>()
+        .map_err(|e| ExportError::Other(format!("Invalid preview frame layout: {e}")))?;
+
+    let mut jpeg_buffer = Vec::new();
+    let mut encoder = JpegEncoder::new_with_quality(&mut jpeg_buffer, quality);
+    encoder
+        .encode_image(&view)
+        .map_err(|e| ExportError::Other(format!("Failed to encode JPEG: {e}")))?;
+    Ok(jpeg_buffer)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    fn frame(width: u32, height: u32, stride: usize, mut state: u64) -> RenderedFrame {
+        let mut data = vec![0xa5; stride * height as usize];
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                let offset = y * stride + x * 4;
+                data[offset] = (state >> 56) as u8;
+                data[offset + 1] = (state >> 48) as u8;
+                data[offset + 2] = (state >> 40) as u8;
+                data[offset + 3] = (state >> 32) as u8;
+            }
+        }
+        RenderedFrame {
+            data: Arc::new(data),
+            width,
+            height,
+            padded_bytes_per_row: stride as u32,
+            frame_number: 0,
+            target_time_ns: 0,
+        }
+    }
+
+    fn legacy_jpeg(frame: &RenderedFrame, quality: u8) -> Vec<u8> {
+        let rgb_data: Vec<u8> = frame
+            .data
+            .chunks(frame.padded_bytes_per_row as usize)
+            .flat_map(|row| {
+                row[..(frame.width * 4) as usize]
+                    .chunks(4)
+                    .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
+            })
+            .collect();
+        let mut jpeg_buffer = Vec::new();
+        let mut encoder = JpegEncoder::new_with_quality(&mut jpeg_buffer, quality);
+        encoder
+            .encode(
+                &rgb_data,
+                frame.width,
+                frame.height,
+                image::ExtendedColorType::Rgb8,
+            )
+            .unwrap();
+        jpeg_buffer
+    }
+
+    #[test]
+    fn flat_samples_jpeg_matches_legacy_bytes() {
+        for (width, height, stride) in [(1, 1, 4), (13, 9, 64)] {
+            let frame = frame(width, height, stride, 0x1234_5678_9abc_def0);
+            for quality in [40, 70, 95] {
+                assert_eq!(
+                    encode_preview_jpeg(&frame, quality).unwrap(),
+                    legacy_jpeg(&frame, quality),
+                    "{width}x{height} stride={stride} quality={quality}"
+                );
+            }
+        }
+
+        let padded = frame(13, 9, 64, 0x1234_5678_9abc_def0);
+        let required_len = 64 * (9 - 1) + 13 * 4;
+        let mut without_trailing_padding = padded.clone();
+        without_trailing_padding.data = Arc::new(padded.data[..required_len].to_vec());
+        for quality in [40, 70, 95] {
+            assert_eq!(
+                encode_preview_jpeg(&without_trailing_padding, quality).unwrap(),
+                legacy_jpeg(&without_trailing_padding, quality),
+                "13x9 stride=64 without trailing padding quality={quality}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_overlapping_rows_and_short_buffers() {
+        let mut overlapping = frame(13, 9, 64, 1);
+        overlapping.padded_bytes_per_row = 51;
+        assert!(encode_preview_jpeg(&overlapping, 70).is_err());
+
+        let valid = frame(13, 9, 64, 2);
+        let mut short = valid.clone();
+        let required_len = 64 * (9 - 1) + 13 * 4;
+        short.data = Arc::new(vec![0; required_len - 1]);
+        assert!(encode_preview_jpeg(&short, 70).is_err());
+
+        let mut empty = valid;
+        empty.width = 0;
+        assert!(encode_preview_jpeg(&empty, 70).is_err());
+    }
 }

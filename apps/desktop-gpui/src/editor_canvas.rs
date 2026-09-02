@@ -1353,10 +1353,10 @@ impl EditorWindow {
                 top + height >= canvas.1 - 6.,
             );
             for (dir_x, dir_y, cursor) in [
-                (-1_i8, -1_i8, CursorStyle::ResizeUpRightDownLeft),
-                (1, -1, CursorStyle::ResizeUpLeftDownRight),
-                (-1, 1, CursorStyle::ResizeUpLeftDownRight),
-                (1, 1, CursorStyle::ResizeUpRightDownLeft),
+                (-1_i8, -1_i8, CursorStyle::ResizeUpLeftDownRight),
+                (1, -1, CursorStyle::ResizeUpRightDownLeft),
+                (-1, 1, CursorStyle::ResizeUpRightDownLeft),
+                (1, 1, CursorStyle::ResizeUpLeftDownRight),
             ] {
                 let hx = if dir_x < 0 {
                     if flush.0 { 0. } else { -6. }

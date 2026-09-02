@@ -230,6 +230,8 @@ impl EditorInstance {
             return Err("Cannot edit non-studio recordings".to_string());
         };
 
+        meta.ensure_ordinary_media_access(&project_path)?;
+
         let segment_count = match meta.as_ref() {
             StudioRecordingMeta::SingleSegment { .. } => 1,
             StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),

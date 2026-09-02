@@ -129,11 +129,28 @@ export async function GET(request: NextRequest) {
 			return Response.redirect(url);
 		}
 
+		const verificationRequested =
+			request.headers.get("x-cap-recording-verification") === "1";
+		const identity = verificationRequested
+			? (yield* storage.headObject(key)).ETag
+			: undefined;
+		if (verificationRequested && !identity) {
+			return new Response("Object identity is unavailable", { status: 503 });
+		}
+		const expectedIdentity = request.headers.get("if-match");
+		if (
+			verificationRequested &&
+			expectedIdentity &&
+			expectedIdentity !== identity
+		) {
+			return new Response("Object changed", { status: 412 });
+		}
 		const upstream = yield* storage.getObjectResponse(
 			key,
 			request.headers.get("range"),
 		);
 		const headers = new Headers(CACHE_CONTROL_HEADERS);
+		if (identity) headers.set("ETag", identity);
 		copyHeader(upstream.headers, headers, "content-type", "Content-Type");
 		copyHeader(upstream.headers, headers, "content-length", "Content-Length");
 		copyHeader(upstream.headers, headers, "content-range", "Content-Range");

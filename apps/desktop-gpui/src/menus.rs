@@ -19,7 +19,10 @@
 //! `TextInput` key context, so ⌘Z is a menu key equivalent only while a field
 //! is focused and falls through to the editor's own project-undo otherwise.
 
-use gpui::{AnyWindowHandle, App, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, actions};
+use gpui::{
+    AnyWindowHandle, App, Global, KeyBinding, Menu, MenuItem, OsAction, Subscription,
+    SystemMenuType, actions,
+};
 
 use crate::{
     app_windows::{self, AppWindows},
@@ -287,34 +290,200 @@ pub fn close_window_by_handle(handle: gpui::AnyWindowHandle, cx: &mut App) {
     });
 }
 
-/// ⌘Q, the Cap menu's Quit item, and the tray's "Quit Cap".
-///
-/// `request_app_exit` stops a live recording before tearing the app down; the
-/// closest thing here is the session's own stop, which is asynchronous, so the
-/// quit waits for the session to come back to `Idle` (bounded, so a wedged
-/// finalize cannot make the app unquittable).
+const QUIT_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QuitAction {
+    Wait,
+    Stop,
+    Exit,
+    Failed,
+    TimedOut,
+}
+
+#[derive(Default)]
+struct QuitGate {
+    generation: u64,
+    pending: Option<(u64, bool)>,
+    exit_committed: bool,
+}
+
+impl QuitGate {
+    fn recording_start_allowed(&self) -> bool {
+        !self.exit_committed && self.pending.is_none()
+    }
+
+    fn cancel_exit(&mut self) {
+        self.exit_committed = false;
+    }
+
+    fn request(&mut self, phase: Phase) -> Option<(u64, QuitAction)> {
+        if self.exit_committed || self.pending.is_some() {
+            return None;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        let action = match phase {
+            Phase::Idle => QuitAction::Exit,
+            Phase::Starting | Phase::Recording { .. } => QuitAction::Stop,
+            Phase::Stopping => QuitAction::Wait,
+        };
+        if action != QuitAction::Exit {
+            self.pending = Some((self.generation, phase != Phase::Starting));
+        } else {
+            self.exit_committed = true;
+        }
+        Some((self.generation, action))
+    }
+
+    fn advance(
+        &mut self,
+        generation: u64,
+        phase: Phase,
+        failed: bool,
+        timed_out: bool,
+    ) -> QuitAction {
+        let Some((current, stop_requested)) = self.pending.as_mut() else {
+            return QuitAction::Wait;
+        };
+        if *current != generation {
+            return QuitAction::Wait;
+        }
+        let action = if failed {
+            QuitAction::Failed
+        } else if phase == Phase::Idle {
+            QuitAction::Exit
+        } else if timed_out {
+            QuitAction::TimedOut
+        } else {
+            match phase {
+                Phase::Recording { .. } if *stop_requested => QuitAction::Wait,
+                Phase::Recording { .. } => {
+                    *stop_requested = true;
+                    QuitAction::Stop
+                }
+                Phase::Starting | Phase::Stopping => QuitAction::Wait,
+                Phase::Idle => unreachable!(),
+            }
+        };
+        if matches!(
+            action,
+            QuitAction::Exit | QuitAction::Failed | QuitAction::TimedOut
+        ) {
+            self.pending = None;
+        }
+        if action == QuitAction::Exit {
+            self.exit_committed = true;
+        }
+        action
+    }
+}
+
+#[derive(Default)]
+struct QuitCoordinator {
+    gate: QuitGate,
+    observer: Option<Subscription>,
+}
+
+impl Global for QuitCoordinator {}
+
+pub(crate) fn recording_start_allowed(cx: &App) -> bool {
+    cx.try_global::<QuitCoordinator>()
+        .is_none_or(|coordinator| coordinator.gate.recording_start_allowed())
+}
+
+fn quit_phase(phase: Phase, ui_cleanup_pending: bool) -> Phase {
+    if phase == Phase::Idle && ui_cleanup_pending {
+        Phase::Stopping
+    } else {
+        phase
+    }
+}
+
 pub fn quit(cx: &mut App) {
     let session = RecordingSession::global(cx);
-    if session.read(cx).phase == Phase::Idle {
-        cx.quit();
+    if !cx.has_global::<QuitCoordinator>() {
+        cx.set_global(QuitCoordinator::default());
+    }
+    let phase = session.read(cx).phase;
+    let ui_cleanup_pending = app_windows::clean_capture_owned(cx);
+    let Some((generation, action)) = cx
+        .global_mut::<QuitCoordinator>()
+        .gate
+        .request(quit_phase(phase, ui_cleanup_pending))
+    else {
+        return;
+    };
+    if action == QuitAction::Exit {
+        apply_quit_action(action, cx);
         return;
     }
 
     tracing::info!("quit requested during a recording; stopping it first");
-    session.update(cx, |session, cx| session.stop(cx));
+    let observer = cx.observe(&session, move |_, cx| {
+        advance_pending_quit(generation, false, cx)
+    });
+    cx.global_mut::<QuitCoordinator>().observer = Some(observer);
     cx.spawn(async move |cx| {
-        for _ in 0..100 {
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(100))
-                .await;
-            let idle = cx.update(|cx| session.read(cx).phase == Phase::Idle);
-            if idle {
-                break;
-            }
-        }
-        cx.update(|cx| cx.quit());
+        cx.background_executor().timer(QUIT_STOP_TIMEOUT).await;
+        cx.update(|cx| advance_pending_quit(generation, true, cx));
     })
     .detach();
+    apply_quit_action(action, cx);
+    if phase == Phase::Idle && ui_cleanup_pending {
+        app_windows::cancel_clean_capture(cx);
+        advance_pending_quit(generation, false, cx);
+    }
+}
+
+fn advance_pending_quit(generation: u64, timed_out: bool, cx: &mut App) {
+    let session = RecordingSession::global(cx);
+    let phase = quit_phase(session.read(cx).phase, app_windows::clean_capture_owned(cx));
+    let failed = session.read(cx).error.is_some();
+    let action = cx
+        .global_mut::<QuitCoordinator>()
+        .gate
+        .advance(generation, phase, failed, timed_out);
+    apply_quit_action(action, cx);
+}
+
+fn apply_quit_action(action: QuitAction, cx: &mut App) {
+    match action {
+        QuitAction::Wait => {}
+        QuitAction::Stop => RecordingSession::global(cx).update(cx, |session, cx| session.stop(cx)),
+        QuitAction::Exit => {
+            cx.global_mut::<QuitCoordinator>().observer = None;
+            cx.defer(|cx| {
+                if let Err(error) = app_windows::flush_pending_editor_saves(cx) {
+                    cx.global_mut::<QuitCoordinator>().gate.cancel_exit();
+                    tracing::error!(%error, "quit canceled because editor changes could not be saved");
+                    cx.spawn(async move |_| {
+                        platform::alert_dialog("Cap is still open", &error);
+                    })
+                    .detach();
+                    return;
+                }
+                #[cfg(target_os = "macos")]
+                platform::permit_native_quit();
+                cx.quit();
+            });
+        }
+        QuitAction::Failed | QuitAction::TimedOut => {
+            cx.global_mut::<QuitCoordinator>().observer = None;
+            let message = RecordingSession::global(cx).update(cx, |session, cx| {
+                let message = match session.error.as_deref() {
+                    Some(error) => format!("Quit canceled: {error}. Cap will stay open so you can finish or recover the recording."),
+                    None if action == QuitAction::TimedOut => "Quit canceled because recording shutdown is still pending. Cap will stay open. Use Stop once available, then try Quit again.".into(),
+                    None => "Quit canceled because recording shutdown could not be confirmed. Cap will stay open. Use Stop, then try Quit again.".into(),
+                };
+                session.error = Some(message.clone());
+                cx.notify();
+                message
+            });
+            tracing::warn!(%message);
+            cx.spawn(async move |_| platform::alert_dialog("Cap is still open", &message))
+                .detach();
+        }
+    }
 }
 
 // -- The dock icon -----------------------------------------------------------
@@ -346,12 +515,14 @@ static DOCK_SYNC_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::A
 /// `schedule_macos_dock_visibility_sync`: coalesce a burst of window changes
 /// into one policy change, 100ms later.
 pub fn schedule_dock_sync(cx: &mut App) {
+    schedule_dock_sync_after(cx, std::time::Duration::from_millis(100));
+}
+
+fn schedule_dock_sync_after(cx: &mut App, delay: std::time::Duration) {
     use std::sync::atomic::Ordering;
     let generation = DOCK_SYNC_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     cx.spawn(async move |cx| {
-        cx.background_executor()
-            .timer(std::time::Duration::from_millis(100))
-            .await;
+        cx.background_executor().timer(delay).await;
         if DOCK_SYNC_GENERATION.load(Ordering::Acquire) != generation {
             return;
         }
@@ -382,7 +553,18 @@ pub fn sync_dock_visibility(cx: &mut App) {
     if before == want {
         return;
     }
-    platform::set_activation_policy(show);
+    #[cfg(target_os = "macos")]
+    if !show {
+        let delay = platform::dock_hide_delay();
+        if !delay.is_zero() {
+            schedule_dock_sync_after(cx, delay);
+            return;
+        }
+    }
+    if !platform::set_activation_policy(show) && cfg!(target_os = "macos") {
+        tracing::warn!(show, "Could not change Dock activation policy");
+        return;
+    }
     tracing::info!(
         hide_dock_icon,
         panel_visible = panel,
@@ -448,6 +630,233 @@ fn visible_window_classes(cx: &mut App) -> (bool, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quit_waits_for_recording_ui_restoration() {
+        for phase in [Phase::Idle, Phase::Starting] {
+            let mut gate = QuitGate::default();
+            let (generation, action) = gate.request(quit_phase(phase, true)).unwrap();
+            assert_ne!(action, QuitAction::Exit);
+            assert!(!gate.recording_start_allowed());
+            assert_eq!(
+                gate.advance(generation, quit_phase(Phase::Idle, true), false, false),
+                QuitAction::Wait
+            );
+            assert_eq!(
+                gate.advance(generation, quit_phase(Phase::Idle, false), false, false),
+                QuitAction::Exit
+            );
+        }
+    }
+
+    #[test]
+    fn restoration_failure_or_timeout_keeps_cap_open() {
+        for failed in [false, true] {
+            let mut gate = QuitGate::default();
+            let (generation, _) = gate.request(quit_phase(Phase::Idle, true)).unwrap();
+            assert_eq!(
+                gate.advance(generation, quit_phase(Phase::Idle, true), failed, !failed),
+                if failed {
+                    QuitAction::Failed
+                } else {
+                    QuitAction::TimedOut
+                }
+            );
+            assert!(gate.recording_start_allowed());
+            assert_eq!(
+                gate.advance(generation, quit_phase(Phase::Idle, false), false, false),
+                QuitAction::Wait
+            );
+        }
+    }
+
+    #[test]
+    fn quit_deadline_does_not_authorize_exit_after_a_delayed_stop() {
+        let mut gate = QuitGate::default();
+        let (generation, action) = gate.request(Phase::Recording { paused: false }).unwrap();
+        assert_eq!(action, QuitAction::Stop);
+        assert_eq!(
+            gate.advance(generation, Phase::Stopping, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Stopping, false, true),
+            QuitAction::TimedOut
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, false, false),
+            QuitAction::Wait
+        );
+        assert!(gate.pending.is_none());
+    }
+
+    #[test]
+    fn failed_stop_cancels_quit_instead_of_exiting_or_retrying_stop() {
+        let mut gate = QuitGate::default();
+        let (generation, _) = gate.request(Phase::Recording { paused: false }).unwrap();
+        assert_eq!(
+            gate.advance(generation, Phase::Stopping, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Recording { paused: false }, true, false),
+            QuitAction::Failed
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, false, true),
+            QuitAction::Wait
+        );
+    }
+
+    #[test]
+    fn quit_during_startup_stops_the_recording_once_it_starts() {
+        let mut gate = QuitGate::default();
+        let (generation, action) = gate.request(Phase::Starting).unwrap();
+        assert_eq!(action, QuitAction::Stop);
+        assert_eq!(
+            gate.advance(generation, Phase::Starting, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Recording { paused: false }, false, false),
+            QuitAction::Stop
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Stopping, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, false, false),
+            QuitAction::Exit
+        );
+    }
+
+    #[test]
+    fn quit_waits_when_stop_is_queued_behind_a_pause_acknowledgement() {
+        let mut gate = QuitGate::default();
+        let (generation, action) = gate.request(Phase::Recording { paused: false }).unwrap();
+        assert_eq!(action, QuitAction::Stop);
+        assert_eq!(
+            gate.advance(generation, Phase::Recording { paused: false }, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Recording { paused: true }, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Stopping, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, false, false),
+            QuitAction::Exit
+        );
+    }
+
+    #[test]
+    fn repeated_quit_does_not_replace_the_pending_request() {
+        let mut gate = QuitGate::default();
+        let (generation, _) = gate.request(Phase::Stopping).unwrap();
+        assert_eq!(gate.request(Phase::Stopping), None);
+        assert_eq!(gate.request(Phase::Idle), None);
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, false, false),
+            QuitAction::Exit
+        );
+    }
+
+    #[test]
+    fn idle_quit_has_no_stop_or_deadline_wait() {
+        let mut gate = QuitGate::default();
+        let (_, action) = gate.request(Phase::Idle).unwrap();
+        assert_eq!(action, QuitAction::Exit);
+        assert!(gate.pending.is_none());
+        assert!(gate.exit_committed);
+    }
+
+    #[test]
+    fn failed_editor_save_allows_recording_and_a_later_quit() {
+        for phase in [Phase::Idle, Phase::Stopping] {
+            let mut gate = QuitGate::default();
+            let (previous, action) = gate.request(phase).unwrap();
+            if action == QuitAction::Wait {
+                assert_eq!(
+                    gate.advance(previous, Phase::Idle, false, false),
+                    QuitAction::Exit
+                );
+            }
+            assert!(!gate.recording_start_allowed());
+            gate.cancel_exit();
+            assert!(gate.recording_start_allowed());
+            let (current, action) = gate.request(Phase::Idle).unwrap();
+            assert_ne!(previous, current);
+            assert_eq!(action, QuitAction::Exit);
+            assert_eq!(
+                gate.advance(previous, Phase::Idle, false, true),
+                QuitAction::Wait
+            );
+            assert!(gate.exit_committed);
+        }
+    }
+
+    #[test]
+    fn committed_exit_closes_recording_admission_before_the_native_callback() {
+        let mut gate = QuitGate::default();
+        assert!(gate.recording_start_allowed());
+        let (generation, _) = gate.request(Phase::Stopping).unwrap();
+        assert!(!gate.recording_start_allowed());
+        assert!(!gate.exit_committed);
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, false, false),
+            QuitAction::Exit
+        );
+        assert!(gate.exit_committed);
+        assert!(!gate.recording_start_allowed());
+        assert_eq!(gate.request(Phase::Idle), None);
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, false, true),
+            QuitAction::Wait
+        );
+        assert!(gate.exit_committed);
+        assert!(!gate.recording_start_allowed());
+    }
+
+    #[test]
+    fn expired_quit_cannot_affect_a_new_recording_or_quit_request() {
+        let mut gate = QuitGate::default();
+        let (old, _) = gate.request(Phase::Stopping).unwrap();
+        assert_eq!(
+            gate.advance(old, Phase::Stopping, false, true),
+            QuitAction::TimedOut
+        );
+        assert!(!gate.exit_committed);
+        assert!(gate.recording_start_allowed());
+        let (current, _) = gate.request(Phase::Recording { paused: false }).unwrap();
+        assert_eq!(
+            gate.advance(old, Phase::Idle, false, true),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(current, Phase::Stopping, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(current, Phase::Idle, false, false),
+            QuitAction::Exit
+        );
+    }
+
+    #[test]
+    fn completed_capture_with_finalization_error_does_not_exit() {
+        let mut gate = QuitGate::default();
+        let (generation, _) = gate.request(Phase::Stopping).unwrap();
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, true, false),
+            QuitAction::Failed
+        );
+        assert!(gate.pending.is_none());
+    }
 
     /// The menu bar, transcribed from `build_macos_app_menu`. Separators are
     /// spelled `"-"` so the ordering is checked too.

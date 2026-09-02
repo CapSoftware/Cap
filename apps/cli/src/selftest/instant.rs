@@ -63,8 +63,9 @@ pub async fn start_recording(
 /// `content/output.mp4`, then persist the meta so the `.cap` is a real
 /// recording rather than a directory of fragments.
 pub async fn finalize(
-    recording: &instant_recording::CompletedRecording,
+    recording: &mut instant_recording::CompletedRecording,
 ) -> Result<PathBuf, String> {
+    let completion = recording.clean_completion.take();
     let project_path = recording.project_path.clone();
     let output = output_path(&project_path);
     let audio_dir = project_path.join("content/audio");
@@ -77,8 +78,14 @@ pub async fn finalize(
     if !already_muxed {
         let display_dir = project_path.join("content/display");
         let output = output.clone();
-        tokio::task::spawn_blocking(move || {
-            RecoveryManager::finalize_instant_output(&display_dir, &audio_dir, &output)
+        tokio::task::spawn_blocking(move || match completion {
+            Some(completion) => RecoveryManager::finalize_completed_instant_output(
+                &display_dir,
+                &audio_dir,
+                &output,
+                completion,
+            ),
+            None => RecoveryManager::finalize_instant_output(&display_dir, &audio_dir, &output),
         })
         .await
         .map_err(|e| format!("instant finalize task join error: {e}"))?

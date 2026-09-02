@@ -60,6 +60,10 @@ export type StorageUploadTarget =
 			webhookSecret?: string;
 	  };
 
+export interface StorageUploadReceipt {
+	objectIdentity?: string;
+}
+
 type UploadedPart = {
 	partNumber: number;
 	etag: string;
@@ -1951,7 +1955,58 @@ function isRetryableUploadStatus(status: number): boolean {
 }
 
 function isGoogleDriveResumableUrl(url: string): boolean {
-	return url.includes("googleapis.com/upload/drive/");
+	const parsed = new URL(url);
+	return (
+		(parsed.hostname === "googleapis.com" ||
+			parsed.hostname.endsWith(".googleapis.com")) &&
+		parsed.pathname.startsWith("/upload/drive/")
+	);
+}
+
+function strongUploadIdentity(value: unknown): string | undefined {
+	return typeof value === "string" &&
+		value.length <= 1_024 &&
+		/^"[\x21\x23-\x7E\x80-\xFF]+"$/.test(value)
+		? value
+		: undefined;
+}
+
+async function readUploadReceipt(
+	response: Response,
+	url: string,
+	contentLength: number,
+): Promise<StorageUploadReceipt> {
+	if (!isGoogleDriveResumableUrl(url)) {
+		await response.body?.cancel().catch(() => {});
+		return {
+			objectIdentity: strongUploadIdentity(response.headers.get("etag")),
+		};
+	}
+	const body = response.body
+		? await readStreamWithLimit(response.body, MAX_STDERR_BYTES).catch(() => "")
+		: "";
+	let metadata: unknown;
+	try {
+		metadata = JSON.parse(body);
+	} catch {
+		return {};
+	}
+	if (!metadata || typeof metadata !== "object") return {};
+	const { id, version, size } = metadata as Record<string, unknown>;
+	if (
+		typeof id !== "string" ||
+		!/^[a-zA-Z0-9_-]{1,200}$/.test(id) ||
+		typeof version !== "string" ||
+		!/^[1-9]\d{0,19}$/.test(version) ||
+		typeof size !== "string" ||
+		!/^\d+$/.test(size) ||
+		!Number.isSafeInteger(Number(size)) ||
+		Number(size) !== contentLength ||
+		contentLength <= 0
+	) {
+		return {};
+	}
+	return { objectIdentity: `"${id}:${version}"` };
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -1963,7 +2018,7 @@ async function uploadWithRetry(
 	contentType: string,
 	contentLength: number,
 	bodyFactory: () => Blob | BunFile,
-): Promise<void> {
+): Promise<StorageUploadReceipt> {
 	let lastError: Error | undefined;
 
 	for (let attempt = 0; attempt <= UPLOAD_MAX_RETRIES; attempt++) {
@@ -1998,7 +2053,7 @@ async function uploadWithRetry(
 		}
 
 		if (response.ok) {
-			return;
+			return readUploadReceipt(response, presignedUrl, contentLength);
 		}
 
 		const responseError = await storageResponseError(
@@ -2037,10 +2092,10 @@ export async function uploadFileToS3(
 	filePath: string,
 	presignedUrl: string,
 	contentType: string,
-): Promise<void> {
+): Promise<StorageUploadReceipt> {
 	const fileHandle = file(filePath);
 
-	await uploadWithRetry(presignedUrl, contentType, fileHandle.size, () =>
+	return uploadWithRetry(presignedUrl, contentType, fileHandle.size, () =>
 		file(filePath),
 	);
 }
@@ -2156,7 +2211,7 @@ async function uploadMultipartPart(
 async function completeMultipartUpload(
 	target: Extract<StorageUploadTarget, { type: "multipart" }>,
 	parts: UploadedPart[],
-): Promise<void> {
+): Promise<StorageUploadReceipt> {
 	const response = await postMultipartJson(
 		target.completeUrl,
 		{
@@ -2174,6 +2229,14 @@ async function completeMultipartUpload(
 			response,
 		);
 	}
+	const result: unknown = await response.json().catch(() => null);
+	return {
+		objectIdentity: strongUploadIdentity(
+			result && typeof result === "object" && "objectIdentity" in result
+				? result.objectIdentity
+				: undefined,
+		),
+	};
 }
 
 async function abortMultipartUpload(
@@ -2197,7 +2260,7 @@ async function abortMultipartUpload(
 async function uploadFileMultipart(
 	filePath: string,
 	target: Extract<StorageUploadTarget, { type: "multipart" }>,
-): Promise<void> {
+): Promise<StorageUploadReceipt> {
 	const fileHandle = file(filePath);
 	const contentLength = fileHandle.size;
 	const partSize = Math.floor(target.partSize);
@@ -2233,7 +2296,7 @@ async function uploadFileMultipart(
 			parts.push({ partNumber, etag, size: partLength });
 		}
 
-		await completeMultipartUpload(target, parts);
+		return await completeMultipartUpload(target, parts);
 	} catch (error) {
 		await abortMultipartUpload(target).catch((abortError) => {
 			console.warn(
@@ -2256,13 +2319,12 @@ export async function uploadFileToStorage(
 	filePath: string,
 	target: StorageUploadTarget,
 	contentType: string,
-): Promise<void> {
+): Promise<StorageUploadReceipt> {
 	if (target.type === "put") {
-		await uploadFileToS3(filePath, target.url, contentType);
-		return;
+		return uploadFileToS3(filePath, target.url, contentType);
 	}
 
-	await uploadFileMultipart(filePath, target);
+	return uploadFileMultipart(filePath, target);
 }
 
 export async function copyFileToMp4(

@@ -477,7 +477,7 @@ struct FirstFrameNv12 {
 
 fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
     #[cfg(target_os = "macos")]
-    if let Some(surface) = frame.surface.clone() {
+    if let Some(surface) = frame.surface {
         return ExportFrame {
             width: frame.width,
             height: frame.height,

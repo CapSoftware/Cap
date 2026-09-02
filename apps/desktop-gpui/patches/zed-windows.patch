@@ -1,6 +1,84 @@
+diff --git a/crates/gpui_windows/src/directx_atlas.rs b/crates/gpui_windows/src/directx_atlas.rs
+index 62386997f5ef..d49ec1836eae 100644
+--- a/crates/gpui_windows/src/directx_atlas.rs
++++ b/crates/gpui_windows/src/directx_atlas.rs
+@@ -108,6 +108,15 @@
+             AtlasTextureKind::Polychrome => &mut lock.polychrome_textures,
+             AtlasTextureKind::Subpixel => &mut lock.subpixel_textures,
+         };
++        let cached_texture_index = if id.kind == AtlasTextureKind::Polychrome {
++            textures.textures.iter().position(|entry| {
++                entry
++                    .as_ref()
++                    .is_some_and(|entry| entry.live_atlas_keys == 0)
++            })
++        } else {
++            None
++        };
+ 
+         let Some(texture_slot) = textures.textures.get_mut(id.index as usize) else {
+             return;
+@@ -116,7 +125,13 @@
+         if let Some(mut texture) = texture_slot.take() {
+             texture.allocator.deallocate(tile.tile_id.into());
+             texture.decrement_ref_count();
+-            if texture.is_unreferenced() {
++            if texture.is_unreferenced() && id.kind == AtlasTextureKind::Polychrome {
++                *texture_slot = Some(texture);
++                if let Some(index) = cached_texture_index {
++                    textures.textures[index] = None;
++                    textures.free_list.push(index);
++                }
++            } else if texture.is_unreferenced() {
+                 textures.free_list.push(texture.id.index as usize);
+             } else {
+                 *texture_slot = Some(texture);
+@@ -417,4 +432,36 @@
+         let tile_b = insert_tile(&atlas, &big_key_b, big);
+         assert_eq!(tile_b.texture_id, keeper_tile.texture_id);
+     }
+-}
++
++    #[test]
++    fn test_reuses_one_unreferenced_polychrome_texture() {
++        let Some(atlas) = create_atlas() else {
++            return;
++        };
++
++        let small = Size {
++            width: DevicePixels(64),
++            height: DevicePixels(64),
++        };
++        let large = Size {
++            width: DevicePixels(1280),
++            height: DevicePixels(720),
++        };
++        let small_key = make_image_key(10);
++        let first_key = make_image_key(11);
++        let second_key = make_image_key(12);
++
++        insert_tile(&atlas, &small_key, small);
++        atlas.remove(&small_key);
++        let first = insert_tile(&atlas, &first_key, large);
++        atlas.remove(&first_key);
++        let second = insert_tile(&atlas, &second_key, large);
++
++        assert_eq!(first.texture_id, second.texture_id);
++        let state = atlas.0.lock();
++        assert_eq!(
++            state.polychrome_textures.textures.iter().flatten().count(),
++            1
++        );
++    }
++}
+diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+index 8a350682e239..35b504e0fb09 100644
 --- a/crates/gpui_windows/src/directx_renderer.rs
 +++ b/crates/gpui_windows/src/directx_renderer.rs
-@@ -1985,0 +1986,38 @@
+@@ -1983,3 +1983,41 @@
+         ))
+     }
+ }
 +
 +#[cfg(test)]
 +mod tests {
@@ -39,9 +117,154 @@
 +        }
 +    }
 +}
+diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
+index b293763bd9ed..07e584557093 100644
+--- a/crates/gpui_windows/src/events.rs
++++ b/crates/gpui_windows/src/events.rs
+@@ -714,6 +714,18 @@
+             return None;
+         }
+ 
++        if self.custom_frame && !self.state.is_maximized() {
++            let dpi = unsafe { GetDpiForWindow(handle) };
++            let (frame, top) =
++                custom_frame_insets(get_frame_thicknessx(dpi), dpi, windows_build_number());
++            let params = unsafe { &mut *(lparam.0 as *mut NCCALCSIZE_PARAMS) };
++            params.rgrc[0].left += frame;
++            params.rgrc[0].top += top;
++            params.rgrc[0].right -= frame;
++            params.rgrc[0].bottom -= frame;
++            return Some(0);
++        }
++
+         unsafe {
+             let params = lparam.0 as *mut NCCALCSIZE_PARAMS;
+             let saved_top = (*params).rgrc[0].top;
+@@ -844,20 +856,12 @@
+                     .context("unable to set maximized window position after dpi has changed")
+                     .log_err();
+                 }
+-
+-                // SetWindowPos may not send WM_SIZE for maximized windows in some cases,
+-                // so we manually update the size to ensure proper rendering
+-                let device_size = size(DevicePixels(width), DevicePixels(height));
+-                self.handle_size_change(device_size, new_scale_factor, true);
+             }
+         } else {
+             // For non-maximized windows, use the suggested RECT from the system
+             let rect = unsafe { &*(lparam.0 as *const RECT) };
+             let width = rect.right - rect.left;
+             let height = rect.bottom - rect.top;
+-            // this will emit `WM_SIZE` and `WM_MOVE` right here
+-            // even before this function returns
+-            // the new size is handled in `WM_SIZE`
+             unsafe {
+                 SetWindowPos(
+                     handle,
+@@ -871,6 +875,21 @@
+                 .context("unable to set window position after dpi has changed")
+                 .log_err();
+             }
++        }
++
++        // SetWindowPos can omit a final WM_SIZE; its outer bounds also include native captions.
++        let mut client_rect = RECT::default();
++        if !unsafe { IsIconic(handle) }.as_bool()
++            && unsafe { GetClientRect(handle, &mut client_rect) }
++                .context("unable to get client bounds after dpi has changed")
++                .log_err()
++                .is_some()
++        {
++            let device_size = size(
++                DevicePixels((client_rect.right - client_rect.left).max(1)),
++                DevicePixels((client_rect.bottom - client_rect.top).max(1)),
++            );
++            self.handle_size_change(device_size, self.state.scale_factor.get(), true);
+         }
+ 
+         Some(0)
+@@ -1650,6 +1669,32 @@
+     Capslock { on }
+ }
+ 
++fn custom_frame_insets(frame: i32, dpi: u32, windows_build: u32) -> (i32, i32) {
++    let top = if windows_build >= 22000 {
++        (dpi as f32 / 96.).round() as i32
++    } else {
++        0
++    };
++    (frame, top)
++}
++
++fn windows_build_number() -> u32 {
++    use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
++
++    static BUILD: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
++    *BUILD.get_or_init(|| {
++        let mut version = OSVERSIONINFOW {
++            dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
++            ..Default::default()
++        };
++        if unsafe { windows::Wdk::System::SystemServices::RtlGetVersion(&mut version) }.is_ok() {
++            version.dwBuildNumber
++        } else {
++            0
++        }
++    })
++}
++
+ // there is some additional non-visible space when talking about window
+ // borders on Windows:
+ // - SM_CXSIZEFRAME: The resize handle.
+@@ -1688,3 +1733,40 @@
+         .log_err();
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::custom_frame_insets;
++
++    #[test]
++    fn windows_10_has_no_top_inset_at_any_scale() {
++        for build in [19045, 21999] {
++            for (frame, dpi) in [(8, 96), (10, 120), (12, 144), (16, 192), (24, 288)] {
++                assert_eq!(custom_frame_insets(frame, dpi, build), (frame, 0));
++            }
++        }
++    }
++
++    #[test]
++    fn windows_11_preserves_the_first_client_row_at_each_scale() {
++        for build in [22000, 22621, 26100] {
++            for (frame, dpi, top) in [
++                (8, 96, 1),
++                (10, 120, 1),
++                (12, 144, 2),
++                (14, 168, 2),
++                (16, 192, 2),
++                (20, 240, 3),
++                (24, 288, 3),
++            ] {
++                assert_eq!(custom_frame_insets(frame, dpi, build), (frame, top));
++            }
++        }
++    }
++
++    #[test]
++    fn unknown_windows_build_does_not_restore_a_native_titlebar() {
++        assert_eq!(custom_frame_insets(8, 96, 0), (8, 0));
++        assert_eq!(custom_frame_insets(16, 192, 0), (16, 0));
++    }
++}
+diff --git a/crates/gpui_windows/src/shaders.hlsl b/crates/gpui_windows/src/shaders.hlsl
+index 483f03993855..78b1adad2ea6 100644
 --- a/crates/gpui_windows/src/shaders.hlsl
 +++ b/crates/gpui_windows/src/shaders.hlsl
-@@ -36,0 +37,11 @@
+@@ -34,6 +34,17 @@
+     float right;
+     float bottom;
+     float left;
 +};
 +
 +struct EdgeFadeParams {
@@ -53,7 +276,13 @@
 +    float right_x;
 +    float band_left;
 +    float band_right;
-@@ -94,0 +106,17 @@
+ };
+ 
+ struct Hsla {
+@@ -92,6 +103,23 @@
+ 
+ static const float M_PI_F = 3.141592653f;
+ static const float3 GRAYSCALE_FACTORS = float3(0.2126f, 0.7152f, 0.0722f);
 +
 +float edge_fade_alpha(float2 position, EdgeFadeParams fade) {
 +    float ramp = 1.0;
@@ -71,39 +300,106 @@
 +    }
 +    return ramp * ramp;
 +}
-@@ -504,0 +533 @@
+ 
+ float4 to_device_position_impl(float2 position) {
+     float2 device_position = position / global_viewport_size * float2(2.0, -2.0) + float2(-1.0, 1.0);
+@@ -502,6 +530,7 @@
+     Hsla border_color;
+     Corners corner_radii;
+     Edges border_widths;
 +    EdgeFadeParams fade;
-@@ -556,0 +586,2 @@
+ };
+ 
+ struct QuadVertexOutput {
+@@ -554,6 +583,8 @@
+     Quad quad = quads[input.quad_id];
+     float4 background_color = gradient_color(quad.background, input.position.xy, quad.bounds,
+     input.background_solid, input.background_color0, input.background_color1);
 +    float fade_alpha = edge_fade_alpha(input.position.xy, quad.fade);
 +    background_color.a *= fade_alpha;
-@@ -663,0 +695 @@
+ 
+     bool unrounded = quad.corner_radii.top_left == 0.0 &&
+         quad.corner_radii.top_right == 0.0 &&
+@@ -661,6 +692,7 @@
+     float4 color = background_color;
+     if (border_sdf < antialias_threshold) {
+         float4 border_color = input.border_color;
 +        border_color.a *= fade_alpha;
-@@ -1211,0 +1244 @@
+         // Dashed border logic when border_style == 1
+         if (quad.border_style == 1) {
+             // Position along the perimeter in "dash space", where each dash
+@@ -1209,6 +1241,7 @@
+     Bounds bounds;
+     Bounds content_mask;
+     Corners corner_radii;
 +    EdgeFadeParams fade;
-@@ -1256 +1289 @@
+     AtlasTile tile;
+ };
+ 
+@@ -1253,6 +1286,6 @@
+         float3 grayscale = dot(color.rgb, GRAYSCALE_FACTORS);
+         color = float4(grayscale, sample.a);
+     }
 -    color.a *= sprite.opacity * saturate(0.5 - distance);
 +    color.a *= sprite.opacity * saturate(0.5 - distance) * edge_fade_alpha(input.position.xy, sprite.fade);
+     return color;
+ }
+diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
+index 49a935bafe42..c0bbefae0955 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
-@@ -95,0 +96 @@
+@@ -93,6 +93,7 @@
+     system_settings: WindowsSystemSettings,
+     pub(crate) handle: AnyWindowHandle,
+     pub(crate) hide_title_bar: bool,
 +    pub(crate) custom_frame: bool,
-@@ -216 +217,5 @@
+     pub(crate) is_movable: bool,
+     pub(crate) is_resizable: bool,
+     pub(crate) is_minimizable: bool,
+@@ -213,7 +214,11 @@
+         };
+         (
+             calculate_client_rect(
 -                placement.rcNormalPosition,
 +                translate_rect(
 +                    placement.rcNormalPosition,
 +                    workspace_offset(self.hwnd, self.display.get(), self.scale_factor.get()),
 +                    1,
 +                ),
-@@ -265,0 +271 @@
+                 &self.border_offset,
+                 self.scale_factor.get(),
+             ),
+@@ -263,6 +268,7 @@
+             state,
+             handle: context.handle,
+             hide_title_bar: context.hide_title_bar,
 +            custom_frame: context.custom_frame,
-@@ -388,0 +395 @@
+             is_movable: context.is_movable,
+             is_resizable: context.is_resizable,
+             is_minimizable: context.is_minimizable,
+@@ -386,6 +392,7 @@
+     inner: Option<Result<Rc<WindowsWindowInner>>>,
+     handle: AnyWindowHandle,
+     hide_title_bar: bool,
 +    custom_frame: bool,
-@@ -405,0 +413,4 @@
+     display: WindowsDisplay,
+     is_movable: bool,
+     is_resizable: bool,
+@@ -403,6 +410,10 @@
+     directx_devices: DirectXDevices,
+     invalidate_devices: Arc<AtomicBool>,
+     parent_hwnd: Option<HWND>,
 +}
 +
 +fn custom_frame_enabled(normal_window: bool, transparent_titlebar: Option<bool>) -> bool {
 +    normal_window && transparent_titlebar == Some(true)
-@@ -452,0 +464,7 @@
+ }
+ 
+ impl WindowsWindow {
+@@ -450,6 +461,13 @@
+             .as_ref()
+             .map(|titlebar| titlebar.appears_transparent)
+             .unwrap_or(true);
 +        let custom_frame = custom_frame_enabled(
 +            params.kind == WindowKind::Normal,
 +            params
@@ -111,24 +407,55 @@
 +                .as_ref()
 +                .map(|titlebar| titlebar.appears_transparent),
 +        );
-@@ -463 +481 @@
+         let window_name = HSTRING::from(
+             params
+                 .titlebar
+@@ -460,9 +478,14 @@
+         );
+ 
+         let (mut dwexstyle, dwstyle) = if params.kind == WindowKind::PopUp {
 -            (WS_EX_TOOLWINDOW, WINDOW_STYLE(0x0))
 +            (WS_EX_TOOLWINDOW, WS_POPUP)
-@@ -465,0 +484,5 @@
+         } else {
+             let mut dwstyle = WS_SYSMENU;
 +            if hide_title_bar && !custom_frame {
 +                dwstyle |= WS_POPUP;
 +            } else {
 +                dwstyle |= WS_CAPTION;
 +            }
-@@ -482,0 +506,3 @@
+ 
+             if params.is_resizable {
+                 dwstyle |= WS_THICKFRAME | WS_MAXIMIZEBOX;
+@@ -480,6 +503,9 @@
+ 
+             (dwexstyle, dwstyle)
+         };
 +        if custom_frame {
 +            dwexstyle |= WS_EX_WINDOWEDGE;
 +        }
-@@ -499,0 +526 @@
+         if !disable_direct_composition {
+             dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
+         }
+@@ -497,6 +523,7 @@
+             inner: None,
+             handle,
+             hide_title_bar,
 +            custom_frame,
-@@ -550,0 +578 @@
+             display,
+             is_movable: params.is_movable,
+             is_resizable: params.is_resizable,
+@@ -548,6 +575,7 @@
+             params.bounds,
+             this.state.scale_factor.get(),
+             &this.state.border_offset,
 +            params.window_min_size,
-@@ -621,2 +649,30 @@
+         )?;
+         if params.show {
+             unsafe { SetWindowPlacement(hwnd, &placement)? };
+@@ -618,8 +646,36 @@
+ 
+     fn resize(&mut self, size: Size<Pixels>) {
+         let hwnd = self.0.hwnd;
 -        let bounds = gpui::bounds(self.bounds().origin, size).to_device_pixels(self.scale_factor());
 -        let rect = calculate_window_rect(bounds, &self.state.border_offset);
 +        let size = size.to_device_pixels(self.scale_factor());
@@ -161,15 +488,23 @@
 +        if !movable {
 +            flags |= SWP_NOMOVE;
 +        }
-@@ -631,2 +687,2 @@
+ 
+         self.0
+             .executor
+@@ -628,13 +684,42 @@
+                     SetWindowPos(
+                         hwnd,
+                         None,
 -                        bounds.origin.x.0,
 -                        bounds.origin.y.0,
 +                        rect.left,
 +                        rect.top,
-@@ -635 +691 @@
+                         rect.right - rect.left,
+                         rect.bottom - rect.top,
 -                        SWP_NOMOVE,
 +                        flags,
-@@ -637,0 +694,29 @@
+                     )
+                     .context("unable to set window content size")
 +                    .log_err();
 +                }
 +            })
@@ -199,9 +534,21 @@
 +                        LPARAM(position as isize),
 +                    )
 +                    .context("unable to start window move")
-@@ -1510,0 +1596 @@
+                     .log_err();
+                 }
+             })
+@@ -1508,6 +1593,7 @@
+     initial_bounds: Bounds<Pixels>,
+     scale_factor: f32,
+     border_offset: &WindowBorderOffset,
 +    minimum_size: Option<Size<Pixels>>,
-@@ -1524 +1610,10 @@
+ ) -> Result<WINDOWPLACEMENT> {
+     let mut placement = WINDOWPLACEMENT {
+         length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+@@ -1521,8 +1607,71 @@
+         display.default_bounds()
+     };
+     let bounds = bounds.to_device_pixels(scale_factor);
 -    placement.rcNormalPosition = calculate_window_rect(bounds, border_offset);
 +    let mut rect = calculate_window_rect(bounds, border_offset);
 +    if !is_tool_window(hwnd) {
@@ -213,7 +560,7 @@
 +    }
 +    placement.rcNormalPosition =
 +        translate_rect(rect, workspace_offset(hwnd, display, scale_factor), -1);
-@@ -1525,0 +1621,54 @@
+     Ok(placement)
 +}
 +
 +fn is_tool_window(hwnd: HWND) -> bool {
@@ -268,12 +615,18 @@
 +        right: left + width,
 +        bottom: top + height,
 +    }
-@@ -1612,2 +1761,2 @@
+ }
+ 
+ fn dwm_set_window_composition_attribute(hwnd: HWND, backdrop_type: u32) {
+@@ -1609,9 +1758,89 @@
+ 
+ #[cfg(test)]
+ mod tests {
 -    use super::ClickState;
 -    use gpui::{DevicePixels, MouseButton, point};
 +    use super::{ClickState, custom_frame_enabled, fit_window_rect, translate_rect};
 +    use gpui::{Bounds, DevicePixels, MouseButton, point, size};
-@@ -1614,0 +1764,80 @@
+     use std::time::Duration;
 +    use windows::Win32::Foundation::RECT;
 +
 +    #[test]
@@ -354,109 +707,6 @@
 +            assert_eq!(translate_rect(workspace, offset, 1), screen);
 +        }
 +    }
---- a/crates/gpui_windows/src/events.rs
-+++ b/crates/gpui_windows/src/events.rs
-@@ -716,0 +717,12 @@
-+        if self.custom_frame && !self.state.is_maximized() {
-+            let dpi = unsafe { GetDpiForWindow(handle) };
-+            let (frame, top) =
-+                custom_frame_insets(get_frame_thicknessx(dpi), dpi, windows_build_number());
-+            let params = unsafe { &mut *(lparam.0 as *mut NCCALCSIZE_PARAMS) };
-+            params.rgrc[0].left += frame;
-+            params.rgrc[0].top += top;
-+            params.rgrc[0].right -= frame;
-+            params.rgrc[0].bottom -= frame;
-+            return Some(0);
-+        }
-+
-@@ -847,5 +858,0 @@
--
--                // SetWindowPos may not send WM_SIZE for maximized windows in some cases,
--                // so we manually update the size to ensure proper rendering
--                let device_size = size(DevicePixels(width), DevicePixels(height));
--                self.handle_size_change(device_size, new_scale_factor, true);
-@@ -858,3 +864,0 @@
--            // this will emit `WM_SIZE` and `WM_MOVE` right here
--            // even before this function returns
--            // the new size is handled in `WM_SIZE`
-@@ -873,0 +878,15 @@
-+        }
-+
-+        // SetWindowPos can omit a final WM_SIZE; its outer bounds also include native captions.
-+        let mut client_rect = RECT::default();
-+        if !unsafe { IsIconic(handle) }.as_bool()
-+            && unsafe { GetClientRect(handle, &mut client_rect) }
-+                .context("unable to get client bounds after dpi has changed")
-+                .log_err()
-+                .is_some()
-+        {
-+            let device_size = size(
-+                DevicePixels((client_rect.right - client_rect.left).max(1)),
-+                DevicePixels((client_rect.bottom - client_rect.top).max(1)),
-+            );
-+            self.handle_size_change(device_size, self.state.scale_factor.get(), true);
-@@ -1652,0 +1672,26 @@
-+fn custom_frame_insets(frame: i32, dpi: u32, windows_build: u32) -> (i32, i32) {
-+    let top = if windows_build >= 22000 {
-+        (dpi as f32 / 96.).round() as i32
-+    } else {
-+        0
-+    };
-+    (frame, top)
-+}
-+
-+fn windows_build_number() -> u32 {
-+    use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
-+
-+    static BUILD: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-+    *BUILD.get_or_init(|| {
-+        let mut version = OSVERSIONINFOW {
-+            dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
-+            ..Default::default()
-+        };
-+        if unsafe { windows::Wdk::System::SystemServices::RtlGetVersion(&mut version) }.is_ok() {
-+            version.dwBuildNumber
-+        } else {
-+            0
-+        }
-+    })
-+}
-+
-@@ -1690,0 +1736,37 @@
-+
-+#[cfg(test)]
-+mod tests {
-+    use super::custom_frame_insets;
-+
-+    #[test]
-+    fn windows_10_has_no_top_inset_at_any_scale() {
-+        for build in [19045, 21999] {
-+            for (frame, dpi) in [(8, 96), (10, 120), (12, 144), (16, 192), (24, 288)] {
-+                assert_eq!(custom_frame_insets(frame, dpi, build), (frame, 0));
-+            }
-+        }
-+    }
-+
-+    #[test]
-+    fn windows_11_preserves_the_first_client_row_at_each_scale() {
-+        for build in [22000, 22621, 26100] {
-+            for (frame, dpi, top) in [
-+                (8, 96, 1),
-+                (10, 120, 1),
-+                (12, 144, 2),
-+                (14, 168, 2),
-+                (16, 192, 2),
-+                (20, 240, 3),
-+                (24, 288, 3),
-+            ] {
-+                assert_eq!(custom_frame_insets(frame, dpi, build), (frame, top));
-+            }
-+        }
-+    }
-+
-+    #[test]
-+    fn unknown_windows_build_does_not_restore_a_native_titlebar() {
-+        assert_eq!(custom_frame_insets(8, 96, 0), (8, 0));
-+        assert_eq!(custom_frame_insets(16, 192, 0), (16, 0));
-+    }
-+}
+ 
+     #[test]
+     fn test_double_click_interval() {

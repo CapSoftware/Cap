@@ -1,4 +1,119 @@
+use std::sync::atomic::{AtomicU8, Ordering};
 use tokio::task::JoinHandle;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExitBlocked {
+    StateUnavailable,
+    RecordingActive,
+    FinalizationActive,
+    ExportActive,
+    UpdateInstalling,
+    AlreadyExiting,
+}
+
+impl ExitBlocked {
+    pub(crate) fn message(self) -> &'static str {
+        match self {
+            Self::StateUnavailable => {
+                "Cap could not confirm that recording has finished. Wait for any recording to finish, then try again."
+            }
+            Self::RecordingActive => {
+                "Finish or cancel your recording before quitting or restarting Cap. If you already pressed Stop, wait for it to finish."
+            }
+            Self::FinalizationActive => {
+                "Cap is still saving your recording. Wait for it to finish before quitting or restarting."
+            }
+            Self::ExportActive => "Wait for your export or upload to finish before restarting Cap.",
+            Self::UpdateInstalling => "Cap is installing an update. Wait for it to finish.",
+            Self::AlreadyExiting => "Cap is already shutting down.",
+        }
+    }
+}
+
+pub(crate) fn with_idle_recording_state<T, R>(
+    state: &tokio::sync::RwLock<T>,
+    verify_idle: impl FnOnce(&T) -> Result<(), ExitBlocked>,
+    begin: impl FnOnce() -> R,
+) -> Result<R, ExitBlocked> {
+    let state = state
+        .try_read()
+        .map_err(|_| ExitBlocked::StateUnavailable)?;
+    verify_idle(&state)?;
+    Ok(begin())
+}
+
+pub(crate) fn recording_start_allowed(
+    is_exiting: bool,
+    update_blocks_recording: bool,
+) -> Result<(), &'static str> {
+    if is_exiting {
+        Err("Cap is shutting down. Recording has not started.")
+    } else if update_blocks_recording {
+        Err("Cap is installing an update. Finish updating or restart Cap before recording.")
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn prepare_then_begin_exit(
+    prepare: impl FnOnce() -> Result<(), String>,
+    begin: impl FnOnce() -> bool,
+) -> Result<(), String> {
+    prepare()?;
+    if begin() {
+        Ok(())
+    } else {
+        Err(ExitBlocked::AlreadyExiting.message().into())
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct UpdateInstallState(AtomicU8);
+
+impl UpdateInstallState {
+    pub(crate) fn is_installing(&self) -> bool {
+        self.0.load(Ordering::Acquire) == 1
+    }
+
+    pub(crate) fn blocks_recording(&self) -> bool {
+        self.0.load(Ordering::Acquire) != 0
+    }
+
+    pub(crate) fn begin(&self) -> Option<UpdateInstallGuard<'_>> {
+        self.0
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| UpdateInstallGuard {
+                state: self,
+                completed: false,
+            })
+    }
+}
+
+pub(crate) struct UpdateInstallGuard<'a> {
+    state: &'a UpdateInstallState,
+    completed: bool,
+}
+
+impl UpdateInstallGuard<'_> {
+    pub(crate) fn complete(mut self, can_exit_later: bool) {
+        self.state
+            .0
+            .store(if can_exit_later { 2 } else { 0 }, Ordering::Release);
+        self.completed = true;
+    }
+}
+
+impl Drop for UpdateInstallGuard<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            let _ = self
+                .state
+                .0
+                .compare_exchange(1, 0, Ordering::AcqRel, Ordering::Acquire);
+        }
+    }
+}
 
 pub(crate) fn run_while_active<T, FExit, F>(is_exiting: FExit, operation: F) -> Option<T>
 where

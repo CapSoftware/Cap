@@ -4,7 +4,7 @@ use x11rb::{
     connection::Connection,
     protocol::{
         randr::ConnectionExt as RandrConnectionExt,
-        xproto::{Atom, AtomEnum, ConnectionExt as XprotoConnectionExt, Window},
+        xproto::{Atom, AtomEnum, ConnectionExt as XprotoConnectionExt, MapState, Window},
     },
     rust_connection::RustConnection,
 };
@@ -155,6 +155,11 @@ impl FromStr for DisplayIdImpl {
 #[derive(Clone, Copy)]
 pub struct WindowImpl(Window);
 
+pub struct WindowSelectionMetadata {
+    pub is_viewable: bool,
+    pub owner_pid: Option<u32>,
+}
+
 impl WindowImpl {
     pub fn list() -> Vec<Self> {
         let Ok((conn, screen_num)) = x11_connection() else {
@@ -191,6 +196,15 @@ impl WindowImpl {
         Self::list_containing_cursor().into_iter().next()
     }
 
+    pub fn selection_metadata(&self) -> Option<WindowSelectionMetadata> {
+        let (conn, _) = x11_connection().ok()?;
+        let attributes = conn.get_window_attributes(self.0).ok()?.reply().ok()?;
+        Some(WindowSelectionMetadata {
+            is_viewable: attributes.map_state == MapState::VIEWABLE,
+            owner_pid: window_pid(&conn, self.0),
+        })
+    }
+
     pub fn id(&self) -> WindowIdImpl {
         WindowIdImpl(self.0)
     }
@@ -206,7 +220,7 @@ impl WindowImpl {
 
     pub fn physical_bounds(&self) -> Option<PhysicalBounds> {
         if is_wayland_portal_window(self.0) {
-            return Some(DisplayImpl::primary().physical_bounds()?);
+            return DisplayImpl::primary().physical_bounds();
         }
 
         let (conn, screen_num) = x11_connection().ok()?;

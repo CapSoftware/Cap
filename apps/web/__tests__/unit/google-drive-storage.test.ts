@@ -1037,6 +1037,7 @@ type DriveFileState = {
 	name: string;
 	mimeType: string;
 	size?: string;
+	version?: string;
 	md5Checksum?: string;
 	parents: string[];
 	trashed: boolean;
@@ -1059,7 +1060,19 @@ const makeDriveFileFetch = (
 		if (!file) return response(404);
 		if (!init?.method || init.method === "GET") {
 			options.events?.push(`GET:${fileId}`);
-			return jsonResponse(file);
+			const fields = new Set(
+				url.searchParams
+					.get("fields")
+					?.split(",")
+					.map((field) => field.split("(")[0]),
+			);
+			return jsonResponse(
+				Object.fromEntries(
+					Object.entries(file).filter(
+						([field]) => fields.size === 0 || fields.has(field),
+					),
+				),
+			);
 		}
 		if (init.method === "PATCH") {
 			options.events?.push(`PATCH:${fileId}`);
@@ -1068,7 +1081,11 @@ const makeDriveFileFetch = (
 				return response(503);
 			}
 			const body = requestBody(init);
-			if (typeof body?.name === "string") file.name = body.name;
+			if (typeof body?.name === "string") {
+				file.name = body.name;
+				if (file.version !== undefined)
+					file.version = (BigInt(file.version) + 1n).toString();
+			}
 			return jsonResponse({ id: file.id, name: file.name });
 		}
 		throw new Error(`Unexpected Drive request: ${init.method} ${url}`);
@@ -1152,7 +1169,7 @@ const makeStorageVideo = (): Video.Video =>
 		updatedAt: new Date("2026-01-01T00:00:00.000Z"),
 	});
 
-const getStorageObject = (harness: RepoHarness) => {
+const getStorageAccess = (harness: RepoHarness) => {
 	const dependencies = Layer.merge(
 		Layer.succeed(StorageRepo, harness.repo),
 		Layer.succeed(S3Buckets, {} as S3Buckets),
@@ -1163,9 +1180,14 @@ const getStorageObject = (harness: RepoHarness) => {
 	return Effect.runPromise(
 		StorageService.getAccessForVideo(makeStorageVideo()).pipe(
 			Effect.provide(storageLayer),
-			Effect.flatMap(([access]) => access.getObject(resultKey)),
+			Effect.map(([access]) => access),
 		),
 	);
+};
+
+const getStorageObject = async (harness: RepoHarness) => {
+	const access = await getStorageAccess(harness);
+	return Effect.runPromise(access.getObject(resultKey));
 };
 
 describe("Google Drive title synchronization", () => {
@@ -1343,6 +1365,42 @@ describe("Google Drive title synchronization", () => {
 			},
 		});
 		expect(harness.fileNameUpdates).toHaveLength(2);
+	});
+
+	it("refreshes verification ETags after a name-only rename without changing media bytes", async () => {
+		const { harness, files } = makeSyncHarness();
+		const file = files.get("file-id");
+		if (!file) throw new Error("Missing Drive file fixture");
+		file.version = "41";
+		vi.stubGlobal("fetch", makeDriveFileFetch(files));
+		const access = await getStorageAccess(harness);
+		const before = await Effect.runPromise(access.headObject(resultKey));
+
+		await Effect.runPromise(
+			syncGoogleDriveVideoNames(
+				harness.repo,
+				makeConfig(),
+				syncVideo,
+				makeTokenStore(),
+			),
+		);
+
+		const after = await Effect.runPromise(access.headObject(resultKey));
+		expect(before).toMatchObject({
+			ETag: '"file-id:41"',
+			ContentLength: 5678,
+		});
+		expect(after).toMatchObject({
+			ETag: '"file-id:42"',
+			ContentLength: 5678,
+		});
+		expect(file).toMatchObject({
+			id: "file-id",
+			name: "New title: 测试 🎬.mp4",
+			md5Checksum: "original-md5",
+			parents: ["folder-id"],
+			appProperties: { capObjectKey: resultKey, customerTag: "keep-me" },
+		});
 	});
 
 	it("renames a usable pending result only after every target passes provider preflight", async () => {

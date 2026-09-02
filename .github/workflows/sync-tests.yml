@@ -26,6 +26,10 @@ on:
       - "crates/editor/**"
       - "crates/audio/**"
       - "crates/media-info/**"
+      - "crates/project/**"
+      - "scripts/recording-reliability.py"
+      - "scripts/recording-reliability-owned-process.cs"
+      - "scripts/test-recording-reliability.py"
       - ".github/workflows/sync-tests.yml"
 
 concurrency:
@@ -67,6 +71,11 @@ jobs:
         with:
           node-version: 24
 
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+
       - name: Native dependencies
         env:
           RUST_TARGET_TRIPLE: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-gnu' || runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'aarch64-apple-darwin' }}
@@ -76,6 +85,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+
+      - name: Recording metadata and harness regression tests
+        shell: bash
+        run: |
+          cargo test --locked -p cap-project --lib
+          python -B scripts/test-recording-reliability.py
+
+      - name: Compile recording process supervisor (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Type -Path scripts/recording-reliability-owned-process.cs
 
       - name: Install software Vulkan driver (Linux)
         if: runner.os == 'Linux'
@@ -116,7 +136,7 @@ jobs:
         shell: bash
         run: |
           cargo test --locked -p cap-timestamp -p cap-enc-ffmpeg
-          cargo test --locked -p cap-recording --lib
+          cargo test --locked -p cap-recording --lib -- --test-threads=1
           # --nocapture so a WARP-adapter notch skip prints instead of
           # looking identical to a pass in the CI log.
           cargo test --locked -p cap-rendering -- --nocapture
@@ -230,7 +250,7 @@ jobs:
 
       - name: Upload findings
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sync-matrix-${{ matrix.runner }}
           path: ${{ github.workspace }}/sync-matrix-${{ matrix.runner }}.json

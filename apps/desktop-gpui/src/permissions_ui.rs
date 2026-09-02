@@ -132,6 +132,7 @@ impl PermissionsState {
         self.action(permission)
     }
 
+    #[cfg(test)]
     pub fn granted_counts(&self) -> (usize, usize) {
         let mut granted = 0;
         let mut total = 0;

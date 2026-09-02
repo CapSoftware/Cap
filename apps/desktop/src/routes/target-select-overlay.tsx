@@ -4,7 +4,7 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementSize } from "@solid-primitives/resize-observer";
 import { makePersisted } from "@solid-primitives/storage";
 import { useSearchParams } from "@solidjs/router";
-import { createMutation, useQuery } from "@tanstack/solid-query";
+import { useQuery } from "@tanstack/solid-query";
 import {
 	LogicalPosition,
 	type PhysicalPosition,
@@ -78,9 +78,11 @@ import { createDevicesQuery } from "~/utils/devices";
 import { shouldConfirmRecordingWithoutMicrophone } from "~/utils/general-settings";
 import {
 	createCameraMutation,
+	createMicrophoneMutation,
 	createOptionsQuery,
 	createOrganizationsQuery,
 } from "~/utils/queries";
+import { createRecordingMenuPopup } from "~/utils/recording-menu";
 import {
 	type CanvasControls,
 	createImageDataWS,
@@ -1872,21 +1874,25 @@ function RecordingControls(props: {
 	const devices = createDevicesQuery();
 	const [noMicrophoneWarningOpen, setNoMicrophoneWarningOpen] =
 		createSignal(false);
+	const [dontShowMicrophoneWarning, setDontShowMicrophoneWarning] =
+		createSignal(false);
+	const [confirmingWithoutMicrophone, setConfirmingWithoutMicrophone] =
+		createSignal(false);
+	let microphoneConfirmationRevision = 0;
+	let controlsDisposed = false;
+	onCleanup(() => {
+		controlsDisposed = true;
+		microphoneConfirmationRevision += 1;
+	});
+	const dismissMicrophoneWarning = () => {
+		microphoneConfirmationRevision += 1;
+		setConfirmingWithoutMicrophone(false);
+		setNoMicrophoneWarningOpen(false);
+	};
 	const cameras = createMemo(() => devices.data?.cameras ?? []);
 	const mics = createMemo(() => devices.data?.microphones ?? []);
 	const permissions = createMemo(() => devices.data?.permissions);
-	const setMicInput = createMutation(() => ({
-		mutationFn: async (name: string | null) => {
-			const previous = rawOptions.micName ?? null;
-			if (previous !== name) setOptions("micName", name);
-			try {
-				await commands.setMicInput(name);
-			} catch (error) {
-				if (previous !== name) setOptions("micName", previous);
-				throw error;
-			}
-		},
-	}));
+	const setMicInput = createMicrophoneMutation();
 	const setCamera = createCameraMutation();
 
 	onMount(async () => {
@@ -1923,6 +1929,27 @@ function RecordingControls(props: {
 		if (!rawOptions.micName) return null;
 		return mics().find((name) => name === rawOptions.micName) ?? null;
 	});
+	const microphoneConfirmationContext = createMemo(() =>
+		JSON.stringify({
+			target: props.target,
+			mode: rawOptions.mode,
+			microphone: rawOptions.micName,
+			selectedMicrophone: selectedMicName(),
+			camera: rawOptions.cameraID,
+			cameraAvailable: selectedCamera() !== null,
+			systemAudio: rawOptions.captureSystemAudio,
+			targetModeSource: rawOptions.targetModeSource,
+			organizationId: rawOptions.organizationId,
+		}),
+	);
+	let previousConfirmationContext = microphoneConfirmationContext();
+	createEffect(() => {
+		const context = microphoneConfirmationContext();
+		if (context !== previousConfirmationContext) {
+			previousConfirmationContext = context;
+			dismissMicrophoneWarning();
+		}
+	});
 
 	createEffect(() => {
 		if (
@@ -1938,10 +1965,14 @@ function RecordingControls(props: {
 	});
 
 	const startLoading = () =>
-		devices.isPending || recordingStartSafety.isPending;
+		devices.isPending ||
+		recordingStartSafety.isPending ||
+		setMicInput.isPending ||
+		setCamera.isPending;
 	const startDisabled = () => !!props.disabled || startLoading();
 
 	const startRecording = async (confirmedWithoutMicrophone = false) => {
+		if (confirmingWithoutMicrophone() && !confirmedWithoutMicrophone) return;
 		if (rawOptions.mode === "instant" && !auth.data) {
 			emit("start-sign-in");
 			return;
@@ -2061,6 +2092,45 @@ function RecordingControls(props: {
 			});
 	};
 
+	const confirmWithoutMicrophone = async () => {
+		if (startDisabled() || confirmingWithoutMicrophone()) return;
+		const revision = ++microphoneConfirmationRevision;
+		const context = microphoneConfirmationContext();
+		setConfirmingWithoutMicrophone(true);
+		if (dontShowMicrophoneWarning()) {
+			try {
+				await recordingStartSafetyStore.set({
+					confirmBeforeRecordingWithoutMicrophone: false,
+				});
+			} catch {
+				if (controlsDisposed || revision !== microphoneConfirmationRevision)
+					return;
+				setConfirmingWithoutMicrophone(false);
+				toast.error(
+					"Could not save your preference. Try again or leave the box unchecked.",
+				);
+				return;
+			}
+		}
+		if (
+			controlsDisposed ||
+			revision !== microphoneConfirmationRevision ||
+			context !== microphoneConfirmationContext()
+		) {
+			if (!controlsDisposed && revision === microphoneConfirmationRevision) {
+				dismissMicrophoneWarning();
+			}
+			return;
+		}
+		try {
+			await startRecording(true);
+		} finally {
+			if (!controlsDisposed && revision === microphoneConfirmationRevision) {
+				setConfirmingWithoutMicrophone(false);
+			}
+		}
+	};
+
 	const menuModes = async () =>
 		await Menu.new({
 			items: [
@@ -2128,10 +2198,15 @@ function RecordingControls(props: {
 		});
 	};
 
-	function showMenu(menu: Promise<Menu>, e: UIEvent) {
+	const popupRecordingMenu = createRecordingMenuPopup();
+
+	function showMenu(createMenu: () => Promise<Menu>, e: UIEvent) {
 		e.stopPropagation();
-		const rect = (e.target as HTMLDivElement).getBoundingClientRect();
-		menu.then((menu) => menu.popup(new LogicalPosition(rect.x, rect.y + 40)));
+		const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+		void popupRecordingMenu(
+			createMenu,
+			new LogicalPosition(rect.x, rect.y + 40),
+		).catch(() => toast.error("Could not open recording menu"));
 	}
 
 	return (
@@ -2158,7 +2233,10 @@ function RecordingControls(props: {
 						</div>
 						<Popover
 							open={noMicrophoneWarningOpen()}
-							onOpenChange={setNoMicrophoneWarningOpen}
+							onOpenChange={(open) => {
+								if (open) setNoMicrophoneWarningOpen(true);
+								else dismissMicrophoneWarning();
+							}}
 							placement="bottom"
 							gutter={8}
 						>
@@ -2202,13 +2280,14 @@ function RecordingControls(props: {
 										</span>
 									</div>
 								</div>
-								<div
+								<button
+									type="button"
+									aria-label="Choose recording mode"
 									class="pl-2.5 pr-3 py-1.5 flex items-center border-l border-white/20 bg-white/5 transition-colors group-hover:bg-white/10"
-									onMouseDown={(e) => showMenu(menuModes(), e)}
-									onClick={(e) => showMenu(menuModes(), e)}
+									onClick={(e) => showMenu(menuModes, e)}
 								>
 									<IconCapCaretDown class="pointer-events-none" />
-								</div>
+								</button>
 							</Popover.Anchor>
 							<Popover.Portal>
 								<Popover.Content class="z-200 w-[min(21rem,calc(100vw-1.5rem))] rounded-xl border border-amber-6 bg-gray-1 p-3.5 text-gray-12 shadow-xl outline-hidden data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95">
@@ -2224,6 +2303,19 @@ function RecordingControls(props: {
 											</p>
 										</div>
 									</div>
+									<label class="mt-3 flex cursor-pointer items-center gap-2 text-xs text-gray-11">
+										<input
+											type="checkbox"
+											class="size-3.5 accent-blue-9"
+											checked={dontShowMicrophoneWarning()}
+											onChange={(event) =>
+												setDontShowMicrophoneWarning(
+													event.currentTarget.checked,
+												)
+											}
+										/>
+										Don't show again
+									</label>
 									<div class="flex gap-2 justify-end mt-3">
 										<Popover.CloseButton class="px-3 h-8 text-xs font-medium rounded-lg border border-gray-4 bg-gray-2 text-gray-12 hover:bg-gray-3">
 											Go back
@@ -2231,7 +2323,10 @@ function RecordingControls(props: {
 										<button
 											type="button"
 											class="px-3 h-8 text-xs font-medium text-white rounded-lg bg-blue-9 hover:bg-blue-10"
-											onClick={() => void startRecording(true)}
+											onClick={() => void confirmWithoutMicrophone()}
+											disabled={
+												startDisabled() || confirmingWithoutMicrophone()
+											}
 										>
 											Record without microphone
 										</button>
@@ -2239,13 +2334,14 @@ function RecordingControls(props: {
 								</Popover.Content>
 							</Popover.Portal>
 						</Popover>
-						<div
+						<button
+							type="button"
+							aria-label="Recording countdown"
 							class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
-							onMouseDown={(e) => showMenu(preRecordingMenu(), e)}
-							onClick={(e) => showMenu(preRecordingMenu(), e)}
+							onClick={(e) => showMenu(preRecordingMenu, e)}
 						>
 							<IconCapGear class="pointer-events-none will-change-transform size-5" />
-						</div>
+						</button>
 					</div>
 				</div>
 				<Show when={(rawOptions.mode as string) !== "screenshot"}>

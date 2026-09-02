@@ -25,6 +25,12 @@ pub enum AuthedApiError {
     Deserialization(#[from] serde_json::Error),
     #[error("The request has timed out")]
     Timeout,
+    #[error(
+        "Cloud verification rejected the uploaded recording; local data must be uploaded again"
+    )]
+    ReuploadRequired,
+    #[error("Recording is awaiting cloud verification; local files are retained")]
+    VerificationPending,
     #[error("AuthedApiError/Other: {0}")]
     Other(String),
 }
@@ -33,7 +39,7 @@ impl From<reqwest::Error> for AuthedApiError {
     fn from(err: reqwest::Error) -> Self {
         match err {
             err if err.is_timeout() => AuthedApiError::Timeout,
-            err => AuthedApiError::Request(err),
+            err => AuthedApiError::Request(err.without_url()),
         }
     }
 }
@@ -78,6 +84,73 @@ where
     };
 
     Ok(app_state.read().await.server_url.clone())
+}
+
+#[derive(Clone)]
+pub(crate) struct UploadRequestContext {
+    server_url: String,
+    owner_id: String,
+}
+
+tokio::task_local! {
+    static UPLOAD_REQUEST: UploadRequestContext;
+}
+
+impl UploadRequestContext {
+    pub(crate) fn new(server_url: String, owner_id: String) -> Result<Self, AuthedApiError> {
+        if server_url.is_empty() || owner_id.is_empty() {
+            return Err(AuthedApiError::InvalidAuthentication);
+        }
+        Ok(Self {
+            server_url,
+            owner_id,
+        })
+    }
+
+    fn check_identity(
+        &self,
+        server_url: &str,
+        owner_id: Option<&str>,
+    ) -> Result<(), AuthedApiError> {
+        if server_url != self.server_url || owner_id != Some(self.owner_id.as_str()) {
+            return Err(AuthedApiError::InvalidAuthentication);
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn check(&self, app: &tauri::AppHandle) -> Result<(), AuthedApiError> {
+        let auth = AuthStore::get(app)
+            .map_err(AuthedApiError::AuthStore)?
+            .ok_or(AuthedApiError::InvalidAuthentication)?;
+        self.check_identity(&current_server_url(app).await?, auth.user_id.as_deref())
+    }
+
+    pub(crate) async fn run<F: std::future::Future>(self, future: F) -> F::Output {
+        UPLOAD_REQUEST.scope(self, future).await
+    }
+
+    pub(crate) fn current() -> Option<Self> {
+        UPLOAD_REQUEST.try_with(Clone::clone).ok()
+    }
+}
+
+pub(crate) fn inherit_upload_context<F: std::future::Future>(
+    context: Option<UploadRequestContext>,
+    future: F,
+) -> impl std::future::Future<Output = F::Output> {
+    let scope = crate::upload::lifecycle::UploadScope::current();
+    async move {
+        let request = async move {
+            match context {
+                Some(context) => context.run(future).await,
+                None => future.await,
+            }
+        };
+        match scope {
+            Some(scope) => scope.bind(request).await,
+            None => request.await,
+        }
+    }
 }
 
 async fn do_authed_request(
@@ -132,10 +205,21 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
         };
 
         let path = path.into();
-        let server_url = current_server_url(self).await?;
+        let server_url = crate::upload::lifecycle::cancellable(current_server_url(self)).await??;
+        let server_url = if let Some(context) = UploadRequestContext::current() {
+            context.check_identity(&server_url, auth.user_id.as_deref())?;
+            context.server_url
+        } else {
+            server_url
+        };
         let url = format!("{server_url}{path}");
-        let response =
-            do_authed_request(&self.state::<http_client::HttpClient>(), &auth, build, url).await?;
+        let response = crate::upload::lifecycle::cancellable(do_authed_request(
+            &self.state::<http_client::HttpClient>(),
+            &auth,
+            build,
+            url,
+        ))
+        .await??;
 
         if response.status() == StatusCode::UNAUTHORIZED {
             error!("Authentication expired. Please log in again.");
@@ -182,5 +266,60 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
                 false
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod upload_context_tests {
+    use super::*;
+
+    #[test]
+    fn upload_request_errors_do_not_expose_signed_urls() {
+        let url = reqwest::Url::parse(
+            "https://storage.invalid/object?X-Amz-Signature=private-signature&upload_id=private-session",
+        )
+        .unwrap();
+        let error = reqwest::Client::new()
+            .put(url.clone())
+            .header("invalid\nheader", "value")
+            .build()
+            .unwrap_err()
+            .with_url(url);
+        assert!(error.url().is_some());
+        let error = AuthedApiError::from(error);
+        assert!(
+            matches!(&error, AuthedApiError::Request(inner) if inner.is_builder() && inner.url().is_none())
+        );
+        for diagnostic in [error.to_string(), format!("{error:?}")] {
+            assert!(!diagnostic.contains("private-signature"));
+            assert!(!diagnostic.contains("private-session"));
+            assert!(!diagnostic.contains("storage.invalid"));
+        }
+    }
+
+    #[test]
+    fn upload_request_identity_cannot_follow_a_changed_account_or_server() {
+        let context =
+            UploadRequestContext::new("https://original.invalid".into(), "owner".into()).unwrap();
+        assert!(
+            context
+                .check_identity("https://original.invalid", Some("owner"))
+                .is_ok()
+        );
+        assert!(
+            context
+                .check_identity("https://changed.invalid", Some("owner"))
+                .is_err()
+        );
+        assert!(
+            context
+                .check_identity("https://original.invalid", Some("another-owner"))
+                .is_err()
+        );
+        assert!(
+            context
+                .check_identity("https://original.invalid", None)
+                .is_err()
+        );
     }
 }

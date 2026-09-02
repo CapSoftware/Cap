@@ -152,6 +152,8 @@ pub struct RgbaToNv12Converter {
     surface_output: bool,
     #[cfg(target_os = "macos")]
     surface_ring: Option<Nv12SurfaceRing>,
+    #[cfg(all(test, target_os = "macos"))]
+    surface_setup_should_fail: bool,
 }
 
 /// An NV12 CVPixelBuffer produced by the GPU converter, ready for zero-copy
@@ -432,6 +434,8 @@ impl RgbaToNv12Converter {
             surface_output: false,
             #[cfg(target_os = "macos")]
             surface_ring: None,
+            #[cfg(all(test, target_os = "macos"))]
+            surface_setup_should_fail: false,
         }
     }
 
@@ -464,13 +468,33 @@ impl RgbaToNv12Converter {
     fn ensure_buffers(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         #[cfg(target_os = "macos")]
         if self.surface_output {
-            let ring_result = match self.surface_ring.as_mut() {
-                Some(ring) => ring.ensure_size(device, width, height),
-                None => Nv12SurfaceRing::new().and_then(|mut ring| {
-                    ring.ensure_size(device, width, height)?;
-                    self.surface_ring = Some(ring);
-                    Ok(())
-                }),
+            let ring_result = {
+                #[cfg(all(test, target_os = "macos"))]
+                if self.surface_setup_should_fail {
+                    Err(RenderingError::Surface(
+                        "test surface setup failure".to_string(),
+                    ))
+                } else {
+                    match self.surface_ring.as_mut() {
+                        Some(ring) => ring.ensure_size(device, width, height),
+                        None => Nv12SurfaceRing::new().and_then(|mut ring| {
+                            ring.ensure_size(device, width, height)?;
+                            self.surface_ring = Some(ring);
+                            Ok(())
+                        }),
+                    }
+                }
+                #[cfg(not(all(test, target_os = "macos")))]
+                {
+                    match self.surface_ring.as_mut() {
+                        Some(ring) => ring.ensure_size(device, width, height),
+                        None => Nv12SurfaceRing::new().and_then(|mut ring| {
+                            ring.ensure_size(device, width, height)?;
+                            self.surface_ring = Some(ring);
+                            Ok(())
+                        }),
+                    }
+                }
             };
             if let Err(error) = ring_result {
                 tracing::warn!(
@@ -488,6 +512,10 @@ impl RgbaToNv12Converter {
             && self.cached_height == height
             && self.cached_stride == stride
         {
+            #[cfg(target_os = "macos")]
+            if self.surface_output {
+                self.readback_buffers = [None, None];
+            }
             return;
         }
 
@@ -510,7 +538,11 @@ impl RgbaToNv12Converter {
             }))
         };
 
-        self.readback_buffers = [Some(make_readback()), Some(make_readback())];
+        self.readback_buffers = if self.surface_output {
+            [None, None]
+        } else {
+            [Some(make_readback()), Some(make_readback())]
+        };
         self.current_readback = 0;
         self.cached_width = width;
         self.cached_height = height;
@@ -543,10 +575,6 @@ impl RgbaToNv12Converter {
         };
 
         let readback_idx = self.current_readback;
-        let readback_buffer = match self.readback_buffers[readback_idx].as_ref() {
-            Some(b) => b.clone(),
-            None => return false,
-        };
         self.current_readback = 1 - self.current_readback;
 
         let y_stride = self.aligned_stride(width);
@@ -658,6 +686,10 @@ impl RgbaToNv12Converter {
             return true;
         }
 
+        let readback_buffer = match self.readback_buffers[readback_idx].as_ref() {
+            Some(b) => b.clone(),
+            None => return false,
+        };
         let nv12_size = self.nv12_size(width, height);
         encoder.copy_buffer_to_buffer(nv12_buffer, 0, &readback_buffer, 0, nv12_size);
 
@@ -2066,6 +2098,43 @@ mod surface_output_tests {
             .expect("conversion completes")
     }
 
+    fn assert_surface_matches_cpu(
+        cpu_frame: &Nv12RenderedFrame,
+        surface_frame: &Nv12RenderedFrame,
+    ) {
+        let width = surface_frame.width as usize;
+        let height = surface_frame.height as usize;
+        let cpu_stride = cpu_frame.y_stride as usize;
+        let surface = surface_frame
+            .surface
+            .as_ref()
+            .expect("surface output produces a CVPixelBuffer");
+
+        let mut max_delta = 0u8;
+        surface
+            .with_locked_planes(|y_plane, y_stride, uv_plane, uv_stride| {
+                for row in 0..height {
+                    let cpu_row = &cpu_frame.data[row * cpu_stride..row * cpu_stride + width];
+                    let surf_row = &y_plane[row * y_stride..row * y_stride + width];
+                    for (a, b) in cpu_row.iter().zip(surf_row) {
+                        max_delta = max_delta.max(a.abs_diff(*b));
+                    }
+                }
+                let cpu_uv_base = cpu_stride * height;
+                for row in 0..(height / 2) {
+                    let cpu_row = &cpu_frame.data
+                        [cpu_uv_base + row * cpu_stride..cpu_uv_base + row * cpu_stride + width];
+                    let surf_row = &uv_plane[row * uv_stride..row * uv_stride + width];
+                    for (a, b) in cpu_row.iter().zip(surf_row) {
+                        max_delta = max_delta.max(a.abs_diff(*b));
+                    }
+                }
+            })
+            .expect("lock surface planes");
+
+        assert_eq!(max_delta, 0, "surface NV12 diverges from readback NV12");
+    }
+
     /// The IOSurface output is a GPU copy of the same compute-shader buffer
     /// the readback path maps, so every pixel must match byte-for-byte. Both
     /// strides differ (4-aligned vs 256-aligned vs the IOSurface's own), which
@@ -2091,8 +2160,6 @@ mod surface_output_tests {
             )
             .await;
             assert!(cpu_frame.surface.is_none());
-            let cpu_stride = cpu_frame.y_stride as usize;
-
             let mut surface_converter = RgbaToNv12Converter::new(&device);
             surface_converter.enable_surface_output();
             let surface_frame = convert(
@@ -2104,38 +2171,221 @@ mod surface_output_tests {
                 height,
             )
             .await;
-            let surface = surface_frame
-                .surface
-                .as_ref()
-                .expect("surface output produces a CVPixelBuffer");
-
-            let mut max_delta = 0u8;
-            surface
-                .with_locked_planes(|y_plane, y_stride, uv_plane, uv_stride| {
-                    for row in 0..height as usize {
-                        let cpu_row =
-                            &cpu_frame.data[row * cpu_stride..row * cpu_stride + width as usize];
-                        let surf_row = &y_plane[row * y_stride..row * y_stride + width as usize];
-                        for (a, b) in cpu_row.iter().zip(surf_row) {
-                            max_delta = max_delta.max(a.abs_diff(*b));
-                        }
-                    }
-                    let cpu_uv_base = cpu_stride * height as usize;
-                    for row in 0..(height as usize / 2) {
-                        let cpu_row = &cpu_frame.data[cpu_uv_base + row * cpu_stride
-                            ..cpu_uv_base + row * cpu_stride + width as usize];
-                        let surf_row = &uv_plane[row * uv_stride..row * uv_stride + width as usize];
-                        for (a, b) in cpu_row.iter().zip(surf_row) {
-                            max_delta = max_delta.max(a.abs_diff(*b));
-                        }
-                    }
-                })
-                .expect("lock surface planes");
-
-            assert_eq!(
-                max_delta, 0,
-                "{width}x{height}: surface NV12 diverges from readback NV12"
+            assert!(
+                surface_converter
+                    .readback_buffers
+                    .iter()
+                    .all(|buffer| buffer.is_none())
             );
+            assert_surface_matches_cpu(&cpu_frame, &surface_frame);
         }
+    }
+
+    #[tokio::test]
+    async fn late_surface_enable_releases_same_stride_readbacks() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+
+        let width = 256;
+        let height = 4;
+        let source = gradient_texture(&device, &queue, width, height);
+        let mut converter = RgbaToNv12Converter::new(&device);
+        let cpu_frame = convert(&device, &queue, &mut converter, &source, width, height).await;
+        assert!(cpu_frame.surface.is_none());
+        assert!(
+            converter
+                .readback_buffers
+                .iter()
+                .all(|buffer| buffer.is_some())
+        );
+        assert_eq!(converter.cached_stride, width);
+
+        converter.enable_surface_output();
+        let surface_frame = convert(&device, &queue, &mut converter, &source, width, height).await;
+
+        assert!(surface_frame.surface.is_some());
+        assert_surface_matches_cpu(&cpu_frame, &surface_frame);
+        assert!(
+            converter
+                .readback_buffers
+                .iter()
+                .all(|buffer| buffer.is_none())
+        );
+        assert_eq!(converter.cached_stride, width);
+    }
+
+    #[tokio::test]
+    async fn failed_surface_setup_falls_back_to_exact_persistent_readback() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+
+        let width = 1284;
+        let height = 722;
+        let source = gradient_texture(&device, &queue, width, height);
+
+        let mut readback_converter = RgbaToNv12Converter::new(&device);
+        let expected = convert(
+            &device,
+            &queue,
+            &mut readback_converter,
+            &source,
+            width,
+            height,
+        )
+        .await;
+
+        let mut fallback_converter = RgbaToNv12Converter::new(&device);
+        fallback_converter.enable_surface_output();
+        fallback_converter.surface_setup_should_fail = true;
+        let fallback = convert(
+            &device,
+            &queue,
+            &mut fallback_converter,
+            &source,
+            width,
+            height,
+        )
+        .await;
+
+        assert!(fallback.surface.is_none());
+        assert!(!fallback_converter.surface_output);
+        assert!(fallback_converter.surface_ring.is_none());
+        assert!(
+            fallback_converter
+                .readback_buffers
+                .iter()
+                .all(|buffer| buffer.is_some())
+        );
+        assert_eq!(fallback.data.as_ref(), expected.data.as_ref());
+        assert_eq!(fallback.width, expected.width);
+        assert_eq!(fallback.height, expected.height);
+        assert_eq!(fallback.y_stride, expected.y_stride);
+        assert_eq!(fallback.frame_number, expected.frame_number);
+        assert_eq!(fallback.target_time_ns, expected.target_time_ns);
+        assert!(fallback.format == expected.format);
+
+        let second = convert(
+            &device,
+            &queue,
+            &mut fallback_converter,
+            &source,
+            width,
+            height,
+        )
+        .await;
+        assert!(second.surface.is_none());
+        assert!(
+            fallback_converter
+                .readback_buffers
+                .iter()
+                .all(|buffer| buffer.is_some())
+        );
+        assert_eq!(second.data.as_ref(), expected.data.as_ref());
+
+        let size_a = (256, 4);
+        let size_b = (1284, 722);
+        let source_a = gradient_texture(&device, &queue, size_a.0, size_a.1);
+        let source_b = gradient_texture(&device, &queue, size_b.0, size_b.1);
+
+        let mut resized_readback_converter = RgbaToNv12Converter::new(&device);
+        let expected_resized = convert(
+            &device,
+            &queue,
+            &mut resized_readback_converter,
+            &source_b,
+            size_b.0,
+            size_b.1,
+        )
+        .await;
+
+        let mut resized_converter = RgbaToNv12Converter::new(&device);
+        resized_converter.enable_surface_output();
+        let surface_a = convert(
+            &device,
+            &queue,
+            &mut resized_converter,
+            &source_a,
+            size_a.0,
+            size_a.1,
+        )
+        .await;
+        assert!(surface_a.surface.is_some());
+        assert!(resized_converter.surface_ring.is_some());
+        assert!(resized_converter.cached_bind_groups.is_some());
+        assert!(resized_converter.nv12_buffer.is_some());
+        assert!(
+            resized_converter
+                .readback_buffers
+                .iter()
+                .all(|buffer| buffer.is_none())
+        );
+
+        resized_converter.surface_setup_should_fail = true;
+        let resized_fallback = convert(
+            &device,
+            &queue,
+            &mut resized_converter,
+            &source_b,
+            size_b.0,
+            size_b.1,
+        )
+        .await;
+        assert!(resized_fallback.surface.is_none());
+        assert!(!resized_converter.surface_output);
+        assert!(resized_converter.surface_ring.is_none());
+        assert!(
+            resized_converter
+                .readback_buffers
+                .iter()
+                .all(|buffer| buffer.is_some())
+        );
+        assert_eq!(
+            resized_fallback.data.as_ref(),
+            expected_resized.data.as_ref()
+        );
+        assert_eq!(resized_fallback.width, expected_resized.width);
+        assert_eq!(resized_fallback.height, expected_resized.height);
+        assert_eq!(resized_fallback.y_stride, expected_resized.y_stride);
+        assert_eq!(resized_fallback.frame_number, expected_resized.frame_number);
+        assert_eq!(
+            resized_fallback.target_time_ns,
+            expected_resized.target_time_ns
+        );
+        assert!(resized_fallback.format == expected_resized.format);
+
+        let first_buffer_ids = resized_converter
+            .readback_buffers
+            .iter()
+            .map(|buffer| {
+                buffer
+                    .as_ref()
+                    .map(|buffer| std::sync::Arc::as_ptr(buffer) as usize)
+            })
+            .collect::<Vec<_>>();
+        let resized_second = convert(
+            &device,
+            &queue,
+            &mut resized_converter,
+            &source_b,
+            size_b.0,
+            size_b.1,
+        )
+        .await;
+        let second_buffer_ids = resized_converter
+            .readback_buffers
+            .iter()
+            .map(|buffer| {
+                buffer
+                    .as_ref()
+                    .map(|buffer| std::sync::Arc::as_ptr(buffer) as usize)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(first_buffer_ids, second_buffer_ids);
+        assert!(resized_second.surface.is_none());
+        assert_eq!(resized_second.data.as_ref(), expected_resized.data.as_ref());
     }
 }

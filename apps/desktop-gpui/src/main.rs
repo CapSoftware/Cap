@@ -39,6 +39,7 @@ mod library;
 mod main_window;
 mod menus;
 mod mode_select_window;
+mod onboarding_audio;
 mod onboarding_window;
 mod permissions;
 mod permissions_ui;
@@ -69,9 +70,8 @@ use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 
 use crate::{assets::Assets, main_window::MainWindow, session::RecordingSession};
 
-/// Matches the Tauri main window exactly (`CapWindowId::Main`).
 const MAIN_WINDOW_WIDTH: f32 = 330.;
-const MAIN_WINDOW_HEIGHT: f32 = 395.;
+const MAIN_WINDOW_HEIGHT: f32 = 432.;
 
 /// The corner radius the native material is clipped to. `radius = 16` for
 /// material `"panel"` on both visual systems in
@@ -177,6 +177,14 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
 
 fn main() {
     #[cfg(target_os = "linux")]
+    if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {
+        // Mesa counts host CPUs inside containers; apply the process limit before logging starts threads.
+        unsafe {
+            std::env::set_var("LP_NUM_THREADS", threads.to_string());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
     if let Some(config) = cap_utils::linux_package::appimage_alsa_config_path() {
         // Logging starts a worker thread, so configure the process environment first.
         unsafe {
@@ -186,8 +194,6 @@ fn main() {
 
     let _log_guard = init_logging();
 
-    // A relaunch means "run the code I just built": take over from any
-    // previous instance still alive in the tray (see `single_instance`).
     single_instance::acquire();
     store::mark_handoff_session();
 
@@ -263,17 +269,19 @@ fn main() {
                     window_min_size: Some(size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT))),
                     #[cfg(target_os = "linux")]
                     window_decorations: Some(gpui::WindowDecorations::Client),
-                    // Stays `Normal` and gets its panel treatment (level 100,
-                    // all Spaces) from `platform::apply_panel_behavior` below.
-                    // `WindowKind::Floating` is not the answer: it allocates an
-                    // NSPanel, and a panel hides itself when the application
-                    // deactivates -- exactly wrong for a recorder.
+                    #[cfg(target_os = "macos")]
+                    kind: gpui::WindowKind::Floating,
+                    #[cfg(not(target_os = "macos"))]
                     kind: gpui::WindowKind::Normal,
                     // The header is dragged by the app via `start_window_move`
                     // rather than by AppKit, so mark the content view as app-owned
                     // titlebar content.
                     app_owns_titlebar_drag: true,
-                    window_background: gpui::WindowBackgroundAppearance::Transparent,
+                    window_background: if cfg!(target_os = "windows") {
+                        gpui::WindowBackgroundAppearance::Opaque
+                    } else {
+                        gpui::WindowBackgroundAppearance::Transparent
+                    },
                     is_resizable: false,
                     is_minimizable: false,
                     ..Default::default()
@@ -295,7 +303,26 @@ fn main() {
         .detach();
 
         app_windows::init(window_handle, session, cx);
+        #[cfg(target_os = "macos")]
+        match platform::install_native_quit_handler() {
+            Ok(requests) => {
+                cx.spawn(async move |cx| {
+                    while requests.recv_async().await.is_ok() {
+                        cx.update(menus::quit);
+                    }
+                })
+                .detach();
+            }
+            Err(error) => {
+                tracing::error!(%error, "Could not install safe native Quit handling");
+                menus::quit(cx);
+                return;
+            }
+        }
+        #[cfg(target_os = "linux")]
+        single_instance::init_linux_reopen(cx);
         updates::schedule_startup_check(cx);
+        upload::queue::init(cx);
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both
         // reach into the window registry, so they come after it -- and the menu

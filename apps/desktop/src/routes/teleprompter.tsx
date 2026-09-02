@@ -21,7 +21,7 @@ import {
 	teleprompterStore,
 } from "~/store";
 import { applyMacOSWindowMaterial } from "~/utils/macos-window-material";
-import { commands } from "~/utils/tauri";
+import { commands, events } from "~/utils/tauri";
 import { initializeTitlebar } from "~/utils/titlebar-state";
 import IconLucideChevronLeft from "~icons/lucide/chevron-left";
 import IconLucideChevronRight from "~icons/lucide/chevron-right";
@@ -39,6 +39,9 @@ import {
 	calculatePlaybackSpeed,
 	clamp,
 	countWords,
+	type TeleprompterPlaybackState,
+	teleprompterPlaybackRunning,
+	updateTeleprompterPlayback,
 } from "./teleprompter-utils";
 
 function ToolButton(props: {
@@ -96,7 +99,14 @@ export default function Teleprompter() {
 	const [state, setState] =
 		createSignal<TeleprompterStore>(teleprompterDefaults);
 	const [isLoaded, setIsLoaded] = createSignal(false);
-	const [isPlaying, setIsPlaying] = createSignal(false);
+	const [playback, setPlayback] = createSignal<TeleprompterPlaybackState>({
+		requested: false,
+		recordingPaused: true,
+	});
+	const [pauseStateError, setPauseStateError] = createSignal<string | null>(
+		null,
+	);
+	const isPlaying = createMemo(() => teleprompterPlaybackRunning(playback()));
 	const [settingsOpen, setSettingsOpen] = createSignal(false);
 	let scrollElement: HTMLDivElement | undefined;
 	let editorElement: HTMLTextAreaElement | undefined;
@@ -110,6 +120,9 @@ export default function Teleprompter() {
 	let allowClose = false;
 	let closePending = false;
 	let disposed = false;
+	let recordingStateRevision = 0;
+	let recordingListenersFailed = false;
+	const recordingUnlisteners: UnlistenFn[] = [];
 
 	const hasScript = createMemo(() => state().script.trim().length > 0);
 	const wordCount = createMemo(() => countWords(state().script));
@@ -117,6 +130,86 @@ export default function Teleprompter() {
 		() =>
 			`calc((100vh - 5rem) / 2 - ${state().fontSize * state().lineHeight * 0.5}px)`,
 	);
+
+	const retainRecordingListener = (unlisten: UnlistenFn) => {
+		if (disposed) unlisten();
+		else recordingUnlisteners.push(unlisten);
+	};
+	void Promise.all([
+		events.recordingEvent
+			.listen(({ payload: event }) => {
+				if (disposed || recordingListenersFailed) return;
+				if (event.variant === "Paused") {
+					recordingStateRevision += 1;
+					setPauseStateError(null);
+					setPlayback((current) =>
+						updateTeleprompterPlayback(current, "recording-paused"),
+					);
+				} else if (event.variant === "Resumed" || event.variant === "Started") {
+					recordingStateRevision += 1;
+					setPauseStateError(null);
+					setPlayback((current) =>
+						updateTeleprompterPlayback(current, "recording-resumed"),
+					);
+				} else if (
+					event.variant === "Failed" ||
+					event.variant === "StartFailed"
+				) {
+					recordingStateRevision += 1;
+					stopPlayback();
+				}
+			})
+			.then(retainRecordingListener),
+		events.recordingStopped
+			.listen(() => {
+				if (disposed || recordingListenersFailed) return;
+				recordingStateRevision += 1;
+				setPauseStateError(null);
+				setPlayback((current) =>
+					updateTeleprompterPlayback(current, "recording-stopped"),
+				);
+			})
+			.then(retainRecordingListener),
+	])
+		.then(async () => {
+			if (disposed) return;
+			const revision = recordingStateRevision;
+			try {
+				const paused = await commands.getRecordingPauseState();
+				if (disposed || recordingStateRevision !== revision) return;
+				setPlayback((current) =>
+					updateTeleprompterPlayback(
+						current,
+						paused ? "recording-paused" : "recording-resumed",
+					),
+				);
+			} catch (error) {
+				if (disposed || recordingStateRevision !== revision) return;
+				setPauseStateError(
+					"Cannot confirm recording state. Reopen the teleprompter to retry.",
+				);
+				console.error("Failed to read recording pause state:", error);
+			}
+		})
+		.catch((error) => {
+			if (disposed) return;
+			recordingListenersFailed = true;
+			setPauseStateError(
+				"Cannot receive recording controls. Reopen the teleprompter to retry.",
+			);
+			setPlayback((current) =>
+				updateTeleprompterPlayback(current, "recording-paused"),
+			);
+			console.error("Failed to listen for recording pause changes:", error);
+		});
+	createEffect(() => {
+		cancelAnimationFrame(playbackFrame);
+		playbackFrame = 0;
+		playbackTimestamp = undefined;
+		if (!isPlaying()) return;
+		if (scrollElement) playbackPosition = scrollElement.scrollTop;
+		playbackFrame = requestAnimationFrame(animatePlayback);
+	});
 
 	onMount(() => {
 		document.documentElement.setAttribute("data-transparent-window", "true");
@@ -203,6 +296,7 @@ export default function Teleprompter() {
 
 	onCleanup(() => {
 		disposed = true;
+		for (const unlisten of recordingUnlisteners) unlisten();
 		if (isLoaded() && !allowClose) void teleprompterStore.set(state());
 		clearTimeout(saveTimer);
 		cancelAnimationFrame(playbackFrame);
@@ -222,10 +316,11 @@ export default function Teleprompter() {
 		cancelAnimationFrame(playbackFrame);
 		playbackFrame = 0;
 		playbackTimestamp = undefined;
-		setIsPlaying(false);
+		setPlayback((current) => updateTeleprompterPlayback(current, "pause"));
 	}
 
 	function animatePlayback(timestamp: number) {
+		if (!isPlaying()) return;
 		const element = scrollElement;
 		if (!element) {
 			stopPlayback();
@@ -273,7 +368,7 @@ export default function Teleprompter() {
 	}
 
 	function togglePlayback() {
-		if (isPlaying()) {
+		if (playback().requested) {
 			stopPlayback();
 			return;
 		}
@@ -289,9 +384,7 @@ export default function Teleprompter() {
 		if (element.scrollTop >= maximumScroll - 1) element.scrollTop = 0;
 		playbackPosition = element.scrollTop;
 		setSettingsOpen(false);
-		setIsPlaying(true);
-		playbackTimestamp = undefined;
-		playbackFrame = requestAnimationFrame(animatePlayback);
+		setPlayback((current) => updateTeleprompterPlayback(current, "play"));
 	}
 
 	function changeFontSize(delta: number) {
@@ -338,9 +431,12 @@ export default function Teleprompter() {
 				>
 					<IconLucideEyeOff class="size-3" />
 					<span>
-						{isLinux
-							? "This window may appear in recordings on Linux"
-							: "This window is hidden from Cap recordings"}
+						{pauseStateError() ??
+							(playback().recordingPaused
+								? "Scrolling paused with recording"
+								: isLinux
+									? "This window may appear in recordings on Linux"
+									: "This window is hidden from Cap recordings")}
 					</span>
 				</div>
 				<Show when={isWindows}>
@@ -417,14 +513,25 @@ export default function Teleprompter() {
 			<footer class="flex h-11 shrink-0 items-center px-3 pb-2">
 				<button
 					type="button"
-					title={isPlaying() ? "Pause" : "Play"}
-					aria-label={isPlaying() ? "Pause" : "Play"}
-					disabled={!hasScript()}
+					title={
+						playback().recordingPaused
+							? playback().requested
+								? "Recording paused. Cancel automatic scroll resume"
+								: "Play when recording resumes"
+							: playback().requested
+								? "Pause"
+								: "Play"
+					}
+					aria-label={
+						playback().requested ? "Pause teleprompter" : "Play teleprompter"
+					}
+					aria-pressed={playback().requested}
+					disabled={!hasScript() || pauseStateError() !== null}
 					onClick={togglePlayback}
 					class="flex size-8 items-center justify-center rounded-full border border-gray-12/6 bg-gray-12/7 text-gray-12 shadow-sm backdrop-blur-xl transition hover:bg-gray-12/11 disabled:cursor-not-allowed disabled:opacity-30"
 				>
 					<Show
-						when={isPlaying()}
+						when={playback().requested}
 						fallback={<IconLucidePlay class="size-3.5 fill-current" />}
 					>
 						<IconLucidePause class="size-3.5 fill-current" />

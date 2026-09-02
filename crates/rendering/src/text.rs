@@ -14,6 +14,7 @@ pub struct PreparedText {
     pub content: String,
     pub bounds: [f32; 4],
     pub color: [f32; 4],
+    pub background_color: Option<[f32; 4]>,
     pub font_family: String,
     pub font_size: f32,
     pub font_weight: f32,
@@ -33,18 +34,55 @@ pub struct PreparedText {
 }
 
 fn parse_color(hex: &str) -> [f32; 4] {
+    parse_rgb_color(hex).unwrap_or([1.0, 1.0, 1.0, 1.0])
+}
+
+fn parse_rgb_color(hex: &str) -> Option<[f32; 4]> {
     let color = hex.trim_start_matches('#');
     if color.len() == 6
+        && color.is_ascii()
         && let (Ok(r), Ok(g), Ok(b)) = (
             u8::from_str_radix(&color[0..2], 16),
             u8::from_str_radix(&color[2..4], 16),
             u8::from_str_radix(&color[4..6], 16),
         )
     {
-        return [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0];
+        return Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]);
     }
 
-    [1.0, 1.0, 1.0, 1.0]
+    None
+}
+
+pub(crate) fn text_background_rect(
+    bounds: [f32; 4],
+    laid_out_height: f32,
+    font_size: f32,
+    scale: f32,
+    offset: [f32; 2],
+) -> ([f32; 4], f32) {
+    let padding = font_size * 0.2;
+    let left = bounds[0] - padding;
+    let top = bounds[1] - padding;
+    let right = bounds[2] + padding;
+    let bottom = bounds[1] + (bounds[3] - bounds[1]).max(laid_out_height) + padding;
+    let cx = (bounds[0] + bounds[2]) * 0.5;
+    let cy = (bounds[1] + bounds[3]) * 0.5;
+    let transform = |x: f32, y: f32| {
+        [
+            cx + (x - cx) * scale + offset[0],
+            cy + (y - cy) * scale + offset[1],
+        ]
+    };
+    let [transformed_left, transformed_top] = transform(left, top);
+    let [transformed_right, transformed_bottom] = transform(right, bottom);
+    let width = (transformed_right - transformed_left).max(0.0);
+    let height = (transformed_bottom - transformed_top).max(0.0);
+    (
+        [transformed_left, transformed_top, width, height],
+        (font_size * 0.15 * scale)
+            .min(width * 0.5)
+            .min(height * 0.5),
+    )
 }
 
 fn ease_out_cubic(t: f32) -> f32 {
@@ -213,6 +251,10 @@ pub fn prepare_texts(
             content,
             bounds: [left, top, right, bottom],
             color: parse_color(&segment.color),
+            background_color: segment
+                .background_color
+                .as_deref()
+                .and_then(parse_rgb_color),
             font_family: segment.font_family.clone(),
             font_size,
             font_weight: segment.font_weight,
@@ -252,6 +294,7 @@ mod tests {
             font_weight: 700.0,
             italic: false,
             color: "#ffffff".to_string(),
+            background_color: None,
             fade_duration: 0.15,
             align: TextAlign::Center,
             letter_spacing: 0.0,
@@ -280,6 +323,50 @@ mod tests {
         assert_eq!(text.offset, [0.0, 0.0]);
         assert_eq!(text.scale, 1.0);
         assert_eq!(text.content, "Hello");
+        assert_eq!(text.background_color, None);
+    }
+
+    #[test]
+    fn background_color_is_prepared_and_invalid_colors_are_ignored() {
+        let mut with_background = segment(TextAnimation::None, TextAnimation::None);
+        with_background.background_color = Some("#102030".to_string());
+        let prepared = prepare_one(with_background, 5.0).unwrap();
+        assert_eq!(
+            prepared.background_color,
+            Some([16.0 / 255.0, 32.0 / 255.0, 48.0 / 255.0, 1.0])
+        );
+
+        let mut malformed = segment(TextAnimation::None, TextAnimation::None);
+        malformed.color = "#ééé".to_string();
+        malformed.background_color = Some("#ééé".to_string());
+        let prepared = prepare_one(malformed, 5.0).unwrap();
+        assert_eq!(prepared.color, [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(prepared.background_color, None);
+    }
+
+    #[test]
+    fn background_rect_expands_authored_bounds_then_transforms_about_center() {
+        let (rect, radius) = text_background_rect(
+            [100.0, 200.0, 300.0, 400.0],
+            100.0,
+            50.0,
+            0.5,
+            [10.0, -20.0],
+        );
+        assert_eq!(rect, [155.0, 225.0, 110.0, 110.0]);
+        assert!((radius - 3.75).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn multiline_background_keeps_the_authored_transform_origin() {
+        let (rect, _) = text_background_rect(
+            [100.0, 200.0, 300.0, 400.0],
+            300.0,
+            50.0,
+            0.5,
+            [10.0, -20.0],
+        );
+        assert_eq!(rect, [155.0, 225.0, 110.0, 160.0]);
     }
 
     #[test]

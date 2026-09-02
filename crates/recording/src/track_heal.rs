@@ -621,10 +621,8 @@ fn rescale_project_config(project_path: &Path, scales: &HashMap<u32, f64>) {
         changed = true;
     }
 
-    if changed {
-        if let Err(e) = config.write(project_path) {
-            warn!("Failed to write rescaled project config after display heal: {e}");
-        }
+    if changed && let Err(e) = config.write(project_path) {
+        warn!("Failed to write rescaled project config after display heal: {e}");
     }
 }
 

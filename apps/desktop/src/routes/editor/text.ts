@@ -32,6 +32,7 @@ export type TextSegment = {
 	fontWeight: number;
 	italic: boolean;
 	color: string;
+	backgroundColor?: string | null;
 	fadeDuration: number;
 	align: TextAlign;
 	letterSpacing: number;
@@ -120,6 +121,7 @@ export const defaultTextSegment = (
 	fontWeight: 700,
 	italic: false,
 	color: "#ffffff",
+	backgroundColor: undefined,
 	fadeDuration: 0.15,
 	align: "center",
 	letterSpacing: 0,

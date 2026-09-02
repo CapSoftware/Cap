@@ -465,6 +465,7 @@ app.post(
 				});
 
 				return yield* Effect.gen(function* () {
+					let objectIdentity = result.ETag;
 					console.log(
 						`Multipart upload completed successfully: ${
 							result.Location || "no location"
@@ -531,6 +532,7 @@ app.post(
 
 						return c.json({
 							location: result.Location,
+							objectIdentity,
 							success: true,
 							fileKey,
 							processingStarted,
@@ -546,11 +548,16 @@ app.post(
 							.copyObject(`${bucket.bucketName}/${fileKey}`, fileKey, {
 								ContentType: "video/mp4",
 								MetadataDirective: "REPLACE",
+								...(result.ETag ? { CopySourceIfMatch: result.ETag } : {}),
 							})
 							.pipe(
-								Effect.tap((result) =>
-									Effect.log("Copy for metadata fix successful:", result),
-								),
+								Effect.tap((copyResult) => {
+									objectIdentity = copyResult.CopyObjectResult?.ETag;
+									return Effect.log(
+										"Copy for metadata fix successful:",
+										copyResult,
+									);
+								}),
 								Effect.catchAll((e) =>
 									Effect.logError(
 										"Warning: Failed to copy object to fix metadata:",
@@ -697,6 +704,7 @@ app.post(
 
 					return c.json({
 						location: result.Location,
+						objectIdentity,
 						success: true,
 						fileKey,
 					});

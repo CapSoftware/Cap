@@ -33,7 +33,7 @@ use cap_project::{
     InstantRecordingMeta, RecordingMeta, RecordingMetaInner, StudioRecordingMeta,
     StudioRecordingStatus,
 };
-use cap_recording::recovery::RecoveryManager;
+use cap_recording::{recovery::RecoveryManager, upload_resume::UploadLock};
 use gpui::RenderImage;
 use image::buffer::ConvertBuffer as _;
 
@@ -275,6 +275,7 @@ pub struct RecordingItem {
     pub path: PathBuf,
     pub mode: RecordingMode,
     pub status: RecordingStatus,
+    pub upload: Option<crate::upload::queue::UploadState>,
     /// `clip_count`, which drives the `"N clips"` badge.
     pub clip_count: u32,
     pub pretty_name: String,
@@ -296,11 +297,12 @@ pub struct IncompleteRecordingItem {
 }
 
 impl RecordingItem {
-    /// `hasActiveRecording` (`recordings.tsx:66-73`) minus its upload half:
-    /// there are no uploads in this app, so `MultipartUpload` /
-    /// `SinglePartUpload` can never be the reason to keep polling.
     pub fn is_active(&self) -> bool {
         self.status == RecordingStatus::InProgress
+            || self
+                .upload
+                .as_ref()
+                .is_some_and(crate::upload::queue::UploadState::is_pending)
     }
 
     /// `studioCompleteCheck()`: the only rows whose whole body is clickable.
@@ -353,7 +355,9 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
     };
 
     let thumbnail = bundle_thumbnail_path(&path);
+    let upload = crate::upload::queue::status(&path, &meta);
     RecordingItem {
+        upload,
         mode,
         status,
         clip_count,
@@ -495,6 +499,9 @@ fn recover_incomplete_recording_in(
     let meta = RecordingMeta::load_for_project(&canonical_path)
         .map_err(|error| format!("Failed to load recording metadata: {error}"))?;
     if matches!(meta.inner, RecordingMetaInner::Instant(_)) {
+        let _upload_lock = UploadLock::acquire(&canonical_path).map_err(|error| {
+            format!("Could not lock the instant recording for recovery: {error}")
+        })?;
         return crate::recording::recover_instant_recording(&canonical_path)
             .map_err(|error| format!("Could not save the instant recording: {error:#}"));
     }
@@ -535,19 +542,10 @@ fn recover_incomplete_recording_in(
     Ok(recovered.project_path)
 }
 
-/// `delete_recording_directory` (`lib.rs:4001-4046`), guards verbatim.
-///
-/// Three of them, and each one covers a hole the others leave:
-///
-/// 1. a `ParentDir` component anywhere is rejected up front, because
-///    `Path::starts_with` compares raw components and would happily accept
-///    `<recordings>/../../etc`;
-/// 2. the path must start with one of the known recordings directories, which
-///    is the same set the listing walks;
-/// 3. both sides are canonicalized before the recursive delete, so a symlink
-///    inside a recordings directory cannot point the delete somewhere else.
-///
-/// A path that does not exist is a no-op success, exactly as it is there.
+/// Existing targets and roots are canonicalized before containment is checked.
+/// This keeps symlink escapes outside the allow-list while accepting Windows
+/// editor paths whose canonical form has a `\\?\` prefix. A missing strict child
+/// of an allowed root remains a no-op success.
 pub fn delete_recording_directory_in(dirs: &[PathBuf], path: &Path) -> Result<(), String> {
     if path
         .components()
@@ -556,25 +554,41 @@ pub fn delete_recording_directory_in(dirs: &[PathBuf], path: &Path) -> Result<()
         return Err("Invalid path".to_string());
     }
 
-    if !dirs.iter().any(|dir| path.starts_with(dir)) {
+    let canonical_dirs: Vec<_> = dirs
+        .iter()
+        .filter_map(|dir| dir.canonicalize().ok())
+        .collect();
+    if dirs.iter().chain(&canonical_dirs).any(|dir| path == dir) {
         return Err("Path is not inside a recordings directory".to_string());
     }
 
-    if path.exists() {
+    let canonical_path = if path
+        .try_exists()
+        .map_err(|error| format!("Failed to inspect recording path: {error}"))?
+    {
         let canonical_path = path
             .canonicalize()
             .map_err(|error| format!("Failed to resolve recording path: {error}"))?;
-
-        let inside_known_dir = dirs.iter().any(|dir| {
-            dir.canonicalize()
-                .map(|dir| canonical_path.starts_with(&dir))
-                .unwrap_or(false)
-        });
-        if !inside_known_dir {
+        if canonical_dirs.iter().any(|dir| &canonical_path == dir)
+            || !canonical_dirs
+                .iter()
+                .any(|dir| canonical_path.starts_with(dir))
+        {
             return Err("Path is not inside a recordings directory".to_string());
         }
+        Some(canonical_path)
+    } else if dirs
+        .iter()
+        .chain(&canonical_dirs)
+        .any(|dir| path.starts_with(dir))
+    {
+        None
+    } else {
+        return Err("Path is not inside a recordings directory".to_string());
+    };
 
-        std::fs::remove_dir_all(&canonical_path)
+    if let Some(canonical_path) = canonical_path {
+        std::fs::remove_dir_all(canonical_path)
             .map_err(|error| format!("Failed to delete recording: {error}"))?;
     }
 
@@ -1727,6 +1741,78 @@ mod tests {
     }
 
     #[test]
+    fn instant_recovery_preserves_live_recording_while_its_upload_lock_is_held() {
+        fn snapshot(directory: &Path) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+            let mut entries = std::collections::BTreeMap::new();
+            let mut pending = vec![directory.to_path_buf()];
+            while let Some(parent) = pending.pop() {
+                for entry in std::fs::read_dir(parent).unwrap() {
+                    let entry = entry.unwrap();
+                    let path = entry.path();
+                    let relative = path.strip_prefix(directory).unwrap().to_path_buf();
+                    if entry.file_type().unwrap().is_dir() {
+                        assert!(entries.insert(relative, None).is_none());
+                        pending.push(path);
+                    } else {
+                        assert!(
+                            entries
+                                .insert(relative, Some(std::fs::read(path).unwrap()))
+                                .is_none()
+                        );
+                    }
+                }
+            }
+            entries
+        }
+
+        let root = temp_dir("instant-recovery-owned");
+        let recordings = root.join("recordings");
+        let metadata = serde_json::json!({
+            "pretty_name": "Live instant recording",
+            "sharing": null,
+            "recording": true,
+        })
+        .to_string();
+        let bundle = write_bundle(&recordings, "live-instant", &metadata);
+        for (relative, contents) in [
+            (
+                "content/display/init.mp4",
+                b"unfinished video init".as_slice(),
+            ),
+            (
+                "content/display/segment_001.m4s",
+                b"unfinished video fragment",
+            ),
+            (
+                "content/audio/segment_001.m4s",
+                b"unfinished audio fragment",
+            ),
+            ("content/output.mp4", b"existing partial output"),
+        ] {
+            let path = bundle.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+        let before = snapshot(&bundle);
+        let owner = UploadLock::acquire(&bundle).unwrap();
+
+        let result = recover_incomplete_recording_in(std::slice::from_ref(&recordings), &bundle);
+
+        assert_eq!(
+            result,
+            Err("Could not lock the instant recording for recovery: Another upload owns this recording".to_string())
+        );
+        assert_eq!(snapshot(&bundle), before);
+        assert!(matches!(
+            RecordingMeta::load_for_project(&bundle).unwrap().inner,
+            RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true })
+        ));
+
+        drop(owner);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn recovery_restores_interrupted_real_recording_when_fixture_is_provided() {
         let Ok(source) = std::env::var("CAP_GPUI_RECOVERY_FIXTURE") else {
             return;
@@ -1833,18 +1919,31 @@ mod tests {
         std::fs::write(victim.join("recording.mp4"), b"irreplaceable").unwrap();
         let escape = recordings.join("escape.cap");
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&victim, &escape).unwrap();
+        let symlink = std::os::unix::fs::symlink(&victim, &escape);
         #[cfg(windows)]
-        std::os::windows::fs::symlink_dir(&victim, &escape).unwrap();
-        assert_eq!(
-            delete_recording_directory_in(&dirs, &escape),
-            Err("Path is not inside a recordings directory".to_string()),
-            "canonicalizing catches the symlink the prefix check let through"
-        );
+        let symlink = std::os::windows::fs::symlink_dir(&victim, &escape);
+        match symlink {
+            Ok(()) => assert_eq!(
+                delete_recording_directory_in(&dirs, &escape),
+                Err("Path is not inside a recordings directory".to_string()),
+                "canonicalizing catches the symlink the prefix check let through"
+            ),
+            #[cfg(windows)]
+            Err(error) if error.raw_os_error() == Some(1314) => {
+                eprintln!("Skipping symlink assertion: Windows symlink privilege unavailable");
+            }
+            Err(error) => panic!("Failed to create symlink fixture: {error}"),
+        }
         assert!(
             victim.join("recording.mp4").is_file(),
             "the symlink's target is untouched"
         );
+
+        assert_eq!(
+            delete_recording_directory_in(&dirs, &recordings),
+            Err("Path is not inside a recordings directory".to_string())
+        );
+        assert!(recordings.is_dir(), "the recordings root survives");
 
         // And the happy path still deletes.
         assert_eq!(delete_recording_directory_in(&dirs, &bundle), Ok(()));
@@ -1853,6 +1952,48 @@ mod tests {
         assert_eq!(delete_recording_directory_in(&dirs, &bundle), Ok(()));
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_rejects_an_allowed_root_nested_in_another_allowed_root() {
+        let root = temp_dir("delete-nested-roots");
+        let recordings = root.join("recordings");
+        let nested = recordings.join("nested");
+        let bundle = write_studio_bundle(&nested, "keep-me", 1);
+        let dirs = [recordings, nested.clone()];
+
+        for path in [&nested, &nested.canonicalize().unwrap()] {
+            assert_eq!(
+                delete_recording_directory_in(&dirs, path),
+                Err("Path is not inside a recordings directory".to_string())
+            );
+            assert!(bundle.is_dir());
+        }
+
+        assert_eq!(delete_recording_directory_in(&dirs, &bundle), Ok(()));
+        assert!(nested.is_dir());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn delete_accepts_a_canonical_windows_project_under_a_raw_root() {
+        let root = temp_dir("delete-canonical-windows");
+        let recordings = root.join("recordings");
+        let bundle = write_studio_bundle(&recordings, "delete-me", 1);
+        let canonical_bundle = bundle.canonicalize().unwrap();
+
+        assert_eq!(
+            delete_recording_directory_in(std::slice::from_ref(&recordings), &canonical_bundle),
+            Ok(())
+        );
+        assert!(!canonical_bundle.exists());
+        assert_eq!(
+            delete_recording_directory_in(&[recordings], &canonical_bundle),
+            Ok(())
+        );
+
+        std::fs::remove_dir_all(root).ok();
     }
 
     // -- The thumbnail cache ---------------------------------------------

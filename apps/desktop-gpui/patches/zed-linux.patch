@@ -1,17 +1,581 @@
+diff --git a/crates/gpui_linux/src/linux/platform.rs b/crates/gpui_linux/src/linux/platform.rs
+index 876f931663fa..062af4e8c9b9 100644
+--- a/crates/gpui_linux/src/linux/platform.rs
++++ b/crates/gpui_linux/src/linux/platform.rs
+@@ -87,6 +87,9 @@
+     fn reveal_path(&self, path: PathBuf);
+     fn write_to_primary(&self, item: ClipboardItem);
+     fn write_to_clipboard(&self, item: ClipboardItem);
++    fn try_write_to_clipboard(&self, _item: ClipboardItem) -> anyhow::Result<()> {
++        anyhow::bail!("Writing this clipboard item is unsupported")
++    }
+     fn read_from_primary(&self) -> Option<ClipboardItem>;
+     fn read_from_clipboard(&self) -> Option<ClipboardItem>;
+     fn active_window(&self) -> Option<AnyWindowHandle>;
+@@ -735,6 +738,10 @@
+         self.inner.write_to_clipboard(item)
+     }
+
++    fn try_write_to_clipboard(&self, item: ClipboardItem) -> anyhow::Result<()> {
++        self.inner.try_write_to_clipboard(item)
++    }
++
+     fn read_from_primary(&self) -> Option<ClipboardItem> {
+         self.inner.read_from_primary()
+     }
+diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
+index fdc40a3de87e..c41fa8d6aebb 100644
+--- a/crates/gpui_linux/src/linux/wayland/client.rs
++++ b/crates/gpui_linux/src/linux/wayland/client.rs
+@@ -1121,6 +1121,30 @@
+         }
+     }
+
++    fn try_write_to_clipboard(&self, item: gpui::ClipboardItem) -> anyhow::Result<()> {
++        let mut state = self.0.borrow_mut();
++        let data_device_manager = state.globals.data_device_manager.clone().ok_or_else(|| {
++            anyhow::anyhow!("Wayland clipboard data device manager is unavailable")
++        })?;
++        let data_device = state
++            .data_device
++            .clone()
++            .ok_or_else(|| anyhow::anyhow!("Wayland clipboard data device is unavailable"))?;
++        if state.mouse_focused_window.is_none() && state.keyboard_focused_window.is_none() {
++            anyhow::bail!("Wayland clipboard requires a focused window");
++        }
++
++        let mime_types = state.clipboard.mime_types(&item)?;
++        state.clipboard.set(item);
++        let serial = state.serial_tracker.get_latest();
++        let data_source = data_device_manager.create_data_source(&state.globals.qh, ());
++        for mime_type in mime_types {
++            data_source.offer(mime_type);
++        }
++        data_device.set_selection(Some(&data_source), serial);
++        Ok(())
++    }
++
+     fn read_from_primary(&self) -> Option<gpui::ClipboardItem> {
+         self.0.borrow_mut().clipboard.read_primary()
+     }
+@@ -1301,6 +1325,25 @@
+ delegate_noop!(WaylandClientStatePtr: ignore wp_viewporter::WpViewporter);
+ delegate_noop!(WaylandClientStatePtr: ignore wp_viewport::WpViewport);
+
++impl Dispatch<WlCallback, super::window::VisibilitySync> for WaylandClientStatePtr {
++    fn event(
++        this: &mut WaylandClientStatePtr,
++        _: &WlCallback,
++        event: wl_callback::Event,
++        sync: &super::window::VisibilitySync,
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++        if let wl_callback::Event::Done { .. } = event {
++            let client = this.get_client();
++            let window = get_window(&mut client.borrow_mut(), &sync.surface);
++            if let Some(window) = window {
++                window.visibility_processed(sync);
++            }
++        }
++    }
++}
++
+ impl Dispatch<WlCallback, ObjectId> for WaylandClientStatePtr {
+     fn event(
+         state: &mut WaylandClientStatePtr,
+diff --git a/crates/gpui_linux/src/linux/wayland/clipboard.rs b/crates/gpui_linux/src/linux/wayland/clipboard.rs
+index dfedf53f6dfa..fb40a8b391f1 100644
+--- a/crates/gpui_linux/src/linux/wayland/clipboard.rs
++++ b/crates/gpui_linux/src/linux/wayland/clipboard.rs
+@@ -1,6 +1,6 @@
+ use std::{
+     fs::File,
+-    io::{ErrorKind, Write},
++    io::{self, ErrorKind, Write},
+     os::fd::{AsRawFd, BorrowedFd, OwnedFd},
+ };
+
+@@ -15,11 +15,13 @@
+     platform::{PIPE_READ_TIMEOUT, read_fd_with_timeout},
+ };
+ use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
++use url::Url;
+
+ /// Text mime types that we'll offer to other programs.
+ pub(crate) const TEXT_MIME_TYPES: [&str; 3] =
+     ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
+ pub(crate) const FILE_LIST_MIME_TYPE: &str = "text/uri-list";
++pub(crate) const GNOME_COPY_FILES_MIME_TYPE: &str = "x-special/gnome-copied-files";
+
+ /// Text mime types that we'll accept from other programs.
+ pub(crate) const ALLOWED_TEXT_MIME_TYPES: [&str; 2] = ["text/plain;charset=utf-8", "UTF8_STRING"];
+@@ -180,20 +182,94 @@
+         self.self_mime.clone()
+     }
+
+-    pub fn send(&self, _mime_type: String, fd: OwnedFd) {
+-        if let Some(text) = self.contents.as_ref().and_then(|contents| contents.text()) {
+-            self.send_internal(fd, text.as_bytes().to_owned());
++    pub(crate) fn mime_types(&self, item: &ClipboardItem) -> anyhow::Result<Vec<String>> {
++        let has_text = item
++            .entries()
++            .iter()
++            .any(|entry| matches!(entry, ClipboardEntry::String(_)));
++        let has_image = item.entries().iter().any(
++            |entry| matches!(entry, ClipboardEntry::Image(image) if !image.bytes().is_empty()),
++        );
++        let has_files = item.entries().iter().any(|entry| {
++            matches!(entry, ClipboardEntry::ExternalPaths(paths) if !paths.paths().is_empty())
++        });
++
++        if !has_text && !has_image && !has_files {
++            anyhow::bail!("clipboard item has no transferable data");
++        }
++        if has_files {
++            file_uris(item)?;
++        }
++
++        let mut mime_types = Vec::new();
++        if has_text {
++            mime_types.extend(
++                TEXT_MIME_TYPES
++                    .iter()
++                    .map(|mime_type| (*mime_type).to_owned()),
++            );
++        }
++        for entry in item.entries() {
++            if let ClipboardEntry::Image(image) = entry
++                && !image.bytes().is_empty()
++            {
++                mime_types.push(image.format().mime_type().to_owned());
++            }
++        }
++        if has_files {
++            mime_types.push(FILE_LIST_MIME_TYPE.to_owned());
++            mime_types.push(GNOME_COPY_FILES_MIME_TYPE.to_owned());
++        }
++        mime_types.push(self.self_mime());
++        Ok(mime_types)
++    }
++
++    pub fn send(&self, mime_type: String, fd: OwnedFd) {
++        let Some(contents) = self.contents.as_ref() else {
++            return;
++        };
++        match Self::bytes_for_mime(contents, &mime_type) {
++            Ok(Some(bytes)) => self.send_internal(fd, bytes),
++            Ok(None) => log::warn!("No clipboard payload is available for MIME type {mime_type}"),
++            Err(error) => log::error!("Failed to prepare clipboard MIME type {mime_type}: {error}"),
++        }
++    }
++
++    pub fn send_primary(&self, mime_type: String, fd: OwnedFd) {
++        let Some(contents) = self.primary_contents.as_ref() else {
++            return;
++        };
++        match Self::bytes_for_mime(contents, &mime_type) {
++            Ok(Some(bytes)) => self.send_internal(fd, bytes),
++            Ok(None) => {
++                log::warn!("No primary clipboard payload is available for MIME type {mime_type}")
++            }
++            Err(error) => {
++                log::error!("Failed to prepare primary clipboard MIME type {mime_type}: {error}")
++            }
+         }
+     }
+
+-    pub fn send_primary(&self, _mime_type: String, fd: OwnedFd) {
+-        if let Some(text) = self
+-            .primary_contents
+-            .as_ref()
+-            .and_then(|contents| contents.text())
+-        {
+-            self.send_internal(fd, text.as_bytes().to_owned());
++    fn bytes_for_mime(item: &ClipboardItem, mime_type: &str) -> anyhow::Result<Option<Vec<u8>>> {
++        if TEXT_MIME_TYPES.contains(&mime_type) {
++            return Ok(text_bytes(item));
++        }
++        if mime_type == FILE_LIST_MIME_TYPE {
++            return Ok(Some(file_uris(item)?.join("\r\n").into_bytes()));
++        }
++        if mime_type == GNOME_COPY_FILES_MIME_TYPE {
++            return Ok(Some(
++                format!("copy\n{}", file_uris(item)?.join("\n")).into_bytes(),
++            ));
+         }
++        for entry in item.entries() {
++            if let ClipboardEntry::Image(image) = entry
++                && image.format().mime_type() == mime_type
++            {
++                return Ok(Some(image.bytes().to_vec()));
++            }
++        }
++        Ok(None)
+     }
+
+     pub fn read(&mut self) -> Option<ClipboardItem> {
+@@ -233,31 +309,145 @@
+     }
+
+     fn send_internal(&self, fd: OwnedFd, bytes: Vec<u8>) {
++        if let Err(error) = set_nonblocking(&fd) {
++            log::error!("Failed to set Wayland clipboard pipe nonblocking: {error}");
++            drop(fd);
++            return;
++        }
+         let mut written = 0;
+-        self.loop_handle
+-            .insert_source(
+-                calloop::generic::Generic::new(
+-                    File::from(fd),
+-                    calloop::Interest::WRITE,
+-                    calloop::Mode::Level,
+-                ),
+-                move |_, file, _| {
+-                    let file = unsafe { file.get_mut() };
+-                    loop {
+-                        match file.write(&bytes[written..]) {
+-                            Ok(n) if written + n == bytes.len() => {
+-                                written += n;
+-                                break Ok(PostAction::Remove);
+-                            }
+-                            Ok(n) => written += n,
+-                            Err(err) if err.kind() == ErrorKind::WouldBlock => {
+-                                break Ok(PostAction::Continue);
+-                            }
+-                            Err(_) => break Ok(PostAction::Remove),
++        if let Err(error) = self.loop_handle.insert_source(
++            calloop::generic::Generic::new(
++                File::from(fd),
++                calloop::Interest::WRITE,
++                calloop::Mode::Level,
++            ),
++            move |_, file, _| {
++                let file = unsafe { file.get_mut() };
++                loop {
++                    match file.write(&bytes[written..]) {
++                        Ok(n) if written + n == bytes.len() => {
++                            written += n;
++                            break Ok(PostAction::Remove);
+                         }
++                        Ok(0) => break Ok(PostAction::Remove),
++                        Ok(n) => written += n,
++                        Err(err) if err.kind() == ErrorKind::Interrupted => continue,
++                        Err(err) if err.kind() == ErrorKind::WouldBlock => {
++                            break Ok(PostAction::Continue);
++                        }
++                        Err(err) if err.kind() == ErrorKind::WriteZero => {
++                            break Ok(PostAction::Remove);
++                        }
++                        Err(_) => break Ok(PostAction::Remove),
+                     }
+-                },
++                }
++            },
++        ) {
++            log::error!("Failed to schedule Wayland clipboard transfer: {error}");
++        }
++    }
++}
++
++fn set_nonblocking(fd: &OwnedFd) -> io::Result<()> {
++    let raw_fd = fd.as_raw_fd();
++    let flags = unsafe { libc::fcntl(raw_fd, libc::F_GETFL) };
++    if flags == -1 {
++        return Err(io::Error::last_os_error());
++    }
++    if unsafe { libc::fcntl(raw_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
++        return Err(io::Error::last_os_error());
++    }
++    Ok(())
++}
++
++fn text_bytes(item: &ClipboardItem) -> Option<Vec<u8>> {
++    let mut text = String::new();
++    let mut has_text = false;
++    for entry in item.entries() {
++        if let ClipboardEntry::String(value) = entry {
++            has_text = true;
++            text.push_str(value.text());
++        }
++    }
++    has_text.then(|| text.into_bytes())
++}
++
++fn file_uris(item: &ClipboardItem) -> anyhow::Result<Vec<String>> {
++    let mut uris = Vec::new();
++    for entry in item.entries() {
++        if let ClipboardEntry::ExternalPaths(paths) = entry {
++            for path in paths.paths() {
++                let uri = Url::from_file_path(path).map_err(|_| {
++                    anyhow::anyhow!("cannot convert {} to a file URI", path.display())
++                })?;
++                uris.push(uri.to_string());
++            }
++        }
++    }
++    if uris.is_empty() {
++        anyhow::bail!("clipboard file list is empty");
++    }
++    Ok(uris)
++}
++
++#[cfg(test)]
++mod tests {
++    use std::path::PathBuf;
++
++    use super::*;
++
++    #[test]
++    fn file_uris_percent_encode_paths() {
++        let item = ClipboardItem {
++            entries: vec![ClipboardEntry::ExternalPaths(gpui::ExternalPaths(
++                smallvec::smallvec![
++                    PathBuf::from("/tmp/clip board/#café.txt"),
++                    PathBuf::from("/tmp/second.txt")
++                ],
++            ))],
++        };
++
++        assert_eq!(
++            file_uris(&item).unwrap(),
++            vec![
++                "file:///tmp/clip%20board/%23caf%C3%A9.txt".to_owned(),
++                "file:///tmp/second.txt".to_owned()
++            ]
++        );
++    }
++
++    #[test]
++    fn image_payload_uses_its_declared_mime() {
++        let bytes = vec![1, 2, 3];
++        let image = Image::from_bytes(ImageFormat::Png, bytes.clone());
++        let item = ClipboardItem::new_image(&image);
++
++        assert_eq!(
++            Clipboard::bytes_for_mime(&item, "image/png").unwrap(),
++            Some(bytes)
++        );
++        assert_eq!(
++            Clipboard::bytes_for_mime(&item, "image/jpeg").unwrap(),
++            None
++        );
++    }
++
++    #[test]
++    fn gnome_payload_contains_all_file_uris() {
++        let item = ClipboardItem {
++            entries: vec![ClipboardEntry::ExternalPaths(gpui::ExternalPaths(
++                smallvec::smallvec![PathBuf::from("/tmp/one.txt"), PathBuf::from("/tmp/two.txt")],
++            ))],
++        };
++
++        assert_eq!(
++            String::from_utf8(
++                Clipboard::bytes_for_mime(&item, GNOME_COPY_FILES_MIME_TYPE)
++                    .unwrap()
++                    .unwrap()
+             )
+-            .unwrap();
++            .unwrap(),
++            "copy\nfile:///tmp/one.txt\nfile:///tmp/two.txt"
++        );
+     }
+ }
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 993b2ff3fa..c59ee3927c 100644
+index 993b2ff3fadc..e8916c11025f 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
-@@ -112,0 +113,2 @@ pub struct WaylandWindowState {
+@@ -7,7 +7,7 @@
+ };
+ 
+ use collections::{FxHashMap, HashMap};
+-use futures::channel::oneshot::Receiver;
++use futures::{FutureExt, channel::oneshot::Receiver};
+ 
+ use raw_window_handle as rwh;
+ use wayland_backend::client::ObjectId;
+@@ -93,7 +93,126 @@
+     tiling: Tiling,
+ }
+ 
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum VisibilityPhase {
++    Visible,
++    Draining(u64),
++    Unmapping(u64),
++    Hidden,
++    Configuring(u64),
++    Remapping(u64),
++}
++
++impl VisibilityPhase {
++    fn can_acknowledge_configure(self) -> bool {
++        !matches!(self, Self::Unmapping(_) | Self::Hidden)
++    }
++
++    fn can_draw(self, configured: bool) -> bool {
++        configured
++            && matches!(
++                self,
++                Self::Visible | Self::Configuring(_) | Self::Remapping(_)
++            )
++    }
++}
++
++struct RetainedVisibility {
++    sequence: u64,
++    desired: bool,
++    phase: VisibilityPhase,
++    waiter: Option<(
++        u64,
++        futures::channel::oneshot::Sender<anyhow::Result<(u64, bool)>>,
++    )>,
++}
++
++impl Default for RetainedVisibility {
++    fn default() -> Self {
++        Self {
++            sequence: 0,
++            desired: true,
++            phase: VisibilityPhase::Visible,
++            waiter: None,
++        }
++    }
++}
++
++impl RetainedVisibility {
++    fn request(&mut self, visible: bool) -> Receiver<anyhow::Result<(u64, bool)>> {
++        if let Some((_, waiter)) = self.waiter.take() {
++            let _ = waiter.send(Err(anyhow::anyhow!("Window visibility request superseded")));
++        }
++        self.sequence = self.sequence.wrapping_add(1);
++        self.desired = visible;
++        let (sender, receiver) = futures::channel::oneshot::channel();
++        self.waiter = Some((self.sequence, sender));
++        receiver
++    }
++
++    fn begin_unmap(&mut self) -> u64 {
++        self.sequence = self.sequence.wrapping_add(1);
++        let transition = self.sequence;
++        self.phase = VisibilityPhase::Draining(transition);
++        transition
++    }
++
++    fn complete(&mut self) {
++        let visible = self.phase == VisibilityPhase::Visible;
++        if !matches!(
++            self.phase,
++            VisibilityPhase::Visible | VisibilityPhase::Hidden
++        ) || visible != self.desired
++        {
++            return;
++        }
++        if let Some((generation, waiter)) = self.waiter.take() {
++            let _ = waiter.send(Ok((generation, visible)));
++        }
++    }
++
++    fn processed(&mut self, transition: u64, visible: bool) -> bool {
++        let expected = if visible {
++            VisibilityPhase::Remapping(transition)
++        } else {
++            VisibilityPhase::Unmapping(transition)
++        };
++        if self.phase != expected {
++            return false;
++        }
++        self.phase = if visible {
++            VisibilityPhase::Visible
++        } else {
++            VisibilityPhase::Hidden
++        };
++        true
++    }
++
++    fn fail_restore(&mut self, error: anyhow::Error) -> u64 {
++        self.fail(error);
++        self.desired = false;
++        self.begin_unmap()
++    }
++
++    fn fail(&mut self, error: anyhow::Error) {
++        if let Some((_, waiter)) = self.waiter.take() {
++            let _ = waiter.send(Err(error));
++        }
++    }
++}
++
++#[derive(Clone, Debug)]
++pub(crate) struct VisibilitySync {
++    pub surface: ObjectId,
++    pub transition: u64,
++    pub visible: bool,
++}
++
+ pub struct WaylandWindowState {
++    visibility: RetainedVisibility,
++    retiring_surface: Option<futures::future::Shared<gpui::Task<()>>>,
++    title: String,
++    minimum_size: Option<Size<Pixels>>,
+     surface_state: WaylandSurfaceState,
+     acknowledged_first_configure: bool,
+     parent: Option<WaylandWindowStatePtr>,
+@@ -110,6 +229,8 @@
+     globals: Globals,
+     renderer: WgpuRenderer,
+     bounds: Bounds<Pixels>,
 +    fixed_outer_size: Option<Size<Pixels>>,
 +    fixed_geometry_size: Option<Size<i32>>,
-@@ -594 +596 @@ impl WaylandWindowState {
+     scale: f32,
+     input_handler: Option<PlatformInputHandler>,
+     decorations: WindowDecorations,
+@@ -575,7 +696,11 @@
+         };
+ 
+         if let WaylandSurfaceState::Xdg(ref xdg_state) = surface_state {
+-            if let Some(title) = options.titlebar.and_then(|titlebar| titlebar.title) {
++            if let Some(title) = options
++                .titlebar
++                .as_ref()
++                .and_then(|titlebar| titlebar.title.as_ref())
++            {
+                 xdg_state.toplevel.set_title(title.to_string());
+             }
+ 
+@@ -591,7 +716,16 @@
+                 .set_max_size(max_texture_size, max_texture_size);
+         }
+ 
 -        Ok(Self {
 +        let mut state = Self {
-@@ -607,0 +610,2 @@ impl WaylandWindowState {
++            visibility: RetainedVisibility::default(),
++            retiring_surface: None,
++            title: options
++                .titlebar
++                .as_ref()
++                .and_then(|titlebar| titlebar.title.as_ref())
++                .map(ToString::to_string)
++                .unwrap_or_default(),
++            minimum_size: options.window_min_size,
+             surface_state,
+             acknowledged_first_configure: false,
+             parent,
+@@ -605,6 +739,8 @@
+             display: None,
+             renderer,
+             bounds: options.bounds,
 +            fixed_outer_size: (!options.is_resizable).then_some(options.bounds.size),
 +            fixed_geometry_size: None,
-@@ -629 +633,24 @@ impl WaylandWindowState {
+             scale: 1.0,
+             input_handler: None,
+             decorations: WindowDecorations::Client,
+@@ -626,7 +762,30 @@
+             window_controls: WindowControls::default(),
+             client_inset: None,
+             accesskit_adapter: None,
 -        })
 +        };
 +        state.update_size_constraints();
@@ -37,44 +601,458 @@ index 993b2ff3fa..c59ee3927c 100644
 +            toplevel.set_max_size(geometry_size.width, geometry_size.height);
 +            self.fixed_geometry_size = Some(geometry_size);
 +        }
-@@ -903,0 +931 @@ impl WaylandWindowStatePtr {
+     }
+ 
+     pub fn is_transparent(&self) -> bool {
+@@ -680,6 +839,34 @@
+ impl Drop for WaylandWindow {
+     fn drop(&mut self) {
+         let mut state = self.0.state.borrow_mut();
++        state.visibility.fail(anyhow::anyhow!(
++            "Window closed during visibility transition"
++        ));
++        state.visibility.phase = VisibilityPhase::Hidden;
++        let retirement = state.retiring_surface.take();
++        let executor = state.globals.executor.clone();
++        drop(state);
++        if let Some(retirement) = retirement {
++            let window = self.0.clone();
++            executor
++                .spawn(async move {
++                    retirement.await;
++                    window.destroy_window();
++                })
++                .detach();
++        } else {
++            self.0.destroy_window();
++        }
++    }
++}
++
++impl WaylandWindowStatePtr {
++    fn destroy_window(&self) {
++        let mut state = self.state.borrow_mut();
++        state.visibility.fail(anyhow::anyhow!(
++            "Window closed during visibility transition"
++        ));
++        state.visibility.phase = VisibilityPhase::Hidden;
+         let surface_id = state.surface.id();
+         if let Some(parent) = state.parent.as_ref() {
+             parent.state.borrow_mut().children.remove(&surface_id);
+@@ -713,7 +900,7 @@
+         // The wl_surface itself should always be destroyed last.
+         state.surface.destroy();
+ 
+-        let state_ptr = self.0.clone();
++        let state_ptr = self.clone();
+         state
+             .globals
+             .executor
+@@ -838,8 +1025,153 @@
+         state.children.values().any(|&blocking| blocking)
+     }
+ 
++    fn visibility_supported(&self) -> bool {
++        let state = self.state.borrow();
++        matches!(&state.surface_state, WaylandSurfaceState::Xdg(xdg) if xdg.dialog.is_none())
++            && state.children.is_empty()
++    }
++
++    fn request_visibility(
++        &self,
++        visible: bool,
++    ) -> anyhow::Result<Receiver<anyhow::Result<(u64, bool)>>> {
++        anyhow::ensure!(
++            self.visibility_supported(),
++            "Close child dialogs and popups before hiding this window"
++        );
++        let receiver = self.state.borrow_mut().visibility.request(visible);
++        self.advance_visibility();
++        Ok(receiver)
++    }
++
++    fn visibility_sync(state: &WaylandWindowState, transition: u64, visible: bool) {
++        let connection = wayland_client::Connection::from_backend(
++            state
++                .surface
++                .backend()
++                .upgrade()
++                .expect("Live surface connection required"),
++        );
++        connection.display().sync(
++            &state.globals.qh,
++            VisibilitySync {
++                surface: state.surface.id(),
++                transition,
++                visible,
++            },
++        );
++    }
++
++    fn unmap_surface(&self, transition: u64) {
++        let mut state = self.state.borrow_mut();
++        let surface = state.renderer.take_surface_for_visibility();
++        let background = state
++            .client
++            .get_client()
++            .borrow()
++            .common
++            .background_executor
++            .clone();
++        let foreground = state.globals.executor.clone();
++        let window = self.clone();
++        let retirement = background
++            .spawn(async move {
++                drop(surface);
++            })
++            .shared();
++        state.retiring_surface = Some(retirement.clone());
++        drop(state);
++        foreground
++            .spawn(async move {
++                retirement.await;
++                let mut state = window.state.borrow_mut();
++                state.retiring_surface = None;
++                if state.visibility.phase != VisibilityPhase::Draining(transition) {
++                    return;
++                }
++                state.surface.attach(None, 0, 0);
++                state.surface.commit();
++                state.visibility.phase = VisibilityPhase::Unmapping(transition);
++                Self::visibility_sync(&state, transition, false);
++            })
++            .detach();
++    }
++
++    fn advance_visibility(&self) {
++        let mut state = self.state.borrow_mut();
++        state.visibility.complete();
++        match (state.visibility.phase, state.visibility.desired) {
++            (VisibilityPhase::Visible, false) => {
++                let transition = state.visibility.begin_unmap();
++                drop(state);
++                self.unmap_surface(transition);
++            }
++            (VisibilityPhase::Hidden, true) => {
++                state.visibility.sequence = state.visibility.sequence.wrapping_add(1);
++                let transition = state.visibility.sequence;
++                state.visibility.phase = VisibilityPhase::Configuring(transition);
++                state.acknowledged_first_configure = false;
++                state.in_progress_configure = None;
++                state.renderer_presented = false;
++                state.resize_throttle = false;
++                state.fixed_geometry_size = None;
++                if let WaylandSurfaceState::Xdg(xdg) = &state.surface_state {
++                    xdg.toplevel.set_title(state.title.clone());
++                    if let Some(app_id) = &state.app_id {
++                        xdg.toplevel.set_app_id(app_id.clone());
++                    }
++                    let parent = state.parent.as_ref().and_then(|parent| parent.toplevel());
++                    xdg.toplevel.set_parent(parent.as_ref());
++                    if let Some(minimum) = state.minimum_size {
++                        xdg.toplevel.set_min_size(
++                            f32::from(minimum.width) as i32,
++                            f32::from(minimum.height) as i32,
++                        );
++                    }
++                    let maximum = state.renderer.max_texture_size() as i32;
++                    xdg.toplevel.set_max_size(maximum, maximum);
++                    if state.maximized {
++                        xdg.toplevel.set_maximized();
++                    }
++                    if state.fullscreen {
++                        xdg.toplevel.set_fullscreen(None);
++                    }
++                    if let Some(decoration) = &xdg.decoration {
++                        decoration.set_mode(state.decorations.to_xdg());
++                    }
++                }
++                state.update_size_constraints();
++                state.surface.commit();
++            }
++            _ => {}
++        }
++    }
++
++    pub(crate) fn visibility_processed(&self, sync: &VisibilitySync) {
++        let mut state = self.state.borrow_mut();
++        if state.surface.id() != sync.surface
++            || !state.visibility.processed(sync.transition, sync.visible)
++        {
++            return;
++        }
++        if !sync.visible {
++            state.acknowledged_first_configure = false;
++            state.in_progress_configure = None;
++            state.renderer_presented = false;
++        }
++        drop(state);
++        self.advance_visibility();
++    }
++
+     pub fn frame(&self) {
+         let mut state = self.state.borrow_mut();
++        if !state
++            .visibility
++            .phase
++            .can_draw(state.acknowledged_first_configure)
++        {
++            return;
++        }
+         state.surface.frame(&state.globals.qh, state.surface.id());
+         state.resize_throttle = false;
+         let force_render = state.force_render_after_recovery;
+@@ -882,6 +1214,17 @@
+     pub fn handle_xdg_surface_event(&self, event: xdg_surface::Event) {
+         if let xdg_surface::Event::Configure { serial } = event {
+             {
++                let state = self.state.borrow();
++                // The null-buffer commit invalidates old serials before its sync callback arrives.
++                if !state.visibility.phase.can_acknowledge_configure() {
++                    return;
++                }
++                if matches!(state.visibility.phase, VisibilityPhase::Draining(_)) {
++                    state.surface_state.ack_configure(serial);
++                    return;
++                }
++            }
++            {
+                 let mut state = self.state.borrow_mut();
+                 if let Some(window_controls) = state.in_progress_window_controls.take() {
+                     state.window_controls = window_controls;
+@@ -901,6 +1244,7 @@
+                     state.fullscreen = configure.fullscreen;
+                     state.maximized = configure.maximized;
+                     state.tiling = configure.tiling;
 +                    state.update_size_constraints();
-@@ -961 +989,5 @@ impl WaylandWindowStatePtr {
+                     // Limit interactive resizes to once per vblank
+                     if configure.resizing && state.resize_throttle {
+                         state.surface_state.ack_configure(serial);
+@@ -945,6 +1289,43 @@
+                 window_geometry.size.height,
+             );
+ 
++            if matches!(state.visibility.phase, VisibilityPhase::Configuring(_))
++                && !state.acknowledged_first_configure
++            {
++                let raw = RawWindow {
++                    window: state.surface.id().as_ptr().cast::<c_void>(),
++                    display: state
++                        .surface
++                        .backend()
++                        .upgrade()
++                        .unwrap()
++                        .display_ptr()
++                        .cast::<c_void>(),
++                };
++                let result = if state.renderer.device_lost() {
++                    state.renderer.recover(&raw)
++                } else {
++                    let gpu = state.client.get_client().borrow().gpu_context.clone();
++                    let gpu = gpu.borrow();
++                    gpu.as_ref()
++                        .ok_or_else(|| anyhow::anyhow!("GPU unavailable during window restore"))
++                        .and_then(|gpu| {
++                            let config = WgpuSurfaceConfig {
++                                size: state.renderer.viewport_size(),
++                                transparent: state.is_transparent(),
++                                preferred_present_mode: Some(wgpu::PresentMode::Mailbox),
++                            };
++                            state.renderer.replace_surface(&raw, config, &gpu.instance)
++                        })
++                };
++                if let Err(error) = result {
++                    let transition = state.visibility.fail_restore(error);
++                    drop(state);
++                    self.unmap_surface(transition);
++                    return;
++                }
++                state.force_render_after_recovery = true;
++            }
+             let request_frame_callback = !state.acknowledged_first_configure;
+             if request_frame_callback {
+                 state.acknowledged_first_configure = true;
+@@ -958,7 +1339,11 @@
+         if let zxdg_toplevel_decoration_v1::Event::Configure { mode } = event {
+             match mode {
+                 WEnum::Value(zxdg_toplevel_decoration_v1::Mode::ServerSide) => {
 -                    self.state.borrow_mut().decorations = WindowDecorations::Server;
 +                    {
 +                        let mut state = self.state.borrow_mut();
 +                        state.decorations = WindowDecorations::Server;
 +                        state.update_size_constraints();
 +                    }
-@@ -969 +1001,5 @@ impl WaylandWindowStatePtr {
+                     let callback = self.callbacks.borrow_mut().appearance_changed.take();
+                     if let Some(mut fun) = callback {
+                         fun();
+@@ -966,7 +1351,11 @@
+                     }
+                 }
+                 WEnum::Value(zxdg_toplevel_decoration_v1::Mode::ClientSide) => {
 -                    self.state.borrow_mut().decorations = WindowDecorations::Client;
 +                    {
 +                        let mut state = self.state.borrow_mut();
 +                        state.decorations = WindowDecorations::Client;
 +                        state.update_size_constraints();
 +                    }
-@@ -1273,0 +1310 @@ impl WaylandWindowStatePtr {
+                     // Update background to be transparent
+                     let callback = self.callbacks.borrow_mut().appearance_changed.take();
+                     if let Some(mut fun) = callback {
+@@ -1271,6 +1660,7 @@
+             }
+             if let Some(scale) = scale {
+                 state.scale = scale;
 +                state.update_size_constraints();
-@@ -1469 +1506 @@ impl PlatformWindow for WaylandWindow {
+             }
+             let device_bounds = state.bounds.to_device_pixels(state.scale);
+             state.renderer.update_drawable_size(device_bounds.size);
+@@ -1466,7 +1856,7 @@
+     }
+ 
+     fn resize(&mut self, size: Size<Pixels>) {
 -        let state = self.borrow();
 +        let mut state = self.borrow_mut();
-@@ -1488,0 +1526,5 @@ impl PlatformWindow for WaylandWindow {
+         let state_ptr = self.0.clone();
+ 
+         // A popup's placement is the compositor's, so a resize re-runs the positioner and the
+@@ -1486,6 +1876,11 @@
+             return;
+         }
+ 
 +        if state.fixed_outer_size.is_some() {
 +            state.fixed_outer_size = Some(size);
 +            state.update_size_constraints();
 +        }
 +
-@@ -1778,0 +1821,3 @@ impl PlatformWindow for WaylandWindow {
+         // Keep window geometry consistent with configure handling. On Wayland, window geometry is
+         // surface-local: resizing should not attempt to translate the window; the compositor
+         // controls placement. We also account for client-side decoration insets and tiling.
+@@ -1566,6 +1961,20 @@
+         _answers: &[PromptButton],
+     ) -> Option<Receiver<usize>> {
+         None
++    }
++
++    fn retained_visibility(&self) -> Option<bool> {
++        self.0.visibility_supported().then(|| {
++            let state = self.borrow();
++            state.visibility.phase == VisibilityPhase::Visible && state.acknowledged_first_configure
++        })
++    }
++
++    fn set_retained_visibility(
++        &self,
++        visible: bool,
++    ) -> anyhow::Result<Receiver<anyhow::Result<(u64, bool)>>> {
++        self.0.request_visibility(visible)
+     }
+ 
+     fn activate(&self) {
+@@ -1596,7 +2005,9 @@
+     }
+ 
+     fn set_title(&mut self, title: &str) {
+-        if let Some(toplevel) = self.borrow().surface_state.toplevel() {
++        let mut state = self.borrow_mut();
++        state.title = title.to_owned();
++        if let Some(toplevel) = state.surface_state.toplevel() {
+             toplevel.set_title(title.to_string());
+         }
+     }
+@@ -1706,6 +2117,13 @@
+ 
+     fn draw(&self, scene: &Scene) {
+         let mut state = self.borrow_mut();
++        if !state
++            .visibility
++            .phase
++            .can_draw(state.acknowledged_first_configure)
++        {
++            return;
++        }
+ 
+         if state.renderer.device_lost() {
+             let raw_window = RawWindow {
+@@ -1730,6 +2148,12 @@
+         }
+ 
+         state.renderer_presented = state.renderer.draw(scene);
++        if state.renderer_presented
++            && let VisibilityPhase::Configuring(transition) = state.visibility.phase
++        {
++            state.visibility.phase = VisibilityPhase::Remapping(transition);
++            WaylandWindowStatePtr::visibility_sync(&state, transition, true);
++        }
+ 
+         if state.renderer.needs_redraw() {
+             state.force_render_after_recovery = true;
+@@ -1738,6 +2162,13 @@
+ 
+     fn completed_frame(&self) {
+         let mut state = self.borrow_mut();
++        if !state
++            .visibility
++            .phase
++            .can_draw(state.acknowledged_first_configure)
++        {
++            return;
++        }
+ 
+         // Work around a bug in old versions of wlroots where committing without a buffer attached
+         // can cause invalid synchronization that leads to graphical corruption.
+@@ -1776,6 +2207,9 @@
+ 
+     fn start_window_resize(&self, edge: gpui::ResizeEdge) {
+         let state = self.borrow();
 +        if state.fixed_outer_size.is_some() {
 +            return;
 +        }
-@@ -1856,0 +1902 @@ impl PlatformWindow for WaylandWindow {
+         if let Some(toplevel) = state.surface_state.toplevel() {
+             toplevel.resize(
+                 &state.globals.seat,
+@@ -1835,7 +2269,13 @@
+         // Commit so the new input region applies immediately. Otherwise it
+         // waits for the next frame, which could be the very click we want to
+         // allow passing through.
+-        state.surface.commit();
++        if state
++            .visibility
++            .phase
++            .can_draw(state.acknowledged_first_configure)
++        {
++            state.surface.commit();
++        }
+     }
+ 
+     fn window_decorations(&self) -> Decorations {
+@@ -1854,6 +2294,7 @@
+             Some(decoration) => {
+                 decoration.set_mode(decorations.to_xdg());
+                 state.decorations = decorations;
 +                state.update_size_constraints();
-@@ -1865,0 +1912 @@ impl PlatformWindow for WaylandWindow {
+                 update_window(state);
+             }
+             None => {
+@@ -1863,6 +2304,7 @@
+                     );
+                 }
+                 state.decorations = WindowDecorations::Client;
 +                state.update_size_constraints();
-@@ -1878,0 +1926 @@ impl PlatformWindow for WaylandWindow {
+                 update_window(state);
+             }
+         }
+@@ -1876,6 +2318,7 @@
+         let mut state = self.borrow_mut();
+         if Some(inset) != state.client_inset {
+             state.client_inset = Some(inset);
 +            state.update_size_constraints();
-@@ -2084,0 +2133,90 @@ fn inset_by_tiling(mut bounds: Bounds<Pixels>, inset: Pixels, tiling: Tiling) ->
+             update_window(state);
+         }
+     }
+@@ -2082,3 +2525,337 @@
+ 
+     bounds
+ }
 +
 +fn fixed_window_geometry_size(
 +    outer_size: Size<Pixels>,
@@ -165,3 +1143,492 @@ index 993b2ff3fa..c59ee3927c 100644
 +        );
 +    }
 +}
++
++#[cfg(test)]
++mod retained_visibility_tests {
++    use super::{RetainedVisibility, VisibilityPhase};
++    use futures::executor::block_on;
++
++    #[test]
++    fn configure_acknowledgements_remain_valid_while_draining() {
++        assert!(VisibilityPhase::Visible.can_acknowledge_configure());
++        assert!(VisibilityPhase::Draining(1).can_acknowledge_configure());
++        assert!(!VisibilityPhase::Draining(1).can_draw(true));
++    }
++
++    #[test]
++    fn queued_configures_are_discarded_after_the_unmap_commit() {
++        for phase in [VisibilityPhase::Unmapping(1), VisibilityPhase::Hidden] {
++            assert!(!phase.can_acknowledge_configure());
++            assert!(!phase.can_draw(true));
++        }
++    }
++
++    #[test]
++    fn a_fresh_restore_configure_is_required_before_drawing() {
++        for phase in [
++            VisibilityPhase::Configuring(2),
++            VisibilityPhase::Remapping(2),
++        ] {
++            assert!(phase.can_acknowledge_configure());
++            assert!(!phase.can_draw(false));
++            assert!(phase.can_draw(true));
++        }
++    }
++
++    #[test]
++    fn normal_unmap_still_begins_draining_before_acknowledgement() {
++        let mut visibility = RetainedVisibility::default();
++        let mut hidden = visibility.request(false);
++        let transition = visibility.begin_unmap();
++
++        assert_eq!(transition, 2);
++        assert_eq!(visibility.phase, VisibilityPhase::Draining(transition));
++        assert!(visibility.phase.can_acknowledge_configure());
++        assert!(!visibility.phase.can_draw(true));
++        visibility.complete();
++        assert!(hidden.try_recv().unwrap().is_none());
++        assert!(!visibility.processed(transition, false));
++
++        visibility.phase = VisibilityPhase::Unmapping(transition);
++        assert!(visibility.processed(transition, false));
++        visibility.complete();
++        assert_eq!(block_on(hidden).unwrap().unwrap(), (1, false));
++    }
++
++    #[test]
++    fn failed_restore_reports_error_and_unmaps_without_automatic_retry() {
++        let mut visibility = RetainedVisibility {
++            sequence: 2,
++            phase: VisibilityPhase::Configuring(2),
++            ..Default::default()
++        };
++        let shown = visibility.request(true);
++        let transition = visibility.fail_restore(anyhow::anyhow!("transient renderer failure"));
++
++        assert_eq!(
++            block_on(shown).unwrap().unwrap_err().to_string(),
++            "transient renderer failure"
++        );
++        assert_eq!(visibility.phase, VisibilityPhase::Draining(transition));
++        assert!(!visibility.desired);
++        assert!(!visibility.phase.can_draw(true));
++        assert!(!visibility.processed(transition, false));
++
++        visibility.phase = VisibilityPhase::Unmapping(transition);
++        assert!(!visibility.phase.can_acknowledge_configure());
++        assert!(visibility.processed(transition, false));
++        visibility.complete();
++        assert_eq!(visibility.phase, VisibilityPhase::Hidden);
++        assert!(!visibility.desired);
++        assert!(visibility.waiter.is_none());
++    }
++
++    #[test]
++    fn show_after_restore_failure_waits_for_unmap_and_fresh_presentation() {
++        let mut visibility = RetainedVisibility {
++            sequence: 2,
++            phase: VisibilityPhase::Configuring(2),
++            ..Default::default()
++        };
++        let failed = visibility.request(true);
++        let unmap = visibility.fail_restore(anyhow::anyhow!("transient renderer failure"));
++        assert!(block_on(failed).unwrap().is_err());
++        let mut shown = visibility.request(true);
++        visibility.complete();
++        assert!(shown.try_recv().unwrap().is_none());
++        assert!(!visibility.processed(unmap, true));
++
++        visibility.phase = VisibilityPhase::Unmapping(unmap);
++        assert!(visibility.processed(unmap, false));
++        visibility.complete();
++        assert_eq!(visibility.phase, VisibilityPhase::Hidden);
++        assert!(visibility.desired);
++        assert!(shown.try_recv().unwrap().is_none());
++
++        visibility.sequence = visibility.sequence.wrapping_add(1);
++        let remap = visibility.sequence;
++        visibility.phase = VisibilityPhase::Configuring(remap);
++        assert!(!visibility.phase.can_draw(false));
++        assert!(!visibility.processed(remap, true));
++        visibility.complete();
++        assert!(shown.try_recv().unwrap().is_none());
++
++        visibility.phase = VisibilityPhase::Remapping(remap);
++        assert!(visibility.processed(remap, true));
++        visibility.complete();
++        assert_eq!(block_on(shown).unwrap().unwrap(), (5, true));
++    }
++
++    #[test]
++    fn hide_after_restore_failure_waits_for_the_cleanup_sync() {
++        let mut visibility = RetainedVisibility {
++            sequence: 2,
++            phase: VisibilityPhase::Configuring(2),
++            ..Default::default()
++        };
++        let failed = visibility.request(true);
++        let transition = visibility.fail_restore(anyhow::anyhow!("transient renderer failure"));
++        assert!(block_on(failed).unwrap().is_err());
++        let mut hidden = visibility.request(false);
++
++        visibility.complete();
++        assert!(hidden.try_recv().unwrap().is_none());
++        assert!(!visibility.processed(transition, false));
++        visibility.phase = VisibilityPhase::Unmapping(transition);
++        assert!(visibility.processed(transition, false));
++        visibility.complete();
++        assert_eq!(block_on(hidden).unwrap().unwrap(), (5, false));
++    }
++
++    #[test]
++    fn repeated_restore_failures_require_new_explicit_requests() {
++        let mut visibility = RetainedVisibility {
++            phase: VisibilityPhase::Hidden,
++            desired: false,
++            ..Default::default()
++        };
++
++        for _ in 0..3 {
++            let shown = visibility.request(true);
++            visibility.sequence = visibility.sequence.wrapping_add(1);
++            visibility.phase = VisibilityPhase::Configuring(visibility.sequence);
++            let transition = visibility.fail_restore(anyhow::anyhow!("renderer still unavailable"));
++            assert!(block_on(shown).unwrap().is_err());
++            assert!(!visibility.desired);
++            assert!(visibility.waiter.is_none());
++
++            visibility.phase = VisibilityPhase::Unmapping(transition);
++            assert!(visibility.processed(transition, false));
++            visibility.complete();
++            assert_eq!(visibility.phase, VisibilityPhase::Hidden);
++            assert!(!visibility.desired);
++            assert!(visibility.waiter.is_none());
++        }
++    }
++
++    #[test]
++    fn unmap_receipt_waits_for_matching_compositor_transition() {
++        let mut visibility = RetainedVisibility::default();
++        let mut receipt = visibility.request(false);
++        visibility.phase = VisibilityPhase::Unmapping(2);
++        visibility.complete();
++        assert!(receipt.try_recv().unwrap().is_none());
++        assert!(!visibility.processed(1, false));
++        assert!(!visibility.processed(2, true));
++        assert!(visibility.processed(2, false));
++        visibility.complete();
++        assert_eq!(block_on(receipt).unwrap().unwrap(), (1, false));
++    }
++
++    #[test]
++    fn hide_then_restore_keeps_physical_unmap_before_remap() {
++        let mut visibility = RetainedVisibility::default();
++        let hidden = visibility.request(false);
++        visibility.phase = VisibilityPhase::Unmapping(2);
++        let mut shown = visibility.request(true);
++        assert!(block_on(hidden).unwrap().is_err());
++        assert!(visibility.processed(2, false));
++        visibility.complete();
++        assert!(shown.try_recv().unwrap().is_none());
++        visibility.phase = VisibilityPhase::Remapping(4);
++        assert!(visibility.processed(4, true));
++        visibility.complete();
++        assert_eq!(block_on(shown).unwrap().unwrap(), (2, true));
++    }
++
++    #[test]
++    fn configure_without_first_present_cannot_acknowledge_restore() {
++        let mut visibility = RetainedVisibility {
++            phase: VisibilityPhase::Hidden,
++            desired: false,
++            ..Default::default()
++        };
++        let mut shown = visibility.request(true);
++        visibility.phase = VisibilityPhase::Configuring(2);
++        assert!(!visibility.processed(2, true));
++        visibility.complete();
++        assert!(shown.try_recv().unwrap().is_none());
++        visibility.phase = VisibilityPhase::Remapping(2);
++        assert!(visibility.processed(2, true));
++        visibility.complete();
++        assert!(block_on(shown).unwrap().unwrap().1);
++    }
++
++    #[test]
++    fn queued_draw_and_completed_frame_are_blocked_through_unmap() {
++        for phase in [
++            VisibilityPhase::Draining(1),
++            VisibilityPhase::Unmapping(1),
++            VisibilityPhase::Hidden,
++        ] {
++            assert!(!phase.can_draw(true));
++            assert!(!phase.can_draw(false));
++        }
++        assert!(!VisibilityPhase::Configuring(1).can_draw(false));
++        assert!(VisibilityPhase::Configuring(1).can_draw(true));
++    }
++
++    #[test]
++    fn close_never_fabricates_a_visibility_acknowledgement() {
++        let mut visibility = RetainedVisibility::default();
++        let receipt = visibility.request(false);
++        visibility.fail(anyhow::anyhow!("window closed"));
++        assert!(block_on(receipt).unwrap().is_err());
++    }
++
++    #[test]
++    fn a_late_unmap_cannot_override_a_new_remap() {
++        let mut visibility = RetainedVisibility {
++            phase: VisibilityPhase::Remapping(8),
++            ..Default::default()
++        };
++        assert!(!visibility.processed(6, false));
++        assert_eq!(visibility.phase, VisibilityPhase::Remapping(8));
++    }
++}
+diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
+index 0c8c9b4e20b8..701ae28fe440 100644
+--- a/crates/gpui_linux/src/linux/x11/client.rs
++++ b/crates/gpui_linux/src/linux/x11/client.rs
+@@ -811,11 +811,12 @@
+                 let [atom, arg1, arg2, arg3, arg4] = event.data.as_data32();
+                 let mut state = self.0.borrow_mut();
+
+-                if atom == state.atoms.WM_DELETE_WINDOW && window.should_close() {
+-                    // window "x" button clicked by user
+-                    // Rest of the close logic is handled in drop_window()
++                if atom == state.atoms.WM_DELETE_WINDOW {
++                    // Closing can flush app effects that open another window.
+                     drop(state);
+-                    window.close();
++                    if window.should_close() {
++                        window.close();
++                    }
+                     state = self.0.borrow_mut();
+                 } else if atom == state.atoms._NET_WM_SYNC_REQUEST {
+                     window.state.borrow_mut().last_sync_counter =
+@@ -1756,6 +1757,20 @@
+         state.clipboard_item.replace(item);
+     }
+
++    fn try_write_to_clipboard(&self, item: gpui::ClipboardItem) -> anyhow::Result<()> {
++        let mut state = self.0.borrow_mut();
++        state
++            .clipboard
++            .set_item(
++                &item,
++                clipboard::ClipboardKind::Clipboard,
++                clipboard::WaitConfig::None,
++            )
++            .context("X11: Failed to write clipboard item")?;
++        state.clipboard_item.replace(item);
++        Ok(())
++    }
++
+     fn read_from_primary(&self) -> Option<gpui::ClipboardItem> {
+         let state = self.0.borrow_mut();
+         state
+@@ -1794,7 +1809,22 @@
+             return;
+         };
+
+-        event_loop.run(None, &mut self.clone(), |_| {}).log_err();
++        let xcb_connection = self.0.borrow().xcb_connection.clone();
++        let loop_signal = event_loop.get_signal();
++        // Checked XCB replies can buffer events without leaving the fd readable.
++        // Wake the first dispatch, then drain after each dispatch's idle callbacks.
++        loop_signal.wakeup();
++        event_loop
++            .run(None, &mut self.clone(), |client| {
++                if client
++                    .process_x11_events(&xcb_connection)
++                    .log_err()
++                    .is_none()
++                {
++                    loop_signal.stop();
++                }
++            })
++            .log_err();
+     }
+
+     fn active_window(&self) -> Option<AnyWindowHandle> {
+diff --git a/crates/gpui_linux/src/linux/x11/clipboard.rs b/crates/gpui_linux/src/linux/x11/clipboard.rs
+index 706e7b096588..591535333fa2 100644
+--- a/crates/gpui_linux/src/linux/x11/clipboard.rs
++++ b/crates/gpui_linux/src/linux/x11/clipboard.rs
+@@ -22,6 +22,7 @@
+     borrow::Cow,
+     cell::RefCell,
+     collections::{HashMap, hash_map::Entry},
++    path::PathBuf,
+     sync::{
+         Arc,
+         atomic::{AtomicBool, Ordering},
+@@ -47,8 +48,9 @@
+     wrapper::ConnectionExt as _,
+ };
+
+-use gpui::{ClipboardItem, Image, ImageFormat, hash};
++use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
+ use strum::IntoEnumIterator;
++use url::Url;
+
+ type Result<T, E = Error> = std::result::Result<T, E>;
+
+@@ -77,8 +79,9 @@
+         TEXT,
+         TEXT_MIME_UNKNOWN: b"text/plain",
+
+-        // HTML: b"text/html",
+-        // URI_LIST: b"text/uri-list",
++        FILE_LIST: b"text/uri-list",
++        GNOME_COPY_FILES: b"x-special/gnome-copied-files",
++        NAUTILUS_FILE_LIST: b"x-special/nautilus-clipboard",
+
+         PNG__MIME: ImageFormat::mime_type(ImageFormat::Png ).as_bytes(),
+         JPEG_MIME: ImageFormat::mime_type(ImageFormat::Jpeg).as_bytes(),
+@@ -990,6 +993,47 @@
+         self.inner.write(data, selection, wait)
+     }
+
++    pub(crate) fn set_item(
++        &self,
++        item: &ClipboardItem,
++        selection: ClipboardKind,
++        wait: WaitConfig,
++    ) -> Result<()> {
++        let mut data = Vec::new();
++        let atoms = self.inner.atoms;
++        let mut text = String::new();
++        let mut has_text = false;
++
++        for entry in item.entries() {
++            match entry {
++                ClipboardEntry::String(value) => {
++                    has_text = true;
++                    text.push_str(value.text());
++                }
++                ClipboardEntry::Image(image) => data.push(ClipboardData {
++                    bytes: image.bytes().to_vec(),
++                    format: self.image_format_atom(image.format()),
++                }),
++                ClipboardEntry::ExternalPaths(paths) => {
++                    data.extend(file_uri_list_to_clipboard_data(paths.paths(), atoms)?);
++                }
++            }
++        }
++
++        if has_text {
++            data.push(ClipboardData {
++                bytes: text.into_bytes(),
++                format: atoms.UTF8_STRING,
++            });
++        }
++
++        if data.is_empty() {
++            return Err(Error::unknown("clipboard item has no transferable data"));
++        }
++
++        self.inner.write(data, selection, wait)
++    }
++
+     fn image_format_atom(&self, format: ImageFormat) -> Atom {
+         match format {
+             ImageFormat::Png => self.inner.atoms.PNG__MIME,
+@@ -1014,7 +1058,7 @@
+         let format = self.image_format_atom(image.format);
+         let data = vec![ClipboardData {
+             bytes: image.bytes,
+-            format: self.inner.atoms.PNG__MIME,
++            format,
+         }];
+         self.inner.write(data, selection, wait)
+     }
+@@ -1138,6 +1182,66 @@
+     }
+ }
+
++fn file_uri_list_to_clipboard_data(paths: &[PathBuf], atoms: Atoms) -> Result<Vec<ClipboardData>> {
++    if paths.is_empty() {
++        return Err(Error::unknown("clipboard file list is empty"));
++    }
++
++    let uris = paths
++        .iter()
++        .map(|path| {
++            Url::from_file_path(path)
++                .map(|url| url.to_string())
++                .map_err(|_| {
++                    Error::unknown(format!("cannot convert {} to a file URI", path.display()))
++                })
++        })
++        .collect::<Result<Vec<_>>>()?;
++    let plain_paths = paths
++        .iter()
++        .map(|path| path.to_string_lossy().into_owned())
++        .collect::<Vec<_>>();
++    let plain_crlf = plain_paths.join("\r\n");
++    let plain_lf = plain_paths.join("\n");
++    let uri_crlf = uris.join("\r\n");
++    let gnome = format!("copy\n{}", uris.join("\n"));
++
++    Ok(vec![
++        ClipboardData {
++            bytes: plain_crlf.as_bytes().to_vec(),
++            format: atoms.TEXT_MIME_UNKNOWN,
++        },
++        ClipboardData {
++            bytes: plain_crlf.as_bytes().to_vec(),
++            format: atoms.UTF8_MIME_0,
++        },
++        ClipboardData {
++            bytes: plain_lf.as_bytes().to_vec(),
++            format: atoms.STRING,
++        },
++        ClipboardData {
++            bytes: plain_lf.as_bytes().to_vec(),
++            format: atoms.TEXT,
++        },
++        ClipboardData {
++            bytes: plain_lf.as_bytes().to_vec(),
++            format: atoms.UTF8_STRING,
++        },
++        ClipboardData {
++            bytes: uri_crlf.as_bytes().to_vec(),
++            format: atoms.FILE_LIST,
++        },
++        ClipboardData {
++            bytes: gnome.as_bytes().to_vec(),
++            format: atoms.GNOME_COPY_FILES,
++        },
++        ClipboardData {
++            bytes: gnome.into_bytes(),
++            format: atoms.NAUTILUS_FILE_LIST,
++        },
++    ])
++}
++
+ /// Clipboard selection
+ ///
+ /// Linux has a concept of clipboard "selections" which tend to be used in different contexts. This
+diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
+--- a/crates/gpui_linux/src/linux/x11/window.rs
++++ b/crates/gpui_linux/src/linux/x11/window.rs
+@@ -1013,2 +1013,2 @@
+-        let mut cb = self.callbacks.borrow_mut();
+-        if let Some(mut should_close) = cb.should_close.take() {
++        let should_close = self.callbacks.borrow_mut().should_close.take();
++        if let Some(mut should_close) = should_close {
+@@ -1016 +1016,5 @@
+-            cb.should_close = Some(should_close);
++            let mut callbacks = self.callbacks.borrow_mut();
++            if callbacks.should_close.is_none() {
++                callbacks.should_close = Some(should_close);
++            }
++            drop(callbacks);
+@@ -1131,2 +1135,2 @@
+-        let mut callbacks = self.callbacks.borrow_mut();
+-        if let Some(fun) = callbacks.close.take() {
++        let close = self.callbacks.borrow_mut().close.take();
++        if let Some(fun) = close {

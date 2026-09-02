@@ -25,9 +25,8 @@
 //!   second instance on macOS -- the AppleEvent goes to the running process.
 //! * **App launched by the URL.** Tauri's single-instance plugin hands the new
 //!   launch's `cap-desktop://` argv to the surviving old instance
-//!   (`lib.rs:5193-5204`). This app's single instancing is new-instance-wins
-//!   (see [`crate::single_instance`]), so the launch that carries the URL *is*
-//!   the instance that survives: [`init`] reads its own argv. On macOS the
+//!   (`lib.rs:5193-5204`). Linux and Windows forward action URLs to the
+//!   surviving instance; [`init`] reads argv on the initial launch. On macOS the
 //!   launch URL additionally arrives as the same GURL event once the run loop
 //!   starts; both roads feed one channel, and the channel buffers until the
 //!   drain task exists, so neither ordering loses the action.
@@ -52,7 +51,7 @@ use crate::{
     app_windows,
     feeds::{Feeds, SelectedCamera},
     library, recording,
-    session::RecordingSession,
+    session::{Phase, RecordingSession},
     settings_window::Page,
 };
 
@@ -185,19 +184,46 @@ impl TryFrom<&Url> for DeepLinkAction {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum QueuedAction {
+    DeepLink(DeepLinkAction),
+    #[cfg(target_os = "macos")]
+    Reopen,
+}
+
+impl QueuedAction {
+    fn execute(self, cx: &mut App) -> Result<(), String> {
+        match self {
+            Self::DeepLink(action) => action.execute(cx),
+            #[cfg(target_os = "macos")]
+            Self::Reopen => {
+                app_windows::handle_dock_reopen(cx);
+                Ok(())
+            }
+        }
+    }
+}
+
 /// The action queue. Unbounded and created on first touch, so URLs submitted
 /// before [`init`] runs (the launch AppleEvent, argv) wait for the drain task
 /// instead of being dropped -- the buffering the Tauri app gets from its
 /// executor being managed before `on_open_url` is wired.
-fn channel() -> &'static (
-    flume::Sender<DeepLinkAction>,
-    flume::Receiver<DeepLinkAction>,
-) {
-    static CHANNEL: OnceLock<(
-        flume::Sender<DeepLinkAction>,
-        flume::Receiver<DeepLinkAction>,
-    )> = OnceLock::new();
+fn channel() -> &'static (flume::Sender<QueuedAction>, flume::Receiver<QueuedAction>) {
+    static CHANNEL: OnceLock<(flume::Sender<QueuedAction>, flume::Receiver<QueuedAction>)> =
+        OnceLock::new();
     CHANNEL.get_or_init(flume::unbounded)
+}
+
+pub(crate) fn submit_action(action: DeepLinkAction) {
+    tracing::info!("queueing deep link action");
+    if channel().0.send(QueuedAction::DeepLink(action)).is_err() {
+        tracing::error!("failed to queue deep link action");
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn submit_reopen() -> bool {
+    channel().0.send(QueuedAction::Reopen).is_ok()
 }
 
 /// The one entry point for a URL handed over by the OS -- what
@@ -231,12 +257,7 @@ fn submit_action_url(raw: &str) {
         return;
     };
     match DeepLinkAction::try_from(&url) {
-        Ok(action) => {
-            tracing::info!(?action, "queueing deep link action");
-            if let Err(error) = channel().0.send(action) {
-                tracing::error!(%error, "failed to queue deep link action");
-            }
-        }
+        Ok(action) => submit_action(action),
         Err(ActionParseFromUrlError::ParseFailed(message)) => {
             tracing::error!(
                 scheme = url.scheme(),
@@ -257,9 +278,7 @@ fn submit_action_url(raw: &str) {
     }
 }
 
-/// Wire the executor: scan the launch argv for action URLs (the
-/// new-instance-wins counterpart of Tauri's single-instance argv forwarding,
-/// `lib.rs:5195-5204`, which filters on the `cap-desktop://` prefix), then
+/// Wire the executor: scan the initial launch argv for action URLs, then
 /// start the drain task that runs each queued action on the main thread with
 /// a clean borrow. Called once from [`crate::app_windows::init`], after the
 /// window registry the actions dispatch into exists.
@@ -274,7 +293,7 @@ pub fn init(cx: &mut App) {
     cx.spawn(async move |cx| {
         while let Ok(action) = rx.recv_async().await {
             cx.update(|cx| {
-                tracing::info!(?action, "executing deep link action");
+                tracing::info!("executing Cap action");
                 if let Err(error) = action.execute(cx) {
                     tracing::error!(%error, "failed to handle deep link action");
                 }
@@ -282,6 +301,20 @@ pub fn init(cx: &mut App) {
         }
     })
     .detach();
+}
+
+fn dispatch_recording_stop<C>(
+    phase: Phase,
+    clean_capture_owned: bool,
+    context: &mut C,
+    cancel_preflight: impl FnOnce(&mut C),
+    stop_session: impl FnOnce(&mut C),
+) {
+    if phase == Phase::Idle && clean_capture_owned {
+        cancel_preflight(context);
+    } else {
+        stop_session(context);
+    }
 }
 
 impl DeepLinkAction {
@@ -298,20 +331,6 @@ impl DeepLinkAction {
                 capture_system_audio,
                 mode,
             } => {
-                // `set_camera_input` / `set_mic_input`: the deep link's devices
-                // replace the current selections (including `None` clearing
-                // them). `Feeds::set_camera` also opens/closes the preview
-                // bubble, which is what `set_camera_input` does through the
-                // camera preview over there.
-                let selection = camera.clone().map(|id| SelectedCamera {
-                    label: camera_label(&id),
-                    id,
-                });
-                Feeds::global(cx).update(cx, |feeds, cx| {
-                    feeds.set_camera(selection, cx);
-                    feeds.set_microphone(mic_label.clone(), cx);
-                });
-
                 // The name -> target resolution, verbatim from
                 // `deeplink_actions.rs:200-231`.
                 let capture_target: ScreenCaptureTarget = match capture_mode {
@@ -357,42 +376,89 @@ impl DeepLinkAction {
                     }
                 };
 
+                let main = cx.global::<app_windows::AppWindows>().main;
+                let permit = main
+                    .update(cx, |view, _, cx| view.prepare_deep_link_start(cx))
+                    .map_err(|_| "The recording window is unavailable".to_string())??;
+                let selection = camera.clone().map(camera_selection);
+                if !permit.is_current(cx) {
+                    let _ = main.update(cx, |view, _, _| view.finish_deep_link_start(&permit));
+                    return Err("Recording preparation is no longer current".into());
+                }
+                Feeds::global(cx).update(cx, |feeds, cx| {
+                    feeds.set_camera(selection, cx);
+                    feeds.set_microphone(mic_label.clone(), cx);
+                });
+
                 // Deferred behind `set_camera`'s own deferred
                 // `open_camera_window`, so a studio start finds the bubble
                 // already open and excludes it from capture
                 // (`begin_recording`'s `camera_window_number` read). gpui
                 // flushes deferred callbacks in FIFO order.
                 cx.defer(move |cx| {
-                    let (camera_feed, mic_feed) = {
+                    if !permit.is_current(cx) {
+                        let _ = main.update(cx, |view, _, _| view.finish_deep_link_start(&permit));
+                        return;
+                    }
+                    let (camera_feed, mic_feed, input_readiness, device_settings) = {
                         let feeds = Feeds::global(cx);
                         feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
                         let feeds = feeds.read(cx);
-                        (feeds.camera_actor(), feeds.mic_actor())
-                    };
-                    let main = cx.global::<app_windows::AppWindows>().main;
-                    main.update(cx, |view, _, cx| {
-                        view.start_recording_config(
-                            recording::StartConfig {
-                                mode,
-                                target: capture_target,
-                                microphone: mic_label,
-                                camera,
-                                system_audio: capture_system_audio,
-                                excluded_windows: Vec::new(),
-                                camera_feed,
-                                mic_feed,
-                            },
-                            cx,
+                        (
+                            feeds.camera_actor(),
+                            feeds.mic_actor(),
+                            feeds.input_readiness(),
+                            feeds.requested_device_settings(),
                         )
-                    })
-                    .ok();
+                    };
+                    if main
+                        .update(cx, |view, _, cx| {
+                            view.start_recording_config_with_permit(
+                                recording::StartConfig {
+                                    mode,
+                                    target: capture_target,
+                                    device_settings,
+                                    input_readiness,
+                                    microphone: mic_label,
+                                    camera,
+                                    system_audio: capture_system_audio,
+                                    excluded_windows: Vec::new(),
+                                    camera_feed,
+                                    mic_feed,
+                                    #[cfg(target_os = "linux")]
+                                    linux_instant_camera: None,
+                                },
+                                permit.clone(),
+                                cx,
+                            )
+                        })
+                        .is_err()
+                    {
+                        permit.cancel();
+                    }
                 });
                 Ok(())
             }
-            // `recording::stop_recording`; the session's own phase guard is
-            // the Tauri command's "no recording in progress" early-out.
             DeepLinkAction::StopRecording => {
-                RecordingSession::global(cx).update(cx, |session, cx| session.stop(cx));
+                let main = cx.global::<app_windows::AppWindows>().main;
+                let _ = main.update(cx, |view, _, cx| {
+                    view.cancel_deep_link_start();
+                    cx.notify();
+                });
+                let session = RecordingSession::global(cx);
+                dispatch_recording_stop(
+                    session.read(cx).phase,
+                    app_windows::clean_capture_owned(cx),
+                    cx,
+                    app_windows::cancel_clean_capture,
+                    |cx| {
+                        if session.read(cx).phase == crate::session::Phase::Idle {
+                            app_windows::abort_editor_recording_flow(cx);
+                        } else {
+                            session.update(cx, |session, cx| session.stop(cx));
+                        }
+                    },
+                );
                 Ok(())
             }
             // `pause_recording` / `resume_recording`
@@ -427,10 +493,7 @@ impl DeepLinkAction {
             // signals with no consumer in this app.
             #[cfg(debug_assertions)]
             DeepLinkAction::OpenCamera { camera } => {
-                let selection = SelectedCamera {
-                    label: camera_label(&camera),
-                    id: camera,
-                };
+                let selection = camera_selection(camera);
                 Feeds::global(cx).update(cx, |feeds, cx| feeds.set_camera(Some(selection), cx));
                 Ok(())
             }
@@ -514,27 +577,102 @@ impl DeepLinkAction {
     }
 }
 
-/// The display label for a deep-linked camera id. The Tauri action carries no
-/// label (its command takes the bare `DeviceOrModelID`); this app's
-/// [`SelectedCamera`] wants one for the pickers, so it is resolved against the
-/// same enumeration `devices.rs` lists from, falling back to the raw device id
-/// for a device that is not currently attached.
-fn camera_label(id: &DeviceOrModelID) -> String {
-    cap_camera::list_cameras()
-        .find(|info| match id {
-            DeviceOrModelID::DeviceID(device_id) => info.device_id() == device_id.as_str(),
-            DeviceOrModelID::ModelID(model) => info.model_id() == Some(model),
-        })
-        .map(|info| info.display_name().to_string())
-        .unwrap_or_else(|| match id {
-            DeviceOrModelID::DeviceID(device_id) => device_id.clone(),
-            DeviceOrModelID::ModelID(_) => "Camera".to_string(),
-        })
+fn camera_selection(id: DeviceOrModelID) -> SelectedCamera {
+    let info = cap_camera::list_cameras().find(|info| match &id {
+        DeviceOrModelID::DeviceID(device) => info.device_id() == device,
+        DeviceOrModelID::ModelID(model) => info.model_id() == Some(model),
+    });
+    SelectedCamera {
+        device_id: info
+            .as_ref()
+            .map(|info| info.device_id().to_string())
+            .unwrap_or_else(|| match &id {
+                DeviceOrModelID::DeviceID(device) => device.clone(),
+                DeviceOrModelID::ModelID(_) => String::new(),
+            }),
+        model_id: info
+            .as_ref()
+            .and_then(|info| info.model_id().cloned())
+            .or_else(|| match &id {
+                DeviceOrModelID::ModelID(model) => Some(model.clone()),
+                DeviceOrModelID::DeviceID(_) => None,
+            }),
+        label: info
+            .as_ref()
+            .map(|info| info.display_name().to_string())
+            .unwrap_or_else(|| match &id {
+                DeviceOrModelID::DeviceID(device) => device.clone(),
+                DeviceOrModelID::ModelID(_) => "Camera".to_string(),
+            }),
+        id,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_dispatch_cancels_idle_preflight_and_preserves_live_session_stop() {
+        for phase in [
+            Phase::Idle,
+            Phase::Starting,
+            Phase::Recording { paused: false },
+            Phase::Recording { paused: true },
+            Phase::Stopping,
+        ] {
+            for owned in [false, true] {
+                let mut effects = (0, 0);
+                dispatch_recording_stop(
+                    phase,
+                    owned,
+                    &mut effects,
+                    |effects| effects.0 += 1,
+                    |effects| effects.1 += 1,
+                );
+                assert_eq!(
+                    effects,
+                    if phase == Phase::Idle && owned {
+                        (1, 0)
+                    } else {
+                        (0, 1)
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn forwarded_actions_wait_in_the_existing_queue_until_dispatch() {
+        let expected = [
+            DeepLinkAction::OpenSettings { page: None },
+            DeepLinkAction::OpenEditor {
+                project_path: "/tmp/forwarded-recording.cap".into(),
+            },
+        ];
+        for action in &expected {
+            submit_action(action.clone());
+        }
+        #[cfg(target_os = "macos")]
+        assert!(submit_reopen());
+        for action in expected {
+            assert_eq!(
+                channel().1.try_recv().unwrap(),
+                QueuedAction::DeepLink(action)
+            );
+        }
+        #[cfg(target_os = "macos")]
+        assert_eq!(channel().1.try_recv().unwrap(), QueuedAction::Reopen);
+        assert!(channel().1.is_empty());
+    }
+
+    #[test]
+    fn private_reopen_is_not_a_public_deep_link_action() {
+        for value in ["\"reopen\"", "{\"reopen\":{}}"] {
+            let url = Url::parse_with_params("cap-desktop://action", &[("value", value)]).unwrap();
+            assert!(DeepLinkAction::try_from(&url).is_err());
+        }
+    }
 
     // -- The Tauri parser's own tests (`deeplink_actions.rs:299-514`),
     // -- unchanged except for crate paths, so grammar drift fails loudly.

@@ -26,6 +26,7 @@ export type GoogleDriveFile = {
 	name?: string;
 	mimeType?: string;
 	size?: string;
+	version?: string;
 	md5Checksum?: string;
 	modifiedTime?: string;
 	parents?: string[];
@@ -1070,7 +1071,7 @@ export const createGoogleDriveResumableUpload = (
 			driveFetch(
 				config,
 				appendSharedDriveCreateParams(
-					`${DRIVE_UPLOAD_BASE}/files/${encodeURIComponent(fileId)}?uploadType=resumable&fields=id,name,mimeType,size`,
+					`${DRIVE_UPLOAD_BASE}/files/${encodeURIComponent(fileId)}?uploadType=resumable&fields=id,name,mimeType,size,version`,
 				),
 				{
 					method: "PATCH",
@@ -1086,7 +1087,7 @@ export const createGoogleDriveResumableUpload = (
 				const uploadUrl = yield* driveFetch(
 					config,
 					appendSharedDriveCreateParams(
-						`${DRIVE_UPLOAD_BASE}/files?uploadType=resumable&fields=id,name,mimeType,size`,
+						`${DRIVE_UPLOAD_BASE}/files?uploadType=resumable&fields=id,name,mimeType,size,version`,
 					),
 					{
 						method: "POST",
@@ -1241,7 +1242,7 @@ export const getGoogleDriveFileMetadata = (
 	driveFetch(
 		config,
 		appendSharedDriveCreateParams(
-			`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size,md5Checksum,parents,trashed,appProperties,capabilities(canRename)`,
+			`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size,version,md5Checksum,parents,trashed,appProperties,capabilities(canRename)`,
 		),
 		undefined,
 		tokenStore,

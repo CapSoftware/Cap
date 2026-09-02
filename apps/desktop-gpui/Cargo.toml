@@ -50,6 +50,7 @@ cpal = { git = "https://github.com/CapSoftware/cpal", rev = "6013cb5f8bd3" }
 # The actual recording engine -- the same studio/instant actors the Tauri app
 # drives. Drags in the ffmpeg encode stack; that is the point.
 cap-recording = { path = "../../crates/recording" }
+cap-media-info = { path = "../../crates/media-info" }
 cap-enc-ffmpeg = { path = "../../crates/enc-ffmpeg" }
 # Already in the tree through cap-recording; direct so the camera draw bench
 # can construct `NativeCameraFrame.timestamp` for its synthetic frames.
@@ -62,6 +63,7 @@ cap-project = { path = "../../crates/project" }
 # a `RenderImage` (`src/editor_sidebar/cursor.rs`).
 cap-cursor-info = { path = "../../crates/cursor-info" }
 resvg = "0.45"
+rodio = { version = "0.19.0", default-features = false, features = ["mp3"] }
 # The editor stack. `cap-rendering` is not a new subtree -- cap-recording
 # already depends on it, so wgpu 25 and its vendored wgpu-hal have been built
 # by this workspace since the recording unit; naming it here only makes the
@@ -169,12 +171,11 @@ tauri-winres = "0.3.5"
 # dev-dependencies so the shipped binary's tokio features are unchanged.
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 
-# kill(2) for the new-instance-wins guard (`src/single_instance.rs`); already
-# in the lockfile through half the tree, this only makes it direct.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
+clipboard-rs = "0.2.4"
 raw-window-handle = "0.6"
 tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
@@ -184,6 +185,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 raw-window-handle = "0.6"

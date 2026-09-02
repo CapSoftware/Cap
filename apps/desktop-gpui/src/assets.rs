@@ -46,7 +46,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "arrows.svg",
     "audio-on.svg",
     "bell.svg",
-    "building-2.svg",
     "camera.svg",
     "caret-down.svg",
     "captions.svg",
@@ -256,6 +255,19 @@ const ILLUSTRATIONS: &[(&str, &[u8])] = assets!("illustrations":
     "transparent.webp",
 );
 
+const ONBOARDING: &[(&str, &[u8])] = &[
+    ("onboarding/cloud-1.png", include_bytes!("../../desktop/src/assets/illustrations/cloud-1.png")),
+    ("onboarding/cloud-2.png", include_bytes!("../../desktop/src/assets/illustrations/cloud-2.png")),
+    ("onboarding/cloud-3.png", include_bytes!("../../desktop/src/assets/illustrations/cloud-3.png")),
+    ("onboarding/logo.svg", include_bytes!("../../../packages/ui-solid/icons/logo.svg")),
+    ("onboarding/music.mp3", include_bytes!("../../desktop/src/assets/tears-and-fireflies-adi-goldstein.mp3")),
+    ("onboarding/cursor-macos.svg", include_bytes!("../../../packages/ui-solid/icons/cursor-macos.svg")),
+    ("onboarding/cursor-windows.svg", include_bytes!("../../../packages/ui-solid/icons/cursor-windows.svg")),
+    ("onboarding/volume-2.svg", include_bytes!("../assets/icons/volume-2.svg")),
+    ("onboarding/volume-x.svg", include_bytes!("../assets/icons/volume-x.svg")),
+    ("onboarding/grain.svg", br##"<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><filter id="noiseFilter"><feTurbulence type="fractalNoise" baseFrequency="1.5" numOctaves="3" stitchTiles="stitch"/></filter><rect width="100%" height="100%" filter="url(#noiseFilter)"/></svg>"##),
+];
+
 pub struct Assets;
 
 impl Assets {
@@ -265,6 +277,7 @@ impl Assets {
             .chain(ICONS.iter())
             .chain(IMAGES.iter())
             .chain(ILLUSTRATIONS.iter())
+            .chain(ONBOARDING.iter())
     }
 }
 

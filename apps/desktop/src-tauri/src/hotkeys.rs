@@ -10,6 +10,7 @@ use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -89,6 +90,51 @@ impl HotkeysStore {
 pub struct OnEscapePress;
 
 pub type HotkeysState = Mutex<HotkeysStore>;
+
+fn clean_capture_shortcut() -> Shortcut {
+    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::F9)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn existing_clean_capture_stop(store: &HotkeysStore) -> Result<bool, String> {
+    let shortcut = clean_capture_shortcut();
+    let mut existing_stop = false;
+    for (action, hotkey) in &store.hotkeys {
+        if Shortcut::from(*hotkey) == shortcut {
+            if !matches!(action, HotkeyAction::StopRecording) {
+                return Err("Ctrl+Shift+F9 is assigned to another Cap action. Change that shortcut before starting clean Studio capture.".into());
+            }
+            existing_stop = true;
+        }
+    }
+    Ok(existing_stop)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn reserve_clean_capture_stop(app: &AppHandle) -> Result<bool, String> {
+    let shortcut = clean_capture_shortcut();
+    let state = app.state::<HotkeysState>();
+    let store = state.lock().unwrap();
+    let existing_stop = existing_clean_capture_stop(&store)?;
+    let shortcuts = app.global_shortcut();
+    if shortcuts.is_registered(shortcut) {
+        return if existing_stop {
+            Ok(false)
+        } else {
+            Err("Ctrl+Shift+F9 is already reserved. Release it before starting clean Studio capture.".into())
+        };
+    }
+    shortcuts.register(shortcut).map_err(|error| {
+        format!("Cannot reserve Ctrl+Shift+F9 to stop recording: {error}. Change the conflicting system shortcut and try again.")
+    })?;
+    Ok(true)
+}
+
+pub(crate) fn release_clean_capture_stop(app: &AppHandle, owned: bool) {
+    if owned && let Err(error) = app.global_shortcut().unregister(clean_capture_shortcut()) {
+        tracing::warn!(%error, "Could not release temporary recording shortcut");
+    }
+}
 
 const RECORDING_START_SAFETY_STORE_KEY: &str = "recording_start_safety";
 
@@ -176,10 +222,26 @@ async fn start_recording_from_hotkey(
     Ok(())
 }
 
+fn spawn_shortcut_task<F>(task: F)
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    drop(tauri::async_runtime::spawn(task));
+}
+
 pub fn init(app: &AppHandle) {
     app.plugin(
         tauri_plugin_global_shortcut::Builder::new()
             .with_handler(|app, shortcut, event| {
+                if *shortcut == clean_capture_shortcut()
+                    && crate::clean_capture::handle_shortcut(
+                        app,
+                        event.state() == HotKeyState::Pressed,
+                    )
+                {
+                    return;
+                }
                 if !matches!(event.state(), HotKeyState::Pressed) {
                     return;
                 }
@@ -190,7 +252,7 @@ pub fn init(app: &AppHandle) {
 
                 if shortcut.key == Code::Comma && shortcut.mods == Modifiers::META {
                     let app = app.clone();
-                    tokio::spawn(async move {
+                    spawn_shortcut_task(async move {
                         let _ = ShowCapWindow::Settings { page: None }.show(&app).await;
                     });
                 }
@@ -200,7 +262,7 @@ pub fn init(app: &AppHandle) {
 
                 for (action, hotkey) in &store.hotkeys {
                     if &Shortcut::from(*hotkey) == shortcut {
-                        tokio::spawn(handle_hotkey(app.clone(), *action));
+                        spawn_shortcut_task(handle_hotkey(app.clone(), *action));
                     }
                 }
             })
@@ -343,6 +405,9 @@ pub fn set_hotkey(app: AppHandle, action: HotkeyAction, hotkey: Option<Hotkey>) 
     let global_shortcut = app.global_shortcut();
     let state = app.state::<HotkeysState>();
     let mut store = state.lock().unwrap();
+    if crate::clean_capture::phase(&app).is_some() {
+        return Err(());
+    }
 
     let prev = store.hotkeys.get(&action).cloned();
 
@@ -365,9 +430,314 @@ pub fn set_hotkey(app: AppHandle, action: HotkeyAction, hotkey: Option<Hotkey>) 
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) struct WaylandStop {
+    generation: u32,
+    cancel: tokio::sync::watch::Sender<bool>,
+    task: Option<tauri::async_runtime::JoinHandle<Result<(), String>>>,
+    completed: Option<Result<(), String>>,
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn reserve_wayland_stop(app: &AppHandle, generation: u32) -> Result<(), String> {
+    let state = app.state::<crate::clean_capture::State>();
+    let mut owned = state.portal_stop.lock().await;
+    if owned.is_some() {
+        return Err("Previous Wayland Stop session has not closed".into());
+    }
+    let (cancel, receiver) = tokio::sync::watch::channel(false);
+    let handle = app.clone();
+    let task = tauri::async_runtime::spawn(async move {
+        if run_wayland_tray(&handle, generation, receiver.clone()).await? {
+            Ok(())
+        } else {
+            run_wayland_stop(&handle, generation, receiver).await
+        }
+    });
+    *owned = Some(WaylandStop {
+        generation,
+        cancel,
+        task: Some(task),
+        completed: None,
+    });
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+async fn run_wayland_stop(
+    app: &AppHandle,
+    generation: u32,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+) -> Result<(), String> {
+    use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
+    use futures::StreamExt;
+    let portal = tokio::select! {
+        _ = cancel.changed() => return Ok(()),
+        result = GlobalShortcuts::new() => match result {
+            Ok(portal) => portal,
+            Err(error) => { report_wayland_stop_loss(app, generation, &error.to_string()); return Ok(()); }
+        },
+    };
+    if *cancel.borrow() {
+        return Ok(());
+    }
+    // Keep session creation owned even if Stop arrives while the portal replies;
+    // dropping CreateSession could lose the only handle needed to close it.
+    let session = match portal.create_session().await {
+        Ok(session) => session,
+        Err(error) => {
+            report_wayland_stop_loss(app, generation, &error.to_string());
+            return Ok(());
+        }
+    };
+    let result = async {
+        let session_path = serde_json::to_value(&session).map_err(|error| error.to_string())?;
+        let session_path = session_path
+            .as_str()
+            .ok_or("Invalid Stop session identity")?;
+        let id = format!("cap-clean-stop-{generation}");
+        let mut activated = portal
+            .receive_activated()
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut deactivated = portal
+            .receive_deactivated()
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut closed = session
+            .receive_closed()
+            .await
+            .map_err(|error| error.to_string())?;
+        let bound = portal
+            .bind_shortcuts(
+                &session,
+                &[NewShortcut::new(&id, "Start or stop Cap clean recording")
+                    .preferred_trigger(Some("CTRL+SHIFT+F9"))],
+                None,
+            )
+            .await
+            .map_err(|error| error.to_string())?
+            .response()
+            .map_err(|error| error.to_string())?;
+        let shortcut = bound
+            .shortcuts()
+            .iter()
+            .find(|shortcut| shortcut.id() == id)
+            .ok_or("Stop shortcut was not granted")?;
+        crate::clean_capture::describe_wayland_stop(
+            app,
+            generation,
+            format!("{} (desktop shortcut)", shortcut.trigger_description()),
+        );
+        loop {
+            tokio::select! {
+                event = activated.next() => match event {
+                    Some(event) if event.session_handle().as_str() == session_path && event.shortcut_id() == id => {
+                        crate::clean_capture::handle_wayland_stop(app, generation, crate::clean_capture::StopRoute::Portal, true);
+                    }
+                    Some(_) => {}
+                    None => return Err("Stop shortcut event stream closed".into()),
+                },
+                event = deactivated.next() => match event {
+                    Some(event) if event.session_handle().as_str() == session_path && event.shortcut_id() == id => {
+                        crate::clean_capture::handle_wayland_stop(app, generation, crate::clean_capture::StopRoute::Portal, false);
+                    }
+                    Some(_) => {}
+                    None => return Err("Stop shortcut event stream closed".into()),
+                },
+                _ = closed.next() => return Err("Stop shortcut session was revoked".into()),
+            }
+        }
+    };
+    let result: Result<(), String> = if *cancel.borrow() {
+        Ok(())
+    } else {
+        tokio::select! {
+            _ = cancel.changed() => Ok(()),
+            result = result => result,
+        }
+    };
+    if let Err(error) = &result {
+        report_wayland_stop_loss(app, generation, error);
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(2), session.close())
+        .await
+        .map_err(|_| "Stop session close timed out".to_string())?
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn report_wayland_stop_loss(app: &AppHandle, generation: u32, error: &str) {
+    crate::clean_capture::wayland_stop_lost(
+        app,
+        generation,
+        crate::clean_capture::StopRoute::Portal,
+        error.to_string(),
+    );
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn release_wayland_stop(app: &AppHandle, generation: u32) -> Result<(), String> {
+    let state = app.state::<crate::clean_capture::State>();
+    let mut owned = state.portal_stop.lock().await;
+    let Some(stop) = owned.as_mut().filter(|stop| stop.generation == generation) else {
+        return Ok(());
+    };
+    if let Some(result) = &stop.completed {
+        return result.clone();
+    }
+    let _ = stop.cancel.send(true);
+    let task = stop
+        .task
+        .as_mut()
+        .ok_or("Stop session worker ownership was lost")?;
+    let joined = tokio::time::timeout(std::time::Duration::from_secs(3), task)
+        .await
+        .map_err(|_| "Stop session worker has not joined".to_string())?;
+    let _finished = stop.task.take();
+    let result = joined
+        .map_err(|error| error.to_string())
+        .and_then(|result| result);
+    stop.completed = Some(result.clone());
+    if result.is_ok() {
+        let _released = owned.take();
+    }
+    result
+}
+
+#[cfg(target_os = "linux")]
+async fn run_wayland_tray(
+    app: &AppHandle,
+    generation: u32,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+) -> Result<bool, String> {
+    use cap_utils::linux_recording_stop::{StopTray, StopTrayEvent};
+    let icon = match crate::tray::clean_stop_icon() {
+        Ok(icon) => icon,
+        Err(error) => {
+            crate::clean_capture::wayland_stop_lost(
+                app,
+                generation,
+                crate::clean_capture::StopRoute::Tray,
+                error,
+            );
+            return Ok(false);
+        }
+    };
+    let tray = match StopTray::open(u64::from(generation), icon).await {
+        Ok(tray) => tray,
+        Err(error) => {
+            let can_fallback = error.can_fallback();
+            let message = error.to_string();
+            crate::clean_capture::wayland_stop_lost(
+                app,
+                generation,
+                crate::clean_capture::StopRoute::Tray,
+                message.clone(),
+            );
+            if !can_fallback {
+                crate::clean_capture::wayland_stop_lost(
+                    app,
+                    generation,
+                    crate::clean_capture::StopRoute::Portal,
+                    message.clone(),
+                );
+                return Err(message);
+            }
+            return Ok(false);
+        }
+    };
+    let events = tray.events();
+    let mut used = false;
+    let mut cancelled = false;
+    loop {
+        tokio::select! {
+            _ = cancel.changed() => { cancelled = true; break; },
+            event = events.recv_async() => match event {
+                Ok(StopTrayEvent::Activated { generation: received }) if received == u64::from(generation) => {
+                    used = true;
+                    crate::clean_capture::handle_wayland_stop(app, generation, crate::clean_capture::StopRoute::Tray, true);
+                    crate::clean_capture::handle_wayland_stop(app, generation, crate::clean_capture::StopRoute::Tray, false);
+                }
+                Ok(StopTrayEvent::Unavailable { generation: received }) if received == u64::from(generation) => {
+                    crate::clean_capture::wayland_stop_lost(app, generation, crate::clean_capture::StopRoute::Tray, "The Stop tray host is unavailable".into());
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    crate::clean_capture::wayland_stop_lost(app, generation, crate::clean_capture::StopRoute::Tray, "The Stop tray event stream closed".into());
+                    break;
+                }
+            }
+        }
+    }
+    tray.close().await?;
+    Ok(used || cancelled)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::should_confirm_without_microphone;
+    use super::{should_confirm_without_microphone, spawn_shortcut_task};
+    use std::time::Duration;
+
+    #[test]
+    fn clean_capture_reuses_only_an_existing_stop_binding() {
+        let hotkey = super::Hotkey {
+            code: super::Code::F9,
+            meta: false,
+            ctrl: true,
+            alt: false,
+            shift: true,
+        };
+        let mut store = super::HotkeysStore::default();
+        assert!(!super::existing_clean_capture_stop(&store).unwrap());
+        store
+            .hotkeys
+            .insert(super::HotkeyAction::StopRecording, hotkey);
+        assert!(super::existing_clean_capture_stop(&store).unwrap());
+        store
+            .hotkeys
+            .insert(super::HotkeyAction::StartStudioRecording, hotkey);
+        assert!(super::existing_clean_capture_stop(&store).is_err());
+    }
+
+    #[test]
+    fn shortcut_dispatch_runs_from_thread_without_tokio_runtime() {
+        let (sent, received) = std::sync::mpsc::channel();
+        let caller = std::thread::spawn(move || {
+            assert!(tokio::runtime::Handle::try_current().is_err());
+            let caller_id = std::thread::current().id();
+            spawn_shortcut_task(async move {
+                assert!(tokio::runtime::Handle::try_current().is_ok());
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                sent.send((caller_id, std::thread::current().id())).unwrap();
+                Ok::<(), String>(())
+            });
+        });
+        caller.join().expect("OS callback thread must not panic");
+        let (caller_id, task_id) = received
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Shortcut action must run on the application runtime");
+        assert_ne!(caller_id, task_id);
+    }
+
+    #[test]
+    fn shortcut_dispatch_keeps_detached_settings_task_alive() {
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            assert!(tokio::runtime::Handle::try_current().is_err());
+            spawn_shortcut_task(async move {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                sent.send(()).unwrap();
+            });
+        })
+        .join()
+        .expect("OS callback thread must not panic");
+        received
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Detached settings task must complete");
+    }
 
     #[test]
     fn confirms_when_enabled_without_microphone() {

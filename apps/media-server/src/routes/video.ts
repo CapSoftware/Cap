@@ -4,6 +4,7 @@ import { z } from "zod";
 import { validateMediaServerSecret } from "../lib/auth";
 import type { VideoMetadata } from "../lib/job-manager";
 import {
+	beginRecordingVerification,
 	canAcceptNewVideoProcess,
 	createJob,
 	deleteJob,
@@ -20,6 +21,7 @@ import {
 	touchJob,
 	updateJob,
 } from "../lib/job-manager";
+import { PROCESS_TIMEOUT_MS } from "../lib/media-common";
 import { renderEditedVideo } from "../lib/media-edit";
 import {
 	canAcceptNewProbeOperation as canAcceptNewProbeProcess,
@@ -43,6 +45,10 @@ import {
 	uploadFileToStorage,
 	uploadToS3,
 } from "../lib/media-video";
+import {
+	isRetryableRecordingVerificationError,
+	verifyRemoteRecording,
+} from "../lib/recording-verification";
 import type { TempFileHandle } from "../lib/temp-files";
 import { cleanupStaleTempFiles } from "../lib/temp-files";
 import {
@@ -54,6 +60,9 @@ import {
 
 const video = new Hono();
 const PROCESSING_HEARTBEAT_MS = 60 * 1000;
+const POST_VERIFICATION_ASSET_BUDGET_MS = 5 * 60 * 1000;
+const RECORDING_VERIFICATION_RETRY_ERROR =
+	"Recording verification temporarily unavailable (503)";
 const MEDIA_ENGINE_ERROR_CODE = ["FF", "MPEG_ERROR"].join("");
 const PROBE_ERROR_CODE = ["FF", "PROBE_ERROR"].join("");
 const VIDEO_BUSY_RETRY_AFTER_SECONDS = 15;
@@ -1558,8 +1567,130 @@ const muxSegmentsOutputUploadSchema = z.discriminatedUnion("type", [
 	}),
 ]);
 
+const recordingVerificationSchema = z.object({
+	videoId: z.string(),
+	userId: z.string(),
+	videoUrl: z.string().url(),
+	fileSize: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+	duration: z.number().finite().positive(),
+	requiredAudio: z.boolean(),
+	objectIdentity: z.string().min(1),
+	webhookUrl: z.string().url(),
+	webhookSecret: z.string().optional(),
+});
+
+video.post("/verify-recording", async (c) => {
+	if (!validateMediaServerSecret(c))
+		return c.json({ error: "Unauthorized" }, 401);
+	const parsed = recordingVerificationSchema.safeParse(await c.req.json());
+	if (!parsed.success)
+		return c.json({ error: "Invalid verification request" }, 400);
+	if (!canAcceptNewVideoProcess()) {
+		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
+		return c.json(getMuxBusyResponseBody(getVideoCapacitySnapshot()), 503);
+	}
+	const body = parsed.data;
+	const jobId = generateJobId();
+	createJob(
+		jobId,
+		body.videoId,
+		body.userId,
+		body.webhookUrl,
+		body.webhookSecret,
+	);
+	void verifyUploadedRecordingAsync(jobId, body);
+	return c.json({ jobId });
+});
+
+async function verifyUploadedRecordingAsync(
+	jobId: string,
+	body: z.infer<typeof recordingVerificationSchema>,
+) {
+	const abortController = new AbortController();
+	updateJob(jobId, { abortController, phase: "processing", progress: 0 });
+	try {
+		const metadata = await probeVideo(body.videoUrl).catch(() => {
+			throw new Error(RECORDING_VERIFICATION_RETRY_ERROR);
+		});
+		if (
+			metadata.fileSize !== body.fileSize ||
+			!isDurationClose(metadata.duration, body.duration) ||
+			(body.requiredAudio && !metadata.audioCodec)
+		) {
+			throw new Error(
+				"Uploaded recording does not match the completed local file",
+			);
+		}
+		if (
+			!beginRecordingVerification(
+				jobId,
+				PROCESS_TIMEOUT_MS + POST_VERIFICATION_ASSET_BUDGET_MS,
+			)
+		)
+			throw new Error("Recording verification job is no longer active");
+		const verified = await withJobHeartbeat(jobId, () =>
+			withMuxMemoryGuard(abortController, () =>
+				verifyRemoteRecording(body.videoUrl, {
+					expectedDuration: body.duration,
+					requireAudio: body.requiredAudio,
+					expectedObjectIdentity: body.objectIdentity,
+					abortSignal: abortController.signal,
+				}),
+			),
+		);
+		if (verified.fileSize !== body.fileSize)
+			throw new Error("Verified recording size does not match the local file");
+		updateJob(jobId, {
+			phase: "complete",
+			progress: 100,
+			metadata: {
+				...metadata,
+				duration: verified.video.duration,
+				audioCodec: verified.audio ? (metadata.audioCodec ?? "unknown") : null,
+				fileSize: verified.fileSize,
+			},
+			recordingVerification: {
+				request: {
+					version: 1,
+					artifact: {
+						kind: "mp4",
+						fileSize: body.fileSize,
+						duration: body.duration,
+						objectIdentity: body.objectIdentity,
+					},
+					requiredAudio: body.requiredAudio,
+				},
+				fullDecode: true,
+				objectIdentity: verified.objectIdentity,
+			},
+		});
+	} catch (error) {
+		const retryable =
+			isRetryableRecordingVerificationError(error) ||
+			(error instanceof Error &&
+				(error.message === VIDEO_MEMORY_PRESSURE_ERROR ||
+					error.message === RECORDING_VERIFICATION_RETRY_ERROR));
+		updateJob(jobId, {
+			phase:
+				!retryable && abortController.signal.aborted ? "cancelled" : "error",
+			error: retryable
+				? RECORDING_VERIFICATION_RETRY_ERROR
+				: "Uploaded recording content could not be verified; retain the local recording",
+		});
+	}
+	const job = getJob(jobId);
+	if (job) await sendWebhook(job);
+	setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
+}
+
 const muxSegmentsSchema = z
 	.object({
+		manifestSha256: z
+			.string()
+			.regex(/^[a-f0-9]{64}$/)
+			.optional(),
+		expectedDuration: z.number().finite().positive().optional(),
+		outputVerificationUrl: z.string().url().optional(),
 		videoId: z.string(),
 		userId: z.string(),
 		outputPresignedUrl: z.string().url().optional(),
@@ -1625,6 +1756,7 @@ video.post("/mux-segments", async (c) => {
 		audioSegmentUrls: audioSegUrls,
 	} = body.data;
 	const outputUpload = getMuxSegmentsOutputUpload(body.data);
+	updateJob(jobId, { manifestSha256: body.data.manifestSha256 });
 
 	muxSegmentsAsync(
 		jobId,
@@ -1636,6 +1768,8 @@ video.post("/mux-segments", async (c) => {
 		videoSegUrls,
 		audioInitUrl ?? null,
 		audioSegUrls ?? null,
+		body.data.expectedDuration,
+		body.data.outputVerificationUrl,
 	).catch((err) => {
 		console.error(`[mux-segments] Async mux error for job ${jobId}:`, err);
 		const currentJob = getJob(jobId);
@@ -1896,6 +2030,8 @@ async function muxSegmentsAsync(
 	videoSegmentUrls: string[],
 	audioInitUrl: string | null,
 	audioSegmentUrls: string[] | null,
+	expectedDuration?: number,
+	outputVerificationUrl?: string,
 ): Promise<void> {
 	const { ensureTempDir } = await import("../lib/temp-files");
 	const { mkdir, rm } = await import("node:fs/promises");
@@ -2016,17 +2152,78 @@ async function muxSegmentsAsync(
 			resources: getSystemResources(),
 		});
 
+		let metadata = await probeVideoFile(resultPath);
+		if (
+			!Number.isFinite(metadata.duration) ||
+			metadata.duration <= 0 ||
+			metadata.fileSize !== file(resultPath).size ||
+			metadata.fileSize <= 0 ||
+			metadata.width <= 0 ||
+			metadata.height <= 0 ||
+			!metadata.videoCodec ||
+			(audioInput && !metadata.audioCodec) ||
+			(expectedDuration !== undefined &&
+				!isDurationClose(metadata.duration, expectedDuration))
+		) {
+			throw new Error(
+				"Muxed recording is incomplete or missing a required track",
+			);
+		}
+
 		updateJob(jobId, { phase: "uploading", progress: 80 });
 		sendCurrentJobWebhook(jobId);
 
 		outputUploadStarted = true;
-		await uploadFileToStorage(resultPath, outputUpload, "video/mp4");
-
-		let metadata: VideoMetadata | undefined;
-		try {
-			const probeResult = await probeVideoFile(resultPath);
-			metadata = probeResult;
-		} catch {}
+		const uploadReceipt = await uploadFileToStorage(
+			resultPath,
+			outputUpload,
+			"video/mp4",
+		);
+		if (outputVerificationUrl) {
+			if (!uploadReceipt.objectIdentity)
+				throw new Error("Recording upload did not return an object identity");
+			if (
+				!beginRecordingVerification(
+					jobId,
+					PROCESS_TIMEOUT_MS + POST_VERIFICATION_ASSET_BUDGET_MS,
+				)
+			)
+				throw new Error("Recording verification job is no longer active");
+			const verified = await withJobHeartbeat(jobId, () =>
+				withMuxMemoryGuard(abortController, () =>
+					verifyRemoteRecording(outputVerificationUrl, {
+						expectedDuration: expectedDuration ?? metadata.duration,
+						requireAudio: Boolean(audioInput),
+						expectedObjectIdentity: uploadReceipt.objectIdentity,
+						abortSignal: abortController.signal,
+					}),
+				),
+			);
+			if (verified.fileSize !== metadata.fileSize)
+				throw new Error(
+					"Uploaded recording size does not match the muxed file",
+				);
+			metadata = {
+				...metadata,
+				duration: verified.video.duration,
+				audioCodec: verified.audio ? (metadata.audioCodec ?? "unknown") : null,
+				fileSize: verified.fileSize,
+			};
+			const manifestSha256 = getJob(jobId)?.manifestSha256;
+			if (manifestSha256) {
+				updateJob(jobId, {
+					recordingVerification: {
+						request: {
+							version: 1,
+							artifact: { kind: "segments", manifestSha256 },
+							requiredAudio: Boolean(audioInput),
+						},
+						fullDecode: true,
+						objectIdentity: verified.objectIdentity,
+					},
+				});
+			}
+		}
 
 		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
 			updateJob(jobId, {
@@ -2092,7 +2289,11 @@ async function muxSegmentsAsync(
 		console.error(`Mux-segments job ${jobId} failed:`, error);
 		updateJob(jobId, {
 			phase: "error",
-			error: error instanceof Error ? error.message : "Unknown error",
+			error: isRetryableRecordingVerificationError(error)
+				? "Recording verification temporarily unavailable (503)"
+				: error instanceof Error
+					? error.message
+					: "Unknown error",
 		});
 		sendCurrentJobWebhook(jobId);
 	} finally {

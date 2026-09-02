@@ -59,7 +59,10 @@ type MultipartAccess = {
 			S3.CompleteMultipartUploadCommandInput,
 			"Key" | "Bucket" | "UploadId"
 		>,
-	) => Effect.Effect<{ Location?: string }, StorageDomain.StorageError>;
+	) => Effect.Effect<
+		{ Location?: string; ETag?: string },
+		StorageDomain.StorageError
+	>;
 	abort: (
 		key: string,
 		uploadId: string,
@@ -259,6 +262,7 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 				ContentLength: result.ContentLength,
 				ContentType: result.ContentType,
 				Metadata: result.Metadata,
+				ETag: result.ETag,
 			})),
 		),
 	putObject: (
@@ -270,7 +274,7 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 		source: string,
 		key: string,
 		args?: Omit<S3.CopyObjectCommandInput, "Bucket" | "CopySource" | "Key">,
-	) => mapStorageError(s3.copyObject(source, key, args)).pipe(Effect.asVoid),
+	) => mapStorageError(s3.copyObject(source, key, args)),
 	deleteObject: (key: string) =>
 		mapStorageError(s3.deleteObject(key)).pipe(Effect.asVoid),
 	deleteObjects: (objects: Array<{ Key?: string }>) =>
@@ -552,6 +556,9 @@ const makeGoogleDriveAccess = ({
 								: (object.contentLength ?? undefined),
 							ContentType: metadata.mimeType ?? object.contentType ?? undefined,
 							Metadata: object.metadata ?? undefined,
+							ETag: metadata.version
+								? `"${metadata.id}:${metadata.version}"`
+								: undefined,
 						})),
 					),
 				),

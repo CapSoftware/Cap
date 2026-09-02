@@ -90,8 +90,8 @@ pub async fn upload_multipart_presign_part(
         return Err(format!("api/upload_multipart_presign_part/{status}: {error_body}").into());
     }
 
-    resp.json::<Response>()
-        .await
+    crate::upload::lifecycle::cancellable(resp.json::<Response>())
+        .await?
         .map_err(|err| format!("api/upload_multipart_presign_part/response: {err}").into())
         .map(|data| data.presigned_url)
 }
@@ -104,6 +104,8 @@ pub struct UploadedPart {
     pub size: usize,
     #[serde(skip)]
     pub total_size: u64,
+    #[serde(skip)]
+    pub object_identity: Option<String>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -137,7 +139,8 @@ pub async fn upload_multipart_complete(
 
     #[derive(Deserialize)]
     pub struct Response {
-        location: Option<String>,
+        #[serde(rename = "objectIdentity")]
+        object_identity: Option<String>,
     }
 
     trace!("Completing multipart upload");
@@ -165,10 +168,10 @@ pub async fn upload_multipart_complete(
         return Err(format!("api/upload_multipart_complete/{status}: {error_body}").into());
     }
 
-    resp.json::<Response>()
-        .await
+    crate::upload::lifecycle::cancellable(resp.json::<Response>())
+        .await?
         .map_err(|err| format!("api/upload_multipart_complete/response: {err}").into())
-        .map(|data| data.location)
+        .map(|data| data.object_identity)
 }
 
 #[derive(Debug, Serialize)]
@@ -224,8 +227,8 @@ pub async fn upload_signed(
         return Err(format!("api/upload_signed/{status}: {error_body}").into());
     }
 
-    resp.json::<Response>()
-        .await
+    crate::upload::lifecycle::cancellable(resp.json::<Response>())
+        .await?
         .map_err(|err| format!("api/upload_signed/response: {err}").into())
         .map(|data| data.presigned_put_data)
 }
@@ -260,8 +263,8 @@ pub async fn upload_signed_batch(
         return Err(format!("api/upload_signed_batch/{status}: {error_body}").into());
     }
 
-    resp.json::<Response>()
-        .await
+    crate::upload::lifecycle::cancellable(resp.json::<Response>())
+        .await?
         .map_err(|err| format!("api/upload_signed_batch/response: {err}").into())
         .map(|data| data.urls)
 }
@@ -352,6 +355,41 @@ pub async fn signal_recording_complete(
     }
 
     Ok(())
+}
+
+pub async fn verify_recording_complete(
+    app: &AppHandle,
+    video_id: &str,
+    verification: &cap_recording::upload_verification::UploadVerification,
+) -> Result<Option<cap_recording::upload_verification::VerifiedUploadReceipt>, AuthedApiError> {
+    let response = app
+        .authed_api_request("/api/upload/recording-complete", |client, url| {
+            client
+                .post(url)
+                .timeout(std::time::Duration::from_secs(45))
+                .json(&serde_json::json!({
+                    "videoId": video_id,
+                    "verification": verification,
+                }))
+        })
+        .await?;
+    let status = response.status();
+    let response: serde_json::Value =
+        crate::upload::lifecycle::cancellable(response.json()).await??;
+    if status == reqwest::StatusCode::CONFLICT
+        && response.get("status").and_then(serde_json::Value::as_str) == Some("reupload-required")
+    {
+        return Err(AuthedApiError::ReuploadRequired);
+    }
+    if !status.is_success() {
+        return Err(format!(
+            "Recording verification is unavailable ({status}); local recording retained"
+        )
+        .into());
+    }
+    verification
+        .verified_receipt(video_id, &response)
+        .map_err(AuthedApiError::from)
 }
 
 pub async fn fetch_organizations(app: &AppHandle) -> Result<Vec<Organization>, AuthedApiError> {

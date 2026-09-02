@@ -7,7 +7,10 @@ use tauri_specta::Event;
 use tokio::sync::{Mutex, Notify};
 use tracing::{info, warn};
 
-use crate::general_settings::GeneralSettingsStore;
+use crate::{
+    exit_shutdown::{ExitBlocked, UpdateInstallGuard, UpdateInstallState},
+    general_settings::GeneralSettingsStore,
+};
 
 const UPDATE_ENDPOINT: &str =
     "https://cdn.crabnebula.app/update/cap/cap/{{target}}/{{current_version}}";
@@ -58,7 +61,33 @@ pub struct UpdatesState {
     pending: Mutex<Option<PendingUpdate>>,
     announced_version: Mutex<Option<String>>,
     install: Mutex<()>,
+    install_phase: UpdateInstallState,
     notify: Notify,
+}
+
+impl UpdatesState {
+    pub(crate) fn is_installing(&self) -> bool {
+        self.install_phase.is_installing()
+    }
+}
+
+pub(crate) fn recording_start_blocked(app: &AppHandle) -> bool {
+    app.try_state::<UpdatesState>()
+        .is_none_or(|state| state.install_phase.blocks_recording())
+}
+
+fn begin_install<'a>(
+    app: &AppHandle,
+    state: &'a UpdatesState,
+) -> Result<UpdateInstallGuard<'a>, String> {
+    crate::with_idle_app(app, true, || {
+        state
+            .install_phase
+            .begin()
+            .ok_or(ExitBlocked::UpdateInstalling)
+    })
+    .and_then(std::convert::identity)
+    .map_err(|reason| reason.message().to_string())
 }
 
 fn current_channel(app: &AppHandle) -> UpdateChannel {
@@ -207,16 +236,8 @@ async fn download_with_progress(app: &AppHandle, update: &Update) -> Result<Vec<
         .map_err(|e| e.to_string())
 }
 
-async fn is_busy(app: &AppHandle) -> bool {
-    if crate::export::export_session_active() || crate::upload::upload_session_active() {
-        return true;
-    }
-
-    let Some(state) = app.try_state::<crate::ArcLock<crate::App>>() else {
-        return true;
-    };
-
-    state.read().await.is_recording_active_or_pending()
+fn is_busy(app: &AppHandle) -> bool {
+    crate::with_idle_app(app, true, || ()).is_err()
 }
 
 #[tauri::command]
@@ -236,7 +257,7 @@ pub async fn updates_download_and_install(app: AppHandle) -> Result<(), String> 
     let state = app.state::<UpdatesState>();
     let _install = state.install.lock().await;
 
-    if is_busy(&app).await {
+    if is_busy(&app) {
         return Err(UPDATE_BUSY_ERROR.to_string());
     }
 
@@ -262,12 +283,10 @@ pub async fn updates_download_and_install(app: AppHandle) -> Result<(), String> 
 
     let bytes = download_with_progress(&app, &pending.update).await?;
 
-    if is_busy(&app).await {
-        return Err(UPDATE_BUSY_ERROR.to_string());
-    }
-
+    let install_admission = begin_install(&app, &state)?;
     info!("Installing update {}", pending.version);
     pending.update.install(bytes).map_err(|e| e.to_string())?;
+    install_admission.complete(cfg!(windows));
 
     let mut guard = state.pending.lock().await;
     if let Some(p) = guard.as_mut()
@@ -311,7 +330,7 @@ pub fn spawn_background_loop(app: AppHandle) {
                 continue;
             }
 
-            if is_busy(&app).await {
+            if is_busy(&app) {
                 delay = BUSY_RETRY_DELAY;
                 continue;
             }
@@ -334,7 +353,7 @@ pub fn spawn_background_loop(app: AppHandle) {
 
             let installed = if cfg!(target_os = "macos") {
                 let _install = state.install.lock().await;
-                if is_busy(&app).await {
+                if is_busy(&app) {
                     delay = BUSY_RETRY_DELAY;
                     continue;
                 }
@@ -358,10 +377,13 @@ pub fn spawn_background_loop(app: AppHandle) {
 
                     // A recording or export may have started mid-download;
                     // don't touch the install while one is running.
-                    if is_busy(&app).await {
-                        delay = BUSY_RETRY_DELAY;
-                        continue;
-                    }
+                    let install_admission = match begin_install(&app, &state) {
+                        Ok(admission) => admission,
+                        Err(_) => {
+                            delay = BUSY_RETRY_DELAY;
+                            continue;
+                        }
+                    };
 
                     // Safe while Cap runs: the .app bundle is swapped in place
                     // and takes effect on relaunch.
@@ -369,6 +391,7 @@ pub fn spawn_background_loop(app: AppHandle) {
                         warn!("Failed to install nightly update {version}: {err}");
                         continue;
                     }
+                    install_admission.complete(false);
 
                     let mut pending = state.pending.lock().await;
                     if let Some(p) = pending.as_mut()

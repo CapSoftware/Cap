@@ -10,12 +10,13 @@ import {
 import { serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
-import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 import {
 	attachPaidBaaCheckout,
 	ensureBaaHasPro,
+	hasBaaProWaiver,
 	hasPaidBaaInvoice,
 	isSignedBaaPrice,
 	isSignedBaaSubscription,
@@ -121,13 +122,30 @@ async function cancelEntitledBaaSubscriptions(
 	subscriptions: Stripe.Subscription[],
 	customerId: string,
 ) {
+	const waivedSubscriptionIds = subscriptions
+		.filter(
+			(subscription) =>
+				isSignedBaaSubscription(subscription) &&
+				subscription.metadata?.proRequirement === "waived",
+		)
+		.map((subscription) => subscription.id);
 	const linked = await db()
-		.select({ subscriptionId: signedBaas.stripeSubscriptionId })
+		.select({
+			id: signedBaas.id,
+			organizationId: signedBaas.organizationId,
+			userId: signedBaas.userId,
+			subscriptionId: signedBaas.stripeSubscriptionId,
+		})
 		.from(signedBaas)
 		.innerJoin(users, eq(signedBaas.userId, users.id))
 		.where(
 			and(
-				eq(users.stripeCustomerId, customerId),
+				or(
+					eq(users.stripeCustomerId, customerId),
+					...(waivedSubscriptionIds.length
+						? [inArray(signedBaas.stripeSubscriptionId, waivedSubscriptionIds)]
+						: []),
+				),
 				ne(signedBaas.status, "canceled"),
 			),
 		)
@@ -151,6 +169,8 @@ async function cancelEntitledBaaSubscriptions(
 	// billing when no entitled Pro subscription remains.
 	for (const sub of allSubscriptions) {
 		if (!isSignedBaaSubscription(sub)) continue;
+		const record = linked.find((item) => item.subscriptionId === sub.id);
+		if (record && hasBaaProWaiver(sub, record)) continue;
 		if (ENTITLED_SUBSCRIPTION_STATUSES.has(sub.status)) {
 			await stripe().subscriptions.cancel(sub.id);
 		}
@@ -226,7 +246,7 @@ async function syncSignedBaaStatus(
 		if (!owner) {
 			throw new Error("The BAA owner could not be found.");
 		}
-		if (!(await ensureBaaHasPro(owner, subscription, record.id))) {
+		if (!(await ensureBaaHasPro(owner, subscription, record))) {
 			return NextResponse.json({ received: true });
 		}
 	}

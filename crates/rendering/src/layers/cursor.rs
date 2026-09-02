@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 use cap_project::*;
-use image::GenericImageView;
+use image::{GenericImageView, imageops::FilterType};
 use tracing::error;
 use wgpu::{BindGroup, FilterMode, include_wgsl, util::DeviceExt};
 
@@ -951,6 +951,88 @@ struct CursorTexture {
     hotspot: XY<f64>,
 }
 
+struct CursorMipLevel {
+    rgba: Vec<u8>,
+    dimensions: (u32, u32),
+}
+
+fn downsample_premultiplied_rgba(
+    rgba: &[u8],
+    dimensions: (u32, u32),
+    next_dimensions: (u32, u32),
+) -> Vec<u8> {
+    let (width, height) = dimensions;
+    let (next_width, next_height) = next_dimensions;
+    let image = image::RgbaImage::from_raw(width, height, rgba.to_vec())
+        .expect("cursor mip dimensions should match its RGBA data");
+    let mut output =
+        image::imageops::resize(&image, next_width, next_height, FilterType::Triangle).into_raw();
+
+    for pixel in output.chunks_exact_mut(4) {
+        let alpha = pixel[3];
+        for channel in &mut pixel[..3] {
+            *channel = (*channel).min(alpha);
+        }
+    }
+
+    output
+}
+
+fn premultiplied_rgba_mip_chain(rgba: &[u8], dimensions: (u32, u32)) -> Vec<CursorMipLevel> {
+    assert_eq!(
+        rgba.len(),
+        dimensions.0 as usize * dimensions.1 as usize * 4
+    );
+
+    let mut levels = vec![CursorMipLevel {
+        rgba: rgba.to_vec(),
+        dimensions,
+    }];
+
+    while let Some(current) = levels.last() {
+        if current.dimensions == (1, 1) {
+            break;
+        }
+
+        let next_dimensions = (
+            (current.dimensions.0 / 2).max(1),
+            (current.dimensions.1 / 2).max(1),
+        );
+        let next_rgba =
+            downsample_premultiplied_rgba(&current.rgba, current.dimensions, next_dimensions);
+        levels.push(CursorMipLevel {
+            rgba: next_rgba,
+            dimensions: next_dimensions,
+        });
+    }
+
+    levels
+}
+
+fn rasterize_svg_cursor(svg_data: &str) -> Result<CursorMipLevel, String> {
+    let tree = resvg::usvg::Tree::from_str(svg_data, &resvg::usvg::Options::default())
+        .map_err(|error| format!("Failed to parse SVG: {error}"))?;
+    let aspect_ratio = tree.size().width() / tree.size().height();
+    let width = (aspect_ratio * SVG_CURSOR_RASTERIZED_HEIGHT as f32) as u32;
+    let mut pixmap = tiny_skia::Pixmap::new(width, SVG_CURSOR_RASTERIZED_HEIGHT)
+        .ok_or("Failed to create pixmap")?;
+    let scale_x = width as f32 / tree.size().width();
+    let scale_y = SVG_CURSOR_RASTERIZED_HEIGHT as f32 / tree.size().height();
+    let scale = scale_x.min(scale_y);
+    let transform = tiny_skia::Transform::from_scale(scale, scale);
+
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+    Ok(CursorMipLevel {
+        rgba: pixmap
+            .pixels()
+            .iter()
+            .flat_map(|pixel| [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()])
+            .collect(),
+        dimensions: (pixmap.width(), pixmap.height()),
+    })
+}
+
 impl CursorTexture {
     /// Prepare a cursor texture on the GPU from RGBA data.
     fn prepare(
@@ -997,44 +1079,65 @@ impl CursorTexture {
         Self { texture, hotspot }
     }
 
+    fn prepare_svg_mipmapped(
+        constants: &RenderVideoConstants,
+        rgba: &[u8],
+        dimensions: (u32, u32),
+        hotspot: XY<f64>,
+    ) -> Self {
+        let mip_levels = premultiplied_rgba_mip_chain(rgba, dimensions);
+        let texture = constants.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Cursor Texture"),
+            size: wgpu::Extent3d {
+                width: dimensions.0,
+                height: dimensions.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: mip_levels.len() as u32,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        for (mip_level, level) in mip_levels.iter().enumerate() {
+            constants.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: mip_level as u32,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &level.rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * level.dimensions.0),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: level.dimensions.0,
+                    height: level.dimensions.1,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        Self { texture, hotspot }
+    }
+
     /// Prepare a cursor texture on the GPU from a raw SVG file
     fn prepare_svg(
         constants: &RenderVideoConstants,
         svg_data: &str,
         hotspot: XY<f64>,
     ) -> Result<Self, String> {
-        let rtree = resvg::usvg::Tree::from_str(svg_data, &resvg::usvg::Options::default())
-            .map_err(|e| format!("Failed to parse SVG: {e}"))?;
+        let rasterized = rasterize_svg_cursor(svg_data)?;
 
-        // Although we could probably determine the size that the cursor is going to be render,
-        // that would depend on the cursor size the user selects.
-        //
-        // This would require reinitializing the texture every time that changes which would be more complicated.
-        // So we trade a small about VRAM for only initializing it once.
-        let aspect_ratio = rtree.size().width() / rtree.size().height();
-        let width = (aspect_ratio * SVG_CURSOR_RASTERIZED_HEIGHT as f32) as u32;
-
-        let mut pixmap = tiny_skia::Pixmap::new(width, SVG_CURSOR_RASTERIZED_HEIGHT)
-            .ok_or("Failed to create pixmap")?;
-
-        // Calculate scale to fit the SVG into the target size while maintaining aspect ratio
-        let scale_x = width as f32 / rtree.size().width();
-        let scale_y = SVG_CURSOR_RASTERIZED_HEIGHT as f32 / rtree.size().height();
-        let scale = scale_x.min(scale_y);
-        let transform = tiny_skia::Transform::from_scale(scale, scale);
-
-        resvg::render(&rtree, transform, &mut pixmap.as_mut());
-
-        let rgba: Vec<u8> = pixmap
-            .pixels()
-            .iter()
-            .flat_map(|p| [p.red(), p.green(), p.blue(), p.alpha()])
-            .collect();
-
-        Ok(Self::prepare(
+        Ok(Self::prepare_svg_mipmapped(
             constants,
-            &rgba,
-            (pixmap.width(), pixmap.height()),
+            &rasterized.rgba,
+            rasterized.dimensions,
             hotspot,
         ))
     }
@@ -1043,6 +1146,15 @@ impl CursorTexture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn alpha_coverage(level: &CursorMipLevel) -> f64 {
+        let alpha_sum: u64 = level
+            .rgba
+            .chunks_exact(4)
+            .map(|pixel| u64::from(pixel[3]))
+            .sum();
+        alpha_sum as f64 / (f64::from(level.dimensions.0 * level.dimensions.1) * 255.0)
+    }
 
     fn move_event(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
         CursorMoveEvent {
@@ -1070,6 +1182,80 @@ mod tests {
         let expected = STANDARD_CURSOR_HEIGHT * (864.0 / 1080.0);
 
         assert!((height - expected).abs() < 0.001);
+    }
+
+    #[test]
+    fn svg_mips_cover_odd_non_square_edges() {
+        let mut rgba = vec![0; 5 * 3 * 4];
+        rgba[(5 * 3 - 1) * 4..].copy_from_slice(&[255, 255, 255, 255]);
+
+        let levels = premultiplied_rgba_mip_chain(&rgba, (5, 3));
+        let dimensions: Vec<_> = levels.iter().map(|level| level.dimensions).collect();
+
+        assert_eq!(dimensions, vec![(5, 3), (2, 1), (1, 1)]);
+        assert!(levels[1].rgba.chunks_exact(4).any(|pixel| pixel[3] > 0));
+        assert!(levels[2].rgba[3] > 0);
+    }
+
+    #[test]
+    fn svg_mips_keep_channels_premultiplied() {
+        let rgba: Vec<u8> = [
+            [0, 0, 0, 0],
+            [10, 20, 30, 40],
+            [100, 50, 25, 100],
+            [255, 255, 255, 255],
+        ]
+        .into_iter()
+        .cycle()
+        .take(7 * 5)
+        .flatten()
+        .collect();
+
+        let levels = premultiplied_rgba_mip_chain(&rgba, (7, 5));
+
+        assert_eq!(levels.last().map(|level| level.dimensions), Some((1, 1)));
+        assert!(levels.iter().all(|level| {
+            level
+                .rgba
+                .chunks_exact(4)
+                .all(|pixel| pixel[..3].iter().all(|channel| *channel <= pixel[3]))
+        }));
+    }
+
+    #[test]
+    fn macos_arrow_mips_preserve_minified_structure_and_coverage() {
+        let arrow = cap_cursor_info::CursorShapeMacOS::Arrow
+            .resolve()
+            .expect("macOS arrow asset should resolve");
+        let rasterized = rasterize_svg_cursor(arrow.raw).expect("macOS arrow SVG should rasterize");
+        let levels = premultiplied_rgba_mip_chain(&rasterized.rgba, rasterized.dimensions);
+        let minified = levels
+            .iter()
+            .find(|level| level.dimensions.1 == 25)
+            .expect("25px macOS arrow mip should exist");
+        let base_coverage = alpha_coverage(&levels[0]);
+        let minified_coverage = alpha_coverage(minified);
+
+        assert_eq!(minified.dimensions, (18, 25));
+        assert!((base_coverage - minified_coverage).abs() < 0.01);
+        assert!(
+            minified
+                .rgba
+                .chunks_exact(4)
+                .any(|pixel| pixel[3] > 200 && pixel[..3].iter().all(|channel| *channel < 32))
+        );
+        assert!(
+            minified
+                .rgba
+                .chunks_exact(4)
+                .any(|pixel| pixel[3] > 200 && pixel[..3].iter().all(|channel| *channel > 200))
+        );
+        assert!(
+            minified
+                .rgba
+                .chunks_exact(4)
+                .any(|pixel| pixel[3] > 0 && pixel[3] < 255)
+        );
     }
 
     #[test]

@@ -203,7 +203,7 @@ function Inner(props: {
 
 			<Show when={takeover()}>
 				{(state) => (
-					<div class="fixed inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-black/90 px-10">
+					<div class="fixed inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-black/90 px-10 text-white">
 						<Show when={!state().error}>
 							<p class="text-8xl font-semibold tabular-nums leading-none text-white">
 								{state().remaining}
@@ -230,9 +230,12 @@ function Inner(props: {
 
 						<Show when={state().error}>
 							{(message) => (
-								<p class="max-w-md text-center text-sm text-red-400">
+								<div
+									role="alert"
+									class="max-w-md text-center text-sm text-red-400"
+								>
 									{message()}
-								</p>
+								</div>
 							)}
 						</Show>
 

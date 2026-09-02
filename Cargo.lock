@@ -199,7 +199,7 @@ checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
 dependencies = [
  "cfg-if",
  "cipher",
- "cpufeatures",
+ "cpufeatures 0.2.17",
 ]
 
 [[package]]
@@ -979,6 +979,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6099cdc01846bc367c4e7dd630dc5966dccf36b652fae7a74e17b640411a91b2"
 
 [[package]]
+name = "blake3"
+version = "1.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d9e454fc11f76977dc803893aff6304ed33d6a26efae8696573bea74baa27ae"
+dependencies = [
+ "arrayvec",
+ "cc",
+ "cfg-if",
+ "constant_time_eq",
+ "cpufeatures 0.3.1",
+]
+
+[[package]]
 name = "block"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1203,6 +1216,7 @@ dependencies = [
  "cap-project",
  "cap-recording",
  "cap-timestamp",
+ "cap-utils",
  "chrono",
  "cidre",
  "clap",
@@ -1439,6 +1453,7 @@ version = "0.6.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
+ "ashpd",
  "async-stream",
  "axum",
  "base64 0.22.1",
@@ -1460,6 +1475,7 @@ dependencies = [
  "cap-project",
  "cap-recording",
  "cap-rendering",
+ "cap-timestamp",
  "cap-utils",
  "chrono",
  "cidre",
@@ -1475,7 +1491,9 @@ dependencies = [
  "flume",
  "futures",
  "futures-intrusive",
+ "gdkwayland-sys",
  "global-hotkey",
+ "gtk",
  "image 0.25.8",
  "kameo",
  "keyed_priority_queue",
@@ -1546,6 +1564,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
+ "wayland-sys",
  "webview2-com",
  "wgpu",
  "whisper-rs",
@@ -1815,6 +1834,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ashpd",
+ "blake3",
  "cap-audio",
  "cap-camera",
  "cap-camera-ffmpeg",
@@ -2020,6 +2040,7 @@ dependencies = [
  "windows 0.58.0",
  "windows-sys 0.52.0",
  "workspace-hack",
+ "zbus",
 ]
 
 [[package]]
@@ -2442,6 +2463,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "constant_time_eq"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
+
+[[package]]
 name = "convert_case"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2716,6 +2743,15 @@ name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "cpufeatures"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
 ]
@@ -9544,7 +9580,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
 dependencies = [
  "cfg-if",
- "cpufeatures",
+ "cpufeatures 0.2.17",
  "digest",
 ]
 
@@ -9555,7 +9591,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if",
- "cpufeatures",
+ "cpufeatures 0.2.17",
  "digest",
 ]
 

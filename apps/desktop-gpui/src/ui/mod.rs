@@ -47,6 +47,7 @@ mod editor_button;
 mod field;
 mod kbd;
 mod menu;
+mod microphone_level;
 mod number_field;
 mod position_pad;
 mod progress;
@@ -88,6 +89,7 @@ pub use field::{Field, Subfield};
 pub use kbd::{KbdChip, KbdSize, kbd_symbol};
 #[allow(unused_imports)]
 pub use menu::{Menu, MenuItem, MenuKey, MenuState};
+pub(crate) use microphone_level::MicrophoneLevel;
 #[allow(unused_imports)]
 pub use number_field::{
     NumberChange, NumberField, NumberFieldState, NumberLimits, format_number, parse_number,
@@ -121,6 +123,6 @@ pub use text_input::{
 #[allow(unused_imports)]
 pub use toggle::{Toggle, ToggleSize};
 #[allow(unused_imports)]
-pub use tooltip::{Tooltip, TooltipStyle};
+pub use tooltip::{TOOLTIP_SHOW_DELAY, Tooltip, TooltipStyle};
 #[cfg(target_os = "windows")]
 pub use windows_caption::windows_caption_controls;

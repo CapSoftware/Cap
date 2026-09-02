@@ -51,6 +51,8 @@ pub enum H264EncoderError {
     FFmpeg(#[from] ffmpeg::Error),
     #[error("Codec not found")]
     CodecNotFound,
+    #[error("Failed to configure RGB conversion for BT.709 limited-range video: {0}")]
+    ColorConversion(ffmpeg::Error),
     #[error("Pixel format {0:?} not supported")]
     PixFmtNotSupported(Pixel),
     #[error("Invalid output dimensions {width}x{height}; expected non-zero even width and height")]
@@ -617,6 +619,44 @@ pub(crate) fn open_video_encoder_with_flags(
     )
 }
 
+fn is_rgb(format: format::Pixel) -> bool {
+    format.descriptor().is_some_and(|descriptor| unsafe {
+        (*descriptor.as_ptr()).flags & ffmpeg::ffi::AV_PIX_FMT_FLAG_RGB as u64 != 0
+    })
+}
+
+fn configure_rgb_converter(
+    converter: &mut ffmpeg::software::scaling::Context,
+    input: format::Pixel,
+    output: format::Pixel,
+) -> Result<(), H264EncoderError> {
+    if !is_rgb(input) || is_rgb(output) {
+        return Ok(());
+    }
+
+    // swscale defaults to BT.601 even though the encoder declares BT.709.
+    // RGB input is full range; the encoded YUV contract below is limited range.
+    let result = unsafe {
+        let coefficients = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
+        ffmpeg::ffi::sws_setColorspaceDetails(
+            converter.as_mut_ptr(),
+            coefficients,
+            1,
+            coefficients,
+            0,
+            0,
+            1 << 16,
+            1 << 16,
+        )
+    };
+    if result < 0 {
+        return Err(H264EncoderError::ColorConversion(ffmpeg::Error::from(
+            result,
+        )));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn open_video_encoder_inner(
     codec: Codec,
@@ -699,7 +739,8 @@ fn open_video_encoder_inner(
             output_height,
             flags,
         ) {
-            Ok(context) => {
+            Ok(mut context) => {
+                configure_rgb_converter(&mut context, input_config.pixel_format, output_format)?;
                 debug!(
                     encoder = %codec.name(),
                     src_format = ?input_config.pixel_format,
@@ -1718,5 +1759,311 @@ mod self_test_tests {
 
         cached_hardware_self_test(codec, &options, &config, 160, 120, 0.3, None)
             .expect("real NVIDIA hardware preserves neutral gray through encode and decode");
+    }
+}
+
+#[cfg(test)]
+mod rgb_color_tests {
+    use super::*;
+
+    const COLORS: [[u8; 3]; 6] = [
+        [255, 0, 0],
+        [0, 255, 0],
+        [0, 0, 255],
+        [0, 0, 0],
+        [255, 255, 255],
+        [128, 128, 128],
+    ];
+
+    fn open(input: format::Pixel, scale: u32, external: bool) -> OpenedVideoEncoder {
+        ffmpeg::init().unwrap();
+        let config = VideoInfo::from_raw_ffmpeg(input, 192, 64, 30);
+        let mut options = Dictionary::new();
+        options.set("preset", "ultrafast");
+        options.set("tune", "zerolatency");
+        options.set("crf", "18");
+        open_video_encoder(
+            encoder::find_by_name("libx264").expect("libx264 available"),
+            options,
+            &config,
+            192 / scale,
+            64 / scale,
+            0.3,
+            external,
+            Some(18),
+        )
+        .unwrap()
+    }
+
+    fn rgb_bars(format: format::Pixel) -> frame::Video {
+        let mut frame = frame::Video::new(format, 192, 64);
+        let stride = frame.stride(0);
+        let channels = if format == format::Pixel::RGB24 { 3 } else { 4 };
+        for y in 0..64 {
+            for x in 0..192 {
+                let [red, green, blue] = COLORS[x / 32];
+                let offset = y * stride + x * channels;
+                let bytes = frame.data_mut(0);
+                match format {
+                    format::Pixel::RGB24 => {
+                        bytes[offset..offset + 3].copy_from_slice(&[red, green, blue]);
+                    }
+                    format::Pixel::RGBA => {
+                        bytes[offset..offset + 4].copy_from_slice(&[red, green, blue, 255]);
+                    }
+                    format::Pixel::BGRA | format::Pixel::BGRZ => {
+                        bytes[offset..offset + 4].copy_from_slice(&[blue, green, red, 255]);
+                    }
+                    _ => panic!("unexpected test RGB format"),
+                }
+            }
+        }
+        frame
+    }
+
+    fn receive_packets(encoder: &mut encoder::Video, packets: &mut Vec<ffmpeg::Packet>) {
+        loop {
+            let mut packet = ffmpeg::Packet::empty();
+            match encoder.receive_packet(&mut packet) {
+                Ok(()) => packets.push(packet),
+                Err(ffmpeg::Error::Eof) => break,
+                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => break,
+                Err(error) => panic!("receive encoded packet: {error}"),
+            }
+        }
+    }
+
+    fn receive_frames(decoder: &mut ffmpeg::decoder::Video, frames: &mut Vec<frame::Video>) {
+        loop {
+            let mut frame = frame::Video::empty();
+            match decoder.receive_frame(&mut frame) {
+                Ok(()) => frames.push(frame),
+                Err(ffmpeg::Error::Eof) => break,
+                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => break,
+                Err(error) => panic!("receive decoded frame: {error}"),
+            }
+        }
+    }
+
+    fn decoded_rgb(opened: &mut OpenedVideoEncoder, input: &frame::Video) -> frame::Video {
+        let mut yuv = frame::Video::empty();
+        opened
+            .converter
+            .as_mut()
+            .unwrap()
+            .run(input, &mut yuv)
+            .unwrap();
+        assert_eq!(yuv.format(), format::Pixel::YUV420P);
+        let expected_luma = [63u8, 173, 32, 16, 235, 126];
+        for (index, expected) in expected_luma.into_iter().enumerate() {
+            let x = (index * 2 + 1) * yuv.width() as usize / 12;
+            let y = yuv.height() as usize / 2;
+            let actual = yuv.data(0)[y * yuv.stride(0) + x];
+            assert!(
+                actual.abs_diff(expected) <= 2,
+                "limited BT709 luma patch {index}: {actual} vs {expected}"
+            );
+        }
+        yuv.set_pts(Some(0));
+        opened.encoder.send_frame(&yuv).unwrap();
+        let mut packets = Vec::new();
+        receive_packets(&mut opened.encoder, &mut packets);
+        opened.encoder.send_eof().unwrap();
+        receive_packets(&mut opened.encoder, &mut packets);
+        assert!(!packets.is_empty());
+
+        let codec = ffmpeg::decoder::find(ffmpeg::codec::Id::H264).unwrap();
+        let mut decoder = context::Context::new_with_codec(codec)
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frames = Vec::new();
+        for packet in packets {
+            decoder.send_packet(&packet).unwrap();
+            receive_frames(&mut decoder, &mut frames);
+        }
+        decoder.send_eof().unwrap();
+        receive_frames(&mut decoder, &mut frames);
+        assert_eq!(frames.len(), 1);
+        let decoded = frames.pop().unwrap();
+        assert_eq!(decoded.color_space(), color::Space::BT709);
+        assert_eq!(decoded.color_range(), color::Range::MPEG);
+        let mut converter = ffmpeg::software::scaling::Context::get(
+            decoded.format(),
+            decoded.width(),
+            decoded.height(),
+            format::Pixel::RGB24,
+            decoded.width(),
+            decoded.height(),
+            ffmpeg::software::scaling::Flags::BILINEAR,
+        )
+        .unwrap();
+        unsafe {
+            let coefficients = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
+            assert!(
+                ffmpeg::ffi::sws_setColorspaceDetails(
+                    converter.as_mut_ptr(),
+                    coefficients,
+                    0,
+                    coefficients,
+                    1,
+                    0,
+                    1 << 16,
+                    1 << 16,
+                ) >= 0
+            );
+        }
+        let mut rgb = frame::Video::empty();
+        converter.run(&decoded, &mut rgb).unwrap();
+        rgb
+    }
+
+    #[test]
+    fn rgb_software_conversion_matches_declared_bt709_through_encode_decode() {
+        for format in [
+            format::Pixel::RGB24,
+            format::Pixel::RGBA,
+            format::Pixel::BGRA,
+            format::Pixel::BGRZ,
+        ] {
+            for scale in [1, 2] {
+                let mut opened = open(format, scale, false);
+                let decoded = decoded_rgb(&mut opened, &rgb_bars(format));
+                for (index, expected) in COLORS.iter().enumerate() {
+                    let x = (index * 2 + 1) * decoded.width() as usize / 12;
+                    let y = decoded.height() as usize / 2;
+                    let offset = y * decoded.stride(0) + x * 3;
+                    for (actual, expected) in
+                        decoded.data(0)[offset..offset + 3].iter().zip(expected)
+                    {
+                        assert!(
+                            actual.abs_diff(*expected) <= 4,
+                            "RGB round trip {format:?} scale {scale} patch {index}: {actual} vs {expected}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn external_rgb_conversion_still_skips_internal_scaler() {
+        let opened = open(format::Pixel::BGRA, 1, true);
+        assert_eq!(opened.output_format, format::Pixel::YUV420P);
+        assert!(opened.converter.is_none());
+        assert!(opened.converted_frame_pool.is_none());
+    }
+
+    #[test]
+    fn rgb_software_nv12_conversion_uses_bt709_limited_luma() {
+        ffmpeg::init().unwrap();
+        let mut converter = ffmpeg::software::scaling::Context::get(
+            format::Pixel::BGRA,
+            192,
+            64,
+            format::Pixel::NV12,
+            192,
+            64,
+            ffmpeg::software::scaling::Flags::FAST_BILINEAR,
+        )
+        .unwrap();
+        configure_rgb_converter(&mut converter, format::Pixel::BGRA, format::Pixel::NV12).unwrap();
+        let mut output = frame::Video::empty();
+        converter
+            .run(&rgb_bars(format::Pixel::BGRA), &mut output)
+            .unwrap();
+        for (index, expected) in [63u8, 173, 32, 16, 235, 126].into_iter().enumerate() {
+            let actual = output.data(0)[32 * output.stride(0) + index * 32 + 16];
+            assert!(actual.abs_diff(expected) <= 2);
+        }
+    }
+
+    #[test]
+    fn rgb_to_rgb_conversion_preserves_channel_values() {
+        ffmpeg::init().unwrap();
+        let mut converter = ffmpeg::software::scaling::Context::get(
+            format::Pixel::BGRA,
+            192,
+            64,
+            format::Pixel::RGB24,
+            192,
+            64,
+            ffmpeg::software::scaling::Flags::FAST_BILINEAR,
+        )
+        .unwrap();
+        configure_rgb_converter(&mut converter, format::Pixel::BGRA, format::Pixel::RGB24).unwrap();
+        let mut output = frame::Video::empty();
+        converter
+            .run(&rgb_bars(format::Pixel::BGRA), &mut output)
+            .unwrap();
+        for (index, expected) in COLORS.iter().enumerate() {
+            let offset = 32 * output.stride(0) + (index * 32 + 16) * 3;
+            assert_eq!(&output.data(0)[offset..offset + 3], expected);
+        }
+    }
+
+    #[test]
+    fn existing_yuv_input_selection_and_scaling_are_unchanged() {
+        let opened = open(format::Pixel::YUV420P, 1, false);
+        assert_eq!(opened.output_format, format::Pixel::YUV420P);
+        assert!(opened.converter.is_none());
+        let mut scaled = open(format::Pixel::YUV420P, 2, false);
+        assert_eq!(scaled.output_format, format::Pixel::YUV420P);
+        let mut original = ffmpeg::software::scaling::Context::get(
+            format::Pixel::YUV420P,
+            192,
+            64,
+            format::Pixel::YUV420P,
+            96,
+            32,
+            ffmpeg::software::scaling::Flags::BICUBIC,
+        )
+        .unwrap();
+        let mut input = frame::Video::new(format::Pixel::YUV420P, 192, 64);
+        for plane in 0..input.planes() {
+            for (index, byte) in input.data_mut(plane).iter_mut().enumerate() {
+                *byte = ((index + plane * 37) % 256) as u8;
+            }
+        }
+        let mut expected = frame::Video::empty();
+        let mut actual = frame::Video::empty();
+        original.run(&input, &mut expected).unwrap();
+        scaled
+            .converter
+            .as_mut()
+            .unwrap()
+            .run(&input, &mut actual)
+            .unwrap();
+        for plane in 0..actual.planes() {
+            let width = actual.plane_width(plane) as usize;
+            for row in 0..actual.plane_height(plane) as usize {
+                let actual_offset = row * actual.stride(plane);
+                let expected_offset = row * expected.stride(plane);
+                assert_eq!(
+                    &actual.data(plane)[actual_offset..actual_offset + width],
+                    &expected.data(plane)[expected_offset..expected_offset + width],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rgb_classification_does_not_treat_yuv_or_hardware_as_rgb() {
+        for format in [
+            format::Pixel::RGB24,
+            format::Pixel::BGRA,
+            format::Pixel::BGRZ,
+        ] {
+            assert!(is_rgb(format));
+        }
+        for format in [
+            format::Pixel::YUV420P,
+            format::Pixel::NV12,
+            format::Pixel::GRAY8,
+            format::Pixel::CUDA,
+            format::Pixel::None,
+        ] {
+            assert!(!is_rgb(format));
+        }
     }
 }
