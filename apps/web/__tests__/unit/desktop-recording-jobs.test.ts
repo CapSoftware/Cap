@@ -16,7 +16,10 @@ import {
 	retireDesktopRecordingJobForOutputReplacement,
 	scheduleRetry,
 } from "@/lib/desktop-recording-jobs";
-import type { RecordingVerification } from "@/lib/desktop-recording-verification";
+import type {
+	RecordingUploadReceipt,
+	RecordingVerification,
+} from "@/lib/desktop-recording-verification";
 
 const mocks = vi.hoisted(() => ({ db: vi.fn() }));
 vi.mock("@cap/database", () => ({ db: mocks.db }));
@@ -563,9 +566,34 @@ describe("retained-source retry policy", () => {
 		},
 	);
 
-	it("fences old workers and automatic retries after an intentional edit while retaining the source", async () => {
+	it("retains the source and verified output receipt while fencing workers after an intentional edit", async () => {
 		const attempt = await createAttempt();
 		await persistCommittedSource(attempt, source);
+		const output: RecordingUploadReceipt & { verifiedAt: string } = {
+			version: 1,
+			artifact: verification.artifact,
+			fileSize: 1000,
+			duration: 91.6,
+			hasAudio: true,
+			fullDecode: true,
+			requiredAudioVerified: true,
+			objectIdentity: '"verified-output"',
+			outputKey: `user/video/.recording/outputs/${attempt.generation}/${attempt.attemptId}.mp4`,
+			outputSha256: "c".repeat(64),
+			sourceProof: {
+				version: 1,
+				manifestSha256,
+				inventorySha256: source.inventorySha256,
+				sourcePreserved: true,
+				videoDuration: 91.6,
+				hasAudio: true,
+				audioVerified: true,
+			},
+			verifiedAt: now.toISOString(),
+		};
+		rows.jobs = [
+			{ ...attempt, source, output, state: "verified", leaseExpiresAt: null },
+		];
 		await mocks
 			.db()
 			.transaction(
@@ -581,10 +609,12 @@ describe("retained-source retry policy", () => {
 			);
 		expect(rows.jobs?.[0]).toMatchObject({
 			source,
+			verification,
 			state: "source-blocked",
 			errorCode: "output-replaced",
 			attemptId: null,
 		});
+		expect(rows.jobs?.[0]?.output).toEqual(output);
 		expect(rows.jobs?.[0]?.generation).not.toBe(attempt.generation);
 		expect(await heartbeatAttempt(attempt)).toBe(false);
 		await expect(

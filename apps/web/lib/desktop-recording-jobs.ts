@@ -762,6 +762,7 @@ export async function retireDesktopRecordingJobForOutputReplacement(
 			"Original source retained after an intentional video edit or replacement.",
 		updatedAt: now,
 	};
+	// MP4 outputs can be original-source snapshots; preserve source and output references until whole-video deletion.
 	await tx
 		.insert(videoProcessingJobs)
 		.values({ ...newJob({ videoId, userId, now }), ...retired })
