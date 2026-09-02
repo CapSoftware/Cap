@@ -736,6 +736,7 @@ pub enum ColorTarget {
     KeyboardBackground,
     /// A text segment's colour, per segment index.
     TextColor(usize),
+    TextBackground(usize),
 }
 
 impl ColorTarget {
@@ -1669,6 +1670,12 @@ impl EditorWindow {
                 .as_ref()
                 .and_then(|timeline| timeline.text_segments.get(index))
                 .map(|segment| segment.color.clone()),
+            ColorTarget::TextBackground(index) => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.text_segments.get(index))
+                .and_then(|segment| segment.background_color.clone()),
             _ => None,
         }
     }
@@ -1786,6 +1793,15 @@ impl EditorWindow {
                         return false;
                     }
                     segment.color = hex;
+                    true
+                })
+            }
+            ColorTarget::TextBackground(index) => {
+                self.edit_text_segment("text-background-color", index, window, cx, move |segment| {
+                    if segment.background_color.as_deref() == Some(hex.as_str()) {
+                        return false;
+                    }
+                    segment.background_color = Some(hex);
                     true
                 })
             }

@@ -1,5 +1,8 @@
 mod base;
 
+mod file_sync;
+pub use file_sync::sync_media_file;
+
 mod audio;
 pub use audio::*;
 

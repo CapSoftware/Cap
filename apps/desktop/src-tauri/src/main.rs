@@ -10,6 +10,14 @@ const TOKIO_WORKER_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 fn main() {
     #[cfg(target_os = "linux")]
+    if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {
+        // Mesa counts host CPUs inside containers; configure it before spawning threads or bundled children.
+        unsafe {
+            std::env::set_var("LP_NUM_THREADS", threads.to_string());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
     if let Some(config) = cap_utils::linux_package::appimage_alsa_config_path() {
         // Configure ALSA before starting threads or handing off to a bundled child process.
         unsafe {

@@ -447,6 +447,14 @@ struct CompletionsArgs {
 }
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {
+        // Mesa counts host CPUs inside containers; configure it before creating the CLI runtime.
+        unsafe {
+            std::env::set_var("LP_NUM_THREADS", threads.to_string());
+        }
+    }
+
     #[cfg(windows)]
     {
         use windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};

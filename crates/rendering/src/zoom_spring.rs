@@ -982,10 +982,7 @@ mod tests {
         let mut max_value_jump = 0.0f64;
         let mut max_slope_jump = 0.0f64;
         for window in values.windows(3) {
-            for channel in 0..5 {
-                let v0 = window[0][channel];
-                let v1 = window[1][channel];
-                let v2 = window[2][channel];
+            for ((v0, v1), v2) in window[0].iter().zip(&window[1]).zip(&window[2]) {
                 let slope_a = (v1 - v0) / step_secs;
                 let slope_b = (v2 - v1) / step_secs;
                 max_value_jump = max_value_jump.max((v1 - v0).abs()).max((v2 - v1).abs());

@@ -13,7 +13,7 @@ use crate::{
     App, ArcLock, general_settings,
     recording_settings::RecordingTargetMode,
     window_exclusion::WindowExclusion,
-    windows::{CapWindowId, ShowCapWindow, hide_overlay, show_overlay},
+    windows::{CapWindowId, ShowCapWindow, hide_overlay},
 };
 use scap_targets::{
     Display, DisplayId, Window, WindowId,
@@ -59,6 +59,12 @@ pub async fn open_target_select_overlays(
     specific_display_id: Option<String>,
     target_mode: Option<RecordingTargetMode>,
 ) -> Result<(), String> {
+    let reveal_generation = crate::clean_capture::generation(&app);
+    if crate::clean_capture::phase(&app).is_some() {
+        return Err(
+            "Close or finish clean Studio recording before opening the target picker".into(),
+        );
+    }
     let start = Instant::now();
 
     let resolved_specific_display_id = specific_display_id.as_ref().map(|id_str| {
@@ -112,10 +118,10 @@ pub async fn open_target_select_overlays(
         .get(&app);
 
         if let Some(window) = existing_window {
-            show_overlay(&window);
+            crate::clean_capture::schedule_overlay_reveal(&window, reveal_generation, false);
 
             if should_focus {
-                focus_target_select_overlay(&window);
+                focus_target_select_overlay(&window, reveal_generation);
             }
 
             state.spawn(display_id, window.clone());
@@ -127,7 +133,7 @@ pub async fn open_target_select_overlays(
             .show(&app)
             .await
             {
-                finish_created_target_select_overlay(&window, should_focus);
+                finish_created_target_select_overlay(&window, should_focus, reveal_generation);
             }
         } else {
             let app_clone = app.clone();
@@ -140,7 +146,7 @@ pub async fn open_target_select_overlays(
                 .show(&app_clone)
                 .await
                 {
-                    finish_created_target_select_overlay(&window, should_focus);
+                    finish_created_target_select_overlay(&window, should_focus, reveal_generation);
                 }
             });
         }
@@ -152,7 +158,7 @@ pub async fn open_target_select_overlays(
     .get(&app);
 
     if let Some(window) = focus_window {
-        focus_target_select_overlay(&window);
+        focus_target_select_overlay(&window, reveal_generation);
     }
 
     let window_exclusions = general_settings::GeneralSettingsStore::get(&app)
@@ -177,23 +183,19 @@ pub async fn open_target_select_overlays(
                 || {
                     focused_target
                         .as_ref()
-                        .map(|v| v.window().and_then(|id| scap_targets::Window::from_id(&id)))
-                        .unwrap_or_else(scap_targets::Window::get_topmost_at_cursor)
+                        .map(|v| {
+                            v.window()
+                                .and_then(|id| scap_targets::Window::from_id(&id))
+                                .and_then(|window| {
+                                    describe_selectable_window(window, &window_exclusions)
+                                })
+                        })
+                        .unwrap_or_else(|| target_window_under_cursor(&window_exclusions))
                 },
             ) {
                 let _ = TargetUnderCursor {
                     display_id: display.map(|d| d.id()),
-                    window: window.and_then(|w| {
-                        if should_skip_window(&w, &window_exclusions) {
-                            return None;
-                        }
-
-                        Some(WindowUnderCursor {
-                            id: w.id(),
-                            bounds: w.display_relative_logical_bounds()?,
-                            app_name: w.owner_name()?,
-                        })
-                    }),
+                    window,
                 }
                 .emit(&app);
 
@@ -215,25 +217,95 @@ pub async fn open_target_select_overlays(
     Ok(())
 }
 
-fn finish_created_target_select_overlay(window: &WebviewWindow, should_focus: bool) {
+fn describe_selectable_window(
+    window: Window,
+    exclusions: &[WindowExclusion],
+) -> Option<WindowUnderCursor> {
+    if should_skip_window(&window, exclusions) {
+        return None;
+    }
+    Some(WindowUnderCursor {
+        id: window.id(),
+        bounds: window.display_relative_logical_bounds()?,
+        app_name: window.owner_name()?,
+    })
+}
+
+fn target_window_under_cursor(exclusions: &[WindowExclusion]) -> Option<WindowUnderCursor> {
+    #[cfg(target_os = "linux")]
+    {
+        let own_pid = std::process::id();
+        let candidates = Window::list_containing_cursor()
+            .into_iter()
+            .filter_map(|window| {
+                let metadata = window.raw_handle().selection_metadata()?;
+                let title = if metadata.owner_pid == Some(own_pid) {
+                    window.name()
+                } else {
+                    None
+                };
+                Some(LinuxPickerCandidate {
+                    window,
+                    is_viewable: metadata.is_viewable,
+                    owner_pid: metadata.owner_pid,
+                    title,
+                })
+            });
+        first_linux_picker_target(candidates, own_pid, |window| {
+            describe_selectable_window(window, exclusions)
+        })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    Window::get_topmost_at_cursor()
+        .and_then(|window| describe_selectable_window(window, exclusions))
+}
+
+#[cfg(any(target_os = "linux", test))]
+struct LinuxPickerCandidate<T> {
+    window: T,
+    is_viewable: bool,
+    owner_pid: Option<u32>,
+    title: Option<String>,
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn first_linux_picker_target<T, R>(
+    candidates: impl IntoIterator<Item = LinuxPickerCandidate<T>>,
+    own_pid: u32,
+    mut describe: impl FnMut(T) -> Option<R>,
+) -> Option<R> {
+    candidates.into_iter().find_map(|candidate| {
+        if !candidate.is_viewable
+            || (candidate.owner_pid == Some(own_pid)
+                && candidate.title.as_deref() == Some("Cap Target Select"))
+        {
+            return None;
+        }
+        describe(candidate.window)
+    })
+}
+
+fn finish_created_target_select_overlay(
+    window: &WebviewWindow,
+    should_focus: bool,
+    reveal_generation: u32,
+) {
     #[cfg(target_os = "macos")]
-    let _ = (window, should_focus);
+    let _ = (window, should_focus, reveal_generation);
 
     #[cfg(not(target_os = "macos"))]
     {
-        window.show().ok();
-        if should_focus {
-            focus_target_select_overlay(window);
-        }
+        crate::clean_capture::schedule_overlay_reveal(window, reveal_generation, should_focus);
     }
 }
 
-fn focus_target_select_overlay(window: &WebviewWindow) {
+fn focus_target_select_overlay(window: &WebviewWindow, reveal_generation: u32) {
     #[cfg(target_os = "macos")]
-    let _ = window;
+    let _ = (window, reveal_generation);
 
     #[cfg(not(target_os = "macos"))]
-    window.set_focus().ok();
+    crate::clean_capture::schedule_overlay_focus(window, reveal_generation);
 }
 
 fn should_skip_window(window: &Window, exclusions: &[WindowExclusion]) -> bool {
@@ -378,7 +450,10 @@ pub async fn display_information(display_id: &str) -> Result<DisplayInformation,
 #[tauri::command]
 #[instrument]
 pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let window = Window::from_id(&window_id).ok_or("Window not found")?;
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    Window::from_id(&window_id).ok_or("Window not found")?;
 
     #[cfg(target_os = "macos")]
     {
@@ -459,6 +534,8 @@ impl WindowFocusManager {
     pub fn spawn(&self, id: &DisplayId, window: WebviewWindow) {
         let display_id = id.clone();
         let task_id = id.to_string();
+        #[cfg(windows)]
+        let reveal_generation = crate::clean_capture::generation(window.app_handle());
         let handle = tokio::spawn(async move {
             let app = window.app_handle();
             let mut main_window_was_seen = false;
@@ -505,7 +582,11 @@ impl WindowFocusManager {
                         overlay_focused || cap_main.is_focused().ok().unwrap_or_default();
 
                     if !should_refocus {
-                        window.set_focus().ok();
+                        crate::clean_capture::schedule_overlay_reveal(
+                            &window,
+                            reveal_generation,
+                            true,
+                        );
                     }
                 }
 
@@ -615,5 +696,113 @@ impl WindowFocusManager {
         if let Err(err) = global_shortcut.unregister("Escape") {
             debug!("Error unregistering global keyboard shortcut for Escape: {err}");
         }
+    }
+}
+
+#[cfg(test)]
+mod linux_picker_tests {
+    use super::{LinuxPickerCandidate, WindowExclusion, first_linux_picker_target};
+
+    fn candidate(
+        title: &'static str,
+        owner_pid: Option<u32>,
+        is_viewable: bool,
+    ) -> LinuxPickerCandidate<&'static str> {
+        LinuxPickerCandidate {
+            window: title,
+            is_viewable,
+            owner_pid,
+            title: Some(title.into()),
+        }
+    }
+
+    #[test]
+    fn selects_underlying_window_after_picker_and_configured_exclusion() {
+        let exclusion = WindowExclusion {
+            bundle_identifier: None,
+            owner_name: Some("Cap".into()),
+            window_title: Some("Cap Camera".into()),
+        };
+        let candidates = [
+            candidate("Cap Target Select", Some(42), true),
+            candidate("Cap Camera", Some(42), true),
+            candidate("Moving fixture", Some(100), true),
+            candidate("Lower window", Some(101), true),
+        ];
+        let mut described = Vec::new();
+
+        let selected = first_linux_picker_target(candidates, 42, |title| {
+            described.push(title);
+            (!exclusion.matches(None, Some("Cap"), Some(title))).then_some(title)
+        });
+
+        assert_eq!(selected, Some("Moving fixture"));
+        assert_eq!(described, ["Cap Camera", "Moving fixture"]);
+    }
+
+    #[test]
+    fn skips_own_picker_when_no_windows_are_configured_for_exclusion() {
+        let candidates = [
+            candidate("Cap Target Select", Some(42), true),
+            candidate("Cap Camera", Some(42), true),
+            candidate("Moving fixture", Some(100), true),
+        ];
+
+        assert_eq!(
+            first_linux_picker_target(candidates, 42, Some),
+            Some("Cap Camera")
+        );
+    }
+
+    #[test]
+    fn does_not_exclude_foreign_or_unknown_owner_by_picker_title() {
+        for owner_pid in [Some(100), None] {
+            let candidates = [
+                candidate("Cap Target Select", owner_pid, true),
+                candidate("Moving fixture", Some(101), true),
+            ];
+
+            assert_eq!(
+                first_linux_picker_target(candidates, 42, Some),
+                Some("Cap Target Select")
+            );
+        }
+    }
+
+    #[test]
+    fn bypasses_unmapped_and_undescribable_windows_without_reordering() {
+        let candidates = [
+            candidate("Hidden window", Some(100), false),
+            candidate("Destroyed window", Some(101), true),
+            candidate("Moving fixture", Some(102), true),
+            candidate("Lower window", Some(103), true),
+        ];
+        let mut described = Vec::new();
+
+        let selected = first_linux_picker_target(candidates, 42, |title| {
+            described.push(title);
+            (title != "Destroyed window").then_some(title)
+        });
+
+        assert_eq!(selected, Some("Moving fixture"));
+        assert_eq!(described, ["Destroyed window", "Moving fixture"]);
+    }
+
+    #[test]
+    fn returns_no_target_when_every_candidate_is_ineligible() {
+        let candidates = [
+            candidate("Cap Target Select", Some(42), true),
+            candidate("Hidden window", Some(100), false),
+            candidate("Excluded window", Some(101), true),
+        ];
+        let mut described = Vec::new();
+
+        let selected = first_linux_picker_target(candidates, 42, |title| {
+            described.push(title);
+            None::<&str>
+        });
+
+        assert!(selected.is_none());
+        assert_eq!(described, ["Excluded window"]);
     }
 }

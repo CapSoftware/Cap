@@ -12,6 +12,7 @@ cap-editor = { path = "../../crates/editor" }
 cap-export = { path = "../../crates/export" }
 cap-media-info = { path = "../../crates/media-info" }
 cap-timestamp = { path = "../../crates/timestamp" }
+cap-utils = { path = "../../crates/utils" }
 relative-path = "1.9.3"
 cap-automation = { path = "../../crates/automation" }
 cap-camera = { path = "../../crates/camera" }

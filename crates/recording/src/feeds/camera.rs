@@ -1520,10 +1520,14 @@ impl Message<Lock> for CameraFeed {
                     LockFeedError::InitializeFailed(SetInputError::Timeout(err.to_string()))
                 })??;
 
-            if state.handle_input_connected(data)
-                && let Some(attached) = &mut state.attached
-            {
-                attached.finalize_pending_release();
+            if state.handle_input_connected(data) {
+                if let Some(attached) = &mut state.attached {
+                    attached.finalize_pending_release();
+                }
+
+                for tx in self.on_ready.drain(..) {
+                    let _ = tx.send(());
+                }
             }
         }
 
@@ -1563,7 +1567,7 @@ impl Message<Lock> for CameraFeed {
 }
 
 impl Message<InputConnected> for CameraFeed {
-    type Reply = Result<(), FeedLockedError>;
+    type Reply = ();
 
     async fn handle(
         &mut self,
@@ -1572,7 +1576,10 @@ impl Message<InputConnected> for CameraFeed {
     ) -> Self::Reply {
         trace!("CameraFeed.InputConnected");
 
-        let state = self.state.try_as_open()?;
+        // Lock can consume this connection before the notification reaches the mailbox.
+        let Ok(state) = self.state.try_as_open() else {
+            return;
+        };
 
         if state.handle_input_connected(msg) {
             if let Some(attached) = &mut state.attached {
@@ -1583,13 +1590,11 @@ impl Message<InputConnected> for CameraFeed {
                 tx.send(()).ok();
             }
         }
-
-        Ok(())
     }
 }
 
 impl Message<InputConnectFailed> for CameraFeed {
-    type Reply = Result<(), FeedLockedError>;
+    type Reply = ();
 
     async fn handle(
         &mut self,
@@ -1598,7 +1603,9 @@ impl Message<InputConnectFailed> for CameraFeed {
     ) -> Self::Reply {
         trace!("CameraFeed.InputConnectFailed");
 
-        let state = self.state.try_as_open()?;
+        let Ok(state) = self.state.try_as_open() else {
+            return;
+        };
 
         let should_clear = state.connecting.as_ref().is_some_and(|connecting| {
             connecting.id == msg.id && connecting.generation == msg.generation
@@ -1613,8 +1620,6 @@ impl Message<InputConnectFailed> for CameraFeed {
                 tx.send(()).ok();
             }
         }
-
-        Ok(())
     }
 }
 
@@ -1697,5 +1702,97 @@ impl Message<Unlock> for CameraFeed {
                 state
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn locked_test_camera() -> (
+        ActorRef<CameraFeed>,
+        CameraFeedLock,
+        InputConnected,
+        oneshot::Receiver<()>,
+    ) {
+        let (done_tx, _done_rx) = mpsc::sync_channel(1);
+        let connection = InputConnected {
+            id: DeviceOrModelID::DeviceID("test-camera".to_string()),
+            generation: 1,
+            done_tx: done_tx.clone(),
+            camera_info: serde_json::from_value(serde_json::json!({
+                "device_id": "test-camera",
+                "model_id": null,
+                "display_name": "Test camera"
+            }))
+            .unwrap(),
+            video_info: VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRA, 16, 16, 30),
+        };
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let camera = CameraFeed {
+            setup_generation: 1,
+            state: State::Open(OpenState {
+                connecting: Some(ConnectingState {
+                    id: connection.id.clone(),
+                    generation: connection.generation,
+                    ready: futures::future::ready(Ok(connection.clone())).boxed(),
+                    done_tx,
+                }),
+                attached: None,
+            }),
+            on_ready: vec![ready_tx],
+            ..CameraFeed::default()
+        };
+        let feed = CameraFeed::spawn(camera);
+        let lock = feed.ask(Lock).await.unwrap();
+        (feed, lock, connection, ready_rx)
+    }
+
+    #[tokio::test]
+    async fn camera_late_connection_notification_keeps_locked_feed_alive() {
+        let (feed, lock, connection, _ready) = locked_test_camera().await;
+        feed.tell(connection).await.unwrap();
+        let (sender, _receiver) = flume::bounded(1);
+        let result = feed.ask(AddSender(sender)).await;
+        drop(lock);
+        feed.kill();
+        feed.wait_for_stop().await;
+        assert!(
+            result.is_ok(),
+            "late connection notification stopped the feed: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn camera_late_failure_notification_keeps_locked_feed_alive() {
+        let (feed, lock, connection, _ready) = locked_test_camera().await;
+        feed.tell(InputConnectFailed {
+            id: connection.id,
+            generation: connection.generation,
+        })
+        .await
+        .unwrap();
+        let (sender, _receiver) = flume::bounded(1);
+        let result = feed.ask(AddSender(sender)).await;
+        drop(lock);
+        feed.kill();
+        feed.wait_for_stop().await;
+        assert!(
+            result.is_ok(),
+            "late failure notification stopped the feed: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn camera_lock_notifies_waiters_when_it_consumes_the_connection() {
+        let (feed, lock, _connection, mut ready) = locked_test_camera().await;
+        let result = ready.try_recv();
+        drop(lock);
+        feed.kill();
+        feed.wait_for_stop().await;
+        assert!(
+            result.is_ok(),
+            "camera readiness was not delivered: {result:?}"
+        );
     }
 }

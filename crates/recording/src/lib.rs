@@ -17,7 +17,11 @@ pub mod sources;
 pub mod studio_recording;
 pub mod sync_calibration;
 pub mod track_heal;
+pub mod upload_resume;
+pub mod upload_verification;
 
+#[cfg(target_os = "linux")]
+pub use capture_pipeline::target_to_display_and_crop;
 pub use resolution_limits::{H264_MAX_DIMENSION, calculate_gpu_compatible_size};
 
 #[cfg(any(test, feature = "test-utils"))]

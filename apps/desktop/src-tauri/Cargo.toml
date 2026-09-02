@@ -87,6 +87,7 @@ cap-editor = { path = "../../../crates/editor" }
 cap-media = { path = "../../../crates/media" }
 cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
+cap-timestamp = { path = "../../../crates/timestamp" }
 cap-export = { path = "../../../crates/export" }
 cap-automation = { path = "../../../crates/automation" }
 cap-cli-install = { path = "../../../crates/cli-install", features = ["specta"] }
@@ -153,6 +154,10 @@ parakeet-rs = "0.3.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libappindicator = "0.9.0"
+gtk = "0.18"
+gdkwayland-sys = "0.18.2"
+wayland-sys = { version = "0.31.7", features = ["client", "dlopen"] }
+ashpd = { version = "0.11.0", default-features = false, features = ["tokio"] }
 notify-rust = "4.11"
 
 [target.'cfg(target_os= "windows")'.dependencies]

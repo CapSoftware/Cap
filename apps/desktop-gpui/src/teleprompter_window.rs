@@ -31,6 +31,7 @@ use gpui::{
 
 use crate::{
     platform,
+    session::{Phase, RecordingSession},
     store::{self, TeleprompterState},
     theme::Theme,
     ui,
@@ -150,6 +151,28 @@ struct PendingSave {
     keys: BTreeSet<&'static str>,
 }
 
+#[derive(Default)]
+struct PlaybackState {
+    requested: bool,
+    recording_paused: bool,
+    recording_active: bool,
+}
+
+impl PlaybackState {
+    fn running(&self) -> bool {
+        self.requested && !self.recording_paused
+    }
+
+    fn update_recording(&mut self, phase: Phase, uncertain: bool) {
+        if phase == Phase::Stopping || (phase == Phase::Idle && self.recording_active) {
+            self.requested = false;
+        }
+        self.recording_active = phase != Phase::Idle;
+        self.recording_paused =
+            matches!(phase, Phase::Recording { paused: true } | Phase::Stopping) || uncertain;
+    }
+}
+
 impl PendingSave {
     fn flush(&mut self) {
         if self.keys.is_empty() {
@@ -169,7 +192,7 @@ pub struct TeleprompterWindow {
     theme: Theme,
     state: TeleprompterState,
     settings_open: bool,
-    playing: bool,
+    playback_state: PlaybackState,
     /// Scroll offset in pixels from the top, positive. gpui's own offset is the
     /// negative of it.
     position: f32,
@@ -183,6 +206,7 @@ pub struct TeleprompterWindow {
     /// store write all read it from `&self`.
     script_input: Entity<ui::TextInputState>,
     _script_events: gpui::Subscription,
+    _recording_events: gpui::Subscription,
     /// Track rects, captured in prepaint: the window is resizable, so neither
     /// pill's width is known here.
     speed_track: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -237,17 +261,35 @@ impl TeleprompterWindow {
             },
         );
 
+        let session = RecordingSession::global(cx);
+        let mut playback_state = PlaybackState::default();
+        playback_state.update_recording(session.read(cx).phase, session.read(cx).pause_uncertain());
+        let recording_events = cx.observe_in(&session, window, |this, session, window, cx| {
+            let session = session.read(cx);
+            let was_running = this.playback_state.running();
+            this.playback_state
+                .update_recording(session.phase, session.pause_uncertain());
+            if !this.playback_state.running() {
+                this.playback = None;
+            } else if !was_running {
+                this.start_playback(window, cx);
+            }
+            cx.notify();
+            window.refresh();
+        });
+
         crate::theme::bind_window(window, cx);
         Self {
             theme: Theme::for_window(window, cx, true),
             state,
             settings_open: false,
-            playing: false,
+            playback_state,
             position: 0.,
             scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
             script_input,
             _script_events: script_events,
+            _recording_events: recording_events,
             speed_track: Rc::new(Cell::new(None)),
             opacity_track: Rc::new(Cell::new(None)),
             dragging: None,
@@ -344,17 +386,17 @@ impl TeleprompterWindow {
     }
 
     fn stop_playback(&mut self) {
-        self.playing = false;
+        self.playback_state.requested = false;
         self.playback = None;
     }
 
     pub fn is_playing(&self) -> bool {
-        self.playing
+        self.playback_state.running()
     }
 
     /// `togglePlayback`.
     pub fn toggle_playback(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.playing {
+        if self.playback_state.requested {
             self.stop_playback();
             cx.notify();
             return;
@@ -371,9 +413,19 @@ impl TeleprompterWindow {
         // `if (element.scrollTop >= maximumScroll - 1) element.scrollTop = 0`
         if self.position >= maximum - 1. {
             self.position = 0.;
+            self.apply_scroll();
         }
         self.settings_open = false;
-        self.playing = true;
+        self.playback_state.requested = true;
+        self.start_playback(window, cx);
+        cx.notify();
+    }
+
+    fn start_playback(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.playback_state.running() {
+            return;
+        }
+        self.position = (-f32::from(self.scroll.offset().y)).clamp(0., self.maximum_scroll());
 
         // An inactive window only repaints when asked, so the tick both
         // notifies and calls `refresh` -- the same rule the recording bar's
@@ -383,7 +435,10 @@ impl TeleprompterWindow {
             loop {
                 cx.background_executor().timer(PLAYBACK_TICK).await;
                 let now = Instant::now();
-                let elapsed = (now - last).as_secs_f32().min(MAX_TICK_SECONDS);
+                let elapsed = now
+                    .saturating_duration_since(last)
+                    .as_secs_f32()
+                    .min(MAX_TICK_SECONDS);
                 last = now;
                 let running = this
                     .update_in(cx, |this, window, cx| {
@@ -404,9 +459,12 @@ impl TeleprompterWindow {
     /// One frame of `animatePlayback`. Returns false when the loop should stop
     /// -- bottom reached, or nothing left to scroll.
     fn advance(&mut self, elapsed: f32) -> bool {
+        if !self.playback_state.running() {
+            return false;
+        }
         let maximum = self.maximum_scroll();
         if maximum <= 1. {
-            self.playing = false;
+            self.playback_state.requested = false;
             return false;
         }
 
@@ -419,7 +477,7 @@ impl TeleprompterWindow {
         self.apply_scroll();
 
         if self.position >= maximum - 0.5 {
-            self.playing = false;
+            self.playback_state.requested = false;
             return false;
         }
         true
@@ -563,6 +621,7 @@ impl TeleprompterWindow {
             .w_full()
             .h(px(HEADER_HEIGHT))
             .flex_shrink_0()
+            .rounded_t(px(theme.teleprompter_window_radius()))
             .bg(theme.header_bg())
             .child(
                 // `pointer-events-none ml-auto flex items-center gap-1.5
@@ -591,7 +650,11 @@ impl TeleprompterWindow {
                             .flex_shrink_0()
                             .text_color(Hsla::from(theme.gray_9)),
                     )
-                    .child("This window is hidden from Cap recordings"),
+                    .child(if self.playback_state.recording_paused {
+                        "Scrolling paused with recording"
+                    } else {
+                        "This window is hidden from Cap recordings"
+                    }),
             );
 
         #[cfg(target_os = "windows")]
@@ -724,7 +787,7 @@ impl TeleprompterWindow {
     /// `flex h-11 shrink-0 items-center px-3 pb-2`.
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let playing = self.playing;
+        let playing = self.playback_state.requested;
         let enabled = self.has_script();
 
         div()
@@ -1029,6 +1092,58 @@ impl TeleprompterWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recording_pause_preserves_manual_playback_intent() {
+        let mut playback = PlaybackState {
+            requested: true,
+            ..Default::default()
+        };
+        playback.update_recording(Phase::Recording { paused: false }, false);
+        assert!(playback.running());
+        playback.update_recording(Phase::Recording { paused: true }, false);
+        assert!(!playback.running());
+        assert!(playback.requested);
+        playback.update_recording(Phase::Recording { paused: false }, false);
+        assert!(playback.running());
+    }
+
+    #[test]
+    fn recording_resume_does_not_start_a_manually_paused_script() {
+        let mut playback = PlaybackState::default();
+        playback.update_recording(Phase::Recording { paused: true }, false);
+        playback.update_recording(Phase::Recording { paused: false }, false);
+        assert!(!playback.running());
+        playback.requested = true;
+        playback.update_recording(Phase::Recording { paused: true }, false);
+        playback.requested = false;
+        playback.update_recording(Phase::Recording { paused: false }, false);
+        assert!(!playback.running());
+    }
+
+    #[test]
+    fn play_cannot_override_recording_pause_or_unconfirmed_capture_state() {
+        for uncertain in [false, true] {
+            let mut playback = PlaybackState::default();
+            playback.update_recording(Phase::Recording { paused: !uncertain }, uncertain);
+            playback.requested = true;
+            assert!(!playback.running());
+        }
+    }
+
+    #[test]
+    fn recording_stop_clears_automatic_scroll_resume() {
+        for terminal in [Phase::Stopping, Phase::Idle] {
+            let mut playback = PlaybackState {
+                requested: true,
+                ..Default::default()
+            };
+            playback.update_recording(Phase::Recording { paused: true }, false);
+            playback.update_recording(terminal, false);
+            playback.update_recording(Phase::Recording { paused: false }, false);
+            assert!(!playback.running());
+        }
+    }
 
     /// `teleprompter-utils.test.ts`, translated. `countWords` splits on any
     /// whitespace run, so a newline counts as a separator.

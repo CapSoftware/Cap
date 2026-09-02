@@ -158,12 +158,8 @@ impl<'de> serde::Deserialize<'de> for ModelID {
     where
         D: serde::Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        let (vid, pid) = s.split_once(":").unwrap();
-        Ok(ModelID {
-            vid: vid.to_string(),
-            pid: pid.to_string(),
-        })
+        Self::try_from(String::deserialize(deserializer)?)
+            .map_err(|()| serde::de::Error::custom("camera model ID must contain a colon"))
     }
 }
 
@@ -290,6 +286,29 @@ impl Drop for CaptureHandle {
     fn drop(&mut self) {
         if let Some(feed) = self.native.take() {
             feed.stop_capturing().ok();
+        }
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod model_id_tests {
+    use super::ModelID;
+    use serde::{Deserialize, de::value::StrDeserializer};
+
+    #[test]
+    fn reads_saved_model_id() {
+        let input = StrDeserializer::<serde::de::value::Error>::new("046d:08e5");
+        assert_eq!(
+            ModelID::deserialize(input).unwrap().to_string(),
+            "046d:08e5"
+        );
+    }
+
+    #[test]
+    fn malformed_model_id_returns_an_error() {
+        for value in ["", "missing-separator"] {
+            let input = StrDeserializer::<serde::de::value::Error>::new(value);
+            assert!(ModelID::deserialize(input).is_err());
         }
     }
 }

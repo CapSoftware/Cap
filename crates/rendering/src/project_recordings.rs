@@ -123,6 +123,8 @@ pub struct ProjectRecordingsMeta {
 
 impl ProjectRecordingsMeta {
     pub fn new(recording_path: &PathBuf, meta: &StudioRecordingMeta) -> Result<Self, String> {
+        meta.ensure_ordinary_media_access(recording_path)?;
+
         let segments = match &meta {
             StudioRecordingMeta::SingleSegment { segment: s } => {
                 let display = Video::new(s.display.path.to_path(recording_path), 0.0)
@@ -253,5 +255,25 @@ impl SegmentRecordings {
         .collect::<Vec<_>>();
         duration_ns.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
         duration_ns[0]
+    }
+}
+
+#[cfg(test)]
+mod ordinary_media_access_tests {
+    use super::ProjectRecordingsMeta;
+    use cap_project::StudioRecordingMeta;
+    use std::path::PathBuf;
+
+    #[test]
+    fn failed_project_refuses_before_opening_invalid_media() {
+        let meta: StudioRecordingMeta = serde_json::from_str(
+            r#"{"segments":[{"display":{"path":"never-created/display.mp4"}}],"status":{"status":"Failed","error":"requested source failed"}}"#,
+        ).unwrap();
+        let error = match ProjectRecordingsMeta::new(&PathBuf::from("never-created-project"), &meta)
+        {
+            Ok(_) => panic!("failed recording unexpectedly accepted"),
+            Err(error) => error,
+        };
+        assert!(error.contains("requested source failed"));
     }
 }

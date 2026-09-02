@@ -19,7 +19,28 @@ export type JobPhase =
 	| "error"
 	| "cancelled";
 
+export interface RecordingVerificationRequest {
+	version: 1;
+	artifact:
+		| { kind: "segments"; manifestSha256: string }
+		| {
+				kind: "mp4";
+				fileSize: number;
+				duration: number;
+				objectIdentity: string;
+		  };
+	requiredAudio: boolean;
+}
+
+export interface RecordingVerificationProof {
+	request: RecordingVerificationRequest;
+	fullDecode: true;
+	objectIdentity: string;
+}
+
 export interface JobProgress {
+	recordingVerification?: RecordingVerificationProof;
+	manifestSha256?: string;
 	jobId: string;
 	videoId: string;
 	phase: JobPhase;
@@ -44,6 +65,9 @@ export interface VideoMetadata {
 }
 
 export interface Job {
+	recordingVerificationDeadlineAt?: number;
+	recordingVerification?: RecordingVerificationProof;
+	manifestSha256?: string;
 	jobId: string;
 	videoId: string;
 	userId: string;
@@ -285,6 +309,8 @@ export function updateJob(
 			| "message"
 			| "error"
 			| "metadata"
+			| "manifestSha256"
+			| "recordingVerification"
 			| "outputUrl"
 			| "inputTempFile"
 			| "outputTempFile"
@@ -306,6 +332,28 @@ export function touchJob(jobId: string): Job | undefined {
 
 	job.updatedAt = Date.now();
 	return job;
+}
+
+export function beginRecordingVerification(
+	jobId: string,
+	budgetMs: number,
+): boolean {
+	const job = jobs.get(jobId);
+	const now = Date.now();
+	if (
+		!job ||
+		!isActivePhase(job.phase) ||
+		job.abortController?.signal.aborted ||
+		job.recordingVerificationDeadlineAt !== undefined ||
+		now > job.createdAt + MAX_JOB_LIFETIME_MS ||
+		!Number.isSafeInteger(budgetMs) ||
+		budgetMs <= 0 ||
+		budgetMs > MAX_JOB_LIFETIME_MS
+	)
+		return false;
+	job.recordingVerificationDeadlineAt = now + budgetMs;
+	job.updatedAt = now;
+	return true;
 }
 
 export function deleteJob(jobId: string): boolean {
@@ -384,13 +432,19 @@ export function cleanupExpiredJobs(): number {
 			continue;
 		}
 
-		if (isActivePhase(job.phase) && age > MAX_JOB_LIFETIME_MS) {
+		const deadline =
+			job.recordingVerificationDeadlineAt ??
+			job.createdAt + MAX_JOB_LIFETIME_MS;
+		if (isActivePhase(job.phase) && now > deadline) {
 			console.warn(
 				`[job-manager] Marking long-running job ${jobId} as error (phase=${job.phase}, age=${Math.round(age / 60000)}m)`,
 			);
 			job.abortController?.abort();
 			job.phase = "error";
-			job.error = `Job exceeded maximum lifetime of ${Math.round(MAX_JOB_LIFETIME_MS / 60000)} minutes`;
+			job.error =
+				job.recordingVerificationDeadlineAt === undefined
+					? `Job exceeded maximum lifetime of ${Math.round(MAX_JOB_LIFETIME_MS / 60000)} minutes`
+					: "Recording verification timed out";
 			job.message = "Processing failed (timeout)";
 			job.updatedAt = now;
 			void sendWebhook(job);
@@ -403,6 +457,8 @@ export function cleanupExpiredJobs(): number {
 
 export function getJobProgress(job: Job): JobProgress {
 	return {
+		manifestSha256: job.manifestSha256,
+		recordingVerification: job.recordingVerification,
 		jobId: job.jobId,
 		videoId: job.videoId,
 		phase: job.phase,

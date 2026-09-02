@@ -9,10 +9,12 @@ import {
 	createEffect,
 	createMemo,
 	createSignal,
+	on,
 	onCleanup,
 	onMount,
 	Show,
 } from "solid-js";
+import toast from "solid-toast";
 import Tooltip from "~/components/Tooltip";
 import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
@@ -22,6 +24,7 @@ import { initializeTitlebar } from "~/utils/titlebar-state";
 import { useEditorContext } from "./context";
 import OrganizationDropdown from "./OrganizationDropdown";
 import PresetsDropdown from "./PresetsDropdown";
+import { createRecordingTitleSave } from "./recording-title-save";
 import ShareButton from "./ShareButton";
 import { EditorButton } from "./ui";
 
@@ -44,7 +47,14 @@ export interface ExportEstimates {
 	estimated_size_mb: number;
 }
 
-export function Header() {
+export type TitleSaveRegistration = {
+	flush: () => Promise<void>;
+	setReadOnly: (readOnly: boolean) => void;
+};
+
+type RegisterTitleSave = (save: TitleSaveRegistration | undefined) => void;
+
+export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 	const {
 		editorInstance,
 		project,
@@ -86,6 +96,8 @@ export function Header() {
 		return "type" in d && d.type === "clips" && d.open;
 	});
 
+	const [titleReadOnly, setTitleReadOnly] = createSignal(false);
+
 	return (
 		<div
 			data-tauri-drag-region
@@ -121,7 +133,12 @@ export function Header() {
 				/>
 
 				<div class="flex flex-row items-center">
-					<NameEditor name={meta().prettyName} />
+					<NameEditor
+						name={meta().prettyName}
+						registerTitleSave={props.registerTitleSave}
+						readOnly={titleReadOnly()}
+						setReadOnly={setTitleReadOnly}
+					/>
 					<span class="text-sm text-gray-11">.cap</span>
 				</div>
 				<div data-tauri-drag-region class="flex-1 h-full" />
@@ -273,21 +290,50 @@ const UploadIcon = (props: ComponentProps<"svg">) => {
 	);
 };
 
-function NameEditor(props: { name: string }) {
+function NameEditor(props: {
+	name: string;
+	registerTitleSave: RegisterTitleSave;
+	readOnly: boolean;
+	setReadOnly: (readOnly: boolean) => void;
+}) {
 	const { refetchMeta } = useEditorContext();
 
 	let prettyNameRef: HTMLInputElement | undefined;
 	let prettyNameMeasureRef: HTMLSpanElement | undefined;
 	const [truncated, setTruncated] = createSignal(false);
 	const [prettyName, setPrettyName] = createSignal(props.name);
-
-	createEffect(() => {
-		if (!prettyNameRef || !prettyNameMeasureRef) return;
-		prettyNameMeasureRef.textContent = prettyName();
-		const inputWidth = prettyNameRef.offsetWidth;
-		const textWidth = prettyNameMeasureRef.offsetWidth;
-		setTruncated(inputWidth < textWidth);
+	const flushPrettyName = createRecordingTitleSave({
+		initialName: props.name,
+		getDraft: prettyName,
+		resetDraft: setPrettyName,
+		save: async (trimmed) => {
+			try {
+				await commands.setPrettyName(trimmed);
+				void refetchMeta();
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				toast.error(`Failed to save recording title: ${message}`);
+				throw error;
+			}
+		},
 	});
+	props.registerTitleSave({
+		flush: flushPrettyName,
+		setReadOnly: props.setReadOnly,
+	});
+	onCleanup(() => props.registerTitleSave(undefined));
+
+	createEffect(
+		on(prettyName, () => {
+			const frame = requestAnimationFrame(() => {
+				if (!prettyNameMeasureRef) return;
+				setTruncated(
+					prettyNameMeasureRef.scrollWidth > prettyNameMeasureRef.clientWidth,
+				);
+			});
+			onCleanup(() => cancelAnimationFrame(frame));
+		}),
+	);
 
 	return (
 		<Tooltip disabled={!truncated()} content={props.name}>
@@ -295,23 +341,16 @@ function NameEditor(props: { name: string }) {
 				<input
 					ref={prettyNameRef}
 					class={cx(
-						"absolute inset-0 px-px m-0 opacity-0 overflow-hidden focus:opacity-100 bg-transparent border-b border-transparent focus:border-gray-7 focus:outline-hidden peer whitespace-pre",
+						"absolute inset-0 px-px m-0 opacity-0 overflow-hidden focus:opacity-100 bg-transparent border-b border-transparent focus:border-gray-7 focus:outline-hidden peer whitespace-pre select-text",
 						truncated() && "truncate",
 						(prettyName().length < 5 || prettyName().length > 100) &&
 							"focus:border-red-500",
 					)}
 					value={prettyName()}
+					readOnly={props.readOnly}
 					onInput={(e) => setPrettyName(e.currentTarget.value)}
-					onBlur={async () => {
-						const trimmed = prettyName().trim();
-						if (trimmed.length < 5 || trimmed.length > 100) {
-							setPrettyName(props.name);
-							return;
-						}
-						if (trimmed && trimmed !== props.name) {
-							await commands.setPrettyName(trimmed);
-							refetchMeta();
-						}
+					onBlur={() => {
+						void flushPrettyName().catch(() => {});
 					}}
 					onKeyDown={(e) => {
 						if (e.key === "Enter" || e.key === "Escape") {
@@ -319,11 +358,12 @@ function NameEditor(props: { name: string }) {
 						}
 					}}
 				/>
-				{/* Hidden span for measuring text width */}
 				<span
 					ref={prettyNameMeasureRef}
 					class="pointer-events-none max-w-[200px] px-px m-0 peer-focus:opacity-0 border-b border-transparent truncate whitespace-pre"
-				/>
+				>
+					{prettyName()}
+				</span>
 			</div>
 		</Tooltip>
 	);

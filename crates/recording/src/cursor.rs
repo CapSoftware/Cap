@@ -328,8 +328,14 @@ pub fn spawn_cursor_recorder(
     let (tx, rx) = oneshot::channel();
     let (stop_wakeup_tx, stop_wakeup_rx) = std::sync::mpsc::channel();
 
+    let scope = crate::output_pipeline::PipelineBuildScope::current();
+    if let Some(scope) = &scope {
+        scope.register_token(stop_token.clone());
+    }
+    let completion = scope.map(|scope| scope.task_completion());
     let stop_token_child = stop_token.child_token();
     let thread = std::thread::spawn(move || {
+        let _completion = completion;
         let crop_bounds = target.crop_bounds;
         let display = target.display;
         #[cfg(target_os = "linux")]

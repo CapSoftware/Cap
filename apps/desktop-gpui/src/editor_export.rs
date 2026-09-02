@@ -1,6 +1,6 @@
 //! Editor export page -- `routes/editor/ExportPage.tsx`, 1:1 layout.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -177,6 +177,7 @@ pub struct ExportUi {
     pub preview_error: Option<String>,
     pub preview_task: Option<gpui::Task<()>>,
     pub phase: ExportPhase,
+    close_requested: bool,
     pub rendered: u32,
     pub total_frames: u32,
     pub output_path: Option<PathBuf>,
@@ -206,6 +207,10 @@ impl ExportUi {
             advanced_open: false,
             organization_id: None,
         });
+        Self::from_preferences(prefs)
+    }
+
+    fn from_preferences(prefs: ExportPrefs) -> Self {
         Self {
             destination: ExportDestination::from_slug(&prefs.export_to),
             format: ExportFormatKind::from_slug(&prefs.format),
@@ -227,6 +232,7 @@ impl ExportUi {
             preview_error: None,
             preview_task: None,
             phase: ExportPhase::Idle,
+            close_requested: false,
             rendered: 0,
             total_frames: 0,
             output_path: None,
@@ -267,6 +273,36 @@ impl ExportUi {
     fn is_custom_bpp(&self) -> bool {
         self.custom_bpp
             .is_some_and(|bpp| (bpp - self.compression.bits_per_pixel()).abs() > 0.001)
+    }
+
+    fn clipboard_retry_path(&self) -> Option<&Path> {
+        if self.phase == ExportPhase::Failed && self.destination == ExportDestination::Clipboard {
+            self.output_path.as_deref()
+        } else {
+            None
+        }
+    }
+
+    fn copy_completed_export(
+        &mut self,
+        path: PathBuf,
+        copy: impl FnOnce(&Path) -> Result<(), String>,
+    ) {
+        self.output_path = Some(path.clone());
+        self.error = None;
+        if self.close_requested || self.cancel.load(Ordering::Relaxed) {
+            self.phase = ExportPhase::Idle;
+            return;
+        }
+
+        self.phase = ExportPhase::Copying;
+        match copy(&path) {
+            Ok(()) => self.phase = ExportPhase::Done,
+            Err(error) => {
+                self.phase = ExportPhase::Failed;
+                self.error = Some(error);
+            }
+        }
     }
 }
 
@@ -337,8 +373,12 @@ impl EditorWindow {
     pub(crate) fn close_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(ui) = self.export.as_mut() {
             if ui.phase.is_busy() {
+                ui.close_requested = true;
                 ui.cancel.store(true, Ordering::Relaxed);
+                cx.notify();
+                return;
             }
+            ui.sign_in_cancel.store(true, Ordering::Relaxed);
             if let Some(image) = ui.preview.take() {
                 let _ = window.drop_image(image);
             }
@@ -346,6 +386,16 @@ impl EditorWindow {
         }
         self.export = None;
         cx.notify();
+    }
+
+    fn finish_requested_export_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .export
+            .as_ref()
+            .is_some_and(|ui| ui.close_requested && !ui.phase.is_busy())
+        {
+            self.close_export(window, cx);
+        }
     }
 
     fn copy_share_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -488,7 +538,7 @@ impl EditorWindow {
         let Some(ui) = self.export.as_mut() else {
             return;
         };
-        if ui.phase.is_busy() {
+        if ui.phase.is_busy() || ui.close_requested {
             return;
         }
         if ui.destination == ExportDestination::Link {
@@ -517,7 +567,7 @@ impl EditorWindow {
         let force = ui.force_ffmpeg;
         let project_path = self.project_path.clone();
         let project = self.project.clone();
-        ui.cancel.store(false, Ordering::Relaxed);
+        ui.cancel = Arc::new(AtomicBool::new(false));
         let cancel = ui.cancel.clone();
         ui.phase = if destination == ExportDestination::File {
             ExportPhase::ChoosingFile
@@ -550,6 +600,9 @@ impl EditorWindow {
                         }
                         cx.notify();
                     });
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.finish_requested_export_close(window, cx)
+                    });
                     return;
                 }
                 chosen
@@ -571,6 +624,9 @@ impl EditorWindow {
                 true
             });
             if !started.unwrap_or(false) {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.finish_requested_export_close(window, cx)
+                });
                 return;
             }
 
@@ -621,29 +677,9 @@ impl EditorWindow {
                     if destination == ExportDestination::Clipboard {
                         let _ = this.update(cx, |this, cx| {
                             if let Some(ui) = this.export.as_mut() {
-                                ui.phase = ExportPhase::Copying;
-                            }
-                            cx.notify();
-                        });
-                        let copied = cx
-                            .background_executor()
-                            .spawn({
-                                let path = path.clone();
-                                async move { platform::copy_file_to_clipboard(&path) }
-                            })
-                            .await;
-                        let _ = this.update(cx, |this, cx| {
-                            if let Some(ui) = this.export.as_mut() {
-                                match copied {
-                                    Ok(()) => {
-                                        ui.phase = ExportPhase::Done;
-                                        ui.output_path = Some(path);
-                                    }
-                                    Err(error) => {
-                                        ui.phase = ExportPhase::Failed;
-                                        ui.error = Some(error);
-                                    }
-                                }
+                                ui.copy_completed_export(path, |path| {
+                                    platform::copy_file_to_clipboard(path, cx)
+                                });
                             }
                             cx.notify();
                         });
@@ -682,7 +718,23 @@ impl EditorWindow {
                     });
                 }
             }
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_requested_export_close(window, cx)
+            });
         }));
+    }
+
+    fn retry_clipboard_copy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ui) = self.export.as_mut() else {
+            return;
+        };
+        let Some(path) = ui.clipboard_retry_path().map(Path::to_path_buf) else {
+            return;
+        };
+        ui.cancel = Arc::new(AtomicBool::new(false));
+        ui.copy_completed_export(path, |path| platform::copy_file_to_clipboard(path, cx));
+        cx.notify();
+        self.finish_requested_export_close(window, cx);
     }
 
     fn start_share_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -762,7 +814,7 @@ impl EditorWindow {
         let Some(ui) = self.export.as_mut() else {
             return;
         };
-        if ui.phase.is_busy() {
+        if ui.phase.is_busy() || ui.close_requested {
             return;
         }
 
@@ -788,7 +840,7 @@ impl EditorWindow {
                 .first()
                 .map(|org| org.id.clone())
         });
-        ui.cancel.store(false, Ordering::Relaxed);
+        ui.cancel = Arc::new(AtomicBool::new(false));
         let cancel = ui.cancel.clone();
         ui.phase = ExportPhase::Starting;
         ui.error = None;
@@ -976,52 +1028,83 @@ impl EditorWindow {
                     show_upload_failure(&this, cx, "Export task failed", false);
                 }
             }
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.finish_requested_export_close(window, cx)
+            });
         }));
     }
 
-    pub(crate) fn render_export_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_export_page(
+        &self,
+        _window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = self.theme;
         let Some(ui) = self.export.as_ref() else {
             return div().into_any_element();
         };
+
+        let header = div()
+            .relative()
+            .h(px(56.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .border_b_1()
+            .border_color(Hsla::from(theme.gray_3))
+            .when(cfg!(target_os = "windows"), |header| {
+                header.window_control_area(gpui::WindowControlArea::Drag)
+            })
+            .when(!cfg!(target_os = "windows"), |header| {
+                header.on_mouse_down(gpui::MouseButton::Left, |event, window, _| {
+                    if event.click_count == 2 {
+                        window.titlebar_double_click();
+                    } else {
+                        window.start_window_move();
+                    }
+                })
+            })
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(Hsla::from(theme.gray_12))
+                    .child("Export"),
+            );
+        #[cfg(target_os = "windows")]
+        let header = header.child(div().absolute().right_0().top_0().h_full().child(
+            ui::windows_caption_controls(
+                theme,
+                _window.is_window_active(),
+                _window.is_maximized(),
+                true,
+                true,
+            ),
+        ));
 
         div()
             .size_full()
             .flex()
             .flex_col()
             .relative()
+            .child(header)
             .child(
                 div()
-                    .h(px(56.))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_center()
-                    .border_b_1()
-                    .border_color(Hsla::from(theme.gray_3))
-                    .child(
-                        div()
-                            .text_size(px(14.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_12))
-                            .child("Export"),
-                    ),
-            )
-            .child(
-                div()
+                    .relative()
                     .flex()
                     .flex_row()
                     .flex_1()
                     .min_h_0()
                     .child(self.render_export_preview_pane(ui))
-                    .child(self.render_export_sidebar(ui, cx)),
+                    .child(self.render_export_sidebar(ui, cx))
+                    .when(ui.phase.shows_progress(), |this| {
+                        this.child(self.render_export_overlay(ui, cx))
+                    })
+                    .when(ui.phase == ExportPhase::ChoosingFile, |this| {
+                        this.child(div().absolute().inset_0().occlude())
+                    }),
             )
-            .when(ui.phase.shows_progress(), |this| {
-                this.child(self.render_export_overlay(ui, cx))
-            })
-            .when(ui.phase == ExportPhase::ChoosingFile, |this| {
-                this.child(div().absolute().inset_0().occlude())
-            })
             .into_any_element()
     }
 
@@ -1628,6 +1711,18 @@ impl EditorWindow {
                     .flex_row()
                     .items_center()
                     .justify_between()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(if ui.advanced_open {
+                        theme.gray_5
+                    } else {
+                        theme.gray_4
+                    })
+                    .when(ui.advanced_open, |button| button.bg(theme.gray_3))
+                    .hover(|style| style.bg(theme.gray_3).border_color(theme.gray_5))
+                    .active(|style| style.bg(theme.gray_4))
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _, _window, cx| {
                         if let Some(ui) = this.export.as_mut() {
@@ -1796,6 +1891,9 @@ impl EditorWindow {
             }
             ExportPhase::Done if ui.destination == ExportDestination::Link => "Upload complete",
             ExportPhase::Done => "Export complete",
+            ExportPhase::Failed if ui.clipboard_retry_path().is_some() => {
+                "Export complete; clipboard copy failed"
+            }
             ExportPhase::Failed => "Export failed",
             ExportPhase::Idle | ExportPhase::ChoosingFile => "",
         };
@@ -1806,6 +1904,7 @@ impl EditorWindow {
         div()
             .absolute()
             .inset_0()
+            .occlude()
             .flex()
             .flex_col()
             .items_center()
@@ -1882,7 +1981,7 @@ impl EditorWindow {
                         let Some(ui) = this.export.as_mut() else {
                             return;
                         };
-                        ui.cancel.store(true, Ordering::Relaxed);
+                        let cancel = ui.cancel.clone();
                         cx.spawn_in(window, async move |this, cx| {
                             let confirmed = platform::confirm_dialog(
                                 "Cancel export?",
@@ -1891,15 +1990,12 @@ impl EditorWindow {
                                 "Keep exporting",
                                 true,
                             );
-                            if confirmed {
-                                let _ = this.update(cx, |this, cx| {
-                                    if let Some(ui) = this.export.as_mut() {
-                                        ui.cancel.store(true, Ordering::Relaxed);
-                                        ui.phase = ExportPhase::Idle;
-                                    }
-                                    cx.notify();
-                                });
-                            }
+                            let _ = this.update(cx, |this, cx| {
+                                if let Some(ui) = this.export.as_mut() {
+                                    cancel_matching_export(&ui.cancel, &cancel, confirmed);
+                                }
+                                cx.notify();
+                            });
                         })
                         .detach();
                     })),
@@ -1916,8 +2012,24 @@ impl EditorWindow {
                 )
             })
             .when(ui.phase == ExportPhase::Done || ui.phase == ExportPhase::Failed, |this| {
-                this                .when(
-                    ui.phase == ExportPhase::Done && ui.destination == ExportDestination::File,
+                this.when(ui.clipboard_retry_path().is_some(), |this| {
+                    this.child(
+                        ui::Button::plain(
+                            &theme,
+                            "export-retry-copy",
+                            ui::ButtonVariant::Gray,
+                            ui::ButtonSize::Md,
+                        )
+                        .icon("icons/copy.svg")
+                        .label("Retry Copy")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.retry_clipboard_copy(window, cx);
+                        })),
+                    )
+                })
+                .when(
+                    (ui.phase == ExportPhase::Done && ui.destination == ExportDestination::File)
+                        || ui.clipboard_retry_path().is_some(),
                     |this| {
                         let path = ui.output_path.clone();
                         this.child(
@@ -1986,6 +2098,12 @@ impl EditorWindow {
                     .on_click(cx.listener(|this, _, window, cx| this.close_export(window, cx))),
                 )
             })
+    }
+}
+
+fn cancel_matching_export(current: &Arc<AtomicBool>, requested: &Arc<AtomicBool>, confirmed: bool) {
+    if confirmed && Arc::ptr_eq(current, requested) {
+        current.store(true, Ordering::Relaxed);
     }
 }
 
@@ -2103,7 +2221,98 @@ async fn run_export(
 
 #[cfg(test)]
 mod tests {
-    use super::ExportPhase;
+    use super::{ExportDestination, ExportPhase, ExportUi, cancel_matching_export};
+    use crate::store::ExportPrefs;
+    use std::path::PathBuf;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    fn clipboard_export() -> ExportUi {
+        ExportUi::from_preferences(ExportPrefs {
+            format: "Mp4".into(),
+            fps: 30,
+            export_to: "clipboard".into(),
+            resolution: "720p".into(),
+            compression: "Maximum".into(),
+            optimize_filesize: false,
+            cursor_only: false,
+            custom_bpp: None,
+            force_ffmpeg_decoder: false,
+            advanced_open: false,
+            organization_id: None,
+        })
+    }
+
+    #[test]
+    fn failed_clipboard_copy_retries_the_completed_file() {
+        let mut ui = clipboard_export();
+        let output = PathBuf::from("finished recording.mp4");
+        ui.copy_completed_export(output.clone(), |path| {
+            assert_eq!(path, output);
+            Err("Clipboard is busy".into())
+        });
+        assert_eq!(ui.phase, ExportPhase::Failed);
+        assert_eq!(ui.error.as_deref(), Some("Clipboard is busy"));
+        let retry = ui.clipboard_retry_path().unwrap().to_path_buf();
+        assert_eq!(retry, output);
+
+        ui.copy_completed_export(retry, |path| {
+            assert_eq!(path, output);
+            Ok(())
+        });
+        assert_eq!(ui.phase, ExportPhase::Done);
+        assert_eq!(ui.output_path, Some(output));
+        assert!(ui.error.is_none());
+        assert!(ui.clipboard_retry_path().is_none());
+    }
+
+    #[test]
+    fn cancellation_or_close_prevents_late_clipboard_mutation() {
+        for closing in [false, true] {
+            let mut ui = clipboard_export();
+            ui.close_requested = closing;
+            ui.cancel.store(!closing, Ordering::Relaxed);
+            let output = PathBuf::from("finished recording.mp4");
+            ui.copy_completed_export(output.clone(), |_| {
+                panic!("cancelled exports must not replace the clipboard")
+            });
+            assert_eq!(ui.phase, ExportPhase::Idle);
+            assert_eq!(ui.output_path, Some(output));
+            assert!(ui.clipboard_retry_path().is_none());
+        }
+    }
+
+    #[test]
+    fn incomplete_or_non_clipboard_exports_cannot_retry_copy() {
+        let mut ui = clipboard_export();
+        ui.phase = ExportPhase::Failed;
+        assert!(ui.clipboard_retry_path().is_none());
+        ui.output_path = Some(PathBuf::from("finished recording.mp4"));
+        ui.destination = ExportDestination::File;
+        assert!(ui.clipboard_retry_path().is_none());
+        ui.destination = ExportDestination::Link;
+        assert!(ui.clipboard_retry_path().is_none());
+    }
+
+    #[test]
+    fn declining_cancel_preserves_the_running_export() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        cancel_matching_export(&cancel, &cancel, false);
+        assert!(!cancel.load(Ordering::Relaxed));
+        cancel_matching_export(&cancel, &cancel, true);
+        assert!(cancel.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn late_confirmation_cannot_cancel_a_subsequent_export() {
+        let previous = Arc::new(AtomicBool::new(false));
+        let current = Arc::new(AtomicBool::new(false));
+        cancel_matching_export(&current, &previous, true);
+        assert!(!current.load(Ordering::Relaxed));
+        assert!(!previous.load(Ordering::Relaxed));
+    }
 
     #[test]
     fn choosing_a_file_blocks_duplicate_exports_without_showing_progress() {

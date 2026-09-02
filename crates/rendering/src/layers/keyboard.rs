@@ -278,7 +278,7 @@ impl KeyboardLayer {
     pub fn prepare(
         &mut self,
         uniforms: &ProjectUniforms,
-        _segment_frames: &DecodedSegmentFrames,
+        segment_frames: &DecodedSegmentFrames,
         output_size: XY<u32>,
         constants: &RenderVideoConstants,
         caption_layout: Option<CaptionOverlayLayout>,
@@ -304,7 +304,12 @@ impl KeyboardLayer {
             return;
         }
 
-        let current_time = uniforms.frame_number as f64 / uniforms.frame_rate as f64;
+        // Keyboard segments are authored on the recording clock. Use the same
+        // clock the cursor layer uses: recording_time travels with the decoded
+        // frame through the timeline mapping, so the overlay follows cuts and
+        // trims, and includes the recording→first-video-frame start offset
+        // that raw output time (frame_number / frame_rate) lacks.
+        let current_time = segment_frames.recording_time as f64;
         let settings = &keyboard_data.settings;
 
         let active_segment = find_active_keyboard_segment(

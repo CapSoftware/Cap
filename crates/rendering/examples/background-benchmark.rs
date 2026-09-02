@@ -27,6 +27,8 @@ struct Args {
     backgrounds: Option<PathBuf>,
     #[arg(long)]
     snapshots: Option<PathBuf>,
+    #[arg(long, value_delimiter = ',', default_value = "0,1800")]
+    snapshot_frames: Vec<u32>,
 }
 
 #[derive(Deserialize)]
@@ -259,7 +261,7 @@ async fn main() -> Result<()> {
                 std::fs::create_dir_all(directory)?;
                 let mut renderer = FrameRenderer::new(&constants);
                 let mut layers = RendererLayers::new(&constants.device, &constants.queue);
-                for frame_number in [0, 1800] {
+                for &frame_number in &args.snapshot_frames {
                     let frame = segment(&source, frame_number);
                     let uniforms = ProjectUniforms::new(
                         &constants,

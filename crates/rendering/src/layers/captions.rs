@@ -960,64 +960,62 @@ impl CaptionsLayer {
             bytemuck::bytes_of(&background_uniforms),
         );
 
-        if let Some((min_x, max_x, line_top, line_height)) = highlight_extent {
-            if max_x > min_x {
-                let pill_pad_x = effective_font_size * 0.28 * anim_scale;
-                let pill_pad_y = effective_font_size * 0.12 * anim_scale;
-                let pill_left = (text_left + min_x * render_scale - pill_pad_x).max(0.0);
-                let pill_top = (text_top + line_top * render_scale - pill_pad_y).max(0.0);
-                let pill_width = ((max_x - min_x) * render_scale + pill_pad_x * 2.0)
-                    .min((width as f32 - pill_left).max(0.0))
-                    .max(1.0);
-                let pill_height = (line_height * render_scale + pill_pad_y * 2.0)
-                    .min((height as f32 - pill_top).max(0.0))
-                    .max(1.0);
-                let pill_radius = (pill_height * 0.4).min(pill_width / 2.0);
+        if let Some((min_x, max_x, line_top, line_height)) = highlight_extent
+            && max_x > min_x
+        {
+            let pill_pad_x = effective_font_size * 0.28 * anim_scale;
+            let pill_pad_y = effective_font_size * 0.12 * anim_scale;
+            let pill_left = (text_left + min_x * render_scale - pill_pad_x).max(0.0);
+            let pill_top = (text_top + line_top * render_scale - pill_pad_y).max(0.0);
+            let pill_width = ((max_x - min_x) * render_scale + pill_pad_x * 2.0)
+                .min((width as f32 - pill_left).max(0.0))
+                .max(1.0);
+            let pill_height = (line_height * render_scale + pill_pad_y * 2.0)
+                .min((height as f32 - pill_top).max(0.0))
+                .max(1.0);
+            let pill_radius = (pill_height * 0.4).min(pill_width / 2.0);
 
-                let pill_uniforms = CaptionBackgroundUniforms {
-                    rect: [pill_left, pill_top, pill_width, pill_height],
-                    color: [
-                        highlight_color_rgb[0],
-                        highlight_color_rgb[1],
-                        highlight_color_rgb[2],
-                        fade_opacity,
-                    ],
-                    radius: pill_radius,
-                    _padding: [0.0; 3],
-                    _padding2: [0.0; 4],
-                };
-                queue.write_buffer(
-                    &self.highlight_uniform_buffer,
-                    0,
-                    bytemuck::bytes_of(&pill_uniforms),
-                );
+            let pill_uniforms = CaptionBackgroundUniforms {
+                rect: [pill_left, pill_top, pill_width, pill_height],
+                color: [
+                    highlight_color_rgb[0],
+                    highlight_color_rgb[1],
+                    highlight_color_rgb[2],
+                    fade_opacity,
+                ],
+                radius: pill_radius,
+                _padding: [0.0; 3],
+                _padding2: [0.0; 4],
+            };
+            queue.write_buffer(
+                &self.highlight_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&pill_uniforms),
+            );
 
-                let pill_scissor_pad = 3.0;
-                let pill_scissor_x = (pill_left - pill_scissor_pad).max(0.0).floor() as u32;
-                let pill_scissor_y = (pill_top - pill_scissor_pad).max(0.0).floor() as u32;
-                let pill_max_width = width.saturating_sub(pill_scissor_x);
-                let pill_max_height = height.saturating_sub(pill_scissor_y);
+            let pill_scissor_pad = 3.0;
+            let pill_scissor_x = (pill_left - pill_scissor_pad).max(0.0).floor() as u32;
+            let pill_scissor_y = (pill_top - pill_scissor_pad).max(0.0).floor() as u32;
+            let pill_max_width = width.saturating_sub(pill_scissor_x);
+            let pill_max_height = height.saturating_sub(pill_scissor_y);
 
-                if pill_max_width > 0 && pill_max_height > 0 {
-                    let pill_scissor_width = (pill_width + pill_scissor_pad * 2.0)
-                        .ceil()
-                        .max(1.0)
-                        .min(pill_max_width as f32)
-                        as u32;
-                    let pill_scissor_height = (pill_height + pill_scissor_pad * 2.0)
-                        .ceil()
-                        .max(1.0)
-                        .min(pill_max_height as f32)
-                        as u32;
+            if pill_max_width > 0 && pill_max_height > 0 {
+                let pill_scissor_width = (pill_width + pill_scissor_pad * 2.0)
+                    .ceil()
+                    .max(1.0)
+                    .min(pill_max_width as f32) as u32;
+                let pill_scissor_height = (pill_height + pill_scissor_pad * 2.0)
+                    .ceil()
+                    .max(1.0)
+                    .min(pill_max_height as f32) as u32;
 
-                    self.highlight_scissor = Some([
-                        pill_scissor_x,
-                        pill_scissor_y,
-                        pill_scissor_width,
-                        pill_scissor_height,
-                    ]);
-                    self.has_highlight = true;
-                }
+                self.highlight_scissor = Some([
+                    pill_scissor_x,
+                    pill_scissor_y,
+                    pill_scissor_width,
+                    pill_scissor_height,
+                ]);
+                self.has_highlight = true;
             }
         }
 
