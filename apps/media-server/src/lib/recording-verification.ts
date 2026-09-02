@@ -685,6 +685,8 @@ async function decodeRecording(
 		"pcm_f64le",
 		"-threads",
 		"1",
+		"-max_interleave_delta",
+		"1",
 	];
 	const proc = registerSubprocess(
 		spawn({

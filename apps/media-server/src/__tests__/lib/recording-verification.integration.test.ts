@@ -1196,6 +1196,31 @@ describe("source-preserving recording mux", () => {
 		},
 	);
 
+	test("preserves a short audio track that ends before the video starts", async () => {
+		const input = join(directory, "early-audio.mp4");
+		await generate(input, "sine=frequency=700:sample_rate=48000:duration=0.1", [
+			"-vf",
+			"setpts=PTS+5/TB",
+			"-fps_mode",
+			"passthrough",
+			"-movie_timescale",
+			"1000000",
+		]);
+		const sourceEvidence = await inspectRecordingSources(input, input);
+		expect(sourceEvidence.audio?.endTime).toBeLessThan(
+			sourceEvidence.video.startTime,
+		);
+		const output = join(directory, "preserved-early-audio.mp4");
+		await muxMediaTracksToMp4(input, input, output);
+		const verified = await verifyRecording(output, {
+			requireAudio: true,
+			sourceEvidence,
+		});
+		expect(verified.sourcePreserved).toBe(true);
+		expect(verified.video.frameCount).toBe(150);
+		expect(verified.integrity).toEqual(sourceEvidence.integrity);
+	});
+
 	test("preserves an audio tail beyond the video and rejects the old shortest mux", async () => {
 		const input = join(directory, "long-audio.mp4");
 		await generate(input, "sine=frequency=700:sample_rate=48000:duration=6");
