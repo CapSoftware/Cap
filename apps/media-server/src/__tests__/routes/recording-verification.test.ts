@@ -72,11 +72,11 @@ async function waitFor(predicate: () => boolean) {
 	}
 }
 
-async function startJob() {
+async function startJob(requestBody: Record<string, unknown> = body) {
 	const response = await video.request("/verify-recording", {
 		method: "POST",
 		headers,
-		body: JSON.stringify(body),
+		body: JSON.stringify(requestBody),
 	});
 	expect(response.status).toBe(200);
 	const accepted = (await response.json()) as { jobId: string };
@@ -163,6 +163,103 @@ afterAll(() => {
 });
 
 describe("asynchronous recording verification", () => {
+	test("binds a fenced MP4 attempt to the original artifact and verified snapshot", async () => {
+		const snapshotIdentity = '"snapshot-generation"';
+		verify.mockResolvedValue({
+			...evidence,
+			objectIdentity: snapshotIdentity,
+			remoteSha256: "a".repeat(64),
+		});
+		const request = {
+			...body,
+			generation: "generation-a",
+			attemptId: "attempt-a",
+			inventorySha256: "c".repeat(64),
+			outputKey: "recording-generations/generation-a/source.mp4",
+			originalObjectIdentity: body.objectIdentity,
+			sourceObjectIdentity: snapshotIdentity,
+			duration: undefined,
+		};
+		const jobId = await startJob(request);
+		const completed = await terminalWebhook(jobId);
+		expect(completed.generation).toBe(request.generation);
+		expect(completed.attemptId).toBe(request.attemptId);
+		expect(completed.inventorySha256).toBe(request.inventorySha256);
+		expect(completed.recordingVerification).toMatchObject({
+			request: {
+				artifact: {
+					objectIdentity: body.objectIdentity,
+					duration: evidence.video.duration,
+				},
+			},
+			objectIdentity: snapshotIdentity,
+			outputKey: request.outputKey,
+			outputSha256: "a".repeat(64),
+		});
+		expect(verify.mock.calls[0]?.[1]).toMatchObject({
+			expectedObjectIdentity: snapshotIdentity,
+			expectedFileSize: body.fileSize,
+			allowObservedDuration: true,
+			hashContent: true,
+		});
+	});
+
+	test("deduplicates a replayed attempt before capacity checks and rejects changed context", async () => {
+		let finish:
+			| ((value: RemoteRecordingVerificationResult) => void)
+			| undefined;
+		verify.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const request = {
+			...body,
+			generation: "generation-dedup",
+			attemptId: "attempt-dedup",
+			inventorySha256: "d".repeat(64),
+			outputKey: "snapshot.mp4",
+			originalObjectIdentity: body.objectIdentity,
+			sourceObjectIdentity: body.objectIdentity,
+		};
+		const jobId = await startJob(request);
+		await waitFor(() => verify.mock.calls.length === 1);
+		expect(await status(jobId)).toMatchObject({
+			phase: "processing",
+			generation: request.generation,
+			attemptId: request.attemptId,
+			inventorySha256: request.inventorySha256,
+		});
+		try {
+			capacity.mockReturnValue(false);
+			expect(await startJob(request)).toBe(jobId);
+			expect(verify.mock.calls).toHaveLength(1);
+			const conflict = await video.request("/verify-recording", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					...request,
+					inventorySha256: "e".repeat(64),
+				}),
+			});
+			expect(conflict.status).toBe(409);
+		} finally {
+			finish?.({ ...evidence, remoteSha256: "b".repeat(64) });
+		}
+		expect((await terminalWebhook(jobId)).phase).toBe("complete");
+	});
+
+	test("rejects incomplete fenced context without starting work", async () => {
+		const response = await video.request("/verify-recording", {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ ...body, generation: "generation-only" }),
+		});
+		expect(response.status).toBe(400);
+		expect(verify).not.toHaveBeenCalled();
+	});
+
 	test("acceptance is not proof and completed metadata comes from decoded evidence", async () => {
 		let finish:
 			| ((value: RemoteRecordingVerificationResult) => void)
