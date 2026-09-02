@@ -1,9 +1,18 @@
 import { db } from "@cap/database";
-import { users, videos, videoUploads } from "@cap/database/schema";
+import { users, videos } from "@cap/database/schema";
 import type { User, Video } from "@cap/web-domain";
-import { and, eq, notInArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { start } from "workflow/api";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import {
+	attachWorkflowRun,
+	DesktopRecordingSourceBlockedError,
+	ensureSegmentProcessingJob,
+	getProcessingState,
+	isDesktopRecordingJobRecoverable,
+	recordWorkflowDispatchFailure,
+	SourceCommitPendingError,
+} from "@/lib/desktop-recording-jobs";
 import type { RecordingVerification } from "@/lib/desktop-recording-verification";
 import { transcribeVideo } from "@/lib/transcribe";
 import { finalizeDesktopRecordingWorkflow } from "@/workflows/finalize-desktop-recording";
@@ -11,18 +20,6 @@ import { finalizeDesktopRecordingWorkflow } from "@/workflows/finalize-desktop-r
 export { isRetryableDesktopSegmentsFinalizationError } from "@/lib/desktop-segments-retryable-errors";
 
 export type DesktopSegmentsFinalizationStatus = "queued" | "already-processing";
-
-const PROCESSING_MESSAGE = "Muxing segments into MP4...";
-
-const getAffectedRows = (result: unknown) => {
-	if (Array.isArray(result)) {
-		return (
-			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-		);
-	}
-
-	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
-};
 
 async function queueEarlySegmentsTranscription({
 	videoId,
@@ -77,82 +74,56 @@ export async function queueDesktopSegmentsFinalization({
 	userId: User.UserId;
 	verification?: RecordingVerification;
 }): Promise<DesktopSegmentsFinalizationStatus> {
-	const processingMessage =
-		verification?.artifact.kind === "mp4"
-			? "Verifying uploaded recording..."
-			: PROCESSING_MESSAGE;
-	const result = await db()
-		.update(videoUploads)
-		.set({
-			phase: "processing",
-			processingProgress: 0,
-			processingMessage,
-			processingError: null,
-			updatedAt: new Date(),
-		})
-		.where(
-			and(
-				eq(videoUploads.videoId, videoId),
-				notInArray(videoUploads.phase, ["processing", "generating_thumbnail"]),
-			),
-		);
-
-	if (getAffectedRows(result) === 0) {
-		const [existing] = await db()
-			.select({ phase: videoUploads.phase })
-			.from(videoUploads)
-			.where(eq(videoUploads.videoId, videoId));
-
-		if (existing) {
-			return "already-processing";
-		}
-
+	const { job, created } = await ensureSegmentProcessingJob({
+		videoId,
+		userId,
+		verification,
+	});
+	let dispatched = false;
+	if (created || isDesktopRecordingJobRecoverable(job, new Date())) {
 		try {
-			await db().insert(videoUploads).values({
+			const run = await start(finalizeDesktopRecordingWorkflow, [
+				{ videoId, userId, generation: job.generation },
+			]);
+			dispatched = true;
+			await attachWorkflowRun({
 				videoId,
-				phase: "processing",
-				processingProgress: 0,
-				processingMessage,
+				generation: job.generation,
+				workflowRunId: run.runId,
 			});
-		} catch {
-			return "already-processing";
+		} catch (error) {
+			await recordWorkflowDispatchFailure({
+				videoId,
+				generation: job.generation,
+				errorMessage: error instanceof Error ? error.message : String(error),
+			});
+			console.error(
+				"[queueDesktopSegmentsFinalization] Durable job is waiting for workflow dispatch",
+				{ videoId, generation: job.generation, error },
+			);
 		}
 	}
-
-	try {
-		await start(finalizeDesktopRecordingWorkflow, [
-			{
-				videoId,
-				userId,
-				verification,
-			},
-		]);
-		// The segments are fully uploaded at this point, so transcription can
-		// start right away from the segment audio instead of waiting for the mux
-		// into result.mp4. Failures here never block finalization: the workflow
-		// re-queues transcription after the mux exactly as before.
-		if (verification?.artifact.kind !== "mp4")
-			await queueEarlySegmentsTranscription({ videoId, userId }).catch(
-				(error) => {
-					console.warn(
-						`[queueDesktopSegmentsFinalization] Early transcription queue failed for ${videoId}`,
-						error,
-					);
-				},
-			);
-		return "queued";
-	} catch (error) {
-		await db()
-			.update(videoUploads)
-			.set({
-				phase: "error",
-				processingProgress: 0,
-				processingMessage: "Failed to queue segment muxing",
-				processingError: error instanceof Error ? error.message : String(error),
-				updatedAt: new Date(),
-			})
-			.where(eq(videoUploads.videoId, videoId));
-
-		throw error;
+	const current = await getProcessingState({
+		videoId,
+		generation: job.generation,
+	});
+	if (current?.state === "source-blocked") {
+		throw new DesktopRecordingSourceBlockedError(
+			current.errorCode ?? "source-incomplete",
+			current.errorMessage ??
+				"Recording source is incomplete; uploaded files are retained.",
+		);
 	}
+	if (!current?.source) throw new SourceCommitPendingError();
+	if (dispatched && current.source.kind === "segments") {
+		await queueEarlySegmentsTranscription({ videoId, userId }).catch(
+			(error) => {
+				console.warn(
+					"[queueDesktopSegmentsFinalization] Early transcription queue failed",
+					{ videoId, error },
+				);
+			},
+		);
+	}
+	return dispatched ? "queued" : "already-processing";
 }

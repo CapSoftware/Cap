@@ -356,8 +356,10 @@ export const ShareVideo = forwardRef<
 			setConfirmStoppedError(null);
 
 			try {
-				await finalizeDesktopSegmentsRecording({ videoId: data.id });
-				setUserConfirmedStopped(true);
+				const result = await finalizeDesktopSegmentsRecording({
+					videoId: data.id,
+				});
+				setUserConfirmedStopped(result.status !== "source-committing");
 				router.refresh();
 			} catch (error) {
 				setConfirmStoppedError(

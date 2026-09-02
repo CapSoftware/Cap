@@ -52,4 +52,18 @@ describe("multipart upload utils", () => {
 			}),
 		).toThrow("Video id not found");
 	});
+
+	it("rejects writes into retained sources and immutable outputs", () => {
+		for (const subpath of [
+			".recording/sources/generation/snapshot/video/0.mp4",
+			".recording/outputs/generation/attempt.mp4",
+		]) {
+			expect(() =>
+				getMultipartFileKey("owner", { videoId: "video", subpath }),
+			).toThrow("Recording snapshots are immutable");
+			expect(() =>
+				getMultipartFileKey("owner", { fileKey: `owner/video/${subpath}` }),
+			).toThrow("Recording snapshots are immutable");
+		}
+	});
 });

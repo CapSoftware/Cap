@@ -1,6 +1,17 @@
 import { getCurrentUser } from "@cap/database/auth/session";
-import { Option } from "effect";
+import {
+	CurrentUser,
+	Policy,
+	Storage as StorageDomain,
+	Video,
+} from "@cap/web-domain";
+import { Effect, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const deletion = vi.hoisted(() => ({
+	deleteVideo: vi.fn(),
+	principal: vi.fn(),
+}));
 
 const schema = {
 	organizations: { table: "organizations" },
@@ -9,12 +20,14 @@ const schema = {
 	videos: { table: "videos" },
 	videoUploads: { table: "videoUploads" },
 	importedVideos: { table: "importedVideos" },
+	authApiKeys: { table: "authApiKeys" },
 };
 
 const mockDb = {
 	select: vi.fn(),
 	from: vi.fn(),
 	innerJoin: vi.fn(),
+	leftJoin: vi.fn(),
 	insert: vi.fn(),
 	values: vi.fn(),
 	update: vi.fn(),
@@ -32,6 +45,10 @@ vi.mock("@cap/database", () => ({
 
 vi.mock("@cap/database/auth/session", () => ({
 	getCurrentUser: vi.fn(),
+}));
+
+vi.mock("@cap/database/auth/auth-options", () => ({
+	getServerSession: vi.fn(),
 }));
 
 vi.mock("@cap/database/schema", () => schema);
@@ -59,16 +76,41 @@ vi.mock("@cap/utils", () => ({
 	userIsPro: vi.fn(() => true),
 }));
 
-vi.mock("@cap/web-backend", () => ({
-	Storage: {
-		getOrganizationWritableAccess: vi.fn(),
-		getS3WritableAccessForUser: vi.fn(),
-	},
-}));
+vi.mock("@cap/web-backend", async () => {
+	const { Effect } = await import("effect");
+	const { makeCurrentUserLayer } = await import("@cap/web-backend/src/Auth");
+	class Videos extends Effect.Service<Videos>()("Videos", {
+		sync: () => ({ delete: deletion.deleteVideo }),
+	}) {}
+	return {
+		makeCurrentUserLayer,
+		Videos,
+		Storage: {
+			getOrganizationWritableAccess: vi.fn(),
+			getS3WritableAccessForUser: vi.fn(),
+		},
+	};
+});
 
-vi.mock("@/lib/server", () => ({
-	runPromise: vi.fn(async (value: unknown) => value),
-}));
+vi.mock("@/lib/server", async () => {
+	const { Effect } = await import("effect");
+	const { Videos } = await import("@cap/web-backend");
+	return {
+		runPromise: vi.fn(async (value: unknown) =>
+			Effect.isEffect(value)
+				? Effect.runPromise(
+						(
+							value as Effect.Effect<
+								unknown,
+								unknown,
+								InstanceType<typeof Videos>
+							>
+						).pipe(Effect.provide(Videos.Default)),
+					)
+				: value,
+		),
+	};
+});
 
 vi.mock("@/lib/video-storage", () => ({
 	decodeStorageVideo: vi.fn(() => null),
@@ -93,10 +135,9 @@ vi.mock("drizzle-orm", () => ({
 
 const mockGetCurrentUser = getCurrentUser as ReturnType<typeof vi.fn>;
 const { Storage } = await import("@cap/web-backend");
-
-const effectLike = <T>(value: T) => ({
-	pipe: (fn: (value: T) => unknown) => fn(value),
-});
+const { invalidateGoogleDriveStorageQuotaCache } = await import(
+	"@/lib/google-drive-storage-quota"
+);
 
 function resetMockDb() {
 	for (const key of Object.keys(mockDb)) {
@@ -108,6 +149,7 @@ function resetMockDb() {
 	mockDb.select.mockReturnValue(mockDb);
 	mockDb.from.mockReturnValue(mockDb);
 	mockDb.innerJoin.mockReturnValue(mockDb);
+	mockDb.leftJoin.mockReturnValue(mockDb);
 	mockDb.insert.mockReturnValue(mockDb);
 	mockDb.values.mockResolvedValue([]);
 	mockDb.update.mockReturnValue(mockDb);
@@ -133,9 +175,9 @@ function stubStorage() {
 		Storage.getOrganizationWritableAccess as ReturnType<typeof vi.fn>;
 	const getS3WritableAccessForUser =
 		Storage.getS3WritableAccessForUser as ReturnType<typeof vi.fn>;
-	getOrganizationWritableAccess.mockReturnValue(effectLike(Option.none()));
+	getOrganizationWritableAccess.mockReturnValue(Effect.succeed(Option.none()));
 	getS3WritableAccessForUser.mockReturnValue(
-		effectLike({
+		Effect.succeed({
 			bucketId: Option.some("bucket-1"),
 			storageIntegrationId: Option.none(),
 		}),
@@ -167,6 +209,187 @@ describe("GET /new-id", () => {
 			id: expect.stringMatching(/^[0-9abcdefghjkmnpqrstvwxyz]{15}$/),
 		});
 		expect(mockDb.insert).not.toHaveBeenCalled();
+	});
+});
+
+describe("DELETE /delete", () => {
+	let app: typeof import("@/app/api/desktop/[...route]/video")["app"];
+	const ownedVideo = {
+		id: "video-1",
+		ownerId: "user-1",
+		storageIntegrationId: "drive-1",
+	};
+
+	beforeEach(async () => {
+		vi.clearAllMocks();
+		resetMockDb();
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "owner@cap.test",
+			activeOrganizationId: "org-1",
+			image: null,
+		});
+		mockDb.where.mockResolvedValue([{ video: ownedVideo }]);
+		deletion.deleteVideo
+			.mockReset()
+			.mockImplementation(() =>
+				Effect.flatMap(CurrentUser, (principal) =>
+					Effect.sync(() => deletion.principal(principal)),
+				),
+			);
+		app = (await import("@/app/api/desktop/[...route]/video")).app;
+	});
+
+	it("delegates deletion under the authenticated principal and then invalidates quota", async () => {
+		const response = await app.request(
+			"https://cap.test/delete?videoId=video-1",
+			{ method: "DELETE" },
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toBe(true);
+		expect(deletion.deleteVideo).toHaveBeenCalledExactlyOnceWith("video-1");
+		expect(deletion.principal).toHaveBeenCalledWith({
+			id: "user-1",
+			email: "owner@cap.test",
+			activeOrganizationId: "org-1",
+			iconUrlOrKey: Option.none(),
+		});
+		expect(mockDb.delete).not.toHaveBeenCalled();
+		expect(
+			invalidateGoogleDriveStorageQuotaCache,
+		).toHaveBeenCalledExactlyOnceWith("drive-1");
+	});
+
+	it("uses the desktop bearer principal without replacing it with a cookie session", async () => {
+		mockGetCurrentUser.mockResolvedValue({ id: "cookie-user" });
+		mockDb.where
+			.mockResolvedValueOnce([
+				{
+					users: {
+						id: "token-user",
+						email: "token-owner@cap.test",
+						activeOrganizationId: "token-org",
+						image: null,
+					},
+				},
+			])
+			.mockResolvedValueOnce([
+				{ video: { ...ownedVideo, ownerId: "token-user" } },
+			]);
+		const response = await app.request(
+			"https://cap.test/delete?videoId=video-1",
+			{
+				method: "DELETE",
+				headers: {
+					Authorization: "Bearer 00000000-0000-4000-8000-000000000000",
+				},
+			},
+		);
+		expect(response.status).toBe(200);
+		expect(mockGetCurrentUser).not.toHaveBeenCalled();
+		expect(deletion.principal).toHaveBeenCalledWith(
+			expect.objectContaining({
+				id: "token-user",
+				activeOrganizationId: "token-org",
+			}),
+		);
+		expect(mockDb.delete).not.toHaveBeenCalled();
+	});
+
+	it("does not invalidate quota or return success before central deletion finishes", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		deletion.deleteVideo.mockReturnValue(Effect.promise(() => gate));
+		const pending = app.request("https://cap.test/delete?videoId=video-1", {
+			method: "DELETE",
+		});
+		await vi.waitFor(() =>
+			expect(deletion.deleteVideo).toHaveBeenCalledTimes(1),
+		);
+		expect(invalidateGoogleDriveStorageQuotaCache).not.toHaveBeenCalled();
+		if (!release) throw new Error("Missing central deletion resolver");
+		release();
+		const response = await pending;
+		expect(response.status).toBe(200);
+		expect(
+			invalidateGoogleDriveStorageQuotaCache,
+		).toHaveBeenCalledExactlyOnceWith("drive-1");
+	});
+
+	it("keeps the not-found response when no owned recording matches", async () => {
+		mockDb.where.mockResolvedValue([]);
+		const response = await app.request(
+			"https://cap.test/delete?videoId=video-1",
+			{ method: "DELETE" },
+		);
+		expect(response.status).toBe(404);
+		expect(await response.json()).toEqual({
+			error: true,
+			message: "Video not found",
+		});
+		expect(deletion.deleteVideo).not.toHaveBeenCalled();
+		expect(invalidateGoogleDriveStorageQuotaCache).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ reason: "missing", error: new Video.NotFoundError() },
+		{ reason: "forbidden", error: new Policy.PolicyDeniedError() },
+	])(
+		"preserves 404 if the central service reports $reason after the preflight",
+		async ({ error }) => {
+			deletion.deleteVideo.mockReturnValue(Effect.fail(error));
+			const response = await app.request(
+				"https://cap.test/delete?videoId=video-1",
+				{ method: "DELETE" },
+			);
+			expect(response.status).toBe(404);
+			expect(await response.json()).toEqual({
+				error: true,
+				message: "Video not found",
+			});
+			expect(mockDb.delete).not.toHaveBeenCalled();
+			expect(invalidateGoogleDriveStorageQuotaCache).not.toHaveBeenCalled();
+		},
+	);
+
+	it("returns 500 without invalidating quota when central storage cleanup fails", async () => {
+		deletion.deleteVideo.mockReturnValue(
+			Effect.fail(
+				new StorageDomain.StorageError({
+					cause: new Error("Provider deletion failed"),
+				}),
+			),
+		);
+		const response = await app.request(
+			"https://cap.test/delete?videoId=video-1",
+			{ method: "DELETE" },
+		);
+		expect(response.status).toBe(500);
+		expect(await response.json()).toEqual({ error: "Internal server error" });
+		expect(mockDb.delete).not.toHaveBeenCalled();
+		expect(invalidateGoogleDriveStorageQuotaCache).not.toHaveBeenCalled();
+	});
+
+	it("does not delegate an unauthenticated request", async () => {
+		mockGetCurrentUser.mockResolvedValue(null);
+		const response = await app.request(
+			"https://cap.test/delete?videoId=video-1",
+			{ method: "DELETE" },
+		);
+		expect(response.status).toBe(401);
+		expect(deletion.deleteVideo).not.toHaveBeenCalled();
+		expect(mockDb.select).not.toHaveBeenCalled();
+	});
+
+	it("rejects a missing recording id before deletion", async () => {
+		const response = await app.request("https://cap.test/delete", {
+			method: "DELETE",
+		});
+		expect(response.status).toBe(400);
+		expect(deletion.deleteVideo).not.toHaveBeenCalled();
+		expect(mockDb.delete).not.toHaveBeenCalled();
 	});
 });
 

@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
-import { Video } from "@cap/web-domain";
+import { type User, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import type { MySqlInsertBase } from "drizzle-orm/mysql-core";
 import { Effect, Option } from "effect";
@@ -45,9 +46,53 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 				);
 			});
 
-		const delete_ = (id: Video.VideoId) =>
+		const prepareDelete = (id: Video.VideoId, ownerId: User.UserId) =>
+			db.use((database) =>
+				database.transaction(async (tx) => {
+					const now = new Date();
+					const retired = {
+						generation: randomUUID(),
+						state: "source-blocked" as const,
+						attemptId: null,
+						leaseExpiresAt: null,
+						nextRetryAt: now,
+						workflowRunId: null,
+						remoteJobId: null,
+						errorCode: "video-deleting",
+						errorMessage: "Recording deletion is in progress.",
+						updatedAt: now,
+					};
+					await tx
+						.insert(Db.videoProcessingJobs)
+						.values({ videoId: id, ownerId, createdAt: now, ...retired })
+						.onDuplicateKeyUpdate({ set: retired });
+					const [video] = await tx
+						.select({ ownerId: Db.videos.ownerId })
+						.from(Db.videos)
+						.where(Dz.eq(Db.videos.id, id))
+						.for("update");
+					if (!video || video.ownerId !== ownerId) {
+						throw new Error("Video owner changed before deletion");
+					}
+				}),
+			);
+
+		const delete_ = (id: Video.VideoId, ownerId?: User.UserId) =>
 			db.use(async (db) => {
 				await db.transaction(async (db) => {
+					await db
+						.delete(Db.videoProcessingJobs)
+						.where(Dz.eq(Db.videoProcessingJobs.videoId, id));
+					if (ownerId) {
+						const [video] = await db
+							.select({ ownerId: Db.videos.ownerId })
+							.from(Db.videos)
+							.where(Dz.eq(Db.videos.id, id))
+							.for("update");
+						if (!video || video.ownerId !== ownerId) {
+							throw new Error("Video owner changed during deletion");
+						}
+					}
 					await Promise.all([
 						db.delete(Db.importedVideos).where(Dz.eq(Db.importedVideos.id, id)),
 						db.delete(Db.videos).where(Dz.eq(Db.videos.id, id)),
@@ -58,9 +103,9 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 				});
 			});
 
-		const create = (data: CreateVideoInput) =>
+		const create = (data: CreateVideoInput, options?: { id: Video.VideoId }) =>
 			Effect.gen(function* () {
-				const id = Video.VideoId.make(nanoId());
+				const id = options?.id ?? Video.VideoId.make(nanoId());
 
 				yield* db.use((db) =>
 					db.transaction(async (db) => {
@@ -105,7 +150,7 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 				return id;
 			});
 
-		return { getById, delete: delete_, create };
+		return { getById, prepareDelete, delete: delete_, create };
 	}),
 	dependencies: [Database.Default],
 }) {}
