@@ -24,6 +24,7 @@ on:
       - "crates/timestamp/**"
       - "crates/rendering/**"
       - "crates/editor/**"
+      - "crates/export/**"
       - "crates/audio/**"
       - "crates/media-info/**"
       - "crates/project/**"
@@ -144,6 +145,8 @@ jobs:
       - name: Editor audio playback and export regressions
         shell: bash
         run: |
+          cargo test --locked -p cap-audio --lib
+          cargo test --locked -p cap-export --lib
           cargo test --locked -p cap-editor --lib audio::tests::
           cargo test --locked -p cap-editor --lib audio_output::tests::
           cargo test --locked -p cap-editor --lib playback::tests::
