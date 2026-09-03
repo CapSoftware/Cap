@@ -414,6 +414,51 @@ describe("organization SSO settings authorization", () => {
 		expect(markup).toContain("Add SAML SSO · €190.00/month");
 	});
 
+	it.each([false, true])(
+		"keeps SSO controls without subscription management when cancellation is %s",
+		async (cancelAtPeriodEnd) => {
+			makeFixture();
+			const { SsoCard } = await vi.importActual<
+				typeof import("@/app/(org)/dashboard/settings/organization/components/SsoCard")
+			>("@/app/(org)/dashboard/settings/organization/components/SsoCard");
+			const markup = renderToStaticMarkup(
+				createElement(SsoCard, {
+					initialSettings: {
+						...(await getOrganizationSsoSettings(ORGANIZATION_ID)),
+						cancelAtPeriodEnd,
+						currentPeriodEnd: "2026-10-03T00:00:00Z",
+					},
+				}),
+			);
+			expect(markup).toContain("Manage SSO");
+			expect(markup).toContain("Share your SSO sign-in link");
+			expect(markup).not.toMatch(/Manage (SSO )?subscription/);
+			if (cancelAtPeriodEnd) {
+				expect(markup).toContain("scheduled to end on 3 October 2026");
+			}
+		},
+	);
+
+	it("provides support for unpaid SSO without subscription management or another purchase", async () => {
+		makeFixture();
+		const { SsoCard } = await vi.importActual<
+			typeof import("@/app/(org)/dashboard/settings/organization/components/SsoCard")
+		>("@/app/(org)/dashboard/settings/organization/components/SsoCard");
+		const markup = renderToStaticMarkup(
+			createElement(SsoCard, {
+				initialSettings: {
+					...(await getOrganizationSsoSettings(ORGANIZATION_ID)),
+					entitled: false,
+					subscriptionStatus: "unpaid",
+				},
+			}),
+		);
+		expect(markup).toContain('href="mailto:hello@cap.so"');
+		expect(markup).toContain("purchase it again");
+		expect(markup).not.toMatch(/Manage (SSO )?subscription/);
+		expect(markup).not.toContain("Add SAML SSO");
+	});
+
 	it.each(["member", "stranger", "forged-owner"] as const)(
 		"denies %s access before opening setup or billing",
 		async (role) => {
