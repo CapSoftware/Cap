@@ -78,7 +78,7 @@ let overlayTokensRegistration: Promise<boolean> | null = null;
 
 const ensureOverlayTokensRegistered = () => {
 	overlayTokensRegistration ??= Promise.all(
-		[PREVIEW_TOKEN, PANEL_TOKEN].map((token) =>
+		[PREVIEW_TOKEN].map((token) =>
 			sendServiceWorkerMessage({
 				target: "service-worker",
 				type: "register-overlay-token",
@@ -303,9 +303,9 @@ const connectCameraPreview = async (
 		offer: toSessionDescriptionInit(peer.localDescription),
 	});
 
-	if (!response.ok) {
+	if (!response.ok || !response.answer) {
 		peer.close();
-		throw new Error(response.error);
+		throw new Error(response.ok ? "Missing camera answer" : response.error);
 	}
 	await peer.setRemoteDescription(response.answer);
 	return {
@@ -366,6 +366,7 @@ function OverlayApp() {
 	const previewDismissedRef = useRef(false);
 	const lastFrameRef = useRef<WebcamPreviewFrame | null>(null);
 	const lastFrameSavedAtRef = useRef(0);
+	const startupReplayedRef = useRef(false);
 	const webcam = extensionSettings?.webcam ?? null;
 	const previewEnabled = Boolean(webcam?.enabled && previewOpen);
 	const isInPictureInPicture = parentPipActive || framePipActive;
