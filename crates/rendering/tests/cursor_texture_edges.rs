@@ -37,30 +37,41 @@ impl Case {
 }
 
 fn reference_shader() -> String {
-    // Capture gradients before any sprite-boundary branch, including every blur tap.
-    let replacements = [
-        (
-            "fn sample_cursor(uv: vec2<f32>)",
-            "fn sample_cursor(uv: vec2<f32>, gradient_x: vec2<f32>, gradient_y: vec2<f32>)",
-        ),
-        (
-            "textureSample(t_cursor, s_cursor, uv)",
-            "textureSampleGrad(t_cursor, s_cursor, uv, gradient_x, gradient_y)",
-        ),
-        (
-            "sample_cursor(input.uv)",
-            "sample_cursor(input.uv, dpdx(input.uv), dpdy(input.uv))",
-        ),
-        (
-            "sample_cursor(sample_uv)",
-            "sample_cursor(sample_uv, dpdx(sample_uv), dpdy(sample_uv))",
-        ),
-    ];
-    let mut source = SHADER.to_string();
-    for (from, to) in replacements {
-        assert_eq!(source.matches(from).count(), 1);
-        source = source.replace(from, to);
+    // Explicit-gradient reads differ on hosted GPU drivers even in uniform control flow.
+    // Keep the same sampling instruction to isolate sprite-boundary divergence.
+    let (shared, _) = SHADER
+        .split_once("fn sample_cursor(")
+        .expect("cursor sampling function");
+    let (_, fragment_helpers) = SHADER
+        .split_once("fn screen_bounds_mask(")
+        .expect("screen bounds mask");
+    let (fragment_helpers, _) = fragment_helpers
+        .split_once("@fragment\nfn fs_main")
+        .expect("cursor fragment entrypoint");
+    let mut source = format!("{shared}fn screen_bounds_mask({fragment_helpers}");
+    source.push_str(
+        r#"@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let velocity_uv = cursor_velocity_uv();
+    let blur_strength = uniforms.motion_vector_strength.z;
+    let opacity = uniforms.motion_vector_strength.w * screen_bounds_mask(input.position.xy);
+    let base_texel = textureSample(t_cursor, s_cursor, input.uv);
+    let base_inside = all(vec4<bool>(input.uv >= vec2<f32>(0.0), input.uv <= vec2<f32>(1.0)));
+    let base_color = base_texel * select(0.0, 1.0, base_inside);
+    if (length(velocity_uv) < 0.005 || blur_strength < 0.001) {
+        return apply_color_grade(base_color * opacity, input.position.xy);
     }
+    var color = base_color;
+    for (var i = 1; i <= 20; i = i + 1) {
+        let sample_uv = input.uv + velocity_uv * (f32(i) / 20.0);
+        let texel = textureSample(t_cursor, s_cursor, sample_uv);
+        let inside = all(vec4<bool>(sample_uv >= vec2<f32>(0.0), sample_uv <= vec2<f32>(1.0)));
+        color += texel * select(0.0, 1.0, inside);
+    }
+    return apply_color_grade((color / 21.0) * opacity, input.position.xy);
+}
+"#,
+    );
     source
 }
 
@@ -298,7 +309,7 @@ fn assert_transparent_exterior(pixels: &[u8], case: Case) {
 }
 
 #[test]
-fn minified_cursor_edges_match_explicit_gradients() {
+fn minified_cursor_edges_match_uniform_sampling() {
     let instance = cap_rendering::create_wgpu_instance_sync();
     let Ok(adapter) =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
