@@ -87,18 +87,21 @@ const LOOM_CSV_LIMIT_ERROR = `CSV imports are limited to ${MAX_LOOM_CSV_ROWS} ro
 function extractLoomVideoId(url: string): string | null {
 	try {
 		const parsed = new URL(url);
-		if (!parsed.hostname.includes("loom.com")) {
+		if (
+			(parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+			(parsed.hostname !== "loom.com" && parsed.hostname !== "www.loom.com")
+		) {
 			return null;
 		}
 
 		const pathParts = parsed.pathname.split("/").filter(Boolean);
 		const id = pathParts[pathParts.length - 1] ?? null;
 
-		if (!id || id.length < 10) {
+		if (!id || !/^[a-zA-Z0-9_-]{10,}$/.test(id)) {
 			return null;
 		}
 
-		return id.split("?")[0] ?? null;
+		return id;
 	} catch {
 		return null;
 	}
@@ -125,7 +128,7 @@ async function fetchLoomEndpoint(
 		}
 
 		const response = await fetch(
-			`https://www.loom.com/api/campaigns/sessions/${videoId}/${endpoint}`,
+			`https://www.loom.com/api/campaigns/sessions/${encodeURIComponent(videoId)}/${endpoint}`,
 			options,
 		);
 
@@ -213,7 +216,7 @@ async function fetchLoomOEmbed(
 ): Promise<{ duration?: number; width?: number; height?: number } | null> {
 	try {
 		const response = await fetch(
-			`https://www.loom.com/v1/oembed?url=https://www.loom.com/share/${loomVideoId}`,
+			`https://www.loom.com/v1/oembed?url=https://www.loom.com/share/${encodeURIComponent(loomVideoId)}`,
 			{ headers: { Accept: "application/json" } },
 		);
 		if (!response.ok) return null;

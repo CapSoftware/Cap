@@ -236,56 +236,86 @@ describe("importFromLoom", () => {
 		vi.stubGlobal("fetch", vi.fn());
 	});
 
-	it("returns direct MP4 URLs for public Loom downloads", async () => {
-		const fetchMock = vi.mocked(fetch);
-		fetchMock.mockImplementation(async (input) => {
-			const url = typeof input === "string" ? input : input.toString();
+	it.each([
+		"https://www.loom.com/share/loom-abc1234567",
+		"https://loom.com/share/loom-abc1234567?sid=example#details",
+		"https://www.loom.com/embed/loom-abc1234567/",
+		"http://loom.com/share/loom-abc1234567",
+	])(
+		"returns direct MP4 URLs for public Loom downloads from %s",
+		async (loomUrl) => {
+			const fetchMock = vi.mocked(fetch);
+			fetchMock.mockImplementation(async (input) => {
+				const url = typeof input === "string" ? input : input.toString();
 
-			if (url.includes("/transcoded-url")) {
-				return {
-					ok: true,
-					status: 200,
-					text: async () =>
-						JSON.stringify({ url: "https://cdn.loom.com/video.mp4" }),
-				} as Response;
-			}
+				if (url.includes("/transcoded-url")) {
+					return {
+						ok: true,
+						status: 200,
+						text: async () =>
+							JSON.stringify({ url: "https://cdn.loom.com/video.mp4" }),
+					} as Response;
+				}
 
-			if (url === "https://www.loom.com/graphql") {
-				return {
-					ok: true,
-					json: async () => ({
-						data: { getVideo: { name: "Public download" } },
-					}),
-				} as Response;
-			}
+				if (url === "https://www.loom.com/graphql") {
+					return {
+						ok: true,
+						json: async () => ({
+							data: { getVideo: { name: "Public download" } },
+						}),
+					} as Response;
+				}
 
-			if (url.includes("/v1/oembed")) {
-				return {
-					ok: true,
-					json: async () => ({ duration: 42, width: 1920, height: 1080 }),
-				} as Response;
-			}
+				if (url.includes("/v1/oembed")) {
+					return {
+						ok: true,
+						json: async () => ({ duration: 42, width: 1920, height: 1080 }),
+					} as Response;
+				}
 
-			throw new Error(`Unexpected fetch: ${url}`);
-		});
+				throw new Error(`Unexpected fetch: ${url}`);
+			});
 
-		const { downloadLoomVideo } = await import("@/actions/loom");
+			const { downloadLoomVideo } = await import("@/actions/loom");
 
-		const result = await downloadLoomVideo(
-			"https://www.loom.com/share/loom-abc1234567",
+			const result = await downloadLoomVideo(loomUrl);
+
+			expect(result).toEqual({
+				success: true,
+				videoId: "loom-abc1234567",
+				videoName: "Public download",
+				downloadUrl: "https://cdn.loom.com/video.mp4",
+				downloadMode: "direct-download",
+				durationSeconds: 42,
+				width: 1920,
+				height: 1080,
+				requiresProxy: false,
+			});
+		},
+	);
+
+	it.each([
+		"https://notloom.com/share/loom-abc1234567",
+		"https://loom.com.example.test/share/loom-abc1234567",
+		"https://www.loom.com.example.test/share/loom-abc1234567",
+		"https://loom.com@example.test/share/loom-abc1234567",
+		"ftp://www.loom.com/share/loom-abc1234567",
+		"https://www.loom.com/share/loom-abc1234567%2F..%2F..",
+		"https://www.loom.com/share/loom-abc1234567%3Fredirect=example.test",
+		"https://www.loom.com/share/loom-abc1234567%23fragment",
+		"https://www.loom.com/share/loom-abc1234567%5C..",
+	])("rejects invalid Loom URLs before side effects: %s", async (loomUrl) => {
+		const { downloadLoomVideo, importFromLoom } = await import(
+			"@/actions/loom"
 		);
 
-		expect(result).toEqual({
-			success: true,
-			videoId: "loom-abc1234567",
-			videoName: "Public download",
-			downloadUrl: "https://cdn.loom.com/video.mp4",
-			downloadMode: "direct-download",
-			durationSeconds: 42,
-			width: 1920,
-			height: 1080,
-			requiresProxy: false,
-		});
+		expect(await downloadLoomVideo(loomUrl)).toMatchObject({ success: false });
+		expect(
+			await importFromLoom({ loomUrl, orgId: "org-1" as never }),
+		).toMatchObject({ success: false });
+		expect(fetch).not.toHaveBeenCalled();
+		expect(mockDb.select).not.toHaveBeenCalled();
+		expect(valuesMock).not.toHaveBeenCalled();
 	});
 
 	it("returns streaming Loom URLs for browser conversion instead of proxying", async () => {
