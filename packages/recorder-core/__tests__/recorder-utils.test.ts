@@ -228,7 +228,30 @@ describe("detectRecordingModeFromTrack", () => {
 		expect(detectRecordingModeFromTrack(windowTrack)).toBe("window");
 		expect(detectRecordingModeFromTrack(tabTrack)).toBe("tab");
 	});
+
+	it("detects recording mode from browser-provided displaySurface settings", async () => {
+		const { detectRecordingModeFromTrack } = await import(
+			"@cap/recorder-core/recorder-utils"
+		);
+		const monitorTrack = {
+			label: "custom-label",
+			getSettings: () => ({ displaySurface: "monitor" }),
+		} as unknown as MediaStreamTrack;
+		const windowTrack = {
+			label: "custom-label",
+			getSettings: () => ({ displaySurface: "window" }),
+		} as unknown as MediaStreamTrack;
+		const browserTrack = {
+			label: "custom-label",
+			getSettings: () => ({ displaySurface: "browser" }),
+		} as unknown as MediaStreamTrack;
+
+		expect(detectRecordingModeFromTrack(monitorTrack)).toBe("fullscreen");
+		expect(detectRecordingModeFromTrack(windowTrack)).toBe("window");
+		expect(detectRecordingModeFromTrack(browserTrack)).toBe("tab");
+	});
 });
+
 
 describe("error retry utilities", () => {
 	it("identifies user cancellation errors correctly", async () => {
