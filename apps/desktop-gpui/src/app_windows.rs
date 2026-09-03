@@ -4805,14 +4805,7 @@ fn load_editor_waveforms(
                         (&segment.audio, &mut mic),
                         (&segment.system_audio, &mut system),
                     ] {
-                        match loader.get().await {
-                            Ok(Some(audio)) => {
-                                out.push((audio.samples().to_vec(), audio.channels()))
-                            }
-                            // A failed track is an empty waveform; playback and
-                            // export surface the actual error.
-                            _ => out.push((Vec::new(), 1)),
-                        }
+                        out.push(loader.get().await.ok().flatten());
                     }
                 }
                 (mic, system)
@@ -4824,15 +4817,21 @@ fn load_editor_waveforms(
         let peaks = cx
             .background_executor()
             .spawn(async move {
-                let extract = |tracks: Vec<(Vec<f32>, u16)>| {
+                let [mic, system] = [mic, system].map(|tracks| {
                     tracks
                         .into_iter()
-                        .map(|(samples, channels)| {
-                            Arc::new(editor_timeline::waveform_peaks(&samples, channels))
+                        .map(|audio| {
+                            Arc::new(match audio {
+                                Some(audio) => editor_timeline::waveform_peaks(
+                                    audio.samples(),
+                                    audio.channels(),
+                                ),
+                                None => Vec::new(),
+                            })
                         })
                         .collect::<Vec<_>>()
-                };
-                (extract(mic), extract(system))
+                });
+                (mic, system)
             })
             .await;
         let _ = handle.update(cx, |view, window, cx| {
