@@ -3,6 +3,11 @@ import { serverEnv } from "@cap/env";
 import { Storage, type User, type Video } from "@cap/web-domain";
 import { Effect, Either, Option, Schedule } from "effect";
 import { getGoogleDriveVideoNames } from "./google-drive-names.ts";
+import {
+	getGoogleDriveRecordingIdentity,
+	getRecordingObjectIdentity,
+	RecordingObjectReadError,
+} from "./recording-object-identity.ts";
 import type {
 	GoogleDriveAccessTokenCache,
 	GoogleDriveIntegrationConfig,
@@ -28,6 +33,8 @@ export type GoogleDriveFile = {
 	size?: string;
 	version?: string;
 	md5Checksum?: string;
+	sha256Checksum?: string;
+	headRevisionId?: string;
 	modifiedTime?: string;
 	parents?: string[];
 	trashed?: boolean;
@@ -1108,7 +1115,7 @@ export const createGoogleDriveResumableUpload = (
 			driveFetch(
 				config,
 				appendSharedDriveCreateParams(
-					`${DRIVE_UPLOAD_BASE}/files/${encodeURIComponent(fileId)}?uploadType=resumable&fields=id,name,mimeType,size,version`,
+					`${DRIVE_UPLOAD_BASE}/files/${encodeURIComponent(fileId)}?uploadType=resumable&fields=id,name,mimeType,size,version,sha256Checksum,headRevisionId`,
 				),
 				{
 					method: "PATCH",
@@ -1124,7 +1131,7 @@ export const createGoogleDriveResumableUpload = (
 				const uploadUrl = yield* driveFetch(
 					config,
 					appendSharedDriveCreateParams(
-						`${DRIVE_UPLOAD_BASE}/files?uploadType=resumable&fields=id,name,mimeType,size,version`,
+						`${DRIVE_UPLOAD_BASE}/files?uploadType=resumable&fields=id,name,mimeType,size,version,sha256Checksum,headRevisionId`,
 					),
 					{
 						method: "POST",
@@ -1275,13 +1282,14 @@ export const getGoogleDriveFileMetadata = (
 	config: GoogleDriveIntegrationConfig,
 	fileId: string,
 	tokenStore?: GoogleDriveTokenStore,
+	signal?: AbortSignal,
 ) =>
 	driveFetch(
 		config,
 		appendSharedDriveCreateParams(
-			`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size,version,md5Checksum,parents,trashed,appProperties,capabilities(canRename)`,
+			`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size,version,md5Checksum,sha256Checksum,headRevisionId,parents,trashed,appProperties,capabilities(canRename)`,
 		),
-		undefined,
+		{ signal },
 		tokenStore,
 	).pipe(
 		Effect.flatMap((response) =>
@@ -1378,6 +1386,121 @@ export const getGoogleDriveObjectResponse = (
 			tokenStore,
 		);
 
+		return response;
+	});
+
+export type GoogleDriveRecordingRead = {
+	objectIdentity: string;
+	signal?: AbortSignal;
+};
+
+export const getGoogleDriveRecordingResponse = (
+	config: GoogleDriveIntegrationConfig,
+	fileId: string,
+	range: string | null | undefined,
+	verification: GoogleDriveRecordingRead,
+	tokenStore?: GoogleDriveTokenStore,
+) =>
+	Effect.gen(function* () {
+		const metadata = yield* getGoogleDriveFileMetadata(
+			config,
+			fileId,
+			tokenStore,
+			verification.signal,
+		);
+		const identity = getRecordingObjectIdentity(
+			{
+				ETag: metadata.version
+					? `"${metadata.id}:${metadata.version}"`
+					: undefined,
+				RecordingContentETag: getGoogleDriveRecordingIdentity(metadata),
+			},
+			verification.objectIdentity,
+		);
+		if (!identity) {
+			return yield* Effect.fail(
+				new Storage.StorageError({
+					cause: new RecordingObjectReadError(
+						503,
+						"Recording content identity is unavailable",
+					),
+				}),
+			);
+		}
+		if (metadata.id !== fileId || identity !== verification.objectIdentity) {
+			return yield* Effect.fail(
+				new Storage.StorageError({
+					cause: new RecordingObjectReadError(412, "Recording object changed"),
+				}),
+			);
+		}
+		if (!metadata.headRevisionId || !getUsableGoogleDriveFileSize(metadata)) {
+			return yield* Effect.fail(
+				new Storage.StorageError({
+					cause: new RecordingObjectReadError(
+						503,
+						"Recording revision identity is unavailable",
+					),
+				}),
+			);
+		}
+		const headers = new Headers();
+		headers.set("Accept-Encoding", "identity");
+		if (range) headers.set("Range", range);
+		const response = yield* driveFetch(
+			config,
+			`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(metadata.headRevisionId)}?alt=media`,
+			{ headers, signal: verification.signal },
+			tokenStore,
+		).pipe(
+			Effect.mapError(
+				(cause) =>
+					new Storage.StorageError({
+						cause: new RecordingObjectReadError(
+							503,
+							"Recording revision is unavailable",
+							{ cause },
+						),
+					}),
+			),
+		);
+		const contentRange = response.headers
+			.get("content-range")
+			?.match(/^bytes (\d+)-(\d+)\/(\d+)$/);
+		const requestedRange = range?.match(/^bytes=(\d*)-(\d*)$/);
+		const expectedStart = requestedRange?.[1]
+			? Number(requestedRange[1])
+			: Math.max(0, Number(metadata.size) - Number(requestedRange?.[2]));
+		const expectedEnd =
+			requestedRange?.[1] && requestedRange[2]
+				? Math.min(Number(metadata.size) - 1, Number(requestedRange[2]))
+				: Number(metadata.size) - 1;
+		const validResponse = range
+			? response.status === 206 &&
+				Boolean(requestedRange?.[1] || requestedRange?.[2]) &&
+				contentRange !== undefined &&
+				contentRange !== null &&
+				Number(contentRange[3]) === Number(metadata.size) &&
+				Number(contentRange[1]) === expectedStart &&
+				Number(contentRange[2]) === expectedEnd &&
+				Number(contentRange[1]) <= Number(contentRange[2]) &&
+				Number(contentRange[2]) < Number(metadata.size) &&
+				Number(response.headers.get("content-length")) ===
+					Number(contentRange[2]) - Number(contentRange[1]) + 1
+			: response.status === 200 &&
+				Number(response.headers.get("content-length")) ===
+					Number(metadata.size);
+		if (!validResponse) {
+			yield* discardGoogleDriveResponseBody(response);
+			return yield* Effect.fail(
+				new Storage.StorageError({
+					cause: new RecordingObjectReadError(
+						503,
+						"Recording revision response is incomplete",
+					),
+				}),
+			);
+		}
 		return response;
 	});
 

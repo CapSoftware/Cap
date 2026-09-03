@@ -1,3 +1,5 @@
+import { RecordingObjectReadError } from "@cap/web-backend/src/Storage/recording-object-identity";
+import { Storage as StorageDomain } from "@cap/web-domain";
 import { Effect } from "effect";
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,7 +45,7 @@ vi.mock("@/lib/server", async () => {
 });
 vi.mock("@/utils/helpers", () => ({ CACHE_CONTROL_HEADERS: {} }));
 
-import { GET } from "@/app/api/storage/object/route";
+import { GET, HEAD } from "@/app/api/storage/object/route";
 
 function request(
 	headers: Record<string, string> = {},
@@ -80,6 +82,105 @@ describe("recording verification object reads", () => {
 		expect(mocks.head).not.toHaveBeenCalled();
 	});
 
+	it("serves content-bound HEAD without downloading media", async () => {
+		const identity = `"cap-drive-content-v1:${"a".repeat(64)}"`;
+		mocks.head.mockReturnValue(
+			Effect.succeed({
+				ETag: '"drive-file:6"',
+				RecordingContentETag: identity,
+				ContentLength: 100,
+			}),
+		);
+		const response = await HEAD(
+			new NextRequest(
+				"https://cap.test/api/storage/object?videoId=video&key=owner/video/result.mp4&token=test",
+				{
+					method: "HEAD",
+					headers: {
+						"X-Cap-Recording-Verification": "1",
+						"If-Match": identity,
+					},
+				},
+			),
+		);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("ETag")).toBe(identity);
+		expect(response.headers.get("Content-Length")).toBe("100");
+		expect(mocks.read).not.toHaveBeenCalled();
+	});
+
+	it("passes content identity and cancellation through a verification range read", async () => {
+		const identity = `"cap-drive-content-v1:${"a".repeat(64)}"`;
+		mocks.head.mockReturnValue(
+			Effect.succeed({
+				ETag: '"drive-file:6"',
+				RecordingContentETag: identity,
+				ContentLength: 100,
+			}),
+		);
+		const response = await request({
+			"X-Cap-Recording-Verification": "1",
+			"If-Match": identity,
+			Range: "bytes=0-3",
+		});
+		expect(response.headers.get("ETag")).toBe(identity);
+		expect(mocks.read).toHaveBeenCalledWith(
+			"owner/video/result.mp4",
+			"bytes=0-3",
+			{ objectIdentity: identity, signal: expect.any(AbortSignal) },
+		);
+	});
+
+	it("keeps an old expected version strict when content identity is also available", async () => {
+		mocks.head.mockReturnValue(
+			Effect.succeed({
+				ETag: '"drive-file:6"',
+				RecordingContentETag: `"cap-drive-content-v1:${"a".repeat(64)}"`,
+				ContentLength: 100,
+			}),
+		);
+		const response = await request({
+			"X-Cap-Recording-Verification": "1",
+			"If-Match": '"drive-file:1"',
+		});
+		expect(response.status).toBe(412);
+		expect(mocks.read).not.toHaveBeenCalled();
+	});
+
+	it("does not fall back to a version tag when new content proof is unavailable", async () => {
+		mocks.head.mockReturnValue(
+			Effect.succeed({
+				ETag: '"drive-file:6"',
+				RecordingContentETag: null,
+				ContentLength: 100,
+			}),
+		);
+		expect(
+			(await request({ "X-Cap-Recording-Verification": "1" })).status,
+		).toBe(503);
+		expect(mocks.read).not.toHaveBeenCalled();
+	});
+
+	it.each([412, 503] as const)(
+		"returns a pinned read failure %s without serving bytes",
+		async (status) => {
+			mocks.read.mockReturnValue(
+				Effect.fail(
+					new StorageDomain.StorageError({
+						cause: new RecordingObjectReadError(
+							status,
+							"Pinned revision unavailable",
+							{ cause: new Error("Google Drive request failed: 404") },
+						),
+					}),
+				),
+			);
+			expect(
+				(await request({ "X-Cap-Recording-Verification": "1" })).status,
+			).toBe(status);
+		},
+	);
+
 	it("returns the provider version with a verification read", async () => {
 		const response = await request({
 			"X-Cap-Recording-Verification": "1",
@@ -90,6 +191,7 @@ describe("recording verification object reads", () => {
 		expect(mocks.read).toHaveBeenCalledWith(
 			"owner/video/result.mp4",
 			"bytes=0-3",
+			{ objectIdentity: '"drive-file:42"', signal: expect.any(AbortSignal) },
 		);
 	});
 
@@ -132,7 +234,10 @@ describe("recording verification object reads", () => {
 			key,
 		);
 		expect(response.status).toBe(206);
-		expect(mocks.read).toHaveBeenCalledWith(key, null);
+		expect(mocks.read).toHaveBeenCalledWith(key, null, {
+			objectIdentity: '"drive-file:42"',
+			signal: expect.any(AbortSignal),
+		});
 	});
 
 	it("does not authorize another retained object using a valid token", async () => {

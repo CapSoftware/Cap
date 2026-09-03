@@ -118,6 +118,7 @@ function storageFixture(provider = "s3") {
 		const key = source.slice("recordings/".length);
 		const value = object(key);
 		if (
+			provider === "s3" &&
 			options.CopySourceIfMatch !== undefined &&
 			options.CopySourceIfMatch !== value.identity
 		) {
@@ -145,6 +146,9 @@ function storageFixture(provider = "s3") {
 					ContentLength: value.size,
 					ETag: value.identity,
 					Metadata: value.metadata,
+					...(provider === "googleDrive"
+						? { RecordingContentSHA256: hash(value.body ?? String(value.size)) }
+						: {}),
 				};
 			}),
 		),
@@ -420,6 +424,157 @@ beforeEach(() => {
 });
 
 describe("durable desktop recording source commit", () => {
+	it("reuses a checksum-verified Drive copy when checksum readiness delayed its receipt", async () => {
+		const storage = storageFixture("googleDrive");
+		seedSegments(storage, [1], false);
+		const video = recording();
+		const checkpoint = await advanceToPhase(
+			video,
+			snapshotCheckpoint(),
+			"copy",
+		);
+		const head = storage.bucket.headObject.getMockImplementation();
+		if (!head) throw new Error("Missing head implementation");
+		let ready = false;
+		storage.bucket.headObject.mockImplementation((key) =>
+			head(key).pipe(
+				Effect.map((value) => ({
+					...value,
+					RecordingContentETag:
+						!ready && key.includes("/copies/")
+							? null
+							: `"cap-drive-content-v1:${hash(key + storage.object(key).body)}"`,
+				})),
+			),
+		);
+		await expect(
+			advanceDesktopRecordingSourceCommit(video, checkpoint),
+		).rejects.toThrow("Recording content identity is unavailable");
+		expect(storage.bucket.copyObject).toHaveBeenCalledTimes(2);
+		ready = true;
+		const source = await finishSnapshot(video, checkpoint);
+		expect(
+			(await buildDesktopRecordingSourceUrls(video, source)).sourceObjects,
+		).toHaveLength(2);
+		expect(storage.bucket.copyObject).toHaveBeenCalledTimes(2);
+	});
+
+	it.each([false, true])(
+		"keeps legacy Drive checkpoint identities strict after content tags are introduced (changed=%s)",
+		async (changed) => {
+			const storage = storageFixture("googleDrive");
+			seedSegments(storage);
+			const video = recording();
+			const checkpoint = await advanceToPhase(
+				video,
+				snapshotCheckpoint(),
+				"verify",
+			);
+			const savedPages = [...storage.objects.entries()]
+				.filter(([key]) => key.endsWith(".json"))
+				.map(([key, object]) => [key, object.body]);
+			const head = storage.bucket.headObject.getMockImplementation();
+			if (!head) throw new Error("Missing head implementation");
+			storage.bucket.headObject.mockImplementation((key) =>
+				head(key).pipe(
+					Effect.map((value) => ({
+						...value,
+						RecordingContentETag: `"cap-drive-content-v1:${hash(key + storage.object(key).body)}"`,
+					})),
+				),
+			);
+			if (changed) {
+				for (const object of storage.objects.values())
+					object.identity = '"changed-version"';
+				await expect(finishSnapshot(video, checkpoint)).rejects.toThrow(
+					"Recording source changed",
+				);
+				for (const [key, body] of savedPages)
+					expect(storage.object(key as string).body).toBe(body);
+			} else {
+				const source = await finishSnapshot(video, checkpoint);
+				const urls = await buildDesktopRecordingSourceUrls(video, source);
+				expect(
+					urls.sourceObjects.every((object) =>
+						object.objectIdentity.startsWith('"snapshot-'),
+					),
+				).toBe(true);
+			}
+		},
+	);
+
+	it("preserves new Drive copy receipts across metadata-only version changes", async () => {
+		const storage = storageFixture("googleDrive");
+		seedSegments(storage);
+		const head = storage.bucket.headObject.getMockImplementation();
+		if (!head) throw new Error("Missing head implementation");
+		storage.bucket.headObject.mockImplementation((key) =>
+			head(key).pipe(
+				Effect.map((value) => ({
+					...value,
+					RecordingContentETag: `"cap-drive-content-v1:${hash(key + storage.object(key).body)}"`,
+				})),
+			),
+		);
+		const video = recording();
+		const checkpoint = await advanceToPhase(
+			video,
+			snapshotCheckpoint(),
+			"verify",
+		);
+		for (const object of storage.objects.values())
+			object.identity = '"metadata-version-6"';
+		const source = await finishSnapshot(video, checkpoint);
+		const urls = await buildDesktopRecordingSourceUrls(video, source);
+		expect(urls.sourceObjects).toHaveLength(5);
+		expect(
+			urls.sourceObjects.every((object) =>
+				object.objectIdentity.startsWith('"cap-drive-content-v1:'),
+			),
+		).toBe(true);
+	});
+
+	it("rejects a same-size wrong Drive copy through the actual source commit path", async () => {
+		const storage = storageFixture("googleDrive");
+		seedSegments(storage);
+		const copy = storage.bucket.copyObject.getMockImplementation();
+		if (!copy) throw new Error("Missing copy implementation");
+		storage.bucket.copyObject.mockImplementation((source, key, options) =>
+			copy(source, key, options).pipe(
+				Effect.tap(() =>
+					Effect.sync(() => {
+						const object = storage.object(key);
+						object.body = "x".repeat(object.size);
+					}),
+				),
+			),
+		);
+		await expect(
+			commitDesktopRecordingSource(recording(), generation),
+		).rejects.toThrow(
+			"Recording snapshot content does not match its original source",
+		);
+		expect(
+			[...storage.objects.keys()].some((key) => key.endsWith("receipt.json")),
+		).toBe(false);
+	});
+
+	it("keeps missing Drive checksum retryable without minting a copy receipt", async () => {
+		const storage = storageFixture("googleDrive");
+		seedSegments(storage);
+		const head = storage.bucket.headObject.getMockImplementation();
+		if (!head) throw new Error("Missing head implementation");
+		storage.bucket.headObject.mockImplementation((key) =>
+			head(key).pipe(
+				Effect.map((value) => ({ ...value, RecordingContentETag: null })),
+			),
+		);
+		await expect(
+			commitDesktopRecordingSource(recording(), generation),
+		).rejects.toThrow("Recording content identity is unavailable");
+		expect(storage.bucket.copyObject).not.toHaveBeenCalled();
+	});
+
 	it.each([
 		{ status: 404, code: "source-missing" },
 		{ status: 412, code: "source-changed" },

@@ -19,9 +19,14 @@ import {
 	findGoogleDriveFileByObjectKey,
 	GOOGLE_DRIVE_FOLDER_MIME_TYPE,
 	type GoogleDriveTokenStore,
+	getGoogleDriveRecordingResponse,
 	syncGoogleDriveVideoNames,
 } from "../../../../packages/web-backend/src/Storage/GoogleDrive";
 import { getGoogleDriveVideoNames } from "../../../../packages/web-backend/src/Storage/google-drive-names";
+import {
+	getGoogleDriveRecordingIdentity,
+	getRecordingObjectIdentity,
+} from "../../../../packages/web-backend/src/Storage/recording-object-identity";
 import {
 	type GoogleDriveIntegrationConfig,
 	type StorageObjectInput,
@@ -329,6 +334,255 @@ const storedObjectInput = (
 afterEach(() => {
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
+});
+
+describe("Google Drive recording content identity", () => {
+	const file = {
+		id: "recording-file",
+		size: "8",
+		version: "1",
+		sha256Checksum: "a".repeat(64),
+		headRevisionId: "revision-1",
+	};
+	const identity = getGoogleDriveRecordingIdentity(file) as string;
+
+	it("matches the media-server upload identity wire vector", () => {
+		expect(
+			getGoogleDriveRecordingIdentity({
+				...file,
+				id: "drive-file-1",
+				size: "11",
+			}),
+		).toBe(
+			'"cap-drive-content-v1:9c353d47a7cf9c0f30c3008eb3576c4629a878019572a4d68404cbe0f222b88c"',
+		);
+	});
+
+	it.each(["metadata", "revision"])(
+		"cancels a stalled %s request",
+		async (stage) => {
+			const controller = new AbortController();
+			let started: () => void = () => undefined;
+			const pendingRequest = new Promise<void>((resolve) => {
+				started = resolve;
+			});
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+					if (stage === "revision" && !String(input).includes("/revisions/"))
+						return jsonResponse(file);
+					return new Promise<Response>((_resolve, reject) => {
+						init?.signal?.addEventListener(
+							"abort",
+							() => reject(init.signal?.reason),
+							{ once: true },
+						);
+						started();
+					});
+				}),
+			);
+			const pending = Effect.runPromise(
+				getGoogleDriveRecordingResponse(
+					makeConfig(),
+					file.id,
+					null,
+					{ objectIdentity: identity, signal: controller.signal },
+					makeTokenStore(),
+				),
+			);
+			await pendingRequest;
+			controller.abort(new Error("Test cancelled"));
+			await expect(pending).rejects.toThrow(
+				stage === "metadata"
+					? "Test cancelled"
+					: "Recording revision is unavailable",
+			);
+		},
+	);
+
+	it("separates stable content identity from strict legacy version identity", () => {
+		const changedMetadata = { ...file, version: "6", name: "Renamed" };
+		expect(getGoogleDriveRecordingIdentity(changedMetadata)).toBe(identity);
+		const head = { ETag: '"recording-file:6"', RecordingContentETag: identity };
+		expect(getRecordingObjectIdentity(head)).toBe(identity);
+		expect(getRecordingObjectIdentity(head, identity)).toBe(identity);
+		expect(getRecordingObjectIdentity(head, '"recording-file:1"')).not.toBe(
+			'"recording-file:1"',
+		);
+		expect(
+			getGoogleDriveRecordingIdentity({
+				...file,
+				sha256Checksum: "b".repeat(64),
+			}),
+		).not.toBe(identity);
+		expect(
+			getGoogleDriveRecordingIdentity({ ...file, id: "replacement" }),
+		).not.toBe(identity);
+	});
+
+	it.each([
+		{ sha256Checksum: undefined },
+		{ sha256Checksum: "invalid" },
+		{ headRevisionId: undefined },
+		{ size: "0" },
+		{ size: "9007199254740992" },
+	])("does not mint content proof with incomplete metadata %j", (change) => {
+		expect(getGoogleDriveRecordingIdentity({ ...file, ...change })).toBeNull();
+		expect(
+			getRecordingObjectIdentity({
+				ETag: '"legacy"',
+				RecordingContentETag: null,
+			}),
+		).toBeUndefined();
+	});
+
+	it.each([null, "bytes=0-0", "bytes=3-", "bytes=-2"])(
+		"pins verification reads to the checked revision for range %s",
+		async (range) => {
+			const request = vi.fn(
+				async (input: string | URL | Request, init?: RequestInit) => {
+					const url = new URL(String(input));
+					if (!url.pathname.includes("/revisions/"))
+						return jsonResponse({ ...file, version: "6" });
+					expect(url.pathname).toBe(
+						"/drive/v3/files/recording-file/revisions/revision-1",
+					);
+					expect(new Headers(init?.headers).get("range")).toBe(range);
+					const [start, end] =
+						range === "bytes=0-0"
+							? [0, 0]
+							: range === "bytes=3-"
+								? [3, 7]
+								: range === "bytes=-2"
+									? [6, 7]
+									: [0, 7];
+					return new Response("12345678".slice(start, end + 1), {
+						status: range ? 206 : 200,
+						headers: {
+							"Content-Length": String(end - start + 1),
+							...(range ? { "Content-Range": `bytes ${start}-${end}/8` } : {}),
+						},
+					});
+				},
+			);
+			vi.stubGlobal("fetch", request);
+			const result = await Effect.runPromise(
+				getGoogleDriveRecordingResponse(
+					makeConfig(),
+					file.id,
+					range,
+					{ objectIdentity: identity },
+					makeTokenStore(),
+				),
+			);
+			expect((await result.text()).length).toBe(
+				range === "bytes=0-0"
+					? 1
+					: range === "bytes=3-"
+						? 5
+						: range === "bytes=-2"
+							? 2
+							: 8,
+			);
+			expect(request).toHaveBeenCalledTimes(2);
+		},
+	);
+
+	it.each([403, 404])(
+		"never falls back to current content after revision %i",
+		async (status) => {
+			const request = vi.fn(async (input: string | URL | Request) =>
+				String(input).includes("/revisions/")
+					? response(status)
+					: jsonResponse(file),
+			);
+			vi.stubGlobal("fetch", request);
+			await expect(
+				Effect.runPromise(
+					getGoogleDriveRecordingResponse(
+						makeConfig(),
+						file.id,
+						null,
+						{ objectIdentity: identity },
+						makeTokenStore(),
+					),
+				),
+			).rejects.toThrow("Recording revision is unavailable");
+			expect(request).toHaveBeenCalledTimes(2);
+		},
+	);
+
+	it.each([
+		{ version: "1", sha256Checksum: "b".repeat(64) },
+		{ id: "replacement-file" },
+	])(
+		"rejects changed bytes or file identity before downloading %j",
+		async (change) => {
+			const request = vi.fn(async () => jsonResponse({ ...file, ...change }));
+			vi.stubGlobal("fetch", request);
+			await expect(
+				Effect.runPromise(
+					getGoogleDriveRecordingResponse(
+						makeConfig(),
+						file.id,
+						null,
+						{ objectIdentity: identity },
+						makeTokenStore(),
+					),
+				),
+			).rejects.toThrow("Recording object changed");
+			expect(request).toHaveBeenCalledOnce();
+		},
+	);
+
+	it("rejects a legacy version mismatch even when SHA256 matches", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => jsonResponse({ ...file, version: "6" })),
+		);
+		await expect(
+			Effect.runPromise(
+				getGoogleDriveRecordingResponse(
+					makeConfig(),
+					file.id,
+					null,
+					{ objectIdentity: '"recording-file:1"' },
+					makeTokenStore(),
+				),
+			),
+		).rejects.toThrow("Recording object changed");
+		expect(fetch).toHaveBeenCalledOnce();
+	});
+
+	it("cancels an incorrect revision range response", async () => {
+		const cancel = vi.fn();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request) =>
+				String(input).includes("/revisions/")
+					? new Response(new ReadableStream({ cancel }), {
+							status: 206,
+							headers: {
+								"Content-Length": "1",
+								"Content-Range": "bytes 1-1/8",
+							},
+						})
+					: jsonResponse(file),
+			),
+		);
+		await expect(
+			Effect.runPromise(
+				getGoogleDriveRecordingResponse(
+					makeConfig(),
+					file.id,
+					"bytes=0-0",
+					{ objectIdentity: identity },
+					makeTokenStore(),
+				),
+			),
+		).rejects.toThrow("Recording revision response is incomplete");
+		expect(cancel).toHaveBeenCalledOnce();
+	});
 });
 
 describe("Google Drive video names", () => {
