@@ -29,6 +29,7 @@ import { trackEvent } from "@/app/utils/analytics";
 import { usePublicEnv } from "@/utils/public-env";
 import { getEmailCodeCooldownSeconds, requestEmailCode } from "../auth-email";
 import { getSafeNextPath } from "../safe-next";
+import { SsoErrorNotice } from "../sso-error-notice";
 
 const MotionInput = motion(Input);
 const MotionLogoBadge = motion(LogoBadge);
@@ -47,6 +48,7 @@ export function SignupForm() {
 		Boolean(
 			searchParams?.get("organizationId") ||
 				searchParams?.get("connection_id") ||
+				searchParams?.get("error") === "SsoMissingProfileAttributes" ||
 				searchParams?.get("sso") === "1",
 		),
 	);
@@ -88,6 +90,9 @@ export function SignupForm() {
 				return toast.error(
 					"This email already has a Cap account. Sign in using your original sign-in method.",
 				);
+			} else if (error === "SsoMissingProfileAttributes") {
+				setShowOrgInput(true);
+				return;
 			} else if (error === "SsoSessionExpired") {
 				setShowOrgInput(true);
 				return toast.error(
@@ -271,6 +276,7 @@ export function SignupForm() {
 				</motion.p>
 			</motion.div>
 			<motion.div layout="position" className="flex flex-col space-y-3">
+				<SsoErrorNotice error={searchParams?.get("error")} />
 				<Suspense
 					fallback={
 						<>

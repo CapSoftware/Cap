@@ -37,7 +37,10 @@ function isSafeReturnPath(value: unknown): value is string {
 }
 
 export function ssoLoginErrorPath(
-	error: "SsoSessionExpired" | "SsoSignInFailed",
+	error:
+		| "SsoSessionExpired"
+		| "SsoSignInFailed"
+		| "SsoMissingProfileAttributes",
 	returnTo?: string,
 ) {
 	const query = new URLSearchParams({ error });

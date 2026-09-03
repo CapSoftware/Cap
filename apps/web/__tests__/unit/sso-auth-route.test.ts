@@ -43,6 +43,10 @@ vi.mock("next-auth", () => ({ default: mocks.nextAuth }));
 vi.mock("next-auth/jwt", () => ({ getToken: mocks.getToken }));
 
 const RETURN_TO = "/api/mobile/session/request?redirectUri=cap%3A%2F%2Fauth";
+const MISSING_PROFILE_QUERY = {
+	error: "server_error",
+	error_description: "The SAML Response did not contain expected attributes.",
+};
 const INTENT = {
 	organizationId: "caporganization",
 	workosOrganizationId: "org_verified",
@@ -368,6 +372,98 @@ describe("SSO auth request boundary", () => {
 			expect(redirect.searchParams.get("next")).toBe(RETURN_TO);
 		},
 	);
+
+	it("explains missing profile attributes without exposing the provider response", async () => {
+		mocks.nextAuth.mockResolvedValueOnce(
+			new Response(null, {
+				status: 302,
+				headers: { location: "/api/auth/error?error=OAuthCallback" },
+			}),
+		);
+		const { request, context } = makeRequest({
+			action: "callback",
+			query: { ...MISSING_PROFILE_QUERY, state: "private-oauth-state" },
+		});
+
+		const response = await GET(request, context);
+		const redirect = await errorUrl(response);
+
+		expect(mocks.nextAuth).toHaveBeenCalledOnce();
+		expect(redirect.origin).toBe(env.WEB_URL);
+		expect(redirect.pathname).toBe("/login");
+		expect(Object.fromEntries(redirect.searchParams)).toEqual({
+			error: "SsoMissingProfileAttributes",
+			next: RETURN_TO,
+		});
+		expect(response.headers.get("set-cookie")).toContain(
+			`${ssoIntentCookie(true).name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure`,
+		);
+	});
+
+	it.each<Record<string, string> | URLSearchParams>([
+		{},
+		{ error: "server_error" },
+		{ error_description: MISSING_PROFILE_QUERY.error_description },
+		{ ...MISSING_PROFILE_QUERY, error: "access_denied" },
+		{ error: "server_error", error_description: "Something else failed" },
+		{
+			...MISSING_PROFILE_QUERY,
+			error_description: `${MISSING_PROFILE_QUERY.error_description} Visit https://attacker.example`,
+		},
+		new URLSearchParams([
+			...Object.entries(MISSING_PROFILE_QUERY),
+			["error", "access_denied"],
+		]),
+		new URLSearchParams([
+			...Object.entries(MISSING_PROFILE_QUERY),
+			["error_description", "Something else failed"],
+		]),
+	])(
+		"keeps unrecognized or ambiguous provider errors generic: %j",
+		async (query) => {
+			mocks.nextAuth.mockResolvedValueOnce(
+				new Response(null, {
+					status: 302,
+					headers: { location: "/api/auth/error?error=OAuthCallback" },
+				}),
+			);
+			const { request, context } = makeRequest({ action: "callback", query });
+
+			const redirect = await errorUrl(await GET(request, context));
+
+			expect(Object.fromEntries(redirect.searchParams)).toEqual({
+				error: "SsoSignInFailed",
+				next: RETURN_TO,
+			});
+		},
+	);
+
+	it("does not classify a missing-profile error before validating the login intent", async () => {
+		const { request, context } = makeRequest({
+			action: "callback",
+			intent: null,
+			query: MISSING_PROFILE_QUERY,
+		});
+
+		const redirect = await errorUrl(await GET(request, context));
+
+		expect(redirect.searchParams.get("error")).toBe("SsoSessionExpired");
+		expect(mocks.nextAuth).not.toHaveBeenCalled();
+	});
+
+	it("does not replace a successful callback with a query-supplied error", async () => {
+		const { request, context } = makeRequest({
+			action: "callback",
+			query: MISSING_PROFILE_QUERY,
+		});
+
+		const response = await GET(request, context);
+
+		expect(response.headers.get("location")).toBe("/dashboard");
+		expect(response.headers.get("set-cookie")).toContain(
+			"next-auth.session-token=verified-session",
+		);
+	});
 
 	it("does not append the signed continuation to an external redirect", async () => {
 		const location = "https://attacker.example/login?error=Callback";

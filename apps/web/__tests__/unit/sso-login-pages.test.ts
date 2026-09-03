@@ -1,4 +1,4 @@
-import { createElement } from "react";
+import { type ButtonHTMLAttributes, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import LoginPage from "@/app/(org)/login/page";
@@ -6,6 +6,7 @@ import SignupPage from "@/app/(org)/signup/page";
 
 const mocks = vi.hoisted(() => ({
 	getCurrentUser: vi.fn(),
+	searchParams: new URLSearchParams(),
 	redirect: vi.fn((url: string): never => {
 		throw new Error(`redirect:${url}`);
 	}),
@@ -17,7 +18,35 @@ vi.mock("@cap/database/auth/session", () => ({
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ WEB_URL: "https://cap.test" }),
 }));
-vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
+vi.mock("next/navigation", () => ({
+	redirect: mocks.redirect,
+	useSearchParams: () => mocks.searchParams,
+	useRouter: () => ({ push: vi.fn() }),
+}));
+vi.mock("@cap/ui", () => ({
+	Button: ({
+		spinner: _spinner,
+		...props
+	}: ButtonHTMLAttributes<HTMLButtonElement> & { spinner?: boolean }) =>
+		createElement("button", { type: "button", ...props }),
+	Input: "input",
+	LogoBadge: "div",
+}));
+vi.mock("@/actions/organization/get-organization-sso-data", () => ({
+	getOrganizationSSOData: vi.fn(),
+}));
+vi.mock("@/app/(org)/auth-email", () => ({
+	getEmailCodeCooldownSeconds: () => 0,
+	requestEmailCode: vi.fn(),
+}));
+vi.mock("@/app/utils/analytics", () => ({ trackEvent: vi.fn() }));
+vi.mock("@/utils/public-env", () => ({
+	usePublicEnv: () => ({
+		googleAuthAvailable: false,
+		workosAuthAvailable: true,
+	}),
+}));
+vi.mock("next-auth/react", () => ({ signIn: vi.fn() }));
 vi.mock("@/app/(org)/login/form", () => ({
 	LoginForm: () => createElement("form", { "aria-label": "Login form" }),
 }));
@@ -34,6 +63,7 @@ const ssoEntries: [string, Query][] = [
 	["work-domain entry", { sso: "1" }],
 	["expired intent retry", { error: "SsoSessionExpired" }],
 	["failed SSO retry", { error: "SsoSignInFailed" }],
+	["missing profile retry", { error: "SsoMissingProfileAttributes" }],
 	[
 		"unapproved domain retry",
 		{ error: "profile_not_allowed_outside_organization" },
@@ -43,6 +73,7 @@ const ssoEntries: [string, Query][] = [
 
 beforeEach(() => {
 	mocks.getCurrentUser.mockResolvedValue({ id: "existing-user" });
+	mocks.searchParams = new URLSearchParams();
 });
 
 describe.each([
@@ -137,3 +168,50 @@ describe("authenticated login continuation", () => {
 		).rejects.toThrow("redirect:/dashboard");
 	});
 });
+
+describe.each(["login", "signup"] as const)(
+	"%s missing-profile notice",
+	(surface) => {
+		async function renderForm() {
+			const Form =
+				surface === "login"
+					? (
+							await vi.importActual<typeof import("@/app/(org)/login/form")>(
+								"@/app/(org)/login/form",
+							)
+						).LoginForm
+					: (
+							await vi.importActual<typeof import("@/app/(org)/signup/form")>(
+								"@/app/(org)/signup/form",
+							)
+						).SignupForm;
+			return renderToStaticMarkup(createElement(Form));
+		}
+
+		it("renders actionable guidance and the SSO form before client effects run", async () => {
+			mocks.searchParams.set("error", "SsoMissingProfileAttributes");
+
+			const markup = await renderForm();
+
+			expect(markup).toContain('role="alert"');
+			expect(markup).toContain("SSO profile details are missing");
+			expect(markup).toContain("first name, and last name");
+			expect(markup).toContain("IT administrator");
+			expect(markup).toContain("SSO attribute mapping");
+			expect(markup).toContain('name="organization"');
+			expect(markup).toContain("Continue with SSO");
+		});
+
+		it.each(["", "SsoSignInFailed", "<script>untrusted error</script>"])(
+			"does not show a missing-profile notice for %j",
+			async (error) => {
+				mocks.searchParams.set("error", error);
+
+				const markup = await renderForm();
+
+				expect(markup).not.toContain("SSO profile details are missing");
+				expect(markup).not.toContain("untrusted error");
+			},
+		);
+	},
+);
