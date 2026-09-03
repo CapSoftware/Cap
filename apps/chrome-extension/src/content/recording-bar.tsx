@@ -133,6 +133,7 @@ export function RecordingBarOverlay({
 	const positionModeRef = useRef<"active" | "ready" | null>(null);
 	const recorderPanelOpenRef = useRef(false);
 	const countdownIntervalRef = useRef<number | null>(null);
+	const hoverTimeoutRef = useRef<number | null>(null);
 
 	useEffect(() => {
 		planRef.current = plan;
@@ -462,6 +463,34 @@ export function RecordingBarOverlay({
 		};
 	}, [clampToViewport]);
 
+	useEffect(() => {
+		return () => {
+			if (hoverTimeoutRef.current !== null) {
+				window.clearTimeout(hoverTimeoutRef.current);
+			}
+		};
+	}, []);
+
+	const handleMouseEnter = useCallback(() => {
+		if (isDragging) return;
+		if (hoverTimeoutRef.current !== null) {
+			window.clearTimeout(hoverTimeoutRef.current);
+			hoverTimeoutRef.current = null;
+		}
+		setIsExpanded(true);
+	}, [isDragging]);
+
+	const handleMouseLeave = useCallback(() => {
+		if (isDragging) return;
+		if (hoverTimeoutRef.current !== null) {
+			window.clearTimeout(hoverTimeoutRef.current);
+		}
+		hoverTimeoutRef.current = window.setTimeout(() => {
+			setIsExpanded(false);
+			hoverTimeoutRef.current = null;
+		}, 450);
+	}, [isDragging]);
+
 	const sendControl = useCallback(
 		(type: BarControl) => {
 			setBusy(true);
@@ -656,6 +685,8 @@ export function RecordingBarOverlay({
 		<>
 			<div
 				ref={barRef}
+				role="toolbar"
+				aria-label="Active recording controls"
 				className={classNames(
 					"cap-extension-active-recording-container",
 					isDragging && "is-dragging",
@@ -669,6 +700,8 @@ export function RecordingBarOverlay({
 					visibility: position ? "visible" : "hidden",
 				}}
 				onPointerDown={handlePointerDown}
+				onMouseEnter={handleMouseEnter}
+				onMouseLeave={handleMouseLeave}
 			>
 				{isExpanded && status !== null ? (
 					<div

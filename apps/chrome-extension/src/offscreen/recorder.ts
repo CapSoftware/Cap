@@ -294,8 +294,11 @@ const disconnectCameraPreviews = () => {
 };
 
 const getCameraPreviewStream = async (settings: WebcamSettings) => {
+	const videoTrack = cameraPreviewStream?.getVideoTracks()[0];
 	if (
 		cameraPreviewStream?.active &&
+		videoTrack &&
+		videoTrack.readyState === "live" &&
 		cameraPreviewDeviceId === settings.deviceId
 	) {
 		return cameraPreviewStream;
@@ -377,38 +380,39 @@ const broadcastCaptureSource = (source: RecordingCaptureSource) => {
 	);
 };
 
-const getVideoConstraint = (webcam: WebcamSettings) =>
-	webcam.deviceId && webcam.deviceId !== DEFAULT_CAMERA_DEVICE_ID
-		? {
-				deviceId: { exact: webcam.deviceId },
-			}
-		: true;
-
-const shouldRetryDefaultCamera = (webcam: WebcamSettings, error: unknown) =>
-	webcam.deviceId !== null &&
-	webcam.deviceId !== DEFAULT_CAMERA_DEVICE_ID &&
-	error instanceof DOMException &&
-	(error.name === "NotFoundError" || error.name === "OverconstrainedError");
-
 const getCameraMediaStream = async (
 	webcam: WebcamSettings,
 	audio: boolean | MediaTrackConstraints,
 ) => {
-	try {
-		return await navigator.mediaDevices.getUserMedia({
-			video: getVideoConstraint(webcam),
+	const constraints: MediaStreamConstraints[] = [];
+	if (webcam.deviceId && webcam.deviceId !== DEFAULT_CAMERA_DEVICE_ID) {
+		constraints.push({
+			video: { deviceId: { exact: webcam.deviceId } },
 			audio,
 		});
-	} catch (error) {
-		if (!shouldRetryDefaultCamera(webcam, error)) {
-			throw error;
-		}
-
-		return navigator.mediaDevices.getUserMedia({
-			video: true,
+		constraints.push({
+			video: { deviceId: { ideal: webcam.deviceId } },
 			audio,
 		});
 	}
+	constraints.push({
+		video: true,
+		audio,
+	});
+
+	let lastError: unknown = null;
+	for (const constraint of constraints) {
+		try {
+			const stream = await navigator.mediaDevices.getUserMedia(constraint);
+			const videoTrack = stream.getVideoTracks()[0];
+			if (videoTrack && videoTrack.readyState === "live") {
+				return stream;
+			}
+		} catch (error) {
+			lastError = error;
+		}
+	}
+	throw lastError ?? new Error("Failed to acquire camera stream");
 };
 
 const tabCaptureConstraints = (streamId: string, includeAudio: boolean) =>

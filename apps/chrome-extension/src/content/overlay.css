@@ -1015,6 +1015,17 @@
 	color: #e5484d;
 }
 
+.cap-extension-recording-badge::before {
+	content: "";
+	position: absolute;
+	top: -8px;
+	bottom: -8px;
+	left: -8px;
+	right: -8px;
+	z-index: -1;
+	pointer-events: auto;
+}
+
 .cap-extension-vertical-dock {
 	position: absolute;
 	left: 0;
@@ -1033,6 +1044,17 @@
 		0 6px 14px rgba(0, 0, 0, 0.08);
 	backdrop-filter: blur(28px);
 	animation: cap-extension-dock-slide-up 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cap-extension-vertical-dock::before {
+	content: "";
+	position: absolute;
+	top: -12px;
+	bottom: -12px;
+	left: -12px;
+	right: -12px;
+	z-index: -1;
+	pointer-events: auto;
 }
 
 .cap-extension-active-recording-container.opens-up
