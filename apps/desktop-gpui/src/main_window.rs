@@ -2665,6 +2665,9 @@ impl MainWindow {
             .id("microphone-warning")
             .absolute()
             .inset_0()
+            .when(cfg!(target_os = "windows"), |overlay| {
+                overlay.top(px(HEADER_HEIGHT))
+            })
             .rounded(px(16.))
             .occlude()
             .flex()
@@ -3383,6 +3386,9 @@ impl MainWindow {
         div()
             .absolute()
             .inset_0()
+            .when(cfg!(target_os = "windows"), |overlay| {
+                overlay.top(px(HEADER_HEIGHT))
+            })
             .rounded(px(16.))
             .flex()
             .flex_col()

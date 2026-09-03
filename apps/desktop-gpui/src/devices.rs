@@ -380,6 +380,11 @@ pub fn list_window_targets() -> Vec<(WindowOption, Window)> {
     Window::list()
         .into_iter()
         .filter_map(|window| {
+            #[cfg(target_os = "windows")]
+            if !window.raw_handle().is_valid() || !window.raw_handle().is_on_screen() {
+                return None;
+            }
+
             let label = window.name().filter(|name| !name.trim().is_empty())?;
             let app = window.owner_name()?;
 

@@ -2520,7 +2520,7 @@ impl Render for OnboardingWindow {
             theme,
             window.is_window_active(),
             window.is_maximized(),
-            false,
+            true,
             false,
         ));
         #[cfg(not(target_os = "windows"))]
