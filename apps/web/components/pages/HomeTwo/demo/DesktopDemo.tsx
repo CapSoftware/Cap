@@ -1417,6 +1417,7 @@ export const DesktopDemo = ({
 
 				{/* Controls: phase pills, tour progress, skip. Hidden until the tour starts. */}
 				<div
+					inert={idle}
 					className={classNames(
 						"relative z-10 mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 transition-opacity duration-500",
 						idle ? "pointer-events-none opacity-0" : "opacity-100",
