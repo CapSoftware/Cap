@@ -18,7 +18,6 @@ import {
 	Chip,
 	RECORDED,
 	RecordedWindow,
-	type StudioCard,
 	useLoop,
 } from "./shared";
 
@@ -67,7 +66,7 @@ const threeDPoseAt = (t: number) => {
 	};
 };
 
-const ThreeDVisual = ({ playing }: { playing: boolean }) => {
+export const ThreeDVisual = ({ playing }: { playing: boolean }) => {
 	const groupRef = useRef<HTMLDivElement | null>(null);
 	const depthRef = useRef<HTMLDivElement | null>(null);
 	const vignetteRef = useRef<HTMLDivElement | null>(null);
@@ -205,7 +204,7 @@ const canvasScaleAt = (t: number) => {
 	return { s, r };
 };
 
-const CanvasVisual = ({ playing }: { playing: boolean }) => {
+export const CanvasVisual = ({ playing }: { playing: boolean }) => {
 	const groupRef = useRef<HTMLDivElement | null>(null);
 	const clipRef = useRef<HTMLDivElement | null>(null);
 	const [ui, setUi] = useSceneState(canvasUiAt(0));
@@ -446,7 +445,7 @@ const gradeAt = (t: number) => {
 	return current;
 };
 
-const GradesVisual = ({ playing }: { playing: boolean }) => {
+export const GradesVisual = ({ playing }: { playing: boolean }) => {
 	const rootRef = useRef<HTMLDivElement | null>(null);
 	const [ui, setUi] = useSceneState({ grade: NONE_GRADE.name });
 	const cursor = useCursor(rootRef);
@@ -611,7 +610,7 @@ const CLIPS_PATH: Way[] = [
 	{ t: CLIPS_DURATION, x: 470, y: 150 },
 ];
 
-const ClipsVisual = ({ playing }: { playing: boolean }) => {
+export const ClipsVisual = ({ playing }: { playing: boolean }) => {
 	const rootRef = useRef<HTMLDivElement | null>(null);
 	const clipARef = useRef<HTMLDivElement | null>(null);
 	const clipBRef = useRef<HTMLDivElement | null>(null);
@@ -850,32 +849,3 @@ const ClipsVisual = ({ playing }: { playing: boolean }) => {
 		</div>
 	);
 };
-
-/* --------------------------------------------------------------- export -- */
-
-export const CARDS_B: StudioCard[] = [
-	{
-		key: "three-d",
-		title: "3D camera moves",
-		body: "Tilt the frame into perspective and glide, sweep, or pull back across it with focus blur.",
-		Visual: ThreeDVisual,
-	},
-	{
-		key: "canvas",
-		title: "Any canvas, one recording",
-		body: "Wallpapers, gradients, or your own image, then padding, corners, shadows, and a macOS, Windows, browser, or MacBook frame.",
-		Visual: CanvasVisual,
-	},
-	{
-		key: "grades",
-		title: "Color grades",
-		body: "Cinematic, Noir, Vintage, Frost, Golden, Midnight, Vivid, or Dreamy, then dial exposure, contrast, and vignette.",
-		Visual: GradesVisual,
-	},
-	{
-		key: "clips",
-		title: "Clips, speed, and music",
-		body: "Trim, split, reorder, speed up to 8x, crossfade between clips, and lay a track from the built in library underneath.",
-		Visual: ClipsVisual,
-	},
-];

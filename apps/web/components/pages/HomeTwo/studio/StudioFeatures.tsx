@@ -13,8 +13,7 @@ import {
 	meshStyle,
 } from "../theme";
 import { useInView, useReducedMotion } from "../visibility";
-import { CARDS_A } from "./cardsA";
-import { CARDS_B } from "./cardsB";
+import { CARDS_A, CARDS_B } from "./catalog";
 import { CANVAS, type StudioCard } from "./shared";
 
 const ORDER = [

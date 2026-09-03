@@ -23,7 +23,6 @@ import {
 	Chip,
 	RECORDED,
 	RecordedWindow,
-	type StudioCard,
 	useLoop,
 } from "./shared";
 
@@ -79,7 +78,7 @@ const maskUiAt = (t: number) => ({
 					: null,
 });
 
-const BlurVisual = ({ playing }: { playing: boolean }) => {
+export const BlurVisual = ({ playing }: { playing: boolean }) => {
 	const rootRef = useRef<HTMLDivElement | null>(null);
 	const boxRef = useRef<HTMLDivElement | null>(null);
 	const [ui, setUi] = useSceneState(maskUiAt(0));
@@ -364,7 +363,7 @@ const sceneAt = (t: number): SceneKey =>
 	SCENE_MODES[Math.min(SCENE_MODES.length - 1, Math.floor(t / SCENE_SLOT))]
 		?.key ?? "default";
 
-const ScenesVisual = ({ playing }: { playing: boolean }) => {
+export const ScenesVisual = ({ playing }: { playing: boolean }) => {
 	const playheadRef = useRef<HTMLDivElement | null>(null);
 	const [scene, setScene] = useSceneState<SceneKey>("default");
 	const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -464,7 +463,7 @@ const textPresetAt = (t: number) =>
 				? "Lower Third · Slide up"
 				: null;
 
-const TextVisual = ({ playing }: { playing: boolean }) => {
+export const TextVisual = ({ playing }: { playing: boolean }) => {
 	const lowerRef = useRef<HTMLDivElement | null>(null);
 	const statRef = useRef<HTMLDivElement | null>(null);
 	const typeRef = useRef<HTMLDivElement | null>(null);
@@ -579,7 +578,7 @@ const zoomScaleAt = (t: number) =>
 	easeInOut(span(t, ZOOM_IN.start, ZOOM_IN.end)) -
 	easeInOut(span(t, ZOOM_OUT.start, ZOOM_OUT.end));
 
-const ZoomVisual = ({ playing }: { playing: boolean }) => {
+export const ZoomVisual = ({ playing }: { playing: boolean }) => {
 	const rootRef = useRef<HTMLDivElement | null>(null);
 	const zoomRef = useRef<HTMLDivElement | null>(null);
 	const ringRef = useRef<HTMLSpanElement | null>(null);
@@ -699,7 +698,7 @@ const captionAt = (t: number) => {
 	};
 };
 
-const CaptionsVisual = ({ playing }: { playing: boolean }) => {
+export const CaptionsVisual = ({ playing }: { playing: boolean }) => {
 	const rootRef = useRef<HTMLDivElement | null>(null);
 	const clockRef = useRef<HTMLSpanElement | null>(null);
 	const [ui, setUi] = useSceneState(captionAt(0));
@@ -794,38 +793,3 @@ const CaptionsVisual = ({ playing }: { playing: boolean }) => {
 		</div>
 	);
 };
-
-export const CARDS_A: StudioCard[] = [
-	{
-		key: "mask",
-		title: "Blur what is private",
-		body: "Drop a mask over a password, an email, or a face and choose blur or pixelate. Or flip it to a highlight that dims everything else.",
-		span: 2,
-		Visual: BlurVisual,
-	},
-	{
-		key: "scenes",
-		title: "Scenes for screen and camera",
-		body: "Switch any stretch of the timeline to camera only, hide camera, split screen, or floating cards, each with its own transition.",
-		span: 2,
-		Visual: ScenesVisual,
-	},
-	{
-		key: "text",
-		title: "Text that animates",
-		body: "Titles, lower thirds, big stats, and typewriter callouts as stackable tracks, with fade, slide, pop, or typewriter in and out.",
-		Visual: TextVisual,
-	},
-	{
-		key: "zoom",
-		title: "Automatic zoom",
-		body: "Generate zooms from your recorded clicks, or draw your own from 1x to 4.5x with a fixed focal point.",
-		Visual: ZoomVisual,
-	},
-	{
-		key: "captions",
-		title: "Captions, generated locally",
-		body: "Transcribe on your machine in 19 languages, fix the words, style them, and burn them in with the active word highlighted.",
-		Visual: CaptionsVisual,
-	},
-];
