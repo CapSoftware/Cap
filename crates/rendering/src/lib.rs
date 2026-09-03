@@ -7419,7 +7419,13 @@ mod project_uniforms_tests {
                     }];
                 }
                 let overlay = renderer
-                    .render_immediate(frames.clone(), overlay_uniforms, &events, true, &mut layers)
+                    .render_immediate(
+                        frames.clone(),
+                        overlay_uniforms.clone(),
+                        &events,
+                        true,
+                        &mut layers,
+                    )
                     .await
                     .unwrap();
                 let overlay_selected = |pixel: &[u8], x: usize, y: usize| {
@@ -7458,8 +7464,8 @@ mod project_uniforms_tests {
                 }
                 let cursor_only = renderer
                     .render_immediate(
-                        cursor_only_frames,
-                        cursor_only_uniforms,
+                        cursor_only_frames.clone(),
+                        cursor_only_uniforms.clone(),
                         &events,
                         false,
                         &mut layers,
@@ -7480,6 +7486,36 @@ mod project_uniforms_tests {
                         pixel_selection_mask(&overlay, marker_center, overlay_selected),
                         pixel_selection_mask(&cursor_only, marker_center, |pixel, _, _| pixel[3]
                             > 12),
+                    );
+                    layers
+                        .cursor
+                        .use_isotropic_sampler_for_test(&constants.device);
+                    let isotropic_overlay = renderer
+                        .render_immediate(
+                            frames.clone(),
+                            overlay_uniforms,
+                            &events,
+                            true,
+                            &mut layers,
+                        )
+                        .await
+                        .unwrap();
+                    let isotropic_cursor = renderer
+                        .render_immediate(
+                            cursor_only_frames,
+                            cursor_only_uniforms,
+                            &events,
+                            false,
+                            &mut layers,
+                        )
+                        .await
+                        .unwrap();
+                    let isotropic_overlay_center =
+                        pixel_center(&isotropic_overlay, overlay_selected);
+                    let isotropic_cursor_center =
+                        pixel_center(&isotropic_cursor, |pixel, _, _| pixel[3] > 12);
+                    eprintln!(
+                        "isotropic {name}, ripple={ripple_only}: marker {marker_center:?}, overlay {isotropic_overlay_center:?}, cursor-only {isotropic_cursor_center:?}"
                     );
                 }
                 assert!(
