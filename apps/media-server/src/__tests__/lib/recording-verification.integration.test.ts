@@ -36,6 +36,117 @@ let silentBytes: Uint8Array<ArrayBuffer>;
 let corruptBytes: Uint8Array<ArrayBuffer>;
 let fragmentInit: Buffer;
 let videoFragments: Buffer[];
+let bFrameInit: Buffer;
+let bFrameSamples: VideoSample[];
+
+interface VideoSample {
+	pts: number;
+	dts: number;
+	duration: number;
+	flags: number;
+	data: Buffer;
+}
+
+function mp4Box(type: string, ...payload: Buffer[]): Buffer {
+	const header = Buffer.alloc(8);
+	header.writeUInt32BE(
+		8 + payload.reduce((size, bytes) => size + bytes.length, 0),
+	);
+	header.write(type, 4, "ascii");
+	return Buffer.concat([header, ...payload]);
+}
+
+function sampleFragment(
+	samples: VideoSample[],
+	sequence: number,
+	durationSource: "trun" | "tfhd" | "trex" = "trun",
+): Buffer {
+	const first = samples[0];
+	if (!first) throw new Error("Fixture fragment is empty");
+	const mfhd = Buffer.alloc(8);
+	mfhd.writeUInt32BE(sequence, 4);
+	const tfhd = Buffer.alloc(durationSource === "tfhd" ? 12 : 8);
+	tfhd.writeUInt32BE(durationSource === "tfhd" ? 0x20008 : 0x20000);
+	tfhd.writeUInt32BE(1, 4);
+	if (durationSource === "tfhd") tfhd.writeUInt32BE(first.duration, 8);
+	const tfdt = Buffer.alloc(12);
+	tfdt.writeUInt32BE(0x1000000);
+	tfdt.writeBigUInt64BE(BigInt(first.dts), 4);
+	const stride = durationSource === "trun" ? 16 : 12;
+	const trun = Buffer.alloc(12 + stride * samples.length);
+	trun.writeUInt32BE(durationSource === "trun" ? 0x1000f01 : 0x1000e01);
+	trun.writeUInt32BE(samples.length, 4);
+	for (const [index, sample] of samples.entries()) {
+		let offset = 12 + index * stride;
+		if (durationSource === "trun") {
+			trun.writeUInt32BE(sample.duration, offset);
+			offset += 4;
+		}
+		trun.writeUInt32BE(sample.data.length, offset);
+		trun.writeUInt32BE(sample.flags, offset + 4);
+		trun.writeInt32BE(sample.pts - sample.dts, offset + 8);
+	}
+	const fragment = () =>
+		mp4Box(
+			"moof",
+			mp4Box("mfhd", mfhd),
+			mp4Box(
+				"traf",
+				mp4Box("tfhd", tfhd),
+				mp4Box("tfdt", tfdt),
+				mp4Box("trun", trun),
+			),
+		);
+	trun.writeInt32BE(fragment().length + 8, 8);
+	return Buffer.concat([
+		fragment(),
+		mp4Box("mdat", ...samples.map((sample) => sample.data)),
+	]);
+}
+
+async function tiedTimestampSource(
+	name: string,
+	terminalTies: number,
+	tailChange = 0,
+	swapTailDurations = false,
+): Promise<string> {
+	const samples = bFrameSamples.map((sample) => ({ ...sample }));
+	const interior = samples[13];
+	const next = samples[17];
+	const final = samples[37];
+	const beforeLast = samples[38];
+	const last = samples[39];
+	if (!interior || !next || !final || !beforeLast || !last) {
+		throw new Error("B-frame fixture is incomplete");
+	}
+	interior.pts = next.pts;
+	if (terminalTies > 1) {
+		final.duration = 6000 + tailChange;
+		beforeLast.dts += 3000;
+		beforeLast.pts += 3000;
+		last.dts += 3000;
+		last.pts += 3000;
+		last.duration = 1;
+		if (terminalTies === 3) beforeLast.pts = final.pts;
+		if (swapTailDurations) {
+			[final.duration, last.duration] = [last.duration, final.duration];
+		}
+	}
+	const output = join(directory, name);
+	await writeFile(
+		output,
+		Buffer.concat(
+			tailChange || swapTailDurations
+				? [
+						bFrameInit,
+						sampleFragment(samples.slice(0, 38), 1),
+						sampleFragment(samples.slice(38), 2),
+					]
+				: [bFrameInit, sampleFragment(samples, 1)],
+		),
+	);
+	return output;
+}
 
 async function run(command: string[]): Promise<string> {
 	const proc = Bun.spawn(command, { stdout: "pipe", stderr: "pipe" });
@@ -88,7 +199,11 @@ function visitFragmentBoxes(
 		if (size < 8 || offset + size > end) {
 			throw new Error("Invalid fragmented fixture box");
 		}
-		if (type === "moof" || type === "traf") {
+		if (
+			["moof", "traf", "moov", "mvex", "trak", "mdia", "minf", "stbl"].includes(
+				type,
+			)
+		) {
 			visitFragmentBoxes(bytes, visit, offset + 8, offset + size);
 		} else {
 			visit(type, offset);
@@ -195,6 +310,76 @@ beforeAll(async () => {
 	variableFrameRate = join(directory, "variable-frame-rate.mp4");
 	corruptTail = join(directory, "corrupt-tail.mp4");
 	truncatedTail = join(directory, "truncated-tail.mp4");
+	const bFrameSource = join(directory, "b-frame-fragments.mp4");
+	await run([
+		"ffmpeg",
+		"-v",
+		"error",
+		"-f",
+		"lavfi",
+		"-i",
+		"testsrc2=size=160x90:rate=30",
+		"-frames:v",
+		"40",
+		"-an",
+		"-c:v",
+		"libx264",
+		"-preset",
+		"fast",
+		"-bf",
+		"2",
+		"-x264-params",
+		"b-adapt=0:b-pyramid=none:scenecut=0:keyint=60:min-keyint=60",
+		"-video_track_timescale",
+		"90000",
+		"-movflags",
+		"empty_moov+frag_keyframe+default_base_moof+delay_moov",
+		bFrameSource,
+	]);
+	const bFrameBytes = await readFile(bFrameSource);
+	const initBoxes: Buffer[] = [];
+	for (let offset = 0; offset < bFrameBytes.length; ) {
+		const size = bFrameBytes.readUInt32BE(offset);
+		const type = bFrameBytes.toString("ascii", offset + 4, offset + 8);
+		if (type === "ftyp" || type === "moov") {
+			initBoxes.push(bFrameBytes.subarray(offset, offset + size));
+		}
+		if (size < 8) throw new Error("B-frame fixture box is invalid");
+		offset += size;
+	}
+	bFrameInit = Buffer.concat(initBoxes);
+	const bFramePackets: {
+		packets: {
+			pts: number;
+			dts: number;
+			pos: string;
+			size: string;
+			flags: string;
+		}[];
+	} = JSON.parse(
+		await run([
+			"ffprobe",
+			"-v",
+			"error",
+			"-select_streams",
+			"v:0",
+			"-show_entries",
+			"packet=pts,dts,pos,size,flags",
+			"-of",
+			"json",
+			bFrameSource,
+		]),
+	);
+	bFrameSamples = bFramePackets.packets.map((packet) => ({
+		pts: packet.pts + 3000,
+		dts: packet.dts + 3000,
+		duration: 3000,
+		flags: packet.flags.includes("K") ? 0x2000000 : 0x1010000,
+		data: bFrameBytes.subarray(
+			Number(packet.pos),
+			Number(packet.pos) + Number(packet.size),
+		),
+	}));
 	await generate(silent, "anullsrc=r=48000:cl=mono:d=5");
 	await generate(
 		shortAudio,
@@ -415,6 +600,248 @@ describe("complete recording decode", () => {
 });
 
 describe("source-preserving recording mux", () => {
+	test.each([1, 2])(
+		"preserves interior tied timestamps and %d terminal packets with real B-frames",
+		async (terminalTies) => {
+			const input = await tiedTimestampSource(
+				`tied-${terminalTies}.mp4`,
+				terminalTies,
+			);
+			const sourceEvidence = await inspectRecordingSources(input, silent);
+			const output = join(directory, `tied-${terminalTies}-output.mp4`);
+			await muxMediaTracksToMp4(input, silent, output);
+			const verified = await verifyRecording(output, {
+				requireAudio: true,
+				sourceEvidence,
+			});
+			expect(verified.sourcePreserved).toBe(true);
+			expect(verified.video.frameCount).toBe(40);
+			expect(verified.integrity).toEqual(sourceEvidence.integrity);
+			expect(verified.audio?.sampleCount).toBe(
+				sourceEvidence.audio?.sampleCount,
+			);
+			const sourceTiming = await readRecordingVideoTiming(input, {
+				timeoutMs: 5000,
+			});
+			const outputTiming = await readRecordingVideoTiming(output, {
+				timeoutMs: 5000,
+			});
+			expect(sourceTiming.terminalPacketCount).toBe(terminalTies);
+			expect(outputTiming.terminalPacketSha256).toBe(
+				sourceTiming.terminalPacketSha256,
+			);
+		},
+	);
+
+	test("refuses tied timestamps when the decoder changes their presentation times", async () => {
+		const input = await tiedTimestampSource("tied-three.mp4", 3);
+		const timing = await readRecordingVideoTiming(input, { timeoutMs: 5000 });
+		expect(timing.terminalPacketCount).toBe(3);
+		await expect(inspectRecordingSources(input, null)).rejects.toThrow(
+			"Recording container timing does not match decoded video",
+		);
+	});
+
+	test("keeps standalone verification strict without source-bound timing evidence", async () => {
+		const input = await tiedTimestampSource("standalone-tied.mp4", 1);
+		await expect(
+			verifyRecording(input, { requireAudio: false, expectedDuration: 4 / 3 }),
+		).rejects.toThrow("Decoded recording timestamps are invalid");
+	});
+
+	test("binds interior container timestamps even when the decoded evidence is unchanged", async () => {
+		const input = await tiedTimestampSource("tied-container-clock.mp4", 1);
+		const sourceEvidence = await inspectRecordingSources(input, null);
+		const originalNext = EncodedPacketSink.prototype.getNextPacket;
+		let calls = 0;
+		const next = spyOn(
+			EncodedPacketSink.prototype,
+			"getNextPacket",
+		).mockImplementation(async function (
+			this: EncodedPacketSink,
+			...args: Parameters<typeof originalNext>
+		) {
+			const packet = await originalNext.apply(this, args);
+			if (packet && ++calls === 17)
+				Object.defineProperty(packet, "timestamp", {
+					value: packet.timestamp + 1 / 90000,
+				});
+			return packet;
+		});
+		let alteredEvidence: Awaited<ReturnType<typeof inspectRecordingSources>>;
+		try {
+			alteredEvidence = await inspectRecordingSources(input, null);
+		} finally {
+			next.mockRestore();
+		}
+		expect(alteredEvidence.video).toEqual(sourceEvidence.video);
+		expect(alteredEvidence.integrity.video.contentSha256).toBe(
+			sourceEvidence.integrity.video.contentSha256,
+		);
+		await expect(
+			verifyRecording(input, {
+				requireAudio: false,
+				sourceEvidence: alteredEvidence,
+			}),
+		).rejects.toThrow("does not preserve source video: presentation timeline");
+	});
+
+	test.each(["tfhd", "trex"] as const)(
+		"binds tied final packets with %s default durations",
+		async (durationSource) => {
+			const samples = bFrameSamples.map((sample) => ({ ...sample }));
+			samples[39].pts = samples[37].pts;
+			const init = Buffer.from(bFrameInit);
+			visitFragmentBoxes(init, (type, offset) => {
+				if (type === "trex") init.writeUInt32BE(3000, offset + 20);
+			});
+			const input = join(directory, `tied-default-${durationSource}.mp4`);
+			await writeFile(
+				input,
+				Buffer.concat([
+					init,
+					...samples.map((sample, index) =>
+						sampleFragment([sample], index + 1, durationSource),
+					),
+				]),
+			);
+			const sourceEvidence = await inspectRecordingSources(input, null);
+			const output = join(
+				directory,
+				`tied-default-${durationSource}-output.mp4`,
+			);
+			await muxMediaTracksToMp4(input, null, output);
+			const verified = await verifyRecording(output, {
+				requireAudio: false,
+				sourceEvidence,
+			});
+			expect(verified.sourcePreserved).toBe(true);
+			expect(verified.video.frameCount).toBe(40);
+			expect(verified.integrity).toEqual(sourceEvidence.integrity);
+			const invalid = await readFile(input);
+			visitFragmentBoxes(invalid, (type, offset) => {
+				if (durationSource === "trex" && type === "trex")
+					invalid.writeUInt32BE(0, offset + 20);
+				if (durationSource === "tfhd" && type === "tfhd")
+					invalid.writeUInt32BE(0, offset + 16);
+			});
+			await writeFile(input, invalid);
+			await expect(
+				readRecordingVideoTiming(input, { timeoutMs: 5000 }),
+			).rejects.toThrow();
+		},
+	);
+
+	test("refuses a truncated sample-time table on a remuxed tied-tail recording", async () => {
+		const input = await tiedTimestampSource("tied-stts-input.mp4", 2);
+		const sourceEvidence = await inspectRecordingSources(input, null);
+		const output = join(directory, "tied-stts-output.mp4");
+		await muxMediaTracksToMp4(input, null, output);
+		const bytes = await readFile(output);
+		visitFragmentBoxes(bytes, (type, offset) => {
+			if (type === "stts")
+				bytes.writeUInt32BE(bytes.readUInt32BE(offset + 12) + 1, offset + 12);
+		});
+		await writeFile(output, bytes);
+		await expect(
+			verifyRecording(output, { requireAudio: false, sourceEvidence }),
+		).rejects.toThrow();
+	});
+
+	test("handles a zero-sized trailing box without reading beyond the recording", async () => {
+		const input = await tiedTimestampSource("tied-zero-box.mp4", 2);
+		const expected = await readRecordingVideoTiming(input, { timeoutMs: 5000 });
+		const trailing = Buffer.alloc(8);
+		trailing.write("free", 4, "ascii");
+		await writeFile(input, Buffer.concat([await readFile(input), trailing]));
+		expect(await readRecordingVideoTiming(input, { timeoutMs: 5000 })).toEqual(
+			expected,
+		);
+	});
+
+	test("refuses an unsafe extended box size without allocating its claimed payload", async () => {
+		const input = await tiedTimestampSource("tied-large-box.mp4", 2);
+		const trailing = Buffer.alloc(16);
+		trailing.writeUInt32BE(1);
+		trailing.write("moof", 4, "ascii");
+		trailing.writeBigUInt64BE(1n << 63n, 8);
+		await writeFile(input, Buffer.concat([await readFile(input), trailing]));
+		await expect(
+			readRecordingVideoTiming(input, { timeoutMs: 5000 }),
+		).rejects.toThrow();
+	});
+
+	test.each([
+		"unknown-trun-flags",
+		"trun-count-overflow",
+		"zero-terminal-duration",
+	])("refuses ambiguous tied-tail metadata: %s", async (damage) => {
+		const input = await tiedTimestampSource(`tied-malformed-${damage}.mp4`, 2);
+		const bytes = await readFile(input);
+		visitFragmentBoxes(bytes, (type, offset) => {
+			if (type !== "trun") return;
+			if (damage === "unknown-trun-flags")
+				bytes.writeUIntBE(bytes.readUIntBE(offset + 9, 3) | 2, offset + 9, 3);
+			else if (damage === "trun-count-overflow")
+				bytes.writeUInt32BE(0xffffffff, offset + 12);
+			else bytes.writeUInt32BE(0, offset + 20 + 39 * 16);
+		});
+		await writeFile(input, bytes);
+		await expect(inspectRecordingSources(input, null)).rejects.toThrow();
+	});
+
+	test.each([-1, 1])(
+		"rejects a %d tick change hidden by another packet at the same final timestamp",
+		async (tailChange) => {
+			const input = await tiedTimestampSource(
+				`tied-tail-source-${tailChange}.mp4`,
+				2,
+			);
+			const changed = await tiedTimestampSource(
+				`tied-tail-change-${tailChange}.mp4`,
+				2,
+				tailChange,
+			);
+			const sourceEvidence = await inspectRecordingSources(input, null);
+			const alteredEvidence = await inspectRecordingSources(changed, null);
+			expect(alteredEvidence.video.frameCount).toBe(40);
+			expect(alteredEvidence.integrity.video.contentSha256).toBe(
+				sourceEvidence.integrity.video.contentSha256,
+			);
+			expect((await videoPackets(changed)).map((packet) => packet.pts)).toEqual(
+				(await videoPackets(input)).map((packet) => packet.pts),
+			);
+			await expect(
+				verifyRecording(changed, { requireAudio: false, sourceEvidence }),
+			).rejects.toThrow(
+				"does not preserve source video: presentation timeline",
+			);
+		},
+	);
+
+	test("rejects exchanging durations between packets with tied final timestamps", async () => {
+		const input = await tiedTimestampSource("tied-duration-source.mp4", 2);
+		const changed = await tiedTimestampSource(
+			"tied-duration-swapped.mp4",
+			2,
+			0,
+			true,
+		);
+		const sourceEvidence = await inspectRecordingSources(input, null);
+		await expect(
+			verifyRecording(changed, { requireAudio: false, sourceEvidence }),
+		).rejects.toThrow("does not preserve source video: presentation timeline");
+	});
+
+	test("continues rejecting backwards presentation timestamps without B-frames", async () => {
+		const input = await fragmentedSource(-33_334);
+		const timing = await readRecordingVideoTiming(input, { timeoutMs: 5000 });
+		expect(timing.videoPacketCount).toBe(31);
+		await expect(inspectRecordingSources(input, null)).rejects.toThrow(
+			"Recording container timing does not match decoded video",
+		);
+	});
+
 	test.each([-1, 1, 100_000])(
 		"preserves fragment boundary clock offsets of %d microseconds",
 		async (offsetTicks) => {
@@ -769,6 +1196,46 @@ describe("source-preserving recording mux", () => {
 		},
 	);
 
+	test("preserves a short audio track that ends before the video starts", async () => {
+		const input = join(directory, "early-audio.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-map",
+			"0:v:0",
+			"-c:v",
+			"copy",
+			"-video_track_timescale",
+			"90000",
+			"-movflags",
+			"empty_moov+frag_keyframe+default_base_moof",
+			input,
+		]);
+		const bytes = await readFile(input);
+		shiftFragmentClocks(bytes, 450000);
+		await writeFile(input, bytes);
+		const timing = await readRecordingVideoTiming(input, { timeoutMs: 5000 });
+		expect(timing.firstTimestampTicks).toBe(450000n);
+		expect(timing.lastTimestampTicks).toBe(897000n);
+		expect(timing.lastDurationTicks).toBe(3000n);
+		const sourceEvidence = await inspectRecordingSources(input, shortAudio);
+		expect(sourceEvidence.audio?.endTime).toBeLessThan(
+			sourceEvidence.video.startTime,
+		);
+		const output = join(directory, "preserved-early-audio.mp4");
+		await muxMediaTracksToMp4(input, shortAudio, output);
+		const verified = await verifyRecording(output, {
+			requireAudio: true,
+			sourceEvidence,
+		});
+		expect(verified.sourcePreserved).toBe(true);
+		expect(verified.video.frameCount).toBe(150);
+		expect(verified.integrity).toEqual(sourceEvidence.integrity);
+	});
+
 	test("preserves an audio tail beyond the video and rejects the old shortest mux", async () => {
 		const input = join(directory, "long-audio.mp4");
 		await generate(input, "sine=frequency=700:sample_rate=48000:duration=6");
@@ -993,6 +1460,98 @@ function expectExited(pid: number) {
 }
 
 describe("recording timing metadata lifetime", () => {
+	test.each(["cancel", "timeout"])(
+		"joins a stalled raw terminal-duration read after %s",
+		async (cause) => {
+			const input = await tiedTimestampSource(`tied-raw-${cause}.mp4`, 2);
+			const bytes = await readFile(input);
+			const identity = '"tied-terminal-read"';
+			let walked = false;
+			const originalNext = EncodedPacketSink.prototype.getNextPacket;
+			const next = spyOn(
+				EncodedPacketSink.prototype,
+				"getNextPacket",
+			).mockImplementation(async function (
+				this: EncodedPacketSink,
+				...args: Parameters<typeof originalNext>
+			) {
+				const packet = await originalNext.apply(this, args);
+				if (!packet) walked = true;
+				return packet;
+			});
+			let began: (() => void) | undefined;
+			const requested = new Promise<void>((resolve) => {
+				began = resolve;
+			});
+			let ended: (() => void) | undefined;
+			const closed = new Promise<void>((resolve) => {
+				ended = resolve;
+			});
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch(request) {
+					expect(request.headers.get("if-match")).toBe(identity);
+					const range = request.headers
+						.get("range")
+						?.match(/^bytes=(\d+)-(\d+)$/);
+					if (!range) throw new Error("Fixture request has no range");
+					const start = Number(range[1]);
+					const end = Number(range[2]) + 1;
+					const body = bytes.subarray(start, end);
+					return new Response(
+						walked
+							? new ReadableStream({
+									start(controller) {
+										controller.enqueue(body.subarray(0, 1));
+										began?.();
+									},
+									cancel() {
+										ended?.();
+									},
+								})
+							: body,
+						{
+							status: 206,
+							headers: {
+								ETag: identity,
+								"Content-Length": String(end - start),
+								"Content-Range": `bytes ${start}-${end - 1}/${bytes.length}`,
+							},
+						},
+					);
+				},
+			});
+			const controller = new AbortController();
+			try {
+				const outcome = readRecordingVideoTiming(
+					`http://127.0.0.1:${server.port}/tied.mp4`,
+					{
+						timeoutMs: cause === "timeout" ? 1000 : 5000,
+						abortSignal: controller.signal,
+						remoteObject: { objectIdentity: identity, fileSize: bytes.length },
+					},
+				).catch((error: unknown) => error);
+				await requested;
+				if (cause === "cancel") controller.abort();
+				const error = await outcome;
+				expect(error).toBeInstanceOf(RecordingTimingError);
+				if (!(error instanceof RecordingTimingError))
+					throw new Error("Stalled raw read unexpectedly succeeded");
+				expect(error.message).toContain(
+					cause === "cancel" ? "cancelled" : "timed out",
+				);
+				expect(error.retryable).toBe(cause === "timeout");
+				await closed;
+			} finally {
+				controller.abort();
+				await server.stop(true);
+				next.mockRestore();
+			}
+		},
+		10_000,
+	);
+
 	test.each(["pre-format", "post-format"])(
 		"joins a cancelled %s metadata read without leaking a rejected read",
 		async (stage) => {

@@ -115,6 +115,7 @@ interface DecodedStream {
 	firstVideoPts?: bigint;
 	lastVideoPts?: bigint;
 	lastVideoEndPts?: bigint;
+	terminalVideoFrameCount?: number;
 	sampleRate?: number;
 	frameCount: number;
 	sampleCount: number;
@@ -185,24 +186,44 @@ function videoTailIntegrity(
 	if (
 		(timing.lastTimestampTicks - timing.firstTimestampTicks) *
 			timeBaseDenominator !==
-		(lastVideoPts - firstVideoPts) * timeBaseNumerator * timeScale
+			(lastVideoPts - firstVideoPts) * timeBaseNumerator * timeScale ||
+		timing.videoPacketCount !== stream.frameCount ||
+		timing.terminalPacketCount !== stream.terminalVideoFrameCount
 	) {
 		throw new Error("Recording container timing does not match decoded video");
+	}
+	if (!/^[a-f0-9]{64}$/.test(timing.packetTimelineSha256)) {
+		throw new Error("Recording container packet timing is missing");
+	}
+	const packets = `packets:${timing.packetTimelineSha256}\n`;
+	if (timing.terminalPacketCount > 1) {
+		if (!timing.terminalPacketSha256) {
+			throw new Error("Recording terminal packets have no content binding");
+		}
+		return `${packets}tails:${timing.terminalPacketCount},${timing.terminalPacketSha256}\n`;
 	}
 	let numerator = timing.lastDurationTicks;
 	let denominator = timeScale;
 	while (denominator !== 0n) {
 		[numerator, denominator] = [denominator, numerator % denominator];
 	}
-	return `tail:${timing.lastDurationTicks / numerator}/${timeScale / numerator}\n`;
+	return `${packets}tail:${timing.lastDurationTicks / numerator}/${timeScale / numerator}\n`;
 }
 
-function decodeLine(line: string, streams: Map<number, DecodedStream>): void {
+function decodeLine(
+	line: string,
+	streams: Map<number, DecodedStream>,
+	allowVideoTies = false,
+): void {
 	if (!line) return;
 	const digest = line.match(/^(\d+),(v|a),SHA256=([a-f0-9]{64})$/);
 	if (digest) {
 		const stream = streams.get(Number(digest[1]));
-		if (!stream || stream.contentSha256) {
+		if (
+			!stream ||
+			stream.contentSha256 ||
+			stream.kind !== (digest[2] === "v" ? "video" : "audio")
+		) {
 			throw new Error("Invalid decoded recording content digest");
 		}
 		stream.contentSha256 = digest[3];
@@ -271,7 +292,12 @@ function decodeLine(line: string, streams: Map<number, DecodedStream>): void {
 	const startTime = pts * stream.timeBase;
 	const duration = ticks * stream.timeBase;
 	const endTime = startTime + duration;
-	if (!Number.isFinite(endTime) || startTime <= stream.previousTime) {
+	if (
+		!Number.isFinite(endTime) ||
+		startTime < stream.previousTime ||
+		((stream.kind === "audio" || !allowVideoTies) &&
+			startTime === stream.previousTime)
+	) {
 		throw new Error("Decoded recording timestamps are invalid");
 	}
 	stream.maximumGap = Math.max(
@@ -284,7 +310,14 @@ function decodeLine(line: string, streams: Map<number, DecodedStream>): void {
 	stream.frameCount++;
 	if (stream.kind === "video") {
 		const timestamp = BigInt(pts);
+		if (stream.lastVideoPts !== undefined && timestamp < stream.lastVideoPts) {
+			throw new Error("Decoded recording timestamps are invalid");
+		}
 		stream.firstVideoPts ??= timestamp;
+		stream.terminalVideoFrameCount =
+			stream.lastVideoPts === timestamp
+				? (stream.terminalVideoFrameCount ?? 0) + 1
+				: 1;
 		stream.lastVideoPts = timestamp;
 		stream.lastVideoEndPts = timestamp + BigInt(ticks);
 		stream.timeline.update(
@@ -316,6 +349,7 @@ function decodeLine(line: string, streams: Map<number, DecodedStream>): void {
 async function readFrameEvidence(
 	stream: ReadableStream<Uint8Array>,
 	streams: Map<number, DecodedStream>,
+	allowVideoTies: boolean,
 ): Promise<void> {
 	const decoder = new TextDecoder();
 	let pending = "";
@@ -326,7 +360,7 @@ async function readFrameEvidence(
 			if (newline > MAX_OUTPUT_LINE_LENGTH) {
 				throw new Error("Recording decoder output exceeded its limit");
 			}
-			decodeLine(pending.slice(0, newline).trim(), streams);
+			decodeLine(pending.slice(0, newline).trim(), streams, allowVideoTies);
 			pending = pending.slice(newline + 1);
 			newline = pending.indexOf("\n");
 		}
@@ -335,13 +369,13 @@ async function readFrameEvidence(
 		}
 	}
 	pending += decoder.decode();
-	decodeLine(pending.trim(), streams);
+	decodeLine(pending.trim(), streams, allowVideoTies);
 }
 
 async function readDecoderErrors(
 	stream: ReadableStream<Uint8Array>,
 	input: string,
-): Promise<string> {
+): Promise<{ error: string; digests: string[] }> {
 	const decoder = new TextDecoder();
 	let output = "";
 	let truncated = false;
@@ -352,14 +386,25 @@ async function readDecoderErrors(
 	}
 	output += decoder.decode();
 	if (truncated) output = output.slice(0, output.lastIndexOf("\n") + 1);
-	return (
-		output
-			.replaceAll(input, "<recording input>")
-			.replace(/https?:\/\/\S+/g, "<redacted URL>")
-			.trim()
-			.slice(-MAX_ERROR_LENGTH) ||
-		(truncated ? "Decoder error output exceeded its limit" : "")
-	);
+	const digests: string[] = [];
+	output = output
+		.split("\n")
+		.filter((line) => {
+			if (!/^\d+,(v|a),SHA256=[a-f0-9]{64}$/.test(line.trim())) return true;
+			digests.push(line.trim());
+			return false;
+		})
+		.join("\n");
+	return {
+		digests,
+		error:
+			output
+				.replaceAll(input, "<recording input>")
+				.replace(/https?:\/\/\S+/g, "<redacted URL>")
+				.trim()
+				.slice(-MAX_ERROR_LENGTH) ||
+			(truncated ? "Decoder error output exceeded its limit" : ""),
+	};
 }
 
 function validateEvidence(
@@ -624,6 +669,25 @@ async function decodeRecording(
 			true,
 		);
 	}
+	const outputOptions = [
+		"-map",
+		"0:v:0",
+		...(sourceAudioInput === null
+			? []
+			: ["-map", sourceAudioInput ? "1:a:0" : "0:a:0?"]),
+		"-fps_mode",
+		"passthrough",
+		"-enc_time_base:v",
+		"-1",
+		"-c:v",
+		"rawvideo",
+		"-c:a",
+		"pcm_f64le",
+		"-threads",
+		"1",
+		"-max_interleave_delta",
+		"1",
+	];
 	const proc = registerSubprocess(
 		spawn({
 			cmd: [
@@ -668,24 +732,16 @@ async function decodeRecording(
 							sourceAudioInput,
 						]
 					: []),
-				"-map",
-				"0:v:0",
-				...(sourceAudioInput === null
-					? []
-					: ["-map", sourceAudioInput ? "1:a:0" : "0:a:0?"]),
-				"-fps_mode",
-				"passthrough",
-				"-enc_time_base:v",
-				"-1",
-				"-c:v",
-				"rawvideo",
-				"-c:a",
-				"pcm_f64le",
-				"-threads",
-				"1",
+				...outputOptions,
 				"-f",
-				"tee",
-				"[f=framecrc]pipe:1|[f=streamhash:hash=sha256]pipe:1",
+				"framecrc",
+				"pipe:1",
+				...outputOptions,
+				"-f",
+				"streamhash",
+				"-hash",
+				"sha256",
+				"pipe:2",
 			],
 			stdin: "ignore",
 			stdout: "pipe",
@@ -715,16 +771,21 @@ async function decodeRecording(
 		stop();
 	}, decodeBudgetMs);
 	const streams = new Map<number, DecodedStream>();
-	const frames = readFrameEvidence(proc.stdout, streams);
+	const frames = readFrameEvidence(
+		proc.stdout,
+		streams,
+		videoTiming !== undefined,
+	);
 	const errors = readDecoderErrors(proc.stderr, input);
 	let result: RecordingSourceEvidence;
 	try {
 		if (options.abortSignal?.aborted) cancel();
-		const [, stderr, exitCode] = await Promise.all([
+		const [, diagnostics, exitCode] = await Promise.all([
 			frames,
 			errors,
 			proc.exited,
 		]);
+		const stderr = diagnostics.error;
 		if (failure) throw failure;
 		if (exitCode !== 0 || stderr || proc.signalCode) {
 			throw new RecordingVerificationError(
@@ -735,6 +796,7 @@ async function decodeRecording(
 					),
 			);
 		}
+		for (const digest of diagnostics.digests) decodeLine(digest, streams);
 		result = validateEvidence(
 			streams,
 			options,
