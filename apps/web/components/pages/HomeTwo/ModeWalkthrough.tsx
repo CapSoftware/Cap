@@ -50,10 +50,6 @@ type Step = {
 	Icon: ComponentType<{ className?: string }>;
 };
 
-/**
- * Static cards for the stacked fallback (mobile, and anyone who prefers
- * reduced motion). The pinned experience is the DesktopDemo.
- */
 const STEPS: Step[] = [
 	{
 		key: "instant",
@@ -160,8 +156,6 @@ const StackedSteps = ({ className }: { className?: string }) => (
 		</div>
 	</div>
 );
-
-/* -------------------------------------------------------------------------- */
 
 export const ModeWalkthrough = () => {
 	// `false` on the server and on the first client render, so the markup the

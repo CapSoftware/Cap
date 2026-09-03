@@ -21,8 +21,6 @@ import {
 	useLoop,
 } from "./shared";
 
-/* ------------------------------------------------------------ 3D camera -- */
-
 const THREE_D_DURATION = 9000;
 
 const threeDPoseAt = (t: number) => {
@@ -168,8 +166,6 @@ export const ThreeDVisual = ({ playing }: { playing: boolean }) => {
 		</CanvasStage>
 	);
 };
-
-/* --------------------------------------------------------------- canvas -- */
 
 const CANVAS_DURATION = 10000;
 const WALLS = [
@@ -338,8 +334,6 @@ export const CanvasVisual = ({ playing }: { playing: boolean }) => {
 		</CanvasStage>
 	);
 };
-
-/* --------------------------------------------------------------- grades -- */
 
 type Grade = {
 	name: string;
@@ -552,8 +546,6 @@ export const GradesVisual = ({ playing }: { playing: boolean }) => {
 		</div>
 	);
 };
-
-/* ---------------------------------------------------------------- clips -- */
 
 const CLIPS_DURATION = 10000;
 const PANEL = { x: 16, y: 206, w: 568, h: 153 };

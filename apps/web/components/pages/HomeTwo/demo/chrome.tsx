@@ -2,16 +2,8 @@
 
 import { classNames } from "@cap/utils/helpers";
 
-/**
- * Window decorations for the fake desktop. macOS gets traffic lights on the
- * left; Windows gets the caption controls Cap Desktop actually draws, traced
- * from `apps/desktop/src/components/titlebar/controls/CaptionControlsWindows11.tsx`
- * (46px cells, 10px glyphs, #c42b1c on the close hover).
- */
-
 export const TrafficLights = ({
 	size = 12,
-	/** The recorder window only offers close + zoom. */
 	minimize = true,
 	className,
 }: {
@@ -29,8 +21,6 @@ export const TrafficLights = ({
 		))}
 	</div>
 );
-
-/* ------------------------------------------------------- windows glyphs -- */
 
 const MinimizeGlyph = () => (
 	<svg aria-hidden="true" width="10" height="1" viewBox="0 0 10 1" fill="none">
@@ -71,10 +61,6 @@ const CloseGlyph = () => (
 	</svg>
 );
 
-/**
- * Minimise / maximise / close, stretched to the titlebar's height the way
- * Windows does. `light` flips the glyph colour for dark titlebars.
- */
 export const WindowsCaptionControls = ({
 	light,
 	className,
@@ -113,14 +99,6 @@ export const WindowsCaptionControls = ({
 	);
 };
 
-/* ---------------------------------------------------------- os switcher -- */
-
-/**
- * The OS badge in the corner of the fake desktop doubles as the switch
- * between the two shells: the Apple glyph in the menu bar, the Start button
- * on the taskbar. A tooltip on hover says so, since nothing else on the
- * chrome is clickable.
- */
 export const OsSwitchButton = ({
 	children,
 	label,
@@ -131,7 +109,6 @@ export const OsSwitchButton = ({
 	onClick,
 }: {
 	children: React.ReactNode;
-	/** Screen-reader label, e.g. "Switch the demo to Windows". */
 	label: string;
 	tooltip: string;
 	side?: "below" | "above";

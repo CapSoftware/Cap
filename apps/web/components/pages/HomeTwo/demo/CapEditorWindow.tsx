@@ -37,12 +37,6 @@ import { TrafficLights, WindowsCaptionControls } from "./chrome";
 import { useVideoAttrs, VIDEO_POSTERS } from "./media";
 import { useIsWindowsDemo } from "./platform";
 
-/**
- * Shell replica of the Cap desktop editor (light theme, 1275×800 native
- * layout scaled to fit). Layout, colours and copy mirror
- * apps/desktop/src/routes/editor/*.
- */
-
 const C = {
 	gray1: "#fcfcfc",
 	gray2: "#f9f9f9",
@@ -145,7 +139,6 @@ const SliderRow = ({ fill, anchor }: { fill: number; anchor?: string }) => (
 	</div>
 );
 
-/** Little sidebar tab. */
 const Tab = ({
 	icon,
 	selected,
@@ -176,7 +169,6 @@ const Tab = ({
 	</span>
 );
 
-/** Deterministic mic waveform for the clip segment. */
 const WAVE_HEIGHTS = Array.from({ length: 90 }, (_, i) => {
 	const a = Math.sin(i * 0.55) * 0.5 + 0.5;
 	const b = Math.sin(i * 1.7 + 2) * 0.5 + 0.5;
@@ -185,7 +177,6 @@ const WAVE_HEIGHTS = Array.from({ length: 90 }, (_, i) => {
 
 export type EditorUi = {
 	visible: boolean;
-	/** Which wallpaper swatch is active (the visitor clicks them). */
 	bgIndex: number;
 	playing: boolean;
 	padding?: number;
@@ -252,11 +243,8 @@ export const CapEditorWindow = ({
 				}}
 			>
 				<div className="flex h-full w-full flex-col">
-					{/* ------------------------------------------------- header (56px) */}
 					<div className="flex h-14 shrink-0 items-center">
 						<div className="flex items-center gap-2 px-4">
-							{/* macOS overlay traffic lights; on Windows the caption
-							    controls sit at the far right of the header instead. */}
 							{isWindows ? null : <TrafficLights className="mr-3" />}
 							<EditorButton>
 								<CapTrash className="size-5" />
@@ -333,14 +321,11 @@ export const CapEditorWindow = ({
 						</div>
 					</div>
 
-					{/* --------------------------------------------------- content row */}
 					<div className="flex min-h-0 flex-1 px-2">
-						{/* Player card */}
 						<div
 							className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border"
 							style={{ borderColor: C.gray3, background: C.gray1 }}
 						>
-							{/* player toolbar */}
 							<div className="flex items-center justify-between p-3">
 								<div className="flex items-center gap-3">
 									<EditorButton className="w-28">
@@ -388,7 +373,6 @@ export const CapEditorWindow = ({
 								</div>
 							</div>
 
-							{/* canvas */}
 							<div className="relative min-h-0 flex-1 px-4 pb-2">
 								<div
 									className="relative mx-auto h-full overflow-hidden"
@@ -447,7 +431,6 @@ export const CapEditorWindow = ({
 								</div>
 							</div>
 
-							{/* transport bar */}
 							<div className="relative flex items-center p-5">
 								<div className="flex flex-1 items-center">
 									<span
@@ -518,7 +501,6 @@ export const CapEditorWindow = ({
 								</div>
 							</div>
 
-							{/* resize handle strip */}
 							<div
 								className="flex h-4 flex-col items-center justify-center gap-0.5 border-t"
 								style={{
@@ -537,7 +519,6 @@ export const CapEditorWindow = ({
 							</div>
 						</div>
 
-						{/* Config sidebar */}
 						<div
 							className="ml-2 flex w-[416px] shrink-0 flex-col overflow-hidden rounded-xl border"
 							style={{ borderColor: C.gray3, background: C.gray1 }}
@@ -655,13 +636,11 @@ export const CapEditorWindow = ({
 						</div>
 					</div>
 
-					{/* ------------------------------------------------------ timeline */}
 					<div
 						data-demo-anchor="editor-timeline"
 						className="relative shrink-0 px-4 pt-8"
 						style={{ height: 236 }}
 					>
-						{/* minimap */}
 						<div
 							className="absolute left-32 right-4 top-3 h-3 rounded-full"
 							style={{ background: "rgba(217,217,217,0.35)" }}
@@ -676,7 +655,6 @@ export const CapEditorWindow = ({
 						</div>
 
 						<div className="flex gap-2">
-							{/* gutter */}
 							<div className="flex w-[104px] shrink-0 flex-col justify-end pb-1">
 								<span
 									className="flex h-8 w-full items-center justify-center gap-1.5 rounded-lg text-[0.6875rem] font-medium text-white"
@@ -691,7 +669,6 @@ export const CapEditorWindow = ({
 									<LucideChevronDown className="size-2.5 text-white/70" />
 								</span>
 							</div>
-							{/* ruler */}
 							<div
 								className="relative h-8 flex-1 text-xs"
 								style={{ color: C.gray9 }}
@@ -709,7 +686,6 @@ export const CapEditorWindow = ({
 							</div>
 						</div>
 
-						{/* video track */}
 						<div className="mt-2 flex gap-2">
 							<div
 								className="flex h-[52px] w-[104px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl text-white"
@@ -738,7 +714,6 @@ export const CapEditorWindow = ({
 											<span className="ml-1 rounded bg-white/15 px-1">1x</span>
 										</span>
 									</div>
-									{/* mic waveform */}
 									<div className="absolute inset-x-0 bottom-0 flex h-3 items-end gap-px px-1">
 										{WAVE_HEIGHTS.map((h, i) => (
 											<span
@@ -756,7 +731,6 @@ export const CapEditorWindow = ({
 							</div>
 						</div>
 
-						{/* zoom track */}
 						<div className="mt-2 flex gap-2">
 							<div
 								className="flex h-[52px] w-[104px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl text-white"
@@ -807,7 +781,6 @@ export const CapEditorWindow = ({
 							</div>
 						</div>
 
-						{/* playhead */}
 						<div
 							ref={playheadRef}
 							className="pointer-events-none absolute bottom-2 top-6 will-change-transform"

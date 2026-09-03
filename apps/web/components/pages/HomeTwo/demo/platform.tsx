@@ -21,7 +21,6 @@ export const useDemoPlatform = () => useContext(DemoPlatformContext);
 
 export const useIsWindowsDemo = () => useDemoPlatform() === "windows";
 
-/** System UI stack per platform, for the OS chrome (not the Cap windows). */
 export const OS_FONT = {
 	macos:
 		"-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif",

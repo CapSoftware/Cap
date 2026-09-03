@@ -9,11 +9,6 @@ interface NavbarProps {
 	stars?: string;
 }
 
-/**
- * Flat, full-bleed header: logo and links on the left, a text link plus an
- * outlined and a filled action on the right. It sits flush at the top of the
- * viewport so page content passes underneath it rather than around a pill.
- */
 export const Navbar = ({ stars }: NavbarProps) => {
 	return (
 		<NavbarFrame>

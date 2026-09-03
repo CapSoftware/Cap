@@ -81,7 +81,6 @@ const WindowsGlyph = ({ className }: { className?: string }) => (
 	</svg>
 );
 
-/** Small muted link to /download for the platforms not shown on the button. */
 const AltIcon = ({
 	label,
 	children,
@@ -101,8 +100,7 @@ const AltIcon = ({
 
 export const Hero = () => {
 	const { platform, isIntel } = useDetectPlatform();
-	// Default the display to macOS while detection resolves (same pattern as
-	// the live homepage Header): majority platform, identical button size.
+
 	const displayPlatform = platform ?? "macos";
 	const isWindows = displayPlatform === "windows";
 	const isLinux = displayPlatform === "linux";
@@ -112,10 +110,6 @@ export const Hero = () => {
 		: getDownloadUrl(displayPlatform, isIntel);
 
 	return (
-		// On desktop the hero takes the fold minus the laptop's peek and centres
-		// itself in it, so the space above and below the block stays even instead
-		// of piling up under the buttons. Capped, because on a tall monitor a
-		// viewport-tall hero just reads as a hole.
 		<section className="relative px-5 pb-12 pt-12 sm:pt-14 md:pb-4 md:pt-[56px]">
 			<span
 				data-header-sentinel
@@ -162,8 +156,7 @@ export const Hero = () => {
 						)}
 						Download free for {platformName}
 					</Link>
-					{/* Scrolls to the demo AND starts the tour, so the click has an
-					    unmistakable payoff instead of landing on an idle laptop. */}
+
 					<button
 						type="button"
 						onClick={() => {

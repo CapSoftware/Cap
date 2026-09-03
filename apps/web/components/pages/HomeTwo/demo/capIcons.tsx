@@ -8,9 +8,6 @@
 
 type IconProps = { className?: string; style?: React.CSSProperties };
 
-/* ------------------------------------------------------------------ brand -- */
-
-/** cap:logo-full — rounded-square mark + "Cap" wordmark (light theme). */
 export const CapLogoFull = ({ className, style }: IconProps) => (
 	<svg
 		aria-hidden="true"
@@ -48,7 +45,6 @@ export const CapLogoFull = ({ className, style }: IconProps) => (
 	</svg>
 );
 
-/** cap:logo — just the rounded-square mark with concentric circles. */
 export const CapLogoMark = ({ className, style }: IconProps) => (
 	<svg
 		aria-hidden="true"
@@ -74,9 +70,6 @@ export const CapLogoMark = ({ className, style }: IconProps) => (
 	</svg>
 );
 
-/* ------------------------------------------------------------- mode icons -- */
-
-/** cap:instant — lightning bolt. */
 export const CapInstant = ({ className, style }: IconProps) => (
 	<svg
 		aria-hidden="true"
@@ -92,7 +85,6 @@ export const CapInstant = ({ className, style }: IconProps) => (
 	</svg>
 );
 
-/** cap:film-cut — clapperboard. */
 export const CapFilmCut = ({ className, style }: IconProps) => (
 	<svg
 		aria-hidden="true"
@@ -108,7 +100,6 @@ export const CapFilmCut = ({ className, style }: IconProps) => (
 	</svg>
 );
 
-/** cap:screenshot. */
 export const CapScreenshot = ({ className, style }: IconProps) => (
 	<svg
 		aria-hidden="true"
@@ -120,8 +111,6 @@ export const CapScreenshot = ({ className, style }: IconProps) => (
 		<path d="M21,2H3A1,1,0,0,0,2,3V21a1,1,0,0,0,1,1H21a1,1,0,0,0,1-1V3A1,1,0,0,0,21,2ZM20,14l-3-3-5,5-2-2L4,20V4H20ZM6,8.5A2.5,2.5,0,1,1,8.5,11,2.5,2.5,0,0,1,6,8.5Z" />
 	</svg>
 );
-
-/* -------------------------------------------------------------- cap 20×20 -- */
 
 export const CapCamera = ({ className, style }: IconProps) => (
 	<svg
@@ -300,7 +289,6 @@ export const CapTrash = ({ className, style }: IconProps) => (
 	</svg>
 );
 
-/** cap:settings — the 20×20 stroked gear used in the recording toolbar. */
 export const CapSettingsGear = ({ className, style }: IconProps) => (
 	<svg
 		aria-hidden="true"
@@ -324,7 +312,6 @@ export const CapSettingsGear = ({ className, style }: IconProps) => (
 	</svg>
 );
 
-/** cap:gear — 16×16 filled gear (the round settings button on the target overlay). */
 export const CapGear = ({ className, style }: IconProps) => (
 	<svg
 		aria-hidden="true"
@@ -371,8 +358,6 @@ export const CapMoreVertical = ({ className, style }: IconProps) => (
 		/>
 	</svg>
 );
-
-/* -------------------------------------------- editor icons (cap package) -- */
 
 export const CapClapperboard = ({ className, style }: IconProps) => (
 	<svg
@@ -645,8 +630,6 @@ export const CapPause = ({ className, style }: IconProps) => (
 	</svg>
 );
 
-/* -------------------------------------------- target + third-party icons -- */
-
 /** ph:monitor-bold — the system audio row icon. */
 export const PhMonitorBold = ({ className, style }: IconProps) => (
 	<svg
@@ -883,12 +866,6 @@ export const LucideLoader = ({ className, style }: IconProps) => (
 	</Lucide>
 );
 
-/* ----------------------------------------------------------------- cursor -- */
-
-/**
- * cap:cursor-macos — the real macOS arrow, white outline + black body with
- * a soft drop shadow, exactly as shipped in the desktop icon set.
- */
 export const MacCursor = ({ className, style }: IconProps) => (
 	<svg
 		aria-hidden="true"

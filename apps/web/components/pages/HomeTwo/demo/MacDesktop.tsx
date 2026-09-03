@@ -11,14 +11,6 @@ import {
 } from "./chrome";
 import { useIsWindowsDemo } from "./platform";
 
-/**
- * The fake macOS environment the demo plays inside: menu bar, desktop files,
- * dock, and the little app window that gets recorded. All chrome is drawn in
- * CSS/SVG so it stays crisp at any scale.
- */
-
-/* ------------------------------------------------------------- menu bar -- */
-
 const MenuGlyph = ({ children }: { children: React.ReactNode }) => (
 	<span className="flex h-full items-center opacity-80">{children}</span>
 );
@@ -55,7 +47,6 @@ export const MenuBar = ({
 		))}
 		<span className="flex-1" />
 
-		{/* macOS screen-recording indicator */}
 		<span
 			className={classNames(
 				"flex items-center gap-1 rounded-full px-1.5 py-[1px] transition-opacity duration-300",
@@ -78,7 +69,6 @@ export const MenuBar = ({
 			</svg>
 		</span>
 
-		{/* battery */}
 		<MenuGlyph>
 			<svg aria-hidden="true" viewBox="0 0 26 12" className="h-[11px] w-auto">
 				<rect
@@ -99,7 +89,6 @@ export const MenuBar = ({
 				/>
 			</svg>
 		</MenuGlyph>
-		{/* wifi */}
 		<MenuGlyph>
 			<svg aria-hidden="true" viewBox="0 0 16 12" className="h-[11px] w-auto">
 				<path d="M8 10.8 1.2 4a9.6 9.6 0 0 1 13.6 0Z" fill="none" />
@@ -109,7 +98,6 @@ export const MenuBar = ({
 				/>
 			</svg>
 		</MenuGlyph>
-		{/* search */}
 		<MenuGlyph>
 			<svg aria-hidden="true" viewBox="0 0 24 24" className="size-[13px]">
 				<circle
@@ -128,7 +116,6 @@ export const MenuBar = ({
 				/>
 			</svg>
 		</MenuGlyph>
-		{/* control centre */}
 		<MenuGlyph>
 			<svg aria-hidden="true" viewBox="0 0 24 24" className="size-[13px]">
 				<rect
@@ -160,8 +147,6 @@ export const MenuBar = ({
 		</span>
 	</div>
 );
-
-/* -------------------------------------------------------- desktop files -- */
 
 const FolderIcon = () => (
 	<svg
@@ -238,8 +223,6 @@ export const DesktopFiles = () => (
 		<DesktopFile icon={<ImageFileIcon />} label="Q3 launch.png" />
 	</div>
 );
-
-/* ----------------------------------------------------------------- dock -- */
 
 const FinderIcon = () => (
 	<svg aria-hidden="true" viewBox="0 0 48 48" className="size-full">
@@ -387,8 +370,6 @@ export const Dock = () => (
 	</div>
 );
 
-/* -------------------------------------------- the window being recorded -- */
-
 const SkeletonBar = ({
 	w,
 	tone = "rgba(17,17,17,0.08)",
@@ -404,11 +385,6 @@ const SkeletonBar = ({
 	/>
 );
 
-/**
- * A generic macOS app window (a little analytics dashboard) that plays the
- * part of "the thing you're recording". The inner content scrolls via
- * `scrollRef` while the demo cursor "works".
- */
 export const ContentWindow = ({
 	width,
 	height,
@@ -431,7 +407,6 @@ export const ContentWindow = ({
 				boxShadow: "0 22px 60px rgba(0,0,0,0.18), 0 3px 12px rgba(0,0,0,0.08)",
 			}}
 		>
-			{/* titlebar */}
 			<div
 				className={classNames(
 					"flex h-10 items-center gap-2 border-b",
@@ -479,9 +454,7 @@ export const ContentWindow = ({
 				)}
 			</div>
 
-			{/* app body */}
 			<div className="flex h-[calc(100%-40px)]">
-				{/* sidebar */}
 				<div
 					className="flex w-[52px] shrink-0 flex-col items-center gap-4 border-r pt-4"
 					style={{ borderColor: "rgba(0,0,0,0.06)", background: "#fafbfc" }}
@@ -500,7 +473,6 @@ export const ContentWindow = ({
 					))}
 				</div>
 
-				{/* scrollable main */}
 				<div className="relative flex-1 overflow-hidden">
 					<div
 						ref={scrollRef}
@@ -533,7 +505,6 @@ export const ContentWindow = ({
 								))}
 							</div>
 
-							{/* chart card */}
 							<div
 								className="rounded-xl border p-4"
 								style={{ borderColor: "rgba(0,0,0,0.08)" }}
@@ -560,7 +531,6 @@ export const ContentWindow = ({
 								</div>
 							</div>
 
-							{/* table rows (revealed as the cursor scrolls) */}
 							<div
 								className="rounded-xl border"
 								style={{ borderColor: "rgba(0,0,0,0.08)" }}

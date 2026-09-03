@@ -2,11 +2,6 @@ import { classNames } from "@cap/utils/helpers";
 import type { ReactNode } from "react";
 import { EYEBROW, INK } from "./theme";
 
-/**
- * 12px uppercase mono eyebrow with a small accent square, the way Intercom
- * marks its sections. `color` covers the dark band; `accent` picks up the
- * section's mode hue.
- */
 export const Eyebrow = ({
 	children,
 	accent = "#8DBCF0",

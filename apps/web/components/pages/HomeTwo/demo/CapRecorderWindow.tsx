@@ -27,28 +27,15 @@ import {
 import { TrafficLights, WindowsCaptionControls } from "./chrome";
 import { useIsWindowsDemo } from "./platform";
 
-/**
- * Pixel replica of the Cap desktop recorder window (compact 330×395 layout,
- * light theme) — markup and values mirror
- * apps/desktop/src/routes/(window-chrome)/new-main/index.tsx and friends.
- * In the interactive demo the controls are real buttons: the mode pills,
- * Display tile, and camera row report clicks up to the orchestrator, and
- * hover states (including the mode hovercards) come from the visitor's own
- * pointer.
- */
-
 export type RecorderMode = "instant" | "studio";
 
 export type RecorderUi = {
 	visible: boolean;
 	mode: RecorderMode;
-	/** Display target selected (blue state on the Display tile). */
 	displaySelected: boolean;
-	/** Camera row populated + On pill. */
 	cameraOn: boolean;
 };
 
-/* Desktop palette (Radix light values used by the app). */
 const C = {
 	gray1: "#fcfcfc",
 	gray2: "#f9f9f9",
@@ -287,7 +274,6 @@ export const CapRecorderWindow = ({
 					boxShadow: "0 28px 80px rgba(0,0,0,0.26), 0 4px 18px rgba(0,0,0,0.1)",
 				}}
 			>
-				{/* Titlebar */}
 				<div
 					className="flex h-9 w-full shrink-0 items-center border-b"
 					style={{
@@ -295,8 +281,6 @@ export const CapRecorderWindow = ({
 						borderColor: "rgba(0,0,0,0.08)",
 					}}
 				>
-					{/* macOS: close + zoom only, the way the recorder ships. Windows
-					    puts its caption controls at the far end instead. */}
 					{isWindows ? null : (
 						<TrafficLights
 							size={14}
@@ -333,9 +317,7 @@ export const CapRecorderWindow = ({
 					{isWindows ? <WindowsCaptionControls className="h-9" /> : null}
 				</div>
 
-				{/* Body */}
 				<div className="flex min-h-0 flex-1 flex-col gap-2 px-[13px] pb-[8px]">
-					{/* Logo row + mode selector */}
 					<div className="mb-[6px] mt-[16px] flex items-center justify-between">
 						<div className="flex items-center space-x-1">
 							<CapLogoFull className="h-auto w-[92px]" />
@@ -399,7 +381,6 @@ export const CapRecorderWindow = ({
 								/>
 							</ModeButton>
 
-							{/* Mode hovercard (bottom-end, gutter 12) */}
 							<div
 								className={classNames(
 									"pointer-events-none absolute right-0 top-[calc(100%+12px)] z-20 transition-[opacity,transform] duration-150",
@@ -439,7 +420,6 @@ export const CapRecorderWindow = ({
 						</div>
 					</div>
 
-					{/* Capture targets */}
 					<div className="flex w-full flex-col gap-2 text-xs">
 						<div className="flex w-full flex-row items-stretch gap-2">
 							<TargetTile
@@ -471,7 +451,6 @@ export const CapRecorderWindow = ({
 						</div>
 					</div>
 
-					{/* Device rows */}
 					<div className="space-y-2">
 						<DeviceRow
 							icon={<CapCamera className="size-4" />}

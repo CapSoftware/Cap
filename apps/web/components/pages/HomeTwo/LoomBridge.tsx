@@ -11,11 +11,6 @@ import {
 	MODE_THEME,
 } from "./theme";
 
-/**
- * The Loom-switcher bridge. The comparison cluster is the best-converting
- * message on the site, so it earns a dedicated moment on the homepage:
- * one-click library import plus the standing MIGRATE20 offer.
- */
 export const LoomBridge = () => (
 	<section className="px-5 pb-4 pt-2">
 		<div

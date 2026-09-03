@@ -10,31 +10,11 @@ import {
 import { MacCursor, WindowsCursor } from "./cursors";
 import { H_HERO, INK, MODE_THEME, type ModeKey } from "./theme";
 
-/**
- * The hero headline is a three-slot machine: capture verb, middle beat,
- * payoff. The slots keep their rhythm while the words are revised, so one
- * sentence re-reads as a different mode.
- *
- *   Record.       Edit.        Share.           (at rest)
- *   Record.       Stop.        Instant Share.   (Instant)
- *   Record.       Edit.        Export.          (Studio)
- *   Screenshot.   Beautify.    Paste.           (Screenshot)
- *
- * Nothing moves on its own: the mode bar sits above the line from the first
- * paint with a cursor leaning in beside it, and you click a mode to watch
- * the line get revised. The revision is staged like an edit on paper: a rule
- * strikes through the word in the incoming mode's colour, the struck word
- * lifts away, and the replacement rises into the gap while the slot width
- * glides so the line re-centres. Words that survive the change are never
- * struck, so you see exactly what the mode changes, which is why Studio only
- * crosses out the last word.
- */
-
 type SlideKey = ModeKey | "all";
 
 type Slide = {
 	key: SlideKey;
-	/** [capture, middle, payoff] */
+
 	words: [string, string, string];
 };
 
@@ -45,12 +25,11 @@ const SLIDES: Slide[] = [
 	{ key: "screenshot", words: ["Screenshot.", "Beautify.", "Paste."] },
 ];
 
-/** The cursor's one line: it invites the click, then retires once you take it. */
 const NUDGE = "Click me \u{1F440}";
 const NUDGE_TOUCH = "Tap me \u{1F440}";
 const TOUCH_QUERY = "(max-width: 767px)";
 const TYPE_MS = 26;
-/** The cursor leans in first, then starts talking. */
+
 const NUDGE_AT = 520;
 const TYPE_AT = NUDGE_AT + 260;
 
@@ -73,24 +52,19 @@ const PILL_ICON = {
 	screenshot: ScreenshotIcon,
 } as const;
 
-/* --------------------------------------------------------------- timing -- */
-
-/** Per-slot head start, so the revision runs left to right down the line. */
 const SLOT_DELAY = [0, 120, 240];
-/** Rule sweeps across the word. */
+
 const STRIKE_MS = 260;
-/** Beat where the struck word just sits there, crossed out. */
+
 const HOLD_MS = 110;
-/** Struck word (and its rule) lift away. */
+
 const LIFT_MS = 260;
-/** Replacement rises in, overlapping the lift so the two read as one move. */
+
 const RISE_MS = 520;
 
 const LIFT_AT = STRIKE_MS + HOLD_MS;
 const RISE_AT = LIFT_AT + 150;
 const WIDTH_AT = LIFT_AT + 60;
-
-/* ------------------------------------------------------------------ slot -- */
 
 type Departing = { text: string; color: string; id: number };
 
@@ -104,9 +78,9 @@ const Slot = ({
 	animate,
 }: {
 	text: string;
-	/** Ink for most slots, the mode's colour for the payoff. */
+
 	color: string;
-	/** Colour of the cross-out rule: the incoming mode's. */
+
 	strike: string;
 	delay: number;
 	animate: boolean;
@@ -121,15 +95,14 @@ const Slot = ({
 		gen: 0,
 		from: null,
 	}));
-	// Holds the colour the slot was painted in for the word now leaving.
+
 	const paintedColor = useRef(color);
 
 	if (swap.text !== text) {
 		setSwap({
 			text,
 			gen: swap.gen + 1,
-			// A word that survives the mode change is never struck out: it just
-			// stays put while its neighbours are revised around it.
+
 			from: animate
 				? { text: swap.text, color: paintedColor.current, id: swap.gen + 1 }
 				: null,
@@ -183,7 +156,6 @@ const Slot = ({
 				transitionDelay: `${delay + WIDTH_AT}ms`,
 			}}
 		>
-			{/* Sets the slot's height and its natural (target) width. */}
 			<span ref={ghostRef} className="ht-slot-ghost" aria-hidden="true">
 				{text}
 			</span>
@@ -220,8 +192,6 @@ const Slot = ({
 	);
 };
 
-/* -------------------------------------------------------------- headline -- */
-
 export const HeroHeadline = () => {
 	const { platform } = useDetectPlatform();
 	const [index, setIndex] = useState(0);
@@ -231,8 +201,6 @@ export const HeroHeadline = () => {
 	const [asked, setAsked] = useState(true);
 	const [reduced, setReduced] = useState(false);
 
-	// Match the download button: assume macOS while detection resolves, so the
-	// arrow never swaps shape under the reader.
 	const Arrow = platform === "windows" ? WindowsCursor : MacCursor;
 
 	useEffect(() => {
@@ -243,8 +211,6 @@ export const HeroHeadline = () => {
 		return () => query.removeEventListener("change", sync);
 	}, []);
 
-	// The cursor leans in, then types its line. Reduced motion gets both at
-	// once, already finished.
 	useEffect(() => {
 		const text = window.matchMedia(TOUCH_QUERY).matches ? NUDGE_TOUCH : NUDGE;
 		setNudgeText(text);
@@ -275,11 +241,9 @@ export const HeroHeadline = () => {
 	const theme = slide.key === "all" ? null : MODE_THEME[slide.key];
 	const accent = theme ? theme.glyph : INK;
 
-	// Clicking the mode you're already on puts the plain line back, so you can
-	// always see what Cap changed.
 	const pick = (target: number) => {
 		setIndex((current) => (current === target ? 0 : target));
-		// The cursor and its bubble have done their job the moment you click.
+
 		setAsked(false);
 	};
 
@@ -318,9 +282,6 @@ export const HeroHeadline = () => {
 					})}
 				</div>
 
-				{/* Nothing cycles on its own, so the cursor is what says the line is
-				    yours to change. It retires as soon as you take it up on the
-				    offer. */}
 				<span
 					aria-hidden="true"
 					className={`ht-nudge ${nudge && asked ? "is-on" : ""}`}
@@ -392,8 +353,7 @@ const CSS = `
 }
 .ht-layer > span { position: relative; display: inline-block; }
 
-/* The cross-out rule, drawn through the x-height and running a hair past
-   the word at both ends the way a pen would. */
+
 .ht-strike {
 	position: absolute;
 	left: -0.04em;
@@ -417,7 +377,7 @@ const CSS = `
 .ht-out { animation: ht-out ${LIFT_MS}ms cubic-bezier(0.4, 0, 0.75, 0.2) both; }
 .ht-in { animation: ht-in ${RISE_MS}ms cubic-bezier(0.18, 0.9, 0.22, 1) both; }
 
-/* Caret for the nudge as it types itself out. */
+
 .ht-caret {
 	display: inline-block;
 	width: 1.5px;
@@ -429,8 +389,7 @@ const CSS = `
 }
 @keyframes ht-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
 
-/* The cursor leaning in beside the mode bar. Hidden on phones, where there
-   is no room beside a wrapped bar and no cursor to speak of on touch. */
+
 .ht-nudge {
 	display: block;
 	position: absolute;
@@ -449,8 +408,7 @@ const CSS = `
 	opacity: 1;
 	transform: translate3d(0, 0, 0) scale(1);
 }
-/* Bubble and cursor sit side by side, the tail on the bubble's right edge
-   reaching across the gap to the arrow. */
+
 .ht-nudge-float {
 	display: flex;
 	align-items: flex-start;
@@ -471,10 +429,7 @@ const CSS = `
 	height: auto;
 	filter: drop-shadow(0 2px 5px rgba(17, 17, 17, 0.28));
 }
-/* An iMessage bubble sitting to the left of the cursor with its tail aimed
-   back at it. The mode bar and the page behind it are all white, so the chip
-   needs its own colour to land, and it stays a size under the mode toggles
-   (13px) so it reads as an aside rather than a fourth control. */
+
 .ht-nudge-chip {
 	position: relative;
 	display: block;

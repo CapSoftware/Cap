@@ -20,12 +20,6 @@ import {
 	type ModeTheme,
 } from "./theme";
 
-/**
- * The modes, explained side by side. What happens after you press record
- * depends entirely on which mode you picked, so each card walks its own
- * capture-to-shared path instead of pretending there is one workflow.
- */
-
 type Mode = {
 	key: ModeKey;
 	name: string;

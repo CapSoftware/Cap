@@ -38,7 +38,6 @@ export const WindowsCursor = ({ className }: CursorProps) => (
 	</svg>
 );
 
-/** Aspect ratio of each pointer, so a caller can size by width alone. */
 export const CURSOR_RATIO = { macos: 17 / 24, windows: 18 / 25 } as const;
 
 export const PlatformCursor = ({

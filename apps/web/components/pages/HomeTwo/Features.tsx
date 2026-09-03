@@ -22,12 +22,6 @@ import {
 	type ModeKey,
 } from "./theme";
 
-/**
- * The homepage's "built for how you actually work" grid, in the new type and
- * colour system. Same eight promises, one accent per card so the row reads in
- * the four mode hues rather than one flat block.
- */
-
 type Feature = {
 	title: string;
 	body: string;

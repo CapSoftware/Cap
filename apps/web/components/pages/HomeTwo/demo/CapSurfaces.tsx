@@ -24,19 +24,6 @@ import {
 import { useVideoAttrs, VIDEO_POSTERS } from "./media";
 import { OS_FONT, useIsWindowsDemo } from "./platform";
 
-/**
- * The Cap surfaces that float on the desktop while recording: the in-progress
- * toolbar (320×150 host window, 296×40 visible bar), the circular camera
- * preview window, the target-select overlay panels, and the macOS
- * notification Cap fires when an instant link lands on the clipboard.
- * All values mirror in-progress-recording.tsx / camera.tsx /
- * target-select-overlay.tsx in apps/desktop. In the interactive demo the
- * controls are live: stop/pause/restart work, and the notification opens the
- * share page.
- */
-
-/* ------------------------------------------------------ recording toolbar -- */
-
 const ToolButton = ({
 	label,
 	onClick,
@@ -93,7 +80,6 @@ export const RecordingToolbar = ({
 			}}
 		>
 			<div className="flex flex-1 flex-row justify-between p-1">
-				{/* Stop button with timer */}
 				<button
 					type="button"
 					data-demo-anchor="toolbar-stop"
@@ -111,7 +97,6 @@ export const RecordingToolbar = ({
 					</span>
 				</button>
 
-				{/* Icon cluster */}
 				<div
 					data-demo-anchor="toolbar-tools"
 					className="flex items-center gap-1"
@@ -153,7 +138,6 @@ export const RecordingToolbar = ({
 				</div>
 			</div>
 
-			{/* Drag handle */}
 			<div
 				className="flex items-center border-l p-1"
 				style={{ borderColor: "#e0e0e0" }}
@@ -163,8 +147,6 @@ export const RecordingToolbar = ({
 		</div>
 	</div>
 );
-
-/* --------------------------------------------------- camera preview window -- */
 
 export const CameraWindow = ({
 	visible,
@@ -206,8 +188,6 @@ export const CameraWindow = ({
 		</div>
 	);
 };
-
-/* --------------------------------------------------- target select overlay -- */
 
 const GLASS: React.CSSProperties = {
 	background: "rgba(252,252,252,0.82)",
@@ -372,8 +352,6 @@ export const TargetOverlayPanel = ({
 		</div>
 	);
 };
-
-/* -------------------------------------------------------- link notification -- */
 
 export const LinkNotification = ({
 	visible,

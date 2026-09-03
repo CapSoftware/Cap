@@ -2,11 +2,6 @@ import { homepageCopy } from "@/data/homepage-copy";
 import { Eyebrow } from "./Eyebrow";
 import { BODY_TEXT, H_SECTION, MODE_THEME } from "./theme";
 
-/**
- * The homepage FAQ, same questions and answers, rebuilt as hairline rows with
- * a plus that turns into a minus. Plain `details` elements, so it opens with
- * no JavaScript and stays keyboard native.
- */
 export const Faq = () => (
 	<section className="px-5 py-20 lg:py-28">
 		<div className="mx-auto grid max-w-[1100px] gap-12 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:gap-20">

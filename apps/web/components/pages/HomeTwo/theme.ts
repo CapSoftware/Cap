@@ -1,71 +1,50 @@
 import type { CSSProperties } from "react";
 
-/**
- * Shared visual tokens for the /home-two prototype.
- *
- * Typography follows Intercom's system: a regular-weight grotesk set very
- * tight (leading ~1.0, -0.03em) for display, a light serif for body copy,
- * and 12px uppercase mono eyebrows. Colours are pastel takes on Cap's four
- * mode hues on warm paper, and every coloured surface carries a film-grain
- * texture baked into its background-image stack.
- */
-
 export type ModeKey = "instant" | "studio" | "screenshot" | "share";
 
-/** Near-black ink. */
 export const INK = "#111111";
-/** Page canvas. */
+
 export const CREAM = "#F8FAFC";
-/**
- * The lighter shell the page sits on: navbar background plus the gutters
- * around the inset page card, so the rounded corners read as a seam.
- */
+
 export const SHELL = "#FFFFFF";
-/** Warm paper band and tile fill. */
+
 export const BAND = "#EDF1F6";
-/** Body copy on light surfaces. */
+
 export const BODY_COLOR = "rgba(17,17,17,0.78)";
-/** Muted labels and microcopy. */
+
 export const MUTED = "rgba(17,17,17,0.5)";
-/** Warm hairline rules. */
+
 export const HAIRLINE = "#E1E7EE";
-/** The cream the floating content cards sit on. */
+
 export const CARD_BG = CREAM;
 
-/* ----------------------------------------------------------------- grain -- */
-
-/** Tiling monochrome noise, alpha baked in. Prepend to any background stack. */
 export const GRAIN = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.1'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E")`;
 
-/** A solid colour with grain. */
 export const grainBg = (color: string): CSSProperties => ({
 	backgroundColor: color,
 	backgroundImage: GRAIN,
 	backgroundSize: "200px 200px",
 });
 
-/* ------------------------------------------------------------ mode themes -- */
-
 export type ModeTheme = {
 	/** Radial layers of the mesh (exactly four, see meshStyle's size list). */
 	image: string;
-	/** Base colour under the mesh. */
+
 	base: string;
-	/** Solid fill for the active nav pill. */
+
 	pill: string;
-	/** Softer fill for inline chips. */
+
 	chip: string;
-	/** Glyph colour on `chip`. On the solid `pill` glyphs use INK. */
+
 	glyph: string;
-	/** Wash behind the coded mockups. */
+
 	panel: string;
-	/** Decorative vertical bars inside the mockup panel. */
+
 	bars: string;
-	/** Accent for underlines, ticks, and eyebrow squares. */
+
 	accent: string;
 };
 
-/** Mesh + grain, ready for a style prop. */
 export const meshStyle = (t: ModeTheme): CSSProperties => ({
 	backgroundColor: t.base,
 	backgroundImage: `${GRAIN}, ${t.image}`,
@@ -135,8 +114,6 @@ export const MODE_THEME: Record<ModeKey, ModeTheme> = {
 	},
 };
 
-/* ------------------------------------------------------------- typography -- */
-
 export const SANS =
 	"[font-family:var(--font-ht-sans),ui-sans-serif,system-ui,sans-serif]";
 
@@ -145,7 +122,6 @@ export const SERIF_BODY =
 
 export const MONO = "[font-family:var(--font-ht-mono),ui-monospace,monospace]";
 
-/** 12px uppercase mono eyebrow. No colour: set it at the use site (Eyebrow.tsx). */
 export const EYEBROW = `${MONO} text-[12px] font-normal uppercase leading-none tracking-[0.05em]`;
 
 export const H_HERO = `${SANS} font-normal leading-[0.98] tracking-[-0.03em] text-[#111111]`;
@@ -156,12 +132,6 @@ export const H_CARD = `${SANS} font-normal leading-[1.04] tracking-[-0.03em] tex
 
 export const BODY_TEXT = `${SERIF_BODY} tracking-[-0.01em]`;
 
-/* ---------------------------------------------------------------- buttons -- */
-
-/**
- * Cap-blue primary action, glass finish: vertical gradient body, a bright
- * inset top edge, a soft ambient blue glow, and a top-half sheen overlay.
- */
 export const BTN_PRIMARY = [
 	"group relative inline-flex h-[48px] items-center justify-center overflow-hidden rounded-[12px] px-6",
 	"text-[16px] font-medium text-[#111111] [text-shadow:0_1px_0_rgba(255,255,255,0.45)]",

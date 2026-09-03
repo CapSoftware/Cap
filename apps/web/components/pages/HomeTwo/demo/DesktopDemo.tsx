@@ -47,28 +47,8 @@ const MemoizedEditorWindow = memo(CapEditorWindow);
 const MemoizedShareWindow = memo(CapShareWindow);
 const MemoizedContentWindow = memo(ContentWindow);
 
-/**
- * The interactive "see how it works" demo: a macOS desktop inside a laptop
- * mockup, with the real Cap windows recreated 1:1 — and this time the
- * visitor drives. Every control in the story is a live button: pick Instant
- * mode, choose the display, start and stop a real (fake) recording, open the
- * link notification, flip to Studio, turn the camera on, restyle the editor
- * background, hit Export. A guide bubble explains each step, a pulsing
- * beacon + spotlight mark the next click, and "i" hotspots open short
- * explainers on the parts worth poking at. Off-script clicks that would
- * break the story get a friendly nudge; harmless ones (camera toggle,
- * pausing the recording, any wallpaper, reactions) just work.
- */
-
-/* ------------------------------------------------------------ stage layout -- */
-
 const STAGE_W = 1360;
 
-/**
- * The laptop is one fixed logical canvas, uniformly scaled to fit. The
- * screen is 1360×850; windows live in a 1360×794 layer under the 28px
- * menu bar so the POS coordinates below stay screen-relative.
- */
 const LAPTOP = {
 	w: 1470,
 	h: 920,
@@ -101,7 +81,6 @@ const POS = {
  */
 const WIN_NOTIFICATION_TOP = LAPTOP.screenH - 28 - 48 - 16 - 112;
 
-/** Idle "attract" state: the recorder sits centred, like the app just opened. */
 const IDLE_RECORDER = { left: (STAGE_W - 330) / 2, top: 185 };
 
 const clamp = (v: number, lo: number, hi: number) =>
@@ -112,8 +91,6 @@ const formatClock = (totalSeconds: number) => {
 	return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 
-/* ------------------------------------------------------------------- state -- */
-
 type Stage =
 	| "recorder"
 	| "overlay"
@@ -123,7 +100,6 @@ type Stage =
 	| "done";
 
 type DemoState = {
-	/** Current tour step; TOTAL_STEPS means the demo is finished. */
 	step: number;
 	stage: Stage;
 	mode: RecorderMode;
@@ -135,7 +111,7 @@ type DemoState = {
 	bgIndex: number;
 	paused: boolean;
 	editorPlaying: boolean;
-	/** Story history, so free play can never strand the tour. */
+
 	r1Started: boolean;
 	r1Stopped: boolean;
 	shareSeen: boolean;
@@ -143,7 +119,7 @@ type DemoState = {
 	r2Stopped: boolean;
 	swatched: boolean;
 	interacted: boolean;
-	/** Bumped when a click lands somewhere the story can't go yet. */
+
 	nudge: number;
 };
 
@@ -168,7 +144,6 @@ type Action =
 
 const TOTAL_STEPS = 13;
 
-/** Per-step "you're done" checks; free play can satisfy several at once. */
 const STEP_DONE: ((s: DemoState) => boolean)[] = [
 	(s) => s.mode === "instant",
 	(s) => s.displaySelected,
@@ -213,7 +188,6 @@ const INITIAL: DemoState = {
 	nudge: 0,
 };
 
-/** Entry states for the phase pills. */
 const PHASE_STATES: DemoState[] = [
 	INITIAL,
 	{
@@ -252,8 +226,7 @@ const reducer = (s: DemoState, a: Action): DemoState => {
 		case "mode": {
 			if (s.stage !== "recorder" && s.stage !== "overlay") return miss(s);
 			if (a.mode === s.mode) return s;
-			// Keep the story sound: Instant belongs to the first act, Studio to
-			// the second. Early flips get a nudge instead of a broken narrative.
+
 			const allowed = a.mode === "instant" ? s.step < 6 : s.step >= 6;
 			if (!allowed) return miss(s);
 			return advance({ ...s, mode: a.mode, interacted: true });
@@ -378,47 +351,107 @@ const reducer = (s: DemoState, a: Action): DemoState => {
 	}
 };
 
-/* -------------------------------------------------------------------- tour -- */
-
 type TourStep = {
 	text: string;
-	/** Objective target: the spotlight + beacon land on this anchor. */
+
 	anchor?: string;
-	/** Spotlight padding around the target, content px. */
+
 	pad?: number;
-	/** Skip the dim for free-play moments (recording). */
+
 	dim?: boolean;
-	/** Bubble centre, screen-space; parked beside the action, never on it. */
+
 	bx: number;
 	by: number;
-	/** Steps with no natural click get an explicit continue button. */
+
 	continueLabel?: string;
 };
 
-// biome-ignore format: keep one step per line
 const TOUR: TourStep[] = [
-	{ text: "Select Instant Mode to record and share a video.", anchor: "mode-instant", bx: 640, by: 420 },
-	{ text: "Click Display to record the whole screen.", anchor: "target-display", bx: 620, by: 480 },
+	{
+		text: "Select Instant Mode to record and share a video.",
+		anchor: "mode-instant",
+		bx: 640,
+		by: 420,
+	},
+	{
+		text: "Click Display to record the whole screen.",
+		anchor: "target-display",
+		bx: 620,
+		by: 480,
+	},
 	{ text: "Click Start Recording.", anchor: "overlay-start", bx: 360, by: 645 },
-	{ text: "Cap uploads while you record. Click Stop to finish.", anchor: "toolbar-stop", dim: false, bx: 400, by: 550 },
-	{ text: "Cap copies a share link when you stop. Click the notification to open the video.", anchor: "notification", bx: 800, by: 170 },
-	{ text: "Viewers can watch, comment, and react in their browser.", anchor: "share-window", pad: 6, bx: 1180, by: 400, continueLabel: "Try Studio Mode" },
-	{ text: "Select Studio Mode to edit a recording before sharing it.", anchor: "mode-studio", bx: 640, by: 420 },
-	{ text: "Turn on the camera to record yourself alongside your screen.", anchor: "row-camera", bx: 600, by: 645 },
-	{ text: "Click Display to select your screen.", anchor: "target-display", bx: 620, by: 480 },
-	{ text: "Studio saves the recording on your computer. Click Start Recording.", anchor: "overlay-start", bx: 360, by: 645 },
-	{ text: "Click Stop to open your recording in the editor.", anchor: "toolbar-stop", dim: false, bx: 400, by: 550 },
-	{ text: "Choose a wallpaper to change the video's background.", anchor: "editor-swatches", bx: 620, by: 620 },
-	{ text: "Click Export to finish the demo. In Cap, you can save a video file or share a link.", anchor: "editor-export", bx: 860, by: 230 },
+	{
+		text: "Cap uploads while you record. Click Stop to finish.",
+		anchor: "toolbar-stop",
+		dim: false,
+		bx: 400,
+		by: 550,
+	},
+	{
+		text: "Cap copies a share link when you stop. Click the notification to open the video.",
+		anchor: "notification",
+		bx: 800,
+		by: 170,
+	},
+	{
+		text: "Viewers can watch, comment, and react in their browser.",
+		anchor: "share-window",
+		pad: 6,
+		bx: 1180,
+		by: 400,
+		continueLabel: "Try Studio Mode",
+	},
+	{
+		text: "Select Studio Mode to edit a recording before sharing it.",
+		anchor: "mode-studio",
+		bx: 640,
+		by: 420,
+	},
+	{
+		text: "Turn on the camera to record yourself alongside your screen.",
+		anchor: "row-camera",
+		bx: 600,
+		by: 645,
+	},
+	{
+		text: "Click Display to select your screen.",
+		anchor: "target-display",
+		bx: 620,
+		by: 480,
+	},
+	{
+		text: "Studio saves the recording on your computer. Click Start Recording.",
+		anchor: "overlay-start",
+		bx: 360,
+		by: 645,
+	},
+	{
+		text: "Click Stop to open your recording in the editor.",
+		anchor: "toolbar-stop",
+		dim: false,
+		bx: 400,
+		by: 550,
+	},
+	{
+		text: "Choose a wallpaper to change the video's background.",
+		anchor: "editor-swatches",
+		bx: 620,
+		by: 620,
+	},
+	{
+		text: "Click Export to finish the demo. In Cap, you can save a video file or share a link.",
+		anchor: "editor-export",
+		bx: 860,
+		by: 230,
+	},
 ];
 
-/** "i" hotspots: extra info for the curious, separate from the tour. */
 type InfoSpot = {
 	key: string;
 	anchor: string;
 	title: string;
 	text: string;
-	/** Dot position as a fraction of the anchor rect. */
+
 	fx: number;
 	fy: number;
 	side: "above" | "below" | "left" | "right";
@@ -428,17 +461,68 @@ type InfoSpot = {
 const onDesktop = (s: DemoState) =>
 	s.stage === "recorder" || s.stage === "overlay";
 
-// biome-ignore format: keep one spot per line
 const INFO_SPOTS: InfoSpot[] = [
-	{ key: "modes", anchor: "mode-info", title: "Recording modes", text: "Use Instant for quick video sharing, Studio for editing recordings, or Screenshot for still images.", fx: 0.5, fy: 0.5, side: "below", when: onDesktop },
-	{ key: "mic", anchor: "row-mic", title: "Audio tracks", text: "Studio saves your microphone and system audio separately so you can adjust their volume in the editor.", fx: 1, fy: 0, side: "below", when: onDesktop },
-	{ key: "camera", anchor: "camera-window", title: "Camera preview", text: "See your camera while recording. Studio saves it separately so you can adjust its size and position later.", fx: 0.85, fy: 0.1, side: "left", when: (s) => s.cameraOn && (onDesktop(s) || s.stage === "recording") },
-	{ key: "tools", anchor: "toolbar-tools", title: "Recording controls", text: "Pause and resume from the toolbar. Try the pause button.", fx: 1, fy: 0, side: "above", when: (s) => s.stage === "recording" },
-	{ key: "reactions", anchor: "share-reactions", title: "Comments and reactions", text: "Viewers can leave feedback at a specific point in the video. Click an emoji to add a reaction.", fx: 1, fy: 0.2, side: "above", when: (s) => s.shareVisible },
-	{ key: "tracks", anchor: "editor-timeline", title: "Separate tracks", text: "Studio records your screen, camera, and audio separately, so you can edit them after recording.", fx: 0.5, fy: 0.06, side: "below", when: (s) => s.stage === "editor" },
+	{
+		key: "modes",
+		anchor: "mode-info",
+		title: "Recording modes",
+		text: "Use Instant for quick video sharing, Studio for editing recordings, or Screenshot for still images.",
+		fx: 0.5,
+		fy: 0.5,
+		side: "below",
+		when: onDesktop,
+	},
+	{
+		key: "mic",
+		anchor: "row-mic",
+		title: "Audio tracks",
+		text: "Studio saves your microphone and system audio separately so you can adjust their volume in the editor.",
+		fx: 1,
+		fy: 0,
+		side: "below",
+		when: onDesktop,
+	},
+	{
+		key: "camera",
+		anchor: "camera-window",
+		title: "Camera preview",
+		text: "See your camera while recording. Studio saves it separately so you can adjust its size and position later.",
+		fx: 0.85,
+		fy: 0.1,
+		side: "left",
+		when: (s) => s.cameraOn && (onDesktop(s) || s.stage === "recording"),
+	},
+	{
+		key: "tools",
+		anchor: "toolbar-tools",
+		title: "Recording controls",
+		text: "Pause and resume from the toolbar. Try the pause button.",
+		fx: 1,
+		fy: 0,
+		side: "above",
+		when: (s) => s.stage === "recording",
+	},
+	{
+		key: "reactions",
+		anchor: "share-reactions",
+		title: "Comments and reactions",
+		text: "Viewers can leave feedback at a specific point in the video. Click an emoji to add a reaction.",
+		fx: 1,
+		fy: 0.2,
+		side: "above",
+		when: (s) => s.shareVisible,
+	},
+	{
+		key: "tracks",
+		anchor: "editor-timeline",
+		title: "Separate tracks",
+		text: "Studio records your screen, camera, and audio separately, so you can edit them after recording.",
+		fx: 0.5,
+		fy: 0.06,
+		side: "below",
+		when: (s) => s.stage === "editor",
+	},
 ];
-
-/* ---------------------------------------------------------------- captions -- */
 
 type Caption = {
 	key: string;
@@ -473,12 +557,9 @@ const CAPTIONS: [Caption, Caption, Caption] = [
 
 const phaseOf = (step: number) => (step >= 11 ? 2 : step >= 6 ? 1 : 0);
 
-/** Where each phase starts, for the progress bar's chapter ticks. */
 const PHASE_TICKS = [6 / TOTAL_STEPS, 11 / TOTAL_STEPS];
 
 type Mark = { x: number; y: number; w: number; h: number };
-
-/* --------------------------------------------------------------- component -- */
 
 export const DesktopDemo = ({
 	startRequested = false,
@@ -509,14 +590,9 @@ export const DesktopDemo = ({
 	const [state, dispatch] = useReducer(reducer, INITIAL);
 	const [marks, setMarks] = useState<Record<string, Mark>>({});
 	const [openSpot, setOpenSpot] = useState<string | null>(null);
-	/** Attract mode: the tour only begins once the visitor opts in. */
+
 	const [idle, setIdle] = useState(true);
 
-	/** The demo dresses as the visitor's own OS. Everything but Windows (and
-	    the first paint, before detection resolves) gets the macOS shell, the
-	    same default the download button uses. Clicking the Apple glyph in the
-	    menu bar (or Start on the taskbar) switches shells by hand, which is
-	    how anyone sees the other platform. */
 	const { platform } = useDetectPlatform();
 	const [osOverride, setOsOverride] = useState<DemoPlatform | null>(null);
 	const demoPlatform: DemoPlatform =
@@ -532,7 +608,6 @@ export const DesktopDemo = ({
 		if (startRequested) setIdle(false);
 	}, [startRequested]);
 
-	/* The hero's "See how Cap works" hands the visitor straight into the tour. */
 	useEffect(() => {
 		const onStart = () => setIdle(false);
 		window.addEventListener("ht-demo-start", onStart);
@@ -553,16 +628,12 @@ export const DesktopDemo = ({
 		[send],
 	);
 
-	/* Fit the laptop into the space above the controls strip. Layout effect,
-	   so the very first paint already uses the measured scale. */
 	useLayoutEffect(() => {
 		const box = frameBoxRef.current;
 		if (!box) return;
 		const fitLaptop = () => {
 			const r = box.getBoundingClientRect();
-			// Slightly undersized (×0.95, capped): the laptop should read as an
-			// object on the page, not a takeover, but without leaving a dead band
-			// between it and the hero above.
+
 			setScale(
 				Math.min(
 					0.82,
@@ -638,8 +709,6 @@ export const DesktopDemo = ({
 			contentScrollRef.current.style.transform = "translate3d(0, 0, 0)";
 	}, [state.stage]);
 
-	/* The recording clock: real elapsed time in the toolbar, and the recorded
-	   window slowly "does some work" underneath. */
 	useEffect(() => {
 		if (state.stage !== "recording" || state.paused) return;
 		clockRef.current.last = performance.now();
@@ -676,14 +745,12 @@ export const DesktopDemo = ({
 		if (timerRef.current) timerRef.current.textContent = "0:00";
 	}, []);
 
-	/* Sofia's comment lands a beat after the share page opens. */
 	useEffect(() => {
 		if (!state.shareVisible) return;
 		const id = setTimeout(() => dispatch({ type: "commentIn" }), 1400);
 		return () => clearTimeout(id);
 	}, [state.shareVisible]);
 
-	/* Editor playback: playhead + timecode loop while playing. */
 	useEffect(() => {
 		const playing =
 			(state.stage === "editor" || state.stage === "done") &&
@@ -713,8 +780,6 @@ export const DesktopDemo = ({
 		};
 	}, [state.stage, state.editorPlaying, active]);
 
-	/* Type the guide text in on every step change (and on nudges, which
-	   re-pop the card). */
 	// biome-ignore lint/correctness/useExhaustiveDependencies: a nudge remounts the keyed card, so the typed node must refill
 	useEffect(() => {
 		if (idle) return;
@@ -735,7 +800,6 @@ export const DesktopDemo = ({
 		return () => clearInterval(id);
 	}, [state.step, state.nudge, idle]);
 
-	/* Videos follow the discrete state. */
 	const cameraWindowVisible =
 		state.cameraOn && (onDesktop(state) || state.stage === "recording");
 	const editorVisible = state.stage === "editor" || state.stage === "done";
@@ -768,7 +832,6 @@ export const DesktopDemo = ({
 		active,
 	]);
 
-	/* Derived scene. */
 	const recorderUi: RecorderUi = {
 		visible: onDesktop(state),
 		mode: state.mode,
@@ -780,7 +843,6 @@ export const DesktopDemo = ({
 	const phase = phaseOf(state.step);
 	const caption = CAPTIONS[phase];
 
-	/* Spotlight + beacon geometry for the current objective. */
 	const objectiveMark = stepDef?.anchor ? marks[stepDef.anchor] : undefined;
 	const pad = stepDef?.pad ?? 10;
 	const dimmed = Boolean(
@@ -804,7 +866,6 @@ export const DesktopDemo = ({
 			state.stage !== "done",
 	);
 
-	/* Until measured, lay out at a placeholder scale behind opacity 0. */
 	const fitScale = scale ?? 0.6;
 	const laptopStyle = useMemo<React.CSSProperties>(
 		() => ({ width: LAPTOP.w * fitScale, height: LAPTOP.h * fitScale }),
@@ -863,12 +924,10 @@ export const DesktopDemo = ({
 				}
 			`}</style>
 
-				{/* Laptop */}
 				<div
 					ref={frameBoxRef}
 					className="relative flex min-h-0 w-full flex-1 items-center justify-center"
 				>
-					{/* Phase-coloured glow grounding the laptop on the band. */}
 					<div
 						aria-hidden="true"
 						className={classNames(
@@ -886,7 +945,6 @@ export const DesktopDemo = ({
 						style={laptopStyle}
 					>
 						<div style={laptopInnerStyle}>
-							{/* Lid / bezel */}
 							<div
 								aria-hidden="true"
 								className="absolute"
@@ -902,7 +960,6 @@ export const DesktopDemo = ({
 								}}
 							/>
 
-							{/* Screen */}
 							<div
 								ref={screenRef}
 								className="absolute overflow-hidden"
@@ -915,7 +972,6 @@ export const DesktopDemo = ({
 									background: "#000",
 								}}
 							>
-								{/* Wallpaper: one of the city paintings Cap Desktop ships. */}
 								<Image
 									src="/backgrounds/sf.webp"
 									alt=""
@@ -925,7 +981,6 @@ export const DesktopDemo = ({
 									className="object-cover"
 								/>
 
-								{/* Desktop chrome */}
 								{isWindows ? (
 									<>
 										<WinDesktopFiles />
@@ -945,7 +1000,6 @@ export const DesktopDemo = ({
 									</>
 								)}
 
-								{/* Target-select highlight around "the screen" */}
 								<div
 									className={classNames(
 										"pointer-events-none absolute inset-0 z-20 rounded-[14px] transition-opacity duration-300",
@@ -958,7 +1012,6 @@ export const DesktopDemo = ({
 									}}
 								/>
 
-								{/* Windows layer, below the menu bar. */}
 								<div
 									inert={idle || state.stage === "done"}
 									className="absolute left-0 top-7"
@@ -1076,9 +1129,6 @@ export const DesktopDemo = ({
 									</div>
 								</div>
 
-								{/* Spotlight: a soft dim with a bright cutout gliding to the
-							    next objective. Pointer-events-free, so it guides without
-							    locking anything. */}
 								<div
 									aria-hidden="true"
 									className="pointer-events-none absolute left-0 top-0 z-30 rounded-[14px] transition-[transform,width,height,box-shadow] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]"
@@ -1094,8 +1144,6 @@ export const DesktopDemo = ({
 									}}
 								/>
 
-								{/* Beacon: a pulsing ring hugging the objective's edge, so the
-							    control itself stays fully visible. */}
 								{beaconVisible && objectiveMark ? (
 									<div
 										aria-hidden="true"
@@ -1114,7 +1162,6 @@ export const DesktopDemo = ({
 									/>
 								) : null}
 
-								{/* "i" hotspots: more info, on demand. */}
 								{idle
 									? null
 									: visibleSpots.map((spot) => {
@@ -1187,8 +1234,6 @@ export const DesktopDemo = ({
 											);
 										})}
 
-								{/* The guide bubble: numbered, typed-in, parked beside the
-							    action. Wrong-turn clicks re-pop it with a wiggle. */}
 								{!idle && stepDef && state.stage !== "done" ? (
 									<div
 										className="absolute left-0 top-0 z-40 transition-transform duration-500 ease-[cubic-bezier(0.4,0,0.2,1)]"
@@ -1215,7 +1260,6 @@ export const DesktopDemo = ({
 														"var(--font-ht-sans), ui-sans-serif, system-ui, sans-serif",
 												}}
 											>
-												{/* Mode attachment */}
 												<span
 													className="absolute -top-3.5 left-4 flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold shadow-[0_2px_8px_rgba(17,17,17,0.18)]"
 													style={{
@@ -1260,8 +1304,6 @@ export const DesktopDemo = ({
 									</div>
 								) : null}
 
-								{/* Idle state: an oversized cursor resting on the app, so the
-							    screen reads as clickable before the tour chrome exists. */}
 								<div
 									aria-hidden="true"
 									className={classNames(
@@ -1276,7 +1318,6 @@ export const DesktopDemo = ({
 									/>
 								</div>
 
-								{/* Restart, parked bottom-left of the screen once the tour runs. */}
 								<button
 									type="button"
 									inert={idle}
@@ -1332,7 +1373,6 @@ export const DesktopDemo = ({
 									</div>
 								) : null}
 
-								{/* Finish card. */}
 								{state.stage === "done" ? (
 									<div className="absolute inset-0 z-50 flex items-center justify-center bg-[rgba(9,12,20,0.5)]">
 										<div
@@ -1379,14 +1419,11 @@ export const DesktopDemo = ({
 									</div>
 								) : null}
 
-								{/* Camera notch: a MacBook tell, so the Windows shell gets a
-								    plain lid instead. */}
 								{isWindows ? null : (
 									<div className="pointer-events-none absolute left-1/2 top-0 z-[60] h-[24px] w-[196px] -translate-x-1/2 rounded-b-[10px] bg-black" />
 								)}
 							</div>
 
-							{/* Base / deck */}
 							<div
 								aria-hidden="true"
 								className="absolute"
@@ -1402,7 +1439,6 @@ export const DesktopDemo = ({
 										"inset 0 1px 0 rgba(255,255,255,0.85), 0 18px 40px -18px rgba(17,17,17,0.5)",
 								}}
 							>
-								{/* Thumb groove */}
 								<div
 									className="absolute left-1/2 top-0 h-[10px] w-[220px] -translate-x-1/2 rounded-b-[12px]"
 									style={{
@@ -1415,7 +1451,6 @@ export const DesktopDemo = ({
 					</div>
 				</div>
 
-				{/* Controls: phase pills, tour progress, skip. Hidden until the tour starts. */}
 				<div
 					inert={idle}
 					className={classNames(

@@ -32,9 +32,6 @@ export function HomeTwoPage() {
 					className={`${CARD_RADIUS} shadow-[0_0_0_1px_rgba(17,17,17,0.045)]`}
 					style={grainBg(CREAM)}
 				>
-					{/* Band one: the hero flows straight into the pinned walkthrough so
-					    the gradient card already peeks into the first viewport. It
-					    carries the card's top corners because it paints over them. */}
 					<div
 						className={`${CARD_RADIUS} rounded-b-[28px]`}
 						style={grainBg(BAND)}

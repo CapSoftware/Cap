@@ -8,11 +8,6 @@ import { TrafficLights, WindowsCaptionControls } from "./chrome";
 import { useVideoAttrs, VIDEO_POSTERS } from "./media";
 import { useIsWindowsDemo } from "./platform";
 
-/**
- * A browser window showing the Cap share page an instant recording produces —
- * the payoff shot for Instant Mode: paste the link, viewers watch and comment
- * in the browser. The reaction pills are live so the visitor can leave one.
- */
 export const CapShareWindow = ({
 	visible,
 	width,
@@ -57,7 +52,6 @@ export const CapShareWindow = ({
 					boxShadow: "0 28px 80px rgba(0,0,0,0.28), 0 4px 18px rgba(0,0,0,0.1)",
 				}}
 			>
-				{/* browser chrome */}
 				<div
 					className="flex h-11 shrink-0 items-center gap-3 border-b px-3.5"
 					style={{ background: "#f6f7f9", borderColor: "rgba(0,0,0,0.07)" }}
@@ -129,7 +123,6 @@ export const CapShareWindow = ({
 					)}
 				</div>
 
-				{/* share page */}
 				<div className="flex min-h-0 flex-1 flex-col">
 					<div className="flex items-center gap-2.5 px-5 pb-3 pt-4">
 						<CapLogoMark className="size-7" />
@@ -150,7 +143,6 @@ export const CapShareWindow = ({
 						</span>
 					</div>
 
-					{/* player */}
 					<div className="relative mx-5 overflow-hidden rounded-xl bg-black">
 						<video
 							ref={videoRef}
@@ -161,7 +153,6 @@ export const CapShareWindow = ({
 							playsInline
 							{...screenVideo}
 						/>
-						{/* player controls */}
 						<div
 							className="absolute inset-x-0 bottom-0 flex items-center gap-3 px-4 pb-2.5 pt-8 text-white"
 							style={{
@@ -179,7 +170,6 @@ export const CapShareWindow = ({
 						</div>
 					</div>
 
-					{/* reactions + comment */}
 					<div className="flex min-h-0 flex-1 flex-col gap-3 px-5 py-4">
 						<div
 							data-demo-anchor="share-reactions"

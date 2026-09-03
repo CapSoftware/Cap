@@ -6,16 +6,7 @@ import { OsSwitchButton } from "./chrome";
 import { CapFileIcon, ImageFileIcon } from "./MacDesktop";
 import { OS_FONT } from "./platform";
 
-/**
- * The Windows 11 dressing for the demo desktop: taskbar instead of a menu
- * bar and dock, Segoe UI everywhere, and a bottom-right toast where macOS
- * gets a banner. The Cap windows themselves are unchanged apart from their
- * caption controls, which is exactly how the app ships on both platforms.
- */
-
 const WIN_FONT = OS_FONT.windows;
-
-/* ------------------------------------------------------ taskbar glyphs -- */
 
 const StartGlyph = () => (
 	<svg aria-hidden="true" viewBox="0 0 24 24" className="size-[19px]">
@@ -142,8 +133,6 @@ const TrayBattery = () => (
 	</svg>
 );
 
-/* ---------------------------------------------------------------- taskbar -- */
-
 const TaskbarApp = ({
 	children,
 	running,
@@ -183,7 +172,6 @@ export const WinTaskbar = ({
 			fontFamily: WIN_FONT,
 		}}
 	>
-		{/* The centre cluster is centred on the bar, tray and spacer balance it. */}
 		<div className="flex-1" />
 		<div className="flex items-center gap-1">
 			<OsSwitchButton
@@ -210,7 +198,6 @@ export const WinTaskbar = ({
 		</div>
 
 		<div className="flex flex-1 items-center justify-end gap-2.5">
-			{/* Windows shows recording apps in the tray, not in a menu bar. */}
 			<span
 				className={classNames(
 					"flex items-center gap-1.5 rounded-[6px] px-2 py-1 text-[11px] font-semibold tracking-[0.02em] transition-opacity duration-300",
@@ -232,8 +219,6 @@ export const WinTaskbar = ({
 		</div>
 	</div>
 );
-
-/* --------------------------------------------------------- desktop files -- */
 
 const WinFolderIcon = () => (
 	<svg aria-hidden="true" viewBox="0 0 64 52" className="h-11 w-auto">

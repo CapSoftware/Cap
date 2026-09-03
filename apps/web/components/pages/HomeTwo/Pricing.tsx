@@ -20,15 +20,8 @@ import {
 	type ModeTheme,
 } from "./theme";
 
-/**
- * The homepage's two plans in the new system. Prices come from the shared
- * pricing copy so the page can never drift from /pricing; the checkout itself
- * still lives there, so both actions link out rather than mounting Stripe.
- */
-
 const { commercial, pro, subtitle, lovedBy } = homepageCopy.pricing;
 
-/** Sentence case and plain punctuation, the house voice on this page. */
 const BLURB = {
 	commercial:
 		"A commercial licence for the Cap desktop app, with unlimited local recording and editing.",

@@ -5,13 +5,6 @@ import { testimonials } from "@/data/testimonials";
 import { Eyebrow } from "./Eyebrow";
 import { BODY_TEXT, BTN_SECONDARY, H_SECTION, MODE_THEME } from "./theme";
 
-/**
- * The homepage's wall of quotes, straightened out: real cards in a masonry
- * column instead of a rotated scatter, so the type stays on the same grid as
- * the rest of the page. Steven Tey is deliberately absent, he leads the
- * ownership section above.
- */
-
 const PICKS = [
 	"Olivia",
 	"CJ",
