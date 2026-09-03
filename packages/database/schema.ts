@@ -473,6 +473,11 @@ export const videos = mysqlTable(
 			table.orgId,
 			table.effectiveCreatedAt,
 		),
+		index("screenshot_transcription_created_idx").on(
+			table.isScreenshot,
+			table.transcriptionStatus,
+			table.createdAt,
+		),
 	],
 );
 
@@ -860,6 +865,9 @@ export const storageObjects = mysqlTable(
 			table.integrationId,
 			table.uploadStatus,
 		),
+		integrationObjectKeyPrefixIndex: index(
+			"integration_object_key_prefix_idx",
+		).on(table.integrationId, sql`${table.objectKey}(191)`),
 		videoIdIndex: index("video_id_idx").on(table.videoId),
 		ownerIdIndex: index("owner_id_idx").on(table.ownerId),
 	}),
@@ -1488,6 +1496,7 @@ export const importedVideos = mysqlTable(
 	},
 	(table) => [
 		primaryKey({ columns: [table.orgId, table.source, table.sourceId] }),
+		index("id_idx").on(table.id),
 	],
 );
 
