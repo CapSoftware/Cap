@@ -7192,6 +7192,8 @@ mod project_uniforms_tests {
     ) -> XY<f64> {
         let mut sum = XY::new(0.0, 0.0);
         let mut count = 0;
+        let mut min = XY::new(frame.width as usize, frame.height as usize);
+        let mut max = XY::new(0, 0);
         for (y, row) in frame
             .data
             .chunks_exact(frame.padded_bytes_per_row as usize)
@@ -7202,11 +7204,40 @@ mod project_uniforms_tests {
                 if selected(pixel, x, y) {
                     sum = sum + XY::new(x as f64 + 0.5, y as f64 + 0.5);
                     count += 1;
+                    min.x = min.x.min(x);
+                    min.y = min.y.min(y);
+                    max.x = max.x.max(x);
+                    max.y = max.y.max(y);
                 }
             }
         }
+        eprintln!("selected pixels: count={count}, bounds={min:?}..={max:?}");
         assert!(count > 0, "expected visible pixels");
         sum / count as f64
+    }
+
+    fn pixel_selection_mask(
+        frame: &RenderedFrame,
+        center: XY<f64>,
+        selected: impl Fn(&[u8], usize, usize) -> bool,
+    ) -> String {
+        let x_min = (center.x.max(0.0) as usize).saturating_sub(32);
+        let y_min = (center.y.max(0.0) as usize).saturating_sub(32);
+        let x_max = (x_min + 64).min(frame.width as usize);
+        let y_max = (y_min + 64).min(frame.height as usize);
+        let mut mask = format!("region x={x_min}..{x_max}, y={y_min}..{y_max}\n");
+        for y in y_min..y_max {
+            for x in x_min..x_max {
+                let offset = y * frame.padded_bytes_per_row as usize + x * 4;
+                mask.push(if selected(&frame.data[offset..offset + 4], x, y) {
+                    '#'
+                } else {
+                    '.'
+                });
+            }
+            mask.push('\n');
+        }
+        mask
     }
 
     #[tokio::test]
@@ -7391,18 +7422,14 @@ mod project_uniforms_tests {
                     .render_immediate(frames.clone(), overlay_uniforms, &events, true, &mut layers)
                     .await
                     .unwrap();
-                let overlay_center = pixel_center(&overlay, |pixel, x, y| {
+                let overlay_selected = |pixel: &[u8], x: usize, y: usize| {
                     let offset = y * display.padded_bytes_per_row as usize + x * 4;
                     pixel[..3]
                         .iter()
                         .zip(&display.data[offset..offset + 3])
                         .any(|(actual, base)| actual.abs_diff(*base) > 12)
-                });
-                assert!(
-                    (marker_center.x - overlay_center.x).abs() < 1.5
-                        && (marker_center.y - overlay_center.y).abs() < 1.5,
-                    "{name}, ripple={ripple_only}: marker {marker_center:?}, overlay {overlay_center:?}",
-                );
+                };
+                let overlay_center = pixel_center(&overlay, overlay_selected);
 
                 let mut cursor_only_frames = frames.clone();
                 cursor_only_frames.screen_frame = None;
@@ -7440,6 +7467,26 @@ mod project_uniforms_tests {
                     .await
                     .unwrap();
                 let cursor_only_center = pixel_center(&cursor_only, |pixel, _, _| pixel[3] > 12);
+                eprintln!(
+                    "{name}, ripple={ripple_only}: marker {marker_center:?}, overlay {overlay_center:?}, cursor-only {cursor_only_center:?}"
+                );
+                if (marker_center.x - overlay_center.x).abs() >= 1.5
+                    || (marker_center.y - overlay_center.y).abs() >= 1.5
+                    || (marker_center.x - cursor_only_center.x).abs() >= 1.5
+                    || (marker_center.y - cursor_only_center.y).abs() >= 1.5
+                {
+                    eprintln!(
+                        "overlay mask:\n{}cursor-only mask:\n{}",
+                        pixel_selection_mask(&overlay, marker_center, overlay_selected),
+                        pixel_selection_mask(&cursor_only, marker_center, |pixel, _, _| pixel[3]
+                            > 12),
+                    );
+                }
+                assert!(
+                    (marker_center.x - overlay_center.x).abs() < 1.5
+                        && (marker_center.y - overlay_center.y).abs() < 1.5,
+                    "{name}, ripple={ripple_only}: marker {marker_center:?}, overlay {overlay_center:?}",
+                );
                 assert!(
                     (marker_center.x - cursor_only_center.x).abs() < 1.5
                         && (marker_center.y - cursor_only_center.y).abs() < 1.5,

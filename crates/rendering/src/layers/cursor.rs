@@ -575,6 +575,16 @@ impl CursorLayer {
             grain_params: cursor_grade.grain_params,
         };
 
+        #[cfg(test)]
+        eprintln!(
+            "cursor prepare: adapter={:?}, uniform_bytes={}, texture={:?}, mip_count={}, hotspot={:?}, uniforms={cursor_uniforms:?}",
+            constants._adapter.get_info(),
+            std::mem::size_of::<CursorUniforms>(),
+            cursor_texture.texture.size(),
+            cursor_texture.texture.mip_level_count(),
+            cursor_texture.hotspot,
+        );
+
         constants.queue.write_buffer(
             &self.statics.uniform_buffer,
             0,
