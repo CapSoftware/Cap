@@ -295,6 +295,13 @@
 			"when": 1788384021541,
 			"tag": "0041_saml_sso",
 			"breakpoints": true
+		},
+		{
+			"idx": 42,
+			"version": "5",
+			"when": 1788437051131,
+			"tag": "0042_perf_indexes",
+			"breakpoints": true
 		}
 	]
 }
