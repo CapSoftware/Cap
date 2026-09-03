@@ -230,6 +230,77 @@ describe("desktop recording audio verification strength", () => {
 });
 
 describe("segmented recording preservation receipts", () => {
+	it("publishes and rechecks a content-bound Drive receipt across metadata changes", async () => {
+		const fixture = segmentedFixture();
+		const identity = `"cap-drive-content-v1:${"d".repeat(64)}"`;
+		mocks.head.mockReturnValue(
+			Effect.succeed({
+				ContentLength: output.fileSize,
+				ETag: '"drive-file:3"',
+				RecordingContentETag: identity,
+			}),
+		);
+		const receipt = await createVerifiedRecordingReceipt(
+			video(),
+			fixture.request,
+			fixture.output,
+			true,
+			identity,
+			fixture.options,
+		);
+		expect(receipt.objectIdentity).toBe(identity);
+		mocks.head.mockReturnValue(
+			Effect.succeed({
+				ContentLength: output.fileSize,
+				ETag: '"drive-file:6"',
+				RecordingContentETag: identity,
+			}),
+		);
+		expect(
+			await verifyDesktopRecordingUpload(video(receipt), fixture.request),
+		).toMatchObject({ fullDecode: true, requiredAudioVerified: true });
+		mocks.head.mockReturnValue(
+			Effect.succeed({
+				ContentLength: output.fileSize,
+				ETag: '"drive-file:6"',
+				RecordingContentETag: `"cap-drive-content-v1:${"e".repeat(64)}"`,
+			}),
+		);
+		expect(
+			await verifyDesktopRecordingUpload(video(receipt), fixture.request),
+		).toBeNull();
+	});
+
+	it("does not reinterpret an old Drive receipt when its version changes", async () => {
+		const fixture = segmentedFixture();
+		const identity = `"cap-drive-content-v1:${"d".repeat(64)}"`;
+		mocks.head.mockReturnValue(
+			Effect.succeed({
+				ContentLength: output.fileSize,
+				ETag: '"drive-file:1"',
+				RecordingContentETag: identity,
+			}),
+		);
+		const receipt = await createVerifiedRecordingReceipt(
+			video(),
+			fixture.request,
+			fixture.output,
+			true,
+			'"drive-file:1"',
+			fixture.options,
+		);
+		mocks.head.mockReturnValue(
+			Effect.succeed({
+				ContentLength: output.fileSize,
+				ETag: '"drive-file:6"',
+				RecordingContentETag: identity,
+			}),
+		);
+		expect(
+			await verifyDesktopRecordingUpload(video(receipt), fixture.request),
+		).toBeNull();
+	});
+
 	it.each([
 		{
 			name: "legacy object estimates",

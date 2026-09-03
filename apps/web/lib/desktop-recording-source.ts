@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { videos } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend/src/Storage/index";
+import { getRecordingObjectIdentity } from "@cap/web-backend/src/Storage/recording-object-identity";
 import { getPublishedRecordingOutputKey } from "@cap/web-backend/src/Storage/recording-output";
 import { Video } from "@cap/web-domain";
 import { Effect, Option, Runtime } from "effect";
@@ -615,9 +616,17 @@ async function captureOriginal(
 	const head = await context.run(
 		context.bucket.headObject(original.originalKey),
 	);
+	const expectedIdentity =
+		original.track === "mp4" && verification?.artifact.kind === "mp4"
+			? verification.artifact.objectIdentity
+			: undefined;
+	const identity = getRecordingObjectIdentity(head, expectedIdentity);
+	if (!identity && "RecordingContentETag" in head) {
+		throw new Error("Recording content identity is unavailable");
+	}
 	if (
-		!head.ETag ||
-		!recordingObjectIdentitySchema.safeParse(head.ETag).success ||
+		!identity ||
+		!recordingObjectIdentitySchema.safeParse(identity).success ||
 		!head.ContentLength ||
 		!Number.isSafeInteger(head.ContentLength) ||
 		head.ContentLength < 0
@@ -631,14 +640,14 @@ async function captureOriginal(
 		original.track === "mp4" &&
 		verification?.artifact.kind === "mp4" &&
 		(verification.artifact.fileSize !== head.ContentLength ||
-			verification.artifact.objectIdentity !== head.ETag)
+			verification.artifact.objectIdentity !== identity)
 	) {
 		throw new DesktopRecordingSourceError(
 			"source-changed",
 			"Uploaded recording does not match its original object identity",
 		);
 	}
-	return { ...original, originalIdentity: head.ETag, size: head.ContentLength };
+	return { ...original, originalIdentity: identity, size: head.ContentLength };
 }
 
 function copyMetadata(original: OriginalObject) {
@@ -653,14 +662,19 @@ async function checkOriginal(context: SourceContext, original: OriginalObject) {
 	const head = await context.run(
 		context.bucket.headObject(original.originalKey),
 	);
+	const identity = getRecordingObjectIdentity(head, original.originalIdentity);
+	if (!identity && "RecordingContentETag" in head) {
+		throw new Error("Recording content identity is unavailable");
+	}
 	if (
-		head.ETag !== original.originalIdentity ||
+		identity !== original.originalIdentity ||
 		head.ContentLength !== original.size
 	)
 		throw new DesktopRecordingSourceError(
 			"source-changed",
 			"Recording source changed while its durable snapshot was being saved",
 		);
+	return head;
 }
 
 async function checkCopy(
@@ -670,15 +684,35 @@ async function checkCopy(
 	expectedIdentity?: string,
 ): Promise<SourceObject> {
 	assertContextKey(context, key);
-	const [head] = await Promise.all([
+	const [head, originalHead] = await Promise.all([
 		context.run(context.bucket.headObject(key)),
 		checkOriginal(context, original),
 	]);
+	const identity = getRecordingObjectIdentity(head, expectedIdentity);
+	if (!identity && "RecordingContentETag" in head) {
+		throw new Error("Recording content identity is unavailable");
+	}
+	if (context.bucket.provider === "googleDrive") {
+		if (
+			!("RecordingContentSHA256" in head) ||
+			!("RecordingContentSHA256" in originalHead) ||
+			!head.RecordingContentSHA256 ||
+			!originalHead.RecordingContentSHA256
+		) {
+			throw new Error("Recording content checksum is unavailable");
+		}
+		if (head.RecordingContentSHA256 !== originalHead.RecordingContentSHA256) {
+			throw new DesktopRecordingSourceError(
+				"source-changed",
+				"Recording snapshot content does not match its original source",
+			);
+		}
+	}
 	if (
-		!head.ETag ||
-		!recordingObjectIdentitySchema.safeParse(head.ETag).success ||
+		!identity ||
+		!recordingObjectIdentitySchema.safeParse(identity).success ||
 		head.ContentLength !== original.size ||
-		(expectedIdentity !== undefined && head.ETag !== expectedIdentity)
+		(expectedIdentity !== undefined && identity !== expectedIdentity)
 	) {
 		throw new DesktopRecordingSourceError(
 			"source-changed",
@@ -696,7 +730,7 @@ async function checkCopy(
 			"Recording snapshot is missing its original source identity",
 		);
 	}
-	return { ...original, key, objectIdentity: head.ETag };
+	return { ...original, key, objectIdentity: identity };
 }
 
 function objectDirectory(key: string) {
@@ -746,6 +780,11 @@ async function reusableCopy(
 				) {
 					return checkCopy(context, original, key, receipt.data.objectIdentity);
 				}
+			} else if (context.bucket.provider === "googleDrive") {
+				return saveObjectReceipt(
+					context,
+					await checkCopy(context, original, key),
+				);
 			} else if (context.bucket.provider === "s3") {
 				const head = await context.run(context.bucket.headObject(key));
 				if (

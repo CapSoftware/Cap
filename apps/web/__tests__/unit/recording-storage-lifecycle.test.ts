@@ -637,7 +637,14 @@ async function driveFixture() {
 	const files = new Map<string, GoogleDriveFile>([
 		[
 			"original-file",
-			{ id: "original-file", version: "1", size: "10", mimeType: "video/mp4" },
+			{
+				id: "original-file",
+				version: "1",
+				size: "10",
+				mimeType: "video/mp4",
+				sha256Checksum: "a".repeat(64),
+				headRevisionId: "revision-1",
+			},
 		],
 	]);
 	const repo = await Effect.runPromise(
@@ -1704,7 +1711,36 @@ describe("recording storage lifecycle", () => {
 		);
 	});
 
-	it.each(["source-version", "destination-size"] as const)(
+	it("allows native Drive copies to change metadata versions without changing bytes", async () => {
+		const drive = await driveFixture();
+		const nativeCopy = mocks.driveCopy.getMockImplementation();
+		if (!nativeCopy) throw new Error("Missing native Drive copy fixture");
+		mocks.driveCopy.mockImplementation(
+			(input: Parameters<typeof copyGoogleDriveFile>[0]) =>
+				nativeCopy(input).pipe(
+					Effect.tap(() =>
+						Effect.sync(() => {
+							for (const file of drive.files.values()) file.version = "6";
+						}),
+					),
+				),
+		);
+		await Effect.runPromise(
+			drive.access.copyObjectForRecording(
+				`google-drive/${outputKey}`,
+				`${newPrefix}result.mp4`,
+			),
+		);
+		expect(drive.records.get(`${newPrefix}result.mp4`)?.providerObjectId).toBe(
+			"copied-file",
+		);
+	});
+
+	it.each([
+		"source-checksum",
+		"destination-checksum",
+		"destination-size",
+	] as const)(
 		"rejects a Drive copy when %s changes during readback",
 		async (change) => {
 			const drive = await driveFixture();
@@ -1715,16 +1751,17 @@ describe("recording storage lifecycle", () => {
 					nativeCopy(input).pipe(
 						Effect.tap(() =>
 							Effect.sync(() => {
-								if (change === "source-version") {
+								if (change === "source-checksum") {
 									const original = drive.files.get("original-file");
 									if (!original)
 										throw new Error("Missing original Drive fixture");
-									original.version = "2";
+									original.sha256Checksum = "b".repeat(64);
 								} else {
 									const destination = drive.files.get("copied-file");
 									if (!destination)
 										throw new Error("Missing copied Drive fixture");
-									destination.size = "9";
+									if (change === "destination-size") destination.size = "9";
+									else destination.sha256Checksum = "b".repeat(64);
 								}
 							}),
 						),

@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { uploadFileToStorage } from "../../lib/media-video";
+import { verifyRemoteRecordingBytes } from "../../lib/recording-verification";
 
 const originalFetch = globalThis.fetch;
 const partSize = 5 * 1024 * 1024;
@@ -26,6 +28,72 @@ describe("uploadFileToStorage", () => {
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
 	});
+
+	test.each([false, true])(
+		"checks full remote bytes after Drive metadata version drift (corrupt=%s)",
+		async (corrupt) => {
+			const uploadFile = await createTempUploadFile(11);
+			const bytes = new Uint8Array(
+				await Bun.file(uploadFile.path).arrayBuffer(),
+			);
+			const sha256 = createHash("sha256").update(bytes).digest("hex");
+			const identity = `"cap-drive-content-v1:${createHash("sha256")
+				.update(JSON.stringify(["drive-file-1", bytes.length, sha256]))
+				.digest("hex")}"`;
+			globalThis.fetch = (async (_input, init) => {
+				if (init?.method === "PUT")
+					return Response.json({
+						id: "drive-file-1",
+						version: "1",
+						size: "11",
+						sha256Checksum: sha256,
+						headRevisionId: "revision-1",
+					});
+				const headers = new Headers(init?.headers);
+				expect(headers.get("if-match")).toBe(identity);
+				if (headers.has("range"))
+					return new Response(bytes.slice(0, 1), {
+						status: 206,
+						headers: {
+							ETag: identity,
+							"Content-Length": "1",
+							"Content-Range": "bytes 0-0/11",
+						},
+					});
+				const returned = bytes.slice();
+				if (corrupt) returned[5] = 99;
+				return new Response(returned, {
+					headers: { ETag: identity, "Content-Length": "11" },
+				});
+			}) as typeof fetch;
+			try {
+				const receipt = await uploadFileToStorage(
+					uploadFile.path,
+					{
+						type: "put",
+						url: "https://www.googleapis.com/upload/drive/v3/files?upload_id=session",
+					},
+					"video/mp4",
+				);
+				expect(receipt.objectIdentity).toBe(identity);
+				const verified = verifyRemoteRecordingBytes(
+					"https://storage.example.com/recording.mp4",
+					{
+						expectedSha256: sha256,
+						expectedFileSize: 11,
+						expectedObjectIdentity: identity,
+					},
+				);
+				if (corrupt)
+					await expect(verified).rejects.toThrow(
+						"Uploaded recording bytes do not match",
+					);
+				else expect((await verified).remoteSha256).toBe(sha256);
+			} finally {
+				await uploadFile.cleanup();
+			}
+		},
+	);
 
 	test("returns the successful PUT identity without a later HEAD lookup", async () => {
 		const uploadFile = await createTempUploadFile(11);
@@ -76,38 +144,59 @@ describe("uploadFileToStorage", () => {
 		},
 	);
 
-	test("binds a Drive upload to its completed response version without rounding", async () => {
-		const uploadFile = await createTempUploadFile(11);
-		const methods: string[] = [];
-		globalThis.fetch = (async (_input, init) => {
-			methods.push(init?.method ?? "GET");
-			expect(new Headers(init?.headers).get("content-range")).toBe(
-				"bytes 0-10/11",
-			);
-			return Response.json({
-				id: "drive-file-1",
-				version: "9007199254740993",
-				size: "11",
-			});
-		}) as typeof fetch;
-		try {
-			const receipt = await uploadFileToStorage(
-				uploadFile.path,
-				{
-					type: "put",
-					url: "https://www.googleapis.com/upload/drive/v3/files?upload_id=session",
-				},
-				"video/mp4",
-			);
-			expect(receipt.objectIdentity).toBe('"drive-file-1:9007199254740993"');
-			expect(methods).toEqual(["PUT"]);
-		} finally {
-			await uploadFile.cleanup();
-		}
-	});
+	test.each(["1", "6", "9007199254740993"])(
+		"binds a Drive upload to content independently of metadata version %s",
+		async (version) => {
+			const uploadFile = await createTempUploadFile(11);
+			const methods: string[] = [];
+			globalThis.fetch = (async (_input, init) => {
+				methods.push(init?.method ?? "GET");
+				expect(new Headers(init?.headers).get("content-range")).toBe(
+					"bytes 0-10/11",
+				);
+				return Response.json({
+					id: "drive-file-1",
+					version,
+					size: "11",
+					sha256Checksum: "a".repeat(64),
+					headRevisionId: "revision-1",
+				});
+			}) as typeof fetch;
+			try {
+				const receipt = await uploadFileToStorage(
+					uploadFile.path,
+					{
+						type: "put",
+						url: "https://www.googleapis.com/upload/drive/v3/files?upload_id=session",
+					},
+					"video/mp4",
+				);
+				expect(receipt.objectIdentity).toBe(
+					'"cap-drive-content-v1:9c353d47a7cf9c0f30c3008eb3576c4629a878019572a4d68404cbe0f222b88c"',
+				);
+				expect(methods).toEqual(["PUT"]);
+			} finally {
+				await uploadFile.cleanup();
+			}
+		},
+	);
 
 	test.each([
 		{ id: "drive-file-1", size: "11" },
+		{ id: "drive-file-1", version: "1", size: "11" },
+		{ id: "drive-file-1", size: "11", sha256Checksum: "a".repeat(64) },
+		{
+			id: "drive-file-1",
+			size: "11",
+			sha256Checksum: "invalid",
+			headRevisionId: "revision-1",
+		},
+		{
+			id: "drive-file-1",
+			size: "12",
+			sha256Checksum: "a".repeat(64),
+			headRevisionId: "revision-1",
+		},
 		{ id: 'invalid"id', version: "1", size: "11" },
 		{ id: "drive-file-1", version: "0", size: "11" },
 		{ id: "drive-file-1", version: "1", size: "12" },
