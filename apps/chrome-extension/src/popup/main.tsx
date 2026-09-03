@@ -37,6 +37,7 @@ import { DEFAULT_MICROPHONE_DEVICE_ID } from "../shared/types";
 import { CameraSelector } from "./components/camera-selector";
 import { DashboardButton } from "./components/dashboard-button";
 import { HowItWorksButton } from "./components/how-it-works-button";
+import { ImportButton } from "./components/import-button";
 import { MicrophoneSelector } from "./components/microphone-selector";
 import { RecorderHeader } from "./components/recorder-header";
 import { RecordingBar } from "./components/recording-bar";
@@ -704,7 +705,14 @@ function App() {
 								{status.message}
 							</div>
 						)}
-						<div className="cap-fade-up cap-fade-up-6 flex justify-center">
+						<div className="cap-fade-up cap-fade-up-6 flex justify-center gap-4">
+							<ImportButton
+								onClick={() => {
+									void chrome.tabs
+										.create({ url: chrome.runtime.getURL("migrate.html") })
+										.catch(() => setError("Could not open the importer."));
+								}}
+							/>
 							<HowItWorksButton onClick={() => void openHowItWorks()} />
 						</div>
 						{failedRecordingsCount > 0 && (
@@ -721,11 +729,20 @@ function App() {
 						)}
 					</>
 				) : (
-					<SignInView
-						authPending={authPending}
-						busy={busy}
-						onSignIn={() => void signIn()}
-					/>
+					<>
+						<SignInView
+							authPending={authPending}
+							busy={busy}
+							onSignIn={() => void signIn()}
+						/>
+						<ImportButton
+							onClick={() => {
+								void chrome.tabs
+									.create({ url: chrome.runtime.getURL("migrate.html") })
+									.catch(() => setError("Could not open the importer."));
+							}}
+						/>
+					</>
 				)}
 
 				{error && (
