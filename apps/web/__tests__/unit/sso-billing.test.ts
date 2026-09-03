@@ -457,6 +457,47 @@ describe("existing subscription billing currency", () => {
 		},
 	);
 
+	it("allows multiple current products using the same billing currency", async () => {
+		const otherProduct = proSubscription({
+			id: "sub_other_product",
+			currency: "gbp",
+		});
+		const item = otherProduct.items.data[0];
+		if (!item) throw new Error("Missing other product subscription item");
+		item.price.id = "price_other_product";
+		item.price.product = "prod_other_product";
+		mocks.listSubscriptions.mockResolvedValue([
+			otherProduct,
+			proSubscription({ currency: "gbp" }),
+		]);
+		expect(await getSsoPrices(organizationId)).toEqual([
+			{ currency: "gbp", unitAmount: 20000 },
+		]);
+		await createSsoCheckout(checkoutInput("gbp"));
+		expect(mocks.stripe.checkout.sessions.create).toHaveBeenCalledWith(
+			expect.objectContaining({ currency: "gbp" }),
+			expect.any(Object),
+		);
+	});
+
+	it.each(["canceled", "incomplete_expired"] as const)(
+		"ignores a %s historical currency alongside the current subscription",
+		async (status) => {
+			mocks.listSubscriptions.mockResolvedValue([
+				proSubscription({ id: "sub_historical", currency: "usd", status }),
+				proSubscription({ currency: "gbp" }),
+			]);
+			expect(await getSsoPrices(organizationId)).toEqual([
+				{ currency: "gbp", unitAmount: 20000 },
+			]);
+			await createSsoCheckout(checkoutInput("gbp"));
+			expect(mocks.stripe.checkout.sessions.create).toHaveBeenCalledWith(
+				expect.objectContaining({ currency: "gbp" }),
+				expect.any(Object),
+			);
+		},
+	);
+
 	it("keeps the selector for an owner without a billing customer", async () => {
 		state.users.set(userId, { id: userId, stripeCustomerId: null });
 		expect(await getSsoPrices(organizationId)).toHaveLength(3);

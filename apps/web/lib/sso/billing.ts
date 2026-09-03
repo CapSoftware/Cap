@@ -36,6 +36,8 @@ function stripeId(value: string | { id: string } | null | undefined) {
 }
 
 function subscriptionBillingCurrency(subscriptions: Stripe.Subscription[]) {
+	// Stripe locks currency per customer, including subscriptions for other products.
+	// https://docs.stripe.com/invoicing/multi-currency-customers
 	const currencies = new Set(
 		subscriptions
 			.filter((subscription) => !TERMINAL_STATUSES.has(subscription.status))
