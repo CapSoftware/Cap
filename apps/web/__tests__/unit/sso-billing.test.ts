@@ -245,6 +245,7 @@ function ssoSubscription(
 		id: "sub_sso",
 		customer: "cus_owner",
 		status: "active",
+		currency: "usd",
 		metadata: { type: "saml_sso", organizationId, userId },
 		current_period_end: periodEnd,
 		cancel_at_period_end: false,
@@ -290,6 +291,18 @@ function checkoutInput(currency: "usd" | "gbp" | "eur" = "usd") {
 		stripeCustomerId: "cus_owner",
 		currency,
 	};
+}
+
+function proSubscription(overrides: Partial<Stripe.Subscription> = {}) {
+	const subscription = ssoSubscription(
+		{ id: "sub_pro", metadata: {}, ...overrides },
+		"price_pro",
+	);
+	const item = subscription.items.data[0];
+	if (!item) throw new Error("Missing Pro subscription item");
+	item.price.product = "prod_pro";
+	item.price.currency = "usd";
+	return subscription;
 }
 
 beforeEach(() => {
@@ -380,6 +393,171 @@ beforeEach(() => {
 });
 
 afterEach(() => vi.useRealTimers());
+
+describe("existing subscription billing currency", () => {
+	it.each(["usd", "gbp", "eur"] as const)(
+		"uses the actual %s subscription currency for pricing and checkout",
+		async (currency) => {
+			mocks.listSubscriptions.mockResolvedValue([
+				proSubscription({ currency }),
+			]);
+			expect(await getSsoPrices(organizationId)).toEqual([
+				{ currency, unitAmount: 20000 },
+			]);
+			expect(mocks.stripe.subscriptions.list).toHaveBeenCalledWith({
+				customer: "cus_owner",
+				status: "all",
+				limit: 100,
+			});
+			await createSsoCheckout(checkoutInput(currency));
+			expect(mocks.stripe.checkout.sessions.create).toHaveBeenCalledWith(
+				expect.objectContaining({ currency }),
+				expect.any(Object),
+			);
+		},
+	);
+
+	it.each([
+		"active",
+		"trialing",
+		"past_due",
+		"unpaid",
+		"paused",
+		"incomplete",
+	] as const)(
+		"does not accept another currency for a %s subscription",
+		async (status) => {
+			mocks.listSubscriptions.mockResolvedValue([
+				proSubscription({
+					currency: "gbp",
+					status,
+					cancel_at_period_end: true,
+				}),
+			]);
+			await expect(createSsoCheckout(checkoutInput("eur"))).rejects.toThrow(
+				"must use your existing billing currency",
+			);
+			expect(mocks.stripe.checkout.sessions.create).not.toHaveBeenCalled();
+			expect(state.billing.size).toBe(0);
+		},
+	);
+
+	it.each(["canceled", "incomplete_expired"] as const)(
+		"allows currency selection after a %s subscription",
+		async (status) => {
+			mocks.listSubscriptions.mockResolvedValue([
+				proSubscription({ currency: "gbp", status }),
+			]);
+			expect(await getSsoPrices(organizationId)).toHaveLength(3);
+			await createSsoCheckout(checkoutInput("eur"));
+			expect(mocks.stripe.checkout.sessions.create).toHaveBeenCalledWith(
+				expect.objectContaining({ currency: "eur" }),
+				expect.any(Object),
+			);
+		},
+	);
+
+	it("allows multiple current products using the same billing currency", async () => {
+		const otherProduct = proSubscription({
+			id: "sub_other_product",
+			currency: "gbp",
+		});
+		const item = otherProduct.items.data[0];
+		if (!item) throw new Error("Missing other product subscription item");
+		item.price.id = "price_other_product";
+		item.price.product = "prod_other_product";
+		mocks.listSubscriptions.mockResolvedValue([
+			otherProduct,
+			proSubscription({ currency: "gbp" }),
+		]);
+		expect(await getSsoPrices(organizationId)).toEqual([
+			{ currency: "gbp", unitAmount: 20000 },
+		]);
+		await createSsoCheckout(checkoutInput("gbp"));
+		expect(mocks.stripe.checkout.sessions.create).toHaveBeenCalledWith(
+			expect.objectContaining({ currency: "gbp" }),
+			expect.any(Object),
+		);
+	});
+
+	it.each(["canceled", "incomplete_expired"] as const)(
+		"ignores a %s historical currency alongside the current subscription",
+		async (status) => {
+			mocks.listSubscriptions.mockResolvedValue([
+				proSubscription({ id: "sub_historical", currency: "usd", status }),
+				proSubscription({ currency: "gbp" }),
+			]);
+			expect(await getSsoPrices(organizationId)).toEqual([
+				{ currency: "gbp", unitAmount: 20000 },
+			]);
+			await createSsoCheckout(checkoutInput("gbp"));
+			expect(mocks.stripe.checkout.sessions.create).toHaveBeenCalledWith(
+				expect.objectContaining({ currency: "gbp" }),
+				expect.any(Object),
+			);
+		},
+	);
+
+	it("keeps the selector for an owner without a billing customer", async () => {
+		state.users.set(userId, { id: userId, stripeCustomerId: null });
+		expect(await getSsoPrices(organizationId)).toHaveLength(3);
+		expect(mocks.stripe.subscriptions.list).not.toHaveBeenCalled();
+	});
+
+	it("does not fall back to another currency when the matching price is unavailable", async () => {
+		mocks.listSubscriptions.mockResolvedValue([
+			proSubscription({ currency: "gbp" }),
+		]);
+		mocks.stripe.prices.retrieve.mockResolvedValue({
+			active: true,
+			currency: "usd",
+			unit_amount: 20000,
+			recurring: { interval: "month", interval_count: 1 },
+		});
+		expect(await getSsoPrices(organizationId)).toEqual([]);
+	});
+
+	it.each([{ currencies: ["cad"] }, { currencies: ["usd", "gbp"] }])(
+		"blocks unsupported or conflicting subscription currencies $currencies",
+		async ({ currencies }) => {
+			mocks.listSubscriptions.mockResolvedValue(
+				currencies.map((currency) => proSubscription({ currency })),
+			);
+			await expect(getSsoPrices(organizationId)).rejects.toThrow();
+			await expect(createSsoCheckout(checkoutInput())).rejects.toThrow();
+			expect(mocks.stripe.checkout.sessions.create).not.toHaveBeenCalled();
+			expect(state.billing.size).toBe(0);
+		},
+	);
+
+	it("does not create checkout when the subscription lookup fails", async () => {
+		mocks.listSubscriptions.mockRejectedValue(new Error("Stripe unavailable"));
+		await expect(getSsoPrices(organizationId)).rejects.toThrow(
+			"Stripe unavailable",
+		);
+		await expect(createSsoCheckout(checkoutInput())).rejects.toThrow(
+			"Stripe unavailable",
+		);
+		expect(mocks.stripe.checkout.sessions.create).not.toHaveBeenCalled();
+	});
+
+	it("expires a previous checkout before using a newly established billing currency", async () => {
+		await createSsoCheckout(checkoutInput("eur"));
+		const previousSessionId =
+			state.billing.get(organizationId)?.checkoutSessionId;
+		mocks.listSubscriptions.mockResolvedValue([
+			proSubscription({ currency: "gbp" }),
+		]);
+		await createSsoCheckout(checkoutInput("gbp"));
+		expect(state.sessions.get(String(previousSessionId))?.status).toBe(
+			"expired",
+		);
+		expect(mocks.stripe.checkout.sessions.create).toHaveBeenLastCalledWith(
+			expect.objectContaining({ currency: "gbp" }),
+			expect.any(Object),
+		);
+	});
+});
 
 describe("verified organization SSO subscription synchronization", () => {
 	it("binds a paid subscription to its exact organization without touching Pro", async () => {

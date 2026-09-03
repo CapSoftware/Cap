@@ -91,7 +91,7 @@ export async function getOrganizationSsoSettings(
 	const ssoAvailable = Boolean(env.WORKOS_API_KEY && env.WORKOS_CLIENT_ID);
 	const [billing, prices, configuration] = await Promise.all([
 		refreshSsoBilling(organizationId),
-		getSsoPrices().catch(() => []),
+		getSsoPrices(organizationId).catch(() => []),
 		ssoAvailable ? getSsoConfiguration(organization) : null,
 	]);
 	const entitled = hasSsoAccess(billing);

@@ -23,7 +23,6 @@ import { toast } from "sonner";
 import {
 	confirmOrganizationSsoCheckout,
 	getOrganizationSsoSettings,
-	manageOrganizationSsoBilling,
 	type OrganizationSsoSettings,
 	openOrganizationSsoPortal,
 	startOrganizationSsoCheckout,
@@ -34,12 +33,11 @@ import {
 	type SupportedCurrency,
 } from "@/utils/currency";
 
-type SsoAction = "checkout" | "portal" | "billing" | "refresh" | "confirm";
+type SsoAction = "checkout" | "portal" | "refresh" | "confirm";
 
 const actionErrors: Record<SsoAction, string> = {
 	checkout: "We couldn't open checkout. Please try again or contact support.",
 	portal: "We couldn't open SSO setup. Please try again or contact support.",
-	billing: "We couldn't open billing. Please try again or contact support.",
 	refresh: "We couldn't refresh SSO status. Please try again.",
 	confirm:
 		"We couldn't confirm your SSO subscription yet. Refresh the status to try again, or contact support if you've been charged.",
@@ -210,13 +208,6 @@ export function SsoCard({
 		});
 	};
 
-	const openBilling = () => {
-		runAction("billing", async () => {
-			const { url } = await manageOrganizationSsoBilling(organizationId);
-			window.location.assign(url);
-		});
-	};
-
 	return (
 		<Card>
 			<div className="flex flex-wrap gap-4 justify-between items-start">
@@ -346,47 +337,25 @@ export function SsoCard({
 										Verify domains
 									</Button>
 								)}
-							{settings.canManageBilling && settings.hasSubscription && (
-								<Button
-									type="button"
-									size="sm"
-									variant="gray"
-									onClick={openBilling}
-									disabled={busy}
-									spinner={pendingAction === "billing"}
-								>
-									Manage subscription
-								</Button>
-							)}
 						</div>
 						{settings.cancelAtPeriodEnd && (
 							<p className="text-sm text-gray-11">
-								Your SSO add-on is scheduled to end {periodEndLabel}. Manage
-								your subscription to keep it active.
+								Your SSO add-on is scheduled to end {periodEndLabel}.
 							</p>
 						)}
 					</>
 				) : settings.canManageBilling ? (
 					<div className="flex flex-col gap-3">
 						{hasExistingSubscription ? (
-							<>
-								<p className="text-sm text-gray-11">
-									Your SSO subscription needs attention before setup is
-									available. Manage the existing subscription to review its
-									payment status.
-								</p>
-								<Button
-									type="button"
-									size="sm"
-									variant="dark"
-									className="w-fit"
-									onClick={openBilling}
-									disabled={busy}
-									spinner={pendingAction === "billing"}
-								>
-									Manage SSO subscription
-								</Button>
-							</>
+							<p className="text-sm text-gray-11">
+								Your SSO subscription needs attention before setup is available.
+								Contact{" "}
+								<a className="underline" href="mailto:hello@cap.so">
+									hello@cap.so
+								</a>{" "}
+								for help with the existing subscription; you don't need to
+								purchase it again.
+							</p>
 						) : (
 							<div className="flex flex-wrap gap-3 items-end">
 								{price && settings.prices.length > 1 && (
