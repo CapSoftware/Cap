@@ -108,10 +108,23 @@ async function handler(
 					(redirectUrl.pathname === "/login" &&
 						redirectUrl.searchParams.has("error")))
 			) {
+				const isMissingProfileAttributes =
+					request.method === "GET" &&
+					request.nextUrl.searchParams.getAll("error").length === 1 &&
+					request.nextUrl.searchParams.getAll("error_description").length ===
+						1 &&
+					request.nextUrl.searchParams.get("error") === "server_error" &&
+					request.nextUrl.searchParams.get("error_description") ===
+						"The SAML Response did not contain expected attributes.";
 				response.headers.set(
 					"location",
 					new URL(
-						ssoLoginErrorPath("SsoSignInFailed", intent.returnTo),
+						ssoLoginErrorPath(
+							isMissingProfileAttributes
+								? "SsoMissingProfileAttributes"
+								: "SsoSignInFailed",
+							intent.returnTo,
+						),
 						env.WEB_URL,
 					).toString(),
 				);
