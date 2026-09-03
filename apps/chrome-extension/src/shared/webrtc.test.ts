@@ -83,5 +83,9 @@ describe("toSessionDescriptionInit", () => {
 		expect(() => toSessionDescriptionInit(null)).toThrow(
 			"Missing session description",
 		);
+		expect(() =>
+			toSessionDescriptionInit(undefined as unknown as RTCSessionDescription),
+		).toThrow("Missing session description");
 	});
 });
+
