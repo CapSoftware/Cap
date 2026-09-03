@@ -15,7 +15,7 @@ import { runPromise } from "@/lib/server";
 
 import { CollectionShareControl } from "../../_components/CollectionShareControl";
 import { UploadCapButton } from "../../caps/components";
-import FolderCard from "../../caps/components/Folder";
+import { FoldersSection } from "../../caps/components/FoldersSection";
 import { WebRecorderDialog } from "../../caps/components/web-recorder-dialog/web-recorder-dialog";
 import {
 	BreadcrumbItem,
@@ -94,29 +94,22 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 					</div>
 				</div>
 
-				{/* Display Child Folders */}
-				{childFolders.length > 0 && (
-					<>
-						<h1 className="mb-6 text-xl font-medium text-gray-12">
-							Subfolders
-						</h1>
-						<div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
-							{childFolders.map((folder) => (
-								<FolderCard
-									key={folder.id}
-									name={folder.name}
-									color={folder.color}
-									public={folder.public}
-									id={folder.id}
-									parentId={folder.parentId}
-									videoCount={folder.videoCount}
-									canMove={share.canManage}
-									moveRootLabel="My Caps"
-								/>
-							))}
-						</div>
-					</>
-				)}
+				<FoldersSection
+					title="Subfolders"
+					scope="personal"
+					headingSize="md"
+					folders={childFolders.map((folder) => ({
+						id: folder.id,
+						name: folder.name,
+						color: folder.color,
+						public: folder.public,
+						parentId: folder.parentId,
+						videoCount: folder.videoCount,
+						createdAt: folder.createdAt,
+					}))}
+					canMove={share.canManage}
+					moveRootLabel="My Caps"
+				/>
 
 				{/* Display Videos */}
 				<FolderVideosSection

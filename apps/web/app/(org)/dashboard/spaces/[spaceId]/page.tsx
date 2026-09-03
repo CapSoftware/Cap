@@ -62,6 +62,7 @@ async function fetchFolders(
 			public: folders.public,
 			parentId: folders.parentId,
 			spaceId: folders.spaceId,
+			createdAt: folders.createdAt,
 			videoCount: sql<number>`(
           SELECT COUNT(*) FROM ${table} WHERE ${table}.folderId = folders.id
         )`,

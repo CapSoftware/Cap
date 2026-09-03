@@ -229,6 +229,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			color: folders.color,
 			public: folders.public,
 			parentId: folders.parentId,
+			createdAt: folders.createdAt,
 			videoCount: sql<number>`(
         SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
       )`,
