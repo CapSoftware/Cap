@@ -1147,14 +1147,6 @@ pub async fn render_video_to_channel_nv12(
                 })
                 .collect::<Vec<_>>()
         });
-    for timeline in &mut zoom_timelines {
-        timeline.precompute();
-    }
-    if let Some(timelines) = &mut outgoing_zoom_timelines {
-        for timeline in timelines {
-            timeline.precompute();
-        }
-    }
     let zoom_focus_interpolators_construct_ms = zoom_build_start.elapsed().as_millis() as u64;
 
     let mut frame_number = 0;
