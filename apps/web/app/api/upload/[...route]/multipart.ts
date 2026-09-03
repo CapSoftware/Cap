@@ -8,9 +8,8 @@ import {
 	provideOptionalAuth,
 	Storage,
 	VideosPolicy,
-	VideosRepo,
 } from "@cap/web-backend";
-import { Policy, Video } from "@cap/web-domain";
+import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
@@ -91,13 +90,10 @@ app.post(
 		const videoId = Video.VideoId.make(videoIdRaw);
 
 		const resp = await Effect.gen(function* () {
-			const repo = yield* VideosRepo;
 			const policy = yield* VideosPolicy;
 			const db = yield* Database;
 
-			const video = yield* repo
-				.getById(videoId)
-				.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+			const video = yield* policy.getOwnedById(videoId);
 			if (Option.isNone(video)) return yield* new Video.NotFoundError();
 
 			yield* db.use((db) =>
@@ -133,11 +129,8 @@ app.post(
 		try {
 			try {
 				const uploadId = await Effect.gen(function* () {
-					const repo = yield* VideosRepo;
 					const policy = yield* VideosPolicy;
-					const maybeVideo = yield* repo
-						.getById(videoId)
-						.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+					const maybeVideo = yield* policy.getOwnedById(videoId);
 					if (Option.isNone(maybeVideo)) {
 						return yield* new Video.NotFoundError();
 					}
@@ -231,11 +224,8 @@ app.post(
 						"videoId" in body ? body.videoId : videoIdFromFileKey;
 					if (!videoIdRaw) throw new Error("Video id not found");
 					const videoId = Video.VideoId.make(videoIdRaw);
-					const repo = yield* VideosRepo;
 					const policy = yield* VideosPolicy;
-					const maybeVideo = yield* repo
-						.getById(videoId)
-						.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+					const maybeVideo = yield* policy.getOwnedById(videoId);
 					if (Option.isNone(maybeVideo)) {
 						return yield* new Video.NotFoundError();
 					}
@@ -315,7 +305,6 @@ app.post(
 		const user = c.get("user");
 
 		return Effect.gen(function* () {
-			const repo = yield* VideosRepo;
 			const policy = yield* VideosPolicy;
 			const db = yield* Database;
 
@@ -327,9 +316,7 @@ app.post(
 			if (!videoIdRaw) return c.text("Video id not found", 400);
 			const videoId = Video.VideoId.make(videoIdRaw);
 
-			const maybeVideo = yield* repo
-				.getById(videoId)
-				.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+			const maybeVideo = yield* policy.getOwnedById(videoId);
 			if (Option.isNone(maybeVideo)) {
 				c.status(404);
 				return c.text(`Video '${encodeURIComponent(videoId)}' not found`);
@@ -766,13 +753,10 @@ app.post("/abort", abortRequestValidator, (c) => {
 	const videoId = Video.VideoId.make(videoIdRaw);
 
 	return Effect.gen(function* () {
-		const repo = yield* VideosRepo;
 		const policy = yield* VideosPolicy;
 		const db = yield* Database;
 
-		const maybeVideo = yield* repo
-			.getById(videoId)
-			.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+		const maybeVideo = yield* policy.getOwnedById(videoId);
 		if (Option.isNone(maybeVideo)) {
 			c.status(404);
 			return c.text(`Video '${encodeURIComponent(videoId)}' not found`);

@@ -29,7 +29,7 @@ import {
 	Comment,
 	type ImageUpload,
 	type Organisation,
-	Policy,
+	type Policy,
 	type Video,
 } from "@cap/web-domain";
 import { and, eq, type InferSelectModel, isNull, sql } from "drizzle-orm";
@@ -40,8 +40,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import {
-	getDashboardData,
+	getDashboardSpacesData,
 	type OrganizationSettings,
+	type Spaces,
 } from "@/app/(org)/dashboard/dashboard-data";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
@@ -97,6 +98,22 @@ const hasRecordingStoppedParam = (searchParams: ShareVideoSearchParams) => {
 
 	return recordingStoppedParam === "1" || recordingStoppedParam === "true";
 };
+
+function toShareVideo<
+	T extends {
+		password: unknown;
+		ownerId: unknown;
+		organizationTombstoneAt: Date | null;
+	},
+>(row: T) {
+	const {
+		password: _password,
+		ownerId: _ownerId,
+		organizationTombstoneAt: _organizationTombstoneAt,
+		...video
+	} = row;
+	return video;
+}
 
 // Helper function to fetch shared spaces data for a video
 async function getSharedSpacesForVideo(videoId: Video.VideoId) {
@@ -316,7 +333,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
 
-		const [video] = yield* Effect.promise(() =>
+		const [row] = yield* Effect.promise(() =>
 			db()
 				.select({
 					id: videos.id,
@@ -360,16 +377,29 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 						),
 					activeUploadRawFileKey: videoUploads.rawFileKey,
 					owner: users,
+					ownerId: videos.ownerId,
+					password: videos.password,
+					organizationTombstoneAt: organizations.tombstoneAt,
 				})
 				.from(videos)
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 				.innerJoin(users, eq(videos.ownerId, users.id))
 				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 				.leftJoin(organizations, eq(videos.orgId, organizations.id))
-				.where(and(eq(videos.id, videoId), isNull(organizations.tombstoneAt))),
-		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
+				.where(eq(videos.id, videoId)),
+		);
 
-		return Option.fromNullable(video);
+		// The access decision runs on the row already loaded above instead of
+		// re-reading it, and stays ahead of the tombstone check so a denied or
+		// password-gated video on a deleted org still resolves the way it did
+		// when the policy ran before the select.
+		if (row) {
+			yield* videosPolicy.canViewLoaded(row, Option.fromNullable(row.password));
+		}
+
+		return Option.fromNullable(
+			row && row.organizationTombstoneAt === null ? toShareVideo(row) : null,
+		);
 	}).pipe(
 		Effect.flatten,
 		Effect.map((video) => ({ needsPassword: false, video }) as const),
@@ -480,19 +510,11 @@ async function AuthorizedContent({
 	// Everything below is an independent round trip (DB or storage); each is
 	// started here and awaited together further down, so the page pays for the
 	// slowest one instead of the sum of all of them.
-	const spacesDataPromise: Promise<
-		Awaited<ReturnType<typeof getDashboardData>>["spacesData"] | null
-	> = user
-		? getDashboardData(user).then(
-				(dashboardData) => dashboardData.spacesData,
-				(error) => {
-					console.error(
-						"Failed to fetch spaces data for sharing dialog:",
-						error,
-					);
-					return [];
-				},
-			)
+	const spacesDataPromise: Promise<Spaces[] | null> = user
+		? getDashboardSpacesData(user).catch((error) => {
+				console.error("Failed to fetch spaces data for sharing dialog:", error);
+				return [];
+			})
 		: Promise.resolve(null);
 
 	const sharedSpacesPromise = getSharedSpacesForVideo(videoId);
@@ -515,18 +537,7 @@ async function AuthorizedContent({
 				return false;
 			});
 
-	const aiGenerationEnabledPromise = db()
-		.select({
-			email: users.email,
-			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
-		})
-		.from(users)
-		.where(eq(users.id, video.owner.id))
-		.limit(1)
-		.then((videoOwnerQuery) =>
-			videoOwnerQuery[0] ? isAiGenerationEnabled(videoOwnerQuery[0]) : false,
-		);
+	const aiGenerationEnabledPromise = isAiGenerationEnabled(video.owner);
 
 	const screenshotImageUrlPromise = video.isScreenshot
 		? Effect.flatMap(Videos, (videos) => videos.getThumbnailURL(videoId)).pipe(

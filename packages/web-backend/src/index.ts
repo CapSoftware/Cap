@@ -41,8 +41,11 @@ export {
 export { findScreenshotObjectKey, Videos } from "./Videos/index.ts";
 export {
 	buildCanView,
+	buildCanViewLoaded,
 	VideosPolicy,
 	type VideosPolicyDeps,
+	type ViewableVideo,
+	type ViewDecisionDeps,
 } from "./Videos/VideosPolicy.ts";
 export { VideosRepo } from "./Videos/VideosRepo.ts";
 export * as Workflows from "./Workflows.ts";
