@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type BunFile, file, spawn } from "bun";
@@ -2002,12 +2002,17 @@ async function readUploadReceipt(
 		return {};
 	}
 	if (!metadata || typeof metadata !== "object") return {};
-	const { id, version, size } = metadata as Record<string, unknown>;
+	const { id, size, sha256Checksum, headRevisionId } = metadata as Record<
+		string,
+		unknown
+	>;
 	if (
 		typeof id !== "string" ||
 		!/^[a-zA-Z0-9_-]{1,200}$/.test(id) ||
-		typeof version !== "string" ||
-		!/^[1-9]\d{0,19}$/.test(version) ||
+		typeof sha256Checksum !== "string" ||
+		!/^[a-fA-F0-9]{64}$/.test(sha256Checksum) ||
+		typeof headRevisionId !== "string" ||
+		!headRevisionId ||
 		typeof size !== "string" ||
 		!/^\d+$/.test(size) ||
 		!Number.isSafeInteger(Number(size)) ||
@@ -2016,7 +2021,10 @@ async function readUploadReceipt(
 	) {
 		return {};
 	}
-	return { objectIdentity: `"${id}:${version}"` };
+	const digest = createHash("sha256")
+		.update(JSON.stringify([id, Number(size), sha256Checksum.toLowerCase()]))
+		.digest("hex");
+	return { objectIdentity: `"cap-drive-content-v1:${digest}"` };
 }
 
 async function sleep(ms: number): Promise<void> {
