@@ -366,10 +366,11 @@ export async function importLoomVideoForOwner({
 		);
 
 	if (!writableResult.ok) {
-		console.error(
-			`Loom import: failed to resolve storage access for user ${ownerId} in org ${orgId}:`,
-			writableResult.error,
-		);
+		console.error("Loom import: failed to resolve storage access", {
+			ownerId,
+			orgId,
+			error: writableResult.error,
+		});
 		return {
 			success: false,
 			error:
