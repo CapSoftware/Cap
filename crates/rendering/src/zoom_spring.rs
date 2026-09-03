@@ -478,7 +478,11 @@ impl ZoomTransformTimeline {
         let mut zoom_segments = zoom_segments.to_vec();
         zoom_segments.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.end.total_cmp(&b.end)));
 
-        let time_map = build_time_map(timeline);
+        let time_map = if zoom_segments.is_empty() {
+            Vec::new()
+        } else {
+            build_time_map(timeline)
+        };
         let clusters = zoom_segments
             .iter()
             .map(|segment| match segment.mode {
@@ -518,12 +522,7 @@ impl ZoomTransformTimeline {
         let total_samples = (duration_secs * 1000.0 / STEP_MS).ceil() as usize + 2;
         if zoom_segments.is_empty() {
             return Self {
-                samples: vec![TimelineSample {
-                    amount: 1.0,
-                    center: XY::new(0.5, 0.5),
-                    activity: 0.0,
-                    snapped: false,
-                }],
+                samples: Vec::new(),
                 state: None,
                 zoom_segments,
                 clusters,
@@ -946,11 +945,35 @@ mod tests {
     #[test]
     fn empty_zoom_timeline_stays_constant_without_precompute_work() {
         let mut timeline = timeline_for(&[], &CursorEvents::default(), 60.0 * 60.0);
-        timeline.ensure_precomputed_until(60.0 * 60.0);
+        for seconds in [
+            f32::NEG_INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            0.5,
+            60.0 * 60.0,
+            f32::MAX,
+            f32::INFINITY,
+            f32::NAN,
+        ] {
+            timeline.ensure_precomputed_until(seconds);
+            timeline.precompute();
+            let sample = timeline.sample(seconds);
+            assert_eq!(
+                [
+                    sample.t,
+                    sample.bounds.top_left.x,
+                    sample.bounds.top_left.y,
+                    sample.bounds.bottom_right.x,
+                    sample.bounds.bottom_right.y,
+                ]
+                .map(f64::to_bits),
+                [0.0, 0.0, 0.0, 1.0, 1.0].map(f64::to_bits)
+            );
+            assert!(!timeline.snapped_within(seconds, 0.0));
+        }
 
         assert!(timeline.state.is_none());
-        assert_eq!(timeline.samples.len(), 1);
-        assert_eq!(timeline.sample(60.0 * 60.0).display_amount(), 1.0);
     }
 
     /// Max |value delta| and |slope delta| between adjacent 8ms sample

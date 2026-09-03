@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use cap_project::XY;
+use cap_project::{CaptionWord, XY};
 use glyphon::cosmic_text::LayoutRunIter;
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
@@ -9,13 +9,6 @@ use log::warn;
 use wgpu::{Device, Queue, include_wgsl, util::DeviceExt};
 
 use crate::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, parse_color_component};
-
-#[derive(Debug, Clone)]
-pub struct CaptionWord {
-    pub text: String,
-    pub start: f32,
-    pub end: f32,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable, Debug)]
@@ -518,16 +511,7 @@ impl CaptionsLayer {
         } else {
             joined_caption_text
         };
-        let caption_words: Vec<CaptionWord> = active
-            .segment
-            .words
-            .iter()
-            .map(|w| CaptionWord {
-                text: w.text.clone(),
-                start: w.start,
-                end: w.end,
-            })
-            .collect();
+        let caption_words = &active.segment.words;
 
         let fade_opacity = calculate_caption_fade(
             current_time,
@@ -572,8 +556,8 @@ impl CaptionsLayer {
             active_word_highlight_enabled && !caption_words.is_empty() && !use_pill_highlight;
 
         let active_word_byte_range = if use_pill_highlight {
-            find_active_word_index(current_time as f32, &caption_words)
-                .and_then(|idx| word_byte_range(&caption_text, &caption_words, idx, uppercase))
+            find_active_word_index(current_time as f32, caption_words)
+                .and_then(|idx| word_byte_range(&caption_text, caption_words, idx, uppercase))
         } else {
             None
         };
@@ -677,7 +661,7 @@ impl CaptionsLayer {
                         current_time as f32,
                         word,
                         idx,
-                        &caption_words,
+                        caption_words,
                         word_transition_duration,
                     );
 
@@ -1180,7 +1164,10 @@ fn calculate_caption_bounce(current_time: f64, start: f64, end: f64, fade_durati
 
 #[cfg(test)]
 mod tests {
-    use super::{caption_segment_effective_end, find_active_caption_segment};
+    use super::{
+        caption_segment_effective_end, find_active_caption_segment, find_active_word_index,
+        word_byte_range,
+    };
     use cap_project::{CaptionTrackSegment, CaptionWord};
 
     fn segment(start: f64, end: f64, words: Vec<CaptionWord>) -> CaptionTrackSegment {
@@ -1229,5 +1216,45 @@ mod tests {
         assert!(find_active_caption_segment(41.0, &segments, 0.2).is_none());
         // Still active while the (capped) word is on screen.
         assert!(find_active_caption_segment(37.0, &segments, 0.2).is_some());
+    }
+
+    #[test]
+    fn active_word_selection_preserves_boundaries_and_gaps() {
+        let words = [word(0.1, 0.4), word(0.5, 0.9)];
+
+        for (time, expected) in [
+            (-0.1, 0),
+            (0.1, 0),
+            (0.4, 0),
+            (0.49, 0),
+            (0.5, 1),
+            (0.9, 1),
+            (1.2, 1),
+        ] {
+            assert_eq!(find_active_word_index(time, &words), Some(expected));
+        }
+        assert_eq!(find_active_word_index(0.5, &[]), None);
+    }
+
+    #[test]
+    fn word_ranges_preserve_repeated_words_and_unicode_uppercase() {
+        let words = ["ŉ", "Straße", "ŉ"].map(|text| CaptionWord {
+            text: text.to_string(),
+            start: 0.0,
+            end: 1.0,
+        });
+        let text = "ŉ Straße ŉ";
+
+        for (index, expected) in [(0, (0, 2)), (1, (3, 10)), (2, (11, 13))] {
+            assert_eq!(word_byte_range(text, &words, index, false), Some(expected));
+        }
+        for (index, expected) in [(0, (0, 3)), (1, (4, 11)), (2, (12, 15))] {
+            assert_eq!(
+                word_byte_range(&text.to_uppercase(), &words, index, true),
+                Some(expected)
+            );
+        }
+        assert_eq!(word_byte_range(text, &words, 3, false), None);
+        assert_eq!(word_byte_range("missing", &words, 0, false), None);
     }
 }
