@@ -379,9 +379,7 @@ export const AgentScene = (props: SceneProps) => {
 						<p className="text-[14px] leading-[1.55] text-[rgba(255,255,255,0.82)]">
 							{DONE}
 						</p>
-						<a
-							href="https://cap.so/s/x7f2k9"
-							tabIndex={-1}
+						<div
 							className={classNames(
 								"mt-3 flex items-center gap-3 rounded-[12px] bg-white p-2.5 pr-4 text-[#111111] transition-[opacity,transform] duration-[480ms] ease-[cubic-bezier(0.16,1,0.3,1)]",
 								ui.link
@@ -400,7 +398,7 @@ export const AgentScene = (props: SceneProps) => {
 									cap.so/s/x7f2k9 · 0:20 · AI summary ready
 								</span>
 							</span>
-						</a>
+						</div>
 					</Message>
 				</div>
 			</div>
