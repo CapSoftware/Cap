@@ -140,7 +140,13 @@ export default async function sitemap() {
 		{ path: string; lastModified?: string }
 	>();
 	for (const route of combined) {
-		if (!uniqueByPath.has(route.path)) uniqueByPath.set(route.path, route);
+		if (
+			route.path !== "/home" &&
+			route.path !== "/home-two" &&
+			!uniqueByPath.has(route.path)
+		) {
+			uniqueByPath.set(route.path, route);
+		}
 	}
 	const dedupedRoutes = [...uniqueByPath.values()];
 	const homeRoute = dedupedRoutes.find((route) => route.path === "/");
