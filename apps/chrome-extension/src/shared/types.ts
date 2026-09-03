@@ -296,7 +296,12 @@ export type OffscreenRequest =
 	| AcknowledgeErrorRequest
 	| RetryUploadRequest
 	| EnumerateDevicesRequest
-	| ProbeMicrophoneRequest;
+	| ProbeMicrophoneRequest
+	| {
+			target: "offscreen";
+			type: "toggle-microphone-mute";
+			muted: boolean;
+	  };
 
 export type OffscreenResponse =
 	| {
@@ -393,6 +398,11 @@ export type ServiceWorkerRequest =
 	| {
 			target: "service-worker";
 			type: "close-webcam-preview";
+	  }
+	| {
+			target: "service-worker";
+			type: "toggle-microphone-mute";
+			muted: boolean;
 	  }
 	| {
 			target: "service-worker";

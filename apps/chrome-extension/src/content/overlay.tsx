@@ -1417,6 +1417,18 @@ function OverlayApp() {
 		}).catch(() => undefined);
 	}, [stopLocalPreview]);
 
+	const updateShape = useCallback(() => {
+		applyWebcamSettings((current) => ({
+			...current,
+			shape:
+				current.shape === "round"
+					? "square"
+					: current.shape === "square"
+						? "full"
+						: "round",
+		}));
+	}, [applyWebcamSettings]);
+
 	const handleTogglePictureInPicture = useCallback(() => {
 		const video = pipVideoRef.current;
 		if (video && document.pictureInPictureElement === video) {
@@ -1616,7 +1628,48 @@ function OverlayApp() {
 				disablePictureInPicture={false}
 				controlsList="nodownload nofullscreen noremoteplayback"
 			/>
-			<RecordingBarOverlay recorderPanelOpen={recorderPanelOpen} />
+			<RecordingBarOverlay
+				recorderPanelOpen={recorderPanelOpen}
+				webcam={webcam}
+				microphone={extensionSettings?.microphone ?? null}
+				onToggleWebcam={() => {
+					if (!webcam) return;
+					const nextEnabled = !webcam.enabled;
+					if (nextEnabled) {
+						previewDismissedRef.current = false;
+						setRecordingPreviewActive(true);
+						setPreviewOpen(true);
+					}
+					applyWebcamSettings((current) => ({
+						...current,
+						enabled: nextEnabled,
+					}));
+				}}
+				onUpdateWebcamShape={updateShape}
+				onToggleMicrophone={() => {
+					if (!extensionSettings) return;
+					const nextEnabled = !extensionSettings.microphone.enabled;
+					setExtensionSettings((current) => {
+						if (!current) return current;
+						return {
+							...current,
+							microphone: { ...current.microphone, enabled: nextEnabled },
+						};
+					});
+					void saveSettings({
+						...extensionSettings,
+						microphone: {
+							...extensionSettings.microphone,
+							enabled: nextEnabled,
+						},
+					}).catch(() => undefined);
+					void sendServiceWorkerMessage({
+						target: "service-worker",
+						type: "toggle-microphone-mute",
+						muted: !nextEnabled,
+					}).catch(() => undefined);
+				}}
+			/>
 			<CountdownOverlay />
 			<ConfirmOverlay />
 			{isDragging ? (

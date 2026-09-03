@@ -1,4 +1,16 @@
-import { GripVertical, Pause, Pencil, Play, Square, X } from "lucide-react";
+import {
+	ChevronDown,
+	EyeOff,
+	Mic,
+	MicOff,
+	Pause,
+	Pencil,
+	Play,
+	Square,
+	Video,
+	VideoOff,
+	X,
+} from "lucide-react";
 import {
 	type PointerEvent as ReactPointerEvent,
 	useCallback,
@@ -26,11 +38,14 @@ import {
 	updateSharedUiState,
 } from "../shared/storage";
 import type {
+	MicrophoneSettings,
 	OverlayPosition,
 	RecordingPlan,
 	RecordingStatus,
 	SharedRecordingState,
+	WebcamSettings,
 } from "../shared/types";
+import { BlurOverlay } from "./blur-overlay";
 import { DrawingOverlay } from "./drawing-overlay";
 
 const EDGE_PADDING = 16;
@@ -49,6 +64,11 @@ type BarControl = "stop-recording" | "pause-recording" | "resume-recording";
 
 type RecordingBarOverlayProps = {
 	recorderPanelOpen: boolean;
+	webcam?: WebcamSettings | null;
+	microphone?: MicrophoneSettings | null;
+	onToggleWebcam?: () => void;
+	onUpdateWebcamShape?: () => void;
+	onToggleMicrophone?: () => void;
 };
 
 const toBarStatus = (status: RecordingStatus | undefined): BarStatus | null => {
@@ -81,6 +101,11 @@ const currentDurationMs = (status: BarStatus, now: number) =>
 
 export function RecordingBarOverlay({
 	recorderPanelOpen,
+	webcam,
+	microphone,
+	onToggleWebcam,
+	onUpdateWebcamShape,
+	onToggleMicrophone,
 }: RecordingBarOverlayProps) {
 	const [status, setStatus] = useState<BarStatus | null>(null);
 	const [plan, setPlan] = useState<RecordingPlan | null>(null);
@@ -95,6 +120,7 @@ export function RecordingBarOverlay({
 	const [isDragging, setIsDragging] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [drawing, setDrawing] = useState(false);
+	const [blurActive, setBlurActive] = useState(false);
 	const [isExpanded, setIsExpanded] = useState(false);
 	const [now, setNow] = useState(() => Date.now());
 	const dragOffsetRef = useRef({ x: 0, y: 0 });
@@ -290,6 +316,7 @@ export function RecordingBarOverlay({
 	useEffect(() => {
 		if (!visible) {
 			setDrawing(false);
+			setBlurActive(false);
 			setIsExpanded(false);
 		}
 	}, [visible]);
@@ -531,6 +558,57 @@ export function RecordingBarOverlay({
 							type="button"
 							className={classNames(
 								"cap-extension-control-bar-icon-button",
+								blurActive && "is-active",
+							)}
+							aria-label="Blur content on page"
+							title={blurActive ? "Exit blur mode" : "Blur content"}
+							onClick={() => setBlurActive((prev) => !prev)}
+						>
+							<EyeOff size={17} aria-hidden />
+						</button>
+
+						{onToggleWebcam ? (
+							<button
+								type="button"
+								className={classNames(
+									"cap-extension-control-bar-icon-button",
+									webcam?.enabled && "is-active",
+								)}
+								aria-label={webcam?.enabled ? "Camera on" : "Camera off"}
+								title={webcam?.enabled ? "Camera enabled" : "Camera disabled"}
+								onClick={onToggleWebcam}
+							>
+								{webcam?.enabled ? (
+									<Video size={17} aria-hidden />
+								) : (
+									<VideoOff size={17} aria-hidden />
+								)}
+							</button>
+						) : null}
+
+						{onToggleMicrophone ? (
+							<button
+								type="button"
+								className={classNames(
+									"cap-extension-control-bar-icon-button",
+									microphone?.enabled && "is-active",
+								)}
+								aria-label={microphone?.enabled ? "Mic unmuted" : "Mic muted"}
+								title={microphone?.enabled ? "Mic unmuted" : "Mic muted"}
+								onClick={onToggleMicrophone}
+							>
+								{microphone?.enabled ? (
+									<Mic size={17} aria-hidden />
+								) : (
+									<MicOff size={17} aria-hidden />
+								)}
+							</button>
+						) : null}
+
+						<button
+							type="button"
+							className={classNames(
+								"cap-extension-control-bar-icon-button",
 								drawing && "is-active",
 							)}
 							aria-label="Draw on the page"
@@ -562,6 +640,7 @@ export function RecordingBarOverlay({
 						</button>
 					</div>
 				</div>
+				<BlurOverlay active={blurActive} onDone={() => setBlurActive(false)} />
 				<DrawingOverlay active={drawing} onClose={stopDrawing} />
 			</>
 		);
@@ -576,6 +655,8 @@ export function RecordingBarOverlay({
 	const displayMs =
 		maxMs !== null ? Math.max(0, maxMs - durationMs) : durationMs;
 	const isWarning = maxMs !== null && displayMs <= WARNING_THRESHOLD_MS;
+	const dockOpensUp = position === null || position.y > 340;
+	const tooltipOnRight = position !== null && position.x < 120;
 
 	return (
 		<>
@@ -585,6 +666,8 @@ export function RecordingBarOverlay({
 					"cap-extension-active-recording-container",
 					isDragging && "is-dragging",
 					isExpanded && "is-expanded",
+					dockOpensUp ? "opens-up" : "opens-down",
+					tooltipOnRight ? "tooltip-right" : "tooltip-left",
 				)}
 				style={{
 					left: `${position?.x ?? EDGE_PADDING}px`,
@@ -593,6 +676,163 @@ export function RecordingBarOverlay({
 				}}
 				onPointerDown={handlePointerDown}
 			>
+				{isExpanded && status !== null ? (
+					<div
+						className="cap-extension-vertical-dock"
+						role="toolbar"
+						aria-label="Recording controls"
+						data-controls
+					>
+						<button
+							type="button"
+							className="cap-extension-dock-btn is-stop"
+							aria-label="End recording"
+							data-tooltip="End recording"
+							disabled={busy}
+							onClick={() => sendControl("stop-recording")}
+						>
+							<Square
+								size={14}
+								fill="currentColor"
+								strokeWidth={0}
+								aria-hidden
+							/>
+						</button>
+
+						<button
+							type="button"
+							className={classNames(
+								"cap-extension-dock-btn is-pause",
+								isPaused && "is-paused",
+							)}
+							aria-label={isPaused ? "Resume recording" : "Pause recording"}
+							data-tooltip={isPaused ? "Resume" : "Pause"}
+							disabled={busy}
+							onClick={() =>
+								sendControl(isPaused ? "resume-recording" : "pause-recording")
+							}
+						>
+							{isPaused ? (
+								<Play
+									size={15}
+									fill="currentColor"
+									strokeWidth={0}
+									aria-hidden
+								/>
+							) : (
+								<Pause
+									size={15}
+									fill="currentColor"
+									strokeWidth={0}
+									aria-hidden
+								/>
+							)}
+						</button>
+
+						<button
+							type="button"
+							className={classNames(
+								"cap-extension-dock-btn is-blur",
+								blurActive && "is-active",
+							)}
+							aria-label={blurActive ? "Done blurring" : "Blur content"}
+							data-tooltip={blurActive ? "Done blurring" : "Blur content"}
+							onClick={() => {
+								const next = !blurActive;
+								setBlurActive(next);
+								if (next && !isPaused) {
+									sendControl("pause-recording");
+								} else if (!next && isPaused) {
+									sendControl("resume-recording");
+								}
+								setIsExpanded(false);
+							}}
+						>
+							<EyeOff size={16} aria-hidden />
+						</button>
+
+						<button
+							type="button"
+							className={classNames(
+								"cap-extension-dock-btn is-pen",
+								drawing && "is-active",
+							)}
+							aria-label="Draw on page"
+							data-tooltip="Draw / Pen"
+							onClick={toggleDrawing}
+						>
+							<Pencil size={15} aria-hidden />
+						</button>
+
+						{onToggleWebcam ? (
+							<button
+								type="button"
+								className={classNames(
+									"cap-extension-dock-btn is-camera",
+									webcam?.enabled && "is-active",
+								)}
+								aria-label={webcam?.enabled ? "Camera on" : "Camera off"}
+								data-tooltip={
+									webcam?.enabled
+										? onUpdateWebcamShape
+											? `Camera: ${webcam.shape} (Click to change shape)`
+											: "Camera on"
+										: "Camera off"
+								}
+								onClick={() => {
+									if (webcam?.enabled && onUpdateWebcamShape) {
+										onUpdateWebcamShape();
+									} else if (onToggleWebcam) {
+										onToggleWebcam();
+									}
+								}}
+								onContextMenu={(e) => {
+									e.preventDefault();
+									if (onToggleWebcam) onToggleWebcam();
+								}}
+							>
+								{webcam?.enabled ? (
+									<Video size={16} aria-hidden />
+								) : (
+									<VideoOff size={16} aria-hidden />
+								)}
+							</button>
+						) : null}
+
+						{onToggleMicrophone ? (
+							<button
+								type="button"
+								className={classNames(
+									"cap-extension-dock-btn is-mic",
+									microphone?.enabled && "is-active",
+									!microphone?.enabled && "is-muted",
+								)}
+								aria-label={
+									microphone?.enabled ? "Mute microphone" : "Unmute microphone"
+								}
+								data-tooltip={microphone?.enabled ? "Mic unmuted" : "Mic muted"}
+								onClick={onToggleMicrophone}
+							>
+								{microphone?.enabled ? (
+									<Mic size={16} aria-hidden />
+								) : (
+									<MicOff size={16} aria-hidden />
+								)}
+							</button>
+						) : null}
+
+						<button
+							type="button"
+							className="cap-extension-dock-btn is-collapse"
+							aria-label="Collapse menu"
+							data-tooltip="Collapse"
+							onClick={() => setIsExpanded(false)}
+						>
+							<ChevronDown size={16} aria-hidden />
+						</button>
+					</div>
+				) : null}
+
 				<button
 					type="button"
 					className={classNames(
@@ -605,6 +845,12 @@ export function RecordingBarOverlay({
 						isExpanded ? "Close recording menu" : "Open recording menu"
 					}
 					title={isExpanded ? "Close menu" : "Recording menu"}
+					onClick={(e) => {
+						e.stopPropagation();
+						if (dragDistanceRef.current < 5) {
+							setIsExpanded((c) => !c);
+						}
+					}}
 				>
 					<div className="cap-extension-recording-badge-icon-wrap">
 						{countdownValue !== null ? (
@@ -643,88 +889,17 @@ export function RecordingBarOverlay({
 						</span>
 					) : null}
 				</button>
-
-				{isExpanded && status !== null ? (
-					<div
-						className="cap-extension-recording-popover"
-						role="dialog"
-						aria-label="Recording options"
-						data-controls
-					>
-						<div className="cap-extension-popover-header">
-							<div className="cap-extension-popover-status">
-								<GripVertical
-									className="cap-extension-popover-grip"
-									size={14}
-									aria-hidden
-								/>
-								<span
-									className={classNames(
-										"cap-extension-control-bar-dot",
-										isPaused ? "is-paused" : "is-recording",
-									)}
-									aria-hidden
-								/>
-								<span
-									className={classNames(
-										"cap-extension-popover-time",
-										isWarning && "is-warning",
-									)}
-								>
-									{formatDuration(displayMs)}
-								</span>
-							</div>
-
-							<div className="cap-extension-popover-header-actions">
-								<button
-									type="button"
-									className="cap-extension-control-bar-icon-button is-compact"
-									aria-label={isPaused ? "Resume recording" : "Pause recording"}
-									title={isPaused ? "Resume" : "Pause"}
-									disabled={busy}
-									onClick={() =>
-										sendControl(
-											isPaused ? "resume-recording" : "pause-recording",
-										)
-									}
-								>
-									{isPaused ? (
-										<Play
-											size={14}
-											fill="currentColor"
-											strokeWidth={0}
-											aria-hidden
-										/>
-									) : (
-										<Pause
-											size={14}
-											fill="currentColor"
-											strokeWidth={0}
-											aria-hidden
-										/>
-									)}
-								</button>
-								<button
-									type="button"
-									className="cap-extension-control-bar-icon-button is-compact is-quiet"
-									aria-label="Stop recording"
-									title="Stop recording"
-									disabled={busy}
-									onClick={() => sendControl("stop-recording")}
-								>
-									<Square
-										size={13}
-										fill="currentColor"
-										strokeWidth={0}
-										aria-hidden
-									/>
-								</button>
-							</div>
-						</div>
-					</div>
-				) : null}
 			</div>
 
+			<BlurOverlay
+				active={blurActive}
+				onDone={() => {
+					setBlurActive(false);
+					if (status?.phase === "paused") {
+						sendControl("resume-recording");
+					}
+				}}
+			/>
 			<DrawingOverlay active={drawing} onClose={stopDrawing} />
 		</>
 	);

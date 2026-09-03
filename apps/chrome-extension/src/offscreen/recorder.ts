@@ -501,8 +501,8 @@ const getMicrophoneStream = async (
 // amplitude (time-domain, 0..1) that counts as sound. A muted/dead device
 // flat-lines near 0; a working mic's noise floor clears this threshold, so it
 // only flags an effectively-silent input.
-const MIC_PROBE_WINDOW_MS = 1200;
-const MIC_PROBE_SAMPLE_INTERVAL_MS = 50;
+const MIC_PROBE_WINDOW_MS = 250;
+const MIC_PROBE_SAMPLE_INTERVAL_MS = 20;
 const MIC_SOUND_MIN_PEAK = 0.0015;
 
 // Opens the selected mic and listens for any signal so the recorder can warn
@@ -1699,6 +1699,21 @@ const handleRequest = async (
 
 	if (message.type === "probe-microphone") {
 		return { ok: true, micProbe: await probeMicrophone(message.microphone) };
+	}
+
+	if (message.type === "toggle-microphone-mute") {
+		const recording = activeRecording;
+		if (recording) {
+			for (const stream of recording.streams) {
+				for (const track of stream.getAudioTracks()) {
+					track.enabled = !message.muted;
+				}
+			}
+			for (const track of recording.recordingStream.getAudioTracks()) {
+				track.enabled = !message.muted;
+			}
+		}
+		return { ok: true };
 	}
 
 	return { ok: true, status };

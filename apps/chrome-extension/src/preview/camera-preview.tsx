@@ -247,7 +247,7 @@ function App() {
 	const sessionCounterRef = useRef(0);
 	const autoPictureInPictureRef = useRef(false);
 	const autoPictureInPictureEnabledRef = useRef(false);
-	const previewEnabled = Boolean(settings?.enabled && settings.deviceId);
+	const previewEnabled = Boolean(settings?.enabled);
 	const isPictureInPictureSupported =
 		typeof document !== "undefined" && document.pictureInPictureEnabled;
 

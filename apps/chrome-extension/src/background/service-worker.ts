@@ -1621,6 +1621,15 @@ const handleRequest = async (
 			: { ok: false, error: response.error };
 	}
 
+	if (message.type === "toggle-microphone-mute") {
+		const response = await sendOffscreen({
+			target: "offscreen",
+			type: "toggle-microphone-mute",
+			muted: message.muted,
+		});
+		return response;
+	}
+
 	if (message.type === "open-options") {
 		chrome.tabs.create({ url: chrome.runtime.getURL("options.html") });
 		return { ok: true };

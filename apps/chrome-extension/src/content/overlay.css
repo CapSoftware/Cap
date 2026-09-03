@@ -266,6 +266,37 @@
 	border-radius: 0 0 6px;
 }
 
+.cap-extension-camera-dismiss-btn {
+	position: absolute;
+	top: 10px;
+	right: 10px;
+	z-index: 12;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	border: none;
+	border-radius: 50%;
+	background: rgba(18, 18, 23, 0.65);
+	color: #ffffff;
+	cursor: pointer;
+	opacity: 0;
+	pointer-events: none;
+	transition: all 140ms ease;
+	backdrop-filter: blur(8px);
+}
+
+.cap-extension-camera-window:hover .cap-extension-camera-dismiss-btn {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.cap-extension-camera-dismiss-btn:hover {
+	background: rgba(239, 68, 68, 0.9);
+	transform: scale(1.1);
+}
+
 .cap-extension-camera-iframe {
 	position: absolute;
 	inset: 0;
@@ -846,6 +877,355 @@
 	}
 }
 
+.cap-extension-active-recording-container {
+	position: fixed;
+	z-index: 2147483647;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	pointer-events: auto;
+	touch-action: none;
+	user-select: none;
+	font-family:
+		Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
+	font-size: 13px;
+	line-height: 1;
+	isolation: isolate;
+	animation: cap-extension-badge-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cap-extension-active-recording-container.is-dragging {
+	cursor: grabbing;
+}
+
+.cap-extension-recording-badge {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 48px;
+	padding: 4px 12px 4px 6px;
+	border: 1.5px solid rgba(18, 18, 23, 0.12);
+	border-radius: 9999px;
+	background: rgba(255, 255, 255, 0.98);
+	box-shadow:
+		0 14px 34px rgba(0, 0, 0, 0.18),
+		0 3px 10px rgba(0, 0, 0, 0.1);
+	color: #18181b;
+	cursor: grab;
+	backdrop-filter: blur(24px);
+	transition:
+		transform 140ms ease,
+		box-shadow 140ms ease,
+		border-color 140ms ease;
+}
+
+.cap-extension-recording-badge.is-counting {
+	width: 48px;
+	height: 48px;
+	padding: 0;
+	justify-content: center;
+	border-color: #ef4444;
+	box-shadow:
+		0 0 0 4px rgba(239, 68, 68, 0.2),
+		0 14px 34px rgba(0, 0, 0, 0.18);
+}
+
+.cap-extension-badge-countdown-ring {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 100%;
+}
+
+.cap-extension-badge-countdown-number {
+	font-size: 22px;
+	font-weight: 800;
+	color: #ef4444;
+	line-height: 1;
+	animation: cap-extension-countdown-pop 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes cap-extension-countdown-pop {
+	0% {
+		transform: scale(0.6);
+		opacity: 0.5;
+	}
+	50% {
+		transform: scale(1.15);
+		opacity: 1;
+	}
+	100% {
+		transform: scale(1);
+		opacity: 1;
+	}
+}
+
+.cap-extension-recording-badge:hover {
+	transform: scale(1.05);
+	border-color: rgba(18, 18, 23, 0.25);
+	box-shadow:
+		0 18px 42px rgba(0, 0, 0, 0.22),
+		0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.cap-extension-recording-badge.is-active {
+	border-color: #3b82f6;
+	box-shadow:
+		0 0 0 3px rgba(59, 130, 246, 0.25),
+		0 14px 34px rgba(0, 0, 0, 0.18);
+}
+
+.cap-extension-recording-badge-icon-wrap {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 36px;
+	height: 36px;
+}
+
+.cap-extension-recording-badge-logo {
+	width: 32px;
+	height: 32px;
+	border-radius: 50%;
+	object-fit: contain;
+}
+
+.cap-extension-recording-badge-icon-wrap .cap-extension-control-bar-dot {
+	position: absolute;
+	right: -1px;
+	bottom: -1px;
+	width: 10px;
+	height: 10px;
+	border: 2px solid #fff;
+	box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.3);
+}
+
+.cap-extension-recording-badge-time {
+	font-size: 13px;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	color: #18181b;
+	white-space: nowrap;
+}
+
+.cap-extension-recording-badge-time.is-warning {
+	color: #e5484d;
+}
+
+.cap-extension-vertical-dock {
+	position: absolute;
+	left: 0;
+	z-index: 10;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+	width: 48px;
+	padding: 6px;
+	border: 1px solid rgba(18, 18, 23, 0.12);
+	border-radius: 28px;
+	background: rgba(255, 255, 255, 0.96);
+	box-shadow:
+		0 20px 48px rgba(0, 0, 0, 0.22),
+		0 6px 14px rgba(0, 0, 0, 0.08);
+	backdrop-filter: blur(28px);
+	animation: cap-extension-dock-slide-up 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cap-extension-active-recording-container.opens-up
+	.cap-extension-vertical-dock {
+	bottom: calc(100% + 8px);
+	transform-origin: bottom center;
+}
+
+.cap-extension-active-recording-container.opens-down
+	.cap-extension-vertical-dock {
+	top: calc(100% + 8px);
+	transform-origin: top center;
+}
+
+.cap-extension-dock-btn {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 36px;
+	height: 36px;
+	border: none;
+	border-radius: 50%;
+	background: rgba(18, 18, 23, 0.05);
+	color: #27272a;
+	cursor: pointer;
+	transition: all 140ms ease;
+}
+
+.cap-extension-dock-btn:hover {
+	background: rgba(18, 18, 23, 0.1);
+	transform: scale(1.08);
+}
+
+.cap-extension-dock-btn:active {
+	transform: scale(0.96);
+}
+
+.cap-extension-dock-btn.is-stop {
+	background: #ef4444;
+	color: #ffffff;
+	box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+}
+
+.cap-extension-dock-btn.is-stop:hover {
+	background: #dc2626;
+	box-shadow: 0 4px 14px rgba(220, 38, 38, 0.4);
+}
+
+.cap-extension-dock-btn.is-pause {
+	background: rgba(18, 18, 23, 0.07);
+	color: #18181b;
+}
+
+.cap-extension-dock-btn.is-pause.is-paused {
+	background: #eab308;
+	color: #ffffff;
+}
+
+.cap-extension-dock-btn.is-blur.is-active {
+	background: #3b82f6;
+	color: #ffffff;
+	box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+.cap-extension-dock-btn.is-pen.is-active {
+	background: #8b5cf6;
+	color: #ffffff;
+	box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+}
+
+.cap-extension-dock-btn.is-camera.is-active {
+	background: rgba(34, 197, 94, 0.14);
+	color: #16a34a;
+}
+
+.cap-extension-dock-btn.is-mic.is-muted {
+	background: rgba(239, 68, 68, 0.14);
+	color: #dc2626;
+}
+
+.cap-extension-dock-btn.is-collapse {
+	background: transparent;
+	color: #a1a1aa;
+}
+
+.cap-extension-dock-btn.is-collapse:hover {
+	background: rgba(18, 18, 23, 0.06);
+	color: #18181b;
+}
+
+.cap-extension-dock-btn::after {
+	content: attr(data-tooltip);
+	position: absolute;
+	top: 50%;
+	transform: translateY(-50%) scale(0.9);
+	padding: 4px 10px;
+	border-radius: 8px;
+	background: #18181b;
+	color: #ffffff;
+	font-size: 11px;
+	font-weight: 500;
+	white-space: nowrap;
+	pointer-events: none;
+	opacity: 0;
+	transition: all 140ms cubic-bezier(0.16, 1, 0.3, 1);
+	z-index: 20;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.cap-extension-active-recording-container.tooltip-left
+	.cap-extension-dock-btn::after {
+	right: calc(100% + 10px);
+}
+
+.cap-extension-active-recording-container.tooltip-right
+	.cap-extension-dock-btn::after {
+	left: calc(100% + 10px);
+}
+
+.cap-extension-dock-btn:hover::after {
+	opacity: 1;
+	transform: translateY(-50%) scale(1);
+}
+
+@keyframes cap-extension-dock-slide-up {
+	from {
+		opacity: 0;
+		transform: translateY(12px) scale(0.92);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
+}
+
+.cap-extension-blur-highlight {
+	position: fixed;
+	z-index: 2147483646;
+	box-sizing: border-box;
+	border: 2px dashed #3b82f6;
+	border-radius: 6px;
+	background: rgba(59, 130, 246, 0.12);
+	box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+	pointer-events: none;
+	animation: cap-extension-fade-in 140ms ease;
+}
+
+.cap-extension-blur-tooltip {
+	position: absolute;
+	top: -24px;
+	left: 0;
+	padding: 2px 8px;
+	border-radius: 6px;
+	background: #18181b;
+	color: #ffffff;
+	font-size: 11px;
+	font-weight: 500;
+	white-space: nowrap;
+	pointer-events: none;
+}
+
+@keyframes cap-extension-badge-in {
+	from {
+		opacity: 0;
+		transform: scale(0.9);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+@keyframes cap-extension-popover-in {
+	from {
+		opacity: 0;
+		transform: translateY(-6px) scale(0.98);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
+}
+
+@keyframes cap-extension-fade-in {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+
 /* The drawing surface sits above the recorder panel's backdrop (so drawing
    works even while the panel that hosts the "Ready to record" bar is open) but
    below the floating bars and the draw toolbar (which stay at the maximum
@@ -1286,196 +1666,5 @@
 	to {
 		opacity: 1;
 		transform: translateY(0) scale(1);
-	}
-}
-
-.cap-extension-active-recording-container {
-	position: fixed;
-	z-index: 2147483647;
-	display: flex;
-	align-items: center;
-	user-select: none;
-	touch-action: none;
-	animation: cap-extension-badge-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.cap-extension-active-recording-container.is-dragging {
-	cursor: grabbing;
-}
-
-.cap-extension-recording-badge {
-	position: relative;
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	height: 48px;
-	padding: 6px 14px 6px 6px;
-	border: 1px solid rgba(18, 18, 23, 0.12);
-	border-radius: 9999px;
-	background: rgba(255, 255, 255, 0.98);
-	box-shadow:
-		0 14px 34px rgba(0, 0, 0, 0.18),
-		0 4px 12px rgba(0, 0, 0, 0.08);
-	cursor: grab;
-	backdrop-filter: blur(20px);
-	transition:
-		transform 160ms ease,
-		box-shadow 160ms ease,
-		border-color 160ms ease;
-}
-
-.cap-extension-recording-badge.is-counting {
-	width: 48px;
-	padding: 0;
-	justify-content: center;
-	border-color: #ef4444;
-	box-shadow:
-		0 0 0 4px rgba(239, 68, 68, 0.2),
-		0 14px 34px rgba(0, 0, 0, 0.18);
-}
-
-.cap-extension-badge-countdown-ring {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	width: 100%;
-	height: 100%;
-}
-
-.cap-extension-badge-countdown-number {
-	font-size: 22px;
-	font-weight: 800;
-	color: #ef4444;
-	line-height: 1;
-	animation: cap-extension-countdown-pop 400ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes cap-extension-countdown-pop {
-	0% {
-		transform: scale(0.6);
-		opacity: 0.5;
-	}
-	50% {
-		transform: scale(1.15);
-		opacity: 1;
-	}
-	100% {
-		transform: scale(1);
-		opacity: 1;
-	}
-}
-
-.cap-extension-recording-badge:hover {
-	transform: scale(1.05);
-	border-color: rgba(18, 18, 23, 0.25);
-	box-shadow:
-		0 18px 42px rgba(0, 0, 0, 0.22),
-		0 4px 12px rgba(0, 0, 0, 0.12);
-}
-
-.cap-extension-recording-badge.is-active {
-	border-color: #3b82f6;
-	box-shadow:
-		0 0 0 3px rgba(59, 130, 246, 0.25),
-		0 14px 34px rgba(0, 0, 0, 0.18);
-}
-
-.cap-extension-recording-badge-icon-wrap {
-	position: relative;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	width: 36px;
-	height: 36px;
-}
-
-.cap-extension-recording-badge-logo {
-	width: 32px;
-	height: 32px;
-	border-radius: 50%;
-	object-fit: contain;
-}
-
-.cap-extension-recording-badge-icon-wrap .cap-extension-control-bar-dot {
-	position: absolute;
-	right: -1px;
-	bottom: -1px;
-	width: 10px;
-	height: 10px;
-	border: 2px solid #fff;
-	box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.3);
-}
-
-.cap-extension-recording-badge-time {
-	font-size: 13px;
-	font-weight: 700;
-	font-variant-numeric: tabular-nums;
-	color: #18181b;
-	white-space: nowrap;
-}
-
-.cap-extension-recording-badge-time.is-warning {
-	color: #e5484d;
-}
-
-.cap-extension-recording-popover {
-	position: absolute;
-	bottom: calc(100% + 10px);
-	left: 0;
-	z-index: 10;
-	display: flex;
-	align-items: center;
-	padding: 4px 8px;
-	border: 1px solid rgba(18, 18, 23, 0.1);
-	border-radius: 9999px;
-	background: rgba(255, 255, 255, 0.98);
-	box-shadow:
-		0 16px 36px rgba(0, 0, 0, 0.2),
-		0 4px 12px rgba(0, 0, 0, 0.08);
-	backdrop-filter: blur(20px);
-}
-
-.cap-extension-popover-header {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-}
-
-.cap-extension-popover-status {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-}
-
-.cap-extension-popover-grip {
-	color: #a1a1aa;
-	cursor: grab;
-}
-
-.cap-extension-popover-time {
-	font-size: 13px;
-	font-weight: 700;
-	font-variant-numeric: tabular-nums;
-	color: #18181b;
-}
-
-.cap-extension-popover-time.is-warning {
-	color: #e5484d;
-}
-
-.cap-extension-popover-header-actions {
-	display: flex;
-	align-items: center;
-	gap: 4px;
-}
-
-@keyframes cap-extension-badge-in {
-	from {
-		opacity: 0;
-		transform: scale(0.9);
-	}
-	to {
-		opacity: 1;
-		transform: scale(1);
 	}
 }
