@@ -46,7 +46,7 @@ fn reference_shader() -> String {
         .split_once("fn screen_bounds_mask(")
         .expect("screen bounds mask");
     let (fragment_helpers, _) = fragment_helpers
-        .split_once("@fragment\nfn fs_main")
+        .split_once("@fragment")
         .expect("cursor fragment entrypoint");
     let mut source = format!("{shared}fn screen_bounds_mask({fragment_helpers}");
     source.push_str(
