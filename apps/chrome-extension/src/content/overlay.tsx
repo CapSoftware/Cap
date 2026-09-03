@@ -1635,10 +1635,11 @@ function OverlayApp() {
 				onToggleWebcam={() => {
 					if (!webcam) return;
 					const nextEnabled = !webcam.enabled;
-					if (nextEnabled) {
-						previewDismissedRef.current = false;
-						setRecordingPreviewActive(true);
-						setPreviewOpen(true);
+					previewDismissedRef.current = !nextEnabled;
+					setRecordingPreviewActive(nextEnabled);
+					setPreviewOpen(nextEnabled);
+					if (!nextEnabled) {
+						stopLocalPreview();
 					}
 					applyWebcamSettings((current) => ({
 						...current,

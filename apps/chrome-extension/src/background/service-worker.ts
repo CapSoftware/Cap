@@ -501,7 +501,7 @@ const shouldAutoPipCaptureSource = (source: RecordingCaptureSource) =>
 	isWindowCaptureSource(source) && !isLikelyBrowserWindow(source);
 
 const isWebcamPreviewEnabled = (settings: ExtensionSettings) =>
-	settings.webcam.enabled && Boolean(settings.webcam.deviceId);
+	Boolean(settings.webcam.enabled);
 
 const shouldShowWebcamPreview = async (
 	settings: ExtensionSettings,
