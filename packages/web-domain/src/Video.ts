@@ -269,7 +269,7 @@ export const verifyPassword = (video: Video, password: Option.Option<string>) =>
 	);
 
 export const verifyPasswordCandidates = (
-	video: Video,
+	video: Pick<Video, "id">,
 	passwords: ReadonlyArray<string>,
 ) =>
 	Effect.gen(function* () {

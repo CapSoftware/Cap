@@ -130,12 +130,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		const tinybird = yield* Tinybird;
 
 		const getByIdForViewing = (id: Video.VideoId) =>
-			repo
-				.getById(id)
-				.pipe(
-					Policy.withPublicPolicy(policy.canView(id)),
-					Effect.withSpan("Videos.getById"),
-				);
+			policy.getViewableById(id).pipe(Effect.withSpan("Videos.getById"));
 
 		const getAnalyticsCounts = Effect.fn("Videos.getAnalyticsCounts")(
 			function* (
@@ -302,9 +297,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			 * Delete a video. Will fail if the user does not have access.
 			 */
 			delete: Effect.fn("Videos.delete")(function* (videoId: Video.VideoId) {
-				const maybeVideo = yield* repo
-					.getById(videoId)
-					.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+				const maybeVideo = yield* policy.getOwnedById(videoId);
 				if (Option.isNone(maybeVideo))
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
@@ -353,9 +346,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			duplicate: Effect.fn("Videos.duplicate")(function* (
 				videoId: Video.VideoId,
 			) {
-				const maybeVideo = yield* repo
-					.getById(videoId)
-					.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+				const maybeVideo = yield* policy.getOwnedById(videoId);
 				if (Option.isNone(maybeVideo))
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
@@ -528,23 +519,22 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				const updatedAt = input.updatedAt;
 				const videoId = input.videoId;
 
-				const [record] = yield* db
-					.use((db) =>
-						db
-							.select({
-								video: Db.videos,
-								upload: Db.videoUploads,
-							})
-							.from(Db.videos)
-							.leftJoin(
-								Db.videoUploads,
-								Dz.eq(Db.videos.id, Db.videoUploads.videoId),
-							)
-							.where(Dz.eq(Db.videos.id, videoId)),
-					)
-					.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+				const [record] = yield* db.use((db) =>
+					db
+						.select({
+							video: Db.videos,
+							upload: Db.videoUploads,
+						})
+						.from(Db.videos)
+						.leftJoin(
+							Db.videoUploads,
+							Dz.eq(Db.videos.id, Db.videoUploads.videoId),
+						)
+						.where(Dz.eq(Db.videos.id, videoId)),
+				);
 
 				if (!record) return yield* Effect.fail(new Video.NotFoundError());
+				yield* policy.isOwnerLoaded(record.video);
 
 				yield* db.use((db) =>
 					db.transaction(async (tx) => {
@@ -705,9 +695,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			getDownloadInfo: Effect.fn("Videos.getDownloadInfo")(function* (
 				videoId: Video.VideoId,
 			) {
-				const maybeVideo = yield* repo
-					.getById(videoId)
-					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
+				const maybeVideo = yield* policy.getViewableById(videoId);
 				if (Option.isNone(maybeVideo))
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
@@ -788,9 +776,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			getThumbnailURL: Effect.fn("Videos.getThumbnailURL")(function* (
 				videoId: Video.VideoId,
 			) {
-				const maybeVideo = yield* repo
-					.getById(videoId)
-					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
+				const maybeVideo = yield* policy.getViewableById(videoId);
 				if (Option.isNone(maybeVideo)) return Option.none();
 				const [video] = maybeVideo.value;
 
