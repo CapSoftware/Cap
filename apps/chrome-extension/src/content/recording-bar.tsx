@@ -106,6 +106,7 @@ export function RecordingBarOverlay({
 	const positionRef = useRef<{ x: number; y: number } | null>(null);
 	const positionModeRef = useRef<"active" | "ready" | null>(null);
 	const recorderPanelOpenRef = useRef(false);
+	const countdownIntervalRef = useRef<number | null>(null);
 
 	useEffect(() => {
 		planRef.current = plan;
@@ -234,6 +235,13 @@ export function RecordingBarOverlay({
 	}, [applySharedState]);
 
 	useEffect(() => {
+		const clearCountdownTimer = () => {
+			if (countdownIntervalRef.current !== null) {
+				window.clearInterval(countdownIntervalRef.current);
+				countdownIntervalRef.current = null;
+			}
+		};
+
 		const handleMessage = (message: unknown) => {
 			if (isRecordingStatusBroadcast(message)) {
 				applyResponse(message.status);
@@ -242,13 +250,14 @@ export function RecordingBarOverlay({
 			}
 			if (isOverlayMessage(message)) {
 				if (message.type === "overlay-countdown") {
+					clearCountdownTimer();
 					setCountdownValue(message.seconds);
 					let cur = message.seconds;
 					const perNum = message.durationMs / message.seconds;
-					const interval = window.setInterval(() => {
+					countdownIntervalRef.current = window.setInterval(() => {
 						cur -= 1;
 						if (cur <= 0) {
-							window.clearInterval(interval);
+							clearCountdownTimer();
 							setCountdownValue(null);
 							return;
 						}
@@ -257,6 +266,7 @@ export function RecordingBarOverlay({
 					return false;
 				}
 				if (message.type === "overlay-hide") {
+					clearCountdownTimer();
 					setCountdownValue(null);
 					refresh();
 					return false;
@@ -267,7 +277,10 @@ export function RecordingBarOverlay({
 			return false;
 		};
 		chrome.runtime.onMessage.addListener(handleMessage);
-		return () => chrome.runtime.onMessage.removeListener(handleMessage);
+		return () => {
+			clearCountdownTimer();
+			chrome.runtime.onMessage.removeListener(handleMessage);
+		};
 	}, [applyResponse, refresh]);
 
 	const active = status !== null || countdownValue !== null;
