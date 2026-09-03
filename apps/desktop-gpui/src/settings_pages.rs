@@ -2262,9 +2262,8 @@ impl SettingsWindow {
         let white = gpui::white();
         let mut column = div()
             .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
+            .inset_0()
+            .when(cfg!(target_os = "windows"), |overlay| overlay.top(px(36.)))
             // Nothing behind the takeover is clickable while it runs.
             .occlude()
             .flex()
@@ -2468,26 +2467,15 @@ impl SettingsWindow {
             (Ok(()), ClassicTarget::DevSupervisor) => {
                 tracing::info!("handing back to the classic app; waiting for the dev build");
                 self.pages.switch_back = Some(SwitchBack::WaitingForClassic);
+                self.pages.switch_back_ticker = None;
                 cx.notify();
-                // Occupies the ticker slot so starting or cancelling another
-                // sequence drops this waiter with it.
-                self.pages.switch_back_ticker = Some(cx.spawn(async move |this, cx| {
+                // A committed handoff must finish even if its settings window closes.
+                cx.spawn(async move |this, cx| {
                     let started = std::time::Instant::now();
                     loop {
                         cx.background_executor()
                             .timer(Duration::from_millis(500))
                             .await;
-                        let waiting = this
-                            .update(cx, |this, _| {
-                                matches!(
-                                    this.pages.switch_back,
-                                    Some(SwitchBack::WaitingForClassic)
-                                )
-                            })
-                            .unwrap_or(false);
-                        if !waiting {
-                            break;
-                        }
                         if !store::classic_pending_path().exists() {
                             tracing::info!("classic app is up; quitting");
                             cx.update(quit_after_flushing_editors);
@@ -2506,7 +2494,8 @@ impl SettingsWindow {
                             break;
                         }
                     }
-                }));
+                })
+                .detach();
             }
             (Err(message), _) => {
                 tracing::error!("{message}");
