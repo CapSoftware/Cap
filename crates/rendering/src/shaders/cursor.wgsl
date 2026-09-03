@@ -103,11 +103,10 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 }
 
 fn sample_cursor(uv: vec2<f32>) -> vec4<f32> {
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-
-    return textureSample(t_cursor, s_cursor, uv);
+    // Keep implicit mip derivatives uniform across the sprite boundary.
+    let color = textureSample(t_cursor, s_cursor, uv);
+    let inside = all(uv >= vec2<f32>(0.0)) && all(uv <= vec2<f32>(1.0));
+    return select(vec4<f32>(0.0), color, inside);
 }
 
 // Confine the sprite to the display card (screen_bounds is the card's
