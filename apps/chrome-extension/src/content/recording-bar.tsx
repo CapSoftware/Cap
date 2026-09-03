@@ -35,9 +35,6 @@ import { DrawingOverlay } from "./drawing-overlay";
 
 const EDGE_PADDING = 16;
 const BOTTOM_OFFSET = 28;
-// Live updates arrive via status broadcasts and the session-storage mirror;
-// this poll only reconciles drift, so it can be slow instead of hammering the
-// service worker (and through it the offscreen document) from every tab.
 const POLL_INTERVAL_MS = 5000;
 const WARNING_THRESHOLD_MS = 60_000;
 const LOGO_URL = chrome.runtime.getURL("icons/icon-48.png");
@@ -77,8 +74,6 @@ const toOverlayPosition = (position: {
 	updatedAt: Date.now(),
 });
 
-// The timer derives from wall-clock deltas against the shared status, so as
-// long as every tab holds the same status object their clocks read the same.
 const currentDurationMs = (status: BarStatus, now: number) =>
 	status.phase === "recording"
 		? status.durationMs + Math.max(0, now - status.updatedAt)
@@ -91,6 +86,7 @@ export function RecordingBarOverlay({
 	const [plan, setPlan] = useState<RecordingPlan | null>(null);
 	const [signedIn, setSignedIn] = useState(false);
 	const [readyDismissed, setReadyDismissed] = useState(false);
+	const [countdownValue, setCountdownValue] = useState<number | null>(null);
 	const [position, setPosition] = useState<{ x: number; y: number } | null>(
 		null,
 	);
@@ -99,8 +95,12 @@ export function RecordingBarOverlay({
 	const [isDragging, setIsDragging] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [drawing, setDrawing] = useState(false);
+	const [isExpanded, setIsExpanded] = useState(false);
 	const [now, setNow] = useState(() => Date.now());
 	const dragOffsetRef = useRef({ x: 0, y: 0 });
+	const dragDistanceRef = useRef(0);
+	const dragStartPosRef = useRef({ x: 0, y: 0 });
+	const isPointerDownRef = useRef(false);
 	const barRef = useRef<HTMLDivElement>(null);
 	const planRef = useRef<RecordingPlan | null>(null);
 	const positionRef = useRef<{ x: number; y: number } | null>(null);
@@ -154,10 +154,6 @@ export function RecordingBarOverlay({
 		recorderPanelOpenRef.current = recorderPanelOpen;
 	}, [recorderPanelOpen, refresh]);
 
-	// chrome.storage.session is the cross-tab source of truth for both the
-	// recording state and the shared UI flags; the storage change events reach
-	// every tab (including backgrounded ones), which keeps each bar in lockstep
-	// without per-tab polling round-trips.
 	useEffect(() => {
 		let disposed = false;
 
@@ -227,11 +223,6 @@ export function RecordingBarOverlay({
 	useEffect(() => {
 		const handleVisibility = () => {
 			if (document.visibilityState !== "visible") return;
-			// Recompute the clock immediately so the first painted frame after a
-			// tab switch already shows the right time, then reconcile from the
-			// session-storage mirror: reading storage does not wake the service
-			// worker, unlike a get-recording-status round trip, and the slow
-			// poll below still corrects any drift while the bar is active.
 			setNow(Date.now());
 			loadSharedRecordingState()
 				.then((state) => applySharedState(state))
@@ -249,59 +240,82 @@ export function RecordingBarOverlay({
 				if (!planRef.current) refresh();
 				return false;
 			}
-			if (!isOverlayMessage(message)) return false;
-			refresh();
+			if (isOverlayMessage(message)) {
+				if (message.type === "overlay-countdown") {
+					setCountdownValue(message.seconds);
+					let cur = message.seconds;
+					const perNum = message.durationMs / message.seconds;
+					const interval = window.setInterval(() => {
+						cur -= 1;
+						if (cur <= 0) {
+							window.clearInterval(interval);
+							setCountdownValue(null);
+							return;
+						}
+						setCountdownValue(cur);
+					}, perNum);
+					return false;
+				}
+				if (message.type === "overlay-hide") {
+					setCountdownValue(null);
+					refresh();
+					return false;
+				}
+				refresh();
+				return false;
+			}
 			return false;
 		};
 		chrome.runtime.onMessage.addListener(handleMessage);
 		return () => chrome.runtime.onMessage.removeListener(handleMessage);
 	}, [applyResponse, refresh]);
 
-	const active = status !== null;
-	// The "Ready to record" bar only makes sense once the user can actually
-	// start a recording, which requires being signed in.
+	const active = status !== null || countdownValue !== null;
 	const ready = signedIn && !active && recorderPanelOpen && !readyDismissed;
 	const visible = active || ready;
 
-	// Drawing is reachable only from a visible bar, so once the bar hides
-	// (recording stopped and the ready bar dismissed) tear the canvas down too
-	// rather than leaving an invisible surface armed to swallow page clicks.
 	useEffect(() => {
-		if (!visible) setDrawing(false);
+		if (!visible) {
+			setDrawing(false);
+			setIsExpanded(false);
+		}
 	}, [visible]);
 
 	useEffect(() => {
-		if (!active) return;
+		if (status === null) return;
 		setNow(Date.now());
 		const interval = window.setInterval(() => setNow(Date.now()), 500);
 		return () => window.clearInterval(interval);
-	}, [active]);
+	}, [status]);
 
 	useEffect(() => {
-		if (!active) return;
+		if (status === null) return;
 		const interval = window.setInterval(() => {
 			if (document.visibilityState === "visible") refresh();
 		}, POLL_INTERVAL_MS);
 		return () => window.clearInterval(interval);
-	}, [active, refresh]);
+	}, [status, refresh]);
 
-	const clampToViewport = useCallback((value: { x: number; y: number }) => {
-		const rect = barRef.current?.getBoundingClientRect();
-		const width = rect?.width ?? 360;
-		const height = rect?.height ?? 64;
-		const maxX = Math.max(
-			EDGE_PADDING,
-			window.innerWidth - width - EDGE_PADDING,
-		);
-		const maxY = Math.max(
-			EDGE_PADDING,
-			window.innerHeight - height - EDGE_PADDING,
-		);
-		return {
-			x: Math.min(Math.max(value.x, EDGE_PADDING), maxX),
-			y: Math.min(Math.max(value.y, EDGE_PADDING), maxY),
-		};
-	}, []);
+	const clampToViewport = useCallback(
+		(value: { x: number; y: number }) => {
+			const rect = barRef.current?.getBoundingClientRect();
+			const width = rect?.width ?? (active ? 60 : 380);
+			const height = rect?.height ?? (active ? 60 : 64);
+			const maxX = Math.max(
+				EDGE_PADDING,
+				window.innerWidth - width - EDGE_PADDING,
+			);
+			const maxY = Math.max(
+				EDGE_PADDING,
+				window.innerHeight - height - EDGE_PADDING,
+			);
+			return {
+				x: Math.min(Math.max(value.x, EDGE_PADDING), maxX),
+				y: Math.min(Math.max(value.y, EDGE_PADDING), maxY),
+			};
+		},
+		[active],
+	);
 
 	useEffect(() => {
 		if (!visible || isDragging) return;
@@ -324,7 +338,7 @@ export function RecordingBarOverlay({
 					(active
 						? {
 								x: EDGE_PADDING,
-								y: (window.innerHeight - rect.height) / 2,
+								y: window.innerHeight - 90,
 							}
 						: {
 								x: (window.innerWidth - rect.width) / 2,
@@ -354,12 +368,9 @@ export function RecordingBarOverlay({
 	const handlePointerDown = useCallback(
 		(event: ReactPointerEvent<HTMLDivElement>) => {
 			if ((event.target as HTMLElement).closest("[data-controls]")) return;
-			event.preventDefault();
-			event.stopPropagation();
-			// Capture the pointer so the drag survives the cursor crossing
-			// iframes (for example the camera preview) on the page.
-			event.currentTarget.setPointerCapture(event.pointerId);
-			setIsDragging(true);
+			isPointerDownRef.current = true;
+			dragDistanceRef.current = 0;
+			dragStartPosRef.current = { x: event.clientX, y: event.clientY };
 			dragOffsetRef.current = {
 				x: event.clientX - (position?.x ?? EDGE_PADDING),
 				y: event.clientY - (position?.y ?? EDGE_PADDING),
@@ -369,16 +380,33 @@ export function RecordingBarOverlay({
 	);
 
 	useEffect(() => {
-		if (!isDragging) return;
 		const handlePointerMove = (event: PointerEvent) => {
-			setPosition(
-				clampToViewport({
-					x: event.clientX - dragOffsetRef.current.x,
-					y: event.clientY - dragOffsetRef.current.y,
-				}),
+			if (!isPointerDownRef.current) return;
+			const dist = Math.hypot(
+				event.clientX - dragStartPosRef.current.x,
+				event.clientY - dragStartPosRef.current.y,
 			);
+			dragDistanceRef.current = dist;
+			if (dist > 4) {
+				setIsDragging(true);
+				setPosition(
+					clampToViewport({
+						x: event.clientX - dragOffsetRef.current.x,
+						y: event.clientY - dragOffsetRef.current.y,
+					}),
+				);
+			}
 		};
-		const handlePointerUp = () => {
+
+		const handlePointerUp = (event: PointerEvent) => {
+			if (!isPointerDownRef.current) return;
+			isPointerDownRef.current = false;
+			if (dragDistanceRef.current < 5) {
+				const target = event.target as HTMLElement | null;
+				if (target && !target.closest("[data-controls]")) {
+					setIsExpanded((current) => !current);
+				}
+			}
 			setIsDragging(false);
 			const nextPosition = positionRef.current;
 			if (!nextPosition) return;
@@ -389,6 +417,7 @@ export function RecordingBarOverlay({
 				.then((state) => setPersistedBarPosition(state.recordingBarPosition))
 				.catch(() => undefined);
 		};
+
 		window.addEventListener("pointermove", handlePointerMove);
 		window.addEventListener("pointerup", handlePointerUp);
 		window.addEventListener("pointercancel", handlePointerUp);
@@ -397,7 +426,7 @@ export function RecordingBarOverlay({
 			window.removeEventListener("pointerup", handlePointerUp);
 			window.removeEventListener("pointercancel", handlePointerUp);
 		};
-	}, [clampToViewport, isDragging]);
+	}, [clampToViewport]);
 
 	const sendControl = useCallback(
 		(type: BarControl) => {
@@ -443,7 +472,7 @@ export function RecordingBarOverlay({
 
 	if (!visible) return null;
 
-	if (status === null) {
+	if (status === null && countdownValue === null) {
 		return (
 			<>
 				<div
@@ -481,17 +510,10 @@ export function RecordingBarOverlay({
 							</span>
 						</div>
 					</div>
+
 					<div className="cap-extension-control-bar-divider" aria-hidden />
+
 					<div className="cap-extension-control-bar-actions" data-controls>
-						<button
-							type="button"
-							className="cap-extension-control-bar-pill is-start"
-							disabled={busy}
-							onClick={startRecording}
-						>
-							<Play size={14} fill="currentColor" strokeWidth={0} aria-hidden />
-							Start recording
-						</button>
 						<button
 							type="button"
 							className={classNames(
@@ -503,8 +525,19 @@ export function RecordingBarOverlay({
 							title="Draw on the page"
 							onClick={toggleDrawing}
 						>
-							<Pencil size={18} aria-hidden />
+							<Pencil size={17} aria-hidden />
 						</button>
+
+						<button
+							type="button"
+							className="cap-extension-control-bar-pill is-start"
+							disabled={busy}
+							onClick={startRecording}
+						>
+							<Play size={13} fill="currentColor" strokeWidth={0} aria-hidden />
+							Start recording
+						</button>
+
 						<button
 							type="button"
 							className="cap-extension-control-bar-icon-button is-quiet"
@@ -512,7 +545,7 @@ export function RecordingBarOverlay({
 							title="Hide bar"
 							onClick={dismissReadyBar}
 						>
-							<X size={20} aria-hidden />
+							<X size={18} aria-hidden />
 						</button>
 					</div>
 				</div>
@@ -521,29 +554,25 @@ export function RecordingBarOverlay({
 		);
 	}
 
-	const isPaused = status.phase === "paused";
+	const isPaused = status?.phase === "paused";
 	const maxMs =
 		plan && !plan.isPro && plan.maxRecordingSeconds !== null
 			? plan.maxRecordingSeconds * 1000
 			: null;
-	const durationMs = currentDurationMs(status, now);
+	const durationMs = status ? currentDurationMs(status, now) : 0;
 	const displayMs =
 		maxMs !== null ? Math.max(0, maxMs - durationMs) : durationMs;
 	const isWarning = maxMs !== null && displayMs <= WARNING_THRESHOLD_MS;
-	const actionsOpenLeft =
-		position !== null && position.x > window.innerWidth / 2;
 
 	return (
 		<>
 			<div
 				ref={barRef}
 				className={classNames(
-					"cap-extension-recording-rail",
+					"cap-extension-active-recording-container",
 					isDragging && "is-dragging",
-					actionsOpenLeft && "opens-left",
+					isExpanded && "is-expanded",
 				)}
-				role="toolbar"
-				aria-label="Cap recording controls"
 				style={{
 					left: `${position?.x ?? EDGE_PADDING}px`,
 					top: position ? `${position.y}px` : "50%",
@@ -551,86 +580,138 @@ export function RecordingBarOverlay({
 				}}
 				onPointerDown={handlePointerDown}
 			>
-				<div
-					className={classNames(
-						"cap-extension-recording-rail-timer",
-						isWarning && "is-warning",
-					)}
-					data-drag-handle
-					title="Drag recording controls"
-				>
-					<GripVertical
-						className="cap-extension-recording-rail-grip"
-						size={14}
-						aria-hidden
-					/>
-					<span
-						className={classNames(
-							"cap-extension-control-bar-dot",
-							isPaused ? "is-paused" : "is-recording",
-						)}
-						aria-hidden
-					/>
-					<span
-						className="cap-extension-recording-rail-time"
-						data-recording-time
-					>
-						{formatDuration(displayMs)}
-					</span>
-				</div>
 				<button
 					type="button"
-					className="cap-extension-control-bar-pill is-stop is-compact"
-					aria-label="Stop recording"
-					title="Stop recording"
-					disabled={busy}
-					data-controls
-					onClick={() => sendControl("stop-recording")}
+					className={classNames(
+						"cap-extension-recording-badge",
+						countdownValue !== null && "is-counting",
+						isPaused && "is-paused",
+						isExpanded && "is-active",
+					)}
+					aria-label={
+						isExpanded ? "Close recording menu" : "Open recording menu"
+					}
+					title={isExpanded ? "Close menu" : "Recording menu"}
 				>
-					<Square size={12} fill="currentColor" strokeWidth={0} aria-hidden />
-				</button>
-				<div
-					className="cap-extension-recording-rail-actions"
-					data-controls
-					data-recording-actions
-				>
-					<button
-						type="button"
-						className="cap-extension-control-bar-icon-button is-compact"
-						aria-label={isPaused ? "Resume recording" : "Pause recording"}
-						title={isPaused ? "Resume" : "Pause"}
-						disabled={busy}
-						data-recording-pause
-						onClick={() =>
-							sendControl(isPaused ? "resume-recording" : "pause-recording")
-						}
-					>
-						{isPaused ? (
-							<Play size={16} fill="currentColor" strokeWidth={0} aria-hidden />
+					<div className="cap-extension-recording-badge-icon-wrap">
+						{countdownValue !== null ? (
+							<div className="cap-extension-badge-countdown-ring">
+								<span className="cap-extension-badge-countdown-number">
+									{countdownValue}
+								</span>
+							</div>
 						) : (
-							<Pause
-								size={16}
-								fill="currentColor"
-								strokeWidth={0}
-								aria-hidden
-							/>
+							<>
+								<img
+									className="cap-extension-recording-badge-logo"
+									src={LOGO_URL}
+									alt=""
+									draggable={false}
+								/>
+								<span
+									className={classNames(
+										"cap-extension-control-bar-dot",
+										isPaused ? "is-paused" : "is-recording",
+									)}
+									aria-hidden
+								/>
+							</>
 						)}
-					</button>
-					<button
-						type="button"
-						className={classNames(
-							"cap-extension-control-bar-icon-button is-compact",
-							drawing && "is-active",
-						)}
-						aria-label="Draw on the page"
-						aria-pressed={drawing}
-						title="Draw on the page"
-						onClick={toggleDrawing}
+					</div>
+
+					{countdownValue === null && status ? (
+						<span
+							className={classNames(
+								"cap-extension-recording-badge-time",
+								isWarning && "is-warning",
+							)}
+						>
+							{formatDuration(displayMs)}
+						</span>
+					) : null}
+				</button>
+
+				{isExpanded && status !== null ? (
+					<div
+						className="cap-extension-recording-popover"
+						role="dialog"
+						aria-label="Recording options"
+						data-controls
 					>
-						<Pencil size={16} aria-hidden />
-					</button>
-				</div>
+						<div className="cap-extension-popover-header">
+							<div className="cap-extension-popover-status">
+								<GripVertical
+									className="cap-extension-popover-grip"
+									size={14}
+									aria-hidden
+								/>
+								<span
+									className={classNames(
+										"cap-extension-control-bar-dot",
+										isPaused ? "is-paused" : "is-recording",
+									)}
+									aria-hidden
+								/>
+								<span
+									className={classNames(
+										"cap-extension-popover-time",
+										isWarning && "is-warning",
+									)}
+								>
+									{formatDuration(displayMs)}
+								</span>
+							</div>
+
+							<div className="cap-extension-popover-header-actions">
+								<button
+									type="button"
+									className="cap-extension-control-bar-icon-button is-compact"
+									aria-label={isPaused ? "Resume recording" : "Pause recording"}
+									title={isPaused ? "Resume" : "Pause"}
+									disabled={busy}
+									onClick={() =>
+										sendControl(
+											isPaused ? "resume-recording" : "pause-recording",
+										)
+									}
+								>
+									{isPaused ? (
+										<Play
+											size={14}
+											fill="currentColor"
+											strokeWidth={0}
+											aria-hidden
+										/>
+									) : (
+										<Pause
+											size={14}
+											fill="currentColor"
+											strokeWidth={0}
+											aria-hidden
+										/>
+									)}
+								</button>
+								<button
+									type="button"
+									className="cap-extension-control-bar-icon-button is-compact is-quiet"
+									aria-label="Stop recording"
+									title="Stop recording"
+									disabled={busy}
+									onClick={() => sendControl("stop-recording")}
+								>
+									<Square
+										size={13}
+										fill="currentColor"
+										strokeWidth={0}
+										aria-hidden
+									/>
+								</button>
+							</div>
+						</div>
+					</div>
+				) : null}
 			</div>
+
 			<DrawingOverlay active={drawing} onClose={stopDrawing} />
 		</>
 	);
