@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Organisation, Storage, User, Video } from "@cap/web-domain";
 import { Cause, Effect, Exit, Layer, Option } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +16,7 @@ import { Storage as StorageService } from "../../../../packages/web-backend/src/
 import {
 	copyGoogleDriveFile,
 	createGoogleDriveResumableUpload,
+	findGoogleDriveFileByObjectKey,
 	GOOGLE_DRIVE_FOLDER_MIME_TYPE,
 	type GoogleDriveTokenStore,
 	syncGoogleDriveVideoNames,
@@ -1024,7 +1026,7 @@ describe("Google Drive upload updates and copies", () => {
 		expect(requestBody(init)).toEqual({
 			name: "Copied: launch/demo.mp4",
 			parents: ["folder-id"],
-			appProperties: { capObjectKey: resultKey },
+			appProperties: { capObjectKey: resultKey, capObjectKeySha256: null },
 		});
 		expect(harness.upserts.at(-1)).toMatchObject({
 			providerObjectId: "copied-file-id",
@@ -1035,6 +1037,364 @@ describe("Google Drive upload updates and copies", () => {
 				contentType: "video/mp4",
 			},
 		});
+	});
+});
+
+describe("Google Drive bounded object identity", () => {
+	const prefix = `${videoOwnerId}/${videoId}/`;
+	const generation = "11111111-1111-4111-8111-111111111111";
+	const snapshot = "22222222-2222-4222-8222-222222222222";
+	const plan = "33333333-3333-4333-8333-333333333333";
+	const manifestKey = `${prefix}.recording/sources/${generation}/${snapshot}/plans/${plan}/manifest.json`;
+	const outputKey = `${prefix}.recording/outputs/${generation}/${snapshot}.mp4`;
+	const digest = (key: string) =>
+		createHash("sha256").update(key, "utf8").digest("hex");
+	const makeHarness = () => {
+		const harness = makeRepoHarness();
+		harness.putObject(
+			storedObjectInput(".cap-folders/video-1", "folder-id", {
+				contentType: GOOGLE_DRIVE_FOLDER_MIME_TYPE,
+			}),
+		);
+		harness.putObject(
+			storedObjectInput(
+				".cap-warnings/video-1/DO_NOT_EDIT_OR_DELETE.txt",
+				"warning-id",
+				{ contentType: "text/plain" },
+			),
+		);
+		return harness;
+	};
+	const upload = (harness: RepoHarness, key: string) =>
+		Effect.runPromise(
+			createGoogleDriveResumableUpload(
+				harness.repo,
+				makeConfig(),
+				{
+					integrationId,
+					ownerId: integrationOwnerId,
+					videoId,
+					key,
+					contentType: "application/json",
+					contentLength: 2,
+				},
+				makeTokenStore(),
+			),
+		);
+
+	it.each([
+		["ASCII boundary", `${prefix}${"x".repeat(112 - prefix.length)}`, false],
+		["ASCII overflow", `${prefix}${"x".repeat(113 - prefix.length)}`, true],
+		[
+			"UTF-8 boundary",
+			`${prefix}${"é".repeat((112 - prefix.length) / 2)}`,
+			false,
+		],
+		[
+			"UTF-8 overflow",
+			`${prefix}${"é".repeat((112 - prefix.length) / 2 + 1)}`,
+			true,
+		],
+		["source plan manifest", manifestKey, true],
+		["immutable output", outputKey, true],
+	] as const)(
+		"starts an upload within the provider property limit: %s",
+		async (_, key, hashed) => {
+			const harness = makeHarness();
+			const fetchMock = vi.fn(
+				async (input: string | URL | Request, init?: RequestInit) => {
+					const url = String(input);
+					if (url.includes("/files/generateIds"))
+						return jsonResponse({ ids: ["new-object-id"] });
+					if (url.includes("uploadType=resumable") && init?.method === "POST") {
+						const properties = requestBody(init)?.appProperties;
+						if (!properties || typeof properties !== "object")
+							throw new Error("Missing object identity");
+						for (const [name, value] of Object.entries(properties)) {
+							if (
+								typeof value !== "string" ||
+								Buffer.byteLength(name + value, "utf8") > 124
+							)
+								return response(400);
+						}
+						return response(200, { Location: "https://upload.test/bounded" });
+					}
+					throw new Error("Unexpected provider request");
+				},
+			);
+			vi.stubGlobal("fetch", fetchMock);
+
+			await expect(upload(harness, key)).resolves.toBe(
+				"https://upload.test/bounded",
+			);
+			const post = fetchMock.mock.calls.find(
+				([, init]) => init?.method === "POST",
+			);
+			expect(requestBody(post?.[1])?.appProperties).toEqual(
+				hashed ? { capObjectKeySha256: digest(key) } : { capObjectKey: key },
+			);
+			expect(
+				harness.objects.get(objectMapKey(integrationId, key)),
+			).toMatchObject({
+				objectKey: key,
+				providerObjectId: "new-object-id",
+			});
+		},
+	);
+
+	it("preserves an existing long-key object's id and display metadata", async () => {
+		const harness = makeHarness();
+		const original = harness.putObject(
+			storedObjectInput(manifestKey, "existing-long-id", {
+				fileName: "Original visible name.json",
+				contentType: "application/json",
+			}),
+		);
+		const fetchMock = vi.fn(
+			async (_input: string | URL | Request, _init?: RequestInit) =>
+				response(200, { Location: "https://upload.test/existing-long" }),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(upload(harness, manifestKey)).resolves.toBe(
+			"https://upload.test/existing-long",
+		);
+		expect(fetchMock).toHaveBeenCalledOnce();
+		const [input, init] = fetchMock.mock.calls[0] ?? [];
+		expect(String(input)).toContain("/files/existing-long-id?");
+		expect(requestBody(init)).toEqual({ mimeType: "application/json" });
+		expect(
+			harness.objects.get(objectMapKey(integrationId, manifestKey)),
+		).toMatchObject({
+			objectKey: manifestKey,
+			providerObjectId: original.providerObjectId,
+			metadata: original.metadata,
+		});
+	});
+
+	it.each([
+		["legacy long key", { capObjectKey: manifestKey }, true],
+		["hashed long key", { capObjectKeySha256: digest(manifestKey) }, true],
+		[
+			"matching dual identities",
+			{ capObjectKey: manifestKey, capObjectKeySha256: digest(manifestKey) },
+			true,
+		],
+		[
+			"contradictory legacy identity",
+			{ capObjectKey: resultKey, capObjectKeySha256: digest(manifestKey) },
+			false,
+		],
+		[
+			"contradictory hashed identity",
+			{ capObjectKey: manifestKey, capObjectKeySha256: digest(resultKey) },
+			false,
+		],
+		[
+			"different recording",
+			{ capObjectKeySha256: digest(`${manifestKey}-different`) },
+			false,
+		],
+		["missing identity", {}, false],
+	] as const)(
+		"searches both representations without accepting %s aliases",
+		async (_, appProperties, accepted) => {
+			const fetchMock = vi.fn(async (_input: string | URL | Request) =>
+				jsonResponse({
+					files: [{ id: "candidate-id", size: "2", appProperties }],
+				}),
+			);
+			vi.stubGlobal("fetch", fetchMock);
+			const result = await Effect.runPromise(
+				findGoogleDriveFileByObjectKey(
+					makeConfig(),
+					manifestKey,
+					makeTokenStore(),
+				),
+			);
+			expect(Option.isSome(result)).toBe(accepted);
+			const [input] = fetchMock.mock.calls[0] ?? [];
+			const query = new URL(String(input)).searchParams.get("q");
+			expect(query).toContain(`key='capObjectKey' and value='${manifestKey}'`);
+			expect(query).toContain(
+				`key='capObjectKeySha256' and value='${digest(manifestKey)}'`,
+			);
+		},
+	);
+
+	it("does not let a larger conflicting candidate displace an exact match", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				jsonResponse({
+					files: [
+						{
+							id: "wrong-id",
+							size: "1000",
+							appProperties: {
+								capObjectKey: resultKey,
+								capObjectKeySha256: digest(manifestKey),
+							},
+						},
+						{
+							id: "right-id",
+							size: "2",
+							appProperties: { capObjectKeySha256: digest(manifestKey) },
+						},
+					],
+				}),
+			),
+		);
+		const result = await Effect.runPromise(
+			findGoogleDriveFileByObjectKey(
+				makeConfig(),
+				manifestKey,
+				makeTokenStore(),
+			),
+		);
+		expect(Option.getOrThrow(result).id).toBe("right-id");
+	});
+
+	it("recovers a missing long-key object through its hashed provider identity", async () => {
+		const harness = makeHarness();
+		harness.putObject(storedObjectInput(manifestKey, "missing-manifest-id"));
+		const access = await getStorageAccess(harness);
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = new URL(String(input));
+			if (url.pathname.endsWith("/missing-manifest-id")) return response(404);
+			if (url.pathname.endsWith("/files")) {
+				return jsonResponse({
+					files: [
+						{
+							id: "recovered-manifest-id",
+							name: "manifest.json",
+							mimeType: "application/json",
+							size: "2",
+							appProperties: { capObjectKeySha256: digest(manifestKey) },
+						},
+					],
+				});
+			}
+			if (
+				url.pathname.endsWith("/recovered-manifest-id") &&
+				url.searchParams.get("alt") === "media"
+			)
+				return new Response("{}", {
+					headers: { "Content-Type": "application/json" },
+				});
+			throw new Error("Unexpected provider request");
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await Effect.runPromise(access.getObject(manifestKey));
+		expect(Option.getOrThrow(result)).toBe("{}");
+		expect(
+			harness.objects.get(objectMapKey(integrationId, manifestKey)),
+		).toMatchObject({
+			objectKey: manifestKey,
+			providerObjectId: "recovered-manifest-id",
+			uploadStatus: "complete",
+		});
+		expect(harness.updates).toHaveLength(1);
+	});
+
+	it.each([
+		["short to long", resultKey, manifestKey],
+		["long to short", manifestKey, resultKey],
+		["long to long", manifestKey, outputKey],
+	] as const)(
+		"clears inherited identity aliases when copying %s",
+		async (_, sourceKey, targetKey) => {
+			const harness = makeHarness();
+			harness.putObject(storedObjectInput(sourceKey, "source-id"));
+			const sourceProperties: Record<string, string> = {
+				customerTag: "preserve",
+				...(sourceKey === resultKey
+					? { capObjectKey: sourceKey }
+					: { capObjectKeySha256: digest(sourceKey) }),
+			};
+			const copiedProperties = { ...sourceProperties };
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+					const properties = requestBody(init)?.appProperties;
+					if (!properties || typeof properties !== "object")
+						throw new Error("Missing copy identity");
+					for (const [name, value] of Object.entries(properties)) {
+						if (value === null) delete copiedProperties[name];
+						else if (
+							typeof value === "string" &&
+							Buffer.byteLength(name + value, "utf8") <= 124
+						)
+							copiedProperties[name] = value;
+						else return response(400);
+					}
+					return jsonResponse({
+						id: "copied-id",
+						name: requestBody(init)?.name,
+						mimeType: "video/mp4",
+						size: "1234",
+					});
+				}),
+			);
+
+			await Effect.runPromise(
+				copyGoogleDriveFile({
+					repo: harness.repo,
+					config: makeConfig(),
+					sourceFileId: "source-id",
+					input: {
+						integrationId,
+						ownerId: integrationOwnerId,
+						videoId,
+						key: targetKey,
+						contentType: "video/mp4",
+					},
+					tokenStore: makeTokenStore(),
+				}),
+			);
+			expect(copiedProperties).toEqual({
+				customerTag: "preserve",
+				...(targetKey === resultKey
+					? { capObjectKey: targetKey }
+					: { capObjectKeySha256: digest(targetKey) }),
+			});
+			expect(
+				harness.objects.get(objectMapKey(integrationId, sourceKey))
+					?.providerObjectId,
+			).toBe("source-id");
+			expect(
+				harness.objects.get(objectMapKey(integrationId, targetKey)),
+			).toMatchObject({
+				objectKey: targetKey,
+				providerObjectId: "copied-id",
+				metadata: { fileName: targetKey.split("/").slice(2).join("__") },
+			});
+		},
+	);
+
+	it("keeps a newer long-key provider mapping when deletion finishes after remapping", async () => {
+		const harness = makeHarness();
+		harness.putObject(storedObjectInput(outputKey, "old-output-id"));
+		const access = await getStorageAccess(harness);
+		const fetchMock = vi.fn(
+			async (_input: string | URL | Request, init?: RequestInit) => {
+				if (init?.method !== "DELETE")
+					throw new Error("Unexpected provider request");
+				harness.putObject(storedObjectInput(outputKey, "new-output-id"));
+				return response(204);
+			},
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		await Effect.runPromise(access.deleteObject(outputKey));
+		expect(fetchMock).toHaveBeenCalledOnce();
+		expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+			"/files/old-output-id?",
+		);
+		expect(
+			harness.objects.get(objectMapKey(integrationId, outputKey))
+				?.providerObjectId,
+		).toBe("new-output-id");
 	});
 });
 
@@ -1221,6 +1581,7 @@ describe("Google Drive title synchronization", () => {
 						files: [
 							{
 								id: "recovered-stale-id",
+								appProperties: { capObjectKey: resultKey },
 								name: "Recovered.mp4",
 								mimeType: "video/mp4",
 								size: "123",
@@ -1268,6 +1629,7 @@ describe("Google Drive title synchronization", () => {
 						files: [
 							{
 								id: "different-file-id",
+								appProperties: { capObjectKey: resultKey },
 								name: "Different.mp4",
 								mimeType: "video/mp4",
 								size: "123",
@@ -1379,6 +1741,39 @@ describe("Google Drive title synchronization", () => {
 			},
 		});
 		expect(harness.fileNameUpdates).toHaveLength(2);
+	});
+
+	it("rejects contradictory object identities before any name change", async () => {
+		const { harness, files } = makeSyncHarness();
+		const file = files.get("file-id");
+		if (!file) throw new Error("Missing Drive file fixture");
+		file.appProperties = {
+			...file.appProperties,
+			capObjectKeySha256: createHash("sha256")
+				.update(`${resultKey}-different`, "utf8")
+				.digest("hex"),
+		};
+		const fetchMock = makeDriveFileFetch(files);
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(
+			Effect.runPromise(
+				syncGoogleDriveVideoNames(
+					harness.repo,
+					makeConfig(),
+					syncVideo,
+					makeTokenStore(),
+				),
+			),
+		).rejects.toBeDefined();
+		expect(
+			fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"),
+		).toHaveLength(0);
+		expect(harness.fileNameUpdates).toHaveLength(0);
+		expect(file).toMatchObject({
+			name: "Old title.mp4",
+			md5Checksum: "original-md5",
+		});
 	});
 
 	it("refreshes verification ETags after a name-only rename without changing media bytes", async () => {

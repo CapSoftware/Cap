@@ -172,14 +172,16 @@ beforeEach(() => {
 		withCurrent({ leaseExpiresAt: new Date(Date.now() + 5 * 60_000) });
 		return true;
 	});
-	mocks.retry.mockImplementation(async () => {
-		withCurrent({
-			state: "retry",
-			leaseExpiresAt: null,
-			nextRetryAt: new Date(Date.now() + 15_000),
-		});
-		return true;
-	});
+	mocks.retry.mockImplementation(
+		async ({ nextRetryAt }: { nextRetryAt?: Date }) => {
+			withCurrent({
+				state: "retry",
+				leaseExpiresAt: null,
+				nextRetryAt: nextRetryAt ?? new Date(Date.now() + 15_000),
+			});
+			return true;
+		},
+	);
 	mocks.blocked.mockImplementation(async () => {
 		withCurrent({ state: "source-blocked", leaseExpiresAt: null });
 		return true;
@@ -332,6 +334,32 @@ function pollingInput() {
 }
 
 describe("short durable processing polls", () => {
+	it.each(["processing-timeout", "worker-lease-expired"])(
+		"does not reuse a rich attempt's stale retry date after %s",
+		async (errorCode) => {
+			withCurrent({ leaseExpiresAt: new Date(now.getTime() - 1) });
+			mocks.observe.mockResolvedValue({
+				status: "unavailable",
+				delivered: false,
+			});
+			const input = {
+				...fixture,
+				...pollingInput(),
+				nextRetryAt: new Date(now.getTime() - 60_000),
+				...(errorCode === "processing-timeout" ? { deadline: now } : {}),
+			};
+			expect(await pollDesktopRecordingAttempt(input)).toBe("retry");
+			expect(current?.nextRetryAt).toEqual(new Date(now.getTime() + 15_000));
+			expect(mocks.retry.mock.calls[0]?.[0]).not.toHaveProperty("nextRetryAt");
+			expect(mocks.retry.mock.calls[0]?.[0]).toMatchObject({
+				videoId,
+				generation: fixture.generation,
+				attemptId: fixture.attemptId,
+				errorCode,
+			});
+		},
+	);
+
 	it("does not treat a delivered terminal webhook as durable success until publication is committed", async () => {
 		mocks.observe.mockResolvedValue({ status: "terminal", delivered: true });
 		expect(await pollDesktopRecordingAttempt(pollingInput())).toBe("waiting");
@@ -535,6 +563,39 @@ describe("source commitment and media request compatibility", () => {
 });
 
 describe("workflow retry lifetime", () => {
+	it("waits for fresh backoff after a source commit failure with a rich stale attempt", async () => {
+		withCurrent({
+			state: "committing",
+			source: null,
+			leaseExpiresAt: null,
+			nextRetryAt: new Date(now.getTime() - 60_000),
+		});
+		mocks.commitSource.mockRejectedValueOnce(
+			new Error("provider copy unavailable"),
+		);
+		expect(
+			await finalizeDesktopRecordingWorkflow({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).toEqual({ success: true, jobId: "remote-job" });
+		expect(mocks.retry).toHaveBeenCalledWith({
+			videoId,
+			generation: fixture.generation,
+			attemptId: "attempt-2",
+			errorCode: "processing-interrupted",
+			errorMessage: "provider copy unavailable",
+		});
+		expect(mocks.sleep.mock.calls[0]).toEqual([
+			new Date(now.getTime() + 15_000),
+		]);
+		expect(mocks.claim.mock.calls[1]?.[0].now).toEqual(
+			new Date(now.getTime() + 15_000),
+		);
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+	});
+
 	it("waits durably between failed attempts and continues past the old eight-attempt cutoff", async () => {
 		withCurrent({
 			state: "committing",
