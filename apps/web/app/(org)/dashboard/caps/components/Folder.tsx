@@ -18,16 +18,22 @@ import { registerDropTarget } from "../../folder/[id]/components/ClientCapCard";
 import { FoldersDropdown } from "./FoldersDropdown";
 import { MoveItemsDialog } from "./MoveItemsDialog";
 
+export type FolderLayout = "grid" | "list";
+
 export type FolderDataType = {
 	name: string;
 	id: Folder.FolderId;
 	color: "normal" | "blue" | "red" | "yellow";
 	public: boolean;
 	videoCount: number;
+	// Drives "Newest/Oldest first" sorting. Optional so older callers that only
+	// need the card for a move menu keep working; missing dates sort as oldest.
+	createdAt?: Date | string | null;
 	spaceId?: Space.SpaceIdOrOrganisationId | null;
 	parentId: Folder.FolderId | null;
 	canMove?: boolean;
 	moveRootLabel?: string;
+	layout?: FolderLayout;
 };
 
 const FolderCard = ({
@@ -40,7 +46,9 @@ const FolderCard = ({
 	spaceId,
 	canMove,
 	moveRootLabel,
+	layout = "grid",
 }: FolderDataType) => {
+	const isList = layout === "list";
 	const router = useRouter();
 	const { theme } = useTheme();
 	const [confirmDeleteFolderOpen, setConfirmDeleteFolderOpen] = useState(false);
@@ -335,11 +343,23 @@ const FolderCard = ({
 			onDragLeave={handleDragLeave}
 			onDrop={handleDrop}
 			className={clsx(
-				"flex justify-between items-center px-4 py-4 w-full h-auto min-w-0 rounded-lg border transition-all duration-200 bg-gray-3 hover:bg-gray-4 hover:border-gray-6",
+				"flex relative justify-between items-center w-full h-auto min-w-0 rounded-lg border transition-all duration-200 bg-gray-3 hover:bg-gray-4 hover:border-gray-6",
+				isList ? "gap-3 px-3 py-2" : "px-4 py-4",
 				isDragOver ? "border-blue-10 bg-gray-4" : "border-gray-5",
 				isMovingVideo && "opacity-70",
 			)}
 		>
+			{/* Stretched link: the whole card opens the folder, including the icon,
+			    the name, and the "x videos" line. Controls that must not navigate
+			    (menu button, rename field) sit above it with z-10. */}
+			{!isRenaming && (
+				<Link
+					href={folderHref}
+					prefetch={false}
+					aria-label={`Open folder ${updateName}`}
+					className="absolute inset-0 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-1"
+				/>
+			)}
 			{moveEnabled && (
 				<MoveItemsDialog
 					open={isMoveDialogOpen}
@@ -353,14 +373,19 @@ const FolderCard = ({
 					}}
 				/>
 			)}
-			<div className="flex flex-1 gap-3 items-center">
-				<Link href={folderHref} prefetch={false} className="shrink-0">
+			<div className="flex flex-1 gap-3 items-center min-w-0">
+				<div className="shrink-0 pointer-events-none">
 					<FolderRive
 						key={`${theme}folder${id}`}
-						className="w-[50px] h-[50px]"
+						className={isList ? "size-9" : "w-[50px] h-[50px]"}
 					/>
-				</Link>
-				<div className="flex flex-col justify-center h-10">
+				</div>
+				<div
+					className={clsx(
+						"flex flex-1 min-w-0",
+						isList ? "gap-3 items-center" : "flex-col justify-center",
+					)}
+				>
 					{isRenaming ? (
 						<textarea
 							ref={nameRef}
@@ -389,25 +414,53 @@ const FolderCard = ({
 										});
 								}
 							}}
-							className="w-full resize-none bg-transparent border-none focus:outline-none
-                 focus:ring-0 focus:border-none text-gray-12 text-[15px] max-w-[116px] truncate p-0 m-0 h-[22px] leading-[22px] overflow-hidden font-normal tracking-normal"
+							className={clsx(
+								"relative z-10 flex-1 w-full min-w-0 resize-none bg-transparent border-none focus:outline-none focus:ring-0 focus:border-none text-gray-12 truncate p-0 m-0 h-[22px] leading-[22px] overflow-hidden font-normal tracking-normal",
+								isList ? "text-[14px]" : "text-[15px]",
+							)}
 						/>
 					) : (
-						<Link
-							href={folderHref}
-							prefetch={false}
-							className="block text-left"
+						<div
+							title={updateName}
+							className={clsx(
+								"block min-w-0 text-left",
+								isList ? "flex-1" : "w-full",
+							)}
 						>
-							<span className="block text-[15px] truncate text-gray-12 w-full max-w-[116px] m-0 p-0 h-[22px] leading-[22px] font-normal tracking-normal">
+							<span
+								className={clsx(
+									"text-gray-12 m-0 p-0 font-normal tracking-normal",
+									isList
+										? "block text-[14px] truncate h-[22px] leading-[22px]"
+										: // Two lines before truncating: numbered names like
+											// "14_Account & Permissions" usually fit without an ellipsis.
+											// line-clamp sets its own display, so no `block` here.
+											"text-[15px] leading-[22px] line-clamp-2 break-words",
+								)}
+							>
 								{updateName}
 							</span>
-						</Link>
+						</div>
 					)}
-					<div className="flex gap-2 items-center">
-						<p className="text-sm truncate text-gray-10 w-fit">{`${videoCount} ${
-							videoCount === 1 ? "video" : "videos"
-						}`}</p>
-						{publicEnabled && (
+					<div
+						className={clsx(
+							"flex gap-2 items-center",
+							isList && "shrink-0 justify-end w-32",
+						)}
+					>
+						{publicEnabled && isList && (
+							<span className="inline-flex gap-1 items-center text-[11px] font-medium text-blue-9">
+								<FontAwesomeIcon icon={faGlobe} className="size-2.5" />
+								Public
+							</span>
+						)}
+						<p
+							className={clsx(
+								"text-sm truncate text-gray-10 w-fit",
+								isList && "tabular-nums",
+							)}
+						>{`${videoCount} ${videoCount === 1 ? "video" : "videos"}`}</p>
+						{publicEnabled && !isList && (
 							<span className="inline-flex gap-1 items-center text-[11px] font-medium text-blue-9">
 								<FontAwesomeIcon icon={faGlobe} className="size-2.5" />
 								Public
@@ -426,31 +479,33 @@ const FolderCard = ({
 				title="Delete Folder"
 				description={`Are you sure you want to delete the folder "${name}"? This action cannot be undone.`}
 			/>
-			<FoldersDropdown
-				id={id}
-				parentId={parentId}
-				public={publicEnabled}
-				setIsRenaming={setIsRenaming}
-				setConfirmDeleteFolderOpen={setConfirmDeleteFolderOpen}
-				nameRef={nameRef}
-				onPublicToggle={() => {
-					const nextPublic = !publicEnabled;
-					if (nextPublic && !ownerIsPro) {
-						setUpgradeModalOpen(true);
-						return;
-					}
-					setPublicEnabled(nextPublic);
-					updateFolder.mutate({
-						id,
-						public: nextPublic,
-					});
-				}}
-				onCopyPublicLink={async () => {
-					await copyPublicLink();
-				}}
-				canMove={moveEnabled}
-				onMove={() => setIsMoveDialogOpen(true)}
-			/>
+			<div className="relative z-10 shrink-0">
+				<FoldersDropdown
+					id={id}
+					parentId={parentId}
+					public={publicEnabled}
+					setIsRenaming={setIsRenaming}
+					setConfirmDeleteFolderOpen={setConfirmDeleteFolderOpen}
+					nameRef={nameRef}
+					onPublicToggle={() => {
+						const nextPublic = !publicEnabled;
+						if (nextPublic && !ownerIsPro) {
+							setUpgradeModalOpen(true);
+							return;
+						}
+						setPublicEnabled(nextPublic);
+						updateFolder.mutate({
+							id,
+							public: nextPublic,
+						});
+					}}
+					onCopyPublicLink={async () => {
+						await copyPublicLink();
+					}}
+					canMove={moveEnabled}
+					onMove={() => setIsMoveDialogOpen(true)}
+				/>
+			</div>
 		</fieldset>
 	);
 };
