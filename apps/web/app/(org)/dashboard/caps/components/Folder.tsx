@@ -349,9 +349,6 @@ const FolderCard = ({
 				isMovingVideo && "opacity-70",
 			)}
 		>
-			{/* Stretched link: the whole card opens the folder, including the icon,
-			    the name, and the "x videos" line. Controls that must not navigate
-			    (menu button, rename field) sit above it with z-10. */}
 			{!isRenaming && (
 				<Link
 					href={folderHref}
@@ -432,10 +429,7 @@ const FolderCard = ({
 									"text-gray-12 m-0 p-0 font-normal tracking-normal",
 									isList
 										? "block text-[14px] truncate h-[22px] leading-[22px]"
-										: // Two lines before truncating: numbered names like
-											// "14_Account & Permissions" usually fit without an ellipsis.
-											// line-clamp sets its own display, so no `block` here.
-											"text-[15px] leading-[22px] line-clamp-2 break-words",
+										: "text-[15px] leading-[22px] line-clamp-2 break-words",
 								)}
 							>
 								{updateName}
