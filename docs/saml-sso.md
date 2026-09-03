@@ -4,7 +4,7 @@ Cap uses WorkOS Single Sign-On with its existing NextAuth sessions. Each Cap org
 
 ## Customer flow
 
-1. An organization owner opens **Settings → Organization → Security & Compliance** and purchases the monthly SAML SSO add-on. Checkout displays the configured USD, GBP, or EUR amount from Stripe.
+1. An organization owner opens **Settings → Organization → Security & Compliance** and purchases the monthly SAML SSO add-on. Existing subscribers use their current Stripe billing currency automatically, without a currency picker. Owners without a current subscription can choose the configured USD, GBP, or EUR amount. Checkout validates the owner's billing currency again before opening a payment session.
 2. Once payment is confirmed, owners and admins can use **Verify domain**. Cap creates or reuses that organization's WorkOS organization and opens the hosted domain-verification flow. Organizations whose domains are already verified skip this step.
 3. After domain verification, **Set up SAML SSO** opens WorkOS's SSO setup flow for the IT administrator to configure the identity provider. **Verify domains** remains available if additional domains need verification. Payment alone never verifies a domain.
 4. Team members choose SAML SSO on the sign-in page, enter their work email/domain, or follow the organization's sign-in link. An IdP-initiated visit to `/login?connection_id=...` starts the same protected authorization flow.
