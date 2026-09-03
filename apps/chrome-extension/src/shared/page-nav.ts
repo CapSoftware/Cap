@@ -3,6 +3,7 @@ import { loadSettings } from "./storage";
 export const PAGE_NAV_LINKS = [
 	{ id: "welcome", label: "Welcome", href: "welcome.html" },
 	{ id: "how-it-works", label: "How it works", href: "how-it-works.html" },
+	{ id: "import", label: "Import", href: "migrate.html" },
 	{ id: "camera", label: "Camera access", href: "camera-permission.html" },
 	{ id: "options", label: "Options", href: "options.html" },
 ] as const;
