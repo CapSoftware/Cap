@@ -1,5 +1,6 @@
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import IconCapLogo from "~icons/cap/logo";
 
 function SkeletonPulse(props: { class?: string }) {
@@ -50,7 +51,7 @@ function HeaderSkeleton() {
 
 			<div
 				class={cx(
-					"flex flex-row items-center gap-2",
+					"flex flex-row items-center gap-2 h-full",
 					ostype() !== "windows" && "pr-2",
 				)}
 			>
@@ -58,6 +59,7 @@ function HeaderSkeleton() {
 				<SkeletonButton />
 				<SkeletonButton />
 				<SkeletonButton />
+				{ostype() === "windows" && <CaptionControlsWindows11 />}
 			</div>
 		</div>
 	);

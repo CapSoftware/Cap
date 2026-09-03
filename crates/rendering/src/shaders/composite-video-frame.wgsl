@@ -287,6 +287,24 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         }
     }
 
+    // Evaluate coverage before the apron return so fwidth retains every helper lane.
+    let shape_coverage = rounded_rect_coverage(
+        p - center,
+        size,
+        corner_radius_for(p - center),
+        uniforms.rounding_type
+    );
+    var border_coverage = 0.0;
+    if (uniforms.border_enabled > 0.0) {
+        let border_outer_coverage = rounded_rect_coverage(
+            p - center,
+            size + vec2<f32>(uniforms.border_width),
+            corner_radius_for(p - center) + uniforms.border_width,
+            uniforms.rounding_type
+        );
+        border_coverage = clamp(border_outer_coverage - shape_coverage, 0.0, 1.0);
+    }
+
     if target_uv.x < -edge_padding_uv.x - blur_reach_uv.x ||
         target_uv.x > 1.0 + edge_padding_uv.x + blur_reach_uv.x ||
         target_uv.y < -edge_padding_uv.y - blur_reach_uv.y ||
@@ -295,36 +313,13 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         return shadow_color;
     }
 
-    if (uniforms.border_enabled > 0.0) {
-        let border_outer_coverage = rounded_rect_coverage(
-            p - center,
-            size + vec2<f32>(uniforms.border_width),
-            corner_radius_for(p - center) + uniforms.border_width,
-            uniforms.rounding_type
+    if (border_coverage > 0.001) {
+        let border_color = vec4<f32>(
+            uniforms.border_color.xyz,
+            border_coverage * uniforms.border_color.w
         );
-        let border_inner_coverage = rounded_rect_coverage(
-            p - center,
-            size,
-            corner_radius_for(p - center),
-            uniforms.rounding_type
-        );
-        let border_coverage = clamp(border_outer_coverage - border_inner_coverage, 0.0, 1.0);
-
-        if (border_coverage > 0.001) {
-            let border_color = vec4<f32>(
-                uniforms.border_color.xyz,
-                border_coverage * uniforms.border_color.w
-            );
-            return composite_source_over(border_color, shadow_color);
-        }
+        return composite_source_over(border_color, shadow_color);
     }
-
-    let shape_coverage = rounded_rect_coverage(
-        p - center,
-        size,
-        corner_radius_for(p - center),
-        uniforms.rounding_type
-    );
 
     // Outside the card the blur can still land content (the smear escapes the
     // card edge along the motion), so only take the fast exit when inactive.

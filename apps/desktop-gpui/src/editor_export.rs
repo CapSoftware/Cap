@@ -2171,8 +2171,22 @@ async fn run_export(
         builder = builder.with_output_path(path);
     }
 
-    let base = builder.build().await.map_err(|error| error.to_string())?;
-    let total = base.total_frames(fps);
+    enum PreparedBase {
+        Mp4(cap_export::Mp4ExporterBase),
+        Other(ExporterBase),
+    }
+    let (base, total) = if !cursor_only && format != ExportFormatKind::Gif {
+        let base = builder
+            .build_for_mp4(cancel.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let total = base.total_frames(fps);
+        (PreparedBase::Mp4(base), total)
+    } else {
+        let base = builder.build().await.map_err(|error| error.to_string())?;
+        let total = base.total_frames(fps);
+        (PreparedBase::Other(base), total)
+    };
     let _ = progress_tx.send((0, total));
 
     let progress = {
@@ -2189,33 +2203,37 @@ async fn run_export(
     };
 
     let resolution = XY::new(width, height);
-    if cursor_only {
-        MovExportSettings {
-            fps,
-            resolution_base: resolution,
-            cursor_only: true,
+    match base {
+        PreparedBase::Other(base) if cursor_only => {
+            MovExportSettings {
+                fps,
+                resolution_base: resolution,
+                cursor_only: true,
+            }
+            .export(base, progress)
+            .await
         }
-        .export(base, progress)
-        .await
-    } else if format == ExportFormatKind::Gif {
-        GifExportSettings {
-            fps,
-            resolution_base: resolution,
-            quality: None,
+        PreparedBase::Other(base) => {
+            GifExportSettings {
+                fps,
+                resolution_base: resolution,
+                quality: None,
+            }
+            .export(base, progress)
+            .await
         }
-        .export(base, progress)
-        .await
-    } else {
-        Mp4ExportSettings {
-            fps,
-            resolution_base: resolution,
-            compression,
-            custom_bpp,
-            force_ffmpeg_decoder: force,
-            optimize_filesize: optimize,
+        PreparedBase::Mp4(base) => {
+            Mp4ExportSettings {
+                fps,
+                resolution_base: resolution,
+                compression,
+                custom_bpp,
+                force_ffmpeg_decoder: force,
+                optimize_filesize: optimize,
+            }
+            .export_prepared(base, progress)
+            .await
         }
-        .export(base, progress)
-        .await
     }
 }
 

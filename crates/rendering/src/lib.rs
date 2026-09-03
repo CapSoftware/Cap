@@ -1147,14 +1147,6 @@ pub async fn render_video_to_channel_nv12(
                 })
                 .collect::<Vec<_>>()
         });
-    for timeline in &mut zoom_timelines {
-        timeline.precompute();
-    }
-    if let Some(timelines) = &mut outgoing_zoom_timelines {
-        for timeline in timelines {
-            timeline.precompute();
-        }
-    }
     let zoom_focus_interpolators_construct_ms = zoom_build_start.elapsed().as_millis() as u64;
 
     let mut frame_number = 0;
@@ -7200,6 +7192,8 @@ mod project_uniforms_tests {
     ) -> XY<f64> {
         let mut sum = XY::new(0.0, 0.0);
         let mut count = 0;
+        let mut min = XY::new(frame.width as usize, frame.height as usize);
+        let mut max = XY::new(0, 0);
         for (y, row) in frame
             .data
             .chunks_exact(frame.padded_bytes_per_row as usize)
@@ -7210,11 +7204,117 @@ mod project_uniforms_tests {
                 if selected(pixel, x, y) {
                     sum = sum + XY::new(x as f64 + 0.5, y as f64 + 0.5);
                     count += 1;
+                    min.x = min.x.min(x);
+                    min.y = min.y.min(y);
+                    max.x = max.x.max(x);
+                    max.y = max.y.max(y);
                 }
             }
         }
+        eprintln!("selected pixels: count={count}, bounds={min:?}..={max:?}");
         assert!(count > 0, "expected visible pixels");
         sum / count as f64
+    }
+
+    fn pixel_selection_mask(
+        frame: &RenderedFrame,
+        center: XY<f64>,
+        selected: impl Fn(&[u8], usize, usize) -> bool,
+    ) -> String {
+        let x_min = (center.x.max(0.0) as usize).saturating_sub(32);
+        let y_min = (center.y.max(0.0) as usize).saturating_sub(32);
+        let x_max = (x_min + 64).min(frame.width as usize);
+        let y_max = (y_min + 64).min(frame.height as usize);
+        let mut mask = format!("region x={x_min}..{x_max}, y={y_min}..{y_max}\n");
+        for y in y_min..y_max {
+            for x in x_min..x_max {
+                let offset = y * frame.padded_bytes_per_row as usize + x * 4;
+                mask.push(if selected(&frame.data[offset..offset + 4], x, y) {
+                    '#'
+                } else {
+                    '.'
+                });
+            }
+            mask.push('\n');
+        }
+        mask
+    }
+
+    fn report_pixel_changes(
+        label: &str,
+        frame: &RenderedFrame,
+        base: &RenderedFrame,
+        center: XY<f64>,
+    ) {
+        let mut changed = 0;
+        let mut distant = 0;
+        let mut max_error = 0;
+        let mut samples = Vec::new();
+        for (y, row) in frame
+            .data
+            .chunks_exact(frame.padded_bytes_per_row as usize)
+            .take(frame.height as usize)
+            .enumerate()
+        {
+            for (x, pixel) in row.chunks_exact(4).take(frame.width as usize).enumerate() {
+                let offset = y * base.padded_bytes_per_row as usize + x * 4;
+                let previous = &base.data[offset..offset + 4];
+                let error = pixel[..3]
+                    .iter()
+                    .zip(&previous[..3])
+                    .map(|(actual, base)| actual.abs_diff(*base))
+                    .max()
+                    .unwrap_or(0);
+                max_error = max_error.max(error);
+                if error > 12 {
+                    changed += 1;
+                    if (x as f64 + 0.5 - center.x).abs() >= 32.0
+                        || (y as f64 + 0.5 - center.y).abs() >= 32.0
+                    {
+                        distant += 1;
+                        if samples.len() < 16 {
+                            samples.push((x, y, previous.to_vec(), pixel.to_vec()));
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "{label}: changed={changed}, distant={distant}, max_rgb_error={max_error}, distant_samples(x,y,base,actual)={samples:?}"
+        );
+    }
+
+    fn changes_outside_alpha_support(
+        frame: &RenderedFrame,
+        base: &RenderedFrame,
+        support: &RenderedFrame,
+    ) -> (usize, u8) {
+        let mut changed = 0;
+        let mut max_error = 0;
+        for (y, row) in frame
+            .data
+            .chunks_exact(frame.padded_bytes_per_row as usize)
+            .take(frame.height as usize)
+            .enumerate()
+        {
+            for (x, pixel) in row.chunks_exact(4).take(frame.width as usize).enumerate() {
+                let support_offset = y * support.padded_bytes_per_row as usize + x * 4;
+                if support.data[support_offset + 3] == 0 {
+                    let base_offset = y * base.padded_bytes_per_row as usize + x * 4;
+                    let error = pixel[..3]
+                        .iter()
+                        .zip(&base.data[base_offset..base_offset + 3])
+                        .map(|(actual, base)| actual.abs_diff(*base))
+                        .max()
+                        .unwrap_or(0);
+                    max_error = max_error.max(error);
+                    if error != 0 {
+                        changed += 1;
+                    }
+                }
+            }
+        }
+        (changed, max_error)
     }
 
     #[tokio::test]
@@ -7399,18 +7499,14 @@ mod project_uniforms_tests {
                     .render_immediate(frames.clone(), overlay_uniforms, &events, true, &mut layers)
                     .await
                     .unwrap();
-                let overlay_center = pixel_center(&overlay, |pixel, x, y| {
+                let overlay_selected = |pixel: &[u8], x: usize, y: usize| {
                     let offset = y * display.padded_bytes_per_row as usize + x * 4;
                     pixel[..3]
                         .iter()
                         .zip(&display.data[offset..offset + 3])
                         .any(|(actual, base)| actual.abs_diff(*base) > 12)
-                });
-                assert!(
-                    (marker_center.x - overlay_center.x).abs() < 1.5
-                        && (marker_center.y - overlay_center.y).abs() < 1.5,
-                    "{name}, ripple={ripple_only}: marker {marker_center:?}, overlay {overlay_center:?}",
-                );
+                };
+                let overlay_center = pixel_center(&overlay, overlay_selected);
 
                 let mut cursor_only_frames = frames.clone();
                 cursor_only_frames.screen_frame = None;
@@ -7448,10 +7544,85 @@ mod project_uniforms_tests {
                     .await
                     .unwrap();
                 let cursor_only_center = pixel_center(&cursor_only, |pixel, _, _| pixel[3] > 12);
+                let (outside_support_changes, outside_support_max_error) =
+                    changes_outside_alpha_support(&overlay, &display, &cursor_only);
+                eprintln!(
+                    "{name}, ripple={ripple_only}: marker {marker_center:?}, overlay {overlay_center:?}, cursor-only {cursor_only_center:?}, outside-support changes={outside_support_changes}, max_rgb_error={outside_support_max_error}"
+                );
+                if (marker_center.x - overlay_center.x).abs() >= 1.5
+                    || (marker_center.y - overlay_center.y).abs() >= 1.5
+                    || (marker_center.x - cursor_only_center.x).abs() >= 1.5
+                    || (marker_center.y - cursor_only_center.y).abs() >= 1.5
+                    || outside_support_changes != 0
+                {
+                    eprintln!(
+                        "overlay mask:\n{}cursor-only mask:\n{}",
+                        pixel_selection_mask(&overlay, marker_center, overlay_selected),
+                        pixel_selection_mask(&cursor_only, marker_center, |pixel, _, _| pixel[3]
+                            > 12),
+                    );
+                    eprintln!(
+                        "{name}: adapter={:?}, display={:?}, camera={:?}, camera-only={:?}",
+                        constants._adapter.get_info(),
+                        uniforms.display,
+                        uniforms.camera,
+                        uniforms.camera_only,
+                    );
+                    report_pixel_changes("overlay vs original", &overlay, &display, marker_center);
+                    let mut hidden_uniforms = uniforms.clone();
+                    hidden_uniforms.project.cursor.hide = true;
+                    let hidden_repeat = renderer
+                        .render_immediate(
+                            frames.clone(),
+                            hidden_uniforms.clone(),
+                            &events,
+                            true,
+                            &mut layers,
+                        )
+                        .await
+                        .unwrap();
+                    let hidden_repeat_again = renderer
+                        .render_immediate(
+                            frames.clone(),
+                            hidden_uniforms,
+                            &events,
+                            true,
+                            &mut layers,
+                        )
+                        .await
+                        .unwrap();
+                    report_pixel_changes(
+                        "hidden repeat vs original",
+                        &hidden_repeat,
+                        &display,
+                        marker_center,
+                    );
+                    report_pixel_changes(
+                        "second hidden repeat vs original",
+                        &hidden_repeat_again,
+                        &display,
+                        marker_center,
+                    );
+                    report_pixel_changes(
+                        "second hidden repeat vs first repeat",
+                        &hidden_repeat_again,
+                        &hidden_repeat,
+                        marker_center,
+                    );
+                }
+                assert!(
+                    (marker_center.x - overlay_center.x).abs() < 1.5
+                        && (marker_center.y - overlay_center.y).abs() < 1.5,
+                    "{name}, ripple={ripple_only}: marker {marker_center:?}, overlay {overlay_center:?}",
+                );
                 assert!(
                     (marker_center.x - cursor_only_center.x).abs() < 1.5
                         && (marker_center.y - cursor_only_center.y).abs() < 1.5,
                     "{name}, ripple={ripple_only}: marker {marker_center:?}, cursor-only {cursor_only_center:?}",
+                );
+                assert_eq!(
+                    outside_support_changes, 0,
+                    "{name}, ripple={ripple_only}: RGB changed outside overlay alpha support; max error={outside_support_max_error}",
                 );
             }
         }

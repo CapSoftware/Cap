@@ -1,5 +1,4 @@
 import { Button } from "@cap/ui-solid";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
@@ -11,7 +10,6 @@ import {
 	createSignal,
 	on,
 	onCleanup,
-	onMount,
 	Show,
 } from "solid-js";
 import toast from "solid-toast";
@@ -20,7 +18,6 @@ import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControls
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { trackEvent } from "~/utils/analytics";
 import { commands } from "~/utils/tauri";
-import { initializeTitlebar } from "~/utils/titlebar-state";
 import { useEditorContext } from "./context";
 import OrganizationDropdown from "./OrganizationDropdown";
 import PresetsDropdown from "./PresetsDropdown";
@@ -68,12 +65,6 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 		editorState,
 		setEditorState,
 	} = useEditorContext();
-
-	let unlistenTitlebar: UnlistenFn | undefined;
-	onMount(async () => {
-		unlistenTitlebar = await initializeTitlebar();
-	});
-	onCleanup(() => unlistenTitlebar?.());
 
 	const clearTimelineSelection = () => {
 		if (!editorState.timeline.selection) return false;

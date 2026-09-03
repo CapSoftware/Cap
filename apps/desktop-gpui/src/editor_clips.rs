@@ -408,12 +408,17 @@ impl EditorWindow {
         ui::Button::plain(&self.theme, "clips-pill", variant, ui::ButtonSize::Md)
             .icon("icons/clapperboard.svg")
             .label("Clips")
+            .disabled(!self.project_ready())
             .height(px(40.))
+            .radius(px(12.))
             .font_weight(FontWeight::MEDIUM)
             .on_click(cx.listener(|this, _, window, cx| this.toggle_clips(window, cx)))
     }
 
     pub(crate) fn toggle_clips(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project_ready() {
+            return;
+        }
         self.set_selection(None, cx);
         if self.clips.open {
             self.close_clips(window, cx);
@@ -754,6 +759,7 @@ impl EditorWindow {
             .px(px(16.))
             .w_full()
             .h(px(64.))
+            .rounded_t(px(11.))
             .border_b_1()
             .border_color(Hsla::from(theme.gray_3))
             .text_size(px(14.))
@@ -838,12 +844,13 @@ impl EditorWindow {
                         .gap(px(8.))
                         .font_weight(FontWeight::MEDIUM)
                         .disabled(self.clips.importing)
-                        .on_click(cx.listener(
-                            |this, event: &gpui::ClickEvent, _window, cx| {
+                        .on_open(cx.listener(
+                            |this, bounds: &Bounds<Pixels>, _window, cx| {
                                 if this.clips.importing {
                                     return;
                                 }
-                                this.clips.import_menu = Some(event.position());
+                                this.clips.import_menu =
+                                    Some(bounds.bottom_left() + gpui::point(px(0.), px(4.)));
                                 cx.notify();
                             },
                         )),
@@ -1200,7 +1207,7 @@ impl EditorWindow {
     }
 
     fn begin_editor_recording(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.clips.importing {
+        if !self.project_ready() || self.clips.importing {
             return false;
         }
         let session = RecordingSession::global(cx);
@@ -1252,6 +1259,13 @@ impl EditorWindow {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.project_ready() {
+            tracing::warn!(
+                recording = %recording_dir.display(),
+                "the editor is not ready; leaving the recording in the library"
+            );
+            return;
+        }
         if self.clips.importing {
             // A concurrent import owns the bundle merge; the capture stays in
             // the library and can be pulled in through "Existing recording".
@@ -1353,6 +1367,7 @@ impl EditorWindow {
                 .child(
                     div()
                         .id("clips-import-backdrop")
+                        .occlude()
                         .absolute()
                         .top_0()
                         .left_0()
@@ -1506,7 +1521,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.clips.importing {
+        if !self.project_ready() || self.clips.importing {
             return;
         }
         if self.playing {

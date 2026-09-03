@@ -24,6 +24,7 @@ on:
       - "crates/timestamp/**"
       - "crates/rendering/**"
       - "crates/editor/**"
+      - "crates/export/**"
       - "crates/audio/**"
       - "crates/media-info/**"
       - "crates/project/**"
@@ -139,11 +140,14 @@ jobs:
           cargo test --locked -p cap-recording --lib -- --test-threads=1
           # --nocapture so a WARP-adapter notch skip prints instead of
           # looking identical to a pass in the CI log.
-          cargo test --locked -p cap-rendering -- --nocapture
+          cargo test --locked -p cap-rendering -- --nocapture --skip zoom_spring::tests::precompute_cost_is_bounded_for_long_projects
+          cargo test --locked -p cap-rendering --lib zoom_spring::tests::precompute_cost_is_bounded_for_long_projects -- --exact --nocapture --test-threads=1
 
       - name: Editor audio playback and export regressions
         shell: bash
         run: |
+          cargo test --locked -p cap-audio --lib
+          cargo test --locked -p cap-export --lib
           cargo test --locked -p cap-editor --lib audio::tests::
           cargo test --locked -p cap-editor --lib audio_output::tests::
           cargo test --locked -p cap-editor --lib playback::tests::

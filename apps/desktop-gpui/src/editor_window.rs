@@ -59,7 +59,7 @@ use core_foundation::base::TCFType;
 #[cfg(target_os = "macos")]
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
-    AppContext as _, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
+    AppContext as _, Bounds, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
     IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
     Point, Render, RenderImage, SharedString, StatefulInteractiveElement as _, StyleRefinement,
     Styled, StyledImage as _, Subscription, WeakEntity, Window, div, point, prelude::FluentBuilder,
@@ -652,25 +652,30 @@ impl Render for EditorSectionView {
         let Some(editor) = self.editor.upgrade() else {
             return div().into_any_element();
         };
-        editor.update(cx, |editor, cx| match self.section {
-            EditorSection::Header => editor.render_header(window, cx).into_any_element(),
-            EditorSection::Toolbar => editor.render_player_toolbar(cx).into_any_element(),
-            EditorSection::Transport => editor.render_transport(cx).into_any_element(),
-            // The Clips layout mode swaps the config sidebar's column for the
-            // clips sidebar; the config sidebar is hidden, not destroyed
-            // (`Editor.tsx:728-747`).
-            EditorSection::Sidebar => {
-                if editor.clips.open {
-                    editor.render_clips_sidebar(cx).into_any_element()
-                } else {
-                    editor.render_sidebar(cx).into_any_element()
-                }
+        editor.update(cx, |editor, cx| {
+            if !editor.project_ready() && !matches!(self.section, EditorSection::Header) {
+                return div().size_full().into_any_element();
             }
-            EditorSection::Timeline => {
-                let viewport_width: f32 = window.viewport_size().width.into();
-                editor
-                    .render_timeline(viewport_width, cx)
-                    .into_any_element()
+            match self.section {
+                EditorSection::Header => editor.render_header(window, cx).into_any_element(),
+                EditorSection::Toolbar => editor.render_player_toolbar(cx).into_any_element(),
+                EditorSection::Transport => editor.render_transport(cx).into_any_element(),
+                // The Clips layout mode swaps the config sidebar's column for the
+                // clips sidebar; the config sidebar is hidden, not destroyed
+                // (`Editor.tsx:728-747`).
+                EditorSection::Sidebar => {
+                    if editor.clips.open {
+                        editor.render_clips_sidebar(cx).into_any_element()
+                    } else {
+                        editor.render_sidebar(cx).into_any_element()
+                    }
+                }
+                EditorSection::Timeline => {
+                    let viewport_width: f32 = window.viewport_size().width.into();
+                    editor
+                        .render_timeline(viewport_width, cx)
+                        .into_any_element()
+                }
             }
         })
     }
@@ -1570,7 +1575,11 @@ impl EditorWindow {
         })
         .detach();
 
-        let name_input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
+        let name_input = cx.new(|cx| {
+            let mut input = ui::TextInputState::single_line(window, cx);
+            input.set_disabled(true, cx);
+            input
+        });
         let hex_targets = [
             crate::editor_sidebar::ColorTarget::BackgroundColor,
             crate::editor_sidebar::ColorTarget::GradientFrom,
@@ -1822,7 +1831,8 @@ impl EditorWindow {
         // the timeline's width.
         self.view.transform = Transform::initial(summary.duration);
         self.name_input.update(cx, |input, cx| {
-            input.set_text(summary.pretty_name.clone(), cx)
+            input.set_text(summary.pretty_name.clone(), cx);
+            input.set_disabled(false, cx);
         });
         self.state = LoadState::Ready(Box::new(summary));
         cx.notify();
@@ -1858,6 +1868,7 @@ impl EditorWindow {
     /// the waveforms arrive separately and later, so whatever has landed is
     /// carried across.
     fn rebuild_timeline(&mut self) {
+        dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
         let mic = std::mem::take(&mut self.timeline.mic_waveforms);
         let system = std::mem::take(&mut self.timeline.system_waveforms);
         self.timeline = TimelineModel::build_with_lanes(
@@ -1966,6 +1977,9 @@ impl EditorWindow {
     }
 
     pub(crate) fn project_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project_ready() {
+            return;
+        }
         // Before `history.record`, so the re-projected caption track is part
         // of the same undo entry as the edit that moved it.
         self.rederive_caption_track();
@@ -1978,6 +1992,9 @@ impl EditorWindow {
     }
 
     pub(crate) fn project_changed_live(&mut self, cx: &mut Context<Self>) {
+        if !self.project_ready() {
+            return;
+        }
         self.publish_project();
         cx.notify();
     }
@@ -2058,6 +2075,9 @@ impl EditorWindow {
     /// the re-render is skipped while playing exactly as `emitRenderFrame`'s
     /// `if (!editorState.playing)` gate does (`:493`).
     pub(crate) fn publish_project(&self) {
+        if !self.project_ready() {
+            return;
+        }
         let Some(instance) = &self.instance else {
             return;
         };
@@ -2076,6 +2096,9 @@ impl EditorWindow {
     /// executor. A later edit drops this task, which is `clearTimeout` plus a
     /// fresh `setTimeout`.
     pub(crate) fn schedule_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project_ready() {
+            return;
+        }
         self.pending_save.borrow_mut().config = Some(self.project.clone());
         let pending = self.pending_save.clone();
         self.save_task = Some(cx.spawn_in(window, async move |_, cx| {
@@ -2162,6 +2185,10 @@ impl EditorWindow {
     /// segment's, and the sidebar unit reads it from here.
     pub fn selection(&self) -> Option<&Selection> {
         self.selection.as_ref()
+    }
+
+    pub(crate) fn project_ready(&self) -> bool {
+        self.instance.is_some() && matches!(&self.state, LoadState::Ready(_))
     }
 
     #[allow(dead_code)]
@@ -2446,7 +2473,11 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !is_playback_shortcut(&event.keystroke, ui::text_input_has_focus(window, cx)) {
+        if !is_playback_shortcut(
+            &event.keystroke,
+            ui::text_input_has_focus(window, cx),
+            self.sidebar.menu.is_some() || self.toolbar_menu.is_some(),
+        ) {
             return;
         }
         // Focused GPUI buttons arm a second click on key-up unless Space is
@@ -2464,6 +2495,9 @@ impl EditorWindow {
     /// (`useEditorShortcuts.ts:10`) and `e.repeat` is ignored there
     /// (`:42`) as `is_held` is here.
     fn on_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project_ready() {
+            return;
+        }
         if self.frame_controls.is_open() && event.keystroke.key == "escape" {
             self.close_frame_controls(window, cx);
             cx.stop_propagation();
@@ -3033,6 +3067,7 @@ impl EditorWindow {
     /// `setEditorState("timeline", "selection", ...)`.
     pub(crate) fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
         if self.selection != selection {
+            dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
             self.selection = selection;
             cx.notify();
         }
@@ -5330,10 +5365,11 @@ impl EditorWindow {
         } else {
             self.history.can_redo()
         };
-        let enabled = can || self.selection.is_some();
+        let enabled = self.project_ready() && (can || self.selection.is_some());
         ui::EditorButton::plain(&theme, id)
             .left_icon(icon)
             .disabled(!enabled)
+            .tooltip(&theme, if undo { "Undo" } else { "Redo" })
             .on_click(cx.listener(move |this, _, window, cx| {
                 if !(this.history.can_undo() || this.history.can_redo() || this.selection.is_some())
                 {
@@ -5395,7 +5431,7 @@ impl EditorWindow {
     fn open_toolbar_menu(
         &mut self,
         kind: ToolbarMenu,
-        origin: gpui::Point<Pixels>,
+        trigger_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -5405,7 +5441,7 @@ impl EditorWindow {
         let items = self.toolbar_menu_items(kind);
         self.toolbar_menu = Some(OpenToolbarMenu {
             kind,
-            state: ui::MenuState::new(origin, &items),
+            state: ui::MenuState::anchored(trigger_bounds, &items),
         });
         cx.notify();
     }
@@ -5615,6 +5651,9 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.project_ready() {
+            return;
+        }
         if self.presets_menu.is_some() {
             self.presets_menu = None;
             cx.notify();
@@ -7279,10 +7318,11 @@ impl EditorWindow {
                         ui::EditorButton::plain(&theme, "presets")
                             .left_icon("icons/presets.svg")
                             .label("Presets")
+                            .disabled(!self.project_ready())
                             .right_icon("icons/chevron-down.svg")
                             .pressed(self.presets_menu.is_some())
-                            .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
-                                this.open_presets_menu(event.position(), window, cx);
+                            .on_open(cx.listener(|this, bounds: &Bounds<Pixels>, window, cx| {
+                                this.open_presets_menu(bounds.bottom_left(), window, cx);
                             })),
                     ),
             )
@@ -7399,7 +7439,8 @@ impl EditorWindow {
             .h(px(40.))
             .flex_none()
             .rounded(px(12.))
-            .cursor_pointer()
+            .when(self.project_ready(), |button| button.cursor_pointer())
+            .when(!self.project_ready(), |button| button.opacity(0.5))
             .bg(gpui::linear_gradient(
                 180.,
                 gpui::linear_color_stop(gpui::rgb(0x3b82f6), 0.),
@@ -7430,7 +7471,13 @@ impl EditorWindow {
                     .text_color(gpui::white()),
             )
             .child("Export")
-            .on_click(cx.listener(|this, _, window, cx| this.open_export(window, cx)))
+            .when(self.project_ready(), |button| {
+                button.on_click(cx.listener(|this, _, window, cx| {
+                    if this.project_ready() {
+                        this.open_export(window, cx);
+                    }
+                }))
+            })
     }
 
     // -- Player --------------------------------------------------------------
@@ -7482,10 +7529,10 @@ impl EditorWindow {
                                     .as_ref()
                                     .is_some_and(|menu| menu.kind == ToolbarMenu::AspectRatio),
                             )
-                            .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                            .on_open(cx.listener(|this, bounds: &Bounds<Pixels>, window, cx| {
                                 this.open_toolbar_menu(
                                     ToolbarMenu::AspectRatio,
-                                    event.position(),
+                                    *bounds,
                                     window,
                                     cx,
                                 );
@@ -7497,6 +7544,7 @@ impl EditorWindow {
                         ui::EditorButton::plain(&theme, "crop")
                             .left_icon("icons/crop.svg")
                             .label("Crop")
+                            .tooltip(&theme, "Crop Video")
                             .pressed(self.crop.is_some())
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.open_crop(window, cx);
@@ -7521,10 +7569,10 @@ impl EditorWindow {
                     .child(
                         ui::Select::plain(&theme, "preview-quality", self.preview_quality.label())
                             .stretch_label()
-                            .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                            .on_open(cx.listener(|this, bounds: &Bounds<Pixels>, window, cx| {
                                 this.open_toolbar_menu(
                                     ToolbarMenu::PreviewQuality,
-                                    event.position(),
+                                    *bounds,
                                     window,
                                     cx,
                                 );
@@ -7651,6 +7699,16 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
+        let (label, key) = if factor > 1. {
+            ("Zoom out", "-")
+        } else {
+            ("Zoom in", "+")
+        };
+        let modifier = if cfg!(target_os = "macos") {
+            "meta"
+        } else {
+            "ctrl"
+        };
         div()
             .id(id)
             .flex()
@@ -7658,6 +7716,12 @@ impl EditorWindow {
             .justify_center()
             .cursor_pointer()
             .hover(|this| this.opacity(0.7))
+            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+            .tooltip(move |_window, cx| {
+                ui::Tooltip::new(&theme, label)
+                    .keys([modifier, key])
+                    .view(cx)
+            })
             .child(
                 svg()
                     .path(icon)
@@ -7775,18 +7839,29 @@ impl EditorWindow {
                             // `rounded-full border border-gray-300 bg-gray-3 size-9`
                             // with `hover:bg-gray-4` -- [`ui::IconButton`].
                             .child(
-                                ui::IconButton::new("transport-play", icon)
-                                    .size(px(36.))
-                                    .icon_size(px(12.))
-                                    .color(Hsla::from(theme.gray_12))
-                                    .filled(
-                                        Hsla::from(theme.gray_3),
-                                        Some(Hsla::from(theme.gray_5)),
-                                    )
-                                    .hover_bg(Hsla::from(theme.gray_4))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.toggle_play(window, cx);
-                                    })),
+                                div()
+                                    .id("transport-play-tooltip")
+                                    .flex()
+                                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                                    .tooltip(move |_window, cx| {
+                                        ui::Tooltip::new(&theme, "Play/Pause video")
+                                            .keys(["Space"])
+                                            .view(cx)
+                                    })
+                                    .child(
+                                        ui::IconButton::new("transport-play", icon)
+                                            .size(px(36.))
+                                            .icon_size(px(12.))
+                                            .color(Hsla::from(theme.gray_12))
+                                            .filled(
+                                                Hsla::from(theme.gray_3),
+                                                Some(Hsla::from(theme.gray_5)),
+                                            )
+                                            .hover_bg(Hsla::from(theme.gray_4))
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.toggle_play(window, cx);
+                                            })),
+                                    ),
                             )
                             .child(
                                 div()
@@ -7826,6 +7901,12 @@ impl EditorWindow {
                         div()
                             .id("transport-split")
                             .tab_index(0)
+                            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                            .tooltip(move |_window, cx| {
+                                ui::Tooltip::new(&theme, "Toggle Split")
+                                    .keys(["S"])
+                                    .view(cx)
+                            })
                             .flex()
                             .flex_row()
                             .items_center()
@@ -8543,8 +8624,43 @@ fn playhead_extrapolation(playing: bool, epoch_has_sample: bool, since_last_samp
     since_last_sample.clamp(0.0, MAX_PLAYHEAD_EXTRAPOLATION)
 }
 
-fn is_playback_shortcut(keystroke: &gpui::Keystroke, text_input_focused: bool) -> bool {
-    keystroke.key == "space" && !keystroke.modifiers.modified() && !text_input_focused
+fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>) {
+    use crate::editor_tabs::SidebarMenu;
+
+    let indexed = menu.as_ref().is_some_and(|menu| match menu.kind {
+        SidebarMenu::TextFontFamily(_)
+        | SidebarMenu::TextWeight(_)
+        | SidebarMenu::TextAnimationIn(_)
+        | SidebarMenu::TextAnimationOut(_)
+        | SidebarMenu::Camera3DBlurMode(_)
+        | SidebarMenu::Camera3DEasing(_) => true,
+        SidebarMenu::BackgroundCornerStyle
+        | SidebarMenu::CameraBlur
+        | SidebarMenu::CameraShape
+        | SidebarMenu::CameraCornerStyle
+        | SidebarMenu::AudioStereo
+        | SidebarMenu::CaptionModel
+        | SidebarMenu::CaptionLanguage
+        | SidebarMenu::CaptionFont
+        | SidebarMenu::CaptionHighlightStyle
+        | SidebarMenu::CaptionPosition
+        | SidebarMenu::CaptionAnimation
+        | SidebarMenu::CaptionWeight
+        | SidebarMenu::KeyboardFont
+        | SidebarMenu::KeyboardPosition
+        | SidebarMenu::KeyboardWeight => false,
+    });
+    if indexed {
+        *menu = None;
+    }
+}
+
+fn is_playback_shortcut(
+    keystroke: &gpui::Keystroke,
+    text_input_focused: bool,
+    menu_open: bool,
+) -> bool {
+    keystroke.key == "space" && !keystroke.modifiers.modified() && !text_input_focused && !menu_open
 }
 
 impl Render for EditorWindow {
@@ -8590,6 +8706,18 @@ impl Render for EditorWindow {
                 .track_focus(&self.focus)
                 .child(self.render_export_page(window, cx));
         }
+
+        let timeline_drag_cursor = self
+            .drag
+            .map(|drag| match drag.kind {
+                DragKind::Move { .. } => gpui::CursorStyle::ClosedHand,
+                DragKind::TrimStart { .. }
+                | DragKind::TrimEnd { .. }
+                | DragKind::ClipTrimStart { .. }
+                | DragKind::ClipTrimEnd { .. } => gpui::CursorStyle::ResizeLeftRight,
+                DragKind::CreateZoom { .. } => gpui::CursorStyle::Arrow,
+            })
+            .or((self.scrub == Some(Scrub::Ruler)).then_some(gpui::CursorStyle::ResizeLeftRight));
 
         div()
             .size_full()
@@ -8818,6 +8946,13 @@ impl Render for EditorWindow {
             // over everything -- the same shape the settings window's sliders
             // use, because gpui has no pointer capture and a 96px row would
             // otherwise lose the drag the moment the pointer left it.
+            .children(timeline_drag_cursor.map(|cursor| {
+                div()
+                    .id("timeline-active-drag-cursor")
+                    .absolute()
+                    .inset_0()
+                    .cursor(cursor)
+            }))
             .children(self.timeline_resize.is_some().then(|| {
                 ui::Slider::drag_layer(
                     "timeline-height-drag",
@@ -8836,6 +8971,7 @@ impl Render for EditorWindow {
                         cx.notify();
                     }),
                 )
+                .cursor(gpui::CursorStyle::ResizeRow)
             }))
             .children(self.zoom_slider_drag.then(|| {
                 ui::Slider::drag_layer(
@@ -8890,12 +9026,20 @@ impl Render for EditorWindow {
                         this.pad_mouse_up(cx);
                     }),
                 )
+                .cursor(gpui::CursorStyle::Crosshair)
             }))
             // The canvas display drag: the source installs `mousemove` /
             // `mouseup` on `window` for the duration (`CEO.tsx:611-618`), so
             // a drag that leaves the letterboxed rect keeps tracking and the
             // release closes the undo bracket wherever it happens.
-            .children(self.canvas_drag.is_some().then(|| {
+            .children(self.canvas_drag.as_ref().map(|drag| {
+                let cursor = drag.resize.as_ref().map_or(gpui::CursorStyle::ClosedHand, |resize| {
+                    if resize.dir_x == resize.dir_y {
+                        gpui::CursorStyle::ResizeUpLeftDownRight
+                    } else {
+                        gpui::CursorStyle::ResizeUpRightDownLeft
+                    }
+                });
                 ui::Slider::drag_layer(
                     "canvas-display-drag",
                     cx.listener(|this, event: &MouseMoveEvent, window, cx| {
@@ -8905,6 +9049,7 @@ impl Render for EditorWindow {
                         this.canvas_mouse_up(window, cx);
                     }),
                 )
+                .cursor(cursor)
             }))
             // The open `KSelect` menu, painted last of all so it is over the
             // sidebar and the drag layers alike.
@@ -8928,8 +9073,8 @@ impl Render for EditorWindow {
             .children(
                 self.crop
                     .as_ref()
-                    .is_some_and(|state| state.drag.is_some())
-                    .then(|| {
+                    .and_then(|state| state.drag.as_ref())
+                    .map(|drag| {
                         ui::Slider::drag_layer(
                             "crop-drag",
                             cx.listener(|this, event: &MouseMoveEvent, window, cx| {
@@ -8939,6 +9084,7 @@ impl Render for EditorWindow {
                                 this.crop_mouse_up(window, cx);
                             }),
                         )
+                        .cursor(drag.cursor())
                     }),
             )
     }
@@ -9102,6 +9248,132 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 mod tests {
     use super::*;
 
+    fn open_sidebar_menu_for_test(
+        kind: crate::editor_tabs::SidebarMenu,
+    ) -> Option<crate::editor_tabs::OpenMenu> {
+        Some(crate::editor_tabs::OpenMenu {
+            kind,
+            state: ui::MenuState::new(
+                point(px(12.), px(24.)),
+                &[
+                    ui::MenuItem::new("First", true),
+                    ui::MenuItem::new("Second", false),
+                ],
+            ),
+        })
+    }
+
+    #[test]
+    fn indexed_sidebar_menus_are_dismissed_when_their_target_can_change() {
+        use crate::editor_tabs::SidebarMenu;
+
+        for kind in [
+            SidebarMenu::TextFontFamily(0),
+            SidebarMenu::TextWeight(1),
+            SidebarMenu::TextAnimationIn(2),
+            SidebarMenu::TextAnimationOut(3),
+            SidebarMenu::Camera3DBlurMode(4),
+            SidebarMenu::Camera3DEasing(5),
+        ] {
+            let mut menu = open_sidebar_menu_for_test(kind);
+            dismiss_indexed_sidebar_menu(&mut menu);
+            assert!(menu.is_none(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn indexed_sidebar_menu_invalidation_preserves_global_menu_navigation() {
+        use crate::editor_tabs::SidebarMenu;
+
+        for kind in [
+            SidebarMenu::BackgroundCornerStyle,
+            SidebarMenu::CameraBlur,
+            SidebarMenu::CameraShape,
+            SidebarMenu::CameraCornerStyle,
+            SidebarMenu::AudioStereo,
+            SidebarMenu::CaptionModel,
+            SidebarMenu::CaptionLanguage,
+            SidebarMenu::CaptionFont,
+            SidebarMenu::CaptionHighlightStyle,
+            SidebarMenu::CaptionPosition,
+            SidebarMenu::CaptionAnimation,
+            SidebarMenu::CaptionWeight,
+            SidebarMenu::KeyboardFont,
+            SidebarMenu::KeyboardPosition,
+            SidebarMenu::KeyboardWeight,
+        ] {
+            let mut menu = open_sidebar_menu_for_test(kind);
+            let state = &mut menu.as_mut().unwrap().state;
+            assert_eq!(state.on_key("down"), ui::MenuKey::Moved);
+            let expected = state.clone();
+            dismiss_indexed_sidebar_menu(&mut menu);
+            let remaining = menu.as_mut().unwrap();
+            assert_eq!(remaining.kind, kind);
+            assert_eq!(remaining.state, expected);
+            assert_eq!(remaining.state.on_key("enter"), ui::MenuKey::Commit(1));
+        }
+    }
+
+    #[test]
+    fn indexed_sidebar_menu_cannot_retarget_after_delete_or_history_change() {
+        use crate::editor_tabs::SidebarMenu;
+
+        let mut project = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                segments: Vec::new(),
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                camera3d_segments: vec![
+                    edits::default_camera3d_segment(0.0, 2.0),
+                    edits::default_camera3d_segment(2.0, 4.0),
+                ],
+            }),
+            ..Default::default()
+        };
+        let mut history = ProjectHistory::new(project.clone());
+        let mut menu = open_sidebar_menu_for_test(SidebarMenu::Camera3DEasing(0));
+        assert_eq!(
+            menu.as_mut().unwrap().state.on_key("backspace"),
+            ui::MenuKey::Ignored
+        );
+        assert!(edits::delete_segments(
+            project.timeline.as_mut().unwrap(),
+            TrackKind::ThreeD,
+            &[0],
+        ));
+        assert_eq!(
+            project.timeline.as_ref().unwrap().camera3d_segments[0].start,
+            2.0
+        );
+        dismiss_indexed_sidebar_menu(&mut menu);
+        assert!(menu.is_none());
+        history.record(&project);
+
+        menu = open_sidebar_menu_for_test(SidebarMenu::Camera3DEasing(0));
+        project = history.undo().unwrap().clone();
+        assert_eq!(
+            project.timeline.as_ref().unwrap().camera3d_segments[0].start,
+            0.0
+        );
+        dismiss_indexed_sidebar_menu(&mut menu);
+        assert!(menu.is_none());
+
+        menu = open_sidebar_menu_for_test(SidebarMenu::Camera3DBlurMode(1));
+        project = history.redo().unwrap().clone();
+        assert_eq!(
+            project.timeline.as_ref().unwrap().camera3d_segments.len(),
+            1
+        );
+        dismiss_indexed_sidebar_menu(&mut menu);
+        assert!(menu.is_none());
+    }
+
     #[test]
     fn failed_predelete_save_keeps_the_pending_edit_for_retry() {
         let root = std::env::temp_dir().join(format!(
@@ -9136,10 +9408,11 @@ mod tests {
     }
 
     #[test]
-    fn playback_shortcut_is_reserved_for_bare_space_outside_text_fields() {
+    fn playback_shortcut_is_reserved_for_bare_space_outside_text_fields_and_menus() {
         let space = gpui::Keystroke::parse("space").unwrap();
-        assert!(is_playback_shortcut(&space, false));
-        assert!(!is_playback_shortcut(&space, true));
+        assert!(is_playback_shortcut(&space, false, false));
+        assert!(!is_playback_shortcut(&space, true, false));
+        assert!(!is_playback_shortcut(&space, false, true));
         for key in [
             "enter",
             "s",
@@ -9149,7 +9422,7 @@ mod tests {
             "alt-space",
         ] {
             let keystroke = gpui::Keystroke::parse(key).unwrap();
-            assert!(!is_playback_shortcut(&keystroke, false), "{key}");
+            assert!(!is_playback_shortcut(&keystroke, false, false), "{key}");
         }
     }
 

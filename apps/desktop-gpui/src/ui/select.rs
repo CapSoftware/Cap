@@ -7,11 +7,12 @@
 //! that leaves the camera bubble's mirror button disabled).
 
 use gpui::{
-    App, ClickEvent, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
-    Pixels, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px, svg,
+    App, Bounds, ClickEvent, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement,
+    ParentElement, Pixels, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window,
+    div, prelude::FluentBuilder, px, svg,
 };
 
+use super::menu::OpenHandler;
 use crate::theme::Theme;
 
 #[derive(IntoElement)]
@@ -38,6 +39,7 @@ pub struct Select {
     stretch: bool,
     disabled: bool,
     on_click: Option<crate::ui::button::ClickHandler>,
+    on_open: Option<OpenHandler>,
 }
 
 impl Select {
@@ -68,6 +70,7 @@ impl Select {
             stretch: false,
             disabled: false,
             on_click: None,
+            on_open: None,
         }
     }
 
@@ -117,6 +120,14 @@ impl Select {
         self.on_click = Some(Box::new(handler));
         self
     }
+
+    pub fn on_open(
+        mut self,
+        handler: impl Fn(&Bounds<Pixels>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_open = Some(Box::new(handler));
+        self
+    }
 }
 
 impl RenderOnce for Select {
@@ -139,6 +150,7 @@ impl RenderOnce for Select {
             stretch,
             disabled,
             on_click,
+            on_open,
         } = self;
 
         div()
@@ -175,5 +187,6 @@ impl RenderOnce for Select {
             .when_some(on_click.filter(|_| !disabled), |this, handler| {
                 this.on_click(move |event, window, cx| handler(event, window, cx))
             })
+            .when_some(on_open.filter(|_| !disabled), crate::ui::Menu::trigger)
     }
 }

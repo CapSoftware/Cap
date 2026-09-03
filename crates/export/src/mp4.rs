@@ -1,5 +1,5 @@
-use crate::ExporterBase;
-use cap_editor::{AudioRenderer, get_audio_segments, load_music_tracks_uncached};
+use crate::{ExporterBase, Mp4ExporterBase};
+use cap_editor::{AudioRenderer, ExportAudioError, get_audio_segments, load_music_tracks_uncached};
 use cap_enc_ffmpeg::{AudioEncoder, aac::AACEncoder, h264::H264Encoder, mp4::*};
 use cap_media_info::{RawVideoFormat, VideoInfo};
 use cap_project::XY;
@@ -14,11 +14,126 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
+use tokio::sync::Notify;
 use tracing::{info, trace, warn};
+
+enum Mp4PipelineError {
+    Interrupted,
+    Failure(String),
+    AudioSourceFailure {
+        source_index: usize,
+        message: String,
+    },
+}
+
+impl From<String> for Mp4PipelineError {
+    fn from(error: String) -> Self {
+        Self::Failure(error)
+    }
+}
+
+impl From<ExportAudioError> for Mp4PipelineError {
+    fn from(error: ExportAudioError) -> Self {
+        match (&error, error.source_index()) {
+            (ExportAudioError::Cancelled, _) => Self::Interrupted,
+            (ExportAudioError::Source { source, .. }, _) if source.is_cancelled() => {
+                Self::Interrupted
+            }
+            (_, Some(source_index)) => Self::AudioSourceFailure {
+                source_index,
+                message: error.to_string(),
+            },
+            _ => Self::Failure(error.to_string()),
+        }
+    }
+}
+
+impl Mp4PipelineError {
+    fn message(self) -> String {
+        match self {
+            Self::Interrupted => "Export cancelled".to_string(),
+            Self::Failure(error) | Self::AudioSourceFailure { message: error, .. } => error,
+        }
+    }
+}
+
+fn resolve_pipeline_results(
+    encoder: Result<PathBuf, Mp4PipelineError>,
+    renderer: Result<(), Mp4PipelineError>,
+    validation: Result<(), Mp4PipelineError>,
+) -> Result<(), String> {
+    let mut first_source_failure: Option<(usize, String)> = None;
+    let mut first_other_failure = None;
+    let mut interrupted = false;
+    for error in [encoder.err(), renderer.err(), validation.err()]
+        .into_iter()
+        .flatten()
+    {
+        match error {
+            Mp4PipelineError::AudioSourceFailure {
+                source_index,
+                message,
+            } => {
+                if first_source_failure
+                    .as_ref()
+                    .is_none_or(|(previous, _)| source_index < *previous)
+                {
+                    first_source_failure = Some((source_index, message));
+                }
+            }
+            Mp4PipelineError::Failure(error) => {
+                if first_other_failure.is_none() {
+                    first_other_failure = Some(error);
+                }
+            }
+            Mp4PipelineError::Interrupted => interrupted = true,
+        }
+    }
+    if let Some((_, error)) = first_source_failure {
+        Err(error)
+    } else if let Some(error) = first_other_failure {
+        Err(error)
+    } else if interrupted {
+        Err("Export cancelled".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+async fn complete_audio_validation(
+    task: tokio::task::JoinHandle<Result<(), Mp4PipelineError>>,
+    abort: Arc<AtomicBool>,
+    failure: Arc<Notify>,
+) -> Result<(), Mp4PipelineError> {
+    match task.await {
+        Ok(result) => result,
+        Err(error) => {
+            abort.store(true, Ordering::Relaxed);
+            failure.notify_one();
+            Err(Mp4PipelineError::Failure(format!(
+                "Audio validation worker failed: {error}"
+            )))
+        }
+    }
+}
+
+async fn render_until_audio_failure(
+    render: impl std::future::Future<Output = Result<(), Mp4PipelineError>>,
+    failure: Option<Arc<Notify>>,
+) -> Result<(), Mp4PipelineError> {
+    let Some(failure) = failure else {
+        return render.await;
+    };
+    tokio::select! {
+        biased;
+        _ = failure.notified() => Err(Mp4PipelineError::Interrupted),
+        result = render => result,
+    }
+}
 
 #[derive(Serialize, Deserialize, Type, Clone, Copy, Debug)]
 pub enum ExportCompression {
@@ -82,6 +197,14 @@ impl Mp4ExportSettings {
 }
 
 impl Mp4ExportSettings {
+    pub fn export_prepared(
+        self,
+        base: Mp4ExporterBase,
+        on_progress: impl FnMut(u32) -> bool + Send + 'static,
+    ) -> impl std::future::Future<Output = Result<PathBuf, String>> {
+        self.export(base.0, on_progress)
+    }
+
     pub async fn export(
         self,
         base: ExporterBase,
@@ -162,7 +285,7 @@ impl Mp4ExportSettings {
 
     async fn export_nv12(
         self,
-        base: ExporterBase,
+        mut base: ExporterBase,
         output_size: (u32, u32),
         fps: u32,
         on_progress: impl FnMut(u32) -> bool + Send + 'static,
@@ -170,6 +293,36 @@ impl Mp4ExportSettings {
     ) -> Result<PathBuf, String> {
         let pipeline_start = std::time::Instant::now();
         let output_path = base.output_path.clone();
+        let mut streaming_audio = base.streaming_audio.take();
+        let audio_control = base.audio_cancellation.take();
+        let audio_cancellation = audio_control.as_ref().map(|control| control.stop.clone());
+        let user_cancellation = audio_control.as_ref().map(|control| control.user.clone());
+        let temporary_output = base.streaming_output.take().map(Arc::new);
+        let unused_audio = streaming_audio
+            .as_mut()
+            .and_then(|audio| audio.take_unused_sources(&base.project_config));
+        let validation_failure = unused_audio.as_ref().map(|_| Arc::new(Notify::new()));
+        let audio_validation = unused_audio.map(|validation| {
+            let abort = audio_cancellation.as_ref().unwrap().clone();
+            let failure = validation_failure.as_ref().unwrap().clone();
+            let worker_abort = abort.clone();
+            let worker_failure = failure.clone();
+            let temporary_output_guard = temporary_output.clone();
+            let task = tokio::task::spawn_blocking(move || {
+                let _temporary_output_guard = temporary_output_guard;
+                let result = validation.validate_to_end().map_err(Mp4PipelineError::from);
+                if result.is_err() {
+                    worker_abort.store(true, Ordering::Relaxed);
+                    worker_failure.notify_one();
+                }
+                result
+            });
+            (task, abort, failure)
+        });
+        let encoder_output_path = temporary_output
+            .as_ref()
+            .map(|path| path.to_path_buf())
+            .unwrap_or_else(|| output_path.clone());
         let meta = &base.studio_meta;
 
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<ExportFrame>(4);
@@ -192,7 +345,12 @@ impl Mp4ExportSettings {
 
         let project_for_audio = base.project_config.clone();
         let pipeline_start_for_encoder = pipeline_start;
+        let encoder_temporary_output = temporary_output.clone();
+        let encoder_cancellation = audio_cancellation.clone();
+        let encoder_user_cancellation = user_cancellation.clone();
+        let encoder_result_cancellation = audio_cancellation.clone();
         let encoder_thread = tokio::task::spawn_blocking(move || {
+            let _temporary_output_guard = encoder_temporary_output;
             trace!("Creating MP4File encoder (NV12 path)");
 
             // The encoder's input mode has to match what the renderer actually
@@ -200,6 +358,9 @@ impl Mp4ExportSettings {
             // VideoToolbox for zero-copy hardware input (falling back to
             // software frames if that fails), CPU frames keep today's path.
             let first_frame = frame_rx.recv().ok();
+            if encoder_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) || encoder_user_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                return Err(Mp4PipelineError::Interrupted);
+            }
             #[cfg(target_os = "macos")]
             let want_hw_input = !self.optimize_filesize
                 && matches!(
@@ -214,7 +375,7 @@ impl Mp4ExportSettings {
 
             let mut encoder = MP4File::init(
                 "output",
-                base.output_path.clone(),
+                encoder_output_path.clone(),
                 self.optimize_filesize,
                 |o| {
                     #[cfg(target_os = "macos")]
@@ -262,7 +423,7 @@ impl Mp4ExportSettings {
                 "Created MP4File encoder (NV12, export settings)"
             );
 
-            let mut audio_renderer = if has_audio {
+            let mut audio_renderer = if has_audio && streaming_audio.is_none() {
                 Some(AudioRenderer::new(audio_segments).with_music(music))
             } else {
                 None
@@ -284,6 +445,9 @@ impl Mp4ExportSettings {
                 .into_iter()
                 .chain(std::iter::from_fn(|| frame_rx.recv().ok()));
             for input in frames {
+                if encoder_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) || encoder_user_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                    return Err(Mp4PipelineError::Interrupted);
+                }
                 if encoded_frames == 0
                     && let Some(audio) = &mut audio_renderer
                 {
@@ -361,6 +525,30 @@ impl Mp4ExportSettings {
                 if let Some(audio) = audio_frame {
                     encoder.queue_audio_frame(audio);
                 }
+                if has_audio && let Some(audio) = &mut streaming_audio {
+                    let n = u64::from(input.frame_number);
+                    if let Some((pts, samples)) = audio_frame_budget(n, sample_rate, fps_u64, audio_sample_cursor) {
+                        audio_sample_cursor = pts as u64 + samples as u64;
+                        let rendered = audio.render_chunks(samples, &project_for_audio, |offset, data| {
+                            let mut frame = packed_audio_frame(data);
+                            frame.set_pts(Some(pts + offset as i64));
+                            encoder.try_queue_audio_frame(frame).map_err(|error| ExportAudioError::Sink(error.to_string()))
+                        }).map_err(Mp4PipelineError::from)?;
+                        if rendered.is_none() {
+                            let mut offset = 0;
+                            while offset < samples {
+                                if encoder_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) || encoder_user_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                                    return Err(Mp4PipelineError::Interrupted);
+                                }
+                                let count = (samples - offset).min(4_096);
+                                let mut frame = silent_audio_frame(count);
+                                frame.set_pts(Some(pts + offset as i64));
+                                encoder.try_queue_audio_frame(frame).map_err(|error| error.to_string())?;
+                                offset += count;
+                            }
+                        }
+                    }
+                }
                 encoded_frames += 1;
                 if encoded_frames == 1
                     && let Some(atom) = record_first_queued_ms.as_ref()
@@ -382,22 +570,52 @@ impl Mp4ExportSettings {
                 );
             }
 
+            if let Some(audio) = &mut streaming_audio {
+                audio.validate_to_end().map_err(Mp4PipelineError::from)?;
+            }
+            if encoder_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) || encoder_user_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                return Err(Mp4PipelineError::Interrupted);
+            }
+
             let res = encoder
                 .finish()
                 .map_err(|e| format!("Failed to finish encoding: {e}"))?;
 
             if let Err(e) = res.video_finish {
-                return Err(format!("Video encoding failed: {e}"));
+                return Err(Mp4PipelineError::Failure(format!("Video encoding failed: {e}")));
             }
             if let Err(e) = res.audio_finish {
-                return Err(format!("Audio encoding failed: {e}"));
+                return Err(Mp4PipelineError::Failure(format!("Audio encoding failed: {e}")));
             }
 
-            Ok::<_, String>(base.output_path)
+            Ok::<_, Mp4PipelineError>(encoder_output_path)
         })
-        .then(|r| async { r.map_err(|e| e.to_string()).and_then(|v| v) });
+        .then(move |r| async move {
+            let result = r.map_err(|e| Mp4PipelineError::Failure(e.to_string())).and_then(|v| v);
+            if result.is_err() && let Some(cancel) = &encoder_result_cancellation {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            result
+        });
 
         let stop_after_frames_sent = mode.stop_after_frames_sent;
+        let render_result_cancellation = audio_cancellation.clone();
+        let progress_cancellation = audio_cancellation.clone();
+        let progress_user_cancellation = user_cancellation;
+        let mut on_progress = on_progress;
+        let on_progress = move |frame| {
+            let keep_going = !progress_user_cancellation
+                .as_ref()
+                .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+                && !progress_cancellation
+                    .as_ref()
+                    .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+                && on_progress(frame);
+            if !keep_going && let Some(cancel) = &progress_cancellation {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            keep_going
+        };
         let render_video_task = export_render_to_channel(
             &base.render_constants,
             &base.project_config,
@@ -418,12 +636,64 @@ impl Mp4ExportSettings {
             &base.recordings,
             stop_after_frames_sent,
             nv12_render_startup_breakdown_ms,
+            audio_cancellation.is_some(),
             on_progress,
             base.project_path.clone(),
         )
-        .then(|v| async { v.map_err(|e| e.to_string()) });
+        .then(move |v| async move {
+            let result = v.map_err(|error| match &error {
+                cap_rendering::RenderingError::ImageLoadError(message)
+                    if render_result_cancellation.is_some() && message == "Export cancelled" =>
+                {
+                    Mp4PipelineError::Interrupted
+                }
+                _ => Mp4PipelineError::Failure(error.to_string()),
+            });
+            if result.is_err()
+                && let Some(cancel) = &render_result_cancellation
+            {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            result
+        });
 
-        tokio::try_join!(encoder_thread, render_video_task)?;
+        if audio_cancellation.is_some() {
+            let validation = async move {
+                match audio_validation {
+                    Some((task, abort, failure)) => {
+                        complete_audio_validation(task, abort, failure).await
+                    }
+                    None => Ok(()),
+                }
+            };
+            let (encoder_result, render_result, validation_result) = tokio::join!(
+                encoder_thread,
+                render_until_audio_failure(render_video_task, validation_failure),
+                validation,
+            );
+            resolve_pipeline_results(encoder_result, render_result, validation_result)?;
+            if audio_cancellation
+                .as_ref()
+                .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+            {
+                return Err("Export cancelled".to_string());
+            }
+            if audio_control
+                .as_ref()
+                .is_some_and(|control| control.user.load(Ordering::Relaxed))
+            {
+                return Err("Export cancelled".to_string());
+            }
+            if let Some(temporary_output) = temporary_output {
+                Arc::try_unwrap(temporary_output)
+                    .map_err(|_| "Export output is still in use".to_string())?
+                    .persist_noclobber(&output_path)
+                    .map_err(|error| error.to_string())?;
+            }
+        } else {
+            tokio::try_join!(encoder_thread, render_video_task)
+                .map_err(Mp4PipelineError::message)?;
+        }
 
         Ok(output_path)
     }
@@ -601,6 +871,103 @@ fn audio_frame_budget(
         return None;
     }
     Some((cursor as i64, (end - cursor) as usize))
+}
+
+#[derive(Debug)]
+pub(crate) struct TemporaryMp4Output {
+    path: tempfile::TempPath,
+    #[cfg(unix)]
+    file: std::fs::File,
+    #[cfg(unix)]
+    final_permissions: std::fs::Permissions,
+}
+
+impl AsRef<std::path::Path> for TemporaryMp4Output {
+    fn as_ref(&self) -> &std::path::Path {
+        self.path.as_ref()
+    }
+}
+
+impl TemporaryMp4Output {
+    pub(crate) fn to_path_buf(&self) -> PathBuf {
+        self.path.to_path_buf()
+    }
+
+    fn persist_noclobber(self, output: &std::path::Path) -> Result<(), tempfile::PathPersistError> {
+        #[cfg(unix)]
+        let prepare_permissions = || {
+            use std::os::unix::fs::MetadataExt;
+            let path_metadata = std::fs::symlink_metadata(&self.path)?;
+            let file_metadata = self.file.metadata()?;
+            if !path_metadata.is_file()
+                || path_metadata.dev() != file_metadata.dev()
+                || path_metadata.ino() != file_metadata.ino()
+            {
+                return Err(std::io::Error::other("Export temporary file was replaced"));
+            }
+            self.file.set_permissions(self.final_permissions.clone())
+        };
+        #[cfg(unix)]
+        if let Err(error) = prepare_permissions() {
+            return Err(tempfile::PathPersistError {
+                error,
+                path: self.path,
+            });
+        }
+        self.path.persist_noclobber(output)
+    }
+}
+
+pub(crate) fn temporary_mp4_output(output: &std::path::Path) -> Result<TemporaryMp4Output, String> {
+    let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let temporary = tempfile::Builder::new()
+        .prefix(".cap-export-")
+        .suffix(".mp4")
+        .tempfile_in(parent)
+        .map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    let final_permissions = {
+        use std::os::unix::fs::PermissionsExt;
+        // An empty sibling captures creation permissions without changing the
+        // process-wide umask or exposing incomplete media to other users.
+        let probe = tempfile::Builder::new()
+            .prefix(".cap-export-permissions-")
+            .permissions(std::fs::Permissions::from_mode(0o666))
+            .tempfile_in(parent)
+            .map_err(|error| error.to_string())?;
+        probe
+            .as_file()
+            .metadata()
+            .map_err(|error| error.to_string())?
+            .permissions()
+    };
+    let (file, path) = temporary.into_parts();
+    #[cfg(not(unix))]
+    drop(file);
+    Ok(TemporaryMp4Output {
+        path,
+        #[cfg(unix)]
+        file,
+        #[cfg(unix)]
+        final_permissions,
+    })
+}
+
+fn packed_audio_frame(data: &[f32]) -> ffmpeg::frame::Audio {
+    let mut frame = ffmpeg::frame::Audio::new(
+        AudioRenderer::SAMPLE_FORMAT,
+        data.len() / 2,
+        ffmpeg::ChannelLayout::STEREO,
+    );
+    frame.set_rate(AudioRenderer::SAMPLE_RATE);
+    for (sample, bytes) in data.iter().zip(
+        frame
+            .data_mut(0)
+            .chunks_exact_mut(std::mem::size_of::<f32>()),
+    ) {
+        bytes.copy_from_slice(&sample.to_ne_bytes());
+    }
+    frame
 }
 
 fn silent_audio_frame(samples: usize) -> ffmpeg::frame::Audio {
@@ -789,6 +1156,7 @@ async fn export_render_to_channel(
     recordings: &ProjectRecordingsMeta,
     stop_after_frames_sent: Option<u32>,
     startup_breakdown_ms: Option<Arc<Mutex<Option<cap_rendering::Nv12RenderStartupBreakdownMs>>>>,
+    stop_on_encoder_drop: bool,
     mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
     project_path: PathBuf,
 ) -> Result<(), cap_rendering::RenderingError> {
@@ -797,7 +1165,7 @@ async fn export_render_to_channel(
     let screenshot_project_path = project_path;
 
     let render_result = {
-        let render_future = cap_rendering::render_video_to_channel_nv12(
+        let render_future = Box::pin(cap_rendering::render_video_to_channel_nv12(
             constants,
             project,
             tx_image_data,
@@ -809,7 +1177,7 @@ async fn export_render_to_channel(
             recordings,
             stop_after_frames_sent,
             startup_breakdown_ms,
-        );
+        ));
 
         let forward_future = async {
             let mut first_frame_data: Option<FirstFrameNv12> = None;
@@ -875,6 +1243,11 @@ async fn export_render_to_channel(
 
                 if sender.send(export_frame).is_err() {
                     warn!("Encoder dropped, stopping render forwarding");
+                    if stop_on_encoder_drop {
+                        return Err(cap_rendering::RenderingError::ImageLoadError(
+                            "Export cancelled".to_string(),
+                        ));
+                    }
                     break;
                 }
 
@@ -954,6 +1327,215 @@ mod tests {
             }
             assert_eq!(cursor, (frames * sample_rate) / fps);
         }
+    }
+
+    #[test]
+    fn pipeline_interruption_preserves_the_peer_failure() {
+        assert_eq!(
+            resolve_pipeline_results(
+                Err(Mp4PipelineError::Interrupted),
+                Err(Mp4PipelineError::Failure("renderer failed".into())),
+                Ok(()),
+            ),
+            Err("renderer failed".into())
+        );
+        assert_eq!(
+            resolve_pipeline_results(
+                Err(Mp4PipelineError::Failure("audio failed".into())),
+                Err(Mp4PipelineError::Interrupted),
+                Ok(()),
+            ),
+            Err("audio failed".into())
+        );
+        assert_eq!(
+            resolve_pipeline_results(Err(Mp4PipelineError::Interrupted), Ok(()), Ok(())),
+            Err("Export cancelled".into())
+        );
+    }
+
+    #[test]
+    fn detached_and_active_source_errors_keep_original_order() {
+        for (active, detached) in [(1, 7), (7, 1)] {
+            let error = resolve_pipeline_results(
+                Err(Mp4PipelineError::AudioSourceFailure {
+                    source_index: active,
+                    message: format!("source {active}"),
+                }),
+                Err(Mp4PipelineError::Interrupted),
+                Err(Mp4PipelineError::AudioSourceFailure {
+                    source_index: detached,
+                    message: format!("source {detached}"),
+                }),
+            );
+            assert_eq!(error, Err("source 1".into()));
+        }
+        assert_eq!(
+            resolve_pipeline_results(
+                Err(Mp4PipelineError::Interrupted),
+                Err(Mp4PipelineError::Interrupted),
+                Err(Mp4PipelineError::from(ExportAudioError::Worker {
+                    source_index: 3,
+                    message: "decoder panicked".into(),
+                })),
+            ),
+            Err("Audio source worker failed: decoder panicked".into()),
+        );
+    }
+
+    #[tokio::test]
+    async fn validation_failure_before_render_poll_skips_producer() {
+        let failure = Arc::new(Notify::new());
+        failure.notify_one();
+        let polled = AtomicBool::new(false);
+        let result = render_until_audio_failure(
+            async {
+                polled.store(true, Ordering::Relaxed);
+                Ok(())
+            },
+            Some(failure),
+        )
+        .await;
+        assert!(matches!(result, Err(Mp4PipelineError::Interrupted)));
+        assert!(!polled.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn validation_failure_releases_pending_producer_receiver_and_temp_owners() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("export.mp4");
+        let temporary = Arc::new(temporary_mp4_output(&output).unwrap());
+        let temporary_path = temporary.to_path_buf();
+        let abort = Arc::new(AtomicBool::new(false));
+        let user = AtomicBool::new(false);
+        let failure = Arc::new(Notify::new());
+        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<()>(1);
+        let (receiver_started_tx, receiver_started_rx) = tokio::sync::oneshot::channel();
+        let (producer_started_tx, producer_started_rx) = tokio::sync::oneshot::channel();
+        let receiver_guard = temporary.clone();
+        let receiver = tokio::task::spawn_blocking(move || {
+            let _guard = receiver_guard;
+            receiver_started_tx.send(()).unwrap();
+            assert!(frame_rx.recv().is_err());
+            Err::<PathBuf, _>(Mp4PipelineError::Interrupted)
+        });
+        receiver_started_rx.await.unwrap();
+        let producer_guard = temporary.clone();
+        let producer = async move {
+            let _sender = frame_tx;
+            let _guard = producer_guard;
+            producer_started_tx.send(()).unwrap();
+            std::future::pending::<Result<(), Mp4PipelineError>>().await
+        };
+        let validation_guard = temporary.clone();
+        let worker_abort = abort.clone();
+        let worker_failure = failure.clone();
+        let validator = tokio::spawn(async move {
+            let _guard = validation_guard;
+            producer_started_rx.await.unwrap();
+            worker_abort.store(true, Ordering::Relaxed);
+            worker_failure.notify_one();
+            Err(Mp4PipelineError::AudioSourceFailure {
+                source_index: 0,
+                message: "unused source failed".into(),
+            })
+        });
+        let result = tokio::time::timeout(Duration::from_secs(2), async {
+            let (encoder, render, validation) = tokio::join!(
+                async { receiver.await.unwrap() },
+                render_until_audio_failure(producer, Some(failure.clone())),
+                complete_audio_validation(validator, abort.clone(), failure),
+            );
+            resolve_pipeline_results(encoder, render, validation)
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, Err("unused source failed".into()));
+        assert!(abort.load(Ordering::Relaxed));
+        assert!(!user.load(Ordering::Relaxed));
+        assert_eq!(Arc::strong_count(&temporary), 1);
+        drop(Arc::try_unwrap(temporary).unwrap());
+        assert!(!temporary_path.exists());
+        assert!(!output.exists());
+    }
+
+    #[tokio::test]
+    async fn validator_join_error_notifies_and_aborts() {
+        let abort = Arc::new(AtomicBool::new(false));
+        let failure = Arc::new(Notify::new());
+        let task = tokio::task::spawn_blocking(|| -> Result<(), Mp4PipelineError> {
+            panic!("validator wrapper panic");
+        });
+        let result = complete_audio_validation(task, abort.clone(), failure.clone()).await;
+        assert!(matches!(result, Err(Mp4PipelineError::Failure(_))));
+        assert!(abort.load(Ordering::Relaxed));
+        tokio::time::timeout(Duration::from_secs(2), failure.notified())
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn temporary_output_is_removed_on_failure_and_never_overwrites() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("export.mp4");
+        let temporary = temporary_mp4_output(&output).unwrap();
+        let path = temporary.to_path_buf();
+        std::fs::write(&path, b"partial").unwrap();
+        drop(temporary);
+        assert!(!path.exists());
+        assert!(!output.exists());
+        let temporary = temporary_mp4_output(&output).unwrap();
+        std::fs::write(&temporary, b"completed").unwrap();
+        std::fs::write(&output, b"existing").unwrap();
+        drop(temporary.persist_noclobber(&output).unwrap_err());
+        assert_eq!(std::fs::read(&output).unwrap(), b"existing");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temporary_output_preserves_default_creation_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("export.mp4");
+        let reference = directory.path().join("reference.mp4");
+        std::fs::write(&reference, b"reference").unwrap();
+        let temporary = temporary_mp4_output(&output).unwrap();
+        assert_eq!(
+            std::fs::metadata(&temporary).unwrap().permissions().mode() & 0o077,
+            0
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
+        std::fs::write(&temporary, b"completed").unwrap();
+        temporary.persist_noclobber(&output).unwrap();
+        assert_eq!(
+            std::fs::metadata(output).unwrap().permissions().mode() & 0o777,
+            std::fs::metadata(reference).unwrap().permissions().mode() & 0o777
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replaced_temporary_output_cannot_change_another_files_permissions() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("export.mp4");
+        let private = directory.path().join("private.mp4");
+        std::fs::write(&private, b"private recording").unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let temporary = temporary_mp4_output(&output).unwrap();
+        let temporary_path = temporary.to_path_buf();
+        std::fs::remove_file(&temporary_path).unwrap();
+        symlink(&private, &temporary_path).unwrap();
+
+        drop(temporary.persist_noclobber(&output).unwrap_err());
+
+        assert!(!output.exists());
+        assert!(!temporary_path.exists());
+        assert_eq!(std::fs::read(&private).unwrap(), b"private recording");
+        assert_eq!(
+            std::fs::metadata(private).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]

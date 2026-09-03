@@ -1,3 +1,4 @@
+use crate::export_audio::{EXPORT_AUDIO_BLOCK_SAMPLES, ExportAudioError, ExportAudioSources};
 use cap_audio::{
     AudioData, AudioRendererTrack, FromSampleBytes, StereoMode, cast_bytes_to_f32_slice,
     cast_f32_slice_to_bytes,
@@ -245,6 +246,182 @@ impl AudioRenderer {
         self.render_linear_frame_raw(samples, project)
     }
 
+    pub(crate) fn render_export_chunks(
+        &mut self,
+        sources: &mut ExportAudioSources,
+        samples: usize,
+        project: &ProjectConfiguration,
+        mut emit: impl FnMut(usize, &[f32]) -> Result<(), ExportAudioError>,
+    ) -> Result<Option<usize>, ExportAudioError> {
+        if samples == 0 {
+            return Ok(None);
+        }
+        let mut output = [0.0; EXPORT_AUDIO_BLOCK_SAMPLES * 2];
+        let mut outgoing_buffer = [0.0; EXPORT_AUDIO_BLOCK_SAMPLES * 2];
+        let mut incoming_buffer = [0.0; EXPORT_AUDIO_BLOCK_SAMPLES * 2];
+        let mut written = 0;
+        let Some(timeline) = &project.timeline else {
+            while written < samples {
+                let count = (samples - written).min(EXPORT_AUDIO_BLOCK_SAMPLES);
+                output[..count * 2].fill(0.0);
+                let rendered = sources.render(
+                    project,
+                    self.cursor.clip_index,
+                    self.cursor.samples + written,
+                    count,
+                    &mut output[..count * 2],
+                )?;
+                if rendered == 0 {
+                    break;
+                }
+                emit(written, &output[..rendered * 2])?;
+                written += rendered;
+                if rendered < count {
+                    break;
+                }
+            }
+            self.elapsed_samples += if written == 0 { samples } else { written };
+            self.cursor.samples += written;
+            return Ok((written != 0).then_some(written));
+        };
+        while written < samples {
+            sources.check_cancelled()?;
+            let (mapping, span) = if !timeline.transitions.is_empty()
+                || !timeline.hold_windows().is_empty()
+            {
+                let Some((mapping, output_end_samples)) = self.next_transition_mapping(timeline)
+                else {
+                    break;
+                };
+                (
+                    mapping,
+                    output_end_samples
+                        .saturating_sub(self.elapsed_samples)
+                        .min(samples - written),
+                )
+            } else {
+                let Some(cursor) = self.timeline_cursor(timeline) else {
+                    break;
+                };
+                (
+                    TimelineFrameMapping::Single {
+                        source: TimelineSource {
+                            source_time: cursor.segment_time,
+                            segment_index: cursor.segment_index,
+                            segment: cursor.segment,
+                        },
+                        output_end: 0.0,
+                    },
+                    (cursor.segment_end_samples - self.elapsed_samples).min(samples - written),
+                )
+            };
+            if span == 0 {
+                break;
+            }
+            let mut span_offset = 0;
+            while span_offset < span {
+                sources.check_cancelled()?;
+                let count = (span - span_offset).min(EXPORT_AUDIO_BLOCK_SAMPLES);
+                let output = &mut output[..count * 2];
+                output.fill(0.0);
+                match mapping {
+                    TimelineFrameMapping::Single { source, .. } => {
+                        if source.segment.speed_audio_mode != Some(ClipSpeedAudioMode::Mute) {
+                            sources.render(
+                                project,
+                                source.segment.recording_clip,
+                                self.playhead_to_samples(source.source_time) + span_offset,
+                                count,
+                                output,
+                            )?;
+                        }
+                    }
+                    TimelineFrameMapping::Hold { .. } => {}
+                    TimelineFrameMapping::Transition {
+                        outgoing,
+                        incoming,
+                        kind,
+                        progress,
+                        duration,
+                        ..
+                    } => {
+                        let outgoing_buffer = &mut outgoing_buffer[..count * 2];
+                        let incoming_buffer = &mut incoming_buffer[..count * 2];
+                        outgoing_buffer.fill(0.0);
+                        incoming_buffer.fill(0.0);
+                        if outgoing.segment.speed_audio_mode != Some(ClipSpeedAudioMode::Mute) {
+                            sources.render(
+                                project,
+                                outgoing.segment.recording_clip,
+                                self.playhead_to_samples(outgoing.source_time) + span_offset,
+                                count,
+                                outgoing_buffer,
+                            )?;
+                        }
+                        if incoming.segment.speed_audio_mode != Some(ClipSpeedAudioMode::Mute) {
+                            sources.render(
+                                project,
+                                incoming.segment.recording_clip,
+                                self.playhead_to_samples(incoming.source_time) + span_offset,
+                                count,
+                                incoming_buffer,
+                            )?;
+                        }
+                        mix_transition_audio_at(
+                            outgoing_buffer,
+                            incoming_buffer,
+                            output,
+                            kind,
+                            progress,
+                            duration,
+                            span_offset,
+                        );
+                    }
+                }
+                emit(written + span_offset, output)?;
+                span_offset += count;
+            }
+            self.cursor = match mapping {
+                TimelineFrameMapping::Single { source, .. } => {
+                    source_cursor(source, self.playhead_to_samples(source.source_time) + span)
+                }
+                TimelineFrameMapping::Hold { source, .. } => {
+                    source_cursor(source, self.playhead_to_samples(source.source_time))
+                }
+                TimelineFrameMapping::Transition { incoming, .. } => source_cursor(
+                    incoming,
+                    self.playhead_to_samples(incoming.source_time) + span,
+                ),
+            };
+            self.elapsed_samples += span;
+            written += span;
+        }
+        Ok((written != 0).then_some(written))
+    }
+
+    fn next_transition_mapping<'a>(
+        &self,
+        timeline: &'a TimelineConfiguration,
+    ) -> Option<(TimelineFrameMapping<'a>, usize)> {
+        let mut mapping_time = self.elapsed_samples_to_playhead();
+        loop {
+            let mapping = timeline.get_frame_mapping(mapping_time)?;
+            let output_end = match mapping {
+                TimelineFrameMapping::Single { output_end, .. }
+                | TimelineFrameMapping::Transition { output_end, .. }
+                | TimelineFrameMapping::Hold { output_end, .. } => output_end,
+            };
+            let output_end_samples = self.playhead_to_samples(output_end);
+            if output_end_samples > self.elapsed_samples {
+                return Some((mapping, output_end_samples));
+            }
+            if output_end <= mapping_time {
+                return None;
+            }
+            mapping_time = output_end;
+        }
+    }
+
     fn render_timeline_frame_raw(
         &mut self,
         samples: usize,
@@ -320,25 +497,9 @@ impl AudioRenderer {
 
         let mut output = vec![0.0; samples * 2];
         let mut written = 0usize;
-        'render: while written < samples {
-            let mut mapping_time = self.elapsed_samples_to_playhead();
-            let (mapping, output_end_samples) = loop {
-                let Some(mapping) = timeline.get_frame_mapping(mapping_time) else {
-                    break 'render;
-                };
-                let output_end = match mapping {
-                    TimelineFrameMapping::Single { output_end, .. }
-                    | TimelineFrameMapping::Transition { output_end, .. }
-                    | TimelineFrameMapping::Hold { output_end, .. } => output_end,
-                };
-                let output_end_samples = self.playhead_to_samples(output_end);
-                if output_end_samples > self.elapsed_samples {
-                    break (mapping, output_end_samples);
-                }
-                if output_end <= mapping_time {
-                    break 'render;
-                }
-                mapping_time = output_end;
+        while written < samples {
+            let Some((mapping, output_end_samples)) = self.next_transition_mapping(timeline) else {
+                break;
             };
             let chunk_samples = output_end_samples
                 .saturating_sub(self.elapsed_samples)
@@ -915,6 +1076,18 @@ fn mix_transition_audio(
     progress: f64,
     duration: f64,
 ) {
+    mix_transition_audio_at(outgoing, incoming, output, kind, progress, duration, 0);
+}
+
+fn mix_transition_audio_at(
+    outgoing: &[f32],
+    incoming: &[f32],
+    output: &mut [f32],
+    kind: ClipTransitionType,
+    progress: f64,
+    duration: f64,
+    sample_offset: usize,
+) {
     let progress_per_sample = 1.0 / (duration * AudioData::SAMPLE_RATE as f64);
     for (sample_index, ((outgoing_frame, incoming_frame), output_frame)) in outgoing
         .chunks_exact(2)
@@ -922,7 +1095,8 @@ fn mix_transition_audio(
         .zip(output.chunks_exact_mut(2))
         .enumerate()
     {
-        let progress = (progress + sample_index as f64 * progress_per_sample).clamp(0.0, 1.0);
+        let progress = (progress + (sample_offset + sample_index) as f64 * progress_per_sample)
+            .clamp(0.0, 1.0);
         let (outgoing_gain, incoming_gain) = match kind {
             ClipTransitionType::CrossFade => {
                 let angle = progress * std::f64::consts::FRAC_PI_2;

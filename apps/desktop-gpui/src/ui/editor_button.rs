@@ -14,11 +14,6 @@
 //!
 //! Disabled is `opacity-50 text-gray-11` on both.
 //!
-//! The polymorphic `as={KSelect.Trigger}` half has no gpui equivalent -- there
-//! is no element to become -- so a call site that needs this button to open a
-//! menu opens one from its own `on_click`, which is what `ui::Select` already
-//! does.
-
 use gpui::{
     App, ClickEvent, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
     RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
@@ -27,7 +22,7 @@ use gpui::{
 
 use crate::theme::Theme;
 
-use super::{ClickHandler, Tooltip};
+use super::{ClickHandler, Tooltip, menu::OpenHandler};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorButtonVariant {
@@ -59,6 +54,7 @@ pub struct EditorButton {
     pressed_text: Hsla,
     tooltip: Option<(Theme, SharedString)>,
     on_click: Option<ClickHandler>,
+    on_open: Option<OpenHandler>,
 }
 
 impl EditorButton {
@@ -82,6 +78,7 @@ impl EditorButton {
             pressed_text: Hsla::from(theme.gray_12),
             tooltip: None,
             on_click: None,
+            on_open: None,
         }
     }
 
@@ -146,6 +143,14 @@ impl EditorButton {
         self.on_click = Some(Box::new(handler));
         self
     }
+
+    pub fn on_open(
+        mut self,
+        handler: impl Fn(&gpui::Bounds<Pixels>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_open = Some(Box::new(handler));
+        self
+    }
 }
 
 impl RenderOnce for EditorButton {
@@ -169,6 +174,7 @@ impl RenderOnce for EditorButton {
             pressed_text,
             tooltip,
             on_click,
+            on_open,
         } = self;
 
         let foreground = if disabled {
@@ -216,10 +222,12 @@ impl RenderOnce for EditorButton {
                     .text_color(foreground)
             }))
             .when_some(tooltip, |this, (theme, label)| {
-                this.tooltip(move |_window, cx| Tooltip::new(&theme, label.clone()).view(cx))
+                this.tooltip_show_delay(crate::ui::TOOLTIP_SHOW_DELAY)
+                    .tooltip(move |_window, cx| Tooltip::new(&theme, label.clone()).view(cx))
             })
             .when_some(on_click.filter(|_| !disabled), |this, handler| {
                 this.on_click(move |event, window, cx| handler(event, window, cx))
             })
+            .when_some(on_open.filter(|_| !disabled), crate::ui::Menu::trigger)
     }
 }

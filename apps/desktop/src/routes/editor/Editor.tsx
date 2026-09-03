@@ -53,6 +53,7 @@ import {
 	useEditorInstanceContext,
 } from "./context";
 import { EditorErrorScreen } from "./EditorErrorScreen";
+import { EditorSkeleton } from "./editor-skeleton";
 import { Header, type TitleSaveRegistration } from "./Header";
 import { ImportProgress } from "./ImportProgress";
 import { PlayerContent } from "./Player";
@@ -287,13 +288,7 @@ export function Editor() {
 	};
 
 	return (
-		<Switch
-			fallback={
-				<div class="flex items-center justify-center h-full w-full">
-					<div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-500" />
-				</div>
-			}
-		>
+		<Switch fallback={<EditorSkeleton />}>
 			<Match
 				when={importStatus() === "importing" ? (projectPath() ?? null) : null}
 			>
@@ -362,7 +357,7 @@ function EditorContent(props: {
 	};
 
 	return (
-		<Switch>
+		<Switch fallback={<EditorSkeleton />}>
 			<Match when={errorInfo()}>
 				{(info) => (
 					<EditorErrorScreen
@@ -763,7 +758,7 @@ function Inner(props: {
 		<Show
 			when={!fullscreenMode()}
 			fallback={
-				<Suspense>
+				<Suspense fallback={<EditorSkeleton />}>
 					<ExportPage />
 				</Suspense>
 			}
