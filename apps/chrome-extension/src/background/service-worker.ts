@@ -817,6 +817,29 @@ const broadcastOverlayHide = async () => {
 	pendingPreviewTabId = null;
 };
 
+const broadcastOverlayCountdown = async (
+	seconds: number,
+	durationMs: number,
+) => {
+	const tabs = await getTabs();
+	await Promise.all(
+		tabs.map((tab) => {
+			if (!canInjectIntoTab(tab) || tab.id === undefined) {
+				return undefined;
+			}
+			return sendOverlay(
+				tab.id,
+				{
+					type: "overlay-countdown",
+					seconds,
+					durationMs,
+				},
+				false,
+			).catch(() => undefined);
+		}),
+	);
+};
+
 const broadcastRecordingStatusToTabs = async (status: RecordingStatus) => {
 	const message: RecordingStatusBroadcast = {
 		target: "recording-status",
@@ -1746,14 +1769,7 @@ const handleRequest = async (
 	}
 
 	if (message.type === "show-countdown") {
-		const targetTabId = message.tabId ?? (await getActiveTab())?.id;
-		if (targetTabId !== undefined) {
-			void sendOverlay(targetTabId, {
-				type: "overlay-countdown",
-				seconds: message.seconds,
-				durationMs: message.durationMs,
-			}).catch(() => undefined);
-		}
+		await broadcastOverlayCountdown(message.seconds, message.durationMs);
 		return { ok: true };
 	}
 

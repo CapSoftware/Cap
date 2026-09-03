@@ -438,15 +438,9 @@ export function RecordingBarOverlay({
 			}
 		};
 
-		const handlePointerUp = (event: PointerEvent) => {
+		const handlePointerUp = (_event: PointerEvent) => {
 			if (!isPointerDownRef.current) return;
 			isPointerDownRef.current = false;
-			if (dragDistanceRef.current < 5) {
-				const target = event.target as HTMLElement | null;
-				if (target && !target.closest("[data-controls]")) {
-					setIsExpanded((current) => !current);
-				}
-			}
 			setIsDragging(false);
 			const nextPosition = positionRef.current;
 			if (!nextPosition) return;
