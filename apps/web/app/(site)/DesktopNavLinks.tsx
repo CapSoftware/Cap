@@ -1,7 +1,7 @@
 "use client";
 
-import { navigationMenuTriggerStyle } from "@cap/ui";
-import { classNames } from "@cap/utils";
+import { navigationMenuTriggerStyle } from "@cap/ui/navigation-menu";
+import { classNames } from "@cap/utils/helpers";
 import { ChevronDown, Clapperboard, Zap } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -126,10 +126,46 @@ const dropdownStyle = (width: number | undefined): CSSProperties => ({
 	maxWidth: "calc(100vw - 2rem)",
 });
 
+const BUBBLE_CSS = `
+.ht-nav-bubble {
+	transition: transform 300ms cubic-bezier(0.22, 1, 0.36, 1),
+		width 300ms cubic-bezier(0.22, 1, 0.36, 1),
+		height 300ms cubic-bezier(0.22, 1, 0.36, 1),
+		opacity 180ms ease;
+	animation: ht-nav-bubble-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes ht-nav-bubble-in {
+	from { opacity: 0; scale: 0.86; }
+	to { opacity: 1; scale: 1; }
+}
+`;
+
 export function DesktopNavLinks() {
 	const pathname = usePathname();
 	const previousPathname = useRef(pathname);
 	const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+	const listRef = useRef<HTMLUListElement | null>(null);
+	const [bubble, setBubble] = useState<{
+		x: number;
+		y: number;
+		w: number;
+		h: number;
+	} | null>(null);
+	const [bubbleOn, setBubbleOn] = useState(false);
+
+	const showBubble = (item: HTMLElement) => {
+		const list = listRef.current;
+		if (!list) return;
+		const rect = item.getBoundingClientRect();
+		const base = list.getBoundingClientRect();
+		setBubble({
+			x: rect.left - base.left,
+			y: rect.top - base.top,
+			w: rect.width,
+			h: rect.height,
+		});
+		setBubbleOn(true);
+	};
 
 	useEffect(() => {
 		if (previousPathname.current === pathname) {
@@ -160,15 +196,34 @@ export function DesktopNavLinks() {
 
 	return (
 		<nav aria-label="Main">
-			<ul className="flex items-center px-0 space-x-0 list-none">
+			<ul
+				ref={listRef}
+				className="relative flex items-center gap-0.5 px-0 list-none"
+				onMouseLeave={() => setBubbleOn(false)}
+			>
+				{bubble ? (
+					<span
+						aria-hidden="true"
+						className="ht-nav-bubble pointer-events-none absolute left-0 top-0 z-0 rounded-[8px] bg-gray-3"
+						style={{
+							transform: `translate(${bubble.x}px, ${bubble.y}px)`,
+							width: bubble.w,
+							height: bubble.h,
+							opacity: bubbleOn ? 1 : 0,
+						}}
+					/>
+				) : null}
 				{Links.map((link) => {
 					const isOpen = openDropdown === link.label;
 
 					return (
 						<li
 							key={link.label}
-							className="relative"
-							onMouseEnter={() => setOpenDropdown(link.label)}
+							className="relative z-10"
+							onMouseEnter={(event) => {
+								showBubble(event.currentTarget);
+								setOpenDropdown(link.label);
+							}}
 							onMouseLeave={() =>
 								setOpenDropdown((current) =>
 									current === link.label ? null : current,
@@ -186,34 +241,31 @@ export function DesktopNavLinks() {
 										onClick={() => setOpenDropdown(link.label)}
 										className={classNames(
 											navigationMenuTriggerStyle(),
-											"flex gap-1 items-center px-2 py-0 text-sm font-medium text-gray-10 transition-colors hover:text-blue-9 focus:text-blue-9",
-											isOpen && "text-blue-9",
+											"bg-transparent hover:bg-transparent focus:bg-transparent data-[state=open]:bg-transparent",
+											"flex gap-1.5 items-center px-2.5 py-2 text-[14.5px] font-medium text-[rgba(17,17,17,0.85)] transition-colors hover:text-[#111111] focus:text-[#111111] xl:px-3 xl:text-[15.5px]",
+											isOpen && "text-[#111111]",
 										)}
 									>
 										{link.label}
 										<ChevronDown
 											className={classNames(
-												"size-3.5 transition-transform duration-200 ease-out",
+												"size-[15px] transition-transform duration-200 ease-out",
 												isOpen && "rotate-180",
 											)}
-											strokeWidth={2.25}
+											strokeWidth={2}
 											aria-hidden="true"
 										/>
 									</button>
 									<div
 										className={classNames(
-											"absolute top-full left-1/2 z-50 -translate-x-1/2 pt-3 transition duration-150",
+											"absolute top-full left-0 z-50 pt-3 transition duration-150",
 											isOpen
 												? "visible block opacity-100"
 												: "invisible hidden opacity-0",
 										)}
 									>
 										<div className="relative" style={dropdownStyle(link.width)}>
-											<span
-												className="absolute -top-[7px] left-1/2 z-10 size-3.5 -translate-x-1/2 rotate-45 rounded-tl-[4px] border-t border-l border-zinc-200/70 bg-white"
-												aria-hidden="true"
-											/>
-											<div className="overflow-hidden relative bg-white rounded-2xl border shadow-xl border-zinc-200/70">
+											<div className="overflow-hidden relative bg-white rounded-2xl border border-zinc-200/70">
 												<ul className="grid grid-cols-2 gap-1.5 p-3 list-none">
 													{link.dropdown.map((sublink) => (
 														<li key={sublink.href}>
@@ -243,7 +295,8 @@ export function DesktopNavLinks() {
 									onClick={closeDropdown}
 									className={classNames(
 										navigationMenuTriggerStyle(),
-										"px-2 py-0 text-sm font-medium text-gray-10 hover:text-blue-9 focus:text-blue-9",
+										"bg-transparent hover:bg-transparent focus:bg-transparent data-[state=open]:bg-transparent",
+										"px-2.5 py-2 text-[14.5px] font-medium text-[rgba(17,17,17,0.85)] hover:text-[#111111] focus:text-[#111111] xl:px-3 xl:text-[15.5px]",
 									)}
 								>
 									{link.label}
@@ -253,6 +306,7 @@ export function DesktopNavLinks() {
 					);
 				})}
 			</ul>
+			<style>{BUBBLE_CSS}</style>
 		</nav>
 	);
 }

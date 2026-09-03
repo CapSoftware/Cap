@@ -1,7 +1,8 @@
 "use client";
 
-import { Button, Logo } from "@cap/ui";
-import { classNames } from "@cap/utils";
+import { Button } from "@cap/ui/button";
+import { Logo } from "@cap/ui/logo";
+import { classNames } from "@cap/utils/helpers";
 import { Menu, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -203,6 +204,7 @@ const MobileMenu = ({ stars }: MobileMenuProps) => {
 										onClick={() => setOpen(false)}
 									>
 										<Logo
+											squaredMark
 											viewBoxDimensions="0 0 120 40"
 											style={{ width: 84, height: 36 }}
 										/>

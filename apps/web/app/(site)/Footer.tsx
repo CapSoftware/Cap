@@ -1,12 +1,10 @@
 "use client";
 
-import { Logo } from "@cap/ui";
-import {
-	faDiscord,
-	faLinkedinIn,
-	faXTwitter,
-} from "@fortawesome/free-brands-svg-icons";
-import { faChevronDown } from "@fortawesome/free-solid-svg-icons";
+import { Logo } from "@cap/ui/logo";
+import { faDiscord } from "@fortawesome/free-brands-svg-icons/faDiscord";
+import { faLinkedinIn } from "@fortawesome/free-brands-svg-icons/faLinkedinIn";
+import { faXTwitter } from "@fortawesome/free-brands-svg-icons/faXTwitter";
+import { faChevronDown } from "@fortawesome/free-solid-svg-icons/faChevronDown";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Link from "next/link";
 import type { ComponentProps, ReactNode } from "react";
