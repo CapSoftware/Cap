@@ -289,7 +289,7 @@ pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> Pro
 fn prepare_streaming_output(
     output: &std::path::Path,
     eligible: bool,
-) -> Option<tempfile::TempPath> {
+) -> Option<mp4::TemporaryMp4Output> {
     if !eligible
         || output.extension().and_then(|extension| extension.to_str()) != Some("mp4")
         || !matches!(std::fs::symlink_metadata(output), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
@@ -341,7 +341,7 @@ pub struct ExporterBase {
     segments: Vec<SegmentMedia>,
     output_path: PathBuf,
     streaming_audio: Option<ExportAudioRenderer>,
-    streaming_output: Option<tempfile::TempPath>,
+    streaming_output: Option<mp4::TemporaryMp4Output>,
     audio_cancellation: Option<ExportAudioCancellation>,
 }
 

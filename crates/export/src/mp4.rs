@@ -873,18 +873,84 @@ fn audio_frame_budget(
     Some((cursor as i64, (end - cursor) as usize))
 }
 
-pub(crate) fn temporary_mp4_output(output: &std::path::Path) -> Result<tempfile::TempPath, String> {
-    let mut builder = tempfile::Builder::new();
-    builder.prefix(".cap-export-").suffix(".mp4");
+#[derive(Debug)]
+pub(crate) struct TemporaryMp4Output {
+    path: tempfile::TempPath,
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        builder.permissions(std::fs::Permissions::from_mode(0o666));
+    file: std::fs::File,
+    #[cfg(unix)]
+    final_permissions: std::fs::Permissions,
+}
+
+impl AsRef<std::path::Path> for TemporaryMp4Output {
+    fn as_ref(&self) -> &std::path::Path {
+        self.path.as_ref()
     }
-    builder
-        .tempfile_in(output.parent().unwrap_or_else(|| std::path::Path::new(".")))
-        .map(tempfile::NamedTempFile::into_temp_path)
-        .map_err(|error| error.to_string())
+}
+
+impl TemporaryMp4Output {
+    pub(crate) fn to_path_buf(&self) -> PathBuf {
+        self.path.to_path_buf()
+    }
+
+    fn persist_noclobber(self, output: &std::path::Path) -> Result<(), tempfile::PathPersistError> {
+        #[cfg(unix)]
+        let prepare_permissions = || {
+            use std::os::unix::fs::MetadataExt;
+            let path_metadata = std::fs::symlink_metadata(&self.path)?;
+            let file_metadata = self.file.metadata()?;
+            if !path_metadata.is_file()
+                || path_metadata.dev() != file_metadata.dev()
+                || path_metadata.ino() != file_metadata.ino()
+            {
+                return Err(std::io::Error::other("Export temporary file was replaced"));
+            }
+            self.file.set_permissions(self.final_permissions.clone())
+        };
+        #[cfg(unix)]
+        if let Err(error) = prepare_permissions() {
+            return Err(tempfile::PathPersistError {
+                error,
+                path: self.path,
+            });
+        }
+        self.path.persist_noclobber(output)
+    }
+}
+
+pub(crate) fn temporary_mp4_output(output: &std::path::Path) -> Result<TemporaryMp4Output, String> {
+    let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let temporary = tempfile::Builder::new()
+        .prefix(".cap-export-")
+        .suffix(".mp4")
+        .tempfile_in(parent)
+        .map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    let final_permissions = {
+        use std::os::unix::fs::PermissionsExt;
+        // An empty sibling captures creation permissions without changing the
+        // process-wide umask or exposing incomplete media to other users.
+        let probe = tempfile::Builder::new()
+            .prefix(".cap-export-permissions-")
+            .permissions(std::fs::Permissions::from_mode(0o666))
+            .tempfile_in(parent)
+            .map_err(|error| error.to_string())?;
+        probe
+            .as_file()
+            .metadata()
+            .map_err(|error| error.to_string())?
+            .permissions()
+    };
+    let (file, path) = temporary.into_parts();
+    #[cfg(not(unix))]
+    drop(file);
+    Ok(TemporaryMp4Output {
+        path,
+        #[cfg(unix)]
+        file,
+        #[cfg(unix)]
+        final_permissions,
+    })
 }
 
 fn packed_audio_frame(data: &[f32]) -> ffmpeg::frame::Audio {
@@ -1434,11 +1500,41 @@ mod tests {
         let reference = directory.path().join("reference.mp4");
         std::fs::write(&reference, b"reference").unwrap();
         let temporary = temporary_mp4_output(&output).unwrap();
+        assert_eq!(
+            std::fs::metadata(&temporary).unwrap().permissions().mode() & 0o077,
+            0
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
         std::fs::write(&temporary, b"completed").unwrap();
         temporary.persist_noclobber(&output).unwrap();
         assert_eq!(
             std::fs::metadata(output).unwrap().permissions().mode() & 0o777,
             std::fs::metadata(reference).unwrap().permissions().mode() & 0o777
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replaced_temporary_output_cannot_change_another_files_permissions() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("export.mp4");
+        let private = directory.path().join("private.mp4");
+        std::fs::write(&private, b"private recording").unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let temporary = temporary_mp4_output(&output).unwrap();
+        let temporary_path = temporary.to_path_buf();
+        std::fs::remove_file(&temporary_path).unwrap();
+        symlink(&private, &temporary_path).unwrap();
+
+        drop(temporary.persist_noclobber(&output).unwrap_err());
+
+        assert!(!output.exists());
+        assert!(!temporary_path.exists());
+        assert_eq!(std::fs::read(&private).unwrap(), b"private recording");
+        assert_eq!(
+            std::fs::metadata(private).unwrap().permissions().mode() & 0o777,
+            0o600
         );
     }
 
