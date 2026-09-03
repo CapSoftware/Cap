@@ -4,7 +4,7 @@ import { Organisation, User } from "@cap/web-domain";
 import type { SQL } from "drizzle-orm";
 import { type AnyMySqlColumn, MySqlDialect } from "drizzle-orm/mysql-core";
 import { redirect } from "next/navigation";
-import { createElement } from "react";
+import { type ComponentProps, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
@@ -64,10 +64,20 @@ vi.mock("@cap/env", () => ({
 	serverEnv: () => mocks.env,
 }));
 vi.mock("@cap/ui", () => ({
+	Button: ({ children, disabled }: ComponentProps<"button">) =>
+		createElement("button", { disabled, type: "button" }, children),
+	Input: "input",
 	Card: "section",
 	CardDescription: "p",
 	CardHeader: "header",
 	CardTitle: "h2",
+}));
+vi.mock("hooks/useCurrency", () => ({
+	useCurrency: () => ({ currency: "eur" }),
+}));
+vi.mock("next/navigation", async (importOriginal) => ({
+	...(await importOriginal<typeof import("next/navigation")>()),
+	useRouter: () => ({ refresh: vi.fn(), replace: vi.fn() }),
 }));
 vi.mock(
 	"@/app/(org)/dashboard/settings/organization/components/ComplianceCard",
@@ -337,6 +347,18 @@ beforeEach(() => {
 });
 
 describe("organization SSO settings authorization", () => {
+	it("keeps paid SSO setup available when billing currency lookup fails", async () => {
+		makeFixture();
+		mocks.getSsoPrices.mockRejectedValue(new Error("Stripe unavailable"));
+		const settings = await getOrganizationSsoSettings(ORGANIZATION_ID);
+		expect(settings.entitled).toBe(true);
+		expect(settings.prices).toEqual([]);
+		expect(settings.connection?.state).toBe("active");
+		await expect(openOrganizationSsoPortal(ORGANIZATION_ID)).resolves.toEqual({
+			url: "https://admin.workos.test/setup",
+		});
+	});
+
 	it.each(["owner", "admin"] as const)(
 		"lets a %s read setup status with owner-only billing controls",
 		async (role) => {
@@ -350,8 +372,47 @@ describe("organization SSO settings authorization", () => {
 				signInUrl: `https://cap.test/login?organizationId=${ORGANIZATION_ID}`,
 			});
 			expect(mocks.syncSsoSubscription).toHaveBeenCalledWith("sub_sso");
+			expect(mocks.getSsoPrices).toHaveBeenCalledWith(ORGANIZATION_ID);
 		},
 	);
+
+	it.each([
+		["usd", "$200.00"],
+		["gbp", "£200.00"],
+		["eur", "€200.00"],
+	] as const)(
+		"renders only the existing %s currency without asking the owner to choose",
+		async (currency, amount) => {
+			makeFixture({ paid: false, linked: false });
+			mocks.getSsoPrices.mockResolvedValue([{ currency, unitAmount: 20000 }]);
+			const { SsoCard } = await vi.importActual<
+				typeof import("@/app/(org)/dashboard/settings/organization/components/SsoCard")
+			>("@/app/(org)/dashboard/settings/organization/components/SsoCard");
+			const markup = renderToStaticMarkup(
+				createElement(SsoCard, {
+					initialSettings: await getOrganizationSsoSettings(ORGANIZATION_ID),
+				}),
+			);
+			expect(markup).toContain(`Add SAML SSO · ${amount}/month`);
+			expect(markup).not.toContain("Billing currency");
+			expect(markup).not.toContain("<select");
+		},
+	);
+
+	it("keeps the currency picker when the owner has no current subscription", async () => {
+		makeFixture({ paid: false, linked: false });
+		const { SsoCard } = await vi.importActual<
+			typeof import("@/app/(org)/dashboard/settings/organization/components/SsoCard")
+		>("@/app/(org)/dashboard/settings/organization/components/SsoCard");
+		const markup = renderToStaticMarkup(
+			createElement(SsoCard, {
+				initialSettings: await getOrganizationSsoSettings(ORGANIZATION_ID),
+			}),
+		);
+		expect(markup).toContain("Billing currency");
+		expect(markup).toContain("<select");
+		expect(markup).toContain("Add SAML SSO · €190.00/month");
+	});
 
 	it.each(["member", "stranger", "forged-owner"] as const)(
 		"denies %s access before opening setup or billing",

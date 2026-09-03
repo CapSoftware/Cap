@@ -35,6 +35,42 @@ function stripeId(value: string | { id: string } | null | undefined) {
 	return typeof value === "string" ? value : (value?.id ?? null);
 }
 
+function subscriptionBillingCurrency(subscriptions: Stripe.Subscription[]) {
+	const currencies = new Set(
+		subscriptions
+			.filter((subscription) => !TERMINAL_STATUSES.has(subscription.status))
+			.map((subscription) => subscription.currency),
+	);
+	if (currencies.size > 1) {
+		throw new Error(
+			"Your subscriptions use different billing currencies. Contact support before adding SAML SSO.",
+		);
+	}
+	const currency = currencies.values().next().value;
+	if (currencies.size && !isSupportedCurrency(currency)) {
+		throw new Error(
+			"SAML SSO is unavailable in your existing billing currency.",
+		);
+	}
+	return currency ?? null;
+}
+
+function listCustomerSubscriptions(customerId: string) {
+	return stripe()
+		.subscriptions.list({ customer: customerId, status: "all", limit: 100 })
+		.autoPagingToArray({ limit: 1000 });
+}
+
+async function organizationBillingCurrency(
+	organizationId: Organisation.OrganisationId,
+) {
+	const owner = await getOwner(organizationId);
+	if (!owner.stripeCustomerId) return null;
+	return subscriptionBillingCurrency(
+		await listCustomerSubscriptions(owner.stripeCustomerId),
+	);
+}
+
 function checkoutPriceId() {
 	const environment = serverEnv();
 	const priceId =
@@ -422,12 +458,15 @@ export async function attachSsoCheckout(
 	return record?.stripeSubscriptionId === subscriptionId ? record : null;
 }
 
-export async function getSsoPrices(): Promise<
-	{ currency: SupportedCurrency; unitAmount: number }[]
-> {
-	const price = await stripe().prices.retrieve(checkoutPriceId(), {
-		expand: ["currency_options"],
-	});
+export async function getSsoPrices(
+	organizationId?: Organisation.OrganisationId,
+): Promise<{ currency: SupportedCurrency; unitAmount: number }[]> {
+	const [price, billingCurrency] = await Promise.all([
+		stripe().prices.retrieve(checkoutPriceId(), {
+			expand: ["currency_options"],
+		}),
+		organizationId ? organizationBillingCurrency(organizationId) : null,
+	]);
 	if (
 		!price.active ||
 		price.recurring?.interval !== "month" ||
@@ -436,6 +475,7 @@ export async function getSsoPrices(): Promise<
 		throw new Error("SAML SSO billing is not available. Contact support.");
 	}
 	return SUPPORTED_CURRENCIES.flatMap((currency) => {
+		if (billingCurrency && currency !== billingCurrency) return [];
 		const unitAmount =
 			price.currency_options?.[currency]?.unit_amount ??
 			(price.currency === currency ? price.unit_amount : null);
@@ -626,13 +666,7 @@ export async function createSsoCheckout(
 			);
 		}
 	}
-	const subscriptions = await stripe()
-		.subscriptions.list({
-			customer: input.stripeCustomerId,
-			status: "all",
-			limit: 100,
-		})
-		.autoPagingToArray({ limit: 1000 });
+	const subscriptions = await listCustomerSubscriptions(input.stripeCustomerId);
 	for (const subscription of subscriptions) {
 		if (
 			!isSsoSubscription(subscription) ||
@@ -650,6 +684,12 @@ export async function createSsoCheckout(
 				"An existing SAML SSO payment needs to be linked. Contact support; do not pay again.",
 			);
 		}
+	}
+	const billingCurrency = subscriptionBillingCurrency(subscriptions);
+	if (billingCurrency && input.currency !== billingCurrency) {
+		throw new Error(
+			"SAML SSO must use your existing billing currency. Refresh billing settings and try again.",
+		);
 	}
 	const prices = await getSsoPrices();
 	if (!prices.some((price) => price.currency === input.currency)) {
