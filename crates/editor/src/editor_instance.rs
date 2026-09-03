@@ -1350,6 +1350,23 @@ pub async fn create_segments(
     meta: &StudioRecordingMeta,
     force_ffmpeg: bool,
 ) -> Result<Vec<SegmentMedia>, String> {
+    create_segments_with_audio(recording_meta, meta, force_ffmpeg, true).await
+}
+
+pub async fn create_segments_without_audio(
+    recording_meta: &RecordingMeta,
+    meta: &StudioRecordingMeta,
+    force_ffmpeg: bool,
+) -> Result<Vec<SegmentMedia>, String> {
+    create_segments_with_audio(recording_meta, meta, force_ffmpeg, false).await
+}
+
+async fn create_segments_with_audio(
+    recording_meta: &RecordingMeta,
+    meta: &StudioRecordingMeta,
+    force_ffmpeg: bool,
+    load_audio: bool,
+) -> Result<Vec<SegmentMedia>, String> {
     let legacy_timing_repair = LegacyAudioTimingRepair::load(&recording_meta.project_path);
     let legacy_timing_repair = &legacy_timing_repair;
 
@@ -1358,6 +1375,7 @@ pub async fn create_segments(
             let audio = s
                 .audio
                 .as_ref()
+                .filter(|_| load_audio)
                 .map(|audio_meta| {
                     AudioLoader::spawn(
                         recording_meta.path(&audio_meta.path),
@@ -1423,6 +1441,7 @@ pub async fn create_segments(
                 let audio = s
                     .mic
                     .as_ref()
+                    .filter(|_| load_audio)
                     .map(|audio| {
                         AudioLoader::spawn(
                             recording_meta.path(&audio.path),
@@ -1434,6 +1453,7 @@ pub async fn create_segments(
                 let system_audio = s
                     .system_audio
                     .as_ref()
+                    .filter(|_| load_audio)
                     .map(|audio| {
                         AudioLoader::spawn(
                             recording_meta.path(&audio.path),

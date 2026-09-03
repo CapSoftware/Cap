@@ -6,15 +6,35 @@ pub enum StereoMode {
     MonoR,
 }
 
-pub struct AudioRendererTrack<'a> {
-    pub data: &'a AudioData,
+pub trait AudioSampleSource {
+    fn channels(&self) -> u16;
+    fn sample_count(&self) -> usize;
+    fn sample(&self, index: usize) -> Option<&f32>;
+}
+
+impl AudioSampleSource for AudioData {
+    fn channels(&self) -> u16 {
+        self.channels()
+    }
+
+    fn sample_count(&self) -> usize {
+        self.samples().len() / self.channels() as usize
+    }
+
+    fn sample(&self, index: usize) -> Option<&f32> {
+        self.samples().get(index)
+    }
+}
+
+pub struct AudioRendererTrack<'a, T: AudioSampleSource = AudioData> {
+    pub data: &'a T,
     pub gain: f32,
     pub stereo_mode: StereoMode,
     pub offset: isize,
 }
 
-pub fn render_audio(
-    tracks: &[AudioRendererTrack],
+pub fn render_audio<T: AudioSampleSource>(
+    tracks: &[AudioRendererTrack<'_, T>],
     offset: usize,
     samples: usize,
     out_offset: usize,
@@ -24,7 +44,7 @@ pub fn render_audio(
         tracks
             .iter()
             .filter_map(|t| {
-                let track_samples = t.data.samples().len() / t.data.channels() as usize;
+                let track_samples = t.data.sample_count();
                 let available = track_samples as i128 - offset as i128 - t.offset as i128;
                 if available > 0 {
                     usize::try_from(available).ok()
@@ -57,16 +77,16 @@ pub fn render_audio(
             }
 
             if data.channels() == 1 {
-                if let Some(sample) = data.samples().get(source_index) {
+                if let Some(sample) = data.sample(source_index) {
                     left += sample * 0.707 * gain;
                     right += sample * 0.707 * gain;
                 }
             } else if data.channels() == 2 {
                 let base_idx = source_index.saturating_mul(2);
-                let Some(l_sample) = data.samples().get(base_idx) else {
+                let Some(l_sample) = data.sample(base_idx) else {
                     continue;
                 };
-                let Some(r_sample) = data.samples().get(base_idx + 1) else {
+                let Some(r_sample) = data.sample(base_idx + 1) else {
                     continue;
                 };
 

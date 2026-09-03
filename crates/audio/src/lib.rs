@@ -2,12 +2,14 @@ mod audio_data;
 mod calibration_store;
 mod latency;
 mod renderer;
+mod streaming;
 mod sync_analysis;
 
 pub use audio_data::*;
 pub use calibration_store::*;
 pub use latency::*;
 pub use renderer::*;
+pub use streaming::*;
 pub use sync_analysis::*;
 
 pub trait FromSampleBytes: cpal::SizedSample + std::fmt::Debug + Send + 'static {
