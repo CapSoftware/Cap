@@ -7240,6 +7240,83 @@ mod project_uniforms_tests {
         mask
     }
 
+    fn report_pixel_changes(
+        label: &str,
+        frame: &RenderedFrame,
+        base: &RenderedFrame,
+        center: XY<f64>,
+    ) {
+        let mut changed = 0;
+        let mut distant = 0;
+        let mut max_error = 0;
+        let mut samples = Vec::new();
+        for (y, row) in frame
+            .data
+            .chunks_exact(frame.padded_bytes_per_row as usize)
+            .take(frame.height as usize)
+            .enumerate()
+        {
+            for (x, pixel) in row.chunks_exact(4).take(frame.width as usize).enumerate() {
+                let offset = y * base.padded_bytes_per_row as usize + x * 4;
+                let previous = &base.data[offset..offset + 4];
+                let error = pixel[..3]
+                    .iter()
+                    .zip(&previous[..3])
+                    .map(|(actual, base)| actual.abs_diff(*base))
+                    .max()
+                    .unwrap_or(0);
+                max_error = max_error.max(error);
+                if error > 12 {
+                    changed += 1;
+                    if (x as f64 + 0.5 - center.x).abs() >= 32.0
+                        || (y as f64 + 0.5 - center.y).abs() >= 32.0
+                    {
+                        distant += 1;
+                        if samples.len() < 16 {
+                            samples.push((x, y, previous.to_vec(), pixel.to_vec()));
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "{label}: changed={changed}, distant={distant}, max_rgb_error={max_error}, distant_samples(x,y,base,actual)={samples:?}"
+        );
+    }
+
+    fn changes_outside_alpha_support(
+        frame: &RenderedFrame,
+        base: &RenderedFrame,
+        support: &RenderedFrame,
+    ) -> (usize, u8) {
+        let mut changed = 0;
+        let mut max_error = 0;
+        for (y, row) in frame
+            .data
+            .chunks_exact(frame.padded_bytes_per_row as usize)
+            .take(frame.height as usize)
+            .enumerate()
+        {
+            for (x, pixel) in row.chunks_exact(4).take(frame.width as usize).enumerate() {
+                let support_offset = y * support.padded_bytes_per_row as usize + x * 4;
+                if support.data[support_offset + 3] == 0 {
+                    let base_offset = y * base.padded_bytes_per_row as usize + x * 4;
+                    let error = pixel[..3]
+                        .iter()
+                        .zip(&base.data[base_offset..base_offset + 3])
+                        .map(|(actual, base)| actual.abs_diff(*base))
+                        .max()
+                        .unwrap_or(0);
+                    max_error = max_error.max(error);
+                    if error != 0 {
+                        changed += 1;
+                    }
+                }
+            }
+        }
+        (changed, max_error)
+    }
+
     #[tokio::test]
     async fn cursor_and_ripple_pixels_follow_the_display_through_layout_changes() {
         let mut constants = cursor_test_constants().await;
@@ -7419,13 +7496,7 @@ mod project_uniforms_tests {
                     }];
                 }
                 let overlay = renderer
-                    .render_immediate(
-                        frames.clone(),
-                        overlay_uniforms.clone(),
-                        &events,
-                        true,
-                        &mut layers,
-                    )
+                    .render_immediate(frames.clone(), overlay_uniforms, &events, true, &mut layers)
                     .await
                     .unwrap();
                 let overlay_selected = |pixel: &[u8], x: usize, y: usize| {
@@ -7464,8 +7535,8 @@ mod project_uniforms_tests {
                 }
                 let cursor_only = renderer
                     .render_immediate(
-                        cursor_only_frames.clone(),
-                        cursor_only_uniforms.clone(),
+                        cursor_only_frames,
+                        cursor_only_uniforms,
                         &events,
                         false,
                         &mut layers,
@@ -7473,13 +7544,16 @@ mod project_uniforms_tests {
                     .await
                     .unwrap();
                 let cursor_only_center = pixel_center(&cursor_only, |pixel, _, _| pixel[3] > 12);
+                let (outside_support_changes, outside_support_max_error) =
+                    changes_outside_alpha_support(&overlay, &display, &cursor_only);
                 eprintln!(
-                    "{name}, ripple={ripple_only}: marker {marker_center:?}, overlay {overlay_center:?}, cursor-only {cursor_only_center:?}"
+                    "{name}, ripple={ripple_only}: marker {marker_center:?}, overlay {overlay_center:?}, cursor-only {cursor_only_center:?}, outside-support changes={outside_support_changes}, max_rgb_error={outside_support_max_error}"
                 );
                 if (marker_center.x - overlay_center.x).abs() >= 1.5
                     || (marker_center.y - overlay_center.y).abs() >= 1.5
                     || (marker_center.x - cursor_only_center.x).abs() >= 1.5
                     || (marker_center.y - cursor_only_center.y).abs() >= 1.5
+                    || outside_support_changes != 0
                 {
                     eprintln!(
                         "overlay mask:\n{}cursor-only mask:\n{}",
@@ -7487,35 +7561,53 @@ mod project_uniforms_tests {
                         pixel_selection_mask(&cursor_only, marker_center, |pixel, _, _| pixel[3]
                             > 12),
                     );
-                    layers
-                        .cursor
-                        .use_isotropic_sampler_for_test(&constants.device);
-                    let isotropic_overlay = renderer
+                    eprintln!(
+                        "{name}: adapter={:?}, display={:?}, camera={:?}, camera-only={:?}",
+                        constants._adapter.get_info(),
+                        uniforms.display,
+                        uniforms.camera,
+                        uniforms.camera_only,
+                    );
+                    report_pixel_changes("overlay vs original", &overlay, &display, marker_center);
+                    let mut hidden_uniforms = uniforms.clone();
+                    hidden_uniforms.project.cursor.hide = true;
+                    let hidden_repeat = renderer
                         .render_immediate(
                             frames.clone(),
-                            overlay_uniforms,
+                            hidden_uniforms.clone(),
                             &events,
                             true,
                             &mut layers,
                         )
                         .await
                         .unwrap();
-                    let isotropic_cursor = renderer
+                    let hidden_repeat_again = renderer
                         .render_immediate(
-                            cursor_only_frames,
-                            cursor_only_uniforms,
+                            frames.clone(),
+                            hidden_uniforms,
                             &events,
-                            false,
+                            true,
                             &mut layers,
                         )
                         .await
                         .unwrap();
-                    let isotropic_overlay_center =
-                        pixel_center(&isotropic_overlay, overlay_selected);
-                    let isotropic_cursor_center =
-                        pixel_center(&isotropic_cursor, |pixel, _, _| pixel[3] > 12);
-                    eprintln!(
-                        "isotropic {name}, ripple={ripple_only}: marker {marker_center:?}, overlay {isotropic_overlay_center:?}, cursor-only {isotropic_cursor_center:?}"
+                    report_pixel_changes(
+                        "hidden repeat vs original",
+                        &hidden_repeat,
+                        &display,
+                        marker_center,
+                    );
+                    report_pixel_changes(
+                        "second hidden repeat vs original",
+                        &hidden_repeat_again,
+                        &display,
+                        marker_center,
+                    );
+                    report_pixel_changes(
+                        "second hidden repeat vs first repeat",
+                        &hidden_repeat_again,
+                        &hidden_repeat,
+                        marker_center,
                     );
                 }
                 assert!(
@@ -7527,6 +7619,10 @@ mod project_uniforms_tests {
                     (marker_center.x - cursor_only_center.x).abs() < 1.5
                         && (marker_center.y - cursor_only_center.y).abs() < 1.5,
                     "{name}, ripple={ripple_only}: marker {marker_center:?}, cursor-only {cursor_only_center:?}",
+                );
+                assert_eq!(
+                    outside_support_changes, 0,
+                    "{name}, ripple={ripple_only}: RGB changed outside overlay alpha support; max error={outside_support_max_error}",
                 );
             }
         }

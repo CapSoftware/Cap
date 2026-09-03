@@ -206,17 +206,6 @@ impl CursorLayer {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn use_isotropic_sampler_for_test(&mut self, device: &wgpu::Device) {
-        self.statics.texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: FilterMode::Linear,
-            min_filter: FilterMode::Linear,
-            mipmap_filter: FilterMode::Linear,
-            anisotropy_clamp: 1,
-            ..Default::default()
-        });
-    }
-
     fn create_circle_cursor(constants: &RenderVideoConstants) -> CursorTexture {
         let size = CIRCLE_CURSOR_SIZE;
         let mut rgba = vec![0u8; (size * size * 4) as usize];
@@ -585,16 +574,6 @@ impl CursorLayer {
             color_adjust_b: cursor_grade.color_adjust_b,
             grain_params: cursor_grade.grain_params,
         };
-
-        #[cfg(test)]
-        eprintln!(
-            "cursor prepare: adapter={:?}, uniform_bytes={}, texture={:?}, mip_count={}, hotspot={:?}, uniforms={cursor_uniforms:?}",
-            constants._adapter.get_info(),
-            std::mem::size_of::<CursorUniforms>(),
-            cursor_texture.texture.size(),
-            cursor_texture.texture.mip_level_count(),
-            cursor_texture.hotspot,
-        );
 
         constants.queue.write_buffer(
             &self.statics.uniform_buffer,
