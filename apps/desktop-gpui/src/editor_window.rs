@@ -652,25 +652,30 @@ impl Render for EditorSectionView {
         let Some(editor) = self.editor.upgrade() else {
             return div().into_any_element();
         };
-        editor.update(cx, |editor, cx| match self.section {
-            EditorSection::Header => editor.render_header(window, cx).into_any_element(),
-            EditorSection::Toolbar => editor.render_player_toolbar(cx).into_any_element(),
-            EditorSection::Transport => editor.render_transport(cx).into_any_element(),
-            // The Clips layout mode swaps the config sidebar's column for the
-            // clips sidebar; the config sidebar is hidden, not destroyed
-            // (`Editor.tsx:728-747`).
-            EditorSection::Sidebar => {
-                if editor.clips.open {
-                    editor.render_clips_sidebar(cx).into_any_element()
-                } else {
-                    editor.render_sidebar(cx).into_any_element()
-                }
+        editor.update(cx, |editor, cx| {
+            if !editor.project_ready() && !matches!(self.section, EditorSection::Header) {
+                return div().size_full().into_any_element();
             }
-            EditorSection::Timeline => {
-                let viewport_width: f32 = window.viewport_size().width.into();
-                editor
-                    .render_timeline(viewport_width, cx)
-                    .into_any_element()
+            match self.section {
+                EditorSection::Header => editor.render_header(window, cx).into_any_element(),
+                EditorSection::Toolbar => editor.render_player_toolbar(cx).into_any_element(),
+                EditorSection::Transport => editor.render_transport(cx).into_any_element(),
+                // The Clips layout mode swaps the config sidebar's column for the
+                // clips sidebar; the config sidebar is hidden, not destroyed
+                // (`Editor.tsx:728-747`).
+                EditorSection::Sidebar => {
+                    if editor.clips.open {
+                        editor.render_clips_sidebar(cx).into_any_element()
+                    } else {
+                        editor.render_sidebar(cx).into_any_element()
+                    }
+                }
+                EditorSection::Timeline => {
+                    let viewport_width: f32 = window.viewport_size().width.into();
+                    editor
+                        .render_timeline(viewport_width, cx)
+                        .into_any_element()
+                }
             }
         })
     }
@@ -1570,7 +1575,11 @@ impl EditorWindow {
         })
         .detach();
 
-        let name_input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
+        let name_input = cx.new(|cx| {
+            let mut input = ui::TextInputState::single_line(window, cx);
+            input.set_disabled(true, cx);
+            input
+        });
         let hex_targets = [
             crate::editor_sidebar::ColorTarget::BackgroundColor,
             crate::editor_sidebar::ColorTarget::GradientFrom,
@@ -1822,7 +1831,8 @@ impl EditorWindow {
         // the timeline's width.
         self.view.transform = Transform::initial(summary.duration);
         self.name_input.update(cx, |input, cx| {
-            input.set_text(summary.pretty_name.clone(), cx)
+            input.set_text(summary.pretty_name.clone(), cx);
+            input.set_disabled(false, cx);
         });
         self.state = LoadState::Ready(Box::new(summary));
         cx.notify();
@@ -1966,6 +1976,9 @@ impl EditorWindow {
     }
 
     pub(crate) fn project_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project_ready() {
+            return;
+        }
         // Before `history.record`, so the re-projected caption track is part
         // of the same undo entry as the edit that moved it.
         self.rederive_caption_track();
@@ -1978,6 +1991,9 @@ impl EditorWindow {
     }
 
     pub(crate) fn project_changed_live(&mut self, cx: &mut Context<Self>) {
+        if !self.project_ready() {
+            return;
+        }
         self.publish_project();
         cx.notify();
     }
@@ -2058,6 +2074,9 @@ impl EditorWindow {
     /// the re-render is skipped while playing exactly as `emitRenderFrame`'s
     /// `if (!editorState.playing)` gate does (`:493`).
     pub(crate) fn publish_project(&self) {
+        if !self.project_ready() {
+            return;
+        }
         let Some(instance) = &self.instance else {
             return;
         };
@@ -2076,6 +2095,9 @@ impl EditorWindow {
     /// executor. A later edit drops this task, which is `clearTimeout` plus a
     /// fresh `setTimeout`.
     pub(crate) fn schedule_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project_ready() {
+            return;
+        }
         self.pending_save.borrow_mut().config = Some(self.project.clone());
         let pending = self.pending_save.clone();
         self.save_task = Some(cx.spawn_in(window, async move |_, cx| {
@@ -2162,6 +2184,10 @@ impl EditorWindow {
     /// segment's, and the sidebar unit reads it from here.
     pub fn selection(&self) -> Option<&Selection> {
         self.selection.as_ref()
+    }
+
+    pub(crate) fn project_ready(&self) -> bool {
+        self.instance.is_some() && matches!(&self.state, LoadState::Ready(_))
     }
 
     #[allow(dead_code)]
@@ -2464,6 +2490,9 @@ impl EditorWindow {
     /// (`useEditorShortcuts.ts:10`) and `e.repeat` is ignored there
     /// (`:42`) as `is_held` is here.
     fn on_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project_ready() {
+            return;
+        }
         if self.frame_controls.is_open() && event.keystroke.key == "escape" {
             self.close_frame_controls(window, cx);
             cx.stop_propagation();
@@ -5330,7 +5359,7 @@ impl EditorWindow {
         } else {
             self.history.can_redo()
         };
-        let enabled = can || self.selection.is_some();
+        let enabled = self.project_ready() && (can || self.selection.is_some());
         ui::EditorButton::plain(&theme, id)
             .left_icon(icon)
             .disabled(!enabled)
@@ -5615,6 +5644,9 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.project_ready() {
+            return;
+        }
         if self.presets_menu.is_some() {
             self.presets_menu = None;
             cx.notify();
@@ -7279,6 +7311,7 @@ impl EditorWindow {
                         ui::EditorButton::plain(&theme, "presets")
                             .left_icon("icons/presets.svg")
                             .label("Presets")
+                            .disabled(!self.project_ready())
                             .right_icon("icons/chevron-down.svg")
                             .pressed(self.presets_menu.is_some())
                             .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
@@ -7399,7 +7432,8 @@ impl EditorWindow {
             .h(px(40.))
             .flex_none()
             .rounded(px(12.))
-            .cursor_pointer()
+            .when(self.project_ready(), |button| button.cursor_pointer())
+            .when(!self.project_ready(), |button| button.opacity(0.5))
             .bg(gpui::linear_gradient(
                 180.,
                 gpui::linear_color_stop(gpui::rgb(0x3b82f6), 0.),
@@ -7430,7 +7464,13 @@ impl EditorWindow {
                     .text_color(gpui::white()),
             )
             .child("Export")
-            .on_click(cx.listener(|this, _, window, cx| this.open_export(window, cx)))
+            .when(self.project_ready(), |button| {
+                button.on_click(cx.listener(|this, _, window, cx| {
+                    if this.project_ready() {
+                        this.open_export(window, cx);
+                    }
+                }))
+            })
     }
 
     // -- Player --------------------------------------------------------------

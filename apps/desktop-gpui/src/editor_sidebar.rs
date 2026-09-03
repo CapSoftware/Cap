@@ -1043,6 +1043,9 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.project_ready() {
+            return;
+        }
         // An edit that is not the open colour panel's closes its bracket
         // first: the panel is a system window and stays up while the user
         // does other things, and an unrelated change must not be swallowed
@@ -1070,6 +1073,9 @@ impl EditorWindow {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut ProjectConfiguration) -> bool,
     ) {
+        if !self.project_ready() {
+            return;
+        }
         self.end_color_history();
         if !change(&mut self.project) {
             return;

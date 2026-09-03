@@ -408,12 +408,16 @@ impl EditorWindow {
         ui::Button::plain(&self.theme, "clips-pill", variant, ui::ButtonSize::Md)
             .icon("icons/clapperboard.svg")
             .label("Clips")
+            .disabled(!self.project_ready())
             .height(px(40.))
             .font_weight(FontWeight::MEDIUM)
             .on_click(cx.listener(|this, _, window, cx| this.toggle_clips(window, cx)))
     }
 
     pub(crate) fn toggle_clips(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project_ready() {
+            return;
+        }
         self.set_selection(None, cx);
         if self.clips.open {
             self.close_clips(window, cx);
@@ -1200,7 +1204,7 @@ impl EditorWindow {
     }
 
     fn begin_editor_recording(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.clips.importing {
+        if !self.project_ready() || self.clips.importing {
             return false;
         }
         let session = RecordingSession::global(cx);
@@ -1252,6 +1256,13 @@ impl EditorWindow {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.project_ready() {
+            tracing::warn!(
+                recording = %recording_dir.display(),
+                "the editor is not ready; leaving the recording in the library"
+            );
+            return;
+        }
         if self.clips.importing {
             // A concurrent import owns the bundle merge; the capture stays in
             // the library and can be pulled in through "Existing recording".
@@ -1506,7 +1517,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.clips.importing {
+        if !self.project_ready() || self.clips.importing {
             return;
         }
         if self.playing {

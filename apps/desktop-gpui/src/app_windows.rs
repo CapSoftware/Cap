@@ -4463,10 +4463,7 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         );
         log_timeline_model(&summary.timeline);
         let recordings = summary.recordings.clone();
-        if handle
-            .update(cx, |view, window, cx| view.set_summary(summary, window, cx))
-            .is_err()
-        {
+        if handle.update(cx, |_, _, _| ()).is_err() {
             return;
         }
 
@@ -4548,8 +4545,35 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         };
 
         tracing::info!(path = %path.display(), "editor instance ready");
+        let (total, config) = {
+            let config = instance.project_config.1.borrow().clone();
+            let total = config
+                .timeline
+                .as_ref()
+                .map_or(0.0, |timeline| timeline.duration());
+            (total, config)
+        };
+        let has_camera = instance
+            .recordings
+            .segments
+            .iter()
+            .any(|segment| segment.camera.is_some());
+        let multiple_clips = instance.recordings.segments.len() > 1;
+        log_timeline_model(&editor_timeline::TimelineModel::build(
+            &config,
+            has_camera,
+            multiple_clips,
+        ));
         if handle
-            .update(cx, |view, _window, _cx| view.set_instance(instance.clone()))
+            .update(cx, |view, window, cx| {
+                // Loading controls can queue a save before the engine is ready.
+                // Publish the loaded config and instance together so those edits
+                // cannot replace the saved project with the initial defaults.
+                view.pending_save().borrow_mut().discard();
+                view.set_summary(summary, window, cx);
+                view.set_project(config, window, cx);
+                view.set_instance(instance.clone());
+            })
             .is_err()
         {
             instance.dispose().await;
@@ -4659,44 +4683,6 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         })
         .detach();
 
-        // `totalDuration()` (`context.ts:1374-1380`). Read off the instance
-        // rather than the pre-flight, because `EditorInstance::new`
-        // synthesises a timeline for a raw bundle -- and `timeline.duration()`
-        // is exactly what the playback engine stops at
-        // (`playback.rs:560-570`).
-        //
-        // The whole track model comes from the same read: the config the
-        // instance actually loaded is the one being rendered, holds, clip
-        // offsets and all. E4 hands the window the config itself rather than
-        // the derived model, because it is what every edit mutates and what
-        // the debounced save writes back.
-        let (total, config) = {
-            let config = instance.project_config.1.borrow().clone();
-            let total = config
-                .timeline
-                .as_ref()
-                .map_or(0.0, |timeline| timeline.duration());
-            (total, config)
-        };
-        {
-            let has_camera = instance
-                .recordings
-                .segments
-                .iter()
-                .any(|segment| segment.camera.is_some());
-            let multiple_clips = instance.recordings.segments.len() > 1;
-            log_timeline_model(&editor_timeline::TimelineModel::build(
-                &config,
-                has_camera,
-                multiple_clips,
-            ));
-        }
-        if handle
-            .update(cx, |view, window, cx| view.set_project(config, window, cx))
-            .is_err()
-        {
-            return;
-        }
         load_editor_waveforms(instance.clone(), handle, cx);
 
         if handle
