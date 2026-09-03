@@ -140,11 +140,7 @@ export default async function sitemap() {
 		{ path: string; lastModified?: string }
 	>();
 	for (const route of combined) {
-		if (
-			route.path !== "/home" &&
-			route.path !== "/home-two" &&
-			!uniqueByPath.has(route.path)
-		) {
+		if (route.path !== "/home" && !uniqueByPath.has(route.path)) {
 			uniqueByPath.set(route.path, route);
 		}
 	}
