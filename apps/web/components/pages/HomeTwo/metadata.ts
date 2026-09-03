@@ -1,9 +1,25 @@
+import type { Metadata } from "next";
 import { buildMarketingMetadata } from "@/lib/og/url";
+import { homepageSeo } from "./seo";
 
-export const homePageMetadata = buildMarketingMetadata({
-	title: "Cap | The open source screen recorder",
-	description:
-		"Record, edit, and share beautiful screen recordings. Instant links, studio-grade editing, and screenshots in one open source app.",
-	path: "/",
-	ogTitle: "One app for every way you capture your screen",
-});
+export const homePageMetadata: Metadata = {
+	...buildMarketingMetadata({
+		title: homepageSeo.title,
+		description: homepageSeo.description,
+		path: homepageSeo.url,
+		ogTitle: "Record. Edit. Share.",
+		ogDescription:
+			"The open source screen recorder for Mac, Windows, and Linux.",
+	}),
+	robots: {
+		index: true,
+		follow: true,
+		googleBot: {
+			index: true,
+			follow: true,
+			"max-image-preview": "large",
+			"max-snippet": -1,
+			"max-video-preview": -1,
+		},
+	},
+};

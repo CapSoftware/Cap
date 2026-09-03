@@ -1,4 +1,3 @@
-import { HomePageSchema } from "@/components/pages/HomePage/HomePageSchema";
 import { Agents } from "@/components/pages/HomeTwo/Agents";
 import { DeepDives } from "@/components/pages/HomeTwo/DeepDives";
 import { Faq } from "@/components/pages/HomeTwo/Faq";
@@ -14,6 +13,7 @@ import { Pricing } from "@/components/pages/HomeTwo/Pricing";
 import { Testimonials } from "@/components/pages/HomeTwo/Testimonials";
 import { BAND, CREAM, grainBg, SHELL } from "@/components/pages/HomeTwo/theme";
 import { Workflow } from "@/components/pages/HomeTwo/Workflow";
+import { HomeTwoSchema } from "./Schema";
 
 const CARD_RADIUS = "rounded-[24px]";
 
@@ -26,7 +26,7 @@ export function HomeTwoPage() {
 			className={`${htSans.className} ${htSans.variable} ${htSerif.variable} ${htMono.variable} text-[#111111]`}
 			style={grainBg(SHELL)}
 		>
-			<HomePageSchema />
+			<HomeTwoSchema />
 			<div className="px-2.5 pb-2.5 pt-[68px] sm:px-4 sm:pb-4 lg:pt-[76px]">
 				<div
 					className={`${CARD_RADIUS} shadow-[0_0_0_1px_rgba(17,17,17,0.045)]`}
