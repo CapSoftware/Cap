@@ -3909,6 +3909,7 @@ impl ScreenshotEditorWindow {
                 .child(
                     div()
                         .id("screenshot-popover-backdrop")
+                        .occlude()
                         .absolute()
                         .top_0()
                         .left_0()
@@ -3920,6 +3921,7 @@ impl ScreenshotEditorWindow {
                 )
                 .child(
                     div()
+                        .occlude()
                         .absolute()
                         .left(px(left))
                         .top(px(top))
@@ -4505,6 +4507,7 @@ fn kbd_tooltip(
         .id(gpui::SharedString::from(format!("{label}-tooltip")))
         .flex_shrink_0()
         .child(child)
+        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
         .tooltip(move |_window, cx| ui::Tooltip::new(&theme, label).keys(keys).view(cx))
 }
 
@@ -4538,6 +4541,7 @@ fn tool_button(
         } else {
             theme.gray_11
         }))
+        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
         .tooltip(move |_window, cx| {
             ui::Tooltip::new(&theme, label.clone())
                 .keys([shortcut.clone()])

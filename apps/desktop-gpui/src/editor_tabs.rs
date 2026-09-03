@@ -13,15 +13,6 @@
 //! [`EditorWindow::edit_project`], which is the same fan-out a timeline edit or
 //! a background slider takes.
 //!
-//! Two things in this file are not the project's: the **menus** (`KSelect` has
-//! no gpui equivalent, so every select opens `ui::Menu` at the pointer, and the
-//! open menu's identity lives in the sidebar state) and the **transcription
-//! flow** on the Captions tab, which drives [`crate::transcription`] -- the
-//! in-process port of the Tauri binary's caption commands -- rather than
-//! invoking them over IPC. The chosen model/language persist in the shared
-//! store's `gpui` section, this app's stand-in for the webview's
-//! `localStorage` keys.
-
 use std::{
     collections::HashSet,
     sync::{LazyLock, Mutex},
@@ -36,8 +27,8 @@ use cap_project::{
     KeyboardData, KeyboardSettings, ProjectConfiguration, ShadowConfiguration, StereoMode,
 };
 use gpui::{
-    AnyElement, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
-    ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    AnyElement, Bounds, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
+    ParentElement, Pixels, SharedString, StatefulInteractiveElement, Styled, Window, div,
     prelude::FluentBuilder, px, relative, svg,
 };
 use serde_json::Value;
@@ -566,11 +557,9 @@ fn with_keyboard_settings(
 // Menus
 // ---------------------------------------------------------------------------
 
-/// Every `KSelect` in the sidebar. `ui::Menu` draws at the pointer, so one
-/// open-menu slot on the sidebar state serves all of them -- the settings
-/// window's `Menu.popup()` stand-in, transcribed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarMenu {
+    BackgroundCornerStyle,
     CameraBlur,
     CameraShape,
     CameraCornerStyle,
@@ -596,6 +585,7 @@ pub enum SidebarMenu {
     TextAnimationIn(usize),
     TextAnimationOut(usize),
     Camera3DBlurMode(usize),
+    Camera3DEasing(usize),
 }
 
 pub struct OpenMenu {
@@ -610,6 +600,12 @@ impl EditorWindow {
         let captions = caption_settings(project);
         let keyboard = keyboard_settings(project);
         match kind {
+            SidebarMenu::BackgroundCornerStyle => CORNER_STYLES
+                .iter()
+                .map(|(style, label)| {
+                    ui::MenuItem::new(*label, *style == project.background.rounding_type)
+                })
+                .collect(),
             SidebarMenu::CameraBlur => CAMERA_BLUR_MODES
                 .iter()
                 .map(|(mode, label)| {
@@ -695,14 +691,15 @@ impl EditorWindow {
             | SidebarMenu::TextWeight(index)
             | SidebarMenu::TextAnimationIn(index)
             | SidebarMenu::TextAnimationOut(index)
-            | SidebarMenu::Camera3DBlurMode(index) => self.panel_menu_items(kind, index),
+            | SidebarMenu::Camera3DBlurMode(index)
+            | SidebarMenu::Camera3DEasing(index) => self.panel_menu_items(kind, index),
         }
     }
 
     pub(crate) fn open_sidebar_menu(
         &mut self,
         kind: SidebarMenu,
-        origin: gpui::Point<gpui::Pixels>,
+        trigger_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -715,7 +712,7 @@ impl EditorWindow {
         let items = self.sidebar_menu_items(kind);
         self.sidebar.menu = Some(OpenMenu {
             kind,
-            state: ui::MenuState::new(origin, &items),
+            state: ui::MenuState::anchored(trigger_bounds, &items),
         });
         cx.notify();
     }
@@ -777,6 +774,19 @@ impl EditorWindow {
     ) {
         self.sidebar.menu = None;
         match kind {
+            SidebarMenu::BackgroundCornerStyle => {
+                let Some((style, _)) = CORNER_STYLES.get(index) else {
+                    return;
+                };
+                let style = *style;
+                self.edit_project("rounding-type", window, cx, move |project| {
+                    if project.background.rounding_type == style {
+                        return false;
+                    }
+                    project.background.rounding_type = style;
+                    true
+                });
+            }
             SidebarMenu::CameraBlur => {
                 let Some((mode, _)) = CAMERA_BLUR_MODES.get(index) else {
                     return;
@@ -932,7 +942,8 @@ impl EditorWindow {
             | SidebarMenu::TextWeight(segment)
             | SidebarMenu::TextAnimationIn(segment)
             | SidebarMenu::TextAnimationOut(segment)
-            | SidebarMenu::Camera3DBlurMode(segment) => {
+            | SidebarMenu::Camera3DBlurMode(segment)
+            | SidebarMenu::Camera3DEasing(segment) => {
                 self.choose_panel_menu(kind, segment, index, window, cx)
             }
         }
@@ -1154,7 +1165,6 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// A `KSelect.Trigger` -- `ui::Select` opening `ui::Menu` at the pointer.
     pub(crate) fn menu_select(
         &self,
         kind: SidebarMenu,
@@ -1164,10 +1174,9 @@ impl EditorWindow {
     ) -> AnyElement {
         ui::Select::plain(&self.theme, id, label)
             .stretch_label()
-            .on_click(
-                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                    let origin = event.position();
-                    this.open_sidebar_menu(kind, origin, window, cx);
+            .on_open(
+                cx.listener(move |this, bounds: &Bounds<Pixels>, window, cx| {
+                    this.open_sidebar_menu(kind, *bounds, window, cx);
                 }),
             )
             .into_any_element()
@@ -1184,10 +1193,9 @@ impl EditorWindow {
     ) -> AnyElement {
         ui::Select::plain(&self.theme, id, label)
             .stretch_label()
-            .on_click(
-                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                    let origin = event.position();
-                    this.open_sidebar_menu(kind, origin, window, cx);
+            .on_open(
+                cx.listener(move |this, bounds: &Bounds<Pixels>, window, cx| {
+                    this.open_sidebar_menu(kind, *bounds, window, cx);
                 }),
             )
             .into_any_element()
@@ -2262,10 +2270,13 @@ impl EditorWindow {
             .tooltip({
                 let model_name = SharedString::new_static(model.model_name);
                 move |_window, cx| ui::Tooltip::new(&theme, model_name.clone()).view(cx)
-            })
-            .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
-                this.open_sidebar_menu(SidebarMenu::CaptionModel, event.position(), window, cx);
-            }));
+            });
+        let model_trigger = ui::Menu::trigger(
+            model_trigger,
+            cx.listener(|this, bounds: &Bounds<Pixels>, window, cx| {
+                this.open_sidebar_menu(SidebarMenu::CaptionModel, *bounds, window, cx);
+            }),
+        );
 
         // The download / generate column (`CaptionsTab.tsx:936-1032`).
         let action = if model_downloaded {
@@ -2667,17 +2678,12 @@ impl EditorWindow {
                     ),
             );
 
+        // An extra flex ancestor here repeats intrinsic layout while scrolling.
         ui::Field::plain(&theme, "Captions")
             .icon("icons/message-bubble.svg")
             .badge("Beta")
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(24.))
-                    .child(transcription)
-                    .child(style),
-            )
+            .child(transcription)
+            .child(style.mt(px(8.)))
             .into_any_element()
     }
 

@@ -8,6 +8,7 @@ use gpui::{
     prelude::FluentBuilder, px, svg,
 };
 
+use super::menu::OpenHandler;
 use crate::theme::Theme;
 
 /// The click handler every component takes. `cx.listener(..)` produces exactly
@@ -130,6 +131,7 @@ pub struct Button {
     /// than the settings surface's repaint.
     dim_disabled: bool,
     on_click: Option<ClickHandler>,
+    on_open: Option<OpenHandler>,
 }
 
 impl Button {
@@ -157,6 +159,7 @@ impl Button {
             height: None,
             dim_disabled: false,
             on_click: None,
+            on_open: None,
         }
     }
 
@@ -318,6 +321,14 @@ impl Button {
         self.on_click = Some(Box::new(handler));
         self
     }
+
+    pub fn on_open(
+        mut self,
+        handler: impl Fn(&gpui::Bounds<Pixels>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_open = Some(Box::new(handler));
+        self
+    }
 }
 
 /// The Radix fills for one variant, before any material remap.
@@ -414,6 +425,7 @@ impl RenderOnce for Button {
             full_width,
             height,
             on_click,
+            on_open,
         } = self;
 
         let icon_color = paint.text;
@@ -478,6 +490,7 @@ impl RenderOnce for Button {
             .when_some(on_click.filter(|_| !disabled), |this, handler| {
                 this.on_click(move |event, window, cx| handler(event, window, cx))
             })
+            .when_some(on_open.filter(|_| !disabled), crate::ui::Menu::trigger)
     }
 }
 

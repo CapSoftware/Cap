@@ -2964,6 +2964,7 @@ impl ScreenshotEditorWindow {
                 .child(
                     div()
                         .id("screenshot-annotation-color-backdrop")
+                        .occlude()
                         .absolute()
                         .top_0()
                         .left_0()
@@ -2975,6 +2976,7 @@ impl ScreenshotEditorWindow {
                 )
                 .child(
                     div()
+                        .occlude()
                         .absolute()
                         .left(px(left))
                         .top(px(top))

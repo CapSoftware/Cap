@@ -10,13 +10,17 @@
 //! The state machine is a plain struct so it can be tested without a window;
 //! [`Menu`] is the element that draws it.
 
+use std::{cell::Cell, rc::Rc};
+
 use gpui::{
-    App, ClickEvent, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
-    Point, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px, svg,
+    Anchor, App, Bounds, ClickEvent, ElementId, Hsla, InteractiveElement, IntoElement,
+    ParentElement, Pixels, Point, RenderOnce, SharedString, Size, StatefulInteractiveElement,
+    Styled, Window, div, point, prelude::FluentBuilder, px, svg,
 };
 
 use crate::theme::Theme;
+
+pub(crate) type OpenHandler = Box<dyn Fn(&Bounds<Pixels>, &mut Window, &mut App) + 'static>;
 
 /// One row: a label and whether it is the value currently in force.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +56,7 @@ pub enum MenuKey {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MenuState {
     pub origin: Point<Pixels>,
+    pub trigger_bounds: Option<Bounds<Pixels>>,
     pub len: usize,
     pub highlighted: Option<usize>,
     /// Whether the highlight is *drawn*. A menu opened by pointer shows the
@@ -69,9 +74,17 @@ impl MenuState {
     pub fn new(origin: Point<Pixels>, items: &[MenuItem]) -> Self {
         Self {
             origin,
+            trigger_bounds: None,
             len: items.len(),
             highlighted: items.iter().position(|item| item.checked),
             highlight_visible: false,
+        }
+    }
+
+    pub fn anchored(trigger_bounds: Bounds<Pixels>, items: &[MenuItem]) -> Self {
+        Self {
+            trigger_bounds: Some(trigger_bounds),
+            ..Self::new(trigger_bounds.bottom_left(), items)
         }
     }
 
@@ -139,6 +152,7 @@ pub struct Menu {
     id: ElementId,
     items: Vec<MenuItem>,
     origin: Point<Pixels>,
+    trigger_bounds: Option<Bounds<Pixels>>,
     highlighted: Option<usize>,
     min_width: Pixels,
     max_height: Pixels,
@@ -166,6 +180,7 @@ impl Menu {
             id: id.into(),
             items,
             origin: state.origin,
+            trigger_bounds: state.trigger_bounds,
             highlighted: state.visible_highlight(),
             min_width: px(180.),
             max_height: px(320.),
@@ -200,6 +215,30 @@ impl Menu {
         self
     }
 
+    pub fn trigger(
+        element: gpui::Stateful<gpui::Div>,
+        handler: impl Fn(&Bounds<Pixels>, &mut Window, &mut App) + 'static,
+    ) -> gpui::Stateful<gpui::Div> {
+        let bounds = Rc::new(Cell::new(None));
+        let measured_bounds = bounds.clone();
+        element
+            .tab_index(0)
+            .relative()
+            .on_click(move |_, window, cx| {
+                if let Some(bounds) = bounds.get() {
+                    handler(&bounds, window, cx);
+                }
+            })
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| measured_bounds.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+    }
+
     pub fn on_select(mut self, handler: impl Fn(&usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Box::new(handler));
         self
@@ -214,12 +253,39 @@ impl Menu {
     }
 }
 
+fn anchored_placement(
+    trigger: Bounds<Pixels>,
+    item_count: usize,
+    max_height: Pixels,
+    viewport: Size<Pixels>,
+) -> (Point<Pixels>, Anchor, Pixels) {
+    let gap = px(4.);
+    let margin = px(12.);
+    let below = (viewport.height - margin - trigger.bottom() - gap).max(px(0.));
+    let above = (trigger.top() - gap - margin).max(px(0.));
+    let height = (px(item_count as f32 * 24. + 10.)).min(max_height);
+    if height <= below || below >= above {
+        (
+            trigger.bottom_left() + point(px(0.), gap),
+            Anchor::TopLeft,
+            max_height.min(below),
+        )
+    } else {
+        (
+            trigger.origin - point(px(0.), gap),
+            Anchor::BottomLeft,
+            max_height.min(above),
+        )
+    }
+}
+
 impl RenderOnce for Menu {
     fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let Menu {
             id,
             items,
             origin,
+            trigger_bounds,
             highlighted,
             min_width,
             max_height,
@@ -239,6 +305,11 @@ impl RenderOnce for Menu {
         let viewport = window.viewport_size();
         let max_width = (viewport.width - px(24.)).max(px(0.));
         let max_height = max_height.min((viewport.height - px(24.)).max(px(0.)));
+        let min_width = trigger_bounds.map_or(min_width, |bounds| min_width.max(bounds.size.width));
+        let (origin, anchor, max_height) = trigger_bounds
+            .map_or((origin, Anchor::TopLeft, max_height), |bounds| {
+                anchored_placement(bounds, items.len(), max_height, viewport)
+            });
 
         div()
             .absolute()
@@ -249,6 +320,7 @@ impl RenderOnce for Menu {
                 // Click-away dismiss, the way a native menu closes.
                 div()
                     .id(SharedString::from(format!("{prefix}-backdrop")))
+                    .occlude()
                     .absolute()
                     .top_0()
                     .left_0()
@@ -260,6 +332,7 @@ impl RenderOnce for Menu {
             .child(
                 gpui::anchored()
                     .position(origin)
+                    .anchor(anchor)
                     .snap_to_window_with_margin(px(12.))
                     .child(
                         div()
@@ -325,6 +398,45 @@ mod tests {
 
     fn state(checked: Option<usize>) -> MenuState {
         MenuState::new(point(px(0.), px(0.)), &items(checked))
+    }
+
+    #[test]
+    fn a_select_menu_uses_the_trigger_bounds_and_current_value() {
+        let bounds = Bounds::new(point(px(100.), px(80.)), gpui::size(px(160.), px(36.)));
+        let menu = MenuState::anchored(bounds, &items(Some(2)));
+        assert_eq!(menu.trigger_bounds, Some(bounds));
+        assert_eq!(menu.origin, bounds.bottom_left());
+        assert_eq!(menu.highlighted, Some(2));
+    }
+
+    #[test]
+    fn a_select_menu_opens_below_the_button_when_it_fits() {
+        let bounds = Bounds::new(point(px(100.), px(80.)), gpui::size(px(160.), px(36.)));
+        let (origin, anchor, height) =
+            anchored_placement(bounds, 4, px(320.), gpui::size(px(800.), px(600.)));
+        assert_eq!(origin, point(px(100.), px(120.)));
+        assert_eq!(anchor, Anchor::TopLeft);
+        assert_eq!(height, px(320.));
+    }
+
+    #[test]
+    fn a_select_menu_flips_above_a_button_near_the_bottom() {
+        let bounds = Bounds::new(point(px(100.), px(540.)), gpui::size(px(160.), px(36.)));
+        let (origin, anchor, height) =
+            anchored_placement(bounds, 4, px(320.), gpui::size(px(800.), px(600.)));
+        assert_eq!(origin, point(px(100.), px(536.)));
+        assert_eq!(anchor, Anchor::BottomLeft);
+        assert_eq!(height, px(320.));
+    }
+
+    #[test]
+    fn a_long_select_menu_is_limited_to_the_larger_side_of_the_button() {
+        let bounds = Bounds::new(point(px(100.), px(220.)), gpui::size(px(160.), px(36.)));
+        let (origin, anchor, height) =
+            anchored_placement(bounds, 40, px(320.), gpui::size(px(800.), px(420.)));
+        assert_eq!(origin, point(px(100.), px(216.)));
+        assert_eq!(anchor, Anchor::BottomLeft);
+        assert_eq!(height, px(204.));
     }
 
     #[test]

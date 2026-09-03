@@ -3518,29 +3518,12 @@ impl EditorWindow {
                     .text_color(Hsla::from(theme.gray_11))
                     .child("CORNER STYLE"),
             )
-            .child(
-                ui::Select::plain(&theme, "corner-style", label)
-                    .stretch_label()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        // Two options: the trigger toggles between them rather
-                        // than opening a two-row menu. `ui::Menu` draws at the
-                        // pointer and this select is the only one in the tab;
-                        // a real menu arrives with the tabs that have several.
-                        let next = match this.project.background.rounding_type {
-                            CornerStyle::Squircle => CornerStyle::Rounded,
-                            CornerStyle::Rounded => CornerStyle::Squircle,
-                        };
-                        this.edit_background(
-                            "rounding-type",
-                            |project| {
-                                project.background.rounding_type = next;
-                                true
-                            },
-                            window,
-                            cx,
-                        );
-                    })),
-            )
+            .child(self.menu_select(
+                crate::editor_tabs::SidebarMenu::BackgroundCornerStyle,
+                "corner-style",
+                label,
+                cx,
+            ))
     }
 
     fn render_border_field(&self, cx: &mut Context<Self>) -> impl IntoElement {
