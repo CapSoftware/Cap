@@ -12,6 +12,8 @@ info_plist="$gpui_dir/resources/Info.plist"
 entitlements="$repo_root/apps/desktop/src-tauri/Entitlements.plist"
 target_triple="$(rustc -vV | awk '/^host:/ { host = $2 } END { print host }')"
 sidecars="$repo_root/apps/desktop/src-tauri/binaries"
+MACOSX_DEPLOYMENT_TARGET="$(node "$repo_root/scripts/build-macos-packages.mjs" --deployment-target)"
+export MACOSX_DEPLOYMENT_TARGET
 
 if [[ "$target_dir" != /* ]]; then
 	target_dir="$gpui_dir/$target_dir"
@@ -53,6 +55,18 @@ if [[ ! -x "$binary_path" ]]; then
 	exit 1
 fi
 
+app_version="$(cd "$gpui_dir" && cargo metadata --locked --offline --no-deps --format-version 1 | node -e '
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+	const pkg = JSON.parse(input).packages.find(pkg => pkg.name === "cap-desktop-gpui");
+	const version = pkg?.version.match(/^(\d+\.\d+\.\d+)(?:[-+].*)?$/)?.[1];
+	if (!version) throw new Error("Missing or invalid GPUI package version");
+	console.log(version);
+});
+')"
+
 app_path="$target_dir/release/bundle/osx/Cap GPUI.app"
 contents="$app_path/Contents"
 
@@ -60,6 +74,9 @@ rm -rf "$app_path"
 mkdir -p "$contents/MacOS" "$contents/Frameworks" "$contents/Resources/assets"
 /usr/bin/ditto "$binary_path" "$contents/MacOS/cap-gpui"
 /usr/bin/ditto "$info_plist" "$contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion $MACOSX_DEPLOYMENT_TARGET" "$contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $app_version" "$contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $app_version" "$contents/Info.plist"
 /usr/bin/ditto "$icon" "$contents/Resources/icon.icns"
 rm -rf "$contents/Frameworks/Spacedrive.framework"
 /usr/bin/ditto "$framework" "$contents/Frameworks/Spacedrive.framework"

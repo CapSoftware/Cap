@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import {
 	buildMacosPackages,
 	executeMacosCommand,
 	isTimestampSigningFailure,
+	resolveMacosDeploymentTarget,
 } from "./build-macos-packages.mjs";
 
 const target = "x86_64-apple-darwin";
@@ -57,6 +59,122 @@ function harness(results) {
 		},
 	};
 }
+
+test("macOS packaging uses the ScreenCaptureKit minimum across both app manifests", () => {
+	const minimum = resolveMacosDeploymentTarget();
+	assert.equal(minimum, "12.3");
+	assert.equal(resolveMacosDeploymentTarget(""), minimum);
+	const cargo = readFileSync(
+		new URL("../apps/desktop-gpui/Cargo.toml", import.meta.url),
+		"utf8",
+	);
+	const plist = readFileSync(
+		new URL("../apps/desktop-gpui/resources/Info.plist", import.meta.url),
+		"utf8",
+	);
+	assert.equal(
+		cargo.match(/osx_minimum_system_version\s*=\s*"([^"]+)"/)?.[1],
+		minimum,
+	);
+	assert.equal(
+		plist.match(
+			/<key>LSMinimumSystemVersion<\/key>\s*<string>([^<]+)<\/string>/,
+		)?.[1],
+		minimum,
+	);
+});
+
+test("macOS deployment targets preserve compatible overrides and reject unsafe versions", () => {
+	for (const version of ["12.3", "12.3.0", "12.3.1", "12.10", "13", "15.7"]) {
+		assert.equal(resolveMacosDeploymentTarget(version), version);
+	}
+	for (const version of ["10.13", "11.0", "12", "12.2.99"]) {
+		assert.throws(
+			() => resolveMacosDeploymentTarget(version),
+			/below Cap's minimum/,
+		);
+	}
+	for (const version of [
+		"abc",
+		"12.3beta",
+		"12.3.0.0",
+		"-1",
+		"99999999999999999999",
+	]) {
+		assert.throws(
+			() => resolveMacosDeploymentTarget(version),
+			/Invalid macOS deployment target/,
+		);
+	}
+});
+
+test("a higher macOS target reaches every build and rebundle with matching installer metadata", async () => {
+	for (const architecture of [target, "aarch64-apple-darwin"]) {
+		const fixture = harness([
+			{ code: 1, output: intelTimestampFailure },
+			{ code: 0 },
+		]);
+		fixture.options.env.MACOSX_DEPLOYMENT_TARGET = "14.0";
+		assert.equal(
+			(await buildMacosPackages(architecture, config, fixture.options)).code,
+			0,
+		);
+		for (const call of fixture.calls) {
+			assert.equal(call.env.MACOSX_DEPLOYMENT_TARGET, "14.0");
+			assert.deepEqual(JSON.parse(call.args.at(-1)), {
+				bundle: { macOS: { minimumSystemVersion: "14.0" } },
+			});
+		}
+		assert.equal(fixture.options.env.RUST_TARGET_TRIPLE, "previous-target");
+	}
+});
+
+test("an unsupported macOS override fails before starting a compiler or packager", async () => {
+	const fixture = harness([]);
+	fixture.options.env.MACOSX_DEPLOYMENT_TARGET = "10.13";
+	await assert.rejects(
+		buildMacosPackages(target, config, fixture.options),
+		/below Cap's minimum macOS version 12.3/,
+	);
+	assert.deepEqual(fixture.calls, []);
+});
+
+test("caller configs cannot lower the validated build target in final bundle metadata", async () => {
+	for (const deploymentTarget of [undefined, "14.0"]) {
+		const fixture = harness([
+			{ code: 1, output: intelTimestampFailure },
+			{ code: 0 },
+		]);
+		fixture.options.env.MACOSX_DEPLOYMENT_TARGET = deploymentTarget;
+		const lowerConfig = JSON.stringify({
+			bundle: { macOS: { minimumSystemVersion: "10.13" } },
+		});
+		const callerArguments = [
+			...config,
+			"--config",
+			lowerConfig,
+			`--config=${lowerConfig}`,
+		];
+		assert.equal(
+			(await buildMacosPackages(target, callerArguments, fixture.options)).code,
+			0,
+		);
+		for (const call of fixture.calls) {
+			assert.deepEqual(call.args.slice(-2), [
+				"--config",
+				JSON.stringify({
+					bundle: {
+						macOS: { minimumSystemVersion: deploymentTarget ?? "12.3" },
+					},
+				}),
+			]);
+			assert.equal(
+				call.env.MACOSX_DEPLOYMENT_TARGET,
+				deploymentTarget ?? "12.3",
+			);
+		}
+	}
+});
 
 test("recognizes the observed Intel and ARM signing failures with pnpm and ANSI output", () => {
 	assert.equal(isTimestampSigningFailure(intelTimestampFailure), true);
@@ -116,6 +234,10 @@ test("timestamp retries only rebundle and preserve the target, config and signin
 	const args = [...config, "--config", "extra config.json", "--verbose"];
 	const result = await buildMacosPackages(target, args, fixture.options);
 	assert.equal(result.code, 0);
+	const minimumConfig = [
+		"--config",
+		JSON.stringify({ bundle: { macOS: { minimumSystemVersion: "12.3" } } }),
+	];
 	const bundleArguments = [
 		"exec",
 		"dotenv",
@@ -128,11 +250,12 @@ test("timestamp retries only rebundle and preserve the target, config and signin
 		"--target",
 		target,
 		...args,
+		...minimumConfig,
 	];
 	assert.deepEqual(
 		fixture.calls.map((call) => call.args),
 		[
-			["build:tauri", "--target", target, ...args],
+			["build:tauri", "--target", target, ...args, ...minimumConfig],
 			bundleArguments,
 			bundleArguments,
 		],
@@ -141,6 +264,7 @@ test("timestamp retries only rebundle and preserve the target, config and signin
 		assert.deepEqual(call.env, {
 			...fixture.options.env,
 			RUST_TARGET_TRIPLE: target,
+			MACOSX_DEPLOYMENT_TARGET: "12.3",
 		});
 	}
 	assert.deepEqual(fixture.delays, [15_000, 30_000]);
