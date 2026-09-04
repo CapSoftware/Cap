@@ -401,8 +401,12 @@ export function OrganizationDropdown() {
 					as={KDropdownMenu.Trigger}
 					leftIcon={<IconLucideBuilding2 class="size-4" />}
 					rightIcon={<IconCapChevronDown />}
+					title={triggerLabel()}
+					aria-label={`Organization: ${triggerLabel()}`}
 				>
-					<span class="max-w-32 truncate">{triggerLabel()}</span>
+					<span class="block max-w-32 truncate max-[1200px]:hidden">
+						{triggerLabel()}
+					</span>
 				</EditorButton>
 				<KDropdownMenu.Portal>
 					<Suspense>

@@ -1,4 +1,14 @@
-use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    ops::Deref,
+    path::PathBuf,
+    str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
+    time::Instant,
+};
 use tauri::{AppHandle, Listener, Manager, Runtime, Window, ipc::CommandArg};
 use tokio::sync::{RwLock, watch};
 use tokio_util::sync::CancellationToken;
@@ -9,6 +19,7 @@ use tauri_specta::Event;
 use crate::{
     FrameLayoutEvent, create_editor_instance_impl,
     frame_ws::{WSFrame, WSFrameFormat, create_watch_frame_ws},
+    windows::{CapWindowId, EditorWindowIds},
 };
 
 /// Forwards rendered frames to the preview websocket and mirrors each frame's
@@ -68,26 +79,106 @@ pub struct EditorInstance {
     render_frame_event_id: tauri::EventId,
 }
 
-type PendingResult = Result<Arc<EditorInstance>, String>;
+type PendingResult = Result<Arc<EditorInstanceDelivery>, String>;
 type PendingReceiver = tokio::sync::watch::Receiver<Option<PendingResult>>;
+
+pub(crate) struct EditorInstanceDelivery {
+    instance: Arc<EditorInstance>,
+    cleanup_runtime: tokio::runtime::Handle,
+    state: AtomicU8,
+}
+
+impl EditorInstanceDelivery {
+    const PENDING: u8 = 0;
+    const ADOPTED: u8 = 1;
+    const RETIRED: u8 = 2;
+
+    fn new(instance: Arc<EditorInstance>, cleanup_runtime: tokio::runtime::Handle) -> Arc<Self> {
+        Arc::new(Self {
+            instance,
+            cleanup_runtime,
+            state: AtomicU8::new(Self::PENDING),
+        })
+    }
+
+    fn adopt_into(
+        &self,
+        instances: &mut HashMap<String, Arc<EditorInstance>>,
+        window_label: &str,
+    ) -> Result<Arc<EditorInstance>, String> {
+        self.state
+            .compare_exchange(
+                Self::PENDING,
+                Self::ADOPTED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .map_err(|_| "Editor instance delivery is no longer pending".to_string())?;
+        let instance = self.instance.clone();
+        let _ = instances.insert(window_label.to_string(), instance.clone());
+        Ok(instance)
+    }
+
+    fn retire(&self) -> Option<tokio::task::JoinHandle<()>> {
+        self.state
+            .compare_exchange(
+                Self::PENDING,
+                Self::RETIRED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .ok()?;
+        let instance = self.instance.clone();
+        Some(self.cleanup_runtime.spawn(async move {
+            instance.dispose().await;
+        }))
+    }
+
+    async fn dispose(&self) {
+        if let Some(cleanup) = self.retire() {
+            let _ = cleanup.await;
+        }
+    }
+}
+
+impl Drop for EditorInstanceDelivery {
+    fn drop(&mut self) {
+        drop(self.retire());
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct PendingEditorInstances(Arc<RwLock<HashMap<String, PendingReceiver>>>);
 
-async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
+async fn do_prewarm(app: AppHandle, path: PathBuf) -> Result<Arc<EditorInstance>, String> {
     let (frame_tx, frame_rx) = watch::channel(None);
 
     let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx, Default::default()).await;
+    let ws_guard = ws_shutdown_token.clone().drop_guard();
     let (inner, render_frame_event_id) =
         create_editor_instance_impl(&app, path, make_frame_callback(app.clone(), frame_tx)).await?;
 
-    Ok(Arc::new(EditorInstance {
+    let instance = Arc::new(EditorInstance {
         inner,
         ws_port,
         ws_shutdown_token,
         app_handle: app,
         render_frame_event_id,
-    }))
+    });
+    ws_guard.disarm();
+    Ok(instance)
+}
+
+fn with_registered_editor<T>(
+    window_ids: &EditorWindowIds,
+    id: u32,
+    action: impl FnOnce() -> T,
+) -> Result<T, String> {
+    let ids = window_ids.ids.lock().map_err(|error| error.to_string())?;
+    if !ids.iter().any(|(_, registered_id)| *registered_id == id) {
+        return Err("Editor window is no longer registered".to_string());
+    }
+    Ok(action())
 }
 
 impl PendingEditorInstances {
@@ -96,32 +187,47 @@ impl PendingEditorInstances {
             Some(s) => (*s).clone(),
             None => {
                 let pending = Self::default();
-                app.manage(pending.clone());
-                pending
+                app.manage(pending);
+                (*app.state::<Self>()).clone()
             }
         }
     }
 
     pub async fn start_prewarm(app: &AppHandle, window_label: String, path: PathBuf) {
+        let Ok(CapWindowId::Editor { id }) = CapWindowId::from_str(&window_label) else {
+            return;
+        };
+        let window_ids = EditorWindowIds::get(app);
         let pending = Self::get(app);
         let app = app.clone();
-
-        {
-            let instances = pending.0.read().await;
-            if instances.contains_key(&window_label) {
-                return;
-            }
-        }
-
-        let (tx, rx) = tokio::sync::watch::channel(None);
-
-        {
+        let tx = {
             let mut instances = pending.0.write().await;
-            instances.insert(window_label.clone(), rx);
-        }
+            let admitted = with_registered_editor(&window_ids, id, || {
+                use std::collections::hash_map::Entry;
+                match instances.entry(window_label) {
+                    Entry::Vacant(entry) => {
+                        let (tx, rx) = watch::channel(None);
+                        entry.insert(rx);
+                        Some(tx)
+                    }
+                    Entry::Occupied(_) => None,
+                }
+            });
+            match admitted {
+                Ok(Some(tx)) => tx,
+                Ok(None) => return,
+                Err(error) => {
+                    tracing::debug!(%error, "Skipping prewarm for a retired editor");
+                    return;
+                }
+            }
+        };
 
+        let cleanup_runtime = tokio::runtime::Handle::current();
         tokio::spawn(async move {
-            let result = do_prewarm(app, path).await;
+            let result = do_prewarm(app, path)
+                .await
+                .map(|instance| EditorInstanceDelivery::new(instance, cleanup_runtime));
             tx.send(Some(result)).ok();
         });
     }
@@ -327,56 +433,64 @@ impl EditorInstances {
         window: &Window,
         path: PathBuf,
     ) -> Result<Arc<EditorInstance>, String> {
+        let CapWindowId::Editor { id } =
+            CapWindowId::from_str(window.label()).map_err(|error| error.to_string())?
+        else {
+            return Err("Invalid editor window".to_string());
+        };
+        let window_ids = EditorWindowIds::get(window.app_handle());
+        with_registered_editor(&window_ids, id, || ())?;
         let instances = match window.try_state::<EditorInstances>() {
             Some(s) => (*s).clone(),
             None => {
-                let instances = Self(Arc::new(RwLock::new(HashMap::new())));
-                window.manage(instances.clone());
-                instances
+                window.manage(Self(Arc::new(RwLock::new(HashMap::new()))));
+                (*window.state::<Self>()).clone()
             }
         };
-
         let mut instances = instances.0.write().await;
+        if let Some(instance) =
+            with_registered_editor(&window_ids, id, || instances.get(window.label()).cloned())?
+        {
+            return Ok(instance);
+        }
 
-        use std::collections::hash_map::Entry;
-
-        match instances.entry(window.label().to_string()) {
-            Entry::Vacant(entry) => {
-                let requested_at = Instant::now();
-                let pending = PendingEditorInstances::get(window.app_handle());
-
-                if let Some(mut prewarmed_rx) = pending.take_prewarmed(window.label()).await {
-                    loop {
-                        if let Some(result) = prewarmed_rx.borrow_and_update().clone() {
-                            let instance = result?;
-                            entry.insert(instance.clone());
-                            tracing::info!(
-                                wait_ms = requested_at.elapsed().as_millis() as u64,
-                                "Editor open: instance served from prewarm"
-                            );
-                            return Ok(instance);
-                        }
-                        if prewarmed_rx.changed().await.is_err() {
-                            break;
-                        }
-                    }
-                    tracing::warn!(
-                        "Editor open: prewarm channel closed without a result, building on demand"
-                    );
+        let requested_at = Instant::now();
+        let pending = PendingEditorInstances::get(window.app_handle());
+        let mut prewarmed = None;
+        if let Some(mut prewarmed_rx) = pending.take_prewarmed(window.label()).await {
+            loop {
+                let result = prewarmed_rx.borrow_and_update().clone();
+                if let Some(result) = result {
+                    prewarmed = Some(result?);
+                    break;
                 }
-
+                if prewarmed_rx.changed().await.is_err() {
+                    break;
+                }
+            }
+            if prewarmed.is_none() {
+                tracing::warn!(
+                    "Editor open: prewarm channel closed without a result, building on demand"
+                );
+            }
+        }
+        let was_prewarmed = prewarmed.is_some();
+        let instance = match prewarmed {
+            Some(instance) => instance,
+            None => {
+                with_registered_editor(&window_ids, id, || ())?;
+                let cleanup_runtime = tokio::runtime::Handle::current();
                 let (frame_tx, frame_rx) = watch::channel(None);
-
                 let (ws_port, ws_shutdown_token) =
                     create_watch_frame_ws(frame_rx, Default::default()).await;
+                let ws_guard = ws_shutdown_token.clone().drop_guard();
                 let app_handle = window.app_handle().clone();
                 let (inner, render_frame_event_id) = create_editor_instance_impl(
                     window.app_handle(),
-                    path,
+                    path.clone(),
                     make_frame_callback(app_handle.clone(), frame_tx),
                 )
                 .await?;
-
                 let instance = Arc::new(EditorInstance {
                     inner,
                     ws_port,
@@ -384,18 +498,34 @@ impl EditorInstances {
                     app_handle,
                     render_frame_event_id,
                 });
-
-                entry.insert(instance.clone());
-
-                tracing::info!(
-                    build_ms = requested_at.elapsed().as_millis() as u64,
-                    "Editor open: instance built on demand (no prewarm hit)"
-                );
-
-                Ok(instance)
+                ws_guard.disarm();
+                EditorInstanceDelivery::new(instance, cleanup_runtime)
             }
-            Entry::Occupied(entry) => Ok(entry.get().clone()),
+        };
+
+        let published = with_registered_editor(&window_ids, id, || {
+            instance.adopt_into(&mut instances, window.label())
+        });
+        drop(instances);
+        let instance = match published {
+            Ok(Ok(instance)) => instance,
+            Ok(Err(error)) | Err(error) => {
+                instance.dispose().await;
+                return Err(error);
+            }
+        };
+        if was_prewarmed {
+            tracing::info!(
+                wait_ms = requested_at.elapsed().as_millis() as u64,
+                "Editor open: instance served from prewarm"
+            );
+        } else {
+            tracing::info!(
+                build_ms = requested_at.elapsed().as_millis() as u64,
+                "Editor open: instance built on demand (no prewarm hit)"
+            );
         }
+        Ok(instance)
     }
 
     /// Project paths of every currently open editor. Used to avoid touching

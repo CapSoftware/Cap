@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::io::Cursor;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc};
 use tauri::{
@@ -29,8 +30,76 @@ use tokio_util::sync::CancellationToken;
 
 const MAX_DIMENSION: u32 = 16_384;
 
-type PendingResult = Result<Arc<ScreenshotEditorInstance>, String>;
+type PendingResult = Result<Arc<ScreenshotEditorInstanceDelivery>, String>;
 type PendingReceiver = watch::Receiver<Option<PendingResult>>;
+
+pub(crate) struct ScreenshotEditorInstanceDelivery {
+    instance: Arc<ScreenshotEditorInstance>,
+    cleanup_runtime: tokio::runtime::Handle,
+    state: AtomicU8,
+}
+
+impl ScreenshotEditorInstanceDelivery {
+    const PENDING: u8 = 0;
+    const ADOPTED: u8 = 1;
+    const RETIRED: u8 = 2;
+
+    fn new(
+        instance: Arc<ScreenshotEditorInstance>,
+        cleanup_runtime: tokio::runtime::Handle,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            instance,
+            cleanup_runtime,
+            state: AtomicU8::new(Self::PENDING),
+        })
+    }
+
+    fn adopt_into(
+        &self,
+        instances: &mut HashMap<String, Arc<ScreenshotEditorInstance>>,
+        window_label: &str,
+    ) -> Result<Arc<ScreenshotEditorInstance>, String> {
+        self.state
+            .compare_exchange(
+                Self::PENDING,
+                Self::ADOPTED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .map_err(|_| "Editor instance delivery is no longer pending".to_string())?;
+        let instance = self.instance.clone();
+        let _ = instances.insert(window_label.to_string(), instance.clone());
+        Ok(instance)
+    }
+
+    fn retire(&self) -> Option<tokio::task::JoinHandle<()>> {
+        self.state
+            .compare_exchange(
+                Self::PENDING,
+                Self::RETIRED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .ok()?;
+        let instance = self.instance.clone();
+        Some(self.cleanup_runtime.spawn(async move {
+            instance.dispose().await;
+        }))
+    }
+
+    async fn dispose(&self) {
+        if let Some(cleanup) = self.retire() {
+            let _ = cleanup.await;
+        }
+    }
+}
+
+impl Drop for ScreenshotEditorInstanceDelivery {
+    fn drop(&mut self) {
+        drop(self.retire());
+    }
+}
 
 #[derive(Clone)]
 pub struct ScreenshotConfigUpdate {
@@ -242,6 +311,7 @@ impl ScreenshotEditorInstances {
         let (frame_tx, frame_rx) = watch::channel(None);
         let (ws_port, ws_shutdown_token) =
             create_watch_frame_ws(frame_rx, Default::default()).await;
+        let ws_guard = ws_shutdown_token.clone().drop_guard();
         if ws_port == 0 {
             return Err("Failed to start screenshot editor frame websocket".to_string());
         }
@@ -380,6 +450,7 @@ impl ScreenshotEditorInstances {
             image_height: height,
             source_rgba: source_rgba.clone(),
         });
+        ws_guard.disarm();
 
         let decoded_frame = DecodedFrame::new(source_rgba.as_ref().clone(), width, height);
 
@@ -510,48 +581,69 @@ impl ScreenshotEditorInstances {
         window: &Window,
         path: PathBuf,
     ) -> Result<Arc<ScreenshotEditorInstance>, String> {
+        let CapWindowId::ScreenshotEditor { id } =
+            CapWindowId::from_str(window.label()).map_err(|error| error.to_string())?
+        else {
+            return Err("Invalid screenshot editor window".to_string());
+        };
+        let window_ids = ScreenshotEditorWindowIds::get(window.app_handle());
+        with_registered_screenshot_editor(&window_ids, id, || ())?;
         let instances = match window.try_state::<ScreenshotEditorInstances>() {
             Some(s) => (*s).clone(),
             None => {
-                let instances = Self(Arc::new(RwLock::new(HashMap::new())));
-                window.manage(instances.clone());
-                instances
+                window.manage(Self(Arc::new(RwLock::new(HashMap::new()))));
+                (*window.state::<Self>()).clone()
             }
         };
-
         let mut instances = instances.0.write().await;
-
-        use std::collections::hash_map::Entry;
-
-        match instances.entry(window.label().to_string()) {
-            Entry::Vacant(entry) => {
-                let pending = PendingScreenshotEditorInstances::get(window.app_handle());
-
-                if let Some(mut prewarmed_rx) = pending.take_prewarmed(window.label()).await {
-                    loop {
-                        if let Some(result) = prewarmed_rx.borrow_and_update().clone() {
-                            let instance = result?;
-                            entry.insert(instance.clone());
-                            return Ok(instance);
-                        }
-                        if prewarmed_rx.changed().await.is_err() {
-                            break;
-                        }
-                    }
-                }
-
-                let instance =
-                    Self::create_standalone_instance(window.app_handle(), path, true).await?;
-                entry.insert(instance.clone());
-                Ok(instance)
-            }
-            Entry::Occupied(entry) => {
-                let instance = entry.get().clone();
+        if let Some(instance) = with_registered_screenshot_editor(&window_ids, id, || {
+            instances.get(window.label()).map(|instance| {
+                let instance = instance.clone();
                 let config = instance.config_tx.borrow().clone();
                 let _ = instance.config_tx.send(config);
-                Ok(instance)
+                instance
+            })
+        })? {
+            return Ok(instance);
+        }
+
+        let pending = PendingScreenshotEditorInstances::get(window.app_handle());
+        let mut prewarmed = None;
+        if let Some(mut prewarmed_rx) = pending.take_prewarmed(window.label()).await {
+            loop {
+                let result = prewarmed_rx.borrow_and_update().clone();
+                if let Some(result) = result {
+                    prewarmed = Some(result?);
+                    break;
+                }
+                if prewarmed_rx.changed().await.is_err() {
+                    break;
+                }
             }
         }
+        let instance = match prewarmed {
+            Some(instance) => instance,
+            None => {
+                with_registered_screenshot_editor(&window_ids, id, || ())?;
+                let cleanup_runtime = tokio::runtime::Handle::current();
+                let instance =
+                    Self::create_standalone_instance(window.app_handle(), path.clone(), true)
+                        .await?;
+                ScreenshotEditorInstanceDelivery::new(instance, cleanup_runtime)
+            }
+        };
+        let published = with_registered_screenshot_editor(&window_ids, id, || {
+            instance.adopt_into(&mut instances, window.label())
+        });
+        drop(instances);
+        let instance = match published {
+            Ok(Ok(instance)) => instance,
+            Ok(Err(error)) | Err(error) => {
+                instance.dispose().await;
+                return Err(error);
+            }
+        };
+        Ok(instance)
     }
 
     pub async fn remove(window: Window) {
@@ -590,39 +682,65 @@ impl ScreenshotEditorInstances {
     }
 }
 
+fn with_registered_screenshot_editor<T>(
+    window_ids: &ScreenshotEditorWindowIds,
+    id: u32,
+    action: impl FnOnce() -> T,
+) -> Result<T, String> {
+    let ids = window_ids.ids.lock().map_err(|error| error.to_string())?;
+    if !ids.iter().any(|(_, registered_id)| *registered_id == id) {
+        return Err("Screenshot editor window is no longer registered".to_string());
+    }
+    Ok(action())
+}
+
 impl PendingScreenshotEditorInstances {
     pub fn get(app: &AppHandle) -> Self {
         match app.try_state::<Self>() {
             Some(s) => (*s).clone(),
             None => {
                 let pending = Self::default();
-                app.manage(pending.clone());
-                pending
+                app.manage(pending);
+                (*app.state::<Self>()).clone()
             }
         }
     }
 
     pub async fn start_prewarm(app: &AppHandle, window_label: String, path: PathBuf) {
+        let Ok(CapWindowId::ScreenshotEditor { id }) = CapWindowId::from_str(&window_label) else {
+            return;
+        };
+        let window_ids = ScreenshotEditorWindowIds::get(app);
         let pending = Self::get(app);
         let app = app.clone();
-
-        {
-            let instances = pending.0.read().await;
-            if instances.contains_key(&window_label) {
-                return;
-            }
-        }
-
-        let (tx, rx) = watch::channel(None);
-
-        {
+        let tx = {
             let mut instances = pending.0.write().await;
-            instances.insert(window_label.clone(), rx);
-        }
+            let admitted = with_registered_screenshot_editor(&window_ids, id, || {
+                use std::collections::hash_map::Entry;
+                match instances.entry(window_label) {
+                    Entry::Vacant(entry) => {
+                        let (tx, rx) = watch::channel(None);
+                        entry.insert(rx);
+                        Some(tx)
+                    }
+                    Entry::Occupied(_) => None,
+                }
+            });
+            match admitted {
+                Ok(Some(tx)) => tx,
+                Ok(None) => return,
+                Err(error) => {
+                    tracing::debug!(%error, "Skipping prewarm for a retired screenshot editor");
+                    return;
+                }
+            }
+        };
 
+        let cleanup_runtime = tokio::runtime::Handle::current();
         tokio::spawn(async move {
-            let result =
-                ScreenshotEditorInstances::create_standalone_instance(&app, path, true).await;
+            let result = ScreenshotEditorInstances::create_standalone_instance(&app, path, true)
+                .await
+                .map(|instance| ScreenshotEditorInstanceDelivery::new(instance, cleanup_runtime));
             tx.send(Some(result)).ok();
         });
     }

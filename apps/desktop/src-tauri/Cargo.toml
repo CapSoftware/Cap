@@ -170,6 +170,7 @@ windows = { workspace = true, features = [
     "Storage_Streams",
     "Win32_Foundation",
     "Win32_System",
+    "Win32_Storage_FileSystem",
     "Win32_System_Power",
     "Win32_System_Threading",
     "Win32_System_WinRT",

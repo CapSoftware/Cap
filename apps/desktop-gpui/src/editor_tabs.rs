@@ -596,7 +596,8 @@ pub struct OpenMenu {
 impl EditorWindow {
     /// The rows a menu draws, with a check mark on the value in force.
     pub(crate) fn sidebar_menu_items(&self, kind: SidebarMenu) -> Vec<ui::MenuItem> {
-        let project = &self.project;
+        let snapshot = self.style_control_project();
+        let project = &snapshot;
         let captions = caption_settings(project);
         let keyboard = keyboard_settings(project);
         match kind {
@@ -1240,7 +1241,7 @@ impl EditorWindow {
                             .child(ui::Subfield::plain(&theme, "Hide Camera").child(
                                 ui::Toggle::plain(&theme, "camera-hide", camera.hide).on_click(
                                     cx.listener(|this, _, window, cx| {
-                                        let next = !this.project.camera.hide;
+                                        let next = !this.style_control_project().camera.hide;
                                         this.edit_project("camera-hide", window, cx, move |p| {
                                             p.camera.hide = next;
                                             true
@@ -1251,7 +1252,7 @@ impl EditorWindow {
                             .child(ui::Subfield::plain(&theme, "Mirror Camera").child(
                                 ui::Toggle::plain(&theme, "camera-mirror", camera.mirror).on_click(
                                     cx.listener(|this, _, window, cx| {
-                                        let next = !this.project.camera.mirror;
+                                        let next = !this.style_control_project().camera.mirror;
                                         this.edit_project("camera-mirror", window, cx, move |p| {
                                             p.camera.mirror = next;
                                             true
@@ -1294,7 +1295,7 @@ impl EditorWindow {
                     ui::Toggle::plain(&theme, "camera-keep-size", camera.scale_during_zoom >= 1.)
                         .on_click(cx.listener(|this, _, window, cx| {
                             // `keep ? 1 : DEFAULT_CAMERA_SCALE_DURING_ZOOM`.
-                            let keep = this.project.camera.scale_during_zoom >= 1.;
+                            let keep = this.style_control_project().camera.scale_during_zoom >= 1.;
                             let next = if keep {
                                 DEFAULT_CAMERA_SCALE_DURING_ZOOM
                             } else {
@@ -1331,7 +1332,12 @@ impl EditorWindow {
                     .child(self.render_camera_shadow_settings(cx)),
             )
             // `<ColorCorrectionSection target="camera" />` (`:3324`).
-            .child(self.render_color_correction(GradeTarget::Camera, cx))
+            .children(
+                self.sidebar
+                    .style_target
+                    .is_none()
+                    .then(|| self.render_color_correction(GradeTarget::Camera, cx)),
+            )
             .children(manual.map(|_| {
                 // The custom-position reset row, shown only once the camera has
                 // been dragged on the canvas (`:3054-3066`).
@@ -1809,7 +1815,7 @@ impl EditorWindow {
                     .value(
                         ui::Toggle::plain(&theme, "cursor-svg", cursor.use_svg)
                             .on_click(cx.listener(|this, _, window, cx| {
-                                let next = !this.project.cursor.use_svg;
+                                let next = !this.style_control_project().cursor.use_svg;
                                 this.edit_project("cursor-svg", window, cx, move |p| {
                                     p.cursor.use_svg = next;
                                     true

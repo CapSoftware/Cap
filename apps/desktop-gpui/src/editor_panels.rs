@@ -1762,6 +1762,8 @@ pub fn mask_effect_amount(segment: &MaskSegment) -> f64 {
 /// panel per segment and each row needs its own track rect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PanelSlider {
+    Image(ImageProperty),
+    StyleCameraOnlyPadding,
     ZoomAmount,
     /// The multi-zoom panel's single Amount slider, which writes every selected
     /// segment at once.
@@ -1804,6 +1806,9 @@ pub enum PanelSlider {
 /// Window` and the sidebar's render chain is threaded with `&self`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FieldKey {
+    StyleName(usize),
+    ImageName(usize),
+    StyleCrop(usize, u8),
     /// `HexColorInput`s, which live on the sidebar's `ColorTarget` map and are
     /// listed here only so a tab can name one.
     CaptionColor,
@@ -1912,6 +1917,28 @@ impl EditorWindow {
         }
         let timeline = self.project.timeline.as_ref()?;
         Some(match key {
+            FieldKey::StyleName(index) => timeline.style_segments.get(index)?.name.clone(),
+            FieldKey::ImageName(index) => timeline.image_segments.get(index)?.name.clone(),
+            FieldKey::StyleCrop(index, axis) => {
+                let background = timeline
+                    .style_segments
+                    .get(index)?
+                    .overrides
+                    .background
+                    .as_ref()?;
+                let (width, height) = self.display_resolution()?;
+                let crop = background.crop.clone().unwrap_or(cap_project::Crop {
+                    position: XY::new(0, 0),
+                    size: XY::new(width, height),
+                });
+                match axis {
+                    0 => crop.position.x,
+                    1 => crop.position.y,
+                    2 => crop.size.x,
+                    _ => crop.size.y,
+                }
+                .to_string()
+            }
             FieldKey::TextContent(index) => timeline.text_segments.get(index)?.content.clone(),
             FieldKey::CaptionText(index) => timeline.caption_segments.get(index)?.text.clone(),
             FieldKey::AudioName(index) => timeline
@@ -2031,6 +2058,71 @@ impl EditorWindow {
         };
         let text = input.read(cx).text().to_string();
         match key {
+            FieldKey::StyleName(index) | FieldKey::ImageName(index) => {
+                let style = matches!(key, FieldKey::StyleName(_));
+                self.edit_project("segment-name", window, cx, move |project| {
+                    let Some(timeline) = project.timeline.as_mut() else {
+                        return false;
+                    };
+                    let name = if style {
+                        timeline
+                            .style_segments
+                            .get_mut(index)
+                            .map(|segment| &mut segment.name)
+                    } else {
+                        timeline
+                            .image_segments
+                            .get_mut(index)
+                            .map(|segment| &mut segment.name)
+                    };
+                    let Some(name) = name else {
+                        return false;
+                    };
+                    if *name == text {
+                        return false;
+                    }
+                    *name = text;
+                    true
+                });
+            }
+            FieldKey::StyleCrop(index, axis) => {
+                if !final_commit {
+                    return;
+                }
+                let Some(value) = ui::parse_number(&text).filter(|value| value.is_finite()) else {
+                    return;
+                };
+                let Some((width, height)) = self.display_resolution() else {
+                    return;
+                };
+                self.edit_style_segment("style-crop", index, window, cx, move |segment| {
+                    let Some(background) = segment.overrides.background.as_mut() else {
+                        return false;
+                    };
+                    let crop = background.crop.get_or_insert(cap_project::Crop {
+                        position: XY::new(0, 0),
+                        size: XY::new(width, height),
+                    });
+                    let value = value.max(0.) as u32;
+                    match axis {
+                        0 => crop.position.x = value.min(width.saturating_sub(1)),
+                        1 => crop.position.y = value.min(height.saturating_sub(1)),
+                        2 => crop.size.x = value.max(1),
+                        _ => crop.size.y = value.max(1),
+                    }
+                    crop.size.x = crop
+                        .size
+                        .x
+                        .min(width.saturating_sub(crop.position.x))
+                        .max(1);
+                    crop.size.y = crop
+                        .size
+                        .y
+                        .min(height.saturating_sub(crop.position.y))
+                        .max(1);
+                    true
+                });
+            }
             // `onRawValueChange={(v) => cropperRef?.setCropProperty(field, v)}`
             // -- per keystroke, straight into the cropper, no project write
             // and so no history entry (`Editor.tsx:1186`).
@@ -2225,6 +2317,16 @@ macro_rules! segment_editor {
 }
 
 segment_editor!(edit_text_segment, text_segments, TextSegment);
+segment_editor!(
+    edit_style_segment,
+    style_segments,
+    cap_project::StyleSegment
+);
+segment_editor!(
+    edit_image_segment,
+    image_segments,
+    cap_project::ImageSegment
+);
 segment_editor!(edit_audio_segment, audio_segments, AudioTrackSegment);
 
 impl EditorWindow {
@@ -2285,6 +2387,8 @@ impl EditorWindow {
 
     pub(crate) fn panel_slider_limits(&self, slider: PanelSlider, index: usize) -> (f32, f32, f32) {
         match slider {
+            PanelSlider::Image(property) => property.limits(),
+            PanelSlider::StyleCameraOnlyPadding => (0., 40., 1.),
             // `minValue={1} maxValue={4.5} step={0.001}` (`:5601-5603`).
             PanelSlider::ZoomAmount | PanelSlider::ZoomAmountAll => (1., 4.5, 0.001),
             PanelSlider::TextLayoutTransition => (0.1, 1.5, 0.05),
@@ -2326,6 +2430,15 @@ impl EditorWindow {
             return 0.;
         };
         match slider {
+            PanelSlider::Image(property) => timeline
+                .image_segments
+                .get(index)
+                .map_or(0., |segment| property.read(segment)),
+            PanelSlider::StyleCameraOnlyPadding => timeline
+                .style_segments
+                .get(index)
+                .and_then(|segment| segment.overrides.camera_only_padding)
+                .unwrap_or(0.) as f32,
             PanelSlider::ZoomAmount => timeline
                 .zoom_segments
                 .get(index)
@@ -2448,6 +2561,18 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         match slider {
+            PanelSlider::Image(property) => {
+                self.edit_image_segment("image-transform", index, window, cx, move |segment| {
+                    property.write(segment, value);
+                    true
+                })
+            }
+            PanelSlider::StyleCameraOnlyPadding => {
+                self.edit_style_segment("camera-only-padding", index, window, cx, move |segment| {
+                    segment.overrides.camera_only_padding = Some(f64::from(value.clamp(0., 40.)));
+                    true
+                })
+            }
             PanelSlider::ZoomAmount => {
                 self.edit_zoom_segment("zoom-amount", index, window, cx, move |segment| {
                     segment.amount = f64::from(value);
@@ -2986,6 +3111,20 @@ impl EditorWindow {
         };
 
         let body: AnyElement = match selection.track {
+            TrackKind::Style => self.stacked_panel(
+                "style",
+                "style",
+                count(timeline.style_segments.len()),
+                cx,
+                |this, index, cx| this.render_style_panel(index, cx),
+            ),
+            TrackKind::Image => self.stacked_panel(
+                "image",
+                "image",
+                count(timeline.image_segments.len()),
+                cx,
+                |this, index, cx| this.render_image_panel(index, cx),
+            ),
             TrackKind::Zoom => {
                 let indices = count(timeline.zoom_segments.len());
                 let total = timeline.zoom_segments.len();
@@ -6137,6 +6276,25 @@ impl EditorWindow {
                         .collect()
                 };
                 match selection.track {
+                    TrackKind::Style => {
+                        for index in indices(timeline.style_segments.len()) {
+                            fields.push(FieldKey::StyleName(index));
+                            if timeline.style_segments[index]
+                                .overrides
+                                .background
+                                .is_some()
+                            {
+                                for axis in 0..4 {
+                                    fields.push(FieldKey::StyleCrop(index, axis));
+                                }
+                            }
+                        }
+                    }
+                    TrackKind::Image => {
+                        for index in indices(timeline.image_segments.len()) {
+                            fields.push(FieldKey::ImageName(index));
+                        }
+                    }
                     TrackKind::Text => {
                         for index in indices(timeline.text_segments.len()) {
                             fields.push(FieldKey::TextContent(index));
@@ -6646,5 +6804,340 @@ mod tests {
         // name, a real family is its own name (`utils/fonts.ts:27-32`).
         assert_eq!(font_family_label("serif"), "System Serif");
         assert_eq!(font_family_label("Georgia"), "Georgia");
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ImageProperty {
+    X,
+    Y,
+    Width,
+    Height,
+    Opacity,
+    Rotation,
+    Rounding,
+}
+
+impl ImageProperty {
+    fn label(self) -> &'static str {
+        match self {
+            Self::X => "Position X",
+            Self::Y => "Position Y",
+            Self::Width => "Width",
+            Self::Height => "Height",
+            Self::Opacity => "Opacity",
+            Self::Rotation => "Rotation",
+            Self::Rounding => "Rounding",
+        }
+    }
+    fn limits(self) -> (f32, f32, f32) {
+        match self {
+            Self::X | Self::Y => (-50., 150., 1.),
+            Self::Width | Self::Height => (1., 200., 1.),
+            Self::Rotation => (-180., 180., 1.),
+            _ => (0., 100., 1.),
+        }
+    }
+    fn read(self, segment: &cap_project::ImageSegment) -> f32 {
+        match self {
+            Self::X => (segment.center.x * 100.) as f32,
+            Self::Y => (segment.center.y * 100.) as f32,
+            Self::Width => (segment.size.x * 100.) as f32,
+            Self::Height => (segment.size.y * 100.) as f32,
+            Self::Opacity => segment.opacity * 100.,
+            Self::Rotation => segment.rotation,
+            Self::Rounding => segment.rounding,
+        }
+    }
+    fn write(self, segment: &mut cap_project::ImageSegment, value: f32) {
+        if !value.is_finite() {
+            return;
+        }
+        let (min, max, _) = self.limits();
+        let value = value.clamp(min, max);
+        match self {
+            Self::X => segment.center.x = f64::from(value) / 100.,
+            Self::Y => segment.center.y = f64::from(value) / 100.,
+            Self::Width => {
+                let width = f64::from(value) / 100.;
+                if segment.lock_aspect && segment.size.x > 0. {
+                    segment.size.y *= width / segment.size.x;
+                }
+                segment.size.x = width;
+            }
+            Self::Height => {
+                let height = f64::from(value) / 100.;
+                if segment.lock_aspect && segment.size.y > 0. {
+                    segment.size.x *= height / segment.size.y;
+                }
+                segment.size.y = height;
+            }
+            Self::Opacity => segment.opacity = value / 100.,
+            Self::Rotation => segment.rotation = value,
+            Self::Rounding => segment.rounding = value,
+        }
+    }
+}
+
+impl EditorWindow {
+    fn render_image_panel(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(segment) = self
+            .timeline()
+            .and_then(|timeline| timeline.image_segments.get(index))
+        else {
+            return div().into_any_element();
+        };
+        let mut panel = div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(self.labelled_small(
+                "Name",
+                self.render_field_input(FieldKey::ImageName(index), None),
+            ));
+        panel = panel
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .child("Drag the image in the canvas to move it. Drag a corner to resize."),
+            )
+            .child(
+                ui::Button::plain(
+                    &self.theme,
+                    SharedString::from(format!("replace-image-{index}")),
+                    ui::ButtonVariant::Gray,
+                    ui::ButtonSize::Md,
+                )
+                .label("Replace image")
+                .disabled(self.sidebar.picking_image)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.replace_timeline_image(index, window, cx)
+                })),
+            );
+        if self
+            .sidebar
+            .image_asset_status
+            .as_ref()
+            .is_some_and(|(path, present)| path == &segment.path && !present)
+        {
+            panel = panel.child(div().text_size(px(12.)).child("Image file is missing. Replace it to restore this segment while keeping its timing and transforms."));
+        }
+        if let Some(error) = &self.sidebar.image_import_error {
+            panel = panel.child(div().text_size(px(12.)).child(error.clone()));
+        }
+        for (key, label, value) in [
+            (0, "Enabled", segment.enabled),
+            (1, "Lock aspect ratio", segment.lock_aspect),
+            (2, "Flip horizontally", segment.flip_x),
+            (3, "Flip vertically", segment.flip_y),
+        ] {
+            panel = panel.child(
+                ui::Subfield::plain(&self.theme, label).child(
+                    ui::Toggle::plain(
+                        &self.theme,
+                        SharedString::from(format!("image-{index}-{key}")),
+                        value,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.edit_image_segment("image-toggle", index, window, cx, move |segment| {
+                            match key {
+                                0 => segment.enabled = !value,
+                                1 => segment.lock_aspect = !value,
+                                2 => segment.flip_x = !value,
+                                _ => segment.flip_y = !value,
+                            };
+                            true
+                        })
+                    })),
+                ),
+            );
+        }
+        for property in [
+            ImageProperty::X,
+            ImageProperty::Y,
+            ImageProperty::Width,
+            ImageProperty::Height,
+            ImageProperty::Rotation,
+            ImageProperty::Rounding,
+            ImageProperty::Opacity,
+        ] {
+            panel = panel.child(
+                self.labelled_small(
+                    property.label(),
+                    self.slider(
+                        SliderKey::Panel(PanelSlider::Image(property), index),
+                        if property == ImageProperty::Rotation {
+                            "°"
+                        } else {
+                            "%"
+                        },
+                        cx,
+                    )
+                    .into_any_element(),
+                ),
+            );
+        }
+        panel.into_any_element()
+    }
+
+    fn render_style_panel(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        use crate::editor_sidebar::StyleGroup;
+        let Some(segment) = self
+            .timeline()
+            .and_then(|timeline| timeline.style_segments.get(index))
+        else {
+            return div().into_any_element();
+        };
+        let enabled = segment.enabled;
+        let mut panel = div().flex().flex_col().gap(px(16.))
+            .child(div().text_size(px(12.)).child("Overrides apply only during this segment. Enable a group to copy its global settings."))
+            .child(self.labelled_small("Name", self.render_field_input(FieldKey::StyleName(index), None)))
+            .child(ui::Subfield::plain(&self.theme,"Enabled").child(ui::Toggle::plain(&self.theme,SharedString::from(format!("style-enabled-{index}")),enabled).on_click(cx.listener(move |this,_,window,cx| this.edit_style_segment("style-enabled",index,window,cx,move |segment| { segment.enabled = !enabled; true })))));
+        for (group, active) in [
+            (
+                StyleGroup::Background,
+                segment.overrides.background.is_some(),
+            ),
+            (StyleGroup::Camera, segment.overrides.camera.is_some()),
+            (StyleGroup::Cursor, segment.overrides.cursor.is_some()),
+        ] {
+            panel = panel.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(
+                        ui::Subfield::plain(&self.theme, group.label()).child(
+                            ui::Toggle::plain(
+                                &self.theme,
+                                SharedString::from(format!("style-{index}-{group:?}")),
+                                active,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.edit_project(
+                                        "style-override",
+                                        window,
+                                        cx,
+                                        move |project| {
+                                            let Some(segment) =
+                                                project.timeline.as_mut().and_then(|timeline| {
+                                                    timeline.style_segments.get_mut(index)
+                                                })
+                                            else {
+                                                return false;
+                                            };
+                                            match group {
+                                                StyleGroup::Background => {
+                                                    segment.overrides.background = (!active)
+                                                        .then(|| project.background.clone())
+                                                }
+                                                StyleGroup::Camera => {
+                                                    segment.overrides.camera =
+                                                        (!active).then(|| project.camera.clone())
+                                                }
+                                                StyleGroup::Cursor => {
+                                                    segment.overrides.cursor =
+                                                        (!active).then(|| project.cursor.clone())
+                                                }
+                                            }
+                                            true
+                                        },
+                                    );
+                                },
+                            )),
+                        ),
+                    )
+                    .children(active.then(|| {
+                        div()
+                            .id(SharedString::from(format!("style-edit-{index}-{group:?}")))
+                            .cursor_pointer()
+                            .px(px(12.))
+                            .py(px(8.))
+                            .rounded(px(6.))
+                            .bg(Hsla::from(self.theme.gray_3))
+                            .child(format!("Edit {}", group.label()))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_style_group(index, group, window, cx)
+                            }))
+                    })),
+            );
+        }
+        if segment.overrides.background.is_some() {
+            let mut crop = div().flex().flex_col().gap(px(8.)).child(
+                div()
+                    .text_size(px(12.))
+                    .child("Screen crop (source pixels)"),
+            );
+            for (axis, label) in [(0, "Left"), (1, "Top"), (2, "Width"), (3, "Height")] {
+                crop = crop.child(self.labelled_small(
+                    label,
+                    self.render_number_field(FieldKey::StyleCrop(index, axis), "px", 80.),
+                ));
+            }
+            crop = crop.child(
+                div()
+                    .id(SharedString::from(format!("style-crop-reset-{index}")))
+                    .cursor_pointer()
+                    .child("Reset crop")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.edit_style_segment(
+                            "style-crop-reset",
+                            index,
+                            window,
+                            cx,
+                            move |segment| {
+                                if let Some(background) = segment.overrides.background.as_mut() {
+                                    background.crop = None;
+                                    true
+                                } else {
+                                    false
+                                }
+                            },
+                        )
+                    })),
+            );
+            panel = panel.child(crop);
+        }
+        let padding = segment.overrides.camera_only_padding.is_some();
+        panel = panel.child(
+            ui::Subfield::plain(&self.theme, "Camera Only background").child(
+                ui::Toggle::plain(
+                    &self.theme,
+                    SharedString::from(format!("style-camera-only-{index}")),
+                    padding,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.edit_style_segment(
+                        "camera-only-background",
+                        index,
+                        window,
+                        cx,
+                        move |segment| {
+                            segment.overrides.camera_only_padding = (!padding).then_some(10.);
+                            true
+                        },
+                    )
+                })),
+            ),
+        );
+        if padding {
+            panel = panel
+                .child(
+                    self.labelled_small(
+                        "Camera Only padding",
+                        self.slider(
+                            SliderKey::Panel(PanelSlider::StyleCameraOnlyPadding, index),
+                            "%",
+                            cx,
+                        )
+                        .into_any_element(),
+                    ),
+                )
+                .child(div().text_size(px(11.)).child(
+                    "Use a Camera Only scene. Padding reveals the background around the camera.",
+                ));
+        }
+        panel.into_any_element()
     }
 }

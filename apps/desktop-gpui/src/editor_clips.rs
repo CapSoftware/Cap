@@ -229,6 +229,8 @@ pub(crate) fn move_clip(
             .transitions
             .retain(|candidate| candidate.segment_index != transition.segment_index);
         // The source ripples these seven tracks and no others (`:672-682`).
+        ripple_track(&mut timeline.style_segments, boundary, effective.duration);
+        ripple_track(&mut timeline.image_segments, boundary, effective.duration);
         ripple_track(&mut timeline.zoom_segments, boundary, effective.duration);
         ripple_track(&mut timeline.scene_segments, boundary, effective.duration);
         ripple_track(&mut timeline.mask_segments, boundary, effective.duration);
@@ -1479,7 +1481,7 @@ impl EditorWindow {
         cx.spawn_in(window, async move |this, cx| {
             // Blocking modal, so from a spawned task with no borrow held --
             // the `save_file_panel` rule.
-            let Some(path) = pick_existing_recording_path() else {
+            let Some(path) = pick_existing_recording_path(cx).await else {
                 return;
             };
             this.update_in(cx, |this, window, cx| {
@@ -1497,7 +1499,10 @@ impl EditorWindow {
         cx.spawn_in(window, async move |this, cx| {
             #[cfg(target_os = "macos")]
             let source = crate::platform::open_image_panel(&["mp4"]);
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "linux")]
+            let source =
+                crate::platform::open_file_panel_async(&[("MP4 Video", &["mp4"])], None, cx).await;
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             let source = rfd::FileDialog::new()
                 .add_filter("MP4 Video", &["mp4"])
                 .pick_file();
@@ -1985,12 +1990,21 @@ impl PreparedMp4Import {
 /// a `.cap` filter on macOS (bundles are packages there), a directory picker
 /// on Windows, both rooted at the recordings directory where the dialog
 /// supports one.
-fn pick_existing_recording_path() -> Option<PathBuf> {
+async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         crate::platform::open_image_panel(&["cap"])
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::platform::open_file_panel_async(
+            &[("Cap Recording", &["cap"])],
+            Some(crate::recording::recordings_dir()),
+            _cx,
+        )
+        .await
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         rfd::FileDialog::new()
             .set_directory(crate::recording::recordings_dir())
@@ -2365,6 +2379,8 @@ fn ensure_project_timeline<'a>(
             keyboard_segments: Vec::new(),
             audio_segments: Vec::new(),
             camera3d_segments: Vec::new(),
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
         });
     }
 
@@ -3791,12 +3807,31 @@ mod tests {
             edge_snap_ratio: 0.25,
         }];
 
+        config.style_segments.push(cap_project::StyleSegment {
+            start: 15.,
+            end: 18.,
+            ..Default::default()
+        });
+        config.image_segments.push(cap_project::ImageSegment {
+            start: 15.,
+            end: 18.,
+            path: "content/images/retained.png".into(),
+            ..Default::default()
+        });
         // Moving clip 0 to the end separates the 0|1 pair, dropping the 1s
         // transition whose boundary sat at offset(1) + 1.0 = 10.0.
         assert!(move_clip(&mut config, 0, 3));
         assert!(config.transitions.is_empty());
         assert_eq!(config.zoom_segments[0].start, 16.0);
         assert_eq!(config.zoom_segments[0].end, 19.0);
+        assert_eq!(
+            (config.style_segments[0].start, config.style_segments[0].end),
+            (16., 19.)
+        );
+        assert_eq!(
+            (config.image_segments[0].start, config.image_segments[0].end),
+            (16., 19.)
+        );
     }
 
     /// `computeDropIndex` (`:692-703`): the insertion point is after every

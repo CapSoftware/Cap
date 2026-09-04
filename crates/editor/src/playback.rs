@@ -713,7 +713,7 @@ impl Playback {
                             .unwrap_or_default();
 
                         let decoders = segment_media.decoders.clone();
-                        let hide_camera = cached_project.camera.hide;
+                        let hide_camera = !cached_project.requires_camera();
                         let segment_index = segment.recording_clip;
                         let is_initial = frames_decoded < 10;
                         let transition = transition_decode_request(

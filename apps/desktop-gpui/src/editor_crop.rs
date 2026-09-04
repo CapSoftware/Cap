@@ -1041,6 +1041,8 @@ pub fn is_nudge_key(key: &str) -> Option<&'static str> {
 /// Everything the open dialog owns. `None` on [`EditorWindow`] means the
 /// dialog is closed, which is `dialog().type !== "crop"`.
 pub struct CropState {
+    style_target: Option<StyleCropTarget>,
+    error: Option<String>,
     /// `targetSize` -- `recordings.segments[0].display`, the raw recording
     /// resolution and the space `background.crop` is written in.
     pub target: (u32, u32),
@@ -1086,6 +1088,8 @@ impl CropState {
     /// viewport gives.
     pub fn new(target: (u32, u32), box_size: (f32, f32), initial: CropBounds) -> Self {
         let mut state = Self {
+            style_target: None,
+            error: None,
             target,
             box_size,
             // Seeded from the border inset so the first frame is already
@@ -1448,9 +1452,31 @@ impl EditorWindow {
             tracing::warn!("crop: no display recording to crop");
             return;
         };
+        self.end_field_edit(cx);
+        self.close_color_picker(cx);
+        self.dismiss_frame_controls(cx);
         self.stop_playback_for_crop(cx);
 
-        let initial = match &self.project.background.crop {
+        let style_target = self.selected_style_index().and_then(|index| {
+            let segment = self.project.timeline.as_ref()?.style_segments.get(index)?;
+            Some(StyleCropTarget {
+                index,
+                fingerprint: serde_json::to_string(segment).ok()?,
+                background: segment
+                    .overrides
+                    .background
+                    .clone()
+                    .unwrap_or_else(|| self.project.background.clone()),
+                opting_in: segment.overrides.background.is_none(),
+                time: self
+                    .preview_or_playhead()
+                    .clamp(segment.start, (segment.end - 0.001).max(segment.start)),
+            })
+        });
+        let background = style_target
+            .as_ref()
+            .map_or(&self.project.background, |target| &target.background);
+        let initial = match &background.crop {
             Some(crop) => CropBounds::new(
                 f64::from(crop.position.x),
                 f64::from(crop.position.y),
@@ -1462,7 +1488,11 @@ impl EditorWindow {
 
         let viewport = window.viewport_size();
         let container = crop_box_size((viewport.width.into(), viewport.height.into()), target);
-        let state = CropState::new(target, container, initial);
+        let mut state = CropState::new(target, container, initial);
+        state.style_target = style_target;
+        if let Some(target) = &state.style_target {
+            self.seek_to_time(target.time, cx);
+        }
         tracing::info!(
             target = format!("{}x{}", target.0, target.1),
             container = format!("{}x{}", container.0, container.1),
@@ -1541,9 +1571,18 @@ impl EditorWindow {
     /// The footer's Save (`Editor.tsx:1414-1432`): **one** `setProject` call,
     /// so **one** history entry for the whole session, then close.
     pub(crate) fn save_crop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(state) = self.crop.take() else {
+        let Some(mut state) = self.crop.take() else {
             return;
         };
+        if let Some(target) = &state.style_target
+            && !target.matches(&self.project)
+        {
+            state.error = Some("This Style changed while cropping. Cancel and reopen Crop.".into());
+            self.crop = Some(state);
+            self.publish_project();
+            cx.notify();
+            return;
+        }
         let bounds = state.real();
         let crop = Crop {
             position: XY::new(bounds.x.max(0.) as u32, bounds.y.max(0.) as u32),
@@ -1556,7 +1595,13 @@ impl EditorWindow {
             ),
             "crop saved"
         );
-        self.project.background.crop = Some(crop);
+        if let Some(target) = state.style_target {
+            if !target.apply(&mut self.project, crop) {
+                return;
+            }
+        } else {
+            self.project.background.crop = Some(crop);
+        }
         self.project_changed(window, cx);
         window.refresh();
     }
@@ -1571,15 +1616,26 @@ impl EditorWindow {
             return;
         };
         let mut config = self.project.clone();
+        let mut time = self.preview_or_playhead();
         if let Some(state) = &self.crop {
             let bounds = state.real();
-            config.background.crop = Some(Crop {
+            let crop = Crop {
                 position: XY::new(bounds.x.max(0.) as u32, bounds.y.max(0.) as u32),
-                size: XY::new(bounds.width.max(0.) as u32, bounds.height.max(0.) as u32),
-            });
+                size: XY::new(bounds.width.max(1.) as u32, bounds.height.max(1.) as u32),
+            };
+            if let Some(target) = &state.style_target {
+                if !target.apply(&mut config, crop) {
+                    return;
+                }
+                time = target.time;
+            } else {
+                config.background.crop = Some(crop);
+                if let Some(timeline) = config.timeline.as_mut() {
+                    timeline.style_segments.clear();
+                }
+            }
         }
         instance.project_config.0.send(config).ok();
-        let time = self.preview_or_playhead();
         crate::editor_window::request_frame(
             instance,
             (time * f64::from(EDITOR_PREVIEW_FPS)).floor() as u32,
@@ -2248,6 +2304,8 @@ impl EditorWindow {
                         .border_color(Hsla::from(theme.gray_3))
                         .bg(Hsla::from(theme.gray_1))
                         .overflow_hidden()
+                        .children(state.style_target.as_ref().map(|target| div().px(px(20.)).pt(px(16.)).text_size(px(12.)).child(if target.opting_in { format!("Style {} only · Saving enables its background override. Global settings stay unchanged.",target.index+1) } else { format!("Editing Style {} only · Global settings stay unchanged.",target.index+1) })))
+                        .children(state.error.as_ref().map(|error| div().p(px(16.)).child(error.clone())))
                         .child(self.render_crop_header(state, cx))
                         .child(self.render_crop_body(state, cx))
                         .child(self.render_crop_footer(cx)),
@@ -3423,5 +3481,102 @@ mod tests {
             Some(CropMenuChoice::ToggleSnap)
         ));
         assert!(crop_menu_choice(10).is_none());
+    }
+}
+
+struct StyleCropTarget {
+    index: usize,
+    fingerprint: String,
+    background: cap_project::BackgroundConfiguration,
+    opting_in: bool,
+    time: f64,
+}
+
+impl StyleCropTarget {
+    fn apply(&self, project: &mut cap_project::ProjectConfiguration, crop: Crop) -> bool {
+        if !self.matches(project) {
+            return false;
+        }
+        let Some(segment) = project
+            .timeline
+            .as_mut()
+            .and_then(|timeline| timeline.style_segments.get_mut(self.index))
+        else {
+            return false;
+        };
+        let mut background = self.background.clone();
+        background.crop = Some(crop);
+        segment.overrides.background = Some(background);
+        true
+    }
+
+    fn matches(&self, project: &cap_project::ProjectConfiguration) -> bool {
+        project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.style_segments.get(self.index))
+            .and_then(|segment| serde_json::to_string(segment).ok())
+            .is_some_and(|value| value == self.fingerprint)
+    }
+}
+
+#[cfg(test)]
+mod style_image_tests {
+    use super::*;
+
+    #[test]
+    fn style_image_crop_preview_and_save_preserve_base_and_guard_reordering() {
+        let mut project: cap_project::ProjectConfiguration = serde_json::from_value(serde_json::json!({"timeline":{"zoomSegments":[],"segments":[],"styleSegments":[{"start":1,"end":5,"name":"A"},{"start":6,"end":9,"name":"B"}]}})).unwrap();
+        let before = serde_json::to_value(&project).unwrap();
+        let target = StyleCropTarget {
+            index: 0,
+            fingerprint: serde_json::to_string(
+                &project.timeline.as_ref().unwrap().style_segments[0],
+            )
+            .unwrap(),
+            background: project.background.clone(),
+            opting_in: true,
+            time: 2.,
+        };
+        let crop = Crop {
+            position: XY::new(100, 50),
+            size: XY::new(800, 600),
+        };
+        let mut preview = project.clone();
+        assert!(target.apply(&mut preview, crop.clone()));
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
+        assert_eq!(
+            serde_json::to_value(&preview.background).unwrap(),
+            serde_json::to_value(&project.background).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&preview.style_at(2.).background.crop).unwrap(),
+            serde_json::to_value(&Some(crop.clone())).unwrap()
+        );
+        assert!(target.apply(&mut project, crop));
+        assert_eq!(
+            serde_json::to_value(&project.background).unwrap(),
+            serde_json::to_value(&preview.background).unwrap()
+        );
+        assert!(
+            project.timeline.as_ref().unwrap().style_segments[1]
+                .overrides
+                .background
+                .is_none()
+        );
+        project.timeline.as_mut().unwrap().style_segments.swap(0, 1);
+        assert!(!target.apply(
+            &mut project,
+            Crop {
+                position: XY::new(0, 0),
+                size: XY::new(10, 10)
+            }
+        ));
+        assert!(
+            project.timeline.as_ref().unwrap().style_segments[0]
+                .overrides
+                .background
+                .is_none()
+        );
     }
 }

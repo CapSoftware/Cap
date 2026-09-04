@@ -1,4 +1,11 @@
-use std::{path::PathBuf, sync::Mutex, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use serde::Serialize;
 use specta::Type;
@@ -131,6 +138,77 @@ struct ControlError {
     message: String,
 }
 
+#[derive(Clone)]
+pub(crate) struct StopNoticeOwner {
+    sequence: u64,
+    directory: PathBuf,
+    generation: Option<u32>,
+    confirmed: Arc<AtomicBool>,
+}
+
+impl StopNoticeOwner {
+    pub(crate) fn is_confirmed(&self) -> bool {
+        self.confirmed.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn same_attempt(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.confirmed, &other.confirmed)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct StopNoticeTicket {
+    sequence: u64,
+    pub(crate) owner: StopNoticeOwner,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StopNoticeKind {
+    Unconfirmed,
+    ConfirmedFailure,
+    ControlFailure,
+}
+
+struct StopNotice {
+    ticket: StopNoticeTicket,
+    kind: StopNoticeKind,
+    message: String,
+    previous_message: Option<String>,
+    restoration: Option<Result<(), String>>,
+}
+
+impl StopNotice {
+    fn error(&self) -> String {
+        let confirmed =
+            self.ticket.owner.is_confirmed() || self.kind == StopNoticeKind::ConfirmedFailure;
+        let status = if confirmed {
+            match (&self.restoration, self.ticket.owner.generation) {
+                (Some(Err(_)), _) => "Recording stopped; window restoration failed",
+                (None, Some(_)) => "Recording stopped; window restoration is pending",
+                _ => "Recording stopped",
+            }
+        } else {
+            "Stop could not be confirmed"
+        };
+        let mut message = format!(
+            "{status} ({}): {}",
+            self.ticket.owner.directory.display(),
+            self.message
+        );
+        if let Some(previous) = &self.previous_message {
+            message.push_str("\n");
+            message.push_str(previous);
+        }
+        if let Some(Err(error)) = &self.restoration
+            && !self.message.contains(error)
+        {
+            message.push_str("\n");
+            message.push_str(error);
+        }
+        message
+    }
+}
+
 struct RestorationReceipt {
     generation: u32,
     result: Result<(), String>,
@@ -139,9 +217,13 @@ struct RestorationReceipt {
 }
 
 impl RestorationReceipt {
+    fn restoration_result(&self) -> Result<(), String> {
+        self.result.clone()
+    }
+
     #[cfg(target_os = "linux")]
     fn restart_result(&self) -> Result<(), String> {
-        self.result.clone()?;
+        self.restoration_result()?;
         if self.stop_requested {
             Err("Recording restart was cancelled by Stop".into())
         } else {
@@ -156,6 +238,8 @@ struct Inner {
     lease: Option<Lease>,
     control_error: Option<ControlError>,
     restored: Option<RestorationReceipt>,
+    stop_notice_sequence: u64,
+    stop_notice: Option<StopNotice>,
     #[cfg(target_os = "linux")]
     x11_cleanup_sequence: u64,
     #[cfg(target_os = "linux")]
@@ -276,11 +360,7 @@ impl Inner {
             return None;
         }
         let succeeded = result.is_ok();
-        self.restored = Some(RestorationReceipt {
-            generation,
-            result,
-            stop_requested: self.lease.as_ref().unwrap().stop_requested,
-        });
+        let _ = self.record_stop_restoration(generation, result);
         if succeeded {
             let owned = self.lease.take().unwrap().registered_shortcut;
             self.generation = self.generation.wrapping_add(1);
@@ -288,6 +368,108 @@ impl Inner {
         } else {
             None
         }
+    }
+
+    fn record_stop_restoration(&mut self, generation: u32, result: Result<(), String>) -> bool {
+        let Some(lease) = self
+            .lease
+            .as_ref()
+            .filter(|lease| lease.generation == generation && lease.phase == Phase::Restoring)
+        else {
+            return false;
+        };
+        if let Some(notice) = &mut self.stop_notice
+            && notice.ticket.owner.generation == Some(generation)
+            && lease.recording_dir.as_ref() == Some(&notice.ticket.owner.directory)
+        {
+            notice.restoration = Some(result.clone());
+        }
+        self.restored = Some(RestorationReceipt {
+            generation,
+            result,
+            #[cfg(target_os = "linux")]
+            stop_requested: lease.stop_requested,
+        });
+        true
+    }
+
+    fn next_stop_notice_sequence(&mut self) -> u64 {
+        self.stop_notice_sequence = self
+            .stop_notice_sequence
+            .checked_add(1)
+            .expect("Stop notice identity exhausted");
+        self.stop_notice_sequence
+    }
+
+    fn reserve_stop_notice_owner(
+        &mut self,
+        directory: PathBuf,
+        generation: Option<u32>,
+    ) -> StopNoticeOwner {
+        StopNoticeOwner {
+            sequence: self.next_stop_notice_sequence(),
+            directory,
+            generation,
+            confirmed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn reserve_stop_notice_ticket(&mut self, owner: StopNoticeOwner) -> StopNoticeTicket {
+        StopNoticeTicket {
+            sequence: self.next_stop_notice_sequence(),
+            owner,
+        }
+    }
+
+    fn retain_stop_notice(
+        &mut self,
+        ticket: &StopNoticeTicket,
+        kind: StopNoticeKind,
+        message: String,
+    ) -> bool {
+        if let Some(previous) = &mut self.stop_notice {
+            if previous.ticket.sequence == ticket.sequence
+                && previous.ticket.owner.same_attempt(&ticket.owner)
+            {
+                if previous.message == message
+                    || previous.previous_message.as_ref() == Some(&message)
+                {
+                    return false;
+                }
+                if kind == StopNoticeKind::ConfirmedFailure {
+                    previous.previous_message =
+                        Some(std::mem::replace(&mut previous.message, message));
+                    previous.kind = kind;
+                } else {
+                    previous.previous_message = Some(message);
+                }
+                tracing::info!(project = %ticket.owner.directory.display(), "Retained distinct failure from the same Stop cohort");
+                return true;
+            }
+            if (previous.ticket.owner.sequence, previous.ticket.sequence)
+                >= (ticket.owner.sequence, ticket.sequence)
+            {
+                return false;
+            }
+            tracing::info!(
+                previous_project = %previous.ticket.owner.directory.display(),
+                next_project = %ticket.owner.directory.display(),
+                "Retained Stop notice superseded by a newer failure"
+            );
+        }
+        let restoration = self
+            .restored
+            .as_ref()
+            .filter(|receipt| Some(receipt.generation) == ticket.owner.generation)
+            .map(RestorationReceipt::restoration_result);
+        self.stop_notice = Some(StopNotice {
+            ticket: ticket.clone(),
+            kind,
+            message,
+            previous_message: None,
+            restoration,
+        });
+        true
     }
 
     fn owner(&self, dir: &std::path::Path) -> Option<u32> {
@@ -360,6 +542,35 @@ impl Inner {
     }
 
     fn snapshot(&self) -> Snapshot {
+        let mut errors = Vec::with_capacity(4);
+        if let Some(error) = self.control_error.as_ref().filter(|error| {
+            error.generation == self.generation
+                && self
+                    .lease
+                    .as_ref()
+                    .is_none_or(|lease| lease.recording_dir.as_ref() == Some(&error.dir))
+        }) {
+            errors.push(error.message.clone());
+        }
+        for error in [
+            self.lease
+                .as_ref()
+                .and_then(|lease| lease.stop_error.clone()),
+            self.restored.as_ref().and_then(|receipt| {
+                self.lease
+                    .as_ref()
+                    .filter(|lease| lease.generation == receipt.generation)
+                    .and_then(|_| receipt.result.as_ref().err().cloned())
+            }),
+            self.stop_notice.as_ref().map(StopNotice::error),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !errors.contains(&error) {
+                errors.push(error);
+            }
+        }
         Snapshot {
             generation: self.generation,
             phase: self.lease.as_ref().map(|lease| lease.phase),
@@ -373,30 +584,7 @@ impl Inner {
                     }
                 })
             }),
-            error: self
-                .control_error
-                .as_ref()
-                .filter(|error| {
-                    error.generation == self.generation
-                        && self
-                            .lease
-                            .as_ref()
-                            .is_none_or(|lease| lease.recording_dir.as_ref() == Some(&error.dir))
-                })
-                .map(|error| error.message.clone())
-                .or_else(|| {
-                    self.lease
-                        .as_ref()
-                        .and_then(|lease| lease.stop_error.clone())
-                })
-                .or_else(|| {
-                    self.restored.as_ref().and_then(|receipt| {
-                        self.lease
-                            .as_ref()
-                            .filter(|lease| lease.generation == receipt.generation)
-                            .and_then(|_| receipt.result.as_ref().err().cloned())
-                    })
-                }),
+            error: (!errors.is_empty()).then(|| errors.join("\n")),
         }
     }
 
@@ -509,6 +697,51 @@ fn notify(app: &AppHandle) {
     let _ = CurrentRecordingChanged.emit(app);
 }
 
+pub(crate) fn reserve_stop_notice_owner(
+    app: &AppHandle,
+    directory: PathBuf,
+    generation: Option<u32>,
+) -> StopNoticeOwner {
+    app.state::<State>()
+        .inner
+        .lock()
+        .unwrap()
+        .reserve_stop_notice_owner(directory, generation)
+}
+
+pub(crate) fn reserve_stop_notice_ticket(
+    app: &AppHandle,
+    owner: StopNoticeOwner,
+) -> StopNoticeTicket {
+    app.state::<State>()
+        .inner
+        .lock()
+        .unwrap()
+        .reserve_stop_notice_ticket(owner)
+}
+
+pub(crate) fn retain_stop_notice(
+    app: &AppHandle,
+    ticket: &StopNoticeTicket,
+    kind: StopNoticeKind,
+    message: String,
+) {
+    let retained = app
+        .state::<State>()
+        .inner
+        .lock()
+        .unwrap()
+        .retain_stop_notice(ticket, kind, message);
+    if retained {
+        notify(app);
+    }
+}
+
+pub(crate) fn confirm_stop_notice(app: &AppHandle, owner: &StopNoticeOwner) {
+    owner.confirmed.store(true, Ordering::Release);
+    notify(app);
+}
+
 pub fn set_phase(app: &AppHandle, generation: u32, phase: Phase) -> bool {
     let state = app.state::<State>();
     let mut inner = state.inner.lock().unwrap();
@@ -563,6 +796,27 @@ pub fn queue_stop(app: &AppHandle) -> bool {
     drop(inner);
     notify(app);
     deferred
+}
+
+pub(crate) fn queue_owned_studio_stop(
+    app: &AppHandle,
+    generation: u32,
+    directory: &std::path::Path,
+) -> bool {
+    let state = app.state::<State>();
+    let mut inner = state.inner.lock().unwrap();
+    if inner.lease.as_ref().is_none_or(|lease| {
+        lease.generation != generation
+            || lease.mode != cap_recording::RecordingMode::Studio
+            || lease.recording_dir.as_deref() != Some(directory)
+            || !(lease.phase.can_stop() || lease.phase == Phase::Stopping)
+    }) {
+        return false;
+    }
+    let _ = inner.queue_stop();
+    drop(inner);
+    notify(app);
+    true
 }
 
 pub fn handle_shortcut(app: &AppHandle, pressed: bool) -> bool {
@@ -622,6 +876,21 @@ fn handle_stop_input(app: &AppHandle, pressed: bool, route: Option<(u32, StopRou
             .as_ref()
             .is_some_and(|lease| lease.phase != Phase::AwaitingShortcut);
     let handled = inner.shortcut(pressed);
+    let studio_stop = pressed
+        .then(|| {
+            inner.lease.as_ref().and_then(|lease| {
+                (lease.mode == cap_recording::RecordingMode::Studio
+                    && (lease.phase.can_stop() || lease.phase == Phase::Stopping))
+                    .then(|| {
+                        lease
+                            .recording_dir
+                            .clone()
+                            .map(|dir| (lease.generation, dir))
+                    })
+                    .flatten()
+            })
+        })
+        .flatten();
     let stop = handled
         && pressed
         && inner
@@ -634,7 +903,9 @@ fn handle_stop_input(app: &AppHandle, pressed: bool, route: Option<(u32, StopRou
     if handled {
         notify(app);
     }
-    if stop {
+    if let Some((generation, directory)) = studio_stop {
+        crate::recording::queue_clean_studio_stop(app, generation, directory);
+    } else if stop {
         let app = app.clone();
         drop(tauri::async_runtime::spawn(async move {
             if let Err(error) = crate::recording::stop_recording(app.clone(), app.state()).await {
@@ -876,7 +1147,13 @@ pub fn control(
             },
             restore: restore_paused_main(app, generation, dir.clone()),
             stop: async {
-                Box::pin(crate::recording::stop_recording(app.clone(), app.state())).await
+                Box::pin(crate::recording::stop_clean_studio_recording(
+                    app.clone(),
+                    handle.clone(),
+                    generation,
+                    dir.clone(),
+                ))
+                .await
             },
             notify: || notify(app),
         }
@@ -1760,6 +2037,29 @@ async fn restore_pass_acknowledged(
     scheduled && matches!(acknowledgement.await, Ok(Ok(())))
 }
 
+fn restore_saved_window(app: &AppHandle, saved: &SavedWindow) -> Result<(), String> {
+    let window = app.get_webview_window(&saved.label).ok_or_else(|| {
+        format!(
+            "Recording window {} disappeared before restoration",
+            saved.label
+        )
+    })?;
+    let visible = saved.visibility_for(native_id(&window)?).ok_or_else(|| {
+        format!(
+            "Recording window {} was replaced before restoration",
+            saved.label
+        )
+    })?;
+    set_native_visibility(&window, visible)?;
+    if window.is_visible().map_err(|error| error.to_string())? != visible {
+        return Err(format!(
+            "Recording window {} restoration was not acknowledged",
+            saved.label
+        ));
+    }
+    Ok(())
+}
+
 fn release_inner(
     app: &AppHandle,
     generation: u32,
@@ -1830,6 +2130,8 @@ fn release_inner(
     let app = app.clone();
     drop(tauri::async_runtime::spawn(async move {
         let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+        let restoration_error = Arc::new(Mutex::new(None::<String>));
+        let first_error = restoration_error.clone();
         let handle = app.clone();
         let scheduled = app.run_on_main_thread(move || {
             #[cfg(target_os = "linux")]
@@ -1860,15 +2162,10 @@ fn release_inner(
             };
             if let Some((saved, owned)) = saved {
                 crate::hotkeys::release_clean_capture_stop(&handle, owned);
-                if !editor_took_foreground
-                    && let Some(saved) = saved
-                    && let Some(window) = handle.get_webview_window(&saved.label)
-                    && let Some(visible) = native_id(&window)
-                        .ok()
-                        .and_then(|id| saved.visibility_for(id))
-                {
-                    let result = set_native_visibility(&window, visible);
+                if !editor_took_foreground && let Some(saved) = saved {
+                    let result = restore_saved_window(&handle, &saved);
                     if let Err(error) = result {
+                        *first_error.lock().unwrap() = Some(error.to_string());
                         tracing::warn!(%error, "Could not restore Main after recording");
                     }
                 }
@@ -1914,19 +2211,20 @@ fn release_inner(
                 {
                     continue;
                 }
-                if let Some(window) = handle.get_webview_window(&saved.label)
-                    && let Some(visible) = native_id(&window)
-                        .ok()
-                        .and_then(|id| saved.visibility_for(id))
-                {
-                    let result = set_native_visibility(&window, visible);
-                    if let Err(error) = result {
-                        tracing::warn!(%error, "Could not restore clean capture window");
-                    }
+                if let Err(error) = restore_saved_window(&handle, &saved) {
+                    restoration_error
+                        .lock()
+                        .unwrap()
+                        .get_or_insert_with(|| error.to_string());
+                    tracing::warn!(%error, "Could not restore clean capture window");
                 }
             }
             {
                 let mut inner = state.inner.lock().unwrap();
+                let result = restoration_error.lock().unwrap().take().map_or(Ok(()), Err);
+                if !inner.record_stop_restoration(generation, result) {
+                    return;
+                }
                 inner.lease = None;
                 inner.generation = inner.generation.wrapping_add(1);
             }
@@ -3708,11 +4006,7 @@ fn set_native_visibility(window: &WebviewWindow, visible: bool) -> Result<(), St
         // Tao queues GTK visibility changes even on the UI thread; this gate needs
         // the native change to complete before checking its acknowledgement.
         if visible {
-            if cap_recording::screenshot::uses_wayland_portal() {
-                gtk.show();
-            } else {
-                gtk.show_all();
-            }
+            gtk.show_all();
         } else {
             gtk.hide();
         }
@@ -3923,6 +4217,10 @@ pub(crate) fn wayland_stop_lost(app: &AppHandle, generation: u32, route: StopRou
         return;
     };
     let stop = lease.lose_stop_route(route);
+    let studio_stop = (lease.mode == cap_recording::RecordingMode::Studio
+        && (stop || lease.stop_requested && lease.phase == Phase::Stopping))
+        .then(|| lease.recording_dir.clone())
+        .flatten();
     if lease.stop_requested {
         lease.stop_error = Some(error);
     } else if route == StopRoute::Tray {
@@ -3930,7 +4228,9 @@ pub(crate) fn wayland_stop_lost(app: &AppHandle, generation: u32, route: StopRou
     }
     drop(inner);
     notify(app);
-    if stop {
+    if let Some(directory) = studio_stop {
+        crate::recording::queue_clean_studio_stop(app, generation, directory);
+    } else if stop {
         let app = app.clone();
         drop(tauri::async_runtime::spawn(async move {
             if let Err(error) = crate::recording::stop_recording(app.clone(), app.state()).await {
@@ -4241,7 +4541,7 @@ fn restore_wayland_windows(
             continue;
         }
         if wanted {
-            saved.window.show();
+            saved.window.show_all();
             if saved.requested_during_stop
                 && saved
                     .label

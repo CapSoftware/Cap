@@ -358,7 +358,7 @@ pub fn min_segment_duration(kind: TrackKind, secs_per_pixel: f64) -> f64 {
         TrackKind::Zoom => (1., 40.),
         TrackKind::Scene => (1., 80.),
         TrackKind::ThreeD => (1., 40.),
-        TrackKind::Text => (1., 80.),
+        TrackKind::Text | TrackKind::Style | TrackKind::Image => (1., 80.),
         TrackKind::Mask => (1., 80.),
         TrackKind::Audio => (0.5, 60.),
         TrackKind::Caption => (0.5, 40.),
@@ -512,6 +512,8 @@ impl_track_segment!(SceneSegment);
 impl_track_segment!(Camera3DSegment);
 impl_track_segment!(MaskSegment, lane: track);
 impl_track_segment!(TextSegment, lane: track);
+impl_track_segment!(cap_project::StyleSegment, lane: track);
+impl_track_segment!(cap_project::ImageSegment, lane: track);
 
 impl TrackSegmentOps for CaptionTrackSegment {
     fn start(&self) -> f64 {
@@ -705,6 +707,14 @@ macro_rules! with_track {
                 let $segments = &mut $timeline.camera3d_segments;
                 $body
             }
+            TrackKind::Style => {
+                let $segments = &mut $timeline.style_segments;
+                $body
+            }
+            TrackKind::Image => {
+                let $segments = &mut $timeline.image_segments;
+                $body
+            }
             TrackKind::Text => {
                 let $segments = &mut $timeline.text_segments;
                 $body
@@ -738,6 +748,8 @@ pub fn segment_count(timeline: &TimelineConfiguration, kind: TrackKind) -> usize
         TrackKind::Zoom => timeline.zoom_segments.len(),
         TrackKind::Scene => timeline.scene_segments.len(),
         TrackKind::ThreeD => timeline.camera3d_segments.len(),
+        TrackKind::Style => timeline.style_segments.len(),
+        TrackKind::Image => timeline.image_segments.len(),
         TrackKind::Text => timeline.text_segments.len(),
         TrackKind::Mask => timeline.mask_segments.len(),
         TrackKind::Audio => timeline.audio_segments.len(),
@@ -764,7 +776,9 @@ pub fn set_segment_start(
             return false;
         }
         segment.set_start(start);
-        sort_track(segments);
+        if !matches!(kind, TrackKind::Style | TrackKind::Image) {
+            sort_track(segments);
+        }
         true
     })
 }
@@ -784,7 +798,9 @@ pub fn set_segment_end(
             return false;
         }
         segment.set_end(end);
-        sort_track(segments);
+        if !matches!(kind, TrackKind::Style | TrackKind::Image) {
+            sort_track(segments);
+        }
         true
     })
 }
@@ -822,6 +838,20 @@ pub fn delete_segments(
     indices: &[usize],
 ) -> bool {
     match kind {
+        TrackKind::Image => {
+            let deleted = delete_indices(&mut timeline.image_segments, indices);
+            normalize_track(&mut timeline.image_segments, |segment, lane| {
+                segment.track = lane
+            });
+            deleted
+        }
+        TrackKind::Style => {
+            let deleted = delete_indices(&mut timeline.style_segments, indices);
+            normalize_track(&mut timeline.style_segments, |segment, lane| {
+                segment.track = lane
+            });
+            deleted
+        }
         TrackKind::Mask => {
             let deleted = delete_indices(&mut timeline.mask_segments, indices);
             normalize_track(&mut timeline.mask_segments, |segment, lane| {
@@ -874,6 +904,18 @@ pub fn delete_track_lane(timeline: &mut TimelineConfiguration, kind: TrackKind, 
         changed
     }
     match kind {
+        TrackKind::Style => apply(
+            &mut timeline.style_segments,
+            lane,
+            |segment| segment.track,
+            |segment, value| segment.track = value,
+        ),
+        TrackKind::Image => apply(
+            &mut timeline.image_segments,
+            lane,
+            |segment| segment.track,
+            |segment, value| segment.track = value,
+        ),
         TrackKind::Text => apply(
             &mut timeline.text_segments,
             lane,
@@ -1274,6 +1316,8 @@ pub fn ensure_timeline(project: &mut ProjectConfiguration, clip_display_duration
         keyboard_segments: Vec::new(),
         audio_segments: Vec::new(),
         camera3d_segments: Vec::new(),
+        style_segments: Vec::new(),
+        image_segments: Vec::new(),
     });
     true
 }
@@ -1694,6 +1738,18 @@ pub fn snap_split_time(
                 .iter()
                 .map(|segment| (segment.start, segment.end)),
         )
+        .chain(
+            timeline
+                .style_segments
+                .iter()
+                .map(|segment| (segment.start, segment.end)),
+        )
+        .chain(
+            timeline
+                .image_segments
+                .iter()
+                .map(|segment| (segment.start, segment.end)),
+        )
         .collect::<Vec<_>>()
     {
         consider(start);
@@ -1807,6 +1863,14 @@ pub fn set_clip_segment_timescale(
         )
     };
 
+    for segment in &mut timeline.style_segments {
+        segment.start += shift(segment.start);
+        segment.end += shift(segment.end);
+    }
+    for segment in &mut timeline.image_segments {
+        segment.start += shift(segment.start);
+        segment.end += shift(segment.end);
+    }
     for segment in &mut timeline.zoom_segments {
         segment.start += shift(segment.start);
         segment.end += shift(segment.end);
@@ -2809,5 +2873,206 @@ mod tests {
             0,
             ClipSpeedAudioMode::MaintainPitch
         ));
+    }
+}
+
+pub fn insert_style_segment(
+    timeline: &mut TimelineConfiguration,
+    segment: cap_project::StyleSegment,
+) -> usize {
+    let start = segment.start;
+    let track = segment.track;
+    timeline.style_segments.push(segment);
+    sort_lane_segments(&mut timeline.style_segments);
+    timeline
+        .style_segments
+        .iter()
+        .rposition(|item| item.start == start && item.track == track)
+        .unwrap_or(0)
+}
+
+pub fn insert_image_segment(
+    timeline: &mut TimelineConfiguration,
+    segment: cap_project::ImageSegment,
+) -> usize {
+    let start = segment.start;
+    let track = segment.track;
+    timeline.image_segments.push(segment);
+    sort_lane_segments(&mut timeline.image_segments);
+    timeline
+        .image_segments
+        .iter()
+        .rposition(|item| item.start == start && item.track == track)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod style_image_tests {
+    use super::*;
+
+    fn project() -> ProjectConfiguration {
+        serde_json::from_value(serde_json::json!({"timeline": {"zoomSegments":[],
+            "segments": [{"start":0,"end":20,"timescale":1}],
+            "styleSegments": [{"start":2,"end":8,"track":0,"name":"First"}, {"start":1,"end":6,"track":1,"name":"Second"}],
+            "imageSegments": [{"start":2,"end":8,"track":0,"path":"content/images/retained.png","rotation":35,"flipX":true}]
+        }})).unwrap()
+    }
+
+    #[test]
+    fn style_image_edit_split_delete_and_history_preserve_assets_and_overrides() {
+        let mut project = project();
+        let mut history = ProjectHistory::new(project.clone());
+        history.pause();
+        for kind in [TrackKind::Style, TrackKind::Image] {
+            let timeline = project.timeline.as_mut().unwrap();
+            assert!(move_segment(timeline, kind, 0, 3., 9.));
+            assert!(set_segment_start(timeline, kind, 0, 4.));
+            assert!(set_segment_end(timeline, kind, 0, 10.));
+            history.record(&project);
+        }
+        history.resume(&project);
+        assert_eq!(history.depth(), 2);
+        assert_eq!(
+            history
+                .undo()
+                .unwrap()
+                .timeline
+                .as_ref()
+                .unwrap()
+                .image_segments[0]
+                .start,
+            2.
+        );
+        project = history.redo().unwrap().clone();
+        let timeline = project.timeline.as_mut().unwrap();
+        for kind in [TrackKind::Style, TrackKind::Image] {
+            assert!(split_segment(timeline, kind, 0, 3.));
+            assert!(!split_segment(timeline, kind, 0, 0.1));
+        }
+        assert_eq!(timeline.style_segments[1].end, 10.);
+        assert_eq!(timeline.style_segments[2].name, "Second");
+        assert!(timeline.style_segments[0].overrides.background.is_none());
+        assert_eq!(
+            timeline.image_segments[1].path,
+            "content/images/retained.png"
+        );
+        assert_eq!(timeline.image_segments[1].rotation, 35.);
+        assert!(timeline.image_segments[1].flip_x);
+        history.record(&project);
+        assert!(delete_segments(
+            project.timeline.as_mut().unwrap(),
+            TrackKind::Image,
+            &[0, 1]
+        ));
+        history.record(&project);
+        let restored = history.undo().unwrap().timeline.as_ref().unwrap();
+        assert_eq!(restored.image_segments.len(), 2);
+        assert_eq!(
+            restored.image_segments[0].path,
+            "content/images/retained.png"
+        );
+    }
+
+    #[test]
+    fn style_image_trim_keeps_unsorted_loaded_indices_and_delete_normalizes_lanes() {
+        let mut project = project();
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.style_segments.swap(0, 1);
+        assert!(set_segment_start(timeline, TrackKind::Style, 0, 1.5));
+        assert_eq!(timeline.style_segments[0].name, "Second");
+        assert!(delete_track_lane(timeline, TrackKind::Style, 0));
+        assert_eq!(timeline.style_segments[0].track, 0);
+        assert_eq!(timeline.style_segments[0].name, "Second");
+    }
+
+    #[test]
+    fn style_image_speed_ripple_and_serialization_keep_both_tracks() {
+        let mut project = project();
+        let timeline = project.timeline.as_mut().unwrap();
+        assert!(set_clip_segment_timescale(timeline, 0, 2.));
+        assert_eq!(
+            (
+                timeline.style_segments[0].start,
+                timeline.style_segments[0].end
+            ),
+            (1., 4.)
+        );
+        assert_eq!(
+            (
+                timeline.image_segments[0].start,
+                timeline.image_segments[0].end
+            ),
+            (1., 4.)
+        );
+        let json = serde_json::to_value(&project).unwrap();
+        assert!(json["timeline"]["styleSegments"][0]["overrides"]["cameraOnlyPadding"].is_null());
+        assert_eq!(json["timeline"]["imageSegments"][0]["lockAspect"], true);
+        let restored: ProjectConfiguration = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            restored.timeline.unwrap().image_segments[0].path,
+            "content/images/retained.png"
+        );
+    }
+}
+
+pub(crate) fn replace_image_asset(
+    project: &mut ProjectConfiguration,
+    index: usize,
+    fingerprint: &str,
+    path: String,
+    name: String,
+) -> bool {
+    let Some(segment) = project
+        .timeline
+        .as_mut()
+        .and_then(|timeline| timeline.image_segments.get_mut(index))
+    else {
+        return false;
+    };
+    if serde_json::to_string(segment).ok().as_deref() != Some(fingerprint) {
+        return false;
+    }
+    segment.path = path;
+    segment.name = name;
+    true
+}
+
+#[cfg(test)]
+mod style_image_replacement_tests {
+    use super::*;
+    #[test]
+    fn style_image_replace_preserves_geometry_and_history_rejects_stale_target() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({"timeline":{"zoomSegments":[],"segments":[],"imageSegments":[{"start":2,"end":8,"track":3,"path":"content/images/old.png","name":"Old","center":{"x":0.3,"y":0.7},"size":{"x":0.2,"y":0.4},"rotation":35,"flipX":true,"opacity":0.6}]}})).unwrap();
+        let before = serde_json::to_value(&project).unwrap();
+        let mut history = ProjectHistory::new(project.clone());
+        let fingerprint =
+            serde_json::to_string(&project.timeline.as_ref().unwrap().image_segments[0]).unwrap();
+        assert!(replace_image_asset(
+            &mut project,
+            0,
+            &fingerprint,
+            "content/images/new.gif".into(),
+            "New".into()
+        ));
+        history.record(&project);
+        let mut expected = before.clone();
+        expected["timeline"]["imageSegments"][0]["path"] = "content/images/new.gif".into();
+        expected["timeline"]["imageSegments"][0]["name"] = "New".into();
+        assert_eq!(serde_json::to_value(&project).unwrap(), expected);
+        assert!(!replace_image_asset(
+            &mut project,
+            0,
+            &fingerprint,
+            "stale.png".into(),
+            "Stale".into()
+        ));
+        assert_eq!(
+            serde_json::to_value(history.undo().unwrap()).unwrap(),
+            before
+        );
+        assert_eq!(
+            serde_json::to_value(history.redo().unwrap()).unwrap(),
+            expected
+        );
     }
 }

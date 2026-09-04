@@ -27,6 +27,8 @@ mod editor_color;
 mod editor_crop;
 mod editor_edits;
 mod editor_export;
+#[cfg(target_os = "linux")]
+mod editor_modal;
 mod editor_panels;
 mod editor_sidebar;
 mod editor_tabs;
@@ -142,27 +144,18 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
             .unwrap_or_else(|_| "cap_gpui=info".into())
     };
 
-    let logs_dir = diagnostics::logs_dir();
-    let file = match std::fs::create_dir_all(&logs_dir) {
-        Ok(()) => {
-            let (writer, guard) = tracing_appender::non_blocking(tracing_appender::rolling::daily(
-                &logs_dir,
-                diagnostics::LOG_FILE_PREFIX,
-            ));
-            Some((
+    let file = create_log_appender(&diagnostics::logs_dir(), diagnostics::LOG_FILE_PREFIX).map(
+        |appender| {
+            let (writer, guard) = tracing_appender::non_blocking(appender);
+            (
                 tracing_subscriber::fmt::layer()
                     .with_ansi(false)
                     .with_writer(writer)
                     .with_filter(filter()),
                 guard,
-            ))
-        }
-        Err(error) => {
-            // A log file is a nice-to-have; losing it must never stop the app.
-            eprintln!("failed to create the logs directory {logs_dir:?}: {error}");
-            None
-        }
-    };
+            )
+        },
+    );
     let (file_layer, guard) = match file {
         Some((layer, guard)) => (Some(layer), Some(guard)),
         None => (None, None),
@@ -173,6 +166,29 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
         .with(file_layer)
         .init();
     guard
+}
+
+fn create_log_appender(
+    directory: &std::path::Path,
+    prefix: &str,
+) -> Option<tracing_appender::rolling::RollingFileAppender> {
+    use std::io::Write;
+
+    match tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix(prefix)
+        .build(directory)
+    {
+        Ok(appender) => Some(appender),
+        Err(error) => {
+            let _ = writeln!(
+                std::io::stderr(),
+                "Could not open {prefix} in {}: {error}; console logging remains enabled",
+                directory.display()
+            );
+            None
+        }
+    }
 }
 
 fn main() {
@@ -209,6 +225,12 @@ fn main() {
     // registered on the builder -- gpui exposes it nowhere else -- with the
     // handler guarding against firing before the window registry exists.
     app.on_reopen(crate::app_windows::handle_dock_reopen);
+    #[cfg(target_os = "macos")]
+    app.on_open_urls(|urls| {
+        for url in urls {
+            crate::deeplink::submit_deep_link(&url);
+        }
+    });
     app.run(|cx: &mut App| {
         gpui_tokio::init(cx);
         // The dock icon: an unbundled dev binary shows the generic terminal
@@ -398,6 +420,9 @@ fn main() {
                 platform::apply_panel_behavior(
                     window,
                     platform::PanelBehavior {
+                        #[cfg(target_os = "macos")]
+                        level: objc2_app_kit::NSFloatingWindowLevel,
+                        #[cfg(not(target_os = "macos"))]
                         level: platform::MAIN_WINDOW_LEVEL,
                         join_all_spaces: true,
                         shadow: true,
@@ -616,4 +641,72 @@ fn main() {
             cx.activate(true);
         }
     });
+}
+
+#[cfg(test)]
+mod logging_tests {
+    use super::create_log_appender;
+    use std::{io::Write, path::PathBuf};
+
+    struct LogDirectory(PathBuf);
+
+    impl LogDirectory {
+        fn new() -> Self {
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let directory = std::env::temp_dir()
+                .join(format!("cap-gpui-logging-{}-{nonce}", std::process::id()));
+            std::fs::create_dir_all(&directory).unwrap();
+            Self(directory)
+        }
+    }
+
+    impl Drop for LogDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn healthy_log_destination_preserves_existing_records() {
+        let directory = LogDirectory::new();
+        let destination = directory.0.join("nested");
+        for record in ["first\n", "second\n"] {
+            let mut appender = create_log_appender(&destination, "cap.log").unwrap();
+            appender.write_all(record.as_bytes()).unwrap();
+            appender.flush().unwrap();
+        }
+        let records: String = std::fs::read_dir(destination)
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
+        assert!(records.contains("first\n"));
+        assert!(records.contains("second\n"));
+    }
+
+    #[test]
+    fn unavailable_log_directory_disables_only_file_logging() {
+        let directory = LogDirectory::new();
+        let destination = directory.0.join("blocked");
+        std::fs::write(&destination, "existing file").unwrap();
+        assert!(create_log_appender(&destination, "cap.log").is_none());
+        assert_eq!(
+            std::fs::read_to_string(destination).unwrap(),
+            "existing file"
+        );
+    }
+
+    #[test]
+    fn unavailable_daily_log_file_disables_only_file_logging() {
+        let directory = LogDirectory::new();
+        let today = chrono::Utc::now().date_naive();
+        for days in [-1, 0, 1] {
+            let date = today + chrono::Duration::days(days);
+            std::fs::create_dir(directory.0.join(format!("cap.log.{date}"))).unwrap();
+        }
+        assert!(create_log_appender(&directory.0, "cap.log").is_none());
+        assert!(create_log_appender(&directory.0, "other.log").is_some());
+    }
 }

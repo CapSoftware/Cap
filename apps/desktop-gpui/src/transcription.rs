@@ -314,7 +314,9 @@ fn delete_model_files(model: &str) -> Result<(), String> {
         invalidate_parakeet_cache_for_dir(&path);
         std::fs::remove_dir_all(&path).map_err(|e| format!("Failed to delete model directory: {e}"))
     } else {
-        std::fs::remove_file(&path).map_err(|e| format!("Failed to delete model file: {e}"))
+        std::fs::remove_file(&path).map_err(|e| format!("Failed to delete model file: {e}"))?;
+        invalidate_whisper_cache_for_path(&path);
+        Ok(())
     }
 }
 
@@ -769,9 +771,27 @@ struct CachedWhisperContext {
 static WHISPER_CONTEXT: LazyLock<Mutex<Option<CachedWhisperContext>>> =
     LazyLock::new(|| Mutex::new(None));
 
+fn invalidate_whisper_cache_for_path(model_path: &Path) {
+    let removed = {
+        let mut guard = WHISPER_CONTEXT
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if guard
+            .as_ref()
+            .is_some_and(|cached| Path::new(&cached.model_path) == model_path)
+        {
+            guard.take()
+        } else {
+            None
+        }
+    };
+    drop(removed);
+}
+
 /// `get_whisper_context_blocking` (`captions.rs:691-707`), keyed by model path
 /// so switching small -> medium reloads instead of reusing the stale context.
 fn get_whisper_context(model_path: &str) -> Result<Arc<WhisperContext>, String> {
+    cap_utils::local_captions::ensure_whisper_cpu_support()?;
     let mut guard = WHISPER_CONTEXT
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -1497,6 +1517,7 @@ fn process_with_parakeet(
         model
     } else {
         tracing::info!("Loading Parakeet TDT model from: {model_dir}");
+        cap_camera_effects::initialize_onnx_runtime().map_err(|error| format!("{error:#}"))?;
         let model = ParakeetTDT::from_pretrained(model_dir, None).map_err(|e| format!("{e}"))?;
         let loaded_model = Arc::new(Mutex::new(model));
 
@@ -2298,6 +2319,8 @@ pub fn apply_caption_result(
             keyboard_segments: Vec::new(),
             audio_segments: Vec::new(),
             camera3d_segments: Vec::new(),
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
         });
     }
     let timeline = project

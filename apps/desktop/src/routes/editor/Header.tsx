@@ -92,14 +92,14 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 	return (
 		<div
 			data-tauri-drag-region
-			class="flex relative flex-row items-center w-full h-14"
+			class="flex relative shrink-0 flex-row items-center w-full h-14 max-[900px]:grid max-[900px]:grid-cols-[minmax(0,1fr)_auto] max-[900px]:grid-rows-[36px_36px] max-[900px]:h-[72px]"
 		>
 			<div
 				data-tauri-drag-region
-				class={cx("flex flex-row flex-1 gap-2 items-center px-4 h-full")}
+				class="flex flex-row flex-1 min-w-0 gap-2 items-center px-4 h-full max-[1200px]:gap-1 max-[1200px]:px-2"
 			>
-				{ostype() === "macos" && <div class="h-full w-16" />}
-				{ostype() === "linux" && <CaptionControlsMacOS class="mr-1" />}
+				{ostype() === "macos" && <div class="h-full w-16 shrink-0" />}
+				{ostype() === "linux" && <CaptionControlsMacOS class="mr-1 shrink-0" />}
 				<EditorButton
 					onClick={async () => {
 						clearTimelineSelection();
@@ -123,21 +123,24 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 					leftIcon={<IconLucideFolder class="w-5" />}
 				/>
 
-				<div class="flex flex-row items-center">
+				<div class="flex min-w-0 flex-row items-center">
 					<NameEditor
 						name={meta().prettyName}
 						registerTitleSave={props.registerTitleSave}
 						readOnly={titleReadOnly()}
 						setReadOnly={setTitleReadOnly}
 					/>
-					<span class="text-sm text-gray-11">.cap</span>
+					<span class="shrink-0 text-sm text-gray-11">.cap</span>
 				</div>
 				<div data-tauri-drag-region class="flex-1 h-full" />
 			</div>
 
 			<div
 				data-tauri-drag-region
-				class="flex flex-row items-center justify-center gap-2 px-4 border-x border-black-transparent-10"
+				class={cx(
+					"flex shrink-0 flex-row items-center justify-center gap-2 px-4 border-x border-black-transparent-10 max-[1200px]:gap-1 max-[1200px]:px-2",
+					ostype() === "windows" && "max-[900px]:pr-[146px]",
+				)}
 			>
 				<PresetsDropdown />
 				<OrganizationDropdown />
@@ -146,7 +149,7 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 			<div
 				data-tauri-drag-region
 				class={cx(
-					"flex-1 h-full flex flex-row items-center gap-2 pl-2",
+					"flex-1 min-w-max h-full flex flex-row items-center gap-2 pl-2 max-[1200px]:flex-none max-[1200px]:gap-1 max-[900px]:col-span-2 max-[900px]:justify-end",
 					ostype() !== "windows" && "pr-2",
 				)}
 			>
@@ -180,7 +183,9 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 				</Show>
 				<Button
 					variant={isClipsOpen() ? "white" : "gray"}
-					class="flex gap-1.5 justify-center h-[40px]"
+					class="flex shrink-0 gap-1.5 justify-center h-[40px] max-[900px]:h-8"
+					title="Clips"
+					aria-label="Clips"
 					onClick={() => {
 						clearTimelineSelection();
 						if (isClipsOpen()) {
@@ -191,12 +196,14 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 					}}
 				>
 					<IconCapClapperboard class="size-4" />
-					Clips
+					<span class="max-[1200px]:hidden">Clips</span>
 				</Button>
 				<Show when={hasTranscript()}>
 					<Button
 						variant={isTranscriptOpen() ? "white" : "gray"}
-						class="flex gap-1.5 justify-center h-[40px]"
+						class="flex shrink-0 gap-1.5 justify-center h-[40px] max-[900px]:h-8"
+						title={isTranscriptOpen() ? "Back to editor" : "Captions"}
+						aria-label={isTranscriptOpen() ? "Back to editor" : "Captions"}
 						onClick={() => {
 							clearTimelineSelection();
 							if (isTranscriptOpen()) {
@@ -212,13 +219,15 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 						>
 							<IconLucideArrowLeft class="size-4" />
 						</Show>
-						{isTranscriptOpen() ? "Back" : "Captions"}
+						<span class="max-[1200px]:hidden">
+							{isTranscriptOpen() ? "Back" : "Captions"}
+						</span>
 					</Button>
 				</Show>
 				<button
 					type="button"
 					class={cx(
-						"flex gap-1.5 justify-center items-center px-4 w-full h-[40px] max-w-[100px] text-[0.8125rem] font-medium text-white rounded-xl outline-hidden",
+						"flex shrink-0 gap-1.5 justify-center items-center px-4 w-[100px] h-[40px] max-[900px]:h-8 text-[0.8125rem] font-medium text-white rounded-xl outline-hidden",
 						"bg-linear-to-b from-[#3b82f6] to-[#2563eb]",
 						"shadow-[0_4px_14px_-6px_rgba(37,99,235,0.5),inset_0_1px_0_0_rgba(255,255,255,0.22)]",
 						"transition-[box-shadow,filter] duration-200 ease-out",
@@ -237,8 +246,10 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 					<UploadIcon class="size-4" />
 					Export
 				</button>
-				{ostype() === "windows" && <CaptionControlsWindows11 />}
 			</div>
+			{ostype() === "windows" && (
+				<CaptionControlsWindows11 class="shrink-0 max-[900px]:absolute max-[900px]:right-0 max-[900px]:top-0 max-[900px]:h-9" />
+			)}
 		</div>
 	);
 }
@@ -327,8 +338,8 @@ function NameEditor(props: {
 	);
 
 	return (
-		<Tooltip disabled={!truncated()} content={props.name}>
-			<div class="flex relative flex-row items-center text-sm font-normal font-inherit tracking-inherit text-gray-12">
+		<Tooltip content={props.name} childClass="min-w-0">
+			<div class="flex min-w-0 relative flex-row items-center text-sm font-normal font-inherit tracking-inherit text-gray-12">
 				<input
 					ref={prettyNameRef}
 					class={cx(

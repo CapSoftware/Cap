@@ -306,6 +306,69 @@ fn linux_camera_recording_snapshot(
 mod frame {
     use cidre::{arc, cf, cv, vt};
 
+    type CreateRotationSession = unsafe extern "C-unwind" fn(
+        Option<&cf::Allocator>,
+        *mut Option<arc::R<vt::PixelRotationSession>>,
+    ) -> cidre::os::Status;
+    type RotateImage = unsafe extern "C-unwind" fn(
+        &vt::PixelRotationSession,
+        &cv::PixelBuf,
+        &mut cv::PixelBuf,
+    ) -> cidre::os::Status;
+
+    struct FlipSession {
+        session: arc::R<vt::PixelRotationSession>,
+        rotate_image: RotateImage,
+    }
+
+    impl FlipSession {
+        fn new() -> Option<Self> {
+            // These APIs are macOS 13+. Direct cidre calls create strong imports that
+            // make dyld terminate the entire app on macOS 12 before any OS guard runs.
+            let create = unsafe {
+                libc::dlsym(libc::RTLD_DEFAULT, c"VTPixelRotationSessionCreate".as_ptr())
+            };
+            let rotate = unsafe {
+                libc::dlsym(
+                    libc::RTLD_DEFAULT,
+                    c"VTPixelRotationSessionRotateImage".as_ptr(),
+                )
+            };
+            let key = unsafe {
+                libc::dlsym(
+                    libc::RTLD_DEFAULT,
+                    c"kVTPixelRotationPropertyKey_FlipHorizontalOrientation".as_ptr(),
+                )
+            };
+            if create.is_null() || rotate.is_null() || key.is_null() {
+                return None;
+            }
+            let create =
+                unsafe { std::mem::transmute::<*mut libc::c_void, CreateRotationSession>(create) };
+            let rotate_image =
+                unsafe { std::mem::transmute::<*mut libc::c_void, RotateImage>(rotate) };
+            let key = unsafe { key.cast::<*const cf::String>().read().as_ref()? };
+            let mut session = None;
+            unsafe { create(None, &mut session).result().ok()? };
+            let mut session = session?;
+            session
+                .set_prop(key, Some(cf::Boolean::value_true().as_ref()))
+                .ok()?;
+            Some(Self {
+                session,
+                rotate_image,
+            })
+        }
+
+        fn rotate(
+            &self,
+            source: &cv::PixelBuf,
+            destination: &mut cv::PixelBuf,
+        ) -> cidre::os::Result {
+            unsafe { (self.rotate_image)(&self.session, source, destination).result() }
+        }
+    }
+
     /// A converted preview frame: the BGRA IOSurface pixel buffer to paint or
     /// blur, its dimensions, and the ring generation (bumped on every ring
     /// rebuild so the blur worker's imported-texture cache can never alias a
@@ -314,6 +377,7 @@ mod frame {
         pub buffer: arc::R<cv::PixelBuf>,
         pub dims: (usize, usize),
         pub generation: u64,
+        pub mirrored: bool,
     }
 
     /// Converts camera frames (typically `420v`) into BGRA IOSurface-backed
@@ -342,7 +406,7 @@ mod frame {
         session: arc::R<vt::PixelTransferSession>,
         /// `None` when unmirrored, or when the rotation session could not be
         /// created (the preview then degrades to unmirrored, logged once).
-        flip_session: Option<arc::R<vt::PixelRotationSession>>,
+        flip_session: Option<FlipSession>,
         ring: Vec<arc::R<cv::PixelBuf>>,
         mirror_ring: Vec<arc::R<cv::PixelBuf>>,
         next: usize,
@@ -402,11 +466,7 @@ mod frame {
             session.set_realtime(true).ok()?;
 
             let flip_session = if mirrored {
-                let flip = vt::PixelRotationSession::new()
-                    .ok()
-                    .and_then(|mut session| {
-                        session.set_horizontal_flip(true).ok().map(|_| session)
-                    });
+                let flip = FlipSession::new();
                 if flip.is_none() {
                     tracing::warn!(
                         "VTPixelRotationSession unavailable; camera preview mirroring disabled"
@@ -464,8 +524,14 @@ mod frame {
             converter.session.transfer(src, &dst).ok()?;
             let out = if let Some(flip) = &converter.flip_session {
                 let mut flipped = converter.mirror_ring[converter.next].clone();
-                flip.rotate(&dst, &mut flipped).ok()?;
-                flipped
+                match flip.rotate(&dst, &mut flipped) {
+                    Ok(()) => flipped,
+                    Err(error) => {
+                        tracing::warn!(?error, "camera preview mirroring failed");
+                        converter.flip_session = None;
+                        dst
+                    }
+                }
             } else {
                 dst
             };
@@ -474,6 +540,7 @@ mod frame {
                 buffer: out,
                 dims: converter.dst_dims,
                 generation: converter.generation,
+                mirrored: converter.flip_session.is_some(),
             })
         }
     }
@@ -640,6 +707,127 @@ fn camera_issue(error: &str) -> (&'static str, &'static str) {
     ("Camera unavailable", message)
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct PreviewEffectFailures {
+    mirror: bool,
+    blur: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl PreviewEffectFailures {
+    fn issue(self) -> Option<(&'static str, &'static str)> {
+        match (self.mirror, self.blur) {
+            (false, false) => None,
+            (true, false) => Some(("Mirror unavailable", "Your camera preview is not mirrored.")),
+            (false, true) => Some(("Background blur unavailable", "Your camera is unblurred.")),
+            (true, true) => Some((
+                "Camera effects unavailable",
+                "Your camera is unblurred and not mirrored.",
+            )),
+        }
+    }
+
+    fn reset_changed(&mut self, before: CameraWindowState, after: CameraWindowState) {
+        if before.mirrored != after.mirrored {
+            self.mirror = false;
+        }
+        if before.background_blur != after.background_blur {
+            self.blur = false;
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod preview_effect_failure_tests {
+    use super::*;
+
+    #[test]
+    fn each_failed_effect_has_explicit_feedback() {
+        assert!(PreviewEffectFailures::default().issue().is_none());
+        assert!(
+            PreviewEffectFailures {
+                mirror: true,
+                blur: false
+            }
+            .issue()
+            .unwrap()
+            .1
+            .contains("not mirrored")
+        );
+        assert!(
+            PreviewEffectFailures {
+                mirror: false,
+                blur: true
+            }
+            .issue()
+            .unwrap()
+            .1
+            .contains("unblurred")
+        );
+        assert!(
+            PreviewEffectFailures {
+                mirror: true,
+                blur: true
+            }
+            .issue()
+            .unwrap()
+            .1
+            .contains("unblurred and not mirrored")
+        );
+    }
+
+    #[test]
+    fn unrelated_changes_preserve_failure_and_requested_recording_blur() {
+        let before = CameraWindowState {
+            mirrored: true,
+            background_blur: BlurMode::Heavy,
+            ..Default::default()
+        };
+        let after = CameraWindowState {
+            size: 400.,
+            ..before
+        };
+        let mut failures = PreviewEffectFailures {
+            mirror: true,
+            blur: true,
+        };
+        failures.reset_changed(before, after);
+        assert!(failures.mirror && failures.blur);
+        assert_eq!(after.background_blur, BlurMode::Heavy);
+    }
+
+    #[test]
+    fn toggle_retry_resets_only_the_changed_effect() {
+        let before = CameraWindowState {
+            mirrored: true,
+            background_blur: BlurMode::Heavy,
+            ..Default::default()
+        };
+        let mut failures = PreviewEffectFailures {
+            mirror: true,
+            blur: true,
+        };
+        failures.reset_changed(
+            before,
+            CameraWindowState {
+                mirrored: false,
+                ..before
+            },
+        );
+        assert!(!failures.mirror && failures.blur);
+        failures.reset_changed(
+            before,
+            CameraWindowState {
+                background_blur: BlurMode::Off,
+                ..before
+            },
+        );
+        assert!(!failures.mirror && !failures.blur);
+        assert!(failures.issue().is_none());
+    }
+}
+
 /// The per-frame half of the window: owns the latest converted (or blurred)
 /// frame and is the only entity notified at camera rate. Chrome invalidation
 /// goes through the parent [`CameraWindow`] instead, so a frame draw reuses
@@ -662,6 +850,7 @@ struct CameraPreviewView {
     /// ~20Hz whenever a microphone is selected, and each of those would
     /// repaint the whole preview for a message that did not change.
     camera_error: Option<String>,
+    effect_issue: Option<(&'static str, &'static str)>,
     _feeds_subscription: Subscription,
 }
 
@@ -693,6 +882,7 @@ impl CameraPreviewView {
             frame_dims: None,
             paints,
             camera_error,
+            effect_issue: None,
             _feeds_subscription: feeds_subscription,
         }
     }
@@ -807,8 +997,12 @@ impl Render for CameraPreviewView {
         // the preview with a centred, size-scaled title + message. The
         // `backdrop-blur-xs` behind it has no per-element hook in this gpui
         // rev (the recording overlay documents the same gap).
-        if let Some(error) = self.camera_error.clone() {
-            let (title, message) = camera_issue(&error);
+        if let Some((title, message)) = self
+            .camera_error
+            .as_deref()
+            .map(camera_issue)
+            .or(self.effect_issue)
+        {
             let metrics = overlay_metrics(self.size);
             container = container.child(
                 div()
@@ -912,11 +1106,8 @@ pub struct CameraWindow {
     converter: Option<frame::FrameConverter>,
     #[cfg(target_os = "macos")]
     blur: Option<BlurBridge>,
-    /// Latched when the worker dies (device/ONNX bring-up failed); cleared
-    /// when the blur mode changes, which is the retry point -- the
-    /// `blur_processor_init_attempted` shape (`camera.rs:1500-1518`).
     #[cfg(target_os = "macos")]
-    blur_failed: bool,
+    effect_failures: PreviewEffectFailures,
     preview: Entity<CameraPreviewView>,
     toolbar: Entity<CameraToolbarView>,
     frame_dims: Option<(usize, usize)>,
@@ -984,7 +1175,13 @@ impl CameraWindow {
             platform::ForcedAppearance::Dark,
             cx.foreground_executor(),
         );
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
+        platform::apply_window_theme_deferred(
+            window,
+            platform::ForcedAppearance::Dark,
+            cx.foreground_executor(),
+        );
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         platform::apply_window_theme(window, platform::ForcedAppearance::Dark);
         let theme = Theme::dark();
         let state = store::load().camera_window.unwrap_or_default();
@@ -1024,7 +1221,7 @@ impl CameraWindow {
             #[cfg(target_os = "macos")]
             blur: None,
             #[cfg(target_os = "macos")]
-            blur_failed: false,
+            effect_failures: PreviewEffectFailures::default(),
             preview,
             toolbar,
             frame_dims: None,
@@ -1103,6 +1300,10 @@ impl CameraWindow {
             use core_foundation::base::TCFType as _;
             use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 
+            let failures_before = self.effect_failures;
+            if self.state.background_blur != BlurMode::Off && camera_blur::is_low_spec_preview() {
+                self.effect_failures.blur = true;
+            }
             let blur_mode = self.active_blur_mode();
             let max_dims = blur_mode.is_some().then_some(camera_blur::BLUR_MAX_DIMS);
             if let Some(converted) = frame::FrameConverter::convert(
@@ -1111,6 +1312,7 @@ impl CameraWindow {
                 max_dims,
                 self.state.mirrored,
             ) {
+                self.effect_failures.mirror = self.state.mirrored && !converted.mirrored;
                 let first_frame = self.frame_dims.is_none();
                 let dims = converted.dims;
                 let dims_changed = self.frame_dims != Some(dims);
@@ -1140,7 +1342,7 @@ impl CameraWindow {
                                 "camera blur worker unavailable; preview continues unblurred"
                             );
                             self.blur = None;
-                            self.blur_failed = true;
+                            self.effect_failures.blur = true;
                             paint_raw = true;
                         }
                     }
@@ -1162,6 +1364,9 @@ impl CameraWindow {
                 }
             } else if self.frame_dims.is_none() && self.frames_in_window == 0 {
                 tracing::warn!("camera frame could not be converted for preview");
+            }
+            if failures_before != self.effect_failures {
+                self.sync_effect_feedback(cx);
             }
         }
         #[cfg(not(target_os = "macos"))]
@@ -1205,13 +1410,21 @@ impl CameraWindow {
         }
     }
 
-    /// The blur mode frames should be processed with right now: `None` when
-    /// off, latched off after a worker failure, and always `None` on low-spec
-    /// machines (`ensure_blur_processor`'s early return, `camera.rs:1491-1498`
-    /// -- the toggle still cycles and persists there too).
+    #[cfg(target_os = "macos")]
+    fn sync_effect_feedback(&self, cx: &mut Context<Self>) {
+        let issue = self.effect_failures.issue();
+        self.preview.update(cx, |preview, cx| {
+            if preview.effect_issue != issue {
+                preview.effect_issue = issue;
+                cx.notify();
+            }
+        });
+        cx.notify();
+    }
+
     #[cfg(target_os = "macos")]
     fn active_blur_mode(&self) -> Option<cap_camera_effects::BlurMode> {
-        if self.blur_failed || camera_blur::is_low_spec_preview() {
+        if self.effect_failures.blur || camera_blur::is_low_spec_preview() {
             return None;
         }
         match self.state.background_blur {
@@ -1317,7 +1530,7 @@ impl CameraWindow {
         mutate: impl FnOnce(&mut CameraWindowState),
     ) {
         #[cfg(target_os = "macos")]
-        let blur_before = self.state.background_blur;
+        let before = self.state;
         self.picker_size = None;
         mutate(&mut self.state);
         self.state.size = clamp_size(self.state.size);
@@ -1327,11 +1540,11 @@ impl CameraWindow {
         });
         #[cfg(target_os = "macos")]
         {
-            if self.state.background_blur != blur_before {
-                // Changing the mode is the retry point after a failed
-                // bring-up.
-                self.blur_failed = false;
+            self.effect_failures.reset_changed(before, self.state);
+            if before.mirrored != self.state.mirrored {
+                self.converter = None;
             }
+            self.sync_effect_feedback(cx);
             if self.state.background_blur == BlurMode::Off {
                 // Ends the worker thread, dropping the ONNX session and every
                 // GPU texture -- `release_blur_resources`
@@ -1550,6 +1763,10 @@ impl CameraWindow {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let scale = self.toolbar_scale();
+        #[cfg(target_os = "macos")]
+        let (mirror_failed, blur_failed) = (self.effect_failures.mirror, self.effect_failures.blur);
+        #[cfg(not(target_os = "macos"))]
+        let (mirror_failed, blur_failed) = (false, false);
         let shape_icon = match self.state.shape {
             CameraShape::Round => "icons/circle.svg",
             CameraShape::Square => "icons/square.svg",
@@ -1627,9 +1844,9 @@ impl CameraWindow {
                     .child(self.toolbar_button(
                         "mirror",
                         "icons/arrows.svg",
-                        self.state.mirrored,
+                        self.state.mirrored && !mirror_failed,
                         scale,
-                        None,
+                        mirror_failed.then_some("!"),
                         cx,
                         |this, window, cx| {
                             this.mutate_state(window, cx, |state| {
@@ -1640,9 +1857,13 @@ impl CameraWindow {
                     .child(self.toolbar_button(
                         "blur",
                         "icons/person-standing.svg",
-                        self.state.background_blur != BlurMode::Off,
+                        self.state.background_blur != BlurMode::Off && !blur_failed,
                         scale,
-                        self.state.background_blur.label(),
+                        if blur_failed {
+                            Some("!")
+                        } else {
+                            self.state.background_blur.label()
+                        },
                         cx,
                         |this, window, cx| {
                             this.mutate_state(window, cx, |state| {

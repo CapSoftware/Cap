@@ -15,6 +15,443 @@
 /// auto-hide reveal, below context menus.
 pub const MAIN_WINDOW_LEVEL: isize = 100;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(any(target_os = "linux", test))]
+pub(crate) enum LinuxFileDialogError {
+    Busy,
+    BeforeDispatch(String),
+    NativeResponse(String),
+    Indeterminate(String),
+    RestartRequired,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl LinuxFileDialogError {
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Self::Busy => "A file dialog is already open. Finish or cancel it before trying again.".into(),
+            Self::BeforeDispatch(error) | Self::NativeResponse(error) => format!("The file dialog could not complete: {error}"),
+            Self::Indeterminate(_) | Self::RestartRequired => "Cap could not confirm that the file dialog closed. Close any remaining file dialog and restart Cap before trying again.".into(),
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+type LinuxFileDialogResult = Result<Option<std::path::PathBuf>, LinuxFileDialogError>;
+
+#[cfg(any(target_os = "linux", test))]
+struct FileDialogPermit<'a> {
+    active: &'a std::sync::atomic::AtomicU8,
+    completed: bool,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl<'a> FileDialogPermit<'a> {
+    fn acquire(active: &'a std::sync::atomic::AtomicU8) -> Result<Self, LinuxFileDialogError> {
+        match active.compare_exchange(
+            0,
+            1,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        ) {
+            Ok(_) => Ok(Self {
+                active,
+                completed: false,
+            }),
+            Err(2) => Err(LinuxFileDialogError::RestartRequired),
+            Err(_) => Err(LinuxFileDialogError::Busy),
+        }
+    }
+
+    fn allow_reuse(&mut self) {
+        self.completed = true;
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl Drop for FileDialogPermit<'_> {
+    fn drop(&mut self) {
+        if self.completed {
+            let _ = self.active.compare_exchange(
+                1,
+                0,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            );
+        } else {
+            self.active.store(2, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+async fn complete_file_dialog(
+    mut permit: FileDialogPermit<'_>,
+    dialog: impl std::future::Future<Output = LinuxFileDialogResult>,
+    sender: flume::Sender<LinuxFileDialogResult>,
+) {
+    let result = dialog.await;
+    if !matches!(result, Err(LinuxFileDialogError::Indeterminate(_))) {
+        permit.allow_reuse();
+    }
+    drop(permit);
+    let _ = sender.send(result);
+}
+
+#[cfg(target_os = "linux")]
+enum LinuxFileDialogParent {
+    Wayland(wayland_client::protocol::wl_surface::WlSurface),
+    X11(std::os::raw::c_ulong),
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxFileDialogParent {
+    fn from_window(window: &gpui::Window) -> Option<Self> {
+        if let Some(surface) = window.wayland_surface() {
+            return Some(Self::Wayland(surface));
+        }
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+            RawWindowHandle::Xlib(handle) => Some(Self::X11(handle.window)),
+            RawWindowHandle::Xcb(handle) => Some(Self::X11(handle.window.get().into())),
+            _ => None,
+        }
+    }
+
+    async fn identifier(self) -> Option<ashpd::WindowIdentifier> {
+        match self {
+            Self::Wayland(surface) => {
+                use wayland_client::Proxy;
+                if !surface.is_alive() {
+                    return None;
+                }
+                ashpd::WindowIdentifier::from_wayland(&surface).await
+            }
+            Self::X11(id) => Some(ashpd::WindowIdentifier::from_xid(id)),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn run_linux_file_dialog<F, Fut>(
+    cx: &mut gpui::AsyncApp,
+    owner: Option<(gpui::AnyWindowHandle, gpui::EntityId)>,
+    parent: Option<LinuxFileDialogParent>,
+    dialog: F,
+) -> LinuxFileDialogResult
+where
+    F: FnOnce(Option<ashpd::WindowIdentifier>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = LinuxFileDialogResult> + Send + 'static,
+{
+    static ACTIVE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+    let permit = FileDialogPermit::acquire(&ACTIVE)?;
+    let (ready_sender, ready_receiver) = flume::bounded(1);
+    let (approval_sender, approval_receiver) = flume::bounded(1);
+    let (sender, receiver) = flume::bounded(1);
+    // ashpd does not close dispatched requests on drop; retain the worker and
+    // admission through a native response, or disable reuse when closure is unknown.
+    gpui_tokio::Tokio::spawn(
+        cx,
+        complete_file_dialog(
+            permit,
+            async move {
+                use futures_util::{FutureExt, StreamExt};
+                let connection = ashpd::zbus::Connection::session()
+                    .await
+                    .map_err(|error| LinuxFileDialogError::BeforeDispatch(error.to_string()))?;
+                let proxy = ashpd::zbus::fdo::DBusProxy::new(&connection)
+                    .await
+                    .map_err(|error| LinuxFileDialogError::BeforeDispatch(error.to_string()))?;
+                let mut owner_changes = proxy
+                    .receive_name_owner_changed_with_args(&[(0, "org.freedesktop.portal.Desktop")])
+                    .await
+                    .map_err(|error| LinuxFileDialogError::BeforeDispatch(error.to_string()))?;
+                let identifier = match parent {
+                    Some(parent) => parent.identifier().await,
+                    None => None,
+                };
+                if ready_sender.send(()).is_err()
+                    || approval_receiver.recv_async().await != Ok(true)
+                {
+                    return Ok(None);
+                }
+                while let Some(change) = owner_changes.next().now_or_never() {
+                    let Some(change) = change else {
+                        return Err(LinuxFileDialogError::BeforeDispatch(
+                            "The desktop portal connection closed.".into(),
+                        ));
+                    };
+                    match change.args() {
+                        Ok(args) if args.old_owner().is_some() => {
+                            return Err(LinuxFileDialogError::BeforeDispatch(
+                                "The desktop portal restarted before the dialog could open.".into(),
+                            ));
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            return Err(LinuxFileDialogError::BeforeDispatch(error.to_string()));
+                        }
+                    }
+                }
+                let owner_lost = async {
+                    loop {
+                        let Some(change) = owner_changes.next().await else {
+                            return "The desktop portal connection closed.".to_owned();
+                        };
+                        match change.args() {
+                            Ok(args) if args.old_owner().is_some() => {
+                                return "The desktop portal restarted while the dialog was open."
+                                    .to_owned();
+                            }
+                            Ok(_) => {}
+                            Err(error) => return error.to_string(),
+                        }
+                    }
+                };
+                tokio::select! {
+                    biased;
+                    result = dialog(identifier) => result,
+                    error = owner_lost => Err(LinuxFileDialogError::Indeterminate(error)),
+                }
+            },
+            sender,
+        ),
+    )
+    .detach();
+    if ready_receiver.recv_async().await.is_ok() {
+        let owner_exists = owner.is_none_or(|(owner, expected_root)| {
+            cx.update(|cx| {
+                owner
+                    .update(cx, |root, _, _| root.entity_id() == expected_root)
+                    .unwrap_or(false)
+            })
+        });
+        let _ = approval_sender.send(owner_exists);
+    }
+    match receiver.recv_async().await {
+        Ok(result) => result,
+        Err(error) => {
+            ACTIVE.store(2, std::sync::atomic::Ordering::Release);
+            Err(LinuxFileDialogError::Indeterminate(error.to_string()))
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn portal_file_response(
+    request: ashpd::desktop::Request<ashpd::desktop::file_chooser::SelectedFiles>,
+) -> LinuxFileDialogResult {
+    match request.response() {
+        Ok(response) => response
+            .uris()
+            .first()
+            .map(|uri| {
+                uri.to_file_path().map_err(|()| {
+                    LinuxFileDialogError::NativeResponse(
+                        "The selected location is not a local file.".into(),
+                    )
+                })
+            })
+            .transpose(),
+        Err(ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)) => Ok(None),
+        Err(error) => Err(LinuxFileDialogError::NativeResponse(error.to_string())),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn portal_filters(filters: &[(&str, &[&str])]) -> Vec<ashpd::desktop::file_chooser::FileFilter> {
+    filters
+        .iter()
+        .map(|(name, extensions)| {
+            extensions.iter().fold(
+                ashpd::desktop::file_chooser::FileFilter::new(*name),
+                |filter, extension| {
+                    if extension.is_empty() || *extension == "*" {
+                        filter.glob("*")
+                    } else {
+                        filter.glob(&format!("*.{extension}"))
+                    }
+                },
+            )
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+async fn linux_open_file_panel(
+    filters: &[(&str, &[&str])],
+    directory: Option<std::path::PathBuf>,
+    owner: Option<(gpui::AnyWindowHandle, gpui::EntityId)>,
+    parent: Option<LinuxFileDialogParent>,
+    cx: &mut gpui::AsyncApp,
+) -> LinuxFileDialogResult {
+    let filters = portal_filters(filters);
+    run_linux_file_dialog(cx, owner, parent, move |identifier| async move {
+        let request = ashpd::desktop::file_chooser::OpenFileRequest::default()
+            .identifier(identifier)
+            .multiple(false)
+            .filters(filters)
+            .current_folder::<&std::path::PathBuf>(directory.as_ref())
+            .map_err(|error| LinuxFileDialogError::BeforeDispatch(error.to_string()))?
+            .send()
+            .await
+            .map_err(|error| LinuxFileDialogError::Indeterminate(error.to_string()))?;
+        portal_file_response(request)
+    })
+    .await
+}
+
+#[cfg(target_os = "linux")]
+async fn linux_save_file_panel(
+    suggested: &str,
+    extensions: &[&str],
+    owner: Option<(gpui::AnyWindowHandle, gpui::EntityId)>,
+    parent: Option<LinuxFileDialogParent>,
+    cx: &mut gpui::AsyncApp,
+) -> LinuxFileDialogResult {
+    let name = suggested.to_owned();
+    let filters = if extensions.is_empty() {
+        Vec::new()
+    } else {
+        portal_filters(&[("Export", extensions)])
+    };
+    run_linux_file_dialog(cx, owner, parent, move |identifier| async move {
+        let request = ashpd::desktop::file_chooser::SaveFileRequest::default()
+            .identifier(identifier)
+            .current_name(name.as_str())
+            .filters(filters)
+            .send()
+            .await
+            .map_err(|error| LinuxFileDialogError::Indeterminate(error.to_string()))?;
+        portal_file_response(request)
+    })
+    .await
+}
+
+#[cfg(target_os = "linux")]
+async fn finish_linux_file_dialog(
+    result: LinuxFileDialogResult,
+    owner: Option<(gpui::AnyWindowHandle, gpui::EntityId)>,
+    cx: &mut gpui::AsyncApp,
+) -> Option<std::path::PathBuf> {
+    match result {
+        Ok(path) => path.filter(|_| {
+            owner.is_none_or(|(owner, expected_root)| {
+                cx.update(|cx| {
+                    owner
+                        .update(cx, |root, _, _| root.entity_id() == expected_root)
+                        .unwrap_or(false)
+                })
+            })
+        }),
+        Err(error) => {
+            tracing::error!(?error, "native file dialog failed");
+            let message = error.message();
+            let response = cx.update(|cx| {
+                let (owner, expected_root) = owner?;
+                owner
+                    .update(cx, |root, window, cx| {
+                        if root.entity_id() != expected_root {
+                            return None;
+                        }
+                        Some(crate::editor_modal::informational_alert(
+                            "File dialog unavailable",
+                            &message,
+                            window,
+                            cx,
+                        ))
+                    })
+                    .ok()
+                    .flatten()
+            });
+            if let Some(response) = response {
+                let _ = response.await;
+            }
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn open_file_panel_async(
+    filters: &[(&str, &[&str])],
+    directory: Option<std::path::PathBuf>,
+    cx: &mut gpui::AsyncWindowContext,
+) -> Option<std::path::PathBuf> {
+    let (owner, parent) = cx
+        .update_root(|root, window, _| {
+            (
+                (window.window_handle(), root.entity_id()),
+                LinuxFileDialogParent::from_window(window),
+            )
+        })
+        .ok()?;
+    let result = linux_open_file_panel(filters, directory, Some(owner), parent, cx).await;
+    finish_linux_file_dialog(result, Some(owner), cx).await
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn open_file_panel_from_app_async(
+    filters: &[(&str, &[&str])],
+    cx: &mut gpui::AsyncApp,
+) -> Option<std::path::PathBuf> {
+    let captured = cx.update(|cx| {
+        let handle = if let Some(handle) = cx.active_window() {
+            handle
+        } else {
+            if !cx.has_global::<crate::app_windows::AppWindows>()
+                || crate::session::RecordingSession::global(cx).read(cx).phase
+                    != crate::session::Phase::Idle
+            {
+                return None;
+            }
+            let windows = cx.global::<crate::app_windows::AppWindows>();
+            if windows.main_hidden_for_picker || !windows.overlays.is_empty() {
+                return None;
+            }
+            let main = windows.main;
+            main.update(cx, |_, _, _| ()).ok()?;
+            crate::app_windows::show_main_window(cx);
+            main.into()
+        };
+        handle
+            .update(cx, |root, window, _| {
+                (
+                    (window.window_handle(), root.entity_id()),
+                    LinuxFileDialogParent::from_window(window),
+                )
+            })
+            .ok()
+    });
+    let (owner, parent) = captured?;
+    let result = linux_open_file_panel(filters, None, Some(owner), parent, cx).await;
+    finish_linux_file_dialog(result, Some(owner), cx).await
+}
+
+pub(crate) async fn save_file_panel_async(
+    suggested: &str,
+    extensions: &[&str],
+    _cx: &mut gpui::AsyncWindowContext,
+) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        let (owner, parent) = _cx
+            .update_root(|root, window, _| {
+                (
+                    (window.window_handle(), root.entity_id()),
+                    LinuxFileDialogParent::from_window(window),
+                )
+            })
+            .ok()?;
+        let result = linux_save_file_panel(suggested, extensions, Some(owner), parent, _cx).await;
+        finish_linux_file_dialog(result, Some(owner), _cx).await
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        save_file_panel(suggested, extensions)
+    }
+}
+
 #[cfg(any(target_os = "macos", test))]
 struct DockActivationTiming {
     last_show: std::time::Instant,
@@ -228,13 +665,30 @@ mod mac {
     }
 
     pub fn apply_window_theme(window: &Window, appearance: ForcedAppearance) {
+        if let Some(native) = native_window(window) {
+            apply_native_window_theme(&native, appearance);
+        }
+    }
+
+    pub fn apply_window_theme_deferred(
+        window: &Window,
+        appearance: ForcedAppearance,
+        executor: &gpui::ForegroundExecutor,
+    ) {
+        let Some(native) = native_window(window) else {
+            return;
+        };
+        // AppKit synchronously invokes GPUI's appearance callback from setAppearance.
+        executor
+            .spawn(async move { apply_native_window_theme(&native, appearance) })
+            .detach();
+    }
+
+    fn apply_native_window_theme(native: &NativeWindow, appearance: ForcedAppearance) {
         use objc2_app_kit::{
             NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
         };
 
-        let Some(ns) = ns_window(window) else {
-            return;
-        };
         let named = match appearance {
             ForcedAppearance::System => None,
             ForcedAppearance::Light => {
@@ -245,7 +699,7 @@ mod mac {
             }
         };
         unsafe {
-            NSAppearanceCustomization::setAppearance(&*ns, named.as_deref());
+            NSAppearanceCustomization::setAppearance(&*native.0, named.as_deref());
         }
     }
 
@@ -642,7 +1096,10 @@ mod mac {
         apply_fullscreen_overlay_behavior(ns_window);
         // `.shadow(false)` in the Tauri builder.
         ns_window.setHasShadow(false);
-        unsafe { ns_window.orderFrontRegardless() };
+        unsafe {
+            ns_window.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
+            ns_window.orderFrontRegardless();
+        }
     }
 
     /// The window's raw AppKit frame (bottom-left origin). The dev-restore
@@ -1934,14 +2391,6 @@ mod stub {
 
     pub fn install_url_scheme_handler() {}
 
-    pub fn save_file_panel(suggested: &str, extensions: &[&str]) -> Option<std::path::PathBuf> {
-        let mut dialog = rfd::FileDialog::new().set_file_name(suggested);
-        if !extensions.is_empty() {
-            dialog = dialog.add_filter("Export", extensions);
-        }
-        dialog.save_file()
-    }
-
     pub fn copy_file_to_clipboard(path: &std::path::Path, cx: &gpui::App) -> Result<(), String> {
         let path = super::clipboard_file_path(path)?;
         cx.try_write_to_clipboard(
@@ -2091,6 +2540,126 @@ mod tests {
         assert!(!super::confirmation_accepted(
             rfd::MessageDialogResult::Yes,
             accept
+        ));
+    }
+}
+
+#[cfg(test)]
+mod file_dialog_tests {
+    use super::*;
+    use std::{
+        future::Future,
+        sync::atomic::AtomicU8,
+        task::{Context, Poll, Waker},
+    };
+
+    #[test]
+    fn active_native_dialog_rejects_repeated_requests() {
+        let active = AtomicU8::new(0);
+        let mut permit = FileDialogPermit::acquire(&active).unwrap();
+        assert!(matches!(
+            FileDialogPermit::acquire(&active),
+            Err(LinuxFileDialogError::Busy)
+        ));
+        permit.allow_reuse();
+        drop(permit);
+        assert!(FileDialogPermit::acquire(&active).is_ok());
+    }
+
+    fn complete(result: LinuxFileDialogResult) -> (AtomicU8, LinuxFileDialogResult) {
+        let active = AtomicU8::new(0);
+        let permit = FileDialogPermit::acquire(&active).unwrap();
+        let (sender, receiver) = flume::bounded(1);
+        {
+            let mut future = Box::pin(complete_file_dialog(permit, async { result }, sender));
+            let mut cx = Context::from_waker(Waker::noop());
+            assert_eq!(future.as_mut().poll(&mut cx), Poll::Ready(()));
+        }
+        (active, receiver.recv().unwrap())
+    }
+
+    #[test]
+    fn cancel_releases_admission_before_delivering_result() {
+        let (active, result) = complete(Ok(None));
+        assert_eq!(result, Ok(None));
+        assert!(FileDialogPermit::acquire(&active).is_ok());
+    }
+
+    #[test]
+    fn accept_releases_admission_before_delivering_path() {
+        let path = std::path::PathBuf::from("accepted.mp4");
+        let (active, result) = complete(Ok(Some(path.clone())));
+        assert_eq!(result, Ok(Some(path)));
+        assert!(FileDialogPermit::acquire(&active).is_ok());
+    }
+
+    #[test]
+    fn before_dispatch_failure_allows_retry() {
+        let error = LinuxFileDialogError::BeforeDispatch("invalid folder".into());
+        let (active, result) = complete(Err(error.clone()));
+        assert_eq!(result, Err(error));
+        assert!(FileDialogPermit::acquire(&active).is_ok());
+    }
+
+    #[test]
+    fn terminal_native_error_allows_retry() {
+        let error = LinuxFileDialogError::NativeResponse("rejected by portal".into());
+        let (active, result) = complete(Err(error.clone()));
+        assert_eq!(result, Err(error));
+        assert!(FileDialogPermit::acquire(&active).is_ok());
+    }
+
+    #[test]
+    fn ambiguous_dispatch_failure_requires_restart() {
+        let error = LinuxFileDialogError::Indeterminate("response stream lost".into());
+        let (active, result) = complete(Err(error.clone()));
+        assert_eq!(result, Err(error));
+        assert!(matches!(
+            FileDialogPermit::acquire(&active),
+            Err(LinuxFileDialogError::RestartRequired)
+        ));
+        assert!(
+            LinuxFileDialogError::RestartRequired
+                .message()
+                .contains("restart Cap")
+        );
+    }
+
+    #[test]
+    fn caller_drop_retains_admission_until_native_response() {
+        let active = AtomicU8::new(0);
+        let permit = FileDialogPermit::acquire(&active).unwrap();
+        let (native_sender, native_receiver) = flume::bounded(1);
+        let (sender, receiver) = flume::bounded(1);
+        let mut future = Box::pin(complete_file_dialog(
+            permit,
+            async move { native_receiver.recv_async().await.unwrap() },
+            sender,
+        ));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        drop(receiver);
+        assert!(matches!(
+            FileDialogPermit::acquire(&active),
+            Err(LinuxFileDialogError::Busy)
+        ));
+        native_sender.send(Ok(None)).unwrap();
+        assert_eq!(future.as_mut().poll(&mut cx), Poll::Ready(()));
+        assert!(FileDialogPermit::acquire(&active).is_ok());
+    }
+
+    #[test]
+    fn unexpected_worker_drop_does_not_reopen_admission() {
+        let active = AtomicU8::new(0);
+        let permit = FileDialogPermit::acquire(&active).unwrap();
+        let (sender, _receiver) = flume::bounded(1);
+        let mut future = Box::pin(complete_file_dialog(permit, std::future::pending(), sender));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        drop(future);
+        assert!(matches!(
+            FileDialogPermit::acquire(&active),
+            Err(LinuxFileDialogError::RestartRequired)
         ));
     }
 }

@@ -11,7 +11,9 @@ use crate::{
     capture_pipeline::{
         MakeCapturePipeline, ScreenCaptureMethod, Stop, target_to_display_and_crop,
     },
-    cursor::{CursorActor, Cursors, IncrementalCaptureOutputs, spawn_cursor_recorder},
+    cursor::{
+        CursorActor, CursorActorResponse, Cursors, IncrementalCaptureOutputs, spawn_cursor_recorder,
+    },
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer},
     output_pipeline::{
@@ -108,6 +110,47 @@ fn studio_capture_stopped(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.downcast_ref::<StudioCaptureStoppedError>().is_some())
+}
+
+fn accumulate_finalization_error(failure: &mut Option<anyhow::Error>, result: anyhow::Result<()>) {
+    if let Err(error) = result {
+        *failure = Some(match failure.take() {
+            Some(previous) => previous.context(format!("{error:#}")),
+            None => error,
+        });
+    }
+}
+
+fn persist_segment_input_events(
+    response: CursorActorResponse,
+    cursor_path: Option<&Path>,
+    keyboard_path: Option<&Path>,
+    failure: &mut Option<anyhow::Error>,
+) -> (Cursors, u32) {
+    if let Some(path) = cursor_path {
+        let result = serde_json::to_string_pretty(&CursorEvents {
+            clicks: response.clicks,
+            moves: response.moves,
+        })
+        .map_err(anyhow::Error::from)
+        .and_then(|events| std::fs::write(path, events).map_err(anyhow::Error::from))
+        .with_context(|| format!("Could not save cursor events to {}", path.display()));
+        accumulate_finalization_error(failure, result);
+    }
+
+    if !response.keyboard_presses.is_empty()
+        && let Some(path) = keyboard_path
+    {
+        let result = KeyboardEvents {
+            presses: response.keyboard_presses,
+        }
+        .write_to_file(path)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("Could not save keyboard events to {}", path.display()));
+        accumulate_finalization_error(failure, result);
+    }
+
+    (response.cursors, response.next_cursor_id)
 }
 
 fn minimum_segment_stop_deadline(discard: bool, segment_start: Instant) -> Option<Instant> {
@@ -358,9 +401,10 @@ impl Actor {
         let stopped = stopped.map_err(|error| self.preserve_windows_stop_failure(error));
         let PipelineStopOutcome {
             mut pipeline,
-            media_error,
+            mut media_error,
             all_tracks_stopped,
         } = stopped?;
+        self.all_tracks_stopped &= all_tracks_stopped;
 
         tracing::info!("pipeline shutdown");
 
@@ -388,27 +432,12 @@ impl Actor {
             None
         };
         let cursors = if let Some((cursor, res)) = cursor_result {
-            if let Some(output_path) = cursor.output_path.as_ref() {
-                std::fs::write(
-                    output_path,
-                    serde_json::to_string_pretty(&CursorEvents {
-                        clicks: res.clicks,
-                        moves: res.moves,
-                    })?,
-                )?;
-            }
-
-            if !res.keyboard_presses.is_empty()
-                && let Some(keyboard_output_path) = cursor.keyboard_output_path.as_ref()
-            {
-                KeyboardEvents {
-                    presses: res.keyboard_presses,
-                }
-                .write_to_file(keyboard_output_path)
-                .map_err(anyhow::Error::msg)?;
-            }
-
-            (res.cursors, res.next_cursor_id)
+            persist_segment_input_events(
+                res,
+                cursor.output_path.as_deref(),
+                cursor.keyboard_output_path.as_deref(),
+                &mut media_error,
+            )
         } else {
             (Default::default(), 0)
         };
@@ -423,8 +452,6 @@ impl Actor {
             camera_device_id,
             mic_device_id,
         });
-        self.all_tracks_stopped &= all_tracks_stopped;
-
         if let Some(error) = media_error {
             if self.all_tracks_stopped {
                 return Err(anyhow::Error::new(StudioCaptureStoppedError::new(error)));
@@ -2497,6 +2524,8 @@ async fn stop_recording(
             transitions: Vec::new(),
             zoom_segments: Vec::new(),
             scene_segments: Vec::new(),
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
             mask_segments: Vec::new(),
             text_segments: Vec::new(),
             caption_segments: Vec::new(),
@@ -3221,6 +3250,134 @@ mod tests {
         AudioMuxer, AudioSource, ChannelAudioSource, ChannelAudioSourceConfig, ChannelVideoSource,
         ChannelVideoSourceConfig, Muxer, SetupCtx, TaskPool, VideoFrame, VideoMuxer,
     };
+
+    fn sidecar_response() -> CursorActorResponse {
+        CursorActorResponse {
+            cursors: [(
+                42,
+                crate::cursor::Cursor {
+                    file_name: "cursor.png".into(),
+                    id: 7,
+                    hotspot: cap_project::XY { x: 0.25, y: 0.75 },
+                    shape: None,
+                },
+            )]
+            .into(),
+            next_cursor_id: 8,
+            moves: Vec::new(),
+            clicks: Vec::new(),
+            keyboard_presses: vec![cap_project::KeyPressEvent {
+                key: "a".into(),
+                key_code: "KeyA".into(),
+                time_ms: 125.0,
+                down: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn sidecar_cursor_failure_still_saves_keyboard_and_keeps_cursor_registry() {
+        let temp = tempfile::tempdir().unwrap();
+        let keyboard = temp.path().join("keyboard.bin");
+        let response = sidecar_response();
+        let expected_keys = response.keyboard_presses.clone();
+        let mut failure = None;
+        let (cursors, next_id) = persist_segment_input_events(
+            response,
+            Some(temp.path()),
+            Some(&keyboard),
+            &mut failure,
+        );
+
+        assert!(format!("{:#}", failure.unwrap()).contains("Could not save cursor events"));
+        assert_eq!(
+            KeyboardEvents::load_from_file(&keyboard).unwrap().presses,
+            expected_keys
+        );
+        assert_eq!(cursors.get(&42).unwrap().id, 7);
+        assert_eq!(next_id, 8);
+    }
+
+    #[test]
+    fn sidecar_keyboard_failure_preserves_cursor_file_and_media_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let cursor = temp.path().join("cursor.json");
+        let mut failure = Some(anyhow!("encoder media failed"));
+        persist_segment_input_events(
+            sidecar_response(),
+            Some(&cursor),
+            Some(temp.path()),
+            &mut failure,
+        );
+
+        let saved: CursorEvents = serde_json::from_slice(&std::fs::read(cursor).unwrap()).unwrap();
+        assert!(saved.clicks.is_empty() && saved.moves.is_empty());
+        let error = format!("{:#}", failure.unwrap());
+        assert!(error.contains("Could not save keyboard events"));
+        assert!(error.contains("encoder media failed"));
+    }
+
+    #[test]
+    fn sidecar_failures_aggregate_without_losing_disk_full_or_stop_acknowledgement() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut failure = Some(anyhow::Error::from(std::io::Error::from_raw_os_error(
+            libc::ENOSPC,
+        )));
+        persist_segment_input_events(
+            sidecar_response(),
+            Some(temp.path()),
+            Some(temp.path()),
+            &mut failure,
+        );
+        let error = anyhow::Error::new(StudioCaptureStoppedError::new(failure.unwrap()));
+        assert!(studio_capture_stopped(&error));
+        let message = format!("{error:#}");
+        assert!(message.contains("Could not save cursor events"));
+        assert!(message.contains("Could not save keyboard events"));
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.raw_os_error() == Some(libc::ENOSPC))
+        }));
+    }
+
+    #[test]
+    fn sidecar_success_preserves_existing_json_and_keyboard_formats() {
+        let temp = tempfile::tempdir().unwrap();
+        let cursor = temp.path().join("cursor.json");
+        let keyboard = temp.path().join("keyboard.bin");
+        let response = sidecar_response();
+        let expected_cursor = serde_json::to_string_pretty(&CursorEvents {
+            moves: response.moves.clone(),
+            clicks: response.clicks.clone(),
+        })
+        .unwrap();
+        let expected_keyboard = temp.path().join("expected.bin");
+        KeyboardEvents {
+            presses: response.keyboard_presses.clone(),
+        }
+        .write_to_file(&expected_keyboard)
+        .unwrap();
+        let mut failure = None;
+        persist_segment_input_events(response, Some(&cursor), Some(&keyboard), &mut failure);
+        assert!(failure.is_none());
+        assert_eq!(std::fs::read_to_string(cursor).unwrap(), expected_cursor);
+        assert_eq!(
+            std::fs::read(keyboard).unwrap(),
+            std::fs::read(expected_keyboard).unwrap()
+        );
+    }
+
+    #[test]
+    fn sidecar_disabled_paths_and_empty_keyboard_do_not_write_or_clear_failures() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut response = sidecar_response();
+        response.keyboard_presses.clear();
+        let mut failure = Some(anyhow!("retained media error"));
+        persist_segment_input_events(response, None, Some(temp.path()), &mut failure);
+        assert_eq!(failure.unwrap().to_string(), "retained media error");
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
 
     #[test]
     fn media_failure_requires_every_producer_stop_to_be_confirmed() {

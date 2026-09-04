@@ -447,6 +447,7 @@ pub enum CanvasSelection {
     Camera,
     Mask(usize),
     Text(usize),
+    Image(usize),
 }
 
 impl CanvasSelection {
@@ -456,6 +457,7 @@ impl CanvasSelection {
             Self::Camera => "Camera".into(),
             Self::Mask(_) => "Mask".into(),
             Self::Text(_) => "Text".into(),
+            Self::Image(_) => "Image".into(),
         }
     }
 
@@ -465,6 +467,7 @@ impl CanvasSelection {
             Self::Camera => "canvas-camera".into(),
             Self::Mask(index) => format!("canvas-mask-{index}").into(),
             Self::Text(index) => format!("canvas-text-{index}").into(),
+            Self::Image(index) => format!("canvas-image-{index}").into(),
         }
     }
 
@@ -472,6 +475,7 @@ impl CanvasSelection {
         match self {
             Self::Mask(index) => Some((TrackKind::Mask, index)),
             Self::Text(index) => Some((TrackKind::Text, index)),
+            Self::Image(index) => Some((TrackKind::Image, index)),
             _ => None,
         }
     }
@@ -597,6 +601,24 @@ impl EditorWindow {
         }
         let t = self.preview_or_playhead();
         if let Some(timeline) = self.project.timeline.as_ref() {
+            for (index, segment) in timeline.image_segments.iter().enumerate() {
+                if exclude == CanvasSelection::Image(index)
+                    || !segment.is_active_at(t)
+                    || segment.opacity <= 0.
+                {
+                    continue;
+                }
+                if let Some(rect) = self.element_rect(CanvasSelection::Image(index)) {
+                    rects.push(image_axis_bounds(
+                        rect,
+                        (
+                            f64::from(layout.output_size[0]),
+                            f64::from(layout.output_size[1]),
+                        ),
+                        f64::from(segment.rotation),
+                    ));
+                }
+            }
             for (index, segment) in timeline.text_segments.iter().enumerate() {
                 if exclude == CanvasSelection::Text(index) {
                     continue;
@@ -651,12 +673,17 @@ impl EditorWindow {
                 cx,
             );
         } else if self.canvas_selection != Some(element) {
+            if self.selected_style_index().is_none() {
+                self.set_selection(None, cx);
+            }
             self.canvas_selection = Some(element);
-            self.set_selection(None, cx);
         }
         let draggable = match element {
             CanvasSelection::Display => self.display_draggable(),
-            CanvasSelection::Camera | CanvasSelection::Mask(_) | CanvasSelection::Text(_) => true,
+            CanvasSelection::Camera
+            | CanvasSelection::Mask(_)
+            | CanvasSelection::Text(_)
+            | CanvasSelection::Image(_) => true,
         };
         if !draggable {
             cx.notify();
@@ -690,7 +717,7 @@ impl EditorWindow {
         let resizable = match element {
             CanvasSelection::Display => self.display_draggable(),
             CanvasSelection::Camera => self.camera_resizable(),
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) => true,
+            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => true,
         };
         if !resizable {
             return;
@@ -702,8 +729,10 @@ impl EditorWindow {
                 cx,
             );
         } else if self.canvas_selection != Some(element) {
+            if self.selected_style_index().is_none() {
+                self.set_selection(None, cx);
+            }
             self.canvas_selection = Some(element);
-            self.set_selection(None, cx);
         }
         let Some(rect) = self.element_rect(element) else {
             return;
@@ -711,8 +740,12 @@ impl EditorWindow {
         let Some(layout) = self.frame_layout else {
             return;
         };
+        let effective = self
+            .project
+            .style_at(self.preview_or_playhead())
+            .into_owned();
         let (max_width, padding_scale) =
-            display_resize_scales(rect, &layout, self.project.aspect_ratio.is_some());
+            display_resize_scales(rect, &layout, effective.aspect_ratio.is_some());
         self.history.pause();
         self.canvas_drag = Some(CanvasDrag {
             element,
@@ -725,9 +758,9 @@ impl EditorWindow {
                 dir_y,
                 output_width: f64::from(layout.output_size[0]),
                 output_height: f64::from(layout.output_size[1]),
-                camera_manual: self.project.camera.manual_position,
-                camera_x: self.project.camera.position.x.clone(),
-                camera_y: self.project.camera.position.y.clone(),
+                camera_manual: effective.camera.manual_position,
+                camera_x: effective.camera.position.x.clone(),
+                camera_y: effective.camera.position.y.clone(),
                 max_width,
                 padding_scale,
             }),
@@ -820,10 +853,17 @@ impl EditorWindow {
                     );
                     self.snap_guides = guides;
                     self.canvas_drag_rect = Some(rect);
-                    if (self.project.background.padding - padding).abs() > 1e-6 {
-                        self.project.background.padding = padding;
-                        self.project_changed_live(cx);
-                    }
+                    self.write_canvas_style(
+                        crate::editor_sidebar::StyleGroup::Background,
+                        |project| {
+                            if (project.background.padding - padding).abs() <= 1e-6 {
+                                return false;
+                            }
+                            project.background.padding = padding;
+                            true
+                        },
+                        cx,
+                    );
                 }
                 CanvasSelection::Camera => {
                     let (rect, size_pct, guides) = camera_resize_rect(
@@ -841,14 +881,42 @@ impl EditorWindow {
                     );
                     self.snap_guides = guides;
                     self.canvas_drag_camera_rect = Some(rect);
-                    if (f64::from(self.project.camera.size) - size_pct).abs() > 1e-6 {
-                        self.project.camera.size = size_pct as f32;
-                        self.project_changed_live(cx);
-                    }
+                    self.write_canvas_style(
+                        crate::editor_sidebar::StyleGroup::Camera,
+                        |project| {
+                            if (f64::from(project.camera.size) - size_pct).abs() <= 1e-6 {
+                                return false;
+                            }
+                            project.camera.size = size_pct as f32;
+                            true
+                        },
+                        cx,
+                    );
                 }
-                CanvasSelection::Mask(_) | CanvasSelection::Text(_) => {
-                    let (rect, guides) =
-                        overlay_resize_rect(start, size, delta, dir_x, dir_y, &targets, shift);
+                CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
+                    let (rect, guides) = if let CanvasSelection::Image(index) = element {
+                        let Some(segment) = self
+                            .project
+                            .timeline
+                            .as_ref()
+                            .and_then(|timeline| timeline.image_segments.get(index))
+                        else {
+                            return;
+                        };
+                        (
+                            image_resize_rect(
+                                start,
+                                size,
+                                delta,
+                                (dir_x, dir_y),
+                                f64::from(segment.rotation),
+                                segment.lock_aspect,
+                            ),
+                            Vec::new(),
+                        )
+                    } else {
+                        overlay_resize_rect(start, size, delta, dir_x, dir_y, &targets, shift)
+                    };
                     self.snap_guides = guides;
                     self.canvas_overlay_rect = Some(rect);
                     self.write_overlay_rect(element, rect, cx);
@@ -860,8 +928,19 @@ impl EditorWindow {
         let (center, guides) = match element {
             CanvasSelection::Display => display_drag_center(start, size, delta, &targets, shift),
             CanvasSelection::Camera => camera_drag_center(start, size, delta, &targets, shift),
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) => {
-                overlay_drag_center(start, size, delta, &targets, shift)
+            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
+                let bounds = if let CanvasSelection::Image(index) = element {
+                    let rotation = self
+                        .project
+                        .timeline
+                        .as_ref()
+                        .and_then(|timeline| timeline.image_segments.get(index))
+                        .map_or(0., |segment| f64::from(segment.rotation));
+                    image_axis_bounds(start, size, rotation)
+                } else {
+                    start
+                };
+                overlay_drag_center(bounds, size, delta, &targets, shift)
             }
         };
         self.snap_guides = guides;
@@ -879,7 +958,7 @@ impl EditorWindow {
                 self.canvas_drag_camera_rect = Some(optimistic);
                 self.write_camera_position(center, cx);
             }
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) => {
+            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
                 self.canvas_overlay_rect = Some(optimistic);
                 self.write_overlay_rect(element, optimistic, cx);
             }
@@ -920,6 +999,9 @@ impl EditorWindow {
                 CanvasSelection::Text(index) => {
                     tracing::info!(index, "canvas text drag");
                 }
+                CanvasSelection::Image(index) => {
+                    tracing::info!(index, "canvas image drag");
+                }
             }
         }
         cx.notify();
@@ -937,6 +1019,18 @@ impl EditorWindow {
             return false;
         };
         if !self.canvas_overlay_visible() {
+            return false;
+        }
+        if let CanvasSelection::Image(index) = selected
+            && !self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.image_segments.get(index))
+                .is_some_and(|segment| {
+                    segment.is_active_at(self.preview_or_playhead()) && segment.opacity > 0.
+                })
+        {
             return false;
         }
         let (Some(canvas), Some(rect)) = (self.canvas_bounds(), self.element_rect(selected)) else {
@@ -957,7 +1051,7 @@ impl EditorWindow {
         let center = match selected {
             CanvasSelection::Display => display_nudge_center(rect, size, direction, shift),
             CanvasSelection::Camera => camera_nudge_center(rect, size, direction, shift),
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) => {
+            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
                 overlay_nudge_center(rect, direction, shift)
             }
         };
@@ -975,35 +1069,107 @@ impl EditorWindow {
                 self.canvas_drag_camera_rect = Some(optimistic);
                 self.write_camera_position(center, cx);
             }
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) => {
+            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
                 self.canvas_overlay_rect = Some(optimistic);
                 self.write_overlay_rect(selected, optimistic, cx);
             }
         }
-        let _ = window;
+        self.schedule_save(window, cx);
         true
     }
 
     fn write_display_position(&mut self, center: XY<f64>, cx: &mut Context<Self>) {
-        if self.project.background.display_position == Some(center) {
-            return;
-        }
-        self.project.background.display_position = Some(center);
-        self.project_changed_live(cx);
+        self.write_canvas_style(
+            crate::editor_sidebar::StyleGroup::Background,
+            |project| {
+                if project.background.display_position == Some(center) {
+                    return false;
+                }
+                project.background.display_position = Some(center);
+                true
+            },
+            cx,
+        );
     }
 
     fn write_camera_position(&mut self, center: XY<f64>, cx: &mut Context<Self>) {
-        if self.project.camera.manual_position == Some(center) {
-            return;
+        self.write_canvas_style(
+            crate::editor_sidebar::StyleGroup::Camera,
+            |project| {
+                if project.camera.manual_position == Some(center) {
+                    return false;
+                }
+                project.camera.manual_position = Some(center);
+                true
+            },
+            cx,
+        );
+    }
+
+    fn write_canvas_style(
+        &mut self,
+        group: crate::editor_sidebar::StyleGroup,
+        change: impl FnOnce(&mut cap_project::ProjectConfiguration) -> bool,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::editor_sidebar::StyleGroup;
+        let time = self.preview_or_playhead();
+        let target = self.project.timeline.as_ref().and_then(|timeline| {
+            timeline
+                .style_segments
+                .iter()
+                .enumerate()
+                .filter(|(_, segment)| {
+                    segment.is_active_at(time)
+                        && match group {
+                            StyleGroup::Background => segment.overrides.background.is_some(),
+                            StyleGroup::Camera => segment.overrides.camera.is_some(),
+                            StyleGroup::Cursor => segment.overrides.cursor.is_some(),
+                        }
+                })
+                .max_by(|(ai, a), (bi, b)| {
+                    a.track
+                        .cmp(&b.track)
+                        .then(a.start.total_cmp(&b.start))
+                        .then(ai.cmp(bi))
+                })
+                .map(|(index, _)| index)
+        });
+        let changed = match self.selected_style_index().or(target) {
+            Some(index) => crate::editor_sidebar::apply_style_control_change(
+                &mut self.project,
+                index,
+                group,
+                change,
+            ),
+            None => change(&mut self.project),
+        };
+        if changed {
+            self.project_changed_live(cx);
         }
-        self.project.camera.manual_position = Some(center);
-        self.project_changed_live(cx);
     }
 
     fn element_rect(&self, element: CanvasSelection) -> Option<NormRect> {
         match element {
             CanvasSelection::Display => self.display_rect(),
             CanvasSelection::Camera => self.camera_rect(),
+            CanvasSelection::Image(index) => {
+                if self
+                    .canvas_drag
+                    .as_ref()
+                    .is_some_and(|drag| drag.element == element)
+                    && let Some(rect) = self.canvas_overlay_rect
+                {
+                    return Some(rect);
+                }
+                let segment = self.project.timeline.as_ref()?.image_segments.get(index)?;
+                Some(NormRect {
+                    x: segment.center.x - segment.size.x / 2.,
+                    y: segment.center.y - segment.size.y / 2.,
+                    w: segment.size.x,
+                    h: segment.size.y,
+                })
+            }
             CanvasSelection::Mask(index) => {
                 if self
                     .canvas_drag
@@ -1055,6 +1221,13 @@ impl EditorWindow {
             return;
         };
         match element {
+            CanvasSelection::Image(index) => {
+                let Some(segment) = timeline.image_segments.get_mut(index) else {
+                    return;
+                };
+                segment.center = center;
+                segment.size = size;
+            }
             CanvasSelection::Mask(index) => {
                 let Some(segment) = timeline.mask_segments.get_mut(index) else {
                     return;
@@ -1183,6 +1356,20 @@ impl EditorWindow {
             }
         }
 
+        if let Some(timeline) = self.project.timeline.as_ref() {
+            let mut images: Vec<_> = timeline
+                .image_segments
+                .iter()
+                .enumerate()
+                .filter(|(_, segment)| segment.is_active_at(time) && segment.opacity > 0.)
+                .collect();
+            images.sort_by_key(|(index, segment)| (segment.track, *index));
+            for (index, _) in images {
+                if let Some(rect) = self.element_rect(CanvasSelection::Image(index)) {
+                    layer = layer.child(self.render_image_box(index, rect, (cw, ch), cx));
+                }
+            }
+        }
         for guide in &self.snap_guides {
             let color = gpui::rgb(0xFF3B6B);
             layer = layer.child(match guide.axis {
@@ -1232,7 +1419,9 @@ impl EditorWindow {
                 self.camera_resizable(),
                 (!self.camera_resizable()).then_some("Camera size follows the zoom — drag to move"),
             ),
-            CanvasSelection::Mask(_) | CanvasSelection::Text(_) => (true, true, None),
+            CanvasSelection::Mask(_) | CanvasSelection::Text(_) | CanvasSelection::Image(_) => {
+                (true, true, None)
+            }
         };
 
         let left = rect.x as f32 * canvas.0;
@@ -1278,7 +1467,7 @@ impl EditorWindow {
             // the stop the display would hijack the drag one event later.
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, event, window, cx| {
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
                     this.begin_canvas_move(element, event, window, cx);
                 }),
@@ -1403,7 +1592,7 @@ impl EditorWindow {
                         )
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(move |this, event, window, cx| {
+                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
                                 this.begin_canvas_resize(element, dir_x, dir_y, event, window, cx);
                             }),
@@ -1917,5 +2106,258 @@ mod tests {
         // From the other rect's top (0.0) to the moving rect's bottom (0.7).
         assert!((guide.start - 0.0).abs() < 1e-9);
         assert!((guide.end - 0.7).abs() < 1e-9);
+    }
+}
+
+fn rotate_point(point: (f64, f64), degrees: f64) -> (f64, f64) {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    (point.0 * cos - point.1 * sin, point.0 * sin + point.1 * cos)
+}
+
+fn image_corners(rect: NormRect, canvas: (f64, f64), rotation: f64) -> [(f64, f64); 4] {
+    [(-1., -1.), (1., -1.), (1., 1.), (-1., 1.)].map(|(x, y)| {
+        let offset = rotate_point(
+            (x * rect.w * canvas.0 / 2., y * rect.h * canvas.1 / 2.),
+            rotation,
+        );
+        (
+            (rect.x + rect.w / 2.) * canvas.0 + offset.0,
+            (rect.y + rect.h / 2.) * canvas.1 + offset.1,
+        )
+    })
+}
+
+fn image_axis_bounds(rect: NormRect, canvas: (f64, f64), rotation: f64) -> NormRect {
+    let corners = image_corners(rect, canvas, rotation);
+    let min_x = corners
+        .iter()
+        .map(|point| point.0)
+        .fold(f64::INFINITY, f64::min);
+    let min_y = corners
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::INFINITY, f64::min);
+    let max_x = corners
+        .iter()
+        .map(|point| point.0)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let max_y = corners
+        .iter()
+        .map(|point| point.1)
+        .fold(f64::NEG_INFINITY, f64::max);
+    NormRect {
+        x: min_x / canvas.0,
+        y: min_y / canvas.1,
+        w: (max_x - min_x) / canvas.0,
+        h: (max_y - min_y) / canvas.1,
+    }
+}
+
+fn image_hit(rect: NormRect, canvas: (f64, f64), rotation: f64, point: (f64, f64)) -> bool {
+    let local = rotate_point(
+        (
+            point.0 - (rect.x + rect.w / 2.) * canvas.0,
+            point.1 - (rect.y + rect.h / 2.) * canvas.1,
+        ),
+        -rotation,
+    );
+    local.0.abs() <= rect.w * canvas.0 / 2. && local.1.abs() <= rect.h * canvas.1 / 2.
+}
+
+fn image_resize_rect(
+    start: NormRect,
+    canvas: (f64, f64),
+    delta: (f64, f64),
+    direction: (i8, i8),
+    rotation: f64,
+    lock_aspect: bool,
+) -> NormRect {
+    let delta = rotate_point(delta, -rotation);
+    let width = start.w * canvas.0;
+    let height = start.h * canvas.1;
+    let mut next_width = (width + delta.0 * f64::from(direction.0)).max(canvas.0 * 0.01);
+    let mut next_height = (height + delta.1 * f64::from(direction.1)).max(canvas.1 * 0.01);
+    if lock_aspect && width > 0. && height > 0. {
+        let sx = next_width / width;
+        let sy = next_height / height;
+        let scale = if (sx - 1.).abs() > (sy - 1.).abs() {
+            sx
+        } else {
+            sy
+        };
+        let scale = scale
+            .max(canvas.0 * 0.01 / width)
+            .max(canvas.1 * 0.01 / height);
+        next_width = width * scale;
+        next_height = height * scale;
+    }
+    let offset = rotate_point(
+        (
+            (next_width - width) * f64::from(direction.0) / 2.,
+            (next_height - height) * f64::from(direction.1) / 2.,
+        ),
+        rotation,
+    );
+    let w = next_width / canvas.0;
+    let h = next_height / canvas.1;
+    NormRect {
+        x: start.x + start.w / 2. + offset.0 / canvas.0 - w / 2.,
+        y: start.y + start.h / 2. + offset.1 / canvas.1 - h / 2.,
+        w,
+        h,
+    }
+}
+
+impl EditorWindow {
+    fn render_image_box(
+        &self,
+        index: usize,
+        rect: NormRect,
+        canvas: (f32, f32),
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let element = CanvasSelection::Image(index);
+        let rotation = self
+            .project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.image_segments.get(index))
+            .map_or(0., |segment| f64::from(segment.rotation));
+        let size = (f64::from(canvas.0), f64::from(canvas.1));
+        let corners = image_corners(rect, size, rotation);
+        let show = self.canvas_selection == Some(element) || self.hovered_canvas == Some(element);
+        let color = Hsla::from(self.theme.blue_9);
+        let mut layer = div()
+            .id(element.element_id())
+            .absolute()
+            .inset_0()
+            .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                let Some(bounds) = this.canvas_bounds() else {
+                    return;
+                };
+                let point = (
+                    f64::from(f32::from(event.position.x - bounds.origin.x)),
+                    f64::from(f32::from(event.position.y - bounds.origin.y)),
+                );
+                this.set_canvas_hover(element, image_hit(rect, size, rotation, point), cx);
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    let Some(bounds) = this.canvas_bounds() else {
+                        return;
+                    };
+                    let point = (
+                        f64::from(f32::from(event.position.x - bounds.origin.x)),
+                        f64::from(f32::from(event.position.y - bounds.origin.y)),
+                    );
+                    if image_hit(rect, size, rotation, point) {
+                        cx.stop_propagation();
+                        this.begin_canvas_move(element, event, window, cx);
+                    }
+                }),
+            );
+        if show {
+            layer = layer.child(
+                gpui::canvas(
+                    |bounds, _, _| bounds,
+                    move |_, bounds, window, _| {
+                        let mut path = gpui::PathBuilder::stroke(px(2.));
+                        for (index, (x, y)) in corners.into_iter().enumerate() {
+                            let point = gpui::point(
+                                bounds.origin.x + px(x as f32),
+                                bounds.origin.y + px(y as f32),
+                            );
+                            if index == 0 {
+                                path.move_to(point);
+                            } else {
+                                path.line_to(point);
+                            }
+                        }
+                        path.close();
+                        if let Ok(path) = path.build() {
+                            window.paint_path(path, color);
+                        }
+                    },
+                )
+                .absolute()
+                .inset_0(),
+            );
+            for ((x, y), (dx, dy)) in corners
+                .into_iter()
+                .zip([(-1, -1), (1, -1), (1, 1), (-1, 1)])
+            {
+                layer = layer.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "image-handle-{index}-{dx}-{dy}"
+                        )))
+                        .absolute()
+                        .left(px(x as f32 - 6.))
+                        .top(px(y as f32 - 6.))
+                        .size(px(12.))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(gpui::white())
+                        .bg(color)
+                        .cursor(CursorStyle::ResizeUpLeftDownRight)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.begin_canvas_resize(element, dx, dy, event, window, cx);
+                            }),
+                        ),
+                );
+            }
+        }
+        layer.into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod style_image_tests {
+    use super::*;
+
+    #[test]
+    fn style_image_rotated_hit_excludes_empty_bounding_box_corners() {
+        let rect = NormRect {
+            x: 0.3,
+            y: 0.35,
+            w: 0.4,
+            h: 0.3,
+        };
+        let canvas = (1200., 600.);
+        let bounds = image_axis_bounds(rect, canvas, 45.);
+        assert!(image_hit(rect, canvas, 45., (600., 300.)));
+        assert!(!image_hit(
+            rect,
+            canvas,
+            45.,
+            (bounds.x * canvas.0, bounds.y * canvas.1)
+        ));
+    }
+
+    #[test]
+    fn style_image_rotated_resize_keeps_opposite_corner_and_aspect() {
+        let start = NormRect {
+            x: 0.3,
+            y: 0.35,
+            w: 0.4,
+            h: 0.3,
+        };
+        let canvas = (1200., 600.);
+        for rotation in [-135., 0., 35., 90.] {
+            for (corner, direction) in [(0, (-1, -1)), (1, (1, -1)), (2, (1, 1)), (3, (-1, 1))] {
+                let next = image_resize_rect(start, canvas, (80., 45.), direction, rotation, true);
+                assert!((next.w / next.h - start.w / start.h).abs() < 1e-9);
+                let opposite = (corner + 2) % 4;
+                let before = image_corners(start, canvas, rotation)[opposite];
+                let after = image_corners(next, canvas, rotation)[opposite];
+                assert!((before.0 - after.0).abs() < 1e-8);
+                assert!((before.1 - after.1).abs() < 1e-8);
+                assert!(next.w > 0. && next.h > 0.);
+            }
+        }
     }
 }

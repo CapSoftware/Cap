@@ -11,7 +11,8 @@ import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
 import IconLucideBan from "~icons/lucide/ban";
 import IconLucideGlobe from "~icons/lucide/globe";
 import IconLucideLaptop from "~icons/lucide/laptop";
-import { useEditorContext } from "./context";
+import { EditorStyleContext, useEditorContext } from "./context";
+import { StyleGroupToggle } from "./StyleSegmentConfig";
 import { EditorButton, Input } from "./ui";
 
 const DEFAULT_FRAME_CONFIG: FrameConfiguration = {
@@ -72,7 +73,7 @@ function SettingRow(props: { name: string; children: JSX.Element }) {
 }
 
 function FrameSettings() {
-	const { project, setProject } = useEditorContext();
+	const { project, setProject, selectedStyle } = useEditorContext();
 
 	const style = () => project.background.frame?.style ?? "none";
 	const updateFrame = (patch: Partial<FrameConfiguration>) =>
@@ -89,98 +90,131 @@ function FrameSettings() {
 					Wrap your recording in a window or device frame.
 				</span>
 			</div>
-			<div class="flex flex-col gap-0.5 p-1.5">
-				<For each={FRAME_STYLES}>
-					{(option) => {
-						const selected = () => style() === option.value;
-						return (
-							<button
-								type="button"
-								onClick={() => updateFrame({ style: option.value })}
-								class="flex items-center gap-3 rounded-xl p-2 text-left outline-hidden transition-colors duration-150 hover:bg-gray-3 focus-visible:bg-gray-3"
-							>
-								<span
-									class={cx(
-										"flex justify-center items-center rounded-[0.625rem] size-8 shrink-0 transition-colors duration-150",
-										selected()
-											? "bg-blue-9 text-white"
-											: "bg-gray-3 text-gray-11",
-									)}
+			<Show when={selectedStyle()}>
+				<div class="px-4 pb-3">
+					<StyleGroupToggle group="background" />
+				</div>
+			</Show>
+			<Show
+				when={!selectedStyle() || selectedStyle()?.overrides.background != null}
+			>
+				<div class="flex flex-col gap-0.5 p-1.5">
+					<For each={FRAME_STYLES}>
+						{(option) => {
+							const selected = () => style() === option.value;
+							return (
+								<button
+									type="button"
+									onClick={() => updateFrame({ style: option.value })}
+									class="flex items-center gap-3 rounded-xl p-2 text-left outline-hidden transition-colors duration-150 hover:bg-gray-3 focus-visible:bg-gray-3"
 								>
-									<Dynamic component={option.icon} class="size-4" />
-								</span>
-								<span class="flex flex-col flex-1 min-w-0">
-									<span class="text-[0.8125rem] font-medium leading-tight text-gray-12">
-										{option.label}
+									<span
+										class={cx(
+											"flex justify-center items-center rounded-[0.625rem] size-8 shrink-0 transition-colors duration-150",
+											selected()
+												? "bg-blue-9 text-white"
+												: "bg-gray-3 text-gray-11",
+										)}
+									>
+										<Dynamic component={option.icon} class="size-4" />
 									</span>
-									<span class="text-[0.6875rem] leading-snug text-gray-10">
-										{option.description}
+									<span class="flex flex-col flex-1 min-w-0">
+										<span class="text-[0.8125rem] font-medium leading-tight text-gray-12">
+											{option.label}
+										</span>
+										<span class="text-[0.6875rem] leading-snug text-gray-10">
+											{option.description}
+										</span>
 									</span>
-								</span>
-								<Show when={selected()}>
-									<IconCapCircleCheck class="size-4 shrink-0 text-blue-9" />
-								</Show>
-							</button>
-						);
-					}}
-				</For>
-			</div>
-			<Show when={style() !== "none" && project.background.frame}>
-				{(frame) => (
-					<div class="flex flex-col gap-3 p-3 border-t border-gray-3">
-						<SettingRow name="Theme">
-							<KTabs
-								class="w-40"
-								value={frame().theme}
-								onChange={(v) =>
-									updateFrame({ theme: v as FrameConfiguration["theme"] })
-								}
-							>
-								<KTabs.List class="flex relative flex-row items-center h-8 rounded-lg border border-gray-3">
-									<KTabs.Trigger value="light" class={THEME_TAB_TRIGGER_CLASS}>
-										Light
-									</KTabs.Trigger>
-									<KTabs.Trigger value="dark" class={THEME_TAB_TRIGGER_CLASS}>
-										Dark
-									</KTabs.Trigger>
-									<KTabs.Indicator class="overflow-hidden absolute inset-0 rounded-lg transition-transform flex p-px peer-focus-visible:outline-solid outline-2 outline-blue-9 outline-offset-2">
-										<div class="flex-1 bg-gray-3" />
-									</KTabs.Indicator>
-								</KTabs.List>
-							</KTabs>
-						</SettingRow>
-						<Show when={frame().style === "browser"}>
-							<SettingRow name="URL">
-								<div class="w-40">
-									<Input
-										value={frame().url}
-										placeholder="cap.so"
-										onInput={(e) => updateFrame({ url: e.currentTarget.value })}
-									/>
-								</div>
+									<Show when={selected()}>
+										<IconCapCircleCheck class="size-4 shrink-0 text-blue-9" />
+									</Show>
+								</button>
+							);
+						}}
+					</For>
+				</div>
+				<Show when={style() !== "none" && project.background.frame}>
+					{(frame) => (
+						<div class="flex flex-col gap-3 p-3 border-t border-gray-3">
+							<SettingRow name="Theme">
+								<KTabs
+									class="w-40"
+									value={frame().theme}
+									onChange={(v) =>
+										updateFrame({ theme: v as FrameConfiguration["theme"] })
+									}
+								>
+									<KTabs.List class="flex relative flex-row items-center h-8 rounded-lg border border-gray-3">
+										<KTabs.Trigger
+											value="light"
+											class={THEME_TAB_TRIGGER_CLASS}
+										>
+											Light
+										</KTabs.Trigger>
+										<KTabs.Trigger value="dark" class={THEME_TAB_TRIGGER_CLASS}>
+											Dark
+										</KTabs.Trigger>
+										<KTabs.Indicator class="overflow-hidden absolute inset-0 rounded-lg transition-transform flex p-px peer-focus-visible:outline-solid outline-2 outline-blue-9 outline-offset-2">
+											<div class="flex-1 bg-gray-3" />
+										</KTabs.Indicator>
+									</KTabs.List>
+								</KTabs>
 							</SettingRow>
-						</Show>
-						<Show when={frame().style === "macOS"}>
-							<SettingRow name="Title">
-								<div class="w-40">
-									<Input
-										value={frame().title}
-										placeholder="Window title"
-										onInput={(e) =>
-											updateFrame({ title: e.currentTarget.value })
-										}
-									/>
-								</div>
-							</SettingRow>
-						</Show>
-					</div>
-				)}
+							<Show when={frame().style === "browser"}>
+								<SettingRow name="URL">
+									<div class="w-40">
+										<Input
+											value={frame().url}
+											placeholder="cap.so"
+											onInput={(e) =>
+												updateFrame({ url: e.currentTarget.value })
+											}
+										/>
+									</div>
+								</SettingRow>
+							</Show>
+							<Show when={frame().style === "macOS"}>
+								<SettingRow name="Title">
+									<div class="w-40">
+										<Input
+											value={frame().title}
+											placeholder="Window title"
+											onInput={(e) =>
+												updateFrame({ title: e.currentTarget.value })
+											}
+										/>
+									</div>
+								</SettingRow>
+							</Show>
+						</div>
+					)}
+				</Show>
 			</Show>
 		</>
 	);
 }
 
 export function FrameButton() {
+	const context = useEditorContext();
+	return (
+		<Show when={context.styleScopeToken()} keyed>
+			{(_scope) => (
+				<EditorStyleContext.Provider
+					value={{
+						...context,
+						project: context.styleProject,
+						setProject: context.createStyleProjectSetter(),
+					}}
+				>
+					<ScopedFrameButton />
+				</EditorStyleContext.Provider>
+			)}
+		</Show>
+	);
+}
+
+function ScopedFrameButton() {
 	const { project } = useEditorContext();
 
 	const activeStyle = () =>

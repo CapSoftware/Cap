@@ -59,11 +59,7 @@ import {
 	rippleTimelineTrack,
 	transitionsAfterClipMove,
 } from "./clip-transitions";
-import {
-	type EditorTimelineSegment,
-	serializeProjectConfiguration,
-	useEditorContext,
-} from "./context";
+import { type EditorTimelineSegment, useEditorContext } from "./context";
 import { getExistingRecordingPickerOptions } from "./existing-recording-picker";
 import { Input } from "./ui";
 
@@ -266,6 +262,7 @@ export function ClipsSidebar(props: { open: boolean; class?: string }) {
 function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 	const {
 		project,
+		flushProjectConfig,
 		setProject,
 		projectActions,
 		editorInstance,
@@ -440,7 +437,7 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 		if (previousMode === null) previousMode = rawOptions.mode;
 		setOptions("mode", "studio");
 		await commands.setRecordingMode("studio");
-		await commands.setProjectConfig(serializeProjectConfiguration(project));
+		await flushProjectConfig();
 		await commands.setEditorRecordingTarget(editorInstance.path);
 	};
 
@@ -509,7 +506,7 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 				await commands.stopPlayback();
 				setEditorState("playing", false);
 			}
-			await commands.setProjectConfig(serializeProjectConfiguration(project));
+			await flushProjectConfig();
 			const count = await commands.addExistingRecordingToEditor(sourcePath);
 			toast.success(count === 1 ? "Clip imported" : `${count} clips imported`, {
 				id: toastId,
@@ -670,6 +667,8 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 						(candidate) => candidate.segmentIndex !== transition.segmentIndex,
 					);
 					for (const track of [
+						timeline.styleSegments,
+						timeline.imageSegments,
 						timeline.zoomSegments,
 						timeline.sceneSegments ?? [],
 						timeline.maskSegments,

@@ -23,8 +23,10 @@ export function PresetsDropdown() {
 				as={KDropdownMenu.Trigger}
 				leftIcon={<IconCapPresets />}
 				rightIcon={<IconCapChevronDown />}
+				title="Presets"
+				aria-label="Presets"
 			>
-				Presets
+				<span class="max-[1200px]:hidden">Presets</span>
 			</EditorButton>
 			<KDropdownMenu.Portal>
 				<Suspense>

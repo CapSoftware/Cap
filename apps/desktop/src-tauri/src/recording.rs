@@ -46,11 +46,14 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tauri::{AppHandle, Manager, path::BaseDirectory};
-use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
+use tauri::{AppHandle, Listener, Manager, path::BaseDirectory};
+use tauri_plugin_dialog::{
+    DialogExt, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind,
+};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
+use tokio_util::sync::CancellationToken;
 use tracing::*;
 
 use crate::camera::{CameraPreviewManager, CameraPreviewShape};
@@ -1228,6 +1231,347 @@ fn recording_start_mode_error(mode: RecordingMode, authenticated: bool) -> Optio
     }
 }
 
+const RECORDING_START_CANCELLED: &str = "Recording cancelled before starting.";
+
+#[derive(Clone, Default)]
+struct RecordingStoragePrompt(Arc<std::sync::Mutex<Option<Arc<CancellationToken>>>>);
+
+impl RecordingStoragePrompt {
+    fn begin(&self) -> Option<RecordingStoragePromptLease> {
+        let mut slot = self.0.lock().unwrap();
+        if slot.is_some() {
+            return None;
+        }
+        let cancelled = Arc::new(CancellationToken::new());
+        *slot = Some(cancelled.clone());
+        Some(RecordingStoragePromptLease {
+            slot: self.clone(),
+            cancelled,
+        })
+    }
+
+    fn cancel(&self) -> bool {
+        let slot = self.0.lock().unwrap();
+        if let Some(cancelled) = slot.as_ref() {
+            cancelled.cancel();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn recording_storage_prompt(app: &AppHandle) -> RecordingStoragePrompt {
+    if app.try_state::<RecordingStoragePrompt>().is_none() {
+        app.manage(RecordingStoragePrompt::default());
+    }
+    app.state::<RecordingStoragePrompt>().inner().clone()
+}
+
+struct RecordingStoragePromptLease {
+    slot: RecordingStoragePrompt,
+    cancelled: Arc<CancellationToken>,
+}
+
+impl Drop for RecordingStoragePromptLease {
+    fn drop(&mut self) {
+        let mut slot = self.slot.0.lock().unwrap();
+        if slot
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &self.cancelled))
+        {
+            *slot = None;
+        }
+    }
+}
+
+struct RecordingStorageEvents {
+    app: AppHandle,
+    id: tauri::EventId,
+}
+
+impl Drop for RecordingStorageEvents {
+    fn drop(&mut self) {
+        self.app.unlisten(self.id);
+    }
+}
+
+async fn recording_storage_answer(
+    cancelled: &CancellationToken,
+    answer: tokio::sync::oneshot::Receiver<bool>,
+) -> Result<bool, String> {
+    tokio::select! {
+        biased;
+        _ = cancelled.cancelled() => Err(RECORDING_START_CANCELLED.to_string()),
+        answer = answer => Ok(answer.unwrap_or(false)),
+    }
+}
+
+async fn check_recording_start_storage<F>(
+    directory: &Path,
+    mut sample: impl FnMut(&Path) -> std::io::Result<u64>,
+    confirm: impl FnOnce(u64) -> F,
+) -> Result<(), String>
+where
+    F: std::future::Future<Output = Result<bool, String>>,
+{
+    use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorage};
+
+    let mut read = || {
+        sample(directory).map_err(|error| {
+            format!(
+                "Could not check available disk space at {}: {error}",
+                directory.display()
+            )
+        })
+    };
+    let status = |available_bytes| {
+        RecordingStorage {
+            available_bytes,
+            recording_bytes: 0,
+        }
+        .status()
+    };
+    let exhausted = |bytes| {
+        format!(
+            "Not enough disk space to start recording ({:.2} GiB free). Free up space so more than {} MiB is available at {} and try again.",
+            bytes as f64 / 1_073_741_824.0,
+            cap_utils::disk_space::RECORDING_DISK_RESERVE_BYTES / (1024 * 1024),
+            directory.display(),
+        )
+    };
+    let bytes = read()?;
+    match status(bytes) {
+        DiskSpaceStatus::Ok => Ok(()),
+        DiskSpaceStatus::Exhausted => Err(exhausted(bytes)),
+        DiskSpaceStatus::Low => {
+            if !confirm(bytes).await? {
+                return Err(RECORDING_START_CANCELLED.to_string());
+            }
+            let bytes = read()?;
+            if status(bytes) == DiskSpaceStatus::Exhausted {
+                Err(exhausted(bytes))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+async fn cancel_recording_storage_prompt(app: &AppHandle, state: &MutableState<'_, App>) -> bool {
+    let state = state.read().await;
+    matches!(state.recording_state, RecordingState::Pending { .. })
+        && app
+            .try_state::<RecordingStoragePrompt>()
+            .is_some_and(|prompt| prompt.cancel())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn storage_preflight_control_result(
+    result: Result<(), String>,
+    has_capture: bool,
+) -> Result<(), String> {
+    match result {
+        Err(error) if error == RECORDING_START_CANCELLED && !has_capture => Ok(()),
+        result => result,
+    }
+}
+
+#[cfg(test)]
+mod recording_storage_preflight_tests {
+    use super::*;
+    use cap_utils::disk_space::{RECORDING_DISK_RESERVE_BYTES, RECORDING_DISK_WARN_BYTES};
+    use std::cell::Cell;
+
+    #[tokio::test]
+    async fn thresholds_match_recording_storage_policy() {
+        for (bytes, asks, starts) in [
+            (RECORDING_DISK_WARN_BYTES + 1, false, true),
+            (RECORDING_DISK_WARN_BYTES, true, true),
+            (RECORDING_DISK_RESERVE_BYTES + 1, true, true),
+            (RECORDING_DISK_RESERVE_BYTES, false, false),
+            (0, false, false),
+        ] {
+            let prompted = Cell::new(false);
+            let result = check_recording_start_storage(
+                Path::new("recordings"),
+                |_| Ok(bytes),
+                |_| {
+                    prompted.set(true);
+                    async { Ok(true) }
+                },
+            )
+            .await;
+            assert_eq!(prompted.get(), asks);
+            assert_eq!(result.is_ok(), starts);
+        }
+    }
+
+    #[tokio::test]
+    async fn confirmation_rechecks_same_recordings_drive() {
+        let directory = Path::new("external-drive/custom-recordings");
+        let reads = Cell::new(0);
+        check_recording_start_storage(
+            directory,
+            |path| {
+                assert_eq!(path, directory);
+                reads.set(reads.get() + 1);
+                Ok(RECORDING_DISK_WARN_BYTES)
+            },
+            |_| async { Ok(true) },
+        )
+        .await
+        .unwrap();
+        assert_eq!(reads.get(), 2);
+    }
+
+    #[tokio::test]
+    async fn confirmation_cannot_override_new_reserve_exhaustion() {
+        let mut bytes = [RECORDING_DISK_WARN_BYTES, RECORDING_DISK_RESERVE_BYTES].into_iter();
+        let result = check_recording_start_storage(
+            Path::new("recordings"),
+            |_| Ok(bytes.next().unwrap()),
+            |_| async { Ok(true) },
+        )
+        .await;
+        assert!(result.unwrap_err().contains("more than 512 MiB"));
+    }
+
+    #[tokio::test]
+    async fn go_back_skips_second_probe() {
+        let reads = Cell::new(0);
+        let result = check_recording_start_storage(
+            Path::new("recordings"),
+            |_| {
+                reads.set(reads.get() + 1);
+                Ok(RECORDING_DISK_WARN_BYTES)
+            },
+            |_| async { Ok(false) },
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), RECORDING_START_CANCELLED);
+        assert_eq!(reads.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn unknown_storage_never_admits_capture() {
+        for fail_at in [1, 2] {
+            let mut reads = 0;
+            let result = check_recording_start_storage(
+                Path::new("recordings"),
+                |_| {
+                    reads += 1;
+                    if reads == fail_at {
+                        Err(std::io::Error::from_raw_os_error(5))
+                    } else {
+                        Ok(RECORDING_DISK_WARN_BYTES)
+                    }
+                },
+                |_| async { Ok(true) },
+            )
+            .await;
+            assert!(
+                result
+                    .unwrap_err()
+                    .starts_with("Could not check available disk space")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn closed_native_callback_declines() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        drop(sender);
+        assert!(
+            !recording_storage_answer(&CancellationToken::new(), receiver)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_wins_simultaneous_affirmative() {
+        let token = CancellationToken::new();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        sender.send(true).unwrap();
+        token.cancel();
+        assert_eq!(
+            recording_storage_answer(&token, receiver)
+                .await
+                .unwrap_err(),
+            RECORDING_START_CANCELLED
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_unblocks_wait_and_late_answer_is_inert() {
+        let slot = RecordingStoragePrompt::default();
+        let lease = slot.begin().unwrap();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let answer = recording_storage_answer(&lease.cancelled, receiver);
+        tokio::pin!(answer);
+        tokio::select! {
+            biased;
+            _ = &mut answer => panic!("Prompt resolved without an answer"),
+            _ = std::future::ready(()) => {},
+        }
+        assert!(slot.cancel());
+        assert_eq!(answer.await.unwrap_err(), RECORDING_START_CANCELLED);
+        assert!(sender.send(true).is_err());
+    }
+
+    #[test]
+    fn repeated_requests_do_not_replace_active_prompt() {
+        let slot = RecordingStoragePrompt::default();
+        let first = slot.begin().unwrap();
+        assert!(slot.begin().is_none());
+        assert!(slot.cancel());
+        assert!(first.cancelled.is_cancelled());
+        assert!(slot.begin().is_none());
+        drop(first);
+        let second = slot.begin().unwrap();
+        assert!(!second.cancelled.is_cancelled());
+    }
+
+    #[test]
+    fn retired_prompt_cannot_cancel_admitted_recording() {
+        let slot = RecordingStoragePrompt::default();
+        let lease = slot.begin().unwrap();
+        let token = lease.cancelled.clone();
+        drop(lease);
+        assert!(!slot.cancel());
+        assert!(!token.is_cancelled());
+    }
+
+    #[test]
+    fn stale_drop_does_not_remove_replacement_prompt() {
+        let slot = RecordingStoragePrompt::default();
+        let first = slot.begin().unwrap();
+        *slot.0.lock().unwrap() = None;
+        let second = slot.begin().unwrap();
+        drop(first);
+        assert!(slot.cancel());
+        assert!(second.cancelled.is_cancelled());
+    }
+
+    #[test]
+    fn instant_control_normalizes_only_confirmed_pre_capture_cancellation() {
+        assert!(
+            storage_preflight_control_result(Err(RECORDING_START_CANCELLED.into()), false).is_ok()
+        );
+        assert_eq!(
+            storage_preflight_control_result(Err(RECORDING_START_CANCELLED.into()), true)
+                .unwrap_err(),
+            RECORDING_START_CANCELLED
+        );
+        assert_eq!(
+            storage_preflight_control_result(Err("cleanup unconfirmed".into()), false).unwrap_err(),
+            "cleanup unconfirmed"
+        );
+        assert!(storage_preflight_control_result(Ok(()), true).is_ok());
+    }
+}
+
 #[derive(Serialize, Type)]
 pub enum RecordingAction {
     Started,
@@ -1404,6 +1748,8 @@ async fn lock_selected_camera(
 
         return Ok(None);
     };
+
+    crate::permissions::check_camera_access().map_err(anyhow::Error::msg)?;
 
     let existing_lock = match camera_feed.ask(camera::Lock).await {
         Ok(lock) if camera_lock_matches_id(&lock, &id) => Some(lock),
@@ -1650,10 +1996,13 @@ async fn start_recording_inner(
     .await;
     if !matches!(&result, Ok(RecordingAction::Started))
         && let Some(generation) = clean_generation
-        && crate::clean_capture::is_current(&app, generation)
     {
-        state_mtx.write().await.clear_pending_recording();
-        crate::clean_capture::release(&app, generation, false);
+        let mut state = state_mtx.write().await;
+        if crate::clean_capture::is_current(&app, generation) {
+            state.clear_pending_recording();
+            drop(state);
+            crate::clean_capture::release(&app, generation, false);
+        }
     }
     result
 }
@@ -1711,6 +2060,10 @@ async fn start_recording_prepared(
             app_state.was_camera_only_recording = true;
         }
     }
+
+    let storage_generation = crate::clean_capture::generation(&app);
+    #[cfg(target_os = "linux")]
+    let storage_instant = linux_instant::current(&app);
 
     if cfg!(target_os = "linux") && inputs.mode == RecordingMode::Instant {
         drop(_input_operation.take());
@@ -1778,36 +2131,120 @@ async fn start_recording_prepared(
         "Failed to create recordings directory: {e}"
     ));
 
-    match cap_utils::disk_space::free_bytes_for_path(&recordings_base_dir) {
-        Ok(bytes) => {
-            if bytes <= cap_utils::disk_space::LOW_DISK_STOP_BYTES {
-                let gb = bytes as f64 / 1_073_741_824.0;
-                let error = format!(
-                    "Not enough disk space to start recording ({:.2} GB free). Free up at least {} MB and try again.",
-                    gb,
-                    (cap_utils::disk_space::LOW_DISK_STOP_BYTES / (1024 * 1024))
-                );
-                error!(
-                    bytes_remaining = bytes,
-                    "Refusing to start recording: disk full"
-                );
-                state_mtx.write().await.clear_pending_recording();
+    let storage_prompt = recording_storage_prompt(&app)
+        .begin()
+        .ok_or(RECORDING_START_CANCELLED)?;
+    let event_app = app.clone();
+    let cancelled = storage_prompt.cancelled.clone();
+    let storage_events = RecordingStorageEvents {
+        app: app.clone(),
+        id: app.listen(CurrentRecordingChanged::NAME, move |_| {
+            if crate::clean_capture::generation(&event_app) != storage_generation
+                || clean_generation.is_some_and(|generation| {
+                    crate::clean_capture::stop_requested(&event_app, generation)
+                })
+            {
+                cancelled.cancel();
+            }
+        }),
+    };
+    if crate::clean_capture::generation(&app) != storage_generation
+        || clean_generation
+            .is_some_and(|generation| crate::clean_capture::stop_requested(&app, generation))
+    {
+        storage_prompt.cancelled.cancel();
+    }
+    let prompt_app = &app;
+    let prompt_cancelled = &storage_prompt.cancelled;
+    let storage_work = check_recording_start_storage(
+        &recordings_base_dir,
+        cap_utils::disk_space::free_bytes_for_path,
+        |bytes| async move {
+            if prompt_cancelled.is_cancelled() {
+                return Err(RECORDING_START_CANCELLED.to_string());
+            }
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            prompt_app.dialog()
+                .message(format!(
+                    "Only {:.2} GiB is available on your recordings drive. The recording may stop early if space runs out. Free up space, or record anyway.",
+                    bytes as f64 / 1_073_741_824.0,
+                ))
+                .title("Low storage space")
+                .kind(MessageDialogKind::Warning)
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "Record anyway".to_string(),
+                    "Go back".to_string(),
+                ))
+                .show(move |confirmed| {
+                    let _ = sender.send(confirmed);
+                });
+            recording_storage_answer(prompt_cancelled, receiver).await
+        },
+    );
+    #[cfg(target_os = "linux")]
+    let storage_result = if let Some(attempt) = &storage_instant {
+        attempt.while_active(storage_work).await.map_err(|error| {
+            if attempt.cancelled() {
+                RECORDING_START_CANCELLED.to_string()
+            } else {
+                error
+            }
+        })
+    } else {
+        storage_work.await
+    };
+    #[cfg(not(target_os = "linux"))]
+    let storage_result = storage_work.await;
+    {
+        let mut app_state = state_mtx.write().await;
+        let owns_pending = matches!(app_state.recording_state, RecordingState::Pending { .. })
+            && crate::clean_capture::generation(&app) == storage_generation
+            && clean_generation
+                .is_none_or(|generation| crate::clean_capture::is_current(&app, generation));
+        #[cfg(target_os = "linux")]
+        let owns_pending = owns_pending
+            && match (&storage_instant, linux_instant::current(&app)) {
+                (Some(expected), Some(current)) => expected.same(&current),
+                (None, None) => true,
+                _ => false,
+            };
+        #[cfg(target_os = "linux")]
+        let instant_cancelled = storage_instant
+            .as_ref()
+            .is_some_and(|attempt| attempt.cancelled());
+        #[cfg(not(target_os = "linux"))]
+        let instant_cancelled = false;
+        let storage_result = if !owns_pending
+            || storage_prompt.cancelled.is_cancelled()
+            || instant_cancelled
+            || clean_generation
+                .is_some_and(|generation| crate::clean_capture::stop_requested(&app, generation))
+        {
+            Err(RECORDING_START_CANCELLED.to_string())
+        } else if !requested_state.is_current(&requested_inputs) {
+            Err(
+                "Input selection changed before recording could start. Try recording again."
+                    .to_string(),
+            )
+        } else {
+            storage_result.and_then(|()| requested_state.ready_snapshot().map(|_| ()))
+        };
+        // Stop checks Pending under the same App lock before cancelling this lease.
+        // Retire it here so a successful Stop cannot race admission to capture setup.
+        drop(storage_prompt);
+        if let Err(error) = storage_result {
+            if owns_pending {
+                app_state.clear_pending_recording();
+            }
+            drop(app_state);
+            drop(storage_events);
+            if owns_pending {
                 notify_recording_start_failed(&app, &error);
-                return Err(error);
             }
-            if bytes <= cap_utils::disk_space::LOW_DISK_WARN_BYTES {
-                let gb = bytes as f64 / 1_073_741_824.0;
-                warn!(
-                    bytes_remaining = bytes,
-                    available_gb = gb,
-                    "Starting recording with low disk space"
-                );
-            }
-        }
-        Err(e) => {
-            warn!(error = %e, "Failed to check disk space before starting recording");
+            return Err(error);
         }
     }
+    drop(storage_events);
 
     let project_file_path = recordings_base_dir.join(&pending_try!(
         cap_utils::ensure_unique_filename(&filename, &recordings_base_dir,),
@@ -2064,6 +2501,11 @@ async fn start_recording_prepared(
                 )
             };
 
+            crate::check_requested_camera_permission(
+                selected_camera_id.as_ref(),
+                crate::permissions::check_camera_access,
+            )
+            .map_err(anyhow::Error::msg)?;
             validate_selected_camera_for_start(
                 selected_camera_id.as_ref(),
                 crate::is_camera_available,
@@ -2148,7 +2590,7 @@ async fn start_recording_prepared(
 
             let mut mic_restart_attempts = 0;
 
-            let (done_fut, health_rx) = loop {
+            let (done_fut, health_rx, automatic_stop) = loop {
                 let actor_result: Result<InProgressRecording, anyhow::Error> = async {
                     if !app_handle
                         .state::<crate::RequestedInputsState>()
@@ -2432,7 +2874,23 @@ async fn start_recording_prepared(
                                 "Input selection changed during recording startup. Try recording again."
                             ));
                         }
-                        break (done_fut, health_rx);
+                        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+                        let automatic_stop = match state.current_recording() {
+                            Some(InProgressRecording::Studio { handle, common, .. }) => {
+                                Some(enroll_studio_stop(
+                                    &app_handle,
+                                    &state_mtx,
+                                    handle,
+                                    &common.recording_dir,
+                                    crate::clean_capture::owner(&app_handle, &common.recording_dir),
+                                    StudioStopOrigin::Automatic,
+                                ))
+                            }
+                            _ => None,
+                        };
+                        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+                        let automatic_stop = ();
+                        break (done_fut, health_rx, automatic_stop);
                     }
                     #[cfg(target_os = "macos")]
                     Err(err) if is_shareable_content_error(&err) => {
@@ -2474,13 +2932,13 @@ async fn start_recording_prepared(
                 }
             };
 
-            Ok::<_, anyhow::Error>((done_fut, health_rx))
+            Ok::<_, anyhow::Error>((done_fut, health_rx, automatic_stop))
         }
     };
 
     let actor_task_res = AssertUnwindSafe(actor_task).catch_unwind().await;
 
-    let (actor_done_fut, health_rx) = match actor_task_res {
+    let (actor_done_fut, health_rx, automatic_stop) = match actor_task_res {
         Ok(Ok(v)) => v,
         Ok(Err(err)) => {
             let message = format!("{err:#}");
@@ -2507,33 +2965,7 @@ async fn start_recording_prepared(
         }
     };
 
-    drop(_input_operation);
-    if clean_generation
-        .is_some_and(|generation| crate::clean_capture::stop_requested(&app, generation))
-    {
-        #[cfg(target_os = "linux")]
-        if inputs.mode == RecordingMode::Instant {
-            if let Some(attempt) = linux_instant::current(&app) {
-                attempt.cancel();
-            }
-            return Err("Instant startup cancelled".into());
-        }
-        Box::pin(stop_recording(app.clone(), state_mtx.clone())).await?;
-        return Ok(RecordingAction::Started);
-    }
-
-    if matches!(inputs.mode, RecordingMode::Studio) {
-        spawn_current_desktop_background_snapshot(
-            project_file_path.clone(),
-            inputs.capture_target.clone(),
-        );
-    }
-
-    let _ = RecordingEvent::Started.emit(&app);
-    let _ = RecordingStarted.emit(&app);
-
-    emit_recording_started_telemetry(&app, &state_mtx).await;
-
+    let (watcher_started_tx, watcher_started_rx) = tokio::sync::oneshot::channel::<()>();
     spawn_actor({
         let app = app.clone();
         let state_mtx = Arc::clone(&state_mtx);
@@ -2541,6 +2973,7 @@ async fn start_recording_prepared(
         #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         let instant_watch = inputs.mode == RecordingMode::Instant;
         async move {
+            let _ = watcher_started_rx.await;
             fail!("recording::wait_actor_done");
             let disposition = {
                 let res = actor_done_fut.await;
@@ -2554,27 +2987,71 @@ async fn start_recording_prepared(
                     }
                     return;
                 }
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos", windows))]
                 if !instant_watch {
-                    let state = state_mtx.read().await;
-                    if let Some(InProgressRecording::Studio { handle, common, .. }) =
-                        state.current_recording()
-                        && common.recording_dir == project_file_path
-                        && handle.lifecycle().terminal_started()
-                    {
+                    let terminal_started = {
+                        let state = state_mtx.read().await;
+                        let Some(InProgressRecording::Studio { handle, common, .. }) =
+                            state.current_recording()
+                        else {
+                            return;
+                        };
+                        if common.recording_dir != project_file_path
+                            || automatic_stop.as_ref().is_none_or(|participant| {
+                                !participant.cohort.identity.matches(
+                                    handle,
+                                    &common.recording_dir,
+                                    crate::clean_capture::owner(&app, &common.recording_dir),
+                                )
+                            })
+                        {
+                            return;
+                        }
+                        #[cfg(target_os = "linux")]
+                        let started = handle.lifecycle().terminal_started();
+                        #[cfg(any(target_os = "macos", windows))]
+                        let started = handle.terminal_started();
+                        started
+                    };
+                    if clean_generation.is_some_and(|generation| {
+                        crate::clean_capture::owner(&app, &project_file_path) != Some(generation)
+                    }) {
                         return;
                     }
-                }
-                #[cfg(any(target_os = "macos", windows))]
-                if !instant_watch {
-                    let state = state_mtx.read().await;
-                    if let Some(InProgressRecording::Studio { handle, common, .. }) =
-                        state.current_recording()
-                        && common.recording_dir == project_file_path
-                        && handle.terminal_started()
-                    {
+                    let follow_stop = automatic_stop.as_ref().is_some_and(|participant| {
+                        participant.cohort.flight.lock().unwrap().explicit_seen
+                    }) || matches!(
+                        crate::clean_capture::phase(&app),
+                        Some(
+                            crate::clean_capture::Phase::Stopping
+                                | crate::clean_capture::Phase::Restoring
+                        )
+                    );
+                    if terminal_started && !follow_stop {
                         return;
                     }
+                    let failure = if follow_stop {
+                        res.err().map(|error| error.to_string())
+                    } else {
+                        match classify_actor_done_result(res, true) {
+                            ActorDoneDisposition::UnexpectedStop { error }
+                            | ActorDoneDisposition::Failed { error } => Some(error),
+                            ActorDoneDisposition::UserInitiatedStop => None,
+                        }
+                    };
+                    if let Some(completion) = control_studio_recording(
+                        &app,
+                        &state_mtx,
+                        Some(&project_file_path),
+                        StudioTerminalAction::Stop,
+                        failure,
+                        automatic_stop,
+                    )
+                    .await
+                    {
+                        completion.present_automatic();
+                    }
+                    return;
                 }
                 if let Some(generation) = clean_generation
                     && (crate::clean_capture::owner(&app, &project_file_path) != Some(generation)
@@ -2602,18 +3079,6 @@ async fn start_recording_prepared(
                 }
                 ActorDoneDisposition::UnexpectedStop { error }
                 | ActorDoneDisposition::Failed { error } => {
-                    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
-                    if !instant_watch {
-                        let _ = control_studio_recording(
-                            &app,
-                            &state_mtx,
-                            Some(&project_file_path),
-                            StudioTerminalAction::Stop,
-                            Some(error),
-                        )
-                        .await;
-                        return;
-                    }
                     let mut state = state_mtx.write().await;
                     if let Some(generation) = clean_generation
                         && (crate::clean_capture::owner(&app, &project_file_path)
@@ -2659,6 +3124,49 @@ async fn start_recording_prepared(
             }
         }
     });
+
+    drop(_input_operation);
+    if clean_generation
+        .is_some_and(|generation| crate::clean_capture::stop_requested(&app, generation))
+    {
+        #[cfg(target_os = "linux")]
+        if inputs.mode == RecordingMode::Instant {
+            if let Some(attempt) = linux_instant::current(&app) {
+                attempt.cancel();
+            }
+            return Err("Instant startup cancelled".into());
+        }
+        if inputs.mode == RecordingMode::Studio {
+            if let Some(generation) = clean_generation
+                && let Some(identity) =
+                    studio_stop_registry(&app).active_identity(&project_file_path, generation)
+            {
+                Box::pin(stop_clean_studio_recording(
+                    app.clone(),
+                    identity.handle,
+                    generation,
+                    project_file_path.clone(),
+                ))
+                .await?;
+            }
+        } else {
+            Box::pin(stop_recording(app.clone(), state_mtx.clone())).await?;
+        }
+        return Ok(RecordingAction::Started);
+    }
+
+    if matches!(inputs.mode, RecordingMode::Studio) {
+        spawn_current_desktop_background_snapshot(
+            project_file_path.clone(),
+            inputs.capture_target.clone(),
+        );
+    }
+
+    let _ = RecordingEvent::Started.emit(&app);
+    let _ = RecordingStarted.emit(&app);
+    let _ = watcher_started_tx.send(());
+
+    emit_recording_started_telemetry(&app, &state_mtx).await;
 
     if let Some(mut health_rx) = health_rx {
         let accumulator_mode = {
@@ -3063,6 +3571,8 @@ async fn lock_selected_microphone(
         return Ok(None);
     };
 
+    permissions::check_microphone_access().map_err(anyhow::Error::msg)?;
+
     let existing_lock = match mic_feed.ask(microphone::Lock).await {
         Ok(lock) if lock.device_name() == label => Some(lock),
         Ok(lock) => {
@@ -3248,11 +3758,17 @@ where
     F: std::future::Future<Output = Result<T, String>>,
 {
     let report = stop.await;
+    if report.quiescence != studio_recording::StudioQuiescence::Joined {
+        return Err(format!(
+            "Studio cleanup is unconfirmed; recording and Stop control retained: {}",
+            report
+                .result
+                .err()
+                .unwrap_or_else(|| "terminal acknowledgement missing".into())
+        ));
+    }
     if !report.accepted_intent {
         return Err("Another Studio terminal action owns cleanup".into());
-    }
-    if report.quiescence != studio_recording::StudioQuiescence::Joined {
-        return Err("Studio cleanup is unconfirmed; recording and Stop control retained".into());
     }
     finish(report.result).await
 }
@@ -3265,6 +3781,560 @@ enum StudioTerminalAction {
     Restart,
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StudioStopOrigin {
+    Automatic,
+    Explicit,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[derive(Clone)]
+struct StudioStopIdentity {
+    handle: studio_recording::ActorHandle,
+    directory: PathBuf,
+    generation: Option<u32>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+impl StudioStopIdentity {
+    fn matches(
+        &self,
+        handle: &studio_recording::ActorHandle,
+        directory: &Path,
+        generation: Option<u32>,
+    ) -> bool {
+        #[cfg(target_os = "linux")]
+        let same = self.handle.lifecycle().same_attempt(&handle.lifecycle());
+        #[cfg(any(target_os = "macos", windows))]
+        let same = self.handle.same_attempt(handle);
+        same && self.directory == directory && self.generation == generation
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[derive(Default)]
+struct StudioStopFlight {
+    participants: usize,
+    explicit: usize,
+    explicit_seen: bool,
+    presentation_claimed: bool,
+    automatic_error: Option<StudioStopError>,
+    cleanup_completed: bool,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+struct StudioStopCohort {
+    identity: StudioStopIdentity,
+    notice: crate::clean_capture::StopNoticeTicket,
+    flight: std::sync::Mutex<StudioStopFlight>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[derive(Clone, Default)]
+struct StudioStopRegistry(Arc<std::sync::Mutex<StudioStopRegistryState>>);
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[derive(Default)]
+struct StudioStopRegistryState {
+    cohorts: Vec<Arc<StudioStopCohort>>,
+    active: Option<(StudioStopIdentity, crate::clean_capture::StopNoticeOwner)>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[derive(Clone)]
+struct StudioStopError {
+    kind: crate::clean_capture::StopNoticeKind,
+    message: String,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+type StudioStopPresenter =
+    Arc<dyn Fn(&crate::clean_capture::StopNoticeTicket, StudioStopError) + Send + Sync>;
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+impl StudioStopRegistry {
+    fn retire(&self, owner: &crate::clean_capture::StopNoticeOwner) {
+        let mut entries = self.0.lock().unwrap();
+        if entries
+            .active
+            .as_ref()
+            .is_some_and(|(_, active)| active.same_attempt(owner))
+        {
+            entries.active = None;
+        }
+    }
+
+    fn active_identity(&self, directory: &Path, generation: u32) -> Option<StudioStopIdentity> {
+        self.0
+            .lock()
+            .unwrap()
+            .active
+            .as_ref()
+            .and_then(|(identity, _)| {
+                (identity.directory == directory && identity.generation == Some(generation))
+                    .then(|| identity.clone())
+            })
+    }
+
+    fn retire_identity(
+        &self,
+        handle: &studio_recording::ActorHandle,
+        directory: &Path,
+        generation: Option<u32>,
+    ) -> Option<crate::clean_capture::StopNoticeOwner> {
+        let mut entries = self.0.lock().unwrap();
+        if entries
+            .active
+            .as_ref()
+            .is_some_and(|(identity, _)| identity.matches(handle, directory, generation))
+        {
+            entries.active.take().map(|(_, owner)| owner)
+        } else {
+            None
+        }
+    }
+
+    fn enroll(
+        &self,
+        identity: StudioStopIdentity,
+        origin: StudioStopOrigin,
+        present: StudioStopPresenter,
+        new_owner: impl FnOnce(&StudioStopIdentity) -> crate::clean_capture::StopNoticeOwner,
+        new_ticket: impl FnOnce(
+            crate::clean_capture::StopNoticeOwner,
+        ) -> crate::clean_capture::StopNoticeTicket,
+    ) -> StudioStopParticipant {
+        let mut entries = self.0.lock().unwrap();
+        let cohort = match entries.cohorts.iter().find(|entry| {
+            entry
+                .identity
+                .matches(&identity.handle, &identity.directory, identity.generation)
+        }) {
+            Some(entry) => entry.clone(),
+            None => {
+                let owner = match &entries.active {
+                    Some((active, owner))
+                        if active.matches(
+                            &identity.handle,
+                            &identity.directory,
+                            identity.generation,
+                        ) =>
+                    {
+                        owner.clone()
+                    }
+                    _ => {
+                        let owner = new_owner(&identity);
+                        entries.active = Some((identity.clone(), owner.clone()));
+                        owner
+                    }
+                };
+                let entry = Arc::new(StudioStopCohort {
+                    identity,
+                    notice: new_ticket(owner),
+                    flight: std::sync::Mutex::new(StudioStopFlight::default()),
+                });
+                entries.cohorts.push(entry.clone());
+                entry
+            }
+        };
+        {
+            let mut flight = cohort.flight.lock().unwrap();
+            flight.participants += 1;
+            if origin == StudioStopOrigin::Explicit {
+                flight.explicit += 1;
+                flight.explicit_seen = true;
+            }
+        }
+        StudioStopParticipant {
+            registry: self.clone(),
+            cohort,
+            origin,
+            present,
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn studio_stop_registry(app: &AppHandle) -> StudioStopRegistry {
+    if app.try_state::<StudioStopRegistry>().is_none() {
+        app.manage(StudioStopRegistry::default());
+    }
+    app.state::<StudioStopRegistry>().inner().clone()
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn enroll_studio_stop(
+    app: &AppHandle,
+    _state: &Arc<tokio::sync::RwLock<App>>,
+    handle: &studio_recording::ActorHandle,
+    directory: &Path,
+    generation: Option<u32>,
+    origin: StudioStopOrigin,
+) -> StudioStopParticipant {
+    let retained_app = app.clone();
+    let registry = studio_stop_registry(app);
+    registry.enroll(
+        StudioStopIdentity {
+            handle: handle.clone(),
+            directory: directory.to_owned(),
+            generation,
+        },
+        origin,
+        Arc::new(move |ticket, error| {
+            crate::clean_capture::retain_stop_notice(
+                &retained_app,
+                ticket,
+                error.kind,
+                error.message,
+            );
+        }),
+        |identity| {
+            crate::clean_capture::reserve_stop_notice_owner(
+                app,
+                identity.directory.clone(),
+                identity.generation,
+            )
+        },
+        |owner| crate::clean_capture::reserve_stop_notice_ticket(app, owner),
+    )
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+struct StudioStopParticipant {
+    registry: StudioStopRegistry,
+    cohort: Arc<StudioStopCohort>,
+    origin: StudioStopOrigin,
+    present: StudioStopPresenter,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+impl StudioStopParticipant {
+    fn claim_presentation(&self) {
+        let mut flight = self.cohort.flight.lock().unwrap();
+        flight.presentation_claimed = true;
+        flight.automatic_error = None;
+    }
+
+    fn hand_off_error(&self) {
+        if self.origin == StudioStopOrigin::Explicit {
+            self.claim_presentation();
+        }
+    }
+
+    fn defer_error(&self, error: StudioStopError) {
+        let mut flight = self.cohort.flight.lock().unwrap();
+        if !flight.presentation_claimed && flight.automatic_error.is_none() {
+            flight.automatic_error = Some(error.clone());
+        }
+        drop(flight);
+        (self.present)(&self.cohort.notice, error);
+    }
+
+    fn stale_completion(self) -> StudioTerminalCompletion {
+        let outcome = stale_studio_completion(
+            Some(&self.cohort),
+            self.origin == StudioStopOrigin::Automatic,
+        );
+        StudioTerminalCompletion {
+            outcome,
+            participant: Some(self),
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+impl Drop for StudioStopParticipant {
+    fn drop(&mut self) {
+        let error = {
+            let mut entries = self.registry.0.lock().unwrap();
+            let mut flight = self.cohort.flight.lock().unwrap();
+            flight.participants -= 1;
+            if self.origin == StudioStopOrigin::Explicit {
+                flight.explicit -= 1;
+            }
+            let error = if flight.explicit == 0 && !flight.presentation_claimed {
+                let error = flight.automatic_error.take();
+                if error.is_some() {
+                    flight.presentation_claimed = true;
+                }
+                error
+            } else {
+                None
+            };
+            if flight.participants == 0 {
+                entries
+                    .cohorts
+                    .retain(|entry| !Arc::ptr_eq(entry, &self.cohort));
+            }
+            error
+        };
+        if let Some(error) = error {
+            (self.present)(&self.cohort.notice, error);
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+enum StudioControlFailure {
+    Unconfirmed(String),
+    TaskFailed(String),
+    RejectedConfirmed(String),
+    Other(String),
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+enum StudioTerminalOutcome {
+    AppliedCompletion(Result<(), String>),
+    SupersededConfirmedStop,
+    ControlFailure(StudioControlFailure),
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn stale_studio_completion(
+    cohort: Option<&Arc<StudioStopCohort>>,
+    automatic: bool,
+) -> StudioTerminalOutcome {
+    if cohort.is_some_and(|cohort| {
+        cohort.flight.lock().unwrap().cleanup_completed
+            || automatic && cohort.notice.owner.is_confirmed()
+    }) {
+        StudioTerminalOutcome::SupersededConfirmedStop
+    } else {
+        StudioTerminalOutcome::ControlFailure(StudioControlFailure::Other(
+            "Studio terminal completion is stale".into(),
+        ))
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn complete_studio_cleanup(
+    app: &AppHandle,
+    cohort: Option<&Arc<StudioStopCohort>>,
+    state: &App,
+    result: Result<(), String>,
+) -> StudioTerminalOutcome {
+    if let Some(cohort) = cohort {
+        if let Some(InProgressRecording::Studio { handle, common, .. }) = state.current_recording()
+            && cohort
+                .identity
+                .matches(handle, &common.recording_dir, cohort.identity.generation)
+        {
+            return StudioTerminalOutcome::ControlFailure(StudioControlFailure::Other(
+                result
+                    .err()
+                    .unwrap_or_else(|| "Studio cleanup did not retire the recording".into()),
+            ));
+        }
+        cohort.flight.lock().unwrap().cleanup_completed = true;
+        studio_stop_registry(app).retire(&cohort.notice.owner);
+        crate::clean_capture::confirm_stop_notice(app, &cohort.notice.owner);
+    }
+    StudioTerminalOutcome::AppliedCompletion(result)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+struct StudioTerminalCompletion {
+    outcome: StudioTerminalOutcome,
+    participant: Option<StudioStopParticipant>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+impl StudioTerminalCompletion {
+    #[cfg(any(target_os = "macos", windows))]
+    fn error(&self) -> Option<&String> {
+        match &self.outcome {
+            StudioTerminalOutcome::ControlFailure(StudioControlFailure::RejectedConfirmed(_))
+                if self.participant.as_ref().is_some_and(|participant| {
+                    participant.origin == StudioStopOrigin::Automatic
+                }) =>
+            {
+                None
+            }
+            StudioTerminalOutcome::AppliedCompletion(Err(error))
+            | StudioTerminalOutcome::ControlFailure(StudioControlFailure::Unconfirmed(error))
+            | StudioTerminalOutcome::ControlFailure(StudioControlFailure::TaskFailed(error))
+            | StudioTerminalOutcome::ControlFailure(StudioControlFailure::Other(error))
+            | StudioTerminalOutcome::ControlFailure(StudioControlFailure::RejectedConfirmed(
+                error,
+            )) => Some(error),
+            _ => None,
+        }
+    }
+
+    fn from_report(
+        result: Result<StudioTerminalOutcome, String>,
+        accepted: bool,
+        confirmed: bool,
+        participant: Option<StudioStopParticipant>,
+    ) -> Self {
+        let outcome = match result {
+            Ok(outcome) => outcome,
+            Err(error) => StudioTerminalOutcome::ControlFailure(if !confirmed {
+                StudioControlFailure::Unconfirmed(error)
+            } else if !accepted && confirmed {
+                StudioControlFailure::RejectedConfirmed(error)
+            } else {
+                StudioControlFailure::Other(error)
+            }),
+        };
+        Self {
+            outcome,
+            participant: None,
+        }
+        .with_participant(participant)
+    }
+
+    fn with_participant(mut self, participant: Option<StudioStopParticipant>) -> Self {
+        let error = match &self.outcome {
+            StudioTerminalOutcome::AppliedCompletion(Err(message)) => Some(StudioStopError {
+                kind: crate::clean_capture::StopNoticeKind::ConfirmedFailure,
+                message: message.clone(),
+            }),
+            StudioTerminalOutcome::ControlFailure(StudioControlFailure::Unconfirmed(message)) => {
+                Some(StudioStopError {
+                    kind: crate::clean_capture::StopNoticeKind::Unconfirmed,
+                    message: message.clone(),
+                })
+            }
+            StudioTerminalOutcome::ControlFailure(
+                StudioControlFailure::TaskFailed(message) | StudioControlFailure::Other(message),
+            ) => Some(StudioStopError {
+                kind: crate::clean_capture::StopNoticeKind::ControlFailure,
+                message: message.clone(),
+            }),
+            StudioTerminalOutcome::ControlFailure(StudioControlFailure::RejectedConfirmed(
+                message,
+            )) if participant
+                .as_ref()
+                .is_some_and(|participant| participant.origin == StudioStopOrigin::Explicit) =>
+            {
+                Some(StudioStopError {
+                    kind: crate::clean_capture::StopNoticeKind::ControlFailure,
+                    message: message.clone(),
+                })
+            }
+            _ => None,
+        };
+        if let (Some(error), Some(participant)) = (error, &participant) {
+            participant.defer_error(error);
+        }
+        self.participant = participant;
+        self
+    }
+
+    fn into_result(self) -> Result<(), String> {
+        let Self {
+            outcome,
+            participant,
+        } = self;
+        let completion = Self {
+            outcome,
+            participant: None,
+        }
+        .with_participant(participant);
+        match completion.outcome {
+            StudioTerminalOutcome::AppliedCompletion(result) => {
+                if result.is_err()
+                    && let Some(participant) = &completion.participant
+                {
+                    participant.hand_off_error();
+                }
+                result
+            }
+            StudioTerminalOutcome::SupersededConfirmedStop => Ok(()),
+            StudioTerminalOutcome::ControlFailure(StudioControlFailure::Unconfirmed(error))
+            | StudioTerminalOutcome::ControlFailure(StudioControlFailure::TaskFailed(error)) => {
+                if let Some(participant) = &completion.participant {
+                    participant.hand_off_error();
+                }
+                Err(error)
+            }
+            StudioTerminalOutcome::ControlFailure(StudioControlFailure::Other(error))
+            | StudioTerminalOutcome::ControlFailure(StudioControlFailure::RejectedConfirmed(
+                error,
+            )) => Err(error),
+        }
+    }
+
+    fn present_automatic(self) {
+        let participant = self.participant;
+        drop(
+            Self {
+                outcome: self.outcome,
+                participant: None,
+            }
+            .with_participant(participant),
+        );
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+async fn run_owned_studio_stop(
+    work: impl std::future::Future<Output = Option<StudioTerminalCompletion>> + Send + 'static,
+    participant: Option<StudioStopParticipant>,
+) -> Option<StudioTerminalCompletion> {
+    let failed_task_presenter = participant
+        .as_ref()
+        .map(|participant| (participant.cohort.clone(), participant.present.clone()));
+    let owned = async move {
+        let completion = match AssertUnwindSafe(work).catch_unwind().await {
+            Ok(completion) => completion,
+            Err(panic) => Some(StudioTerminalCompletion {
+                outcome: StudioTerminalOutcome::ControlFailure(StudioControlFailure::TaskFailed(
+                    format!(
+                        "Studio Stop task failed; cleanup may be incomplete: {}",
+                        panic_message(panic)
+                    ),
+                )),
+                participant: None,
+            }),
+        };
+        completion.map(|completion| completion.with_participant(participant))
+    };
+    match tauri::async_runtime::spawn(owned).await {
+        Ok(completion) => completion,
+        Err(error) => {
+            let error = format!("Studio Stop task failed; cleanup may be incomplete: {error}");
+            if let Some((cohort, present)) = failed_task_presenter {
+                present(
+                    &cohort.notice,
+                    StudioStopError {
+                        kind: crate::clean_capture::StopNoticeKind::ControlFailure,
+                        message: error.clone(),
+                    },
+                );
+            }
+            Some(StudioTerminalCompletion {
+                outcome: StudioTerminalOutcome::ControlFailure(StudioControlFailure::TaskFailed(
+                    error,
+                )),
+                participant: None,
+            })
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn stopped_studio_error(error: &str, directory: &Path, action: StudioTerminalAction) -> String {
+    if action != StudioTerminalAction::Stop {
+        return error.to_owned();
+    }
+    let lower = error.to_ascii_lowercase();
+    let disk_full = lower.contains("disk full:")
+        || lower.contains("no space left on device")
+        || !cfg!(windows) && lower.contains("(os error 28)")
+        || cfg!(windows) && (lower.contains("(os error 112)") || lower.contains("(os error 39)"));
+    if disk_full {
+        format!(
+            "Recording stopped because your disk is full. Your recording files have been kept at {}. Free up space before recording again.",
+            directory.display()
+        )
+    } else {
+        error.to_owned()
+    }
+}
+
 #[cfg(target_os = "linux")]
 async fn control_studio_recording(
     app: &AppHandle,
@@ -3272,35 +4342,91 @@ async fn control_studio_recording(
     expected_directory: Option<&Path>,
     action: StudioTerminalAction,
     failure: Option<String>,
-) -> Option<Result<(), String>> {
-    let (handle, directory, target_name, capture_target, generation) = {
-        let state = state.read().await;
-        let InProgressRecording::Studio { handle, common, .. } = state.current_recording()? else {
-            return None;
+    automatic: Option<StudioStopParticipant>,
+) -> Option<StudioTerminalCompletion> {
+    let (handle, directory, target_name, capture_target, generation, participant) = {
+        let current_state = state.read().await;
+        let Some(InProgressRecording::Studio { handle, common, .. }) =
+            current_state.current_recording()
+        else {
+            return automatic.map(StudioStopParticipant::stale_completion);
         };
         if expected_directory.is_some_and(|expected| expected != common.recording_dir) {
-            return Some(Err(
-                "Studio terminal operation belongs to an older recording".into(),
-            ));
+            return Some(match automatic {
+                Some(participant) => participant.stale_completion(),
+                None => StudioTerminalCompletion {
+                    outcome: StudioTerminalOutcome::ControlFailure(StudioControlFailure::Other(
+                        "Studio terminal operation belongs to an older recording".into(),
+                    )),
+                    participant: None,
+                },
+            });
         }
+        let generation = crate::clean_capture::owner(app, &common.recording_dir);
+        let participant = if action == StudioTerminalAction::Stop {
+            match automatic {
+                Some(participant) => {
+                    if !participant.cohort.identity.matches(
+                        handle,
+                        &common.recording_dir,
+                        generation,
+                    ) || participant.origin == StudioStopOrigin::Explicit
+                        && !studio_stop_retry_is_current(app, &common.recording_dir, generation)
+                    {
+                        return Some(participant.stale_completion());
+                    }
+                    Some(participant)
+                }
+                None => Some(enroll_studio_stop(
+                    app,
+                    state,
+                    handle,
+                    &common.recording_dir,
+                    generation,
+                    StudioStopOrigin::Explicit,
+                )),
+            }
+        } else {
+            None
+        };
         (
             handle.clone(),
             common.recording_dir.clone(),
             common.target_name.clone(),
             common.inputs.capture_target.clone(),
-            crate::clean_capture::owner(app, &common.recording_dir),
+            generation,
+            participant,
         )
     };
-    let discard = action != StudioTerminalAction::Stop;
-    let intent = if discard {
-        studio_recording::StudioStopIntent::Discard
-    } else {
-        studio_recording::StudioStopIntent::Preserve
-    };
-    let stopping = handle.clone();
-    Some(
-        after_studio_join(
-            async move { stopping.stop_with_intent(intent).await },
+
+    let automatic = participant
+        .as_ref()
+        .is_some_and(|participant| participant.origin == StudioStopOrigin::Automatic);
+    let cohort = participant
+        .as_ref()
+        .map(|participant| participant.cohort.clone());
+    let app = app.clone();
+    let state = state.clone();
+    #[cfg(any(target_os = "macos", windows))]
+    let expected_directory = expected_directory.map(Path::to_owned);
+    let work = async move {
+        let app = &app;
+        let state = &state;
+        #[cfg(any(target_os = "macos", windows))]
+        let expected_directory = expected_directory.as_deref();
+        let discard = action != StudioTerminalAction::Stop;
+        let intent = if discard {
+            studio_recording::StudioStopIntent::Discard
+        } else {
+            studio_recording::StudioStopIntent::Preserve
+        };
+
+        let stopping = handle.clone();
+        let report = stopping.stop_with_intent(intent).await;
+        let accepted = report.accepted_intent;
+        let confirmed = report.quiescence == studio_recording::StudioQuiescence::Joined;
+        let result = after_studio_join(
+            async move { report },
             |result| async move {
                 let outcome = match failure {
                     Some(error) => Err(error),
@@ -3309,6 +4435,11 @@ async fn control_studio_recording(
                 if discard && let Err(error) = &outcome {
                     return Err(error.clone());
                 }
+                let finalization_project = if !discard && outcome.is_ok() {
+                    Some(crate::FinalizationProject::admit(directory.clone()).await)
+                } else {
+                    None
+                };
                 let mut state = state.write().await;
                 let current = match state.current_recording() {
                     Some(InProgressRecording::Studio {
@@ -3323,7 +4454,7 @@ async fn control_studio_recording(
                     _ => false,
                 };
                 if !current {
-                    return Err("Studio terminal completion is stale".into());
+                    return Ok(stale_studio_completion(cohort.as_ref(), automatic));
                 }
                 if discard && let Err(error) = remove_recording_dir(&directory).await {
                     return Err(error);
@@ -3338,7 +4469,11 @@ async fn control_studio_recording(
                         capture_target,
                     })
                 };
-                if let Some(error) = &error {
+                let display_error = error.as_deref().map(|error| {
+                    tracing::error!(error, directory = %directory.display(), "Studio stopped with a recording failure");
+                    stopped_studio_error(error, &directory, action)
+                });
+                if let Some(error) = &display_error {
                     let _ = RecordingEvent::Failed {
                         error: error.clone(),
                     }
@@ -3350,16 +4485,28 @@ async fn control_studio_recording(
                     &mut state,
                     directory,
                     action == StudioTerminalAction::Restart,
+                    finalization_project,
                 )
                 .await;
-                match error {
+                let result = match display_error {
                     Some(error) => Err(error),
                     None => cleanup,
-                }
+                };
+                let outcome = complete_studio_cleanup(app, cohort.as_ref(), &state, result);
+                drop(state);
+                Ok(outcome)
             },
         )
-        .await,
-    )
+        .await;
+        Some(StudioTerminalCompletion::from_report(
+            result, accepted, confirmed, None,
+        ))
+    };
+    if action == StudioTerminalAction::Stop {
+        run_owned_studio_stop(work, participant).await
+    } else {
+        work.await
+    }
 }
 
 #[cfg(any(target_os = "macos", windows))]
@@ -3371,9 +4518,6 @@ where
     F: std::future::Future<Output = Result<T, String>>,
 {
     let report = stop.await;
-    if !report.accepted_intent {
-        return Err("Another Studio terminal action owns cleanup".into());
-    }
     if !report.stop_acknowledged {
         return Err(format!(
             "Studio cleanup is unconfirmed; recording and Stop control retained: {}",
@@ -3382,6 +4526,9 @@ where
                 .err()
                 .unwrap_or_else(|| "terminal acknowledgement missing".into())
         ));
+    }
+    if !report.accepted_intent {
+        return Err("Another Studio terminal action owns cleanup".into());
     }
     finish(report.result).await
 }
@@ -3393,36 +4540,102 @@ async fn control_studio_recording(
     expected_directory: Option<&Path>,
     action: StudioTerminalAction,
     failure: Option<String>,
-) -> Option<Result<(), String>> {
-    let (handle, directory, target_name, capture_target, generation) = {
-        let state = state.read().await;
-        let InProgressRecording::Studio { handle, common, .. } = state.current_recording()? else {
-            return None;
+    automatic: Option<StudioStopParticipant>,
+) -> Option<StudioTerminalCompletion> {
+    let (handle, directory, target_name, capture_target, generation, participant) = {
+        let current_state = state.read().await;
+        let Some(InProgressRecording::Studio { handle, common, .. }) =
+            current_state.current_recording()
+        else {
+            return automatic.map(StudioStopParticipant::stale_completion);
         };
         if expected_directory.is_some_and(|expected| expected != common.recording_dir) {
-            return Some(Err(
-                "Studio terminal operation belongs to an older recording".into(),
-            ));
+            return Some(match automatic {
+                Some(participant) => participant.stale_completion(),
+                None => StudioTerminalCompletion {
+                    outcome: StudioTerminalOutcome::ControlFailure(StudioControlFailure::Other(
+                        "Studio terminal operation belongs to an older recording".into(),
+                    )),
+                    participant: None,
+                },
+            });
         }
+        let generation = crate::clean_capture::owner(app, &common.recording_dir);
+        let participant = if action == StudioTerminalAction::Stop {
+            match automatic {
+                Some(participant) => {
+                    if !participant.cohort.identity.matches(
+                        handle,
+                        &common.recording_dir,
+                        generation,
+                    ) || participant.origin == StudioStopOrigin::Explicit
+                        && !studio_stop_retry_is_current(app, &common.recording_dir, generation)
+                    {
+                        return Some(participant.stale_completion());
+                    }
+                    Some(participant)
+                }
+                None => Some(enroll_studio_stop(
+                    app,
+                    state,
+                    handle,
+                    &common.recording_dir,
+                    generation,
+                    StudioStopOrigin::Explicit,
+                )),
+            }
+        } else {
+            None
+        };
         (
             handle.clone(),
             common.recording_dir.clone(),
             common.target_name.clone(),
             common.inputs.capture_target.clone(),
-            crate::clean_capture::owner(app, &common.recording_dir),
+            generation,
+            participant,
         )
     };
-    let discard = action != StudioTerminalAction::Stop;
-    let intent = if discard {
-        studio_recording::StudioStopIntent::Discard
-    } else {
-        studio_recording::StudioStopIntent::Preserve
-    };
-    let stopping = handle.clone();
-    let finishing = handle.clone();
-    let result = after_studio_capture_stop(
-        async move { stopping.stop_with_intent(intent).await },
+    let automatic = participant
+        .as_ref()
+        .is_some_and(|participant| participant.origin == StudioStopOrigin::Automatic);
+    let cohort = participant
+        .as_ref()
+        .map(|participant| participant.cohort.clone());
+    let app = app.clone();
+    let state = state.clone();
+    #[cfg(any(target_os = "macos", windows))]
+    let expected_directory = expected_directory.map(Path::to_owned);
+    let work = async move {
+        let app = &app;
+        let state = &state;
+        #[cfg(any(target_os = "macos", windows))]
+        let expected_directory = expected_directory.as_deref();
+        let discard = action != StudioTerminalAction::Stop;
+        let intent = if discard {
+            studio_recording::StudioStopIntent::Discard
+        } else {
+            studio_recording::StudioStopIntent::Preserve
+        };
+
+        let stopping = handle.clone();
+        let finishing = handle.clone();
+        let report = stopping.stop_with_intent(intent).await;
+        let accepted = report.accepted_intent;
+        let confirmed = report.stop_acknowledged;
+        let result = after_studio_capture_stop(
+        async move { report },
         |result| async move {
+            let outcome = match (failure, result) {
+                (Some(failure), Err(error)) => Err(format!("{failure}; {error}")),
+                (Some(error), _) => Err(error),
+                (None, result) => result,
+            };
+            let finalization_project = if !discard && outcome.is_ok() {
+                Some(crate::FinalizationProject::admit(directory.clone()).await)
+            } else {
+                None
+            };
             let mut state = state.write().await;
             let current = match state.current_recording() {
                 Some(InProgressRecording::Studio {
@@ -3437,13 +4650,8 @@ async fn control_studio_recording(
                 _ => false,
             };
             if !current {
-                return Err("Studio terminal completion is stale".into());
+                return Ok(stale_studio_completion(cohort.as_ref(), automatic));
             }
-            let outcome = match (failure, result) {
-                (Some(failure), Err(error)) => Err(format!("{failure}; {error}")),
-                (Some(error), _) => Err(error),
-                (None, result) => result,
-            };
             let mut error = outcome.as_ref().err().cloned();
             if discard && error.is_none() {
                 error = remove_recording_dir(&directory).await.err();
@@ -3451,8 +4659,11 @@ async fn control_studio_recording(
             #[cfg(target_os = "macos")]
             if action == StudioTerminalAction::Restart && error.is_none() {
                 drop(state.clear_current_recording());
+                if let Some(owner) = studio_stop_registry(app).retire_identity(&finishing, &directory, generation) {
+                    crate::clean_capture::confirm_stop_notice(app, &owner);
+                }
                 CurrentRecordingChanged.emit(app).ok();
-                return Ok(());
+                return Ok(StudioTerminalOutcome::AppliedCompletion(Ok(())));
             }
             let completed = if let Some(error) = &error {
                 Err(error.clone())
@@ -3465,7 +4676,11 @@ async fn control_studio_recording(
                     capture_target,
                 })
             };
-            if let Some(error) = &error {
+            let display_error = error.as_deref().map(|error| {
+                tracing::error!(error, directory = %directory.display(), "Studio stopped with a recording failure");
+                stopped_studio_error(error, &directory, action)
+            });
+            if let Some(error) = &display_error {
                 let _ = RecordingEvent::Failed {
                     error: error.clone(),
                 }
@@ -3477,50 +4692,211 @@ async fn control_studio_recording(
                 &mut state,
                 directory,
                 action == StudioTerminalAction::Restart && error.is_none(),
+                finalization_project,
             )
             .await;
-            match error {
+            let result = match display_error {
                 Some(error) => Err(error),
                 None => cleanup,
-            }
+            };
+            let outcome = complete_studio_cleanup(app, cohort.as_ref(), &state, result);
+            drop(state);
+            Ok(outcome)
         },
     )
     .await;
-    if let Err(error) = &result {
-        let state = state.read().await;
-        if let Some(InProgressRecording::Studio {
-            handle: current,
+        let completion = StudioTerminalCompletion::from_report(result, accepted, confirmed, None);
+        if action != StudioTerminalAction::Stop
+            && !(automatic
+                && matches!(
+                    &completion.outcome,
+                    StudioTerminalOutcome::ControlFailure(StudioControlFailure::RejectedConfirmed(
+                        _
+                    ))
+                ))
+            && let Some(error) = completion.error()
+        {
+            let state = state.read().await;
+            if let Some(InProgressRecording::Studio {
+                handle: current,
+                common,
+                ..
+            }) = state.current_recording()
+                && current.same_attempt(&handle)
+                && expected_directory.is_none_or(|expected| expected == common.recording_dir)
+            {
+                let _ = RecordingEvent::Failed {
+                    error: error.clone(),
+                }
+                .emit(app);
+            }
+        }
+        Some(completion)
+    };
+    if action == StudioTerminalAction::Stop {
+        run_owned_studio_stop(work, participant).await
+    } else {
+        work.await
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn studio_stop_retry_is_current(
+    app: &AppHandle,
+    directory: &Path,
+    generation: Option<u32>,
+) -> bool {
+    let Some(generation) = generation else {
+        return false;
+    };
+    let snapshot = crate::clean_capture::get_clean_capture_state(app.clone());
+    snapshot.generation == generation
+        && matches!(snapshot.phase, Some(crate::clean_capture::Phase::Stopping))
+        && matches!(snapshot.mode, Some(RecordingMode::Studio))
+        && crate::clean_capture::owner(app, directory) == Some(generation)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+pub(crate) fn queue_clean_studio_stop(app: &AppHandle, generation: u32, directory: PathBuf) {
+    let Some(identity) = studio_stop_registry(app).active_identity(&directory, generation) else {
+        return;
+    };
+    let app = app.clone();
+    drop(tauri::async_runtime::spawn(async move {
+        if let Err(error) =
+            stop_clean_studio_recording(app, identity.handle, generation, directory).await
+        {
+            tracing::error!(%error, "Clean capture Stop did not complete");
+        }
+    }));
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+pub(crate) async fn stop_clean_studio_recording(
+    app: AppHandle,
+    handle: studio_recording::ActorHandle,
+    generation: u32,
+    directory: PathBuf,
+) -> Result<(), String> {
+    let state = app.state::<Arc<tokio::sync::RwLock<App>>>().inner().clone();
+    let participant = {
+        let current = state.read().await;
+        let Some(InProgressRecording::Studio {
+            handle: current_handle,
             common,
             ..
-        }) = state.current_recording()
-            && current.same_attempt(&handle)
-            && expected_directory.is_none_or(|expected| expected == common.recording_dir)
-        {
-            let _ = RecordingEvent::Failed {
-                error: error.clone(),
-            }
-            .emit(app);
+        }) = current.current_recording()
+        else {
+            return Ok(());
+        };
+        let identity = StudioStopIdentity {
+            handle,
+            directory,
+            generation: Some(generation),
+        };
+        if !identity.matches(
+            current_handle,
+            &common.recording_dir,
+            crate::clean_capture::owner(&app, &common.recording_dir),
+        ) || !crate::clean_capture::queue_owned_studio_stop(
+            &app,
+            generation,
+            &common.recording_dir,
+        ) {
+            return Ok(());
         }
-    }
-    Some(result)
+        enroll_studio_stop(
+            &app,
+            &state,
+            current_handle,
+            &common.recording_dir,
+            Some(generation),
+            StudioStopOrigin::Explicit,
+        )
+    };
+    control_studio_recording(
+        &app,
+        &state,
+        None,
+        StudioTerminalAction::Stop,
+        None,
+        Some(participant),
+    )
+    .await
+    .map_or(Ok(()), StudioTerminalCompletion::into_result)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+async fn queue_studio_stop(
+    app: &AppHandle,
+    state: &Arc<tokio::sync::RwLock<App>>,
+) -> (bool, Option<StudioStopParticipant>) {
+    let current = state.read().await;
+    let generation = match current.current_recording() {
+        Some(InProgressRecording::Studio { common, .. }) => {
+            crate::clean_capture::owner(app, &common.recording_dir)
+        }
+        _ => None,
+    };
+    let deferred = crate::clean_capture::queue_stop(app);
+    let retry = if deferred {
+        match current.current_recording() {
+            Some(InProgressRecording::Studio { handle, common, .. })
+                if studio_stop_retry_is_current(app, &common.recording_dir, generation) =>
+            {
+                Some(enroll_studio_stop(
+                    app,
+                    state,
+                    handle,
+                    &common.recording_dir,
+                    generation,
+                    StudioStopOrigin::Explicit,
+                ))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    (deferred, retry)
 }
 
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app, state))]
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+    if cancel_recording_storage_prompt(&app, &state).await {
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
     if let Some(attempt) = linux_instant::current(&app) {
         return linux_instant::control(app, attempt, false).await;
     }
-    if crate::clean_capture::queue_stop(&app) {
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    let (deferred, retry) = queue_studio_stop(&app, &state).await;
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    let deferred = crate::clean_capture::queue_stop(&app);
+    if deferred {
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+        if let Some(retry) = retry {
+            return control_studio_recording(
+                &app,
+                &state,
+                None,
+                StudioTerminalAction::Stop,
+                None,
+                Some(retry),
+            )
+            .await
+            .map_or(Ok(()), StudioTerminalCompletion::into_result);
+        }
         return Ok(());
     }
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     if let Some(result) =
-        control_studio_recording(&app, &state, None, StudioTerminalAction::Stop, None).await
+        control_studio_recording(&app, &state, None, StudioTerminalAction::Stop, None, None).await
     {
-        return result;
+        return result.into_result();
     }
     let mut state = state.write().await;
     let recording_pending = matches!(&state.recording_state, RecordingState::Pending { .. });
@@ -3619,9 +4995,11 @@ pub async fn restart_recording(
                             Some(&directory),
                             StudioTerminalAction::Restart,
                             None,
+                            None,
                         )
                         .await
-                        .ok_or("Studio recording changed before restart")??;
+                        .ok_or("Studio recording changed before restart")?
+                        .into_result()?;
                         Ok(())
                     },
                     async {
@@ -3729,8 +5107,12 @@ pub async fn restart_recording(
         }
         .await;
         if !matches!(&result, Ok(RecordingAction::Started)) {
-            state.write().await.clear_pending_recording();
-            crate::clean_capture::release(&app, generation, false);
+            let mut app_state = state.write().await;
+            if crate::clean_capture::is_current(&app, generation) {
+                app_state.clear_pending_recording();
+                drop(app_state);
+                crate::clean_capture::release(&app, generation, false);
+            }
         }
         return result;
     }
@@ -3815,15 +5197,25 @@ fn take_editor_target_after_recording(
 #[specta::specta]
 #[instrument(skip(app, state))]
 pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+    if cancel_recording_storage_prompt(&app, &state).await {
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
     if let Some(attempt) = linux_instant::current(&app) {
         return linux_instant::control(app, attempt, true).await;
     }
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
-    if let Some(result) =
-        control_studio_recording(&app, &state, None, StudioTerminalAction::Discard, None).await
+    if let Some(result) = control_studio_recording(
+        &app,
+        &state,
+        None,
+        StudioTerminalAction::Discard,
+        None,
+        None,
+    )
+    .await
     {
-        return result;
+        return result.into_result();
     }
     if crate::clean_capture::phase(&app) == Some(crate::clean_capture::Phase::Recording) {
         crate::clean_capture::control(&app, false).await?;
@@ -4106,7 +5498,7 @@ async fn handle_recording_end(
     app: &mut App,
     recording_dir: PathBuf,
 ) -> Result<(), String> {
-    handle_recording_end_inner(handle, recording, app, recording_dir, false).await
+    handle_recording_end_inner(handle, recording, app, recording_dir, false, None).await
 }
 
 async fn handle_recording_end_inner(
@@ -4115,6 +5507,7 @@ async fn handle_recording_end_inner(
     app: &mut App,
     recording_dir: PathBuf,
     preserve_editor_target: bool,
+    finalization_project: Option<Result<Arc<crate::FinalizationProject>, String>>,
 ) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if let Some(InProgressRecording::Studio {
@@ -4157,6 +5550,21 @@ async fn handle_recording_end_inner(
         return Ok(());
     }
     let cleared = app.clear_recording_state();
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    if let Some(InProgressRecording::Studio {
+        handle: studio,
+        common,
+        ..
+    }) = &cleared
+        && let Some(owner) = studio_stop_registry(&handle).retire_identity(
+            studio,
+            &common.recording_dir,
+            clean_generation,
+        )
+    {
+        crate::clean_capture::confirm_stop_notice(&handle, &owner);
+    }
+
     #[cfg(not(target_os = "linux"))]
     let mut cleared = cleared;
 
@@ -4264,7 +5672,9 @@ async fn handle_recording_end_inner(
     }
     let res = match recording {
         // we delay reporting errors here so that everything else happens first
-        Ok(recording) => Some(handle_recording_finish(&handle, recording).await),
+        Ok(recording) => {
+            Some(handle_recording_finish(&handle, recording, finalization_project).await)
+        }
         Err(error) => {
             if let Ok(mut project_meta) =
                 RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
@@ -4470,6 +5880,7 @@ async fn apply_post_studio_editor_behaviour(
 async fn handle_recording_finish(
     app: &AppHandle,
     completed_recording: CompletedRecording,
+    finalization_project: Option<Result<Arc<crate::FinalizationProject>, String>>,
 ) -> Result<bool, String> {
     let recording_dir = completed_recording.project_path().clone();
 
@@ -4500,8 +5911,14 @@ async fn handle_recording_finish(
                     "Recording has fragments queued for finalization - opening editor immediately"
                 );
 
+                let project = finalization_project.ok_or_else(|| {
+                    crate::recoverable_finalization_error(
+                        &recording_dir,
+                        "Recording directory was not admitted for finalization.".into(),
+                    )
+                })??;
                 let finalizing_state = app.state::<FinalizingRecordings>();
-                finalizing_state.start_finalizing(recording_dir.clone());
+                let finalization = finalizing_state.start_finalizing(project.clone())?;
 
                 let duration = compute_studio_duration_secs(&recording_dir);
                 let editor_took_foreground =
@@ -4511,7 +5928,6 @@ async fn handle_recording_finish(
 
                 let app = app.clone();
                 let recording_dir_for_finalize = recording_dir.clone();
-                let screenshots_dir = screenshots_dir.clone();
                 let default_preset = PresetsStore::get_default_preset(&app)
                     .ok()
                     .flatten()
@@ -4520,15 +5936,14 @@ async fn handle_recording_finish(
                 tokio::spawn(async move {
                     let result = finalize_studio_recording(
                         &app,
-                        recording_dir_for_finalize.clone(),
-                        screenshots_dir,
+                        project,
                         recording,
                         default_preset,
                         Some(capture_target),
                     )
                     .await;
 
-                    match result {
+                    match &result {
                         Ok(()) => {
                             let duration =
                                 compute_studio_duration_secs(&recording_dir_for_finalize);
@@ -4541,8 +5956,7 @@ async fn handle_recording_finish(
                         Err(e) => error!("Failed to finalize recording: {e}"),
                     }
 
-                    app.state::<FinalizingRecordings>()
-                        .finish_finalizing(&recording_dir_for_finalize);
+                    finalization.finish(result);
                 });
 
                 return Ok(editor_took_foreground);
@@ -4753,19 +6167,22 @@ async fn handle_recording_finish(
 
 async fn finalize_studio_recording(
     app: &AppHandle,
-    recording_dir: PathBuf,
-    screenshots_dir: PathBuf,
+    project: Arc<crate::FinalizationProject>,
     recording: cap_recording::studio_recording::CompletedRecording,
     default_preset: Option<ProjectConfiguration>,
     capture_target: Option<ScreenCaptureTarget>,
 ) -> Result<(), String> {
     info!("Starting background finalization for recording");
-
+    project.validate_async().await?;
+    let recording_dir = project.work_path().to_path_buf();
+    let screenshots_dir = recording_dir.join("screenshots");
+    let display_path = project.display_path().to_path_buf();
     let recording_dir_for_remux = recording_dir.clone();
     let app_for_remux = app.clone();
     let remux_result = tokio::task::spawn_blocking(move || {
         remux_fragmented_recording_with_trigger(
             &recording_dir_for_remux,
+            &display_path,
             "recording_stop",
             Some(&app_for_remux),
         )
@@ -4775,7 +6192,7 @@ async fn finalize_studio_recording(
 
     if let Err(e) = remux_result {
         error!("Failed to finalize fragmented recording: {e}");
-        return Err(format!("Failed to finalize fragmented recording: {e}"));
+        return Err(e);
     }
 
     let updated_meta = RecordingMeta::load_for_project(&recording_dir)
@@ -4821,6 +6238,7 @@ async fn finalize_studio_recording(
         .write(&recording_dir)
         .map_err(|e| format!("Failed to write project config: {e}"))?;
 
+    project.validate_async().await?;
     info!("Background finalization completed for recording");
 
     Ok(())
@@ -5072,6 +6490,8 @@ fn project_config_from_recording(
         transitions: Vec::new(),
         zoom_segments,
         scene_segments: Vec::new(),
+        style_segments: Vec::new(),
+        image_segments: Vec::new(),
         mask_segments: Vec::new(),
         text_segments: Vec::new(),
         caption_segments: Vec::new(),
@@ -5214,15 +6634,24 @@ fn mark_fragmented_recording_for_ffmpeg_export(recording_dir: &Path) -> Result<(
     .map_err(|e| format!("Failed to mark recording for FFmpeg export: {e}"))
 }
 
-pub fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
-    remux_fragmented_recording_with_trigger(recording_dir, "manual_remux", None)
+pub(crate) fn remux_fragmented_recording(
+    project: &crate::FinalizationProject,
+) -> Result<(), String> {
+    remux_fragmented_recording_with_trigger(
+        project.work_path(),
+        project.display_path(),
+        "manual_remux",
+        None,
+    )
 }
 
 pub fn remux_fragmented_recording_with_trigger(
     recording_dir: &Path,
+    display_path: &Path,
     trigger: &'static str,
     app: Option<&AppHandle>,
 ) -> Result<(), String> {
+    crate::recovery::ensure_finalization_storage(recording_dir, display_path)?;
     let incomplete_recording = RecoveryManager::inspect_recording(recording_dir);
 
     if let Some(recording) = incomplete_recording {
@@ -5237,7 +6666,9 @@ pub fn remux_fragmented_recording_with_trigger(
 
         match outcome {
             Ok(_) => {
-                mark_fragmented_recording_for_ffmpeg_export(recording_dir)?;
+                if let Err(error) = mark_fragmented_recording_for_ffmpeg_export(recording_dir) {
+                    warn!(project_path = %recording_dir.display(), error = %error, "Failed to write fragmented recording export marker");
+                }
                 if normal_stop {
                     info!("Successfully finalized fragmented recording");
                 } else {
@@ -5291,6 +6722,7 @@ pub fn remux_fragmented_recording_with_trigger(
                 Ok(())
             }
             Err(e) => {
+                let storage_full = crate::recovery::is_storage_full_recovery_error(&e);
                 let reason = format!("{e}");
                 if let Some(app_handle) = app {
                     crate::telemetry::async_capture_event(
@@ -5300,6 +6732,9 @@ pub fn remux_fragmented_recording_with_trigger(
                             reason: reason.clone(),
                         },
                     );
+                }
+                if storage_full {
+                    return Err(crate::recovery::finalization_storage_error(display_path));
                 }
                 let action = if normal_stop { "finalize" } else { "recover" };
                 Err(format!("Failed to {action} recording: {reason}"))
@@ -6447,7 +7882,8 @@ pub(crate) mod linux_instant {
             owned_reply(
                 attempt,
                 async move {
-                    let result = execute(app.clone(), worker, discard).await;
+                    let result = execute(app.clone(), worker.clone(), discard).await;
+                    let result = storage_preflight_control_result(result, worker.has_capture());
                     if let Err(error) = &result {
                         let _ = RecordingEvent::Failed {
                             error: error.clone(),
@@ -8119,6 +9555,71 @@ mod studio_joined_completion_tests {
     }
 }
 
+#[cfg(all(test, any(target_os = "linux", target_os = "macos", windows)))]
+mod studio_failure_presentation_tests {
+    use super::*;
+
+    #[test]
+    fn confirmed_disk_full_message_keeps_exact_recording_path() {
+        let directory = Path::new("/recordings/Unfinished capture.cap");
+        for error in [
+            "out-of-process media finalization failed: disk full: encoder exited with code 60",
+            "Could not save cursor events: No space left on device (os error 28)",
+            "Failed to write keyboard events file: No space left on device (os error 28)",
+        ] {
+            let message = stopped_studio_error(error, directory, StudioTerminalAction::Stop);
+            assert!(message.starts_with("Recording stopped because your disk is full."));
+            assert!(message.contains(&directory.display().to_string()));
+            assert!(message.ends_with("Free up space before recording again."));
+            assert!(!message.contains("playable"));
+        }
+    }
+
+    #[test]
+    fn discard_and_restart_errors_do_not_claim_files_were_kept() {
+        let error = "partial directory removal failed: No space left on device (os error 28)";
+        for action in [StudioTerminalAction::Discard, StudioTerminalAction::Restart] {
+            assert_eq!(
+                stopped_studio_error(error, Path::new("recording.cap"), action),
+                error
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_recording_failures_keep_their_details() {
+        for error in [
+            "camera disconnected",
+            "Permission denied (os error 13)",
+            "could not open /recordings/disk full recording.cap",
+        ] {
+            assert_eq!(
+                stopped_studio_error(
+                    error,
+                    Path::new("recording.cap"),
+                    StudioTerminalAction::Stop
+                ),
+                error
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_storage_full_codes_are_recognized() {
+        for error in ["write failed (os error 112)", "write failed (os error 39)"] {
+            assert!(
+                stopped_studio_error(
+                    error,
+                    Path::new("recording.cap"),
+                    StudioTerminalAction::Stop
+                )
+                .contains("your disk is full")
+            );
+        }
+    }
+}
+
 #[cfg(all(test, any(target_os = "macos", windows)))]
 mod studio_capture_control_tests {
     use super::*;
@@ -8193,5 +9694,41 @@ mod studio_capture_control_tests {
         .unwrap_or_else(|_| panic!("Stop receiver closed before acknowledgement"));
         assert!(stop.await.is_err());
         assert_eq!(effects.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn disk_full_presentation_requires_confirmed_stop_ownership() {
+        for (accepted_intent, stop_acknowledged) in [(true, true), (true, false), (false, true)] {
+            let entered = std::sync::atomic::AtomicBool::new(false);
+            let result = after_studio_capture_stop(
+                async {
+                    studio_recording::WindowsStudioStopReport {
+                        accepted_intent,
+                        stop_acknowledged,
+                        result: Err("disk full: encoder exited with code 60".into()),
+                    }
+                },
+                |result| async {
+                    entered.store(true, std::sync::atomic::Ordering::SeqCst);
+                    result.map_err(|error| {
+                        stopped_studio_error(
+                            &error,
+                            Path::new("retained.cap"),
+                            StudioTerminalAction::Stop,
+                        )
+                    })
+                },
+            )
+            .await;
+            let confirmed = accepted_intent && stop_acknowledged;
+            assert_eq!(entered.load(std::sync::atomic::Ordering::SeqCst), confirmed);
+            assert_eq!(
+                result
+                    .err()
+                    .unwrap()
+                    .starts_with("Recording stopped because your disk is full."),
+                confirmed
+            );
+        }
     }
 }

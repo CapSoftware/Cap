@@ -6,7 +6,6 @@ import { Menu } from "@tauri-apps/api/menu";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { createEffect, createSignal, onMount, Show } from "solid-js";
-
 import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
 import { commands } from "~/utils/tauri";
@@ -18,13 +17,9 @@ import {
 import { CaptionOverlay } from "./CaptionOverlay";
 import { CaptionsRegenerateBadge } from "./CaptionsRegenerateBadge";
 import { createCaptionTrackSegments } from "./captions";
-import {
-	type EditorPreviewQuality,
-	FPS,
-	serializeProjectConfiguration,
-	useEditorContext,
-} from "./context";
+import { type EditorPreviewQuality, FPS, useEditorContext } from "./context";
 import { FrameButton } from "./FrameButton";
+import { ImageOverlay } from "./ImageOverlay";
 import { MaskOverlay } from "./MaskOverlay";
 import { PerformanceOverlay } from "./PerformanceOverlay";
 import { SplitScreenOverlay } from "./SplitScreenOverlay";
@@ -40,9 +35,14 @@ import {
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
 
-export function PlayerContent() {
+export function PlayerContent(props: { compactness?: number }) {
 	const {
+		previewStyle,
+		selectedStyle,
+		toggleStyleGroup,
+		styleScopeToken,
 		project,
+		flushProjectConfig,
 		editorInstance,
 		setDialog,
 		totalDuration,
@@ -108,6 +108,8 @@ export function PlayerContent() {
 							sceneSegments: [],
 							maskSegments: [],
 							textSegments: [],
+							styleSegments: [],
+							imageSegments: [],
 							camera3dSegments: [],
 							transitions: [],
 						}),
@@ -131,9 +133,7 @@ export function PlayerContent() {
 
 				if (projectDidChange) {
 					setProject(updatedProject);
-					await commands.setProjectConfig(
-						serializeProjectConfiguration(updatedProject),
-					);
+					await flushProjectConfig();
 				}
 			}
 		}
@@ -159,15 +159,24 @@ export function PlayerContent() {
 	};
 
 	const cropDialogHandler = async () => {
+		const background = selectedStyle()
+			? (selectedStyle()?.overrides.background ?? previewStyle().background)
+			: project.background;
+		if (selectedStyle() && !selectedStyle()?.overrides.background)
+			toggleStyleGroup("background", true);
+		const styleTarget = editorState.styleEditIndex;
+		const scopeToken = styleScopeToken();
 		const display = editorInstance.recordings.segments[0].display;
 		setDialog({
 			open: true,
 			type: "crop",
+			styleTarget,
+			scopeToken,
 			position: {
-				...(project.background.crop?.position ?? { x: 0, y: 0 }),
+				...(background.crop?.position ?? { x: 0, y: 0 }),
 			},
 			size: {
-				...(project.background.crop?.size ?? {
+				...(background.crop?.size ?? {
 					x: display.width,
 					y: display.height,
 				}),
@@ -287,9 +296,14 @@ export function PlayerContent() {
 
 	return (
 		<div class="flex flex-col flex-1 min-h-0">
-			<div class="flex items-center justify-between gap-3 p-3">
+			<div
+				class="flex flex-none overflow-x-auto items-center justify-between gap-3 px-3"
+				style={{ "padding-block": `${12 - 4 * (props.compactness ?? 0)}px` }}
+			>
 				<div class="flex items-center gap-3">
-					<AspectRatioSelect />
+					<Show when={!selectedStyle()}>
+						<AspectRatioSelect />
+					</Show>
 					<EditorButton
 						tooltipText="Crop Video"
 						onClick={cropDialogHandler}
@@ -354,7 +368,13 @@ export function PlayerContent() {
 				</div>
 			</div>
 			<PreviewCanvas />
-			<div class="relative flex overflow-hidden z-10 flex-row gap-3 justify-between items-center p-5">
+			<div
+				class="relative flex flex-none overflow-x-auto z-10 flex-row gap-3 justify-between items-center px-5"
+				style={{
+					"padding-top": `${20 - 12 * (props.compactness ?? 0)}px`,
+					"padding-bottom": `${20 - 4 * (props.compactness ?? 0)}px`,
+				}}
+			>
 				<div class="flex-1">
 					<Time
 						class="text-gray-12"
@@ -605,7 +625,7 @@ function PreviewCanvas() {
 	return (
 		<div
 			ref={setCanvasContainerRef}
-			class="relative flex-1 justify-center items-center"
+			class="relative flex-1 min-h-0 justify-center items-center"
 			style={{ contain: "layout style" }}
 			onContextMenu={handleContextMenu}
 		>
@@ -637,6 +657,7 @@ function PreviewCanvas() {
 						<CanvasElementsOverlay size={size()} />
 						<MaskOverlay size={size()} />
 						<CaptionOverlay size={size()} />
+						<ImageOverlay size={size()} />
 						<TextOverlay size={size()} />
 						<SplitScreenOverlay size={size()} />
 						<SnapGuidesOverlay size={size()} />

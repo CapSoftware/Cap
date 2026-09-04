@@ -72,8 +72,15 @@ enum Handle {
 
 type SharedInstantUpload = Arc<tokio::sync::Mutex<Option<crate::upload::InstantUpload>>>;
 
-/// A live recording. Stopping consumes it; dropping it without stopping leaves
-/// the actors to wind down on their own when the refs go away.
+struct RecordingOwnedFeed<A: Actor>(ActorRef<A>);
+
+impl<A: Actor> Drop for RecordingOwnedFeed<A> {
+    fn drop(&mut self) {
+        self.0.kill();
+    }
+}
+
+/// A live recording. Stopping consumes it.
 #[cfg_attr(target_os = "linux", derive(Clone))]
 pub struct ActiveRecording {
     handle: Handle,
@@ -87,11 +94,8 @@ pub struct ActiveRecording {
     /// Recording-scoped mic mute (payload zeroing at the consumer seam; the
     /// stream cadence is unaffected). `None` when the recording has no mic.
     pub mic_mute: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    // Held for the duration of the recording: dropping an ActorRef early would
-    // stop the feed under the pipeline. Only populated by the per-recording
-    // fallback path; app-scoped feeds are owned by `Feeds`.
-    _mic_feed: Option<ActorRef<MicrophoneFeed>>,
-    _camera_feed: Option<ActorRef<CameraFeed>>,
+    _mic_feed: Option<Arc<RecordingOwnedFeed<MicrophoneFeed>>>,
+    _camera_feed: Option<Arc<RecordingOwnedFeed<CameraFeed>>>,
     // The mic error channel must outlive the stream or error sends panic the
     // sender side into logs; we keep it and drain nothing.
     _mic_errors: Option<flume::Receiver<cpal::StreamError>>,
@@ -2034,10 +2038,11 @@ async fn setup_camera(
     id: &DeviceOrModelID,
     settings: Option<camera::CameraDeviceSettings>,
 ) -> anyhow::Result<(
-    ActorRef<CameraFeed>,
+    Arc<RecordingOwnedFeed<CameraFeed>>,
     cap_recording::feeds::camera::CameraFeedLock,
 )> {
     let feed = CameraFeed::spawn(CameraFeed::default());
+    let owner = Arc::new(RecordingOwnedFeed(feed.clone()));
     let ready = feed
         .ask(camera::SetInput {
             id: id.clone(),
@@ -2050,19 +2055,20 @@ async fn setup_camera(
         .ask(camera::Lock)
         .await
         .map_err(|e| anyhow!("camera lock: {e}"))?;
-    Ok((feed, lock))
+    Ok((owner, lock))
 }
 
 async fn setup_microphone(
     label: &str,
     settings: Option<microphone::MicrophoneDeviceSettings>,
 ) -> anyhow::Result<(
-    ActorRef<MicrophoneFeed>,
+    Arc<RecordingOwnedFeed<MicrophoneFeed>>,
     Arc<cap_recording::feeds::microphone::MicrophoneFeedLock>,
     flume::Receiver<cpal::StreamError>,
 )> {
     let (error_tx, error_rx) = flume::unbounded();
     let feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+    let owner = Arc::new(RecordingOwnedFeed(feed.clone()));
     let ready = feed
         .ask(microphone::SetInput {
             label: label.to_string(),
@@ -2075,7 +2081,7 @@ async fn setup_microphone(
         .ask(microphone::Lock)
         .await
         .map_err(|e| anyhow!("lock: {e}"))?;
-    Ok((feed, Arc::new(lock), error_rx))
+    Ok((owner, Arc::new(lock), error_rx))
 }
 
 #[cfg(target_os = "macos")]
@@ -3603,5 +3609,139 @@ mod windows_studio_stop_tests {
             .await;
         assert!(acknowledged);
         assert_eq!(result.unwrap(), PathBuf::from("preserved.cap"));
+    }
+}
+
+#[cfg(test)]
+mod recording_owned_feed_tests {
+    use super::*;
+    use kameo::{
+        actor::{Recipient, WeakActorRef},
+        message::{Context, Message},
+    };
+    use std::{sync::mpsc, time::Duration};
+
+    #[derive(Actor)]
+    struct TestFeed {
+        _native_stop: mpsc::Sender<()>,
+    }
+
+    struct NativeFrame;
+
+    impl Message<NativeFrame> for TestFeed {
+        type Reply = ();
+
+        async fn handle(&mut self, _: NativeFrame, _: &mut Context<Self, Self::Reply>) {}
+    }
+
+    struct NativeFeedFixture {
+        actor: WeakActorRef<TestFeed>,
+        stopped: flume::Receiver<()>,
+        worker: std::thread::JoinHandle<()>,
+    }
+
+    fn spawn_native_feed() -> (ActorRef<TestFeed>, NativeFeedFixture) {
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let actor = TestFeed::spawn(TestFeed {
+            _native_stop: stop_tx,
+        });
+        let native_callback: Recipient<NativeFrame> = actor.clone().recipient();
+        let weak = actor.downgrade();
+        let (stopped_tx, stopped_rx) = flume::bounded(1);
+        let worker = std::thread::spawn(move || {
+            let _ = stop_rx.recv();
+            drop(native_callback);
+            stopped_tx.send(()).unwrap();
+        });
+        (
+            actor,
+            NativeFeedFixture {
+                actor: weak,
+                stopped: stopped_rx,
+                worker,
+            },
+        )
+    }
+
+    fn native_feed_fixture() -> (Arc<RecordingOwnedFeed<TestFeed>>, NativeFeedFixture) {
+        let (actor, native) = spawn_native_feed();
+        (Arc::new(RecordingOwnedFeed(actor)), native)
+    }
+
+    impl NativeFeedFixture {
+        async fn cleaned_up(self) -> bool {
+            let stopped =
+                tokio::time::timeout(Duration::from_millis(250), self.stopped.recv_async())
+                    .await
+                    .is_ok();
+            if !stopped && let Some(actor) = self.actor.upgrade() {
+                actor.kill();
+            }
+            if !stopped {
+                tokio::time::timeout(Duration::from_secs(1), self.stopped.recv_async())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            self.worker.join().unwrap();
+            stopped
+        }
+    }
+
+    #[tokio::test]
+    async fn fallback_feed_stops_after_startup_failure() {
+        let (owner, native) = native_feed_fixture();
+        let result: Result<(), ()> = async move {
+            let _owner = owner;
+            Err(())
+        }
+        .await;
+        assert!(result.is_err());
+        assert!(native.cleaned_up().await);
+    }
+
+    #[tokio::test]
+    async fn cancelling_recording_startup_stops_fallback_feed() {
+        let (owner, native) = native_feed_fixture();
+        let startup = tokio::spawn(async move {
+            let _owner = owner;
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        startup.abort();
+        assert!(startup.await.unwrap_err().is_cancelled());
+        assert!(native.cleaned_up().await);
+    }
+
+    #[tokio::test]
+    async fn fallback_feed_stops_after_final_recording_clone() {
+        let (owner, native) = native_feed_fixture();
+        let recording_clone = owner.clone();
+        drop(owner);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), native.stopped.recv_async())
+                .await
+                .is_err()
+        );
+        drop(recording_clone);
+        assert!(native.cleaned_up().await);
+    }
+
+    #[tokio::test]
+    async fn releasing_fallback_preserves_app_scoped_feed() {
+        let (app_feed, app_native) = spawn_native_feed();
+        let (fallback, fallback_native) = native_feed_fixture();
+        drop(fallback);
+        let fallback_stopped = fallback_native.cleaned_up().await;
+        let app_still_running =
+            tokio::time::timeout(Duration::from_millis(25), app_native.stopped.recv_async())
+                .await
+                .is_err();
+        app_feed.kill();
+        drop(app_feed);
+        let app_stopped = app_native.cleaned_up().await;
+        assert!(fallback_stopped);
+        assert!(app_still_running);
+        assert!(app_stopped);
     }
 }

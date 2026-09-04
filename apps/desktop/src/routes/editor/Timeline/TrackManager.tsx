@@ -21,6 +21,14 @@ type TrackMeta = {
 };
 
 const TRACK_META: Record<TimelineTrackType, TrackMeta> = {
+	style: {
+		description: "Change background, camera and cursor for part of your video.",
+		unavailableHint: "",
+	},
+	image: {
+		description: "Place images and logos on your video.",
+		unavailableHint: "",
+	},
 	clip: {
 		description: "Your recorded screen footage.",
 		unavailableHint: "",

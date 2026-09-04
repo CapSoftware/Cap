@@ -1167,8 +1167,12 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        cx.spawn_in(window, async move |_this, _cx| {
-            let dest = crate::platform::save_file_panel(&format!("{name}.png"), &["png"]);
+        cx.spawn_in(window, async move |this, cx| {
+            let dest =
+                crate::platform::save_file_panel_async(&format!("{name}.png"), &["png"], cx).await;
+            if this.update_in(cx, |_, _, _| ()).is_err() {
+                return;
+            }
             let Some(dest) = dest else {
                 return;
             };

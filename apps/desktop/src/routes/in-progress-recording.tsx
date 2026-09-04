@@ -16,17 +16,22 @@ import {
 	createEffect,
 	createMemo,
 	createSignal,
+	createUniqueId,
 	For,
+	type JSX,
 	onCleanup,
 	onMount,
 	Show,
+	splitProps,
 } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import { TransitionGroup } from "solid-transition-group";
+import Tooltip from "~/components/Tooltip";
 import { authStore } from "~/store";
 import { getCameraWindow } from "~/utils/camera-window";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
+	createCleanCaptureQuery,
 	createCurrentRecordingQuery,
 	createOptionsQuery,
 	revealRecordingWindow,
@@ -87,11 +92,14 @@ function InProgressRecordingInner() {
 	// this against the recording query's dataUpdatedAt so a refetch that is
 	// still in flight when a stop completes can't resurrect the old recording.
 	let stoppedAt = 0;
+	let stopRequest: { cleanCaptureGeneration: number | undefined } | undefined;
+	let stopErrorRequest: typeof stopRequest;
 	const markStopped = () => {
 		stoppedAt = Date.now();
 		setState({ variant: "stopped" });
 	};
 	const currentRecording = createCurrentRecordingQuery();
+	const cleanCapture = createCleanCaptureQuery();
 	const optionsQuery = createOptionsQuery();
 	const startedWithMicrophone = optionsQuery.rawOptions.micName != null;
 	const startedWithCameraInput = optionsQuery.rawOptions.cameraID != null;
@@ -123,6 +131,39 @@ function InProgressRecordingInner() {
 	const [cameraWindowOpen, setCameraWindowOpen] = createSignal(false);
 	const [startingDismissed, setStartingDismissed] = createSignal(false);
 	const [stopRequested, setStopRequested] = createSignal(false);
+	const [stopError, setStopError] = createSignal<string | null>(null);
+	const resetStopNotice = () => {
+		stopRequest = undefined;
+		setStopRequested(false);
+		stopErrorRequest = undefined;
+		setStopError(null);
+	};
+	createEffect(() => {
+		const snapshot = cleanCapture.data;
+		const status = currentRecording.data?.status;
+		if (!snapshot) return;
+		for (const request of [stopRequest, stopErrorRequest]) {
+			if (!request) continue;
+			if (
+				((snapshot.phase === "awaitingShortcut" && status === "pending") ||
+					((snapshot.phase === "recording" || snapshot.phase === "paused") &&
+						status === "recording")) &&
+				request.cleanCaptureGeneration !== undefined &&
+				snapshot.generation > request.cleanCaptureGeneration
+			) {
+				if (stopRequest === request) {
+					stopRequest = undefined;
+					setStopRequested(false);
+				}
+				if (stopErrorRequest === request) {
+					stopErrorRequest = undefined;
+					setStopError(null);
+				}
+			} else if (request.cleanCaptureGeneration === undefined) {
+				request.cleanCaptureGeneration = snapshot.generation;
+			}
+		}
+	});
 	const [teardownInFlight, setTeardownInFlight] = createSignal(false);
 	// Mirrors the backend's recording-scoped mic mute. The backend flag lives
 	// on the per-recording microphone lock, so every new recording starts
@@ -164,7 +205,11 @@ function InProgressRecordingInner() {
 		if (failure) issues.push(failure);
 		const controlError = pauseError();
 		if (controlError) issues.push(controlError);
-		return issues;
+		const nativeError = cleanCapture.data?.error;
+		if (nativeError) issues.push(nativeError);
+		const localError = stopError();
+		if (localError) issues.push(localError);
+		return [...new Set(issues)];
 	});
 
 	const hasRecordingIssue = () => issueMessages().length > 0;
@@ -213,6 +258,7 @@ function InProgressRecordingInner() {
 				setPauseError(null);
 				setStartingDismissed(false);
 				setDisconnectedInputs({ microphone: false, camera: false });
+				resetStopNotice();
 				setRecordingFailure(null);
 				setDegradedReason(null);
 				setPauseResumes([]);
@@ -231,6 +277,7 @@ function InProgressRecordingInner() {
 				const wasStartingDismissed = startingDismissed();
 				setStartingDismissed(false);
 				setDisconnectedInputs({ microphone: false, camera: false });
+				resetStopNotice();
 				setRecordingFailure(null);
 				setDegradedReason(null);
 				setPauseResumes([]);
@@ -300,7 +347,7 @@ function InProgressRecordingInner() {
 	// session that poisons the next recording's elapsed-time checks.
 	createTauriEventListener(events.recordingStopped, () => {
 		// Restart/delete drive their own state while the discarded recording
-		// tears down; the stop mutation marks stopped itself once it resolves.
+		// tears down and must not consume the previous recording's stop event.
 		if (teardownInFlight()) return;
 		markStopped();
 	});
@@ -444,6 +491,8 @@ function InProgressRecordingInner() {
 	});
 
 	onCleanup(() => {
+		stopRequest = undefined;
+		stopErrorRequest = undefined;
 		interactiveBoundsDisposed = true;
 		lastInteractiveBoundsKey = "";
 		pendingInteractiveBoundsKey = "";
@@ -479,18 +528,31 @@ function InProgressRecordingInner() {
 
 	const stopRecording = createMutation(() => ({
 		mutationFn: async () => {
+			if (stopRequested()) return;
+			const request = {
+				cleanCaptureGeneration: cleanCapture.data?.generation,
+			};
+			stopRequest = request;
 			setStopRequested(true);
-			await commands.stopRecording();
-			markStopped();
-			void getCurrentWindow().hide();
-		},
-		onError: () => {
-			setStopRequested(false);
+			try {
+				await commands.stopRecording();
+			} catch (error) {
+				if (stopRequest === request) {
+					stopErrorRequest = request;
+					setStopError(error instanceof Error ? error.message : String(error));
+					setIssuePanelVisible(true);
+				}
+			} finally {
+				if (stopRequest === request) {
+					stopRequest = undefined;
+					setStopRequested(false);
+				}
+			}
 		},
 	}));
 
 	const requestStopRecording = () => {
-		if (isCountdown() || stopRequested() || stopRecording.isPending) return;
+		if (isCountdown() || stopRequested()) return;
 		stopRecording.mutate();
 	};
 
@@ -813,16 +875,20 @@ function InProgressRecordingInner() {
 		<div class="flex h-full w-full flex-col justify-end px-3 pb-3">
 			<div ref={setInteractiveAreaRef} class="flex w-full flex-col gap-2">
 				<Show when={hasRecordingIssue() && issuePanelVisible()}>
-					<div class="flex w-full flex-row items-start gap-3 rounded-2xl border border-red-8 bg-gray-1 px-4 py-3 text-[12px] leading-snug text-red-11 shadow-lg">
-						<IconLucideAlertTriangle class="mt-0.5 size-5 text-red-9" />
-						<div class="flex-1 space-y-1">
+					<div class="flex w-full shrink-0 flex-row items-start gap-3 rounded-2xl border border-red-8 bg-gray-1 px-3 py-2 text-[12px] leading-snug text-red-11 shadow-lg">
+						<IconLucideAlertTriangle class="mt-0.5 size-5 shrink-0 text-red-9" />
+						<div
+							role="alert"
+							tabIndex={0}
+							class="max-h-16 min-w-0 flex-1 space-y-1 overflow-auto whitespace-pre-wrap break-words"
+						>
 							{issueMessages().map((message) => (
 								<p>{message}</p>
 							))}
 						</div>
 						<button
 							type="button"
-							class="text-red-9 transition hover:text-red-11"
+							class="shrink-0 text-red-9 transition hover:text-red-11"
 							onClick={() => dismissIssuePanel()}
 							aria-label="Dismiss recording issue"
 						>
@@ -830,7 +896,7 @@ function InProgressRecordingInner() {
 						</button>
 					</div>
 				</Show>
-				<div class="h-10 w-full rounded-2xl">
+				<div class="h-10 w-full flex-none rounded-2xl">
 					<div class="flex h-full w-full flex-row items-stretch overflow-hidden rounded-2xl bg-gray-1 border border-gray-5 shadow-[0_1px_3px_rgba(0,0,0,0.1)]">
 						<div class="flex flex-1 flex-col gap-2 p-1">
 							<div class="flex flex-1 flex-row justify-between">
@@ -845,12 +911,8 @@ function InProgressRecordingInner() {
 										</div>
 									}
 								>
-									<button
-										disabled={
-											stopRequested() ||
-											stopRecording.isPending ||
-											isCountdown()
-										}
+									<RecordingControlButton
+										disabled={stopRequested() || isCountdown()}
 										class="flex flex-row items-center gap-1 rounded-lg py-1 px-2 text-red-300 transition-colors duration-100 hover:bg-red-500/8 active:bg-red-500/12 disabled:opacity-60 disabled:hover:bg-transparent"
 										type="button"
 										onPointerDown={(event) => {
@@ -933,45 +995,47 @@ function InProgressRecordingInner() {
 												</Show>
 											</Show>
 										</span>
-									</button>
+									</RecordingControlButton>
 								</Show>
 
 								<div class="flex items-center gap-1">
 									<Show
 										when={canToggleMicMute()}
 										fallback={
-											<div
-												class="relative flex h-8 w-8 items-center justify-center"
-												title={microphoneTitle()}
-											>
-												{optionsQuery.rawOptions.micName != null ? (
-													disconnectedInputs.microphone ? (
-														<IconLucideMicOff class="size-5 text-amber-11" />
+											<RecordingControlTooltip content={microphoneTitle()}>
+												<div
+													aria-label={microphoneTitle()}
+													class="relative flex h-8 w-8 items-center justify-center"
+												>
+													{optionsQuery.rawOptions.micName != null ? (
+														disconnectedInputs.microphone ? (
+															<IconLucideMicOff class="size-5 text-amber-11" />
+														) : (
+															<>
+																<IconCapMicrophone class="size-5 text-gray-12" />
+																<div class="absolute bottom-1 left-1 right-1 h-0.5 overflow-hidden rounded-full bg-gray-10">
+																	<div
+																		class="absolute inset-0 bg-blue-9 transition-transform duration-100"
+																		style={{
+																			transform: `translateX(-${
+																				(1 - audioLevel()) * 100
+																			}%)`,
+																		}}
+																	/>
+																</div>
+															</>
+														)
 													) : (
-														<>
-															<IconCapMicrophone class="size-5 text-gray-12" />
-															<div class="absolute bottom-1 left-1 right-1 h-0.5 overflow-hidden rounded-full bg-gray-10">
-																<div
-																	class="absolute inset-0 bg-blue-9 transition-transform duration-100"
-																	style={{
-																		transform: `translateX(-${
-																			(1 - audioLevel()) * 100
-																		}%)`,
-																	}}
-																/>
-															</div>
-														</>
-													)
-												) : (
-													<IconLucideMicOff
-														class="size-5 text-gray-7"
-														data-tauri-drag-region
-													/>
-												)}
-											</div>
+														<IconLucideMicOff
+															class="size-5 text-gray-7"
+															data-tauri-drag-region
+														/>
+													)}
+												</div>
+											</RecordingControlTooltip>
 										}
 									>
-										<button
+										<RecordingControlButton
 											type="button"
 											class="relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors duration-100 hover:bg-gray-12/6 active:bg-gray-12/10 disabled:opacity-50 disabled:hover:bg-transparent dark:hover:bg-white/8 dark:active:bg-white/12"
 											disabled={toggleMicMute.isPending}
@@ -1001,25 +1065,32 @@ function InProgressRecordingInner() {
 													</div>
 												</>
 											)}
-										</button>
+										</RecordingControlButton>
 									</Show>
 									<Show when={hasCameraInput() && disconnectedInputs.camera}>
-										<div
-											class="flex h-8 w-8 items-center justify-center"
-											title="Camera disconnected - recording continues without camera overlay"
+										<RecordingControlTooltip
+											content={
+												"Camera disconnected - recording continues without camera overlay"
+											}
 										>
-											<IconLucideVideoOff class="size-5 text-amber-11" />
-										</div>
+											<div
+												aria-label="Camera disconnected - recording continues without camera overlay"
+												class="flex h-8 w-8 items-center justify-center"
+											>
+												<IconLucideVideoOff class="size-5 text-amber-11" />
+											</div>
+										</RecordingControlTooltip>
 									</Show>
 									<Show when={degradedReason()}>
 										{(reason) => (
-											<div
-												class="flex h-8 w-8 items-center justify-center"
-												title={reason()}
-												aria-label="Recording quality degraded"
-											>
-												<div class="size-2 rounded-full bg-amber-9 animate-pulse" />
-											</div>
+											<RecordingControlTooltip content={reason()}>
+												<div
+													class="flex h-8 w-8 items-center justify-center"
+													aria-label={`Recording quality degraded: ${reason()}`}
+												>
+													<div class="size-2 rounded-full bg-amber-9 animate-pulse" />
+												</div>
+											</RecordingControlTooltip>
 										)}
 									</Show>
 									<Show
@@ -1058,7 +1129,6 @@ function InProgressRecordingInner() {
 													togglePause.isPending ||
 													isCountdown() ||
 													stopRequested() ||
-													stopRecording.isPending ||
 													teardownInFlight()
 												}
 												onClick={() => togglePause.mutate()}
@@ -1140,9 +1210,117 @@ function InProgressRecordingInner() {
 	);
 }
 
+function RecordingControlTooltip(props: {
+	content: string | undefined;
+	children: JSX.Element;
+}) {
+	const [open, setOpen] = createSignal(false);
+	const boundsPrefix = `recording-control-tooltip-${createUniqueId()}`;
+	let contentElement: HTMLSpanElement | undefined;
+	let opening = 0;
+
+	createEffect(() => {
+		if (!open()) return;
+
+		const boundsName = `${boundsPrefix}-${++opening}`;
+		let disposed = false;
+		let observer: ResizeObserver | undefined;
+		const clearBounds = () => {
+			void commands.removeFakeWindow(boundsName).catch((error) => {
+				console.error("Failed to clear recording tooltip hit area", error);
+			});
+		};
+		const syncBounds = () => {
+			if (disposed) return;
+			const tooltip = contentElement?.closest<HTMLElement>('[role="tooltip"]');
+			if (!tooltip) return;
+			const rect = tooltip.getBoundingClientRect();
+			if (rect.width === 0 || rect.height === 0) return;
+			void commands
+				.setFakeWindowBounds(boundsName, {
+					position: { x: rect.left, y: rect.top },
+					size: {
+						width: rect.width,
+						height: Math.min(window.innerHeight - rect.top, rect.height + 16),
+					},
+				})
+				.then(() => {
+					if (disposed) clearBounds();
+				})
+				.catch((error) => {
+					console.error("Failed to sync recording tooltip hit area", error);
+				});
+		};
+		const frame = requestAnimationFrame(() => {
+			syncBounds();
+			if (contentElement) {
+				observer = new ResizeObserver(syncBounds);
+				observer.observe(contentElement);
+			}
+		});
+		window.addEventListener("resize", syncBounds);
+		onCleanup(() => {
+			disposed = true;
+			cancelAnimationFrame(frame);
+			observer?.disconnect();
+			window.removeEventListener("resize", syncBounds);
+			clearBounds();
+		});
+	});
+
+	return (
+		<Tooltip
+			content={
+				<span
+					ref={contentElement}
+					class="block max-h-[calc(100vh-80px)] max-w-[calc(100vw-48px)] overflow-y-auto whitespace-normal break-words text-left"
+				>
+					{props.content}
+				</span>
+			}
+			childClass="flex h-full items-center"
+			placement="top"
+			gutter={6}
+			flip={false}
+			slide
+			overflowPadding={8}
+			open={open()}
+			onOpenChange={setOpen}
+		>
+			<span
+				class="flex h-full items-center"
+				onFocusIn={() => setOpen(true)}
+				onFocusOut={(event) => {
+					if (
+						!(event.relatedTarget instanceof Node) ||
+						(!event.currentTarget.contains(event.relatedTarget) &&
+							!contentElement?.contains(event.relatedTarget))
+					) {
+						setOpen(false);
+					}
+				}}
+			>
+				{props.children}
+			</span>
+		</Tooltip>
+	);
+}
+
+function RecordingControlButton(props: ComponentProps<"button">) {
+	const [local, buttonProps] = splitProps(props, ["title"]);
+	return (
+		<RecordingControlTooltip content={local.title}>
+			<button
+				{...buttonProps}
+				class={cx(props.class, "disabled:pointer-events-none")}
+			/>
+		</RecordingControlTooltip>
+	);
+}
+
 function ActionButton(props: ComponentProps<"button">) {
 	return (
-		<button
+		<RecordingControlButton
 			{...props}
 			class={cx(
 				"p-1 rounded-lg transition-colors duration-100",

@@ -70,6 +70,23 @@ fn required_window_title_matches(required: Option<&str>, actual: Option<&str>) -
     required.is_none_or(|required| actual == Some(required))
 }
 
+fn overlay_display_is_active(
+    cursor_display: Option<&DisplayId>,
+    display: &DisplayId,
+    only_overlay: bool,
+    window_hovered: bool,
+) -> bool {
+    cursor_display.map_or(only_overlay || window_hovered, |cursor| cursor == display)
+}
+
+fn overlay_viewport_size(viewport: (f32, f32), previous: (f32, f32)) -> (f32, f32) {
+    if viewport.0.is_finite() && viewport.1.is_finite() && viewport.0 > 0. && viewport.1 > 0. {
+        viewport
+    } else {
+        previous
+    }
+}
+
 fn recording_devices_available(cx: &App) -> bool {
     crate::session::RecordingSession::global(cx).read(cx).phase == crate::session::Phase::Idle
         && !app_windows::clean_capture_owned(cx)
@@ -93,6 +110,26 @@ const AREA_HANDLE_GRAB: f32 = 12.;
 /// crop; gpui has no layout read-back, so the two numbers are constants.
 const CLUSTER_WIDTH: f32 = 416.;
 const CLUSTER_HEIGHT: f32 = 88.;
+
+fn area_controls_position(crop: AreaRect, available: AreaRect, cluster_height: f32) -> (f32, f32) {
+    let left = available.x + 16.;
+    let right = (available.right() - CLUSTER_WIDTH - 16.).max(left);
+    let top = available.y + 40.;
+    let bottom = (available.bottom() - cluster_height - 16.).max(top);
+    let below = crop.bottom() + 16.;
+    let above = crop.y - cluster_height - 16.;
+    let y = if below <= bottom {
+        below
+    } else if above >= top {
+        above
+    } else {
+        crop.y + 40.
+    };
+    (
+        (crop.x + crop.width / 2. - CLUSTER_WIDTH / 2.).clamp(left, right),
+        y.clamp(top, bottom),
+    )
+}
 
 const COUNTDOWN_OPTIONS: &[(u32, &str)] = &[
     (0, "Off"),
@@ -546,6 +583,7 @@ pub struct OverlayWindow {
     /// Logical size, which is this window's size and the space every
     /// coordinate here lives in.
     display_size: (f32, f32),
+    controls_work_area: AreaRect,
     /// Physical pixels, for the `1920x1080 · 60FPS` line.
     physical_size: Option<(u32, u32)>,
     refresh_rate: f64,
@@ -615,6 +653,24 @@ impl OverlayWindow {
             .map(|size| (size.width() as f32, size.height() as f32))
             .unwrap_or((1920., 1080.));
 
+        let controls_work_area = display
+            .raw_handle()
+            .logical_bounds()
+            .zip(app_windows::display_work_area(Some(display), cx))
+            .map(|(bounds, available)| AreaRect {
+                x: f32::from(available.origin.x) - bounds.position().x() as f32,
+                y: f32::from(available.origin.y) - bounds.position().y() as f32,
+                width: f32::from(available.size.width),
+                height: f32::from(available.size.height),
+            })
+            .unwrap_or(AreaRect {
+                x: 0.,
+                y: 0.,
+                width: logical.0,
+                height: logical.1,
+            })
+            .clamped(logical);
+
         Self {
             theme,
             select,
@@ -623,6 +679,7 @@ impl OverlayWindow {
                 .name()
                 .unwrap_or_else(|| format!("Display {}", display.id())),
             display_size: logical,
+            controls_work_area,
             physical_size: display
                 .physical_size()
                 .map(|size| (size.width() as u32, size.height() as u32)),
@@ -787,8 +844,13 @@ impl OverlayWindow {
 
     /// True when the cursor is on this overlay's display -- `data-over` in the
     /// display variant, `isActiveDisplay` in the area variant.
-    fn is_active_display(&self, cx: &App) -> bool {
-        self.select.read(cx).cursor_display.as_ref() == Some(&self.display_id)
+    fn is_active_display(&self, window: &Window, cx: &App) -> bool {
+        overlay_display_is_active(
+            self.select.read(cx).cursor_display.as_ref(),
+            &self.display_id,
+            cx.global::<app_windows::AppWindows>().overlays.len() == 1,
+            cfg!(target_os = "linux") && window.is_window_hovered(),
+        )
     }
 }
 
@@ -796,6 +858,18 @@ impl Render for OverlayWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
         self.sync_inline_camera(cx);
+        let viewport = window.viewport_size();
+        let display_size = overlay_viewport_size(
+            (f32::from(viewport.width), f32::from(viewport.height)),
+            self.display_size,
+        );
+        if !self.recording_area && self.display_size != display_size {
+            self.display_size = display_size;
+            self.crop = self.crop.map(|crop| crop.clamped(display_size));
+            self.drag = None;
+            self.snap_guides.clear();
+            self.sync_area_camera(cx);
+        }
         let mode = self.select.read(cx).mode;
 
         let root = div()
@@ -855,12 +929,12 @@ impl Render for OverlayWindow {
             .text_color(gpui::white());
 
         let root = if self.recording_area {
-            root.child(self.render_area_variant(cx))
+            root.child(self.render_area_variant(window, cx))
         } else {
             match mode {
-                Some(TargetType::Display) => root.child(self.render_display_variant(cx)),
+                Some(TargetType::Display) => root.child(self.render_display_variant(window, cx)),
                 Some(TargetType::Window) => root.child(self.render_window_variant(cx)),
-                Some(TargetType::Area) => root.child(self.render_area_variant(cx)),
+                Some(TargetType::Area) => root.child(self.render_area_variant(window, cx)),
                 Some(TargetType::CameraOnly) => root.child(self.render_camera_variant(cx)),
                 None => root,
             }
@@ -1170,8 +1244,8 @@ impl OverlayWindow {
 
     /// `data-[over='true']:bg-blue-600/40` over `bg-black/60`, centered
     /// monitor art, name, resolution.
-    fn render_display_variant(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let over = self.is_active_display(cx);
+    fn render_display_variant(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let over = self.is_active_display(window, cx);
         let resolution = self.physical_size.map(|(width, height)| {
             // `${size().width}x${size().height} · ${display.refresh_rate}FPS`
             format!("{width}x{height} · {}FPS", self.refresh_rate)
@@ -1400,10 +1474,14 @@ impl OverlayWindow {
     /// The crop overlay: `bg-black/45` outside the selection, a `border-white/50`
     /// region with eight handles, a size readout on top and the start cluster
     /// placed against the crop.
-    fn render_area_variant(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+    fn render_area_variant(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         let interacting = self.drag.is_some();
         // `shouldShowOverlay = isInteracting() || isActiveDisplay()`.
-        let visible = self.recording_area || interacting || self.is_active_display(cx);
+        let visible = self.recording_area || interacting || self.is_active_display(window, cx);
         let crop = self.crop;
         let min = area_min_size(self.select.read(cx).recording_mode);
         let valid = crop.is_some_and(|crop| crop.is_valid_for(min));
@@ -1426,8 +1504,8 @@ impl OverlayWindow {
                     }))
                     .on_mouse_up(
                         MouseButton::Left,
-                        cx.listener(|this, _: &MouseUpEvent, _window, cx| {
-                            this.area_mouse_up(cx);
+                        cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                            this.area_mouse_up(event.position, cx);
                         }),
                     )
             });
@@ -1784,43 +1862,21 @@ impl OverlayWindow {
         valid: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        const SIDE_MARGIN: f32 = 16.;
-        const MARGIN_BELOW: f32 = 16.;
-        const MARGIN_TOP_OUTSIDE: f32 = 16.;
-        // `macos ? 40 : 28` / `macos ? 40 : 10`.
-        const MARGIN_TOP_INSIDE: f32 = 40.;
-        const TOP_SAFE_MARGIN: f32 = 40.;
-
         let crop = crop.unwrap_or(AreaRect {
             x: 0.,
             y: 0.,
             width: 0.,
             height: 0.,
         });
-        let (screen_width, screen_height) = self.display_size;
         let min = area_min_size(self.select.read(cx).recording_mode);
-
-        let below = crop.bottom() + MARGIN_BELOW;
+        let available = self.controls_work_area.clamped(self.display_size);
         let cluster_height = CLUSTER_HEIGHT
             + if self.select.read(cx).recording_mode == Mode::Screenshot {
                 0.
             } else {
                 78.
             };
-        let y = if below + cluster_height <= screen_height {
-            below
-        } else {
-            let above = crop.y - cluster_height - MARGIN_TOP_OUTSIDE;
-            if above >= TOP_SAFE_MARGIN {
-                above
-            } else {
-                crop.y + MARGIN_TOP_INSIDE
-            }
-        };
-        let x = (crop.x + crop.width / 2. - CLUSTER_WIDTH / 2.).clamp(
-            SIDE_MARGIN,
-            (screen_width - CLUSTER_WIDTH - SIDE_MARGIN).max(SIDE_MARGIN),
-        );
+        let (x, y) = area_controls_position(crop, available, cluster_height);
 
         div()
             .absolute()
@@ -2320,10 +2376,11 @@ impl OverlayWindow {
         cx.notify();
     }
 
-    fn area_mouse_up(&mut self, cx: &mut Context<Self>) {
+    fn area_mouse_up(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         if self.recording_area {
             return;
         }
+        self.area_mouse_move(position, cx);
         let Some(drag) = self.drag.take() else {
             return;
         };
@@ -2354,6 +2411,88 @@ impl OverlayWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_single_overlay_remains_interactive_without_a_global_cursor_probe() {
+        let display = "1".parse::<DisplayId>().unwrap();
+        let other = "2".parse::<DisplayId>().unwrap();
+        assert!(overlay_display_is_active(None, &display, true, false));
+        assert!(!overlay_display_is_active(None, &display, false, false));
+        assert!(overlay_display_is_active(
+            Some(&display),
+            &display,
+            false,
+            false
+        ));
+        assert!(!overlay_display_is_active(
+            Some(&other),
+            &display,
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn native_window_hover_activates_the_correct_overlay_without_global_coordinates() {
+        let display = "1".parse::<DisplayId>().unwrap();
+        let other = "2".parse::<DisplayId>().unwrap();
+        assert!(overlay_display_is_active(None, &display, false, true));
+        assert!(!overlay_display_is_active(None, &display, false, false));
+        assert!(!overlay_display_is_active(
+            Some(&other),
+            &display,
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn area_controls_stay_above_the_dock_on_a_small_display() {
+        let available = rect(0., 25., 1024., 684.);
+        let height = CLUSTER_HEIGHT + 78.;
+        let (x, y) = area_controls_position(rect(202., 216., 641., 361.), available, height);
+        assert!(x >= available.x && x + CLUSTER_WIDTH <= available.right());
+        assert!(y >= available.y && y + height <= available.bottom());
+        assert!(y < 577.);
+    }
+
+    #[test]
+    fn area_controls_respect_side_taskbars_and_bottom_edge_crops() {
+        let available = rect(64., 24., 736., 416.);
+        for crop in [rect(0., 0., 800., 480.), rect(600., 350., 180., 120.)] {
+            let (x, y) = area_controls_position(crop, available, CLUSTER_HEIGHT + 78.);
+            assert!(x >= available.x && x + CLUSTER_WIDTH <= available.right());
+            assert!(y >= available.y && y + CLUSTER_HEIGHT + 78. <= available.bottom());
+        }
+    }
+
+    #[test]
+    fn area_controls_keep_available_space_below_or_above_a_crop() {
+        let available = rect(0., 0., 1280., 800.);
+        assert_eq!(
+            area_controls_position(rect(100., 100., 640., 360.), available, 166.).1,
+            476.
+        );
+        assert_eq!(
+            area_controls_position(rect(100., 500., 640., 240.), available, 166.).1,
+            318.
+        );
+    }
+
+    #[test]
+    fn compositor_viewport_replaces_placeholder_size_and_clamps_the_selection() {
+        let viewport = overlay_viewport_size((1024., 768.), (1920., 1080.));
+        assert_eq!(viewport, (1024., 768.));
+        let crop = rect(700., 400., 640., 480.).clamped(viewport);
+        assert!(crop.x >= 0. && crop.y >= 0.);
+        assert!(crop.right() <= 1024. && crop.bottom() <= 768.);
+        assert_eq!(overlay_viewport_size((0., 0.), viewport), viewport);
+        assert_eq!(overlay_viewport_size((f32::NAN, 768.), viewport), viewport);
+        assert_eq!(
+            overlay_viewport_size((1024., f32::INFINITY), viewport),
+            viewport
+        );
+    }
 
     #[test]
     fn mode_menu_matches_menu_modes() {

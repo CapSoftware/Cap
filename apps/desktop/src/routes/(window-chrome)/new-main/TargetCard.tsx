@@ -297,9 +297,9 @@ export default function TargetCard(props: TargetCardProps) {
 		e.stopPropagation();
 		const recording = recordingTarget();
 		if (!recording) return;
-		commands.showWindow({
-			Editor: { project_path: recording.path },
-		});
+		if (e.currentTarget instanceof HTMLElement) {
+			e.currentTarget.closest("button")?.click();
+		}
 	};
 
 	const handleOpenRecordingLink = (e: MouseEvent) => {
