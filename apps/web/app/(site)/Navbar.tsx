@@ -12,7 +12,7 @@ interface NavbarProps {
 export const Navbar = ({ stars }: NavbarProps) => {
 	return (
 		<NavbarFrame>
-			<div className="flex gap-4 justify-between items-center px-5 mx-auto h-[68px] max-w-[1440px] group-data-[flat=true]:max-w-none group-data-[island=true]:h-[60px] group-data-[island=true]:px-4 lg:h-[76px] lg:px-8 lg:group-data-[island=true]:h-[64px] lg:group-data-[island=true]:px-5 xl:gap-6">
+			<div className="flex gap-4 justify-between items-center px-5 mx-auto h-[68px] group-data-[island=true]:h-[60px] group-data-[island=true]:px-4 lg:h-[76px] lg:px-8 lg:group-data-[island=true]:h-[64px] lg:group-data-[island=true]:px-5 xl:gap-6">
 				<div className="flex gap-2 items-center lg:gap-3 xl:gap-6">
 					<Link passHref href="/home" className="shrink-0">
 						<Logo
