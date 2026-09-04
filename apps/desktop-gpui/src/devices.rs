@@ -148,6 +148,111 @@ impl DeviceSnapshot {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct InputEnumerationGate(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+pub struct InputEnumerationPermit(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl InputEnumerationGate {
+    pub fn try_enter(&self) -> Option<InputEnumerationPermit> {
+        self.0
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .ok()
+            .map(|_| InputEnumerationPermit(self.0.clone()))
+    }
+}
+
+impl Drop for InputEnumerationPermit {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+pub enum InputSnapshot {
+    Cameras(Vec<CameraOption>),
+    Microphones(Vec<MicrophoneOption>),
+}
+
+impl InputSnapshot {
+    pub fn cameras() -> Self {
+        Self::Cameras(list_cameras())
+    }
+
+    pub fn microphones() -> Self {
+        Self::Microphones(list_microphones())
+    }
+
+    pub fn install(self, snapshot: &mut DeviceSnapshot) -> bool {
+        match self {
+            Self::Cameras(cameras) if snapshot.cameras != cameras => {
+                snapshot.cameras = cameras;
+            }
+            Self::Microphones(microphones) if snapshot.microphones != microphones => {
+                snapshot.microphones = microphones;
+            }
+            _ => return false,
+        }
+        true
+    }
+}
+
+#[cfg(test)]
+mod input_enumeration_tests {
+    use super::*;
+
+    #[test]
+    fn cancelled_refresh_keeps_its_permit_until_enumeration_finishes() {
+        let gate = InputEnumerationGate::default();
+        let pending = gate.try_enter().expect("first refresh");
+        assert!(gate.clone().try_enter().is_none());
+        drop(pending);
+        assert!(gate.try_enter().is_some());
+    }
+
+    #[test]
+    fn enumeration_unwind_releases_the_gate() {
+        let gate = InputEnumerationGate::default();
+        let worker_gate = gate.clone();
+        let result = std::panic::catch_unwind(move || {
+            let _permit = worker_gate.try_enter().expect("first refresh");
+            panic!("enumeration fixture");
+        });
+        assert!(result.is_err());
+        assert!(gate.try_enter().is_some());
+    }
+
+    #[test]
+    fn camera_refresh_preserves_other_device_lists() {
+        let microphone = MicrophoneOption {
+            name: "Selected microphone".into(),
+            sample_rate: Some(48_000),
+            channels: Some(2),
+        };
+        let mut snapshot = DeviceSnapshot {
+            microphones: vec![microphone.clone()],
+            ..Default::default()
+        };
+        let camera = CameraOption {
+            device_id: "new-camera".into(),
+            model_id: None,
+            label: "Connected camera".into(),
+            best_format: None,
+            formats: Vec::new(),
+        };
+        assert!(InputSnapshot::Cameras(vec![camera.clone()]).install(&mut snapshot));
+        assert_eq!(snapshot.cameras, vec![camera.clone()]);
+        assert_eq!(snapshot.microphones, vec![microphone]);
+        assert!(!InputSnapshot::Cameras(vec![camera.clone()]).install(&mut snapshot));
+        assert!(InputSnapshot::Microphones(Vec::new()).install(&mut snapshot));
+        assert_eq!(snapshot.cameras, vec![camera]);
+    }
+}
+
 /// Just the capture targets.
 ///
 /// The Tauri app keeps these on their own queries (`listScreens` /
@@ -216,6 +321,21 @@ fn list_cameras() -> Vec<CameraOption> {
 /// inserted first so it heads the list, then every other input device is
 /// appended, deduped by name.
 fn list_microphones() -> Vec<MicrophoneOption> {
+    // CPAL's configuration lookup opens an input AudioUnit and can prompt for consent.
+    #[cfg(target_os = "macos")]
+    if !crate::permissions::check_raw().is_some_and(|permissions| {
+        permissions.microphone == crate::permissions::MediaAuthorization::Authorized
+    }) {
+        return cap_recording::feeds::microphone::MicrophoneFeed::list_names()
+            .into_iter()
+            .map(|name| MicrophoneOption {
+                name,
+                sample_rate: None,
+                channels: None,
+            })
+            .collect();
+    }
+
     let host = cpal::default_host();
     let mut mics: Vec<MicrophoneOption> = Vec::new();
 

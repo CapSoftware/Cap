@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use cap_project::{RecordingMeta, TimelineFrameMapping, XY};
+use cap_project::{ProjectConfiguration, RecordingMeta, TimelineFrameMapping, XY};
 use cap_rendering::{
     FrameRenderer, ProjectUniforms, RenderedFrame, RendererLayers, TransitionRenderInput,
     ZoomTransformTimeline,
@@ -13,7 +13,7 @@ use image::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{ExportError, ExporterBase, make_cursor_only_project};
+use crate::{ExportError, ExporterBase, ExporterBuilder, make_cursor_only_project};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ExportPreviewSettings {
@@ -55,6 +55,37 @@ pub async fn render_preview(
         .await
         .map_err(|e| ExportError::Other(format!("Exporter build error: {e}")))?;
 
+    render_preview_with_base(exporter_base, frame_time, settings).await
+}
+
+fn preview_builder_with_config(
+    project_path: PathBuf,
+    project_config: ProjectConfiguration,
+    settings: ExportPreviewSettings,
+    force_ffmpeg_decoder: bool,
+) -> ExporterBuilder {
+    let project_config = if settings.cursor_only {
+        make_cursor_only_project(project_config)
+    } else {
+        project_config
+    };
+    ExporterBase::builder(project_path)
+        .with_config(project_config)
+        .with_force_ffmpeg_decoder(force_ffmpeg_decoder)
+}
+
+pub async fn render_preview_with_config(
+    project_path: PathBuf,
+    project_config: ProjectConfiguration,
+    frame_time: f64,
+    settings: ExportPreviewSettings,
+    force_ffmpeg_decoder: bool,
+) -> Result<ExportPreviewResult, ExportError> {
+    let exporter_base =
+        preview_builder_with_config(project_path, project_config, settings, force_ffmpeg_decoder)
+            .build()
+            .await
+            .map_err(|error| ExportError::Other(format!("Exporter build error: {error}")))?;
     render_preview_with_base(exporter_base, frame_time, settings).await
 }
 
@@ -104,7 +135,7 @@ async fn render_preview_with_base(
         .decoders
         .get_frames(
             segment_time as f32,
-            !exporter_base.project_config.camera.hide && !settings.cursor_only,
+            exporter_base.project_config.requires_camera() && !settings.cursor_only,
             !settings.cursor_only,
             clip_config.map(|v| v.offsets).unwrap_or_default(),
         )
@@ -165,7 +196,7 @@ async fn render_preview_with_base(
             .decoders
             .get_frames(
                 outgoing.source_time as f32,
-                !exporter_base.project_config.camera.hide && !settings.cursor_only,
+                exporter_base.project_config.requires_camera() && !settings.cursor_only,
                 !settings.cursor_only,
                 outgoing_offsets,
             )
@@ -411,5 +442,86 @@ mod tests {
         let mut empty = valid;
         empty.width = 0;
         assert!(encode_preview_jpeg(&empty, 70).is_err());
+    }
+}
+
+#[cfg(test)]
+mod subtitle_preview_tests {
+    use super::*;
+
+    #[test]
+    fn immediate_export_preview_uses_current_toggle_before_disk_save() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("project-config.json");
+        for export in [false, true] {
+            let current = ProjectConfiguration {
+                captions: Some(cap_project::CaptionsData {
+                    settings: cap_project::CaptionSettings {
+                        enabled: true,
+                        export_with_subtitles: export,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let original = serde_json::to_value(&current).unwrap();
+            let mut stale = current.clone();
+            stale
+                .captions
+                .as_mut()
+                .unwrap()
+                .settings
+                .export_with_subtitles = !export;
+            let stale_bytes = serde_json::to_vec(&stale).unwrap();
+            std::fs::write(&path, &stale_bytes).unwrap();
+            let mut builder = preview_builder_with_config(
+                temp.path().to_path_buf(),
+                current.clone(),
+                ExportPreviewSettings {
+                    fps: 30,
+                    resolution_base: XY::new(1280, 720),
+                    compression_bpp: 0.15,
+                    cursor_only: false,
+                },
+                true,
+            );
+            let preview = builder.load_project_config().unwrap();
+            assert_eq!(preview.captions.as_ref().unwrap().settings.enabled, export);
+            assert_eq!(
+                preview.captions.unwrap().settings.export_with_subtitles,
+                export
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), stale_bytes);
+            assert_eq!(serde_json::to_value(current).unwrap(), original);
+            assert!(builder.force_ffmpeg_decoder);
+        }
+    }
+
+    #[test]
+    fn current_config_export_preview_preserves_cursor_only_override() {
+        let current = ProjectConfiguration {
+            captions: Some(cap_project::CaptionsData {
+                settings: cap_project::CaptionSettings {
+                    enabled: true,
+                    export_with_subtitles: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut builder = preview_builder_with_config(
+            PathBuf::from("unused-current-config-project"),
+            current,
+            ExportPreviewSettings {
+                fps: 30,
+                resolution_base: XY::new(1280, 720),
+                compression_bpp: 0.15,
+                cursor_only: true,
+            },
+            false,
+        );
+        assert!(builder.load_project_config().unwrap().captions.is_none());
     }
 }

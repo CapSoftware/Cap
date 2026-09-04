@@ -164,6 +164,38 @@ pub(crate) const SIDEBAR_TAB_BAR_HEIGHT: f32 = 64.;
 /// `padding = 4` inside `PreviewCanvas` (`Player.tsx:566`).
 const PLAYER_CANVAS_PADDING: f32 = 4.;
 
+#[derive(Clone, Copy, Debug)]
+struct EditorVerticalLayout {
+    player_min_height: f32,
+    timeline_height: f32,
+}
+
+impl EditorVerticalLayout {
+    fn new(viewport_height: f32, preferred_timeline_height: f32) -> Self {
+        let available = (viewport_height - HEADER_HEIGHT - 8.).max(0.);
+        let scale = (available / (MIN_PLAYER_HEIGHT + MIN_TIMELINE_HEIGHT)).min(1.);
+        let player_min_height = MIN_PLAYER_HEIGHT * scale;
+        let timeline_min_height = MIN_TIMELINE_HEIGHT * scale;
+        Self {
+            player_min_height,
+            timeline_height: preferred_timeline_height.clamp(
+                timeline_min_height,
+                (available - player_min_height).max(timeline_min_height),
+            ),
+        }
+    }
+}
+
+fn compact_header_controls(viewport_width: f32, windows: bool, captions: bool) -> bool {
+    let actions_width = if captions { 416. } else { 304. };
+    let caption_controls_width = if windows { 138. } else { 0. };
+    viewport_width < actions_width * 2. + 144. + caption_controls_width
+}
+
+fn editor_player_width(viewport_width: f32) -> f32 {
+    (viewport_width - SIDEBAR_WIDTH - 8. - 16. - 2.).max(0.)
+}
+
 // ---------------------------------------------------------------------------
 // Timeline metrics -- all of them now live in [`crate::editor_timeline`],
 // which owns the strip itself (`routes/editor/Timeline/index.tsx:62-68`).
@@ -368,6 +400,8 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
             keyboard_segments: Vec::new(),
             audio_segments: Vec::new(),
             camera3d_segments: Vec::new(),
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
         });
     }
 
@@ -658,8 +692,10 @@ impl Render for EditorSectionView {
             }
             match self.section {
                 EditorSection::Header => editor.render_header(window, cx).into_any_element(),
-                EditorSection::Toolbar => editor.render_player_toolbar(cx).into_any_element(),
-                EditorSection::Transport => editor.render_transport(cx).into_any_element(),
+                EditorSection::Toolbar => {
+                    editor.render_player_toolbar(window, cx).into_any_element()
+                }
+                EditorSection::Transport => editor.render_transport(window, cx).into_any_element(),
                 // The Clips layout mode swaps the config sidebar's column for the
                 // clips sidebar; the config sidebar is hidden, not destroyed
                 // (`Editor.tsx:728-747`).
@@ -667,13 +703,16 @@ impl Render for EditorSectionView {
                     if editor.clips.open {
                         editor.render_clips_sidebar(cx).into_any_element()
                     } else {
-                        editor.render_sidebar(cx).into_any_element()
+                        editor.with_style_controls(|editor| {
+                            editor.render_sidebar(cx).into_any_element()
+                        })
                     }
                 }
                 EditorSection::Timeline => {
                     let viewport_width: f32 = window.viewport_size().width.into();
+                    let viewport_height: f32 = window.viewport_size().height.into();
                     editor
-                        .render_timeline(viewport_width, cx)
+                        .render_timeline(viewport_width, viewport_height, cx)
                         .into_any_element()
                 }
             }
@@ -1543,6 +1582,16 @@ impl EditorWindow {
                 })
             });
             if let Some(message) = blocked {
+                #[cfg(target_os = "linux")]
+                if window.root::<Self>().flatten().is_some_and(|editor| {
+                    editor.read(cx).export.as_ref().is_some_and(|export| {
+                        export.phase == crate::editor_export::ExportPhase::ChoosingFile
+                    })
+                }) {
+                    let response = crate::editor_modal::retained_alert(&message, window, cx);
+                    cx.spawn(async move |_| response.await).detach();
+                    return false;
+                }
                 cx.spawn(async move |_| {
                     crate::platform::alert_dialog("Recording retained", &message);
                 })
@@ -1850,6 +1899,10 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.sidebar.style_target = None;
+        self.sidebar.menu = None;
+        self.selection = None;
+        self.canvas_selection = None;
         self.project = config;
         self.history = ProjectHistory::new(self.project.clone());
         self.tracks = TrackLanes::from_project(&self.project, self.has_camera);
@@ -1925,12 +1978,16 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.end_field_edit(cx);
+        self.close_color_picker(cx);
+        self.dismiss_frame_controls(cx);
         let Some(timeline) = self.project.timeline.as_mut() else {
             return false;
         };
         if !change(timeline) {
             return false;
         }
+        self.set_selection(None, cx);
         self.project_changed(window, cx);
         true
     }
@@ -1995,6 +2052,7 @@ impl EditorWindow {
         if !self.project_ready() {
             return;
         }
+        self.history.record(&self.project);
         self.publish_project();
         cx.notify();
     }
@@ -2113,6 +2171,9 @@ impl EditorWindow {
     /// store. The playhead is not moved and the selection is not restored;
     /// neither is in the snapshot (`editorState` is a separate store).
     fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_frame_controls(window, cx);
+        self.end_field_edit(cx);
+        self.close_color_picker(cx);
         let Some(config) = self.history.undo().cloned() else {
             return;
         };
@@ -2121,6 +2182,9 @@ impl EditorWindow {
     }
 
     fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_frame_controls(window, cx);
+        self.end_field_edit(cx);
+        self.close_color_picker(cx);
         let Some(config) = self.history.redo().cloned() else {
             return;
         };
@@ -2136,6 +2200,12 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.sidebar.style_target = None;
+        self.sidebar.menu = None;
+        self.selection = None;
+        self.sidebar.image_asset_status = None;
+        self.canvas_selection = None;
+        self.canvas_drag = None;
         let previous_animated_gradient = self.animated_gradient_config().cloned();
         let animated_background_changed = self.animated_gradient_config()
             != match &config.background.source {
@@ -3067,8 +3137,26 @@ impl EditorWindow {
     /// `setEditorState("timeline", "selection", ...)`.
     pub(crate) fn set_selection(&mut self, selection: Option<Selection>, cx: &mut Context<Self>) {
         if self.selection != selection {
+            self.dismiss_frame_controls(cx);
+            self.end_field_edit(cx);
+            self.close_color_picker(cx);
+            self.sidebar.menu = None;
             dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
+            self.sidebar.style_target = None;
+            self.canvas_selection = selection.as_ref().and_then(|selection| {
+                if selection.indices.len() != 1 {
+                    return None;
+                }
+                let index = selection.indices[0];
+                match selection.track {
+                    TrackKind::Image => Some(crate::editor_canvas::CanvasSelection::Image(index)),
+                    TrackKind::Text => Some(crate::editor_canvas::CanvasSelection::Text(index)),
+                    TrackKind::Mask => Some(crate::editor_canvas::CanvasSelection::Mask(index)),
+                    _ => None,
+                }
+            });
             self.selection = selection;
+            self.refresh_image_asset_status();
             cx.notify();
         }
     }
@@ -3152,6 +3240,12 @@ impl EditorWindow {
                             cx,
                         );
                     }
+                } else if kind == TrackKind::Image {
+                    cx.stop_propagation();
+                    self.import_image_for_lane(lane, press_time, window, cx);
+                } else if kind == TrackKind::Style {
+                    cx.stop_propagation();
+                    self.add_style_at(lane, press_time, window, cx);
                 } else if kind == TrackKind::Audio {
                     cx.stop_propagation();
                     self.open_audio_picker(lane, cx);
@@ -3367,6 +3461,8 @@ impl EditorWindow {
             targets.push(self.total_duration());
         }
         for track in [
+            TrackKind::Style,
+            TrackKind::Image,
             TrackKind::Clip,
             TrackKind::Caption,
             TrackKind::Keyboard,
@@ -3856,9 +3952,7 @@ type GhostClipLayout = (Vec<(f64, f64)>, Option<(f64, f64)>);
 
 impl EditorWindow {
     fn clamp_timeline_height(&self, value: f32, viewport_height: f32) -> f32 {
-        let available = (viewport_height - HEADER_HEIGHT - 8.).max(MIN_TIMELINE_HEIGHT);
-        let max_height = (available - MIN_PLAYER_HEIGHT).max(MIN_TIMELINE_HEIGHT);
-        value.clamp(MIN_TIMELINE_HEIGHT, max_height)
+        EditorVerticalLayout::new(viewport_height, value).timeline_height
     }
 
     fn edit_live(
@@ -3872,6 +3966,7 @@ impl EditorWindow {
         if !change(timeline) {
             return false;
         }
+        self.history.record(&self.project);
         self.rebuild_timeline();
         self.publish_project();
         cx.notify();
@@ -4745,6 +4840,7 @@ impl EditorWindow {
                 window,
                 cx,
             ) {
+                self.set_selection(None, cx);
                 self.note_edit("split", Some(kind));
             }
             return;
@@ -4763,6 +4859,7 @@ impl EditorWindow {
             window,
             cx,
         ) {
+            self.set_selection(None, cx);
             self.note_edit("split", Some(kind));
         }
     }
@@ -4812,6 +4909,8 @@ impl EditorWindow {
             cx,
         );
         let count = match kind {
+            TrackKind::Style => &mut self.tracks.style,
+            TrackKind::Image => &mut self.tracks.image,
             TrackKind::Text => &mut self.tracks.text,
             TrackKind::Mask => &mut self.tracks.mask,
             TrackKind::Audio => &mut self.tracks.audio,
@@ -4819,6 +4918,8 @@ impl EditorWindow {
         };
         let current = *count;
         let used = match (kind, self.project.timeline.as_ref()) {
+            (TrackKind::Style, Some(timeline)) => edits::used_lane_count(&timeline.style_segments),
+            (TrackKind::Image, Some(timeline)) => edits::used_lane_count(&timeline.image_segments),
             (TrackKind::Text, Some(timeline)) => edits::used_lane_count(&timeline.text_segments),
             (TrackKind::Mask, Some(timeline)) => edits::used_lane_count(&timeline.mask_segments),
             (TrackKind::Audio, Some(timeline)) => edits::used_lane_count(&timeline.audio_segments),
@@ -4826,6 +4927,8 @@ impl EditorWindow {
         };
         let next = used.max(current.saturating_sub(1));
         match kind {
+            TrackKind::Style => self.tracks.style = next,
+            TrackKind::Image => self.tracks.image = next,
             TrackKind::Text => self.tracks.text = next,
             TrackKind::Mask => self.tracks.mask = next,
             TrackKind::Audio => self.tracks.audio = next,
@@ -4927,6 +5030,24 @@ impl EditorWindow {
     /// falls back to the playhead.
     fn split_at_playhead(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let time = self.view.preview_time.unwrap_or(self.playhead);
+        if let Some(selection) = self.selection.clone()
+            && matches!(selection.track, TrackKind::Style | TrackKind::Image)
+            && selection.indices.len() == 1
+        {
+            let index = selection.indices[0];
+            let Some(segment) = self.timeline.segments(selection.track).get(index) else {
+                return;
+            };
+            let local = time - segment.start;
+            if self.edit(
+                |timeline| edits::split_segment(timeline, selection.track, index, local),
+                window,
+                cx,
+            ) {
+                self.note_edit("split", Some(selection.track));
+            }
+            return;
+        }
         if self.edit(
             |timeline| edits::split_clip_segment(timeline, time, None),
             window,
@@ -5633,7 +5754,9 @@ impl EditorWindow {
         // The trigger is `absolute bottom-0 left-0` in the 32px timeline
         // header, itself under the slot's fixed geometry, so its top edge is a
         // constant offset from the window's bottom-left corner.
-        let button_top = f32::from(viewport.height) - self.timeline_height + TIMELINE_TOP_PADDING;
+        let timeline_height =
+            self.clamp_timeline_height(self.timeline_height, f32::from(viewport.height));
+        let button_top = f32::from(viewport.height) - timeline_height + TIMELINE_TOP_PADDING;
         let bottom = f32::from(viewport.height) - (button_top - 8.);
         // `overflowPadding: 64` -- stay clear of the titlebar.
         let max_height = (button_top - 8. - 64.).max(160.);
@@ -5789,7 +5912,7 @@ impl EditorWindow {
     }
 
     fn scene_available(&self) -> bool {
-        self.has_camera && !self.project.camera.hide
+        timeline::scene_available(&self.project, self.has_camera)
     }
 
     fn toggle_track(
@@ -5860,6 +5983,25 @@ impl EditorWindow {
 
     fn add_track_kind(&mut self, kind: TrackKind, window: &mut Window, cx: &mut Context<Self>) {
         match kind {
+            TrackKind::Style | TrackKind::Image => {
+                let lane_count = self.tracks.count(kind);
+                let segments = self.timeline.segments(kind);
+                let length = self.total_duration().min(3.0);
+                let lane = (0..lane_count)
+                    .find(|lane| {
+                        !segments.iter().any(|segment| {
+                            segment.lane == *lane
+                                && segment.end > self.playhead
+                                && segment.start < self.playhead + length
+                        })
+                    })
+                    .unwrap_or(lane_count);
+                if kind == TrackKind::Style {
+                    self.add_style_at(lane, self.playhead, window, cx);
+                } else {
+                    self.import_image_for_lane(lane, self.playhead, window, cx);
+                }
+            }
             TrackKind::Audio => {
                 let segments = self
                     .project
@@ -6027,6 +6169,261 @@ impl EditorWindow {
         }
         self.view.preview_time = None;
         self.note_edit("add-track", Some(kind));
+    }
+
+    fn add_style_at(&mut self, lane: u32, time: f64, window: &mut Window, cx: &mut Context<Self>) {
+        if !edits::ensure_timeline(&mut self.project, &self.clip_display_durations) {
+            return;
+        }
+        let Some(timeline) = self.project.timeline.as_ref() else {
+            return;
+        };
+        let segments: Vec<_> = timeline
+            .style_segments
+            .iter()
+            .filter(|segment| segment.track == lane)
+            .cloned()
+            .collect();
+        let total = self.total_duration();
+        let Some((start, end)) = edits::find_placement(&segments, time, 3.0_f64.min(total), total)
+        else {
+            return;
+        };
+        self.tracks.style = self.tracks.style.max(lane + 1);
+        let mut index = 0;
+        if self.edit(
+            |timeline| {
+                index = edits::insert_style_segment(
+                    timeline,
+                    cap_project::StyleSegment {
+                        start,
+                        end,
+                        track: lane,
+                        ..Default::default()
+                    },
+                );
+                true
+            },
+            window,
+            cx,
+        ) {
+            self.set_selection(Some(Selection::single(TrackKind::Style, index)), cx);
+            self.seek_to_time(start, cx);
+        }
+    }
+
+    fn import_image_for_lane(
+        &mut self,
+        lane: u32,
+        time: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pick_timeline_image(None, lane, time, window, cx);
+    }
+
+    pub(crate) fn replace_timeline_image(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(segment) = self
+            .project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.image_segments.get(index))
+        else {
+            return;
+        };
+        let Ok(fingerprint) = serde_json::to_string(segment) else {
+            return;
+        };
+        self.pick_timeline_image(
+            Some((index, fingerprint)),
+            segment.track,
+            segment.start,
+            window,
+            cx,
+        );
+    }
+
+    pub(crate) fn refresh_image_asset_status(&mut self) {
+        self.sidebar.image_asset_status = self
+            .selection
+            .as_ref()
+            .filter(|selection| selection.track == TrackKind::Image && selection.indices.len() == 1)
+            .and_then(|selection| {
+                self.project
+                    .timeline
+                    .as_ref()?
+                    .image_segments
+                    .get(selection.indices[0])
+            })
+            .map(|segment| {
+                (
+                    segment.path.clone(),
+                    self.project_path.join(&segment.path).is_file(),
+                )
+            });
+    }
+
+    fn pick_timeline_image(
+        &mut self,
+        replace: Option<(usize, String)>,
+        lane: u32,
+        time: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.sidebar.picking_image {
+            return;
+        }
+        self.end_field_edit(cx);
+        self.close_color_picker(cx);
+        self.sidebar.image_import_error = None;
+        self.sidebar.picking_image = true;
+        let project_path = self.project_path.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            #[cfg(target_os = "linux")]
+            let source = crate::platform::open_file_panel_async(
+                &[("Images", crate::import::OVERLAY_IMAGE_EXTENSIONS)],
+                None,
+                cx,
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
+            let source = crate::import::pick_import_file(
+                &[("Images", crate::import::OVERLAY_IMAGE_EXTENSIONS)],
+                cx,
+            )
+            .await;
+            if this.update_in(cx, |_, _, _| ()).is_err() {
+                return;
+            }
+            let imported =
+                match source {
+                    Some(source) => Some(
+                        cx.background_executor()
+                            .spawn(async move {
+                                crate::import::import_editor_image(&project_path, &source)
+                            })
+                            .await,
+                    ),
+                    None => None,
+                };
+            this.update_in(cx, |this, window, cx| {
+                this.sidebar.picking_image = false;
+                match imported {
+                    Some(Ok(imported)) => {
+                        if let Some((index, fingerprint)) = replace {
+                            if edits::replace_image_asset(&mut this.project, index, &fingerprint, imported.path, imported.name) {
+                                this.project_changed(window, cx);
+                                this.refresh_image_asset_status();
+                            } else {
+                                this.sidebar.image_import_error = Some("This image changed while choosing a replacement. Select it and try again.".into());
+                                cx.notify();
+                            }
+                        } else { this.commit_image_import(lane, time, imported, window, cx); }
+                    }
+                    Some(Err(error)) => {
+                        this.sidebar.image_import_error = Some(error);
+                        cx.notify();
+                    }
+                    None => cx.notify(),
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn commit_image_import(
+        &mut self,
+        mut lane: u32,
+        time: f64,
+        imported: crate::import::ImportedEditorImage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !edits::ensure_timeline(&mut self.project, &self.clip_display_durations) {
+            self.sidebar.image_import_error = Some(
+                "The recording is no longer available for this image. Please reopen the project."
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
+        let total = self.total_duration();
+        if total <= 0.0 {
+            self.sidebar.image_import_error = Some(
+                "The recording is no longer available for this image. Please reopen the project."
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
+        let Some(timeline) = self.project.timeline.as_ref() else {
+            self.sidebar.image_import_error = Some(
+                "The recording is no longer available for this image. Please reopen the project."
+                    .into(),
+            );
+            cx.notify();
+            return;
+        };
+        let length = total.min(3.0);
+        let mut segments: Vec<_> = timeline
+            .image_segments
+            .iter()
+            .filter(|segment| segment.track == lane)
+            .cloned()
+            .collect();
+        if edits::find_placement(&segments, time, length, total).is_none() {
+            lane = self
+                .tracks
+                .image
+                .max(edits::used_lane_count(&timeline.image_segments));
+            segments.clear();
+        }
+        let Some((start, end)) = edits::find_placement(&segments, time, length, total) else {
+            return;
+        };
+        let output = self
+            .frame_layout
+            .map_or([1920, 1080], |layout| layout.output_size);
+        let ratio = f64::from(imported.width) / f64::from(imported.height) * f64::from(output[1])
+            / f64::from(output[0]);
+        let size = if ratio >= 1.0 {
+            cap_project::XY::new(0.3, 0.3 / ratio)
+        } else {
+            cap_project::XY::new(0.3 * ratio, 0.3)
+        };
+        self.tracks.image = self.tracks.image.max(lane + 1);
+        let mut index = 0;
+        if self.edit(
+            |timeline| {
+                index = edits::insert_image_segment(
+                    timeline,
+                    cap_project::ImageSegment {
+                        start,
+                        end,
+                        track: lane,
+                        path: imported.path,
+                        name: imported.name,
+                        size,
+                        ..Default::default()
+                    },
+                );
+                true
+            },
+            window,
+            cx,
+        ) {
+            self.sidebar.image_import_error = None;
+            self.set_selection(Some(Selection::single(TrackKind::Image, index)), cx);
+            self.seek_to_time(start, cx);
+        }
     }
 
     fn import_audio_for_lane(&mut self, lane: u32, window: &mut Window, cx: &mut Context<Self>) {
@@ -7192,6 +7589,17 @@ impl EditorWindow {
     fn render_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let name_focused = self.name_input.read(cx).focus_handle().is_focused(window);
+        let has_captions = self.project.captions.as_ref().is_some_and(|captions| {
+            captions
+                .segments
+                .iter()
+                .any(|segment| !segment.words.is_empty())
+        });
+        let compact = compact_header_controls(
+            f32::from(window.viewport_size().width),
+            cfg!(target_os = "windows"),
+            has_captions,
+        );
 
         let header = div()
             .relative()
@@ -7214,6 +7622,7 @@ impl EditorWindow {
                     .gap(px(8.))
                     .items_center()
                     .px(px(16.))
+                    .when(compact, |group| group.gap(px(4.)).px(px(8.)))
                     .h_full()
                     .when(cfg!(target_os = "windows"), |group| group.occlude())
                     // The macOS spacer for the inset traffic lights: `h-full w-16`.
@@ -7251,7 +7660,9 @@ impl EditorWindow {
                                 // `px-px m-0 bg-transparent border-b
                                 //  border-transparent focus:border-gray-7`
                                 div()
+                                    .min_w_0()
                                     .max_w(px(200.))
+                                    .overflow_hidden()
                                     .border_b_1()
                                     .border_color(if name_focused {
                                         Hsla::from(theme.gray_7)
@@ -7275,6 +7686,7 @@ impl EditorWindow {
                             )
                             .child(
                                 div()
+                                    .flex_shrink_0()
                                     .text_size(px(14.))
                                     .text_color(Hsla::from(theme.gray_11))
                                     .child(".cap"),
@@ -7307,8 +7719,10 @@ impl EditorWindow {
                     .flex_row()
                     .items_center()
                     .justify_center()
+                    .flex_shrink_0()
                     .gap(px(8.))
                     .px(px(16.))
+                    .when(compact, |group| group.px(px(8.)))
                     .h_full()
                     .border_l_1()
                     .border_r_1()
@@ -7317,7 +7731,8 @@ impl EditorWindow {
                     .child(
                         ui::EditorButton::plain(&theme, "presets")
                             .left_icon("icons/presets.svg")
-                            .label("Presets")
+                            .when(!compact, |button| button.label("Presets"))
+                            .tooltip(&theme, "Presets")
                             .disabled(!self.project_ready())
                             .right_icon("icons/chevron-down.svg")
                             .pressed(self.presets_menu.is_some())
@@ -7334,6 +7749,7 @@ impl EditorWindow {
                     .flex_row()
                     .flex_1()
                     .min_w_0()
+                    .when(compact, |group| group.flex_none())
                     .items_center()
                     .gap(px(8.))
                     .pl(px(8.))
@@ -7366,16 +7782,8 @@ impl EditorWindow {
                     // 188`): the pill only exists once a transcript with words
                     // does.
                     .children(
-                        self.project
-                            .captions
-                            .as_ref()
-                            .is_some_and(|captions| {
-                                captions
-                                    .segments
-                                    .iter()
-                                    .any(|segment| !segment.words.is_empty())
-                            })
-                            .then(|| self.header_pill("icons/captions.svg", "Captions")),
+                        has_captions
+                            .then(|| self.header_pill("icons/captions.svg", "Captions", compact)),
                     )
                     .child(self.render_export_button(cx)),
             );
@@ -7396,9 +7804,17 @@ impl EditorWindow {
     /// `class="flex gap-1.5 justify-center h-[40px]"` (`Header.tsx:188-209`).
     /// Inert -- the transcript layout mode does not exist yet. Clips has its
     /// own live pill (`crate::editor_clips`).
-    fn header_pill(&self, icon: &'static str, label: &'static str) -> impl IntoElement {
+    fn header_pill(
+        &self,
+        icon: &'static str,
+        label: &'static str,
+        compact: bool,
+    ) -> impl IntoElement {
         let theme = self.theme;
         div()
+            .id("editor-captions-pill")
+            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+            .tooltip(move |_, cx| ui::Tooltip::new(&theme, label).view(cx))
             .flex()
             .flex_row()
             .items_center()
@@ -7420,7 +7836,7 @@ impl EditorWindow {
                     .flex_shrink_0()
                     .text_color(Hsla::from(theme.gray_12)),
             )
-            .child(label)
+            .when(!compact, |pill| pill.child(label))
     }
 
     /// The Export button (`Header.tsx:210-231`): `h-[40px] max-w-[100px]
@@ -7503,8 +7919,9 @@ impl EditorWindow {
     }
 
     /// `flex items-center justify-between gap-3 p-3` (`Player.tsx:290`).
-    fn render_player_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_player_toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let narrow = editor_player_width(f32::from(window.viewport_size().width)) < 480.;
         div()
             .flex()
             .flex_row()
@@ -7519,10 +7936,15 @@ impl EditorWindow {
                     .flex_row()
                     .items_center()
                     .gap(px(12.))
+                    .when(narrow, |group| group.gap(px(4.)))
                     .child(
                         ui::EditorButton::plain(&theme, "aspect-ratio")
                             .left_icon("icons/layout.svg")
-                            .label(Self::aspect_ratio_label(self.project.aspect_ratio.as_ref()))
+                            .when(!narrow, |button| {
+                                button.label(Self::aspect_ratio_label(
+                                    self.project.aspect_ratio.as_ref(),
+                                ))
+                            })
                             .tooltip(&theme, "Aspect Ratio")
                             .pressed(
                                 self.toolbar_menu
@@ -7558,14 +7980,14 @@ impl EditorWindow {
                     .flex_row()
                     .items_center()
                     .gap(px(8.))
-                    .child(
+                    .children((!narrow).then(|| {
                         // `text-xs font-medium text-gray-11`.
                         div()
                             .text_size(px(12.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(Hsla::from(theme.gray_11))
-                            .child("Preview quality"),
-                    )
+                            .child("Preview quality")
+                    }))
                     .child(
                         ui::Select::plain(&theme, "preview-quality", self.preview_quality.label())
                             .stretch_label()
@@ -7755,8 +8177,11 @@ impl EditorWindow {
 
     /// The transport row (`Player.tsx:357-481`): `relative flex overflow-hidden
     /// z-10 flex-row gap-3 justify-between items-center p-5`.
-    fn render_transport(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_transport(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let player_width = editor_player_width(f32::from(window.viewport_size().width));
+        let compact = player_width < 600.;
+        let narrow = player_width < 480.;
         let total = self.total_duration();
         // `Math.max(editorState.previewTime ?? editorState.playbackTime, 0)`
         // (`Player.tsx:359-365`) -- the clock reads the *hover* time when there
@@ -7788,6 +8213,8 @@ impl EditorWindow {
                     .flex_1()
                     .min_w_0()
                     .text_size(px(14.))
+                    .when(compact, |clock| clock.overflow_hidden())
+                    .when(narrow, |clock| clock.text_size(px(12.)))
                     .child(
                         div()
                             .text_color(Hsla::from(theme.gray_12))
@@ -7802,8 +8229,8 @@ impl EditorWindow {
             )
             .child(
                 div()
-                    .absolute()
-                    .inset_0()
+                    .when(!compact, |group| group.absolute().inset_0())
+                    .when(compact, |group| group.flex_shrink_0())
                     .flex()
                     .flex_row()
                     .items_center()
@@ -7815,6 +8242,7 @@ impl EditorWindow {
                             .items_center()
                             .justify_center()
                             .gap(px(32.))
+                            .when(compact, |group| group.gap(px(16.)))
                             .when(!live, |this| this.opacity(0.5))
                             .child(
                                 div()
@@ -7892,6 +8320,7 @@ impl EditorWindow {
                     .flex_row()
                     .flex_1()
                     .gap(px(16.))
+                    .when(compact, |group| group.gap(px(8.)))
                     .justify_end()
                     .items_center()
                     // The split toggle (`Player.tsx:409-427`): an
@@ -7948,7 +8377,7 @@ impl EditorWindow {
                     // step={0.001}`: the 32px row with its 5px track. Fully
                     // left is fully zoomed *out* -- the value is
                     // `1 - zoom / zoomOutLimit()` (`Player.tsx:444-465`).
-                    .child(
+                    .children((!narrow).then(|| {
                         ui::Slider::new(
                             "timeline-zoom",
                             self.view.transform.slider_fraction(total),
@@ -7979,14 +8408,19 @@ impl EditorWindow {
                                 this.zoom_slider_drag = true;
                                 this.apply_zoom_slider(event.position, window, cx);
                             },
-                        )),
-                    ),
+                        ))
+                    })),
             )
     }
 
     // -- Timeline ------------------------------------------------------------
 
-    fn render_timeline(&self, viewport_width: f32, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_timeline(
+        &self,
+        viewport_width: f32,
+        viewport_height: f32,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = self.theme;
         let content_width = timeline::content_width(viewport_width);
         let live = self.transport.is_some();
@@ -8023,12 +8457,10 @@ impl EditorWindow {
             .px(px(TIMELINE_SLOT_PADDING))
             .overflow_hidden()
             .relative()
-            // The persisted height, clamped to `[MIN_TIMELINE_HEIGHT,
-            // layoutHeight - MIN_PLAYER_HEIGHT]` (`Editor.tsx:421-435`).
-            // Nothing writes it yet -- the drag handle is inert -- so it sits
-            // at the default with the floor still expressed.
-            .h(px(self.timeline_height))
-            .min_h(px(MIN_TIMELINE_HEIGHT))
+            .h(px(self.clamp_timeline_height(
+                self.timeline_height,
+                viewport_height,
+            )))
             .child(
                 div().h_full().child(
                     // `pt-8 relative overflow-hidden flex flex-col gap-2
@@ -8314,7 +8746,11 @@ impl EditorWindow {
             let delete_label = match kind {
                 TrackKind::Clip => None,
                 TrackKind::Caption | TrackKind::Keyboard => Some("Delete"),
-                TrackKind::Text | TrackKind::Mask | TrackKind::Audio => Some("Delete"),
+                TrackKind::Text
+                | TrackKind::Mask
+                | TrackKind::Audio
+                | TrackKind::Style
+                | TrackKind::Image => Some("Delete"),
                 TrackKind::Zoom | TrackKind::ThreeD | TrackKind::Scene => {
                     (!model.segments(kind).is_empty()).then_some("Clear all")
                 }
@@ -8494,7 +8930,9 @@ impl EditorWindow {
                                                 }
                                                 TrackKind::Text
                                                 | TrackKind::Mask
-                                                | TrackKind::Audio => {
+                                                | TrackKind::Audio
+                                                | TrackKind::Style
+                                                | TrackKind::Image => {
                                                     this.delete_track_lane(kind, lane, window, cx);
                                                 }
                                                 TrackKind::Zoom
@@ -8669,11 +9107,13 @@ impl Render for EditorWindow {
         // Fields first: a field created this frame has no text yet, and gpui
         // only renders on invalidation, so syncing before creating would leave
         // a brand-new box empty until something else asked for a frame.
-        self.prepare_sidebar_fields(window, cx);
-        self.prepare_animated_gradient_fields(window, cx);
-        self.prepare_cursor_fields(window, cx);
-        self.sync_hex_inputs(window, cx);
-        self.sync_picker_hex(window, cx);
+        self.with_style_controls(|this| {
+            this.prepare_sidebar_fields(window, cx);
+            this.prepare_animated_gradient_fields(window, cx);
+            this.prepare_cursor_fields(window, cx);
+            this.sync_hex_inputs(window, cx);
+            this.sync_picker_hex(window, cx);
+        });
         self.prepare_frame_fields(window, cx);
         self.sync_crop_container(window);
         let theme = self.theme;
@@ -8681,6 +9121,11 @@ impl Render for EditorWindow {
         // this window is resizable, so read them off the viewport rather than
         // assuming the default width.
         let viewport_width: f32 = window.viewport_size().width.into();
+
+        let layout = EditorVerticalLayout::new(
+            f32::from(window.viewport_size().height),
+            self.timeline_height,
+        );
 
         // `onMount`'s `checkBounds` (`TL/index.tsx:689-703`): once the
         // timeline has a width, zoom in until a segment would be at least
@@ -8855,7 +9300,7 @@ impl Render for EditorWindow {
                                     .min_h_0()
                                     .px(px(8.))
                                     .overflow_hidden()
-                                    .min_h(px(MIN_PLAYER_HEIGHT))
+                                    .min_h(px(layout.player_min_height))
                                     // The player card: `flex flex-col
                                     // rounded-xl border bg-gray-1
                                     // dark:bg-gray-2 border-gray-3
@@ -8875,8 +9320,7 @@ impl Render for EditorWindow {
                                             .child(self.render_player(cx))
                                             // The 16px horizontal resize
                                             // handle with its three grip bars
-                                            // (`Editor.tsx:700-725`). Inert:
-                                            // resizing the timeline is E3.
+                                            // (`Editor.tsx:700-725`).
                                             .child(
                                                 div()
                                                     .id("timeline-resize-handle")
@@ -8903,10 +9347,13 @@ impl Render for EditorWindow {
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         cx.listener(
-                                                            |this, event: &MouseDownEvent, _, cx| {
+                                                            |this, event: &MouseDownEvent, window, cx| {
                                                                 this.timeline_resize = Some((
                                                                     f32::from(event.position.y),
-                                                                    this.timeline_height,
+                                                                    this.clamp_timeline_height(
+                                                                        this.timeline_height,
+                                                                        f32::from(window.viewport_size().height),
+                                                                    ),
                                                                 ));
                                                                 cx.notify();
                                                             },
@@ -8937,7 +9384,7 @@ impl Render for EditorWindow {
                                 self.timeline_view.clone().cached(
                                     StyleRefinement::default()
                                         .w_full()
-                                        .h(px(self.timeline_height)),
+                                        .h(px(layout.timeline_height)),
                                 ),
                             ),
                     ),
@@ -9053,12 +9500,12 @@ impl Render for EditorWindow {
             }))
             // The open `KSelect` menu, painted last of all so it is over the
             // sidebar and the drag layers alike.
-            .children(self.render_sidebar_menu(cx))
+            .children(self.with_style_controls(|this| this.render_sidebar_menu(cx)))
             .children(self.render_toolbar_menu(cx))
             .children(self.render_frame_controls(window, cx))
             .children(self.render_add_track_popover(cx))
             .children(self.render_clip_speed_popover(cx))
-            .children(self.render_color_picker_popover(cx))
+            .children(self.with_style_controls(|this| this.render_color_picker_popover(cx)))
             .children(self.render_presets_menu(cx))
             .children(self.render_preset_dialog(cx))
             // The clips overlays: import menu, record modal, and the card
@@ -9248,6 +9695,76 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 mod tests {
     use super::*;
 
+    #[test]
+    fn responsive_editor_fits_the_intel_visible_workarea() {
+        let layout = EditorVerticalLayout::new(652., DEFAULT_TIMELINE_HEIGHT);
+        assert_eq!(layout.player_min_height, 336.);
+        assert_eq!(layout.timeline_height, 252.);
+        assert_eq!(editor_player_width(992.), 550.);
+    }
+
+    #[test]
+    fn responsive_editor_restores_the_preferred_split_after_resize() {
+        let preferred = 500.;
+        let sizes = [1200., 652., 600., 480., 1200.];
+        let layouts = sizes.map(|height| EditorVerticalLayout::new(height, preferred));
+        assert_eq!(layouts[0].timeline_height, preferred);
+        assert_eq!(layouts[1].timeline_height, 252.);
+        assert_eq!(layouts[4].timeline_height, preferred);
+        for (height, layout) in sizes.into_iter().zip(layouts) {
+            assert!(layout.player_min_height > 156.);
+            assert!(layout.timeline_height > 160.);
+            assert!(
+                layout.player_min_height + layout.timeline_height + HEADER_HEIGHT + 8.
+                    <= height + 0.001
+            );
+        }
+    }
+
+    #[test]
+    fn responsive_editor_clamps_both_ends_of_the_resize_gesture() {
+        for height in [480., 600., 652., 800., 1200.] {
+            let low = EditorVerticalLayout::new(height, -1000.);
+            let high = EditorVerticalLayout::new(height, 10000.);
+            assert!(low.timeline_height <= high.timeline_height);
+            assert!(low.timeline_height > 0.);
+            assert!(
+                high.player_min_height + high.timeline_height + HEADER_HEIGHT + 8.
+                    <= height + 0.001
+            );
+        }
+        assert_eq!(
+            EditorVerticalLayout::new(800., -1000.).timeline_height,
+            240.
+        );
+        assert_eq!(
+            EditorVerticalLayout::new(800., 10000.).timeline_height,
+            400.
+        );
+    }
+
+    #[test]
+    fn responsive_editor_preserves_the_spacious_layout() {
+        let layout = EditorVerticalLayout::new(800., DEFAULT_TIMELINE_HEIGHT);
+        assert_eq!(layout.player_min_height, MIN_PLAYER_HEIGHT);
+        assert_eq!(layout.timeline_height, DEFAULT_TIMELINE_HEIGHT);
+        for windows in [false, true] {
+            for captions in [false, true] {
+                assert!(!compact_header_controls(1275., windows, captions));
+            }
+        }
+    }
+
+    #[test]
+    fn responsive_editor_reserves_space_for_windows_controls_and_captions() {
+        assert!(compact_header_controls(992., true, true));
+        assert!(!compact_header_controls(992., true, false));
+        assert!(!compact_header_controls(992., false, true));
+        assert!(compact_header_controls(800., true, false));
+        assert!(compact_header_controls(800., false, true));
+        assert_eq!(editor_player_width(800.), 358.);
+    }
+
     fn open_sidebar_menu_for_test(
         kind: crate::editor_tabs::SidebarMenu,
     ) -> Option<crate::editor_tabs::OpenMenu> {
@@ -9320,6 +9837,8 @@ mod tests {
 
         let mut project = ProjectConfiguration {
             timeline: Some(TimelineConfiguration {
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
                 segments: Vec::new(),
                 transitions: Vec::new(),
                 zoom_segments: Vec::new(),

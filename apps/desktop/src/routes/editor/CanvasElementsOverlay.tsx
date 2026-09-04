@@ -12,6 +12,7 @@ import {
 	createSignal,
 	For,
 	on,
+	onCleanup,
 	Show,
 } from "solid-js";
 import type { FrameLayoutEvent } from "~/utils/tauri";
@@ -60,6 +61,7 @@ type SnapExclude =
 	| "camera"
 	| { text: number }
 	| { mask: number }
+	| { image: number }
 	| null;
 
 /**
@@ -118,6 +120,33 @@ export function useCanvasSnapTargets() {
 			});
 		});
 
+		project.timeline?.imageSegments?.forEach((segment, index) => {
+			if (
+				typeof exclude === "object" &&
+				exclude !== null &&
+				"image" in exclude &&
+				exclude.image === index
+			)
+				return;
+			if (!segment.enabled || t < segment.start || t >= segment.end) return;
+			const angle = (segment.rotation * Math.PI) / 180;
+			const outputWidth = layout?.output_width ?? 1920;
+			const outputHeight = layout?.output_height ?? 1080;
+			const w =
+				(Math.abs(segment.size.x * outputWidth * Math.cos(angle)) +
+					Math.abs(segment.size.y * outputHeight * Math.sin(angle))) /
+				outputWidth;
+			const h =
+				(Math.abs(segment.size.x * outputWidth * Math.sin(angle)) +
+					Math.abs(segment.size.y * outputHeight * Math.cos(angle))) /
+				outputHeight;
+			rects.push({
+				x: segment.center.x - w / 2,
+				y: segment.center.y - h / 2,
+				w,
+				h,
+			});
+		});
 		// The classic camera-inset margin lines only make sense for the camera
 		// and display; for text/mask boxes they just cause spurious re-snaps
 		// right next to the frame-edge lines.
@@ -161,8 +190,11 @@ export function SnapGuidesOverlay(props: { size: Size }) {
 
 export function CanvasElementsOverlay(props: { size: Size }) {
 	const {
-		project,
-		setProject,
+		styleProject: project,
+		setStyleProject: setProject,
+		selectedStyle,
+		toggleStyleGroup,
+		styleScopeToken,
 		editorState,
 		setEditorState,
 		projectHistory,
@@ -210,6 +242,8 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 		camera?: NormRect;
 	} | null>(null);
 	let dragging = false;
+	let finishCanvasDrag: (() => void) | undefined;
+	onCleanup(() => finishCanvasDrag?.());
 
 	createEffect(
 		on(
@@ -246,8 +280,12 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 	// The rendered display rect is zoom-transformed while a zoom segment is
 	// active, but drags write base-layout config — lock it to avoid a
 	// mismatched pointer feel. Camera placement is not zoom-transformed.
-	const displayDraggable = () => !zoomActive();
-	const cameraResizable = () => !zoomActive();
+	const displayDraggable = () =>
+		!zoomActive() &&
+		(!selectedStyle() || selectedStyle()?.overrides.background != null);
+	const cameraDraggable = () =>
+		!selectedStyle() || selectedStyle()?.overrides.camera != null;
+	const cameraResizable = () => !zoomActive() && cameraDraggable();
 
 	const selection = () => editorState.canvasSelection;
 	const select = (type: "display" | "camera") =>
@@ -283,9 +321,11 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 	) {
 		return (downEvent: MouseEvent) => {
 			if (downEvent.button !== 0) return;
+			finishCanvasDrag?.();
 			const initial = setup();
 			if (!initial) return;
 			const state = initial;
+			const scopeToken = styleScopeToken();
 
 			downEvent.preventDefault();
 			downEvent.stopPropagation();
@@ -295,6 +335,7 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 			dragging = true;
 
 			function handleUpdate(event: MouseEvent) {
+				if (scopeToken !== styleScopeToken()) return;
 				// A plain click must not write config (it would e.g. convert a
 				// preset camera position into a manual one).
 				if (
@@ -311,9 +352,11 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 
 			const throttledUpdate = throttle(handleUpdate, 1000 / FPS);
 
-			function finish(finalEvent: MouseEvent) {
+			function finish(finalEvent?: MouseEvent) {
+				if (!finishCanvasDrag) return;
+				finishCanvasDrag = undefined;
 				throttledUpdate.clear();
-				handleUpdate(finalEvent);
+				if (finalEvent) handleUpdate(finalEvent);
 				resumeHistory();
 				setSnapGuides([]);
 				dragging = false;
@@ -324,9 +367,11 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 				createEventListenerMap(window, {
 					mousemove: throttledUpdate,
 					mouseup: finish,
+					blur: () => finish(),
 				});
 				return dispose;
 			});
+			finishCanvasDrag = finish;
 		};
 	}
 
@@ -336,6 +381,7 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 				const rect = element === "display" ? displayRect() : cameraRect();
 				if (!rect) return null;
 				if (element === "display" && !displayDraggable()) return null;
+				if (element === "camera" && !cameraDraggable()) return null;
 				return { rect, targets: snapTargetsFor(element), moved: false };
 			},
 			(e, state, initialMouse) => {
@@ -599,7 +645,7 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 
 		const isDisplay = selected.type === "display";
 		if (isDisplay && (!showDisplay() || !displayDraggable())) return;
-		if (!isDisplay && !showCamera()) return;
+		if (!isDisplay && (!showCamera() || !cameraDraggable())) return;
 		const rect = isDisplay ? displayRect() : cameraRect();
 		if (!rect) return;
 
@@ -642,13 +688,20 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 							draggable={displayDraggable()}
 							resizable={displayDraggable()}
 							locked={
-								displayDraggable()
-									? null
-									: {
-											message: "Screen is locked while a zoom is active",
-											actionLabel: "Edit zoom",
-											onAction: selectActiveZoom,
+								selectedStyle() && selectedStyle()?.overrides.background == null
+									? {
+											message:
+												"Enable a Background override to edit this Style's screen",
+											actionLabel: "Enable override",
+											onAction: () => toggleStyleGroup("background", true),
 										}
+									: displayDraggable()
+										? null
+										: {
+												message: "Screen is locked while a zoom is active",
+												actionLabel: "Edit zoom",
+												onAction: selectActiveZoom,
+											}
 							}
 							onMouseDown={(e) => {
 								if (e.button !== 0) return;
@@ -666,16 +719,23 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 							rect={rect()}
 							label="Camera"
 							selected={selection()?.type === "camera"}
-							draggable
+							draggable={cameraDraggable()}
 							resizable={cameraResizable()}
 							locked={
-								cameraResizable()
-									? null
-									: {
-											message: "Camera size follows the zoom — drag to move",
-											actionLabel: "Edit zoom",
-											onAction: selectActiveZoom,
+								selectedStyle() && selectedStyle()?.overrides.camera == null
+									? {
+											message:
+												"Enable a Camera override to edit this Style's camera",
+											actionLabel: "Enable override",
+											onAction: () => toggleStyleGroup("camera", true),
 										}
+									: cameraResizable()
+										? null
+										: {
+												message: "Camera size follows the zoom — drag to move",
+												actionLabel: "Edit zoom",
+												onAction: selectActiveZoom,
+											}
 							}
 							onMouseDown={(e) => {
 								if (e.button !== 0) return;

@@ -764,6 +764,9 @@ pub enum ColorPickerDrag {
 /// The sidebar's own state -- everything `ConfigSidebar`'s signals hold that is
 /// not in the project config.
 pub struct SidebarState {
+    pub(crate) style_target: Option<(usize, StyleGroup)>,
+    pub(crate) image_import_error: Option<String>,
+    pub(crate) image_asset_status: Option<(String, bool)>,
     animated_gradient: animated_gradient::AnimatedGradientState,
     /// `state.selectedTab` (`:563-573`).
     pub tab: SidebarTab,
@@ -862,13 +865,16 @@ pub struct SidebarState {
     pub importing_desktop: bool,
     /// Guards the file-picker task: `runModal` spins its own run loop and a
     /// second panel would stack on the first.
-    picking_image: bool,
+    pub(crate) picking_image: bool,
     picker_task: Option<gpui::Task<()>>,
 }
 
 impl SidebarState {
     pub fn new(config: &ProjectConfiguration) -> Self {
         Self {
+            style_target: None,
+            image_import_error: None,
+            image_asset_status: None,
             animated_gradient: animated_gradient::AnimatedGradientState::new(),
             tab: SidebarTab::Background,
             source_tab: initial_source_tab(config),
@@ -1054,7 +1060,7 @@ impl EditorWindow {
             self.end_color_history();
         }
         let previous_animated_gradient = self.animated_gradient_config().cloned();
-        if !change(&mut self.project) {
+        if !self.apply_control_change(change) {
             return;
         }
         self.project_changed(window, cx);
@@ -1077,7 +1083,7 @@ impl EditorWindow {
             return;
         }
         self.end_color_history();
-        if !change(&mut self.project) {
+        if !self.apply_control_change(change) {
             return;
         }
         self.project_changed(window, cx);
@@ -1150,8 +1156,9 @@ impl EditorWindow {
     }
 
     fn notch_value(&self, slider: BgSlider) -> f64 {
+        let project = self.style_control_project();
         let base = self.notch_base();
-        let notch = self.project.background.notch.as_ref();
+        let notch = project.background.notch.as_ref();
         match slider {
             BgSlider::NotchWidth => notch.and_then(|n| n.width).unwrap_or(base.width),
             BgSlider::NotchHeight => notch.and_then(|n| n.height).unwrap_or(base.height),
@@ -1187,6 +1194,7 @@ impl EditorWindow {
     }
 
     pub(crate) fn slider_value(&self, slider: SliderKey) -> f32 {
+        let project = self.style_control_project();
         match slider {
             SliderKey::Bg(slider) => self.bg_slider_value(slider),
             SliderKey::AnimatedGradient(parameter) => self
@@ -1199,11 +1207,11 @@ impl EditorWindow {
             // Every grade slider is `Math.round(value * 100)` in the UI and
             // `v / 100` back into the config (`ColorCorrectionSection.tsx:181`).
             SliderKey::Grade(target, slider) => (slider.read(self.grade(target)) * 100.).round(),
-            SliderKey::Camera(slider) => slider.read(&self.project),
-            SliderKey::Audio(slider) => slider.read(&self.project),
-            SliderKey::Cursor(slider) => slider.read(&self.project),
-            SliderKey::Caption(slider) => slider.read(&self.project),
-            SliderKey::Keyboard(slider) => slider.read(&self.project),
+            SliderKey::Camera(slider) => slider.read(&project),
+            SliderKey::Audio(slider) => slider.read(&project),
+            SliderKey::Cursor(slider) => slider.read(&project),
+            SliderKey::Caption(slider) => slider.read(&project),
+            SliderKey::Keyboard(slider) => slider.read(&project),
             SliderKey::Panel(slider, index) => self.panel_slider_value(slider, index),
         }
     }
@@ -1254,12 +1262,13 @@ impl EditorWindow {
     }
 
     fn bg_slider_value(&self, slider: BgSlider) -> f32 {
-        let background = &self.project.background;
+        let project = self.style_control_project();
+        let background = &project.background;
         match slider {
             BgSlider::Blur => background.blur as f32,
             BgSlider::Padding => background.padding as f32,
             BgSlider::Rounding => background.rounding as f32,
-            BgSlider::MotionBlur => self.project.screen_motion_blur,
+            BgSlider::MotionBlur => project.screen_motion_blur,
             BgSlider::BorderWidth => background
                 .border
                 .as_ref()
@@ -1629,16 +1638,17 @@ impl EditorWindow {
     }
 
     pub(crate) fn color_for(&self, target: ColorTarget) -> Option<Color> {
+        let project = self.style_control_project();
         match target {
-            ColorTarget::BackgroundColor => match &self.project.background.source {
+            ColorTarget::BackgroundColor => match &project.background.source {
                 BackgroundSource::Color { value, .. } => Some(*value),
                 _ => None,
             },
-            ColorTarget::GradientFrom => match &self.project.background.source {
+            ColorTarget::GradientFrom => match &project.background.source {
                 BackgroundSource::Gradient { from, .. } => Some(*from),
                 _ => None,
             },
-            ColorTarget::GradientTo => match &self.project.background.source {
+            ColorTarget::GradientTo => match &project.background.source {
                 BackgroundSource::Gradient { to, .. } => Some(*to),
                 _ => None,
             },
@@ -1647,13 +1657,13 @@ impl EditorWindow {
                 .and_then(|config| config.color_stops.get(index))
                 .map(|stop| stop.color),
             ColorTarget::BorderColor => Some(
-                self.project
+                project
                     .background
                     .border
                     .as_ref()
                     .map_or(UI_BORDER_FALLBACK.color, |border| border.color),
             ),
-            ColorTarget::CursorRipple => Some(self.project.cursor.ripple.color),
+            ColorTarget::CursorRipple => Some(project.cursor.ripple.color),
             _ => self.hex_string_for(target).and_then(|hex| {
                 hex_to_rgb(&hex).map(|rgba| [rgba[0] as u16, rgba[1] as u16, rgba[2] as u16])
             }),
@@ -2143,8 +2153,9 @@ impl EditorWindow {
     /// Which file the big preview should be showing: the chosen image on the
     /// image tab, the imported desktop picture on the desktop tab.
     fn preview_path(&self) -> Option<PathBuf> {
+        let project = self.style_control_project();
         match self.sidebar.source_tab {
-            SourceTab::Image => match &self.project.background.source {
+            SourceTab::Image => match &project.background.source {
                 BackgroundSource::Image { path } => path.as_ref().map(PathBuf::from),
                 _ => None,
             },
@@ -2172,17 +2183,19 @@ impl EditorWindow {
     /// default padding *and* rounding; a real-to-real switch only ensures
     /// padding, so an intentionally-square background keeps rounding at 0.
     fn ensure_background_presentation(&mut self, from_none: bool) -> bool {
-        let mut changed = false;
-        let background = &mut self.project.background;
-        if background.padding == 0. {
-            background.padding = DEFAULT_BACKGROUND_PADDING;
-            changed = true;
-        }
-        if from_none && background.rounding == 0. {
-            background.rounding = DEFAULT_BACKGROUND_ROUNDING;
-            changed = true;
-        }
-        changed
+        self.apply_control_change(|project| {
+            let mut changed = false;
+            let background = &mut project.background;
+            if background.padding == 0. {
+                background.padding = DEFAULT_BACKGROUND_PADDING;
+                changed = true;
+            }
+            if from_none && background.rounding == 0. {
+                background.rounding = DEFAULT_BACKGROUND_ROUNDING;
+                changed = true;
+            }
+            changed
+        })
     }
 
     /// The source-tab row's `onChange` (`:2189-2263`), verbatim.
@@ -2292,6 +2305,8 @@ impl EditorWindow {
             return;
         }
         self.sidebar.picking_image = true;
+        let style_target = self.sidebar.style_target;
+        let style_fingerprint = self.style_target_fingerprint();
         self.sidebar.picker_task = Some(cx.spawn_in(window, async move |this, cx| {
             let picked = cx
                 .update(|_, _| crate::platform::open_image_panel(&BACKGROUND_IMAGE_EXTENSIONS))
@@ -2332,6 +2347,12 @@ impl EditorWindow {
 
             this.update_in(cx, |this, window, cx| {
                 this.sidebar.picking_image = false;
+                if this.sidebar.style_target != style_target
+                    || this.style_target_fingerprint() != style_fingerprint
+                {
+                    cx.notify();
+                    return;
+                }
                 match stored {
                     Ok(path) => {
                         this.edit_background(
@@ -2365,7 +2386,9 @@ impl EditorWindow {
         }
         self.sidebar.importing_desktop = true;
         let project_path = self.project_path.clone();
-        let from_none = is_none_background(&self.project);
+        let from_none = is_none_background(&self.style_control_project());
+        let style_target = self.sidebar.style_target;
+        let style_fingerprint = self.style_target_fingerprint();
         cx.spawn_in(window, async move |this, cx| {
             let imported = cx
                 .background_executor()
@@ -2373,6 +2396,12 @@ impl EditorWindow {
                 .await;
             this.update_in(cx, |this, window, cx| {
                 this.sidebar.importing_desktop = false;
+                if this.sidebar.style_target != style_target
+                    || this.style_target_fingerprint() != style_fingerprint
+                {
+                    cx.notify();
+                    return;
+                }
                 match imported {
                     Ok(path) => {
                         this.sidebar.desktop_background = Some(path.clone());
@@ -2461,7 +2490,21 @@ impl EditorWindow {
                     .border_1()
                     .border_color(Hsla::from(theme.gray_3))
                     .child(rail)
-                    .child(if self.audio_picker.is_some() {
+                    .children(self.sidebar.image_import_error.as_ref().map(|error| {
+                        div()
+                            .p(px(12.))
+                            .text_size(px(12.))
+                            .text_color(Hsla::from(theme.gray_12))
+                            .child(error.clone())
+                    }))
+                    .children(
+                        self.sidebar
+                            .picking_image
+                            .then(|| div().p(px(12.)).child("Importing image…")),
+                    )
+                    .child(if let Some((index, group)) = self.sidebar.style_target {
+                        self.render_style_group(index, group, cx)
+                    } else if self.audio_picker.is_some() {
                         self.render_audio_library(cx)
                     } else if self.camera3d_setup.is_some() {
                         self.render_camera3d_setup(cx)
@@ -2594,16 +2637,21 @@ impl EditorWindow {
                             .child(self.render_corner_style(cx)),
                     ),
             )
-            .child(
+            .children(self.sidebar.style_target.is_none().then(|| {
                 ui::Field::plain(&theme, "Motion Blur")
                     .icon("icons/wind.svg")
-                    .child(self.slider(SliderKey::Bg(BgSlider::MotionBlur), "x100%", cx)),
-            )
+                    .child(self.slider(SliderKey::Bg(BgSlider::MotionBlur), "x100%", cx))
+            }))
             .child(self.render_border_field(cx))
             .child(self.render_notch_field(cx))
             .child(self.render_shadow_field(cx))
             // `<ColorCorrectionSection target="screen" />` (`:2962`).
-            .child(self.render_color_correction(GradeTarget::Screen, cx))
+            .children(
+                self.sidebar
+                    .style_target
+                    .is_none()
+                    .then(|| self.render_color_correction(GradeTarget::Screen, cx)),
+            )
     }
 
     // -- Source ------------------------------------------------------------
@@ -4013,6 +4061,8 @@ impl EditorWindow {
         };
         let track = match track.to_ascii_lowercase().as_str() {
             "zoom" => TrackKind::Zoom,
+            "style" => TrackKind::Style,
+            "image" => TrackKind::Image,
             "text" => TrackKind::Text,
             "caption" => TrackKind::Caption,
             "mask" => TrackKind::Mask,
@@ -4256,5 +4306,306 @@ mod tests {
         let ring = preview_border_color([255, 255, 255]);
         let rgba = gpui::Rgba::from(ring);
         assert_eq!((rgba.r * 255.).round() as u8, 209);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StyleGroup {
+    Background,
+    Camera,
+    Cursor,
+}
+
+impl StyleGroup {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Background => "Background & frame",
+            Self::Camera => "Camera",
+            Self::Cursor => "Cursor",
+        }
+    }
+}
+
+pub(crate) fn apply_style_control_change(
+    project: &mut ProjectConfiguration,
+    index: usize,
+    group: StyleGroup,
+    change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+) -> bool {
+    let Some(segment) = project
+        .timeline
+        .as_ref()
+        .and_then(|timeline| timeline.style_segments.get(index))
+    else {
+        return false;
+    };
+    let mut scoped = project.clone();
+    match group {
+        StyleGroup::Background => {
+            let Some(value) = &segment.overrides.background else {
+                return false;
+            };
+            scoped.background = value.clone();
+        }
+        StyleGroup::Camera => {
+            let Some(value) = &segment.overrides.camera else {
+                return false;
+            };
+            scoped.camera = value.clone();
+        }
+        StyleGroup::Cursor => {
+            let Some(value) = &segment.overrides.cursor else {
+                return false;
+            };
+            scoped.cursor = value.clone();
+        }
+    }
+    if !change(&mut scoped) {
+        return false;
+    }
+    let Some(segment) = project
+        .timeline
+        .as_mut()
+        .and_then(|timeline| timeline.style_segments.get_mut(index))
+    else {
+        return false;
+    };
+    match group {
+        StyleGroup::Background => segment.overrides.background = Some(scoped.background),
+        StyleGroup::Camera => segment.overrides.camera = Some(scoped.camera),
+        StyleGroup::Cursor => segment.overrides.cursor = Some(scoped.cursor),
+    }
+    true
+}
+
+impl EditorWindow {
+    pub(crate) fn style_background(&self) -> &cap_project::BackgroundConfiguration {
+        self.sidebar
+            .style_target
+            .filter(|(_, group)| *group == StyleGroup::Background)
+            .and_then(|(index, _)| {
+                self.project
+                    .timeline
+                    .as_ref()?
+                    .style_segments
+                    .get(index)?
+                    .overrides
+                    .background
+                    .as_ref()
+            })
+            .unwrap_or(&self.project.background)
+    }
+
+    pub(crate) fn style_control_project(&self) -> std::borrow::Cow<'_, ProjectConfiguration> {
+        let Some((index, group)) = self.sidebar.style_target else {
+            return std::borrow::Cow::Borrowed(&self.project);
+        };
+        let Some(segment) = self
+            .project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.style_segments.get(index))
+        else {
+            return std::borrow::Cow::Borrowed(&self.project);
+        };
+        let mut project = self.project.clone();
+        match group {
+            StyleGroup::Background => {
+                if let Some(value) = &segment.overrides.background {
+                    project.background = value.clone();
+                }
+            }
+            StyleGroup::Camera => {
+                if let Some(value) = &segment.overrides.camera {
+                    project.camera = value.clone();
+                }
+            }
+            StyleGroup::Cursor => {
+                if let Some(value) = &segment.overrides.cursor {
+                    project.cursor = value.clone();
+                }
+            }
+        }
+        std::borrow::Cow::Owned(project)
+    }
+
+    pub(crate) fn with_style_controls<R>(&mut self, render: impl FnOnce(&mut Self) -> R) -> R {
+        let std::borrow::Cow::Owned(scoped) = self.style_control_project() else {
+            return render(self);
+        };
+        // Existing controls read the project while building their elements. Restore the base before any event can publish or save it.
+        let base = std::mem::replace(&mut self.project, scoped);
+        let result = render(self);
+        self.project = base;
+        result
+    }
+
+    fn apply_control_change(
+        &mut self,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+    ) -> bool {
+        match self.sidebar.style_target {
+            Some((index, group)) => {
+                apply_style_control_change(&mut self.project, index, group, change)
+            }
+            None => change(&mut self.project),
+        }
+    }
+
+    pub(crate) fn open_style_group(
+        &mut self,
+        index: usize,
+        group: StyleGroup,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_frame_controls(cx);
+        self.end_field_edit(cx);
+        self.close_color_picker(cx);
+        self.sidebar.menu = None;
+        self.sidebar.style_target = Some((index, group));
+        self.sidebar.tab = match group {
+            StyleGroup::Background => SidebarTab::Background,
+            StyleGroup::Camera => SidebarTab::Camera,
+            StyleGroup::Cursor => SidebarTab::Cursor,
+        };
+        let ripple_enabled = self.style_control_project().cursor.ripple.enabled;
+        self.sidebar.cursor_ripple_open.set_open(ripple_enabled);
+        self.sidebar.source_tab = initial_source_tab(&self.style_control_project());
+        self.sidebar.scroll.set_offset(gpui::point(px(0.), px(0.)));
+        cx.notify();
+        window.refresh();
+    }
+
+    fn render_style_group(
+        &self,
+        index: usize,
+        group: StyleGroup,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(
+                div()
+                    .p(px(12.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(format!("Style {} · {}", index + 1, group.label()))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .child("Editing this segment only. Global settings are unchanged."),
+                    )
+                    .child(
+                        div()
+                            .id("style-back")
+                            .cursor_pointer()
+                            .text_size(px(12.))
+                            .child("← Back to Style")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.end_field_edit(cx);
+                                this.close_color_picker(cx);
+                                this.sidebar.menu = None;
+                                this.sidebar.style_target = None;
+                                cx.notify();
+                                window.refresh();
+                            })),
+                    ),
+            )
+            .child(self.render_tab_body(cx))
+            .into_any_element()
+    }
+}
+
+impl EditorWindow {
+    fn style_target_fingerprint(&self) -> Option<String> {
+        let index = self.sidebar.style_target?.0;
+        serde_json::to_string(self.project.timeline.as_ref()?.style_segments.get(index)?).ok()
+    }
+
+    pub(crate) fn selected_style_index(&self) -> Option<usize> {
+        self.sidebar
+            .style_target
+            .map(|target| target.0)
+            .or_else(|| {
+                self.selection()
+                    .filter(|selection| {
+                        selection.track == TrackKind::Style && selection.indices.len() == 1
+                    })
+                    .map(|selection| selection.indices[0])
+            })
+    }
+}
+
+#[cfg(test)]
+mod style_image_tests {
+    use super::*;
+
+    #[test]
+    fn style_image_group_changes_preserve_globals_and_require_opt_in() {
+        let mut project: ProjectConfiguration = serde_json::from_value(
+            serde_json::json!({"timeline":{"zoomSegments":[],"segments":[],"styleSegments":[{"start":1,"end":5}]}}),
+        )
+        .unwrap();
+        let base = serde_json::to_value(&project).unwrap();
+        assert!(!apply_style_control_change(
+            &mut project,
+            0,
+            StyleGroup::Background,
+            |project| {
+                project.background.padding = 30.;
+                true
+            }
+        ));
+        assert_eq!(serde_json::to_value(&project).unwrap(), base);
+        let background = project.background.clone();
+        let camera = project.camera.clone();
+        let cursor = project.cursor.clone();
+        let segment = &mut project.timeline.as_mut().unwrap().style_segments[0];
+        segment.overrides.background = Some(background);
+        segment.overrides.camera = Some(camera);
+        segment.overrides.cursor = Some(cursor);
+        assert!(apply_style_control_change(
+            &mut project,
+            0,
+            StyleGroup::Background,
+            |project| {
+                project.background.padding = 30.;
+                project.camera.hide = true;
+                true
+            }
+        ));
+        assert!(apply_style_control_change(
+            &mut project,
+            0,
+            StyleGroup::Camera,
+            |project| {
+                project.camera.hide = true;
+                true
+            }
+        ));
+        for enabled in [true, false] {
+            assert!(apply_style_control_change(
+                &mut project,
+                0,
+                StyleGroup::Cursor,
+                |project| {
+                    project.cursor.ripple.enabled = enabled;
+                    true
+                }
+            ));
+        }
+        let after = serde_json::to_value(&project).unwrap();
+        for group in ["background", "camera", "cursor"] {
+            assert_eq!(after[group], base[group]);
+        }
+        let segment = &project.timeline.as_ref().unwrap().style_segments[0];
+        assert_eq!(segment.overrides.background.as_ref().unwrap().padding, 30.);
+        assert!(segment.overrides.camera.as_ref().unwrap().hide);
+        assert!(!segment.overrides.cursor.as_ref().unwrap().ripple.enabled);
     }
 }

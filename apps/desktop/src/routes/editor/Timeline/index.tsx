@@ -22,6 +22,10 @@ import {
 } from "solid-js";
 import { produce } from "solid-js/store";
 import toast from "solid-toast";
+import IconLucidePalette from "~icons/lucide/palette";
+import { stylesRevealCamera } from "../style";
+import { ImageTrack } from "./ImageTrack";
+import { type OverlayDragState, StyleTrack } from "./StyleTrack";
 
 import "./styles.css";
 
@@ -68,6 +72,8 @@ const PLAYHEAD_TOP_OFFSET = 24;
 const START_SNAP_PX = 10;
 
 const trackIcons: Record<TimelineTrackType, () => JSX.Element> = {
+	style: () => <IconLucidePalette class="size-4" />,
+	image: () => <IconCapImage class="size-4" />,
 	clip: () => <IconLucideClapperboard class="size-4" />,
 	caption: () => <IconCapCaptions class="size-4" />,
 	keyboard: () => <IconLucideKeyboard class="size-4" />,
@@ -87,6 +93,8 @@ type TrackDefinition = {
 };
 
 const trackDefinitions: TrackDefinition[] = [
+	{ type: "style", label: "Style", icon: trackIcons.style, locked: false },
+	{ type: "image", label: "Image", icon: trackIcons.image, locked: false },
 	{
 		type: "clip",
 		label: "Clip",
@@ -197,7 +205,11 @@ export function Timeline(props: {
 	};
 
 	const trackState = () => editorState.timeline.tracks;
-	const sceneAvailable = () => meta().hasCamera && !project.camera.hide;
+	const sceneAvailable = () =>
+		meta().hasCamera &&
+		(!project.camera.hide ||
+			stylesRevealCamera(project.timeline?.styleSegments ?? []) ||
+			!!project.timeline?.sceneSegments?.length);
 	const captionTrackVisible = () => trackState().caption;
 	const keyboardTrackVisible = () => trackState().keyboard;
 	const threeDTrackVisible = () => trackState()["3d"];
@@ -205,37 +217,55 @@ export function Timeline(props: {
 		trackDefinitions.map((definition) => ({
 			...definition,
 			active:
-				definition.type === "caption"
-					? trackState().caption
-					: definition.type === "keyboard"
-						? trackState().keyboard
-						: definition.type === "scene"
-							? trackState().scene
-							: definition.type === "3d"
-								? trackState()["3d"]
-								: definition.type === "mask"
-									? trackState().mask > 0
-									: definition.type === "text"
-										? trackState().text > 0
-										: definition.type === "audio"
-											? trackState().audio > 0
-											: true,
+				definition.type === "style" || definition.type === "image"
+					? trackState()[definition.type] > 0
+					: definition.type === "caption"
+						? trackState().caption
+						: definition.type === "keyboard"
+							? trackState().keyboard
+							: definition.type === "scene"
+								? trackState().scene
+								: definition.type === "3d"
+									? trackState()["3d"]
+									: definition.type === "mask"
+										? trackState().mask > 0
+										: definition.type === "text"
+											? trackState().text > 0
+											: definition.type === "audio"
+												? trackState().audio > 0
+												: true,
 			available: definition.type === "scene" ? sceneAvailable() : true,
 			supportsMultiple:
+				definition.type === "style" ||
+				definition.type === "image" ||
 				definition.type === "mask" ||
 				definition.type === "text" ||
 				definition.type === "audio",
 			count:
-				definition.type === "mask"
-					? trackState().mask
-					: definition.type === "text"
-						? trackState().text
-						: definition.type === "audio"
-							? trackState().audio
-							: 0,
+				definition.type === "style" || definition.type === "image"
+					? trackState()[definition.type]
+					: definition.type === "mask"
+						? trackState().mask
+						: definition.type === "text"
+							? trackState().text
+							: definition.type === "audio"
+								? trackState().audio
+								: 0,
 		})),
 	);
 	const sceneTrackVisible = () => trackState().scene && sceneAvailable();
+	const styleTrackRows = createMemo(() =>
+		getTrackRowsWithCount(
+			project.timeline?.styleSegments ?? [],
+			trackState().style,
+		),
+	);
+	const imageTrackRows = createMemo(() =>
+		getTrackRowsWithCount(
+			project.timeline?.imageSegments ?? [],
+			trackState().image,
+		),
+	);
 	const textTrackRows = createMemo(() =>
 		getTrackRowsWithCount(
 			project.timeline?.textSegments ?? [],
@@ -257,6 +287,8 @@ export function Timeline(props: {
 	const visibleTrackCount = createMemo(
 		() =>
 			2 +
+			styleTrackRows().length +
+			imageTrackRows().length +
 			(captionTrackVisible() ? 1 : 0) +
 			(keyboardTrackVisible() ? 1 : 0) +
 			textTrackRows().length +
@@ -381,11 +413,29 @@ export function Timeline(props: {
 	// existing lane with room at the playhead is reused, otherwise a new lane
 	// is stacked on. Same 1s / 80px sizing as the tracks' click-to-add.
 	function handleAddTrack(type: TimelineTrackType) {
+		if (type === "style" || type === "image") {
+			const segments =
+				(type === "style"
+					? project.timeline?.styleSegments
+					: project.timeline?.imageSegments) ?? [];
+			const lane = Math.max(
+				getUsedTrackCount<{ start: number; end: number; track?: number }>(
+					segments,
+				),
+				trackState()[type],
+			);
+			if (type === "style") projectActions.addStyleSegment(lane);
+			else void projectActions.importImageSegment(lane);
+			return;
+		}
+
 		if (type === "audio") {
 			const segments = project.timeline?.audioSegments ?? [];
 			const laneCount = Math.max(
 				trackState().audio,
-				getUsedTrackCount(segments),
+				getUsedTrackCount<{ start: number; end: number; track?: number }>(
+					segments,
+				),
 			);
 			let lane = laneCount;
 			for (let i = 0; i < laneCount; i++) {
@@ -414,7 +464,12 @@ export function Timeline(props: {
 				: project.timeline?.maskSegments) ?? [];
 		const length = Math.min(Math.max(1, secsPerPixel() * 80), totalDuration());
 		const time = editorState.playbackTime ?? 0;
-		const laneCount = Math.max(trackState()[type], getUsedTrackCount(segments));
+		const laneCount = Math.max(
+			trackState()[type],
+			getUsedTrackCount<{ start: number; end: number; track?: number }>(
+				segments,
+			),
+		);
 
 		let lane = laneCount;
 		let placement: { start: number; end: number } | null = null;
@@ -495,9 +550,40 @@ export function Timeline(props: {
 	}
 
 	function handleDeleteTrackLane(
-		type: "text" | "mask" | "audio",
+		type: "text" | "mask" | "audio" | "style" | "image",
 		laneIndex: number,
 	) {
+		if (type === "style" || type === "image") {
+			const resumeHistory = projectHistory.pause();
+			const segments =
+				(type === "style"
+					? project.timeline?.styleSegments
+					: project.timeline?.imageSegments) ?? [];
+			projectActions.deleteOverlaySegments(
+				type,
+				segments.flatMap((segment, index) =>
+					segment.track === laneIndex ? [index] : [],
+				),
+			);
+			setProject(
+				produce((project) => {
+					const remaining =
+						type === "style"
+							? project.timeline?.styleSegments
+							: project.timeline?.imageSegments;
+					for (const segment of remaining ?? [])
+						if (segment.track > laneIndex) segment.track -= 1;
+				}),
+			);
+			setEditorState(
+				"timeline",
+				"tracks",
+				type,
+				Math.max(0, trackState()[type] - 1),
+			);
+			resumeHistory();
+			return;
+		}
 		const resumeHistory = projectHistory.pause();
 		const currentTrackCount = trackState()[type];
 		const nextTextSegments =
@@ -579,6 +665,8 @@ export function Timeline(props: {
 							sceneSegments: [],
 							maskSegments: [],
 							textSegments: [],
+							styleSegments: [],
+							imageSegments: [],
 							captionSegments: [],
 							keyboardSegments: [],
 							camera3dSegments: [],
@@ -604,6 +692,8 @@ export function Timeline(props: {
 							sceneSegments: [],
 							maskSegments: [],
 							textSegments: [],
+							styleSegments: [],
+							imageSegments: [],
 							captionSegments: [],
 							keyboardSegments: [],
 							camera3dSegments: [],
@@ -645,7 +735,7 @@ export function Timeline(props: {
 
 	async function handleOpenTrackMenu(
 		e: MouseEvent,
-		type: "text" | "mask" | "audio",
+		type: "text" | "mask" | "audio" | "style" | "image",
 		laneIndex: number,
 	) {
 		e.preventDefault();
@@ -678,6 +768,8 @@ export function Timeline(props: {
 				sceneSegments: [],
 				maskSegments: [],
 				textSegments: [],
+				styleSegments: [],
+				imageSegments: [],
 				captionSegments: [],
 				keyboardSegments: [],
 				camera3dSegments: [],
@@ -724,6 +816,8 @@ export function Timeline(props: {
 					sceneSegments: [],
 					maskSegments: [],
 					textSegments: [],
+					styleSegments: [],
+					imageSegments: [],
 					captionSegments: [],
 					keyboardSegments: [],
 					camera3dSegments: [],
@@ -736,10 +830,14 @@ export function Timeline(props: {
 				project.timeline.textSegments ??= [];
 				project.timeline.zoomSegments ??= [];
 				project.timeline.camera3dSegments ??= [];
+				project.timeline.styleSegments ??= [];
+				project.timeline.imageSegments ??= [];
 			}),
 		);
 	}
 
+	let styleSegmentDragState: OverlayDragState = { type: "idle" };
+	let imageSegmentDragState: OverlayDragState = { type: "idle" };
 	let zoomSegmentDragState = { type: "idle" } as ZoomSegmentDragState;
 	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
 	let maskSegmentDragState = { type: "idle" } as MaskSegmentDragState;
@@ -855,6 +953,8 @@ export function Timeline(props: {
 
 	async function handleUpdatePlayhead(e: MouseEvent) {
 		if (
+			styleSegmentDragState.type !== "moving" &&
+			imageSegmentDragState.type !== "moving" &&
 			zoomSegmentDragState.type !== "moving" &&
 			sceneSegmentDragState.type !== "moving" &&
 			maskSegmentDragState.type !== "moving" &&
@@ -974,7 +1074,9 @@ export function Timeline(props: {
 			const selection = editorState.timeline.selection;
 			if (!selection) return;
 
-			if (selection.type === "zoom") {
+			if (selection.type === "style" || selection.type === "image") {
+				projectActions.deleteOverlaySegments(selection.type, selection.indices);
+			} else if (selection.type === "zoom") {
 				projectActions.deleteZoomSegments(selection.indices);
 			} else if (selection.type === "caption") {
 				projectActions.deleteCaptionSegments(selection.indices);
@@ -1010,7 +1112,14 @@ export function Timeline(props: {
 			const time = editorState.previewTime ?? editorState.playbackTime;
 			if (time === null || time === undefined) return;
 
-			projectActions.splitClipSegment(time);
+			const selection = editorState.timeline.selection;
+			if (selection?.type === "style" || selection?.type === "image") {
+				const type = selection.type;
+				const resumeHistory = projectHistory.pause();
+				for (const index of [...selection.indices].sort((a, b) => b - a))
+					projectActions.splitOverlaySegment(type, index, time);
+				resumeHistory();
+			} else projectActions.splitClipSegment(time);
 		} else if (e.code === "Escape" && hasNoModifiers) {
 			// Deselect all selected segments
 			setEditorState("timeline", "selection", null);
@@ -1029,6 +1138,8 @@ export function Timeline(props: {
 
 			const timeline = project.timeline;
 			const segmentCount = {
+				style: timeline?.styleSegments?.length ?? 0,
+				image: timeline?.imageSegments?.length ?? 0,
 				clip: timeline?.segments.length ?? 0,
 				zoom: timeline?.zoomSegments?.length ?? 0,
 				scene: timeline?.sceneSegments?.length ?? 0,
@@ -1369,6 +1480,48 @@ export function Timeline(props: {
 									/>
 								</TrackRow>
 							</Show>
+							<For each={styleTrackRows()}>
+								{(laneIndex) => (
+									<TrackRow
+										icon={trackIcons.style}
+										label={`Style ${laneIndex + 1}`}
+										type="style"
+										onDelete={() => handleDeleteTrackLane("style", laneIndex)}
+										onContextMenu={(event) =>
+											handleOpenTrackMenu(event, "style", laneIndex)
+										}
+									>
+										<StyleTrack
+											laneIndex={laneIndex}
+											onDragStateChanged={(value) => {
+												styleSegmentDragState = value;
+											}}
+											handleUpdatePlayhead={handleUpdatePlayhead}
+										/>
+									</TrackRow>
+								)}
+							</For>
+							<For each={imageTrackRows()}>
+								{(laneIndex) => (
+									<TrackRow
+										icon={trackIcons.image}
+										label={`Image ${laneIndex + 1}`}
+										type="image"
+										onDelete={() => handleDeleteTrackLane("image", laneIndex)}
+										onContextMenu={(event) =>
+											handleOpenTrackMenu(event, "image", laneIndex)
+										}
+									>
+										<ImageTrack
+											laneIndex={laneIndex}
+											onDragStateChanged={(value) => {
+												imageSegmentDragState = value;
+											}}
+											handleUpdatePlayhead={handleUpdatePlayhead}
+										/>
+									</TrackRow>
+								)}
+							</For>
 							<For each={textTrackRows()}>
 								{(laneIndex) => (
 									<TrackRow

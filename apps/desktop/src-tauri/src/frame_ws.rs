@@ -204,16 +204,23 @@ async fn create_watch_frame_ws_inner(
         watch::Receiver<Option<std::sync::Arc<WSFrame>>>,
         Arc<AtomicUsize>,
         Option<Arc<AtomicUsize>>,
+        CancellationToken,
     );
 
     #[axum::debug_handler]
     async fn ws_handler(
         ws: WebSocketUpgrade,
         Query(query): Query<WatchFrameQuery>,
-        State((state, subscribers, instant_subscribers)): State<RouterState>,
+        State((state, subscribers, instant_subscribers, shutdown)): State<RouterState>,
     ) -> impl IntoResponse {
         let instant_subscribers = query.instant.then_some(instant_subscribers).flatten();
-        ws.on_upgrade(move |socket| handle_socket(socket, state, subscribers, instant_subscribers))
+        ws.on_upgrade(move |socket| async move {
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => {},
+                _ = handle_socket(socket, state, subscribers, instant_subscribers) => {},
+            }
+        })
     }
 
     async fn handle_socket(
@@ -285,7 +292,10 @@ async fn create_watch_frame_ws_inner(
                         }
                     }
                 },
-                _ = camera_rx.changed() => {
+                changed = camera_rx.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
                     let frame_arc = camera_rx.borrow_and_update().clone();
                     if let Some(ref frame) = frame_arc {
                         let width = frame.width;
@@ -353,41 +363,46 @@ async fn create_watch_frame_ws_inner(
         tracing::info!("Websocket closing after {elapsed:.2?}");
     }
 
+    let cancel_token = CancellationToken::new();
+    let server_shutdown = cancel_token.child_token();
     let router = axum::Router::new().route("/", get(ws_handler)).with_state((
         frame_rx,
         subscribers,
         instant_subscribers,
+        server_shutdown.clone(),
     ));
-
-    let cancel_token = CancellationToken::new();
-    let cancel_token_child = cancel_token.child_token();
     let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) => {
             tracing::error!("Failed to bind watch frame websocket listener: {err}");
-            return (0, cancel_token_child);
+            cancel_token.cancel();
+            return (0, cancel_token);
         }
     };
     let port = match listener.local_addr() {
         Ok(addr) => addr.port(),
         Err(err) => {
             tracing::error!("Failed to read watch frame websocket listener address: {err}");
-            return (0, cancel_token_child);
+            cancel_token.cancel();
+            return (0, cancel_token);
         }
     };
     tracing::info!("WebSocket server listening on port {}", port);
 
     tokio::spawn(async move {
-        let server = axum::serve(listener, router.into_make_service());
+        let _shutdown_guard = server_shutdown.clone().drop_guard();
+        let server = axum::serve(listener, router.into_make_service())
+            .with_graceful_shutdown(server_shutdown.clone().cancelled_owned());
         tokio::select! {
-            _ = server => {},
-            _ = cancel_token.cancelled() => {
+            biased;
+            _ = server_shutdown.cancelled() => {
                 tracing::info!("WebSocket server shutting down");
-            }
+            },
+            _ = server => {},
         }
     });
 
-    (port, cancel_token_child)
+    (port, cancel_token)
 }
 
 pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, CancellationToken) {
@@ -400,15 +415,21 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
         routing::get,
     };
 
-    type RouterState = broadcast::Sender<WSFrame>;
+    type RouterState = (broadcast::Sender<WSFrame>, CancellationToken);
 
     #[axum::debug_handler]
     async fn ws_handler(
         ws: WebSocketUpgrade,
-        State(state): State<RouterState>,
+        State((state, shutdown)): State<RouterState>,
     ) -> impl IntoResponse {
         let rx = state.subscribe();
-        ws.on_upgrade(move |socket| handle_socket(socket, rx))
+        ws.on_upgrade(move |socket| async move {
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => {},
+                _ = handle_socket(socket, rx) => {},
+            }
+        })
     }
 
     async fn handle_socket(mut socket: WebSocket, mut camera_rx: broadcast::Receiver<WSFrame>) {
@@ -475,39 +496,43 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
         tracing::info!("Websocket closing after {elapsed:.2?}");
     }
 
+    let cancel_token = CancellationToken::new();
+    let server_shutdown = cancel_token.child_token();
     let router = axum::Router::new()
         .route("/", get(ws_handler))
-        .with_state(frame_tx);
-
-    let cancel_token = CancellationToken::new();
-    let cancel_token_child = cancel_token.child_token();
+        .with_state((frame_tx, server_shutdown.clone()));
     let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) => {
             tracing::error!("Failed to bind frame websocket listener: {err}");
-            return (0, cancel_token_child);
+            cancel_token.cancel();
+            return (0, cancel_token);
         }
     };
     let port = match listener.local_addr() {
         Ok(addr) => addr.port(),
         Err(err) => {
             tracing::error!("Failed to read frame websocket listener address: {err}");
-            return (0, cancel_token_child);
+            cancel_token.cancel();
+            return (0, cancel_token);
         }
     };
     tracing::info!("WebSocket server listening on port {}", port);
 
     tokio::spawn(async move {
-        let server = axum::serve(listener, router.into_make_service());
+        let _shutdown_guard = server_shutdown.clone().drop_guard();
+        let server = axum::serve(listener, router.into_make_service())
+            .with_graceful_shutdown(server_shutdown.clone().cancelled_owned());
         tokio::select! {
-            _ = server => {},
-            _ = cancel_token.cancelled() => {
+            biased;
+            _ = server_shutdown.cancelled() => {
                 tracing::info!("WebSocket server shutting down");
-            }
+            },
+            _ = server => {},
         }
     });
 
-    (port, cancel_token_child)
+    (port, cancel_token)
 }
 
 #[cfg(test)]
@@ -561,5 +586,353 @@ mod tests {
 
         assert_eq!(subscribers.load(Ordering::Acquire), 0);
         assert_eq!(instant_subscribers.load(Ordering::Acquire), 0);
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    fn frame() -> WSFrame {
+        WSFrame {
+            data: Arc::new(vec![1, 2, 3, 4]),
+            width: 1,
+            height: 1,
+            stride: 4,
+            frame_number: 42,
+            target_time_ns: 1234,
+            format: WSFrameFormat::Rgba,
+            created_at: Instant::now(),
+        }
+    }
+
+    async fn wait_until(condition: impl Fn() -> bool) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !condition() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("shutdown condition did not settle");
+    }
+
+    async fn connect(port: u16, instant: bool) -> TcpStream {
+        assert_ne!(port, 0);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            let path = if instant { "/?instant=true" } else { "/" };
+            let request = format!(
+                "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut response = Vec::new();
+            while !response.ends_with(b"\r\n\r\n") {
+                assert!(response.len() < 4096);
+                response.push(stream.read_u8().await.unwrap());
+            }
+            assert!(response.starts_with(b"HTTP/1.1 101"));
+            stream
+        })
+        .await
+        .expect("websocket handshake timed out")
+    }
+
+    async fn read_binary(stream: &mut TcpStream) -> Vec<u8> {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            assert_eq!(stream.read_u8().await.unwrap(), 0x82);
+            let length = stream.read_u8().await.unwrap();
+            assert!(length < 126);
+            let mut data = vec![0; usize::from(length)];
+            stream.read_exact(&mut data).await.unwrap();
+            data
+        })
+        .await
+        .expect("frame delivery timed out")
+    }
+
+    async fn assert_disconnected(stream: &mut TcpStream) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let mut buffer = [0; 8192];
+            loop {
+                match stream.read(&mut buffer).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
+        })
+        .await
+        .expect("connected websocket did not close");
+    }
+
+    async fn assert_listener_closed(port: u16) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("websocket listener still accepts connections");
+    }
+
+    async fn assert_unused_port_released(port: u16) {
+        let listener = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)).await {
+                    break listener;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("websocket listener still owns its port");
+        drop(listener);
+        assert_listener_closed(port).await;
+    }
+
+    #[tokio::test]
+    async fn watch_listener_releases_port_after_cancel_before_server_poll() {
+        let (_tx, rx) = watch::channel(None);
+        let (port, shutdown) = create_watch_frame_ws(rx, Default::default()).await;
+        shutdown.cancel();
+        assert_unused_port_released(port).await;
+    }
+
+    #[tokio::test]
+    async fn broadcast_listener_releases_port_after_cancel_before_server_poll() {
+        let (tx, _rx) = broadcast::channel(2);
+        let (port, shutdown) = create_frame_ws(tx).await;
+        shutdown.cancel();
+        assert_unused_port_released(port).await;
+    }
+
+    #[tokio::test]
+    async fn watch_shutdown_drains_existing_clients_and_subscriber_counts() {
+        let (tx, rx) = watch::channel(None);
+        let subscribers = Arc::new(AtomicUsize::new(0));
+        let instant = Arc::new(AtomicUsize::new(0));
+        let (port, shutdown) =
+            create_watch_frame_ws_with_instant_tracking(rx, subscribers.clone(), instant.clone())
+                .await;
+        let mut first = connect(port, false).await;
+        let mut second = connect(port, true).await;
+        wait_until(|| subscribers.load(Ordering::Acquire) == 2).await;
+        assert_eq!(instant.load(Ordering::Acquire), 1);
+        let frame = frame();
+        let expected = pack_ws_frame(&frame);
+        tx.send(Some(Arc::new(frame))).unwrap();
+        assert_eq!(read_binary(&mut first).await, expected);
+        assert_eq!(read_binary(&mut second).await, expected);
+        shutdown.cancel();
+        assert_disconnected(&mut first).await;
+        assert_disconnected(&mut second).await;
+        wait_until(|| subscribers.load(Ordering::Acquire) == 0 && tx.receiver_count() == 0).await;
+        assert_eq!(instant.load(Ordering::Acquire), 0);
+        assert_listener_closed(port).await;
+    }
+
+    #[tokio::test]
+    async fn broadcast_shutdown_drains_existing_clients() {
+        let (tx, rx) = broadcast::channel(2);
+        drop(rx);
+        let (port, shutdown) = create_frame_ws(tx.clone()).await;
+        let mut first = connect(port, false).await;
+        let mut second = connect(port, false).await;
+        let frame = frame();
+        let expected = pack_ws_frame(&frame);
+        assert!(matches!(tx.send(frame), Ok(2)));
+        assert_eq!(read_binary(&mut first).await, expected);
+        assert_eq!(read_binary(&mut second).await, expected);
+        shutdown.cancel();
+        assert_disconnected(&mut first).await;
+        assert_disconnected(&mut second).await;
+        wait_until(|| tx.receiver_count() == 0).await;
+        assert_listener_closed(port).await;
+    }
+
+    #[tokio::test]
+    async fn watch_source_close_does_not_resend_retained_frame() {
+        let frame = Arc::new(frame());
+        let (tx, rx) = watch::channel(Some(frame.clone()));
+        let subscribers = Arc::new(AtomicUsize::new(0));
+        let (port, shutdown) = create_watch_frame_ws(rx, subscribers.clone()).await;
+        let mut client = connect(port, false).await;
+        assert_eq!(read_binary(&mut client).await, pack_ws_frame(&frame));
+        drop(tx);
+        wait_until(|| subscribers.load(Ordering::Acquire) == 0).await;
+        assert_disconnected(&mut client).await;
+        shutdown.cancel();
+        assert_listener_closed(port).await;
+    }
+
+    #[tokio::test]
+    async fn watch_shutdown_interrupts_stalled_initial_send() {
+        let mut frame = frame();
+        frame.width = 4096;
+        frame.height = 1024;
+        frame.stride = 4096 * 4;
+        frame.data = Arc::new(vec![0; frame.stride as usize * frame.height as usize]);
+        let weak_data = Arc::downgrade(&frame.data);
+        let (tx, rx) = watch::channel(Some(Arc::new(frame)));
+        let subscribers = Arc::new(AtomicUsize::new(0));
+        let (port, shutdown) = create_watch_frame_ws(rx, subscribers.clone()).await;
+        let client = connect(port, false).await;
+        wait_until(|| subscribers.load(Ordering::Acquire) == 1).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        shutdown.cancel();
+        wait_until(|| subscribers.load(Ordering::Acquire) == 0 && tx.receiver_count() == 0).await;
+        drop(tx);
+        assert!(weak_data.upgrade().is_none());
+        drop(client);
+        assert_listener_closed(port).await;
+    }
+
+    #[tokio::test]
+    async fn cancelling_owner_child_does_not_stop_sibling_server() {
+        let (tx, rx) = watch::channel(None);
+        let (port, shutdown) = create_watch_frame_ws(rx, Default::default()).await;
+        shutdown.child_token().cancel();
+        assert!(!shutdown.is_cancelled());
+        let mut client = connect(port, false).await;
+        let frame = frame();
+        let expected = pack_ws_frame(&frame);
+        tx.send(Some(Arc::new(frame))).unwrap();
+        assert_eq!(read_binary(&mut client).await, expected);
+        shutdown.cancel();
+        assert_disconnected(&mut client).await;
+        assert_listener_closed(port).await;
+    }
+
+    #[tokio::test]
+    async fn dropping_owner_token_preserves_app_scoped_camera_server() {
+        let (tx, rx) = watch::channel(None);
+        let (port, shutdown) = create_watch_frame_ws(rx, Default::default()).await;
+        drop(shutdown);
+        let mut client = connect(port, false).await;
+        let frame = frame();
+        let expected = pack_ws_frame(&frame);
+        tx.send(Some(Arc::new(frame))).unwrap();
+        assert_eq!(read_binary(&mut client).await, expected);
+    }
+
+    #[tokio::test]
+    async fn aborted_construction_drop_guard_releases_listener() {
+        let (port_tx, port_rx) = tokio::sync::oneshot::channel();
+        let construction = tokio::spawn(async move {
+            let (_tx, rx) = watch::channel(None);
+            let (port, shutdown) = create_watch_frame_ws(rx, Default::default()).await;
+            let _guard = shutdown.clone().drop_guard();
+            port_tx.send(port).unwrap();
+            std::future::pending::<()>().await;
+        });
+        let port = port_rx.await.unwrap();
+        construction.abort();
+        assert!(construction.await.unwrap_err().is_cancelled());
+        assert_unused_port_released(port).await;
+    }
+
+    #[tokio::test]
+    async fn successful_construction_disarms_guard_until_owner_cancels() {
+        let (tx, rx) = watch::channel(None);
+        let (port, shutdown) = create_watch_frame_ws(rx, Default::default()).await;
+        let guard = shutdown.clone().drop_guard();
+        drop(guard.disarm());
+        let mut client = connect(port, false).await;
+        let frame = frame();
+        let expected = pack_ws_frame(&frame);
+        tx.send(Some(Arc::new(frame))).unwrap();
+        assert_eq!(read_binary(&mut client).await, expected);
+        shutdown.cancel();
+        assert_disconnected(&mut client).await;
+        assert_listener_closed(port).await;
+    }
+
+    #[tokio::test]
+    async fn repeated_watch_open_cancel_releases_every_port() {
+        for _ in 0..20 {
+            let (_tx, rx) = watch::channel(None);
+            let (port, shutdown) = create_watch_frame_ws(rx, Default::default()).await;
+            let mut client = connect(port, false).await;
+            shutdown.cancel();
+            assert_disconnected(&mut client).await;
+            assert_listener_closed(port).await;
+        }
+    }
+
+    async fn connect_http_client(port: u16) -> TcpStream {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            client
+                .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .await
+                .unwrap();
+            let mut response = Vec::new();
+            while !response.ends_with(b"\r\n\r\n") {
+                assert!(response.len() < 4096);
+                response.push(client.read_u8().await.unwrap());
+            }
+            assert!(response.starts_with(b"HTTP/1.1 400"));
+            let headers = std::str::from_utf8(&response).unwrap();
+            let length = headers
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                .unwrap()
+                .1
+                .trim()
+                .parse::<usize>()
+                .unwrap();
+            assert!(length < 4096);
+            client.read_exact(&mut vec![0; length]).await.unwrap();
+            client
+        })
+        .await
+        .expect("HTTP connection did not become ready")
+    }
+
+    #[tokio::test]
+    async fn watch_shutdown_drains_incomplete_http_upgrade() {
+        let (tx, rx) = watch::channel(None);
+        let (port, shutdown) = create_watch_frame_ws(rx, Default::default()).await;
+        let mut client = connect_http_client(port).await;
+        client
+            .write_all(b"GET / HTTP/1.1\r\nUpgrade: websocket\r\n")
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        shutdown.cancel();
+        assert_disconnected(&mut client).await;
+        wait_until(|| tx.receiver_count() == 0).await;
+        assert_listener_closed(port).await;
+    }
+
+    #[tokio::test]
+    async fn broadcast_shutdown_drains_incomplete_http_upgrade() {
+        let (tx, rx) = broadcast::channel(2);
+        drop(rx);
+        let (port, shutdown) = create_frame_ws(tx.clone()).await;
+        let mut client = connect_http_client(port).await;
+        client
+            .write_all(b"GET / HTTP/1.1\r\nUpgrade: websocket\r\n")
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        shutdown.cancel();
+        assert_disconnected(&mut client).await;
+        wait_until(|| tx.strong_count() == 1).await;
+        assert_listener_closed(port).await;
+    }
+
+    #[tokio::test]
+    async fn watch_shutdown_drains_http_keep_alive_connection() {
+        let (tx, rx) = watch::channel(None);
+        let (port, shutdown) = create_watch_frame_ws(rx, Default::default()).await;
+        let mut client = connect_http_client(port).await;
+        shutdown.cancel();
+        assert_disconnected(&mut client).await;
+        wait_until(|| tx.receiver_count() == 0).await;
+        assert_listener_closed(port).await;
     }
 }

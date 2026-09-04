@@ -275,9 +275,8 @@ impl Worker {
             .context("blur output missing")?;
 
         self.frame_number = self.frame_number.wrapping_add(1);
-        let pending = self
-            .converter
-            .encode(
+        let pending = runtime
+            .block_on(self.converter.encode(
                 &self.device,
                 &mut encoder,
                 output,
@@ -285,7 +284,7 @@ impl Worker {
                 height,
                 self.frame_number,
                 30,
-            )
+            ))
             .map_err(|error| anyhow!("{error}"))?;
         self.queue.submit(std::iter::once(encoder.finish()));
 

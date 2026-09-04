@@ -8,7 +8,7 @@ use std::time::Duration;
 use cap_export::gif::GifExportSettings;
 use cap_export::mov::MovExportSettings;
 use cap_export::mp4::{ExportCompression, Mp4ExportSettings};
-use cap_export::preview::{ExportPreviewSettings, render_preview};
+use cap_export::preview::{ExportPreviewSettings, render_preview_with_config};
 use cap_export::{ExporterBase, make_cursor_only_project};
 use cap_project::{BackgroundSource, RecordingMeta, XY};
 use gpui::{
@@ -472,6 +472,7 @@ impl EditorWindow {
         let Some(ui) = self.export.as_mut() else {
             return;
         };
+        let project = self.project.clone();
         let (width, height) = ui.resolution.size();
         let settings = ExportPreviewSettings {
             fps: ui.fps,
@@ -487,7 +488,7 @@ impl EditorWindow {
                 .timer(Duration::from_millis(120))
                 .await;
             let result = gpui_tokio::Tokio::spawn(cx, async move {
-                render_preview(path, time, settings, force).await
+                render_preview_with_config(path, project, time, settings, force).await
             })
             .await
             .ok();
@@ -590,12 +591,15 @@ impl EditorWindow {
                     "mp4"
                 };
                 let default = format!("{pretty_name}.{ext}");
-                let chosen = std::env::var_os("CAP_GPUI_AUTO_EXPORT")
-                    .map(PathBuf::from)
-                    .or_else(|| platform::save_file_panel(&default, &[ext]));
+                let chosen = match std::env::var_os("CAP_GPUI_AUTO_EXPORT") {
+                    Some(path) => Some(PathBuf::from(path)),
+                    None => platform::save_file_panel_async(&default, &[ext], cx).await,
+                };
                 if chosen.is_none() {
                     let _ = this.update(cx, |this, cx| {
-                        if let Some(ui) = this.export.as_mut() {
+                        if let Some(ui) = this.export.as_mut()
+                            && Arc::ptr_eq(&ui.cancel, &cancel)
+                        {
                             ui.phase = ExportPhase::Idle;
                         }
                         cx.notify();
@@ -610,10 +614,13 @@ impl EditorWindow {
                 None
             };
 
-            let started = this.update(cx, |this, cx| {
+            let started = this.update_in(cx, |this, _, cx| {
                 let Some(ui) = this.export.as_mut() else {
                     return false;
                 };
+                if !Arc::ptr_eq(&ui.cancel, &cancel) {
+                    return false;
+                }
                 if cancel.load(Ordering::Relaxed) {
                     ui.phase = ExportPhase::Idle;
                     cx.notify();
@@ -1982,6 +1989,26 @@ impl EditorWindow {
                             return;
                         };
                         let cancel = ui.cancel.clone();
+                        #[cfg(target_os = "linux")]
+                        {
+                            if !ui.phase.is_busy() {
+                                return;
+                            }
+                            let response = crate::editor_modal::confirm_cancel_export(window, cx);
+                            cx.spawn_in(window, async move |this, cx| {
+                                let confirmed = response.await;
+                                let _ = this.update_in(cx, |this, _, cx| {
+                                    if let Some(ui) = this.export.as_mut()
+                                        && ui.phase.is_busy()
+                                    {
+                                        cancel_matching_export(&ui.cancel, &cancel, confirmed);
+                                    }
+                                    cx.notify();
+                                });
+                            })
+                            .detach();
+                        }
+                        #[cfg(not(target_os = "linux"))]
                         cx.spawn_in(window, async move |this, cx| {
                             let confirmed = platform::confirm_dialog(
                                 "Cancel export?",

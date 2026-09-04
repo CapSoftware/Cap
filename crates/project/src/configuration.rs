@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     fmt,
     ops::{Add, Div, Mul, Sub, SubAssign},
@@ -1568,6 +1569,105 @@ impl AudioTrackSegment {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StyleOverrides {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<BackgroundConfiguration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera: Option<Camera>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<CursorConfiguration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_only_padding: Option<f64>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StyleSegment {
+    pub start: f64,
+    pub end: f64,
+    pub track: u32,
+    pub enabled: bool,
+    pub name: String,
+    pub overrides: StyleOverrides,
+}
+
+impl Default for StyleSegment {
+    fn default() -> Self {
+        Self {
+            start: 0.0,
+            end: 0.0,
+            track: 0,
+            enabled: true,
+            name: "Style".to_string(),
+            overrides: StyleOverrides::default(),
+        }
+    }
+}
+
+impl StyleSegment {
+    pub fn is_active_at(&self, time: f64) -> bool {
+        self.enabled && is_timeline_interval_active(self.start, self.end, time)
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ImageSegment {
+    pub start: f64,
+    pub end: f64,
+    pub track: u32,
+    pub enabled: bool,
+    pub path: String,
+    pub name: String,
+    pub center: XY<f64>,
+    pub size: XY<f64>,
+    pub opacity: f32,
+    pub rotation: f32,
+    pub rounding: f32,
+    pub flip_x: bool,
+    pub flip_y: bool,
+    pub lock_aspect: bool,
+}
+
+impl Default for ImageSegment {
+    fn default() -> Self {
+        Self {
+            start: 0.0,
+            end: 0.0,
+            track: 0,
+            enabled: true,
+            path: String::new(),
+            name: "Image".to_string(),
+            center: XY::new(0.5, 0.5),
+            size: XY::new(0.3, 0.3),
+            opacity: 1.0,
+            rotation: 0.0,
+            rounding: 0.0,
+            flip_x: false,
+            flip_y: false,
+            lock_aspect: true,
+        }
+    }
+}
+
+impl ImageSegment {
+    pub fn is_active_at(&self, time: f64) -> bool {
+        self.enabled && is_timeline_interval_active(self.start, self.end, time)
+    }
+}
+
+fn is_timeline_interval_active(start: f64, end: f64, time: f64) -> bool {
+    time.is_finite()
+        && start.is_finite()
+        && end.is_finite()
+        && start >= 0.0
+        && end > start
+        && time >= start
+        && time < end
+}
+
 pub const MIN_CLIP_TRANSITION_DURATION: f64 = 0.05;
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1622,6 +1722,10 @@ pub struct TimelineConfiguration {
     pub keyboard_segments: Vec<crate::KeyboardTrackSegment>,
     #[serde(default)]
     pub audio_segments: Vec<AudioTrackSegment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub style_segments: Vec<StyleSegment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_segments: Vec<ImageSegment>,
     // Explicit rename: the digit boundary makes rename_all's camelCase output
     // easy to second-guess, and the editor TypeScript hardcodes this name.
     #[serde(default, rename = "camera3dSegments")]
@@ -2387,6 +2491,80 @@ impl Default for ProjectConfiguration {
 }
 
 impl ProjectConfiguration {
+    fn style_override_at<T>(
+        &self,
+        time: f64,
+        select: impl Fn(&StyleOverrides) -> Option<&T>,
+    ) -> Option<&T> {
+        self.timeline
+            .as_ref()?
+            .style_segments
+            .iter()
+            .enumerate()
+            .filter(|(_, segment)| segment.is_active_at(time))
+            .filter_map(|(index, segment)| {
+                select(&segment.overrides).map(|value| (index, segment, value))
+            })
+            .max_by(|(left_index, left, _), (right_index, right, _)| {
+                left.track
+                    .cmp(&right.track)
+                    .then_with(|| {
+                        left.start
+                            .partial_cmp(&right.start)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .then_with(|| left_index.cmp(right_index))
+            })
+            .map(|(_, _, value)| value)
+    }
+
+    pub fn cursor_at(&self, time: f64) -> &CursorConfiguration {
+        self.style_override_at(time, |overrides| overrides.cursor.as_ref())
+            .unwrap_or(&self.cursor)
+    }
+
+    pub fn style_at(&self, time: f64) -> Cow<'_, Self> {
+        let mut configuration = Cow::Borrowed(self);
+        if let Some(background) =
+            self.style_override_at(time, |overrides| overrides.background.as_ref())
+        {
+            configuration.to_mut().background = background.clone();
+        }
+        if let Some(camera) = self.style_override_at(time, |overrides| overrides.camera.as_ref()) {
+            configuration.to_mut().camera = camera.clone();
+        }
+        if let Some(cursor) = self.style_override_at(time, |overrides| overrides.cursor.as_ref()) {
+            configuration.to_mut().cursor = cursor.clone();
+        }
+        configuration
+    }
+
+    pub fn camera_only_padding_at(&self, time: f64) -> f64 {
+        self.style_override_at(time, |overrides| {
+            overrides
+                .camera_only_padding
+                .as_ref()
+                .filter(|padding| padding.is_finite())
+        })
+        .copied()
+        .unwrap_or(0.0)
+        .clamp(0.0, 40.0)
+    }
+
+    pub fn requires_camera(&self) -> bool {
+        !self.camera.hide
+            || self.timeline.as_ref().is_some_and(|timeline| {
+                timeline.style_segments.iter().any(|segment| {
+                    segment.is_active_at(segment.start)
+                        && segment
+                            .overrides
+                            .camera
+                            .as_ref()
+                            .is_some_and(|camera| !camera.hide)
+                })
+            })
+    }
+
     fn default_screen_motion_blur() -> f32 {
         // Screen Studio's default blur amount is 1.0; with length-based blur
         // semantics (amount scales the smear length, output fully blurred)
@@ -2647,8 +2825,508 @@ mod tests {
             caption_segments: Vec::new(),
             keyboard_segments: Vec::new(),
             audio_segments: Vec::new(),
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
             camera3d_segments: Vec::new(),
         }
+    }
+
+    fn project_with_styles(style_segments: Vec<StyleSegment>) -> ProjectConfiguration {
+        ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                style_segments,
+                ..timeline_with_transitions(Vec::new())
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn legacy_project_json_defaults_to_no_style_or_image_segments() {
+        let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "timescale": 1.0, "start": 0.0, "end": 4.0 }],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap();
+
+        let timeline = config.timeline.as_ref().unwrap();
+        assert!(timeline.style_segments.is_empty());
+        assert!(timeline.image_segments.is_empty());
+        assert_eq!(timeline.duration(), 4.0);
+        assert!(matches!(config.style_at(2.0), Cow::Borrowed(_)));
+        assert_eq!(config.camera_only_padding_at(2.0), 0.0);
+
+        let json = serde_json::to_value(&config).unwrap();
+        assert!(json["timeline"].get("styleSegments").is_none());
+        assert!(json["timeline"].get("imageSegments").is_none());
+    }
+
+    #[test]
+    fn style_and_image_serde_defaults_match_model_defaults() {
+        let style: StyleSegment = serde_json::from_str("{}").unwrap();
+        let style_json = serde_json::to_value(&style).unwrap();
+        assert_eq!(
+            style_json,
+            serde_json::json!({
+                "start": 0.0, "end": 0.0, "track": 0, "enabled": true,
+                "name": "Style", "overrides": {}
+            })
+        );
+        assert_eq!(
+            style_json,
+            serde_json::to_value(StyleSegment::default()).unwrap()
+        );
+        assert!(style.overrides.background.is_none());
+        assert!(style.overrides.camera.is_none());
+        assert!(style.overrides.cursor.is_none());
+        assert!(style.overrides.camera_only_padding.is_none());
+
+        let image: ImageSegment = serde_json::from_str("{}").unwrap();
+        let image_json = serde_json::to_value(&image).unwrap();
+        assert_eq!(
+            image_json,
+            serde_json::json!({
+                "start": 0.0, "end": 0.0, "track": 0, "enabled": true,
+                "path": "", "name": "Image", "center": { "x": 0.5, "y": 0.5 },
+                "size": { "x": 0.3, "y": 0.3 }, "opacity": 1.0,
+                "rotation": 0.0, "rounding": 0.0, "flipX": false,
+                "flipY": false, "lockAspect": true
+            })
+        );
+        assert_eq!(
+            image_json,
+            serde_json::to_value(ImageSegment::default()).unwrap()
+        );
+        assert!(!style.is_active_at(0.0));
+        assert!(!image.is_active_at(0.0));
+    }
+
+    #[test]
+    fn style_and_image_segments_round_trip_all_fields() {
+        let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [], "zoomSegments": [],
+                "styleSegments": [{
+                    "start": 1.0, "end": 4.0, "track": 2, "enabled": false,
+                    "name": "Focus", "overrides": {
+                        "background": { "padding": 17.0 },
+                        "camera": { "hide": true, "size": 45.0 },
+                        "cursor": { "hide": true, "size": 150 },
+                        "cameraOnlyPadding": 12.0
+                    }
+                }],
+                "imageSegments": [{
+                    "start": 2.0, "end": 5.0, "track": 3, "enabled": false,
+                    "path": "content/images/logo.png", "name": "Logo",
+                    "center": { "x": 0.25, "y": 0.75 },
+                    "size": { "x": 0.4, "y": 0.2 }, "opacity": 0.5,
+                    "rotation": 45.0, "rounding": 25.0, "flipX": true,
+                    "flipY": true, "lockAspect": false
+                }]
+            }
+        }))
+        .unwrap();
+        let json = serde_json::to_value(&config).unwrap();
+        let reloaded: ProjectConfiguration =
+            serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        assert_eq!(serde_json::to_value(&reloaded).unwrap(), json);
+
+        let timeline = reloaded.timeline.as_ref().unwrap();
+        let style = &timeline.style_segments[0];
+        assert_eq!((style.start, style.end, style.track), (1.0, 4.0, 2));
+        assert!(!style.enabled);
+        assert_eq!(style.name, "Focus");
+        assert_eq!(style.overrides.background.as_ref().unwrap().padding, 17.0);
+        let camera = style.overrides.camera.as_ref().unwrap();
+        assert!(camera.hide);
+        assert_eq!(camera.size, 45.0);
+        let cursor = style.overrides.cursor.as_ref().unwrap();
+        assert!(cursor.hide);
+        assert_eq!(cursor.size, 150);
+        assert_eq!(style.overrides.camera_only_padding, Some(12.0));
+
+        let image = &timeline.image_segments[0];
+        assert_eq!((image.start, image.end, image.track), (2.0, 5.0, 3));
+        assert!(!image.enabled);
+        assert_eq!(image.path, "content/images/logo.png");
+        assert_eq!(image.name, "Logo");
+        assert_eq!(image.center, XY::new(0.25, 0.75));
+        assert_eq!(image.size, XY::new(0.4, 0.2));
+        assert_eq!(image.opacity, 0.5);
+        assert_eq!(image.rotation, 45.0);
+        assert_eq!(image.rounding, 25.0);
+        assert!(image.flip_x);
+        assert!(image.flip_y);
+        assert!(!image.lock_aspect);
+        assert_eq!(
+            json["timeline"]["styleSegments"][0]["overrides"]["cameraOnlyPadding"],
+            12.0
+        );
+        assert_eq!(json["timeline"]["imageSegments"][0]["lockAspect"], false);
+    }
+
+    #[test]
+    fn styles_respect_boundaries_disabled_clips_and_group_inheritance() {
+        let style = StyleSegment {
+            start: 1.0,
+            end: 3.0,
+            overrides: StyleOverrides {
+                background: Some(BackgroundConfiguration {
+                    padding: 20.0,
+                    ..Default::default()
+                }),
+                camera_only_padding: Some(15.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut disabled = style.clone();
+        disabled.track = 10;
+        disabled.enabled = false;
+        disabled.overrides.background.as_mut().unwrap().padding = 99.0;
+        disabled.overrides.camera_only_padding = Some(39.0);
+        let mut config = project_with_styles(vec![style, disabled]);
+        config.background.padding = 5.0;
+        config.background.shadow = 12.0;
+        config.camera.size = 55.0;
+        config.cursor.size = 175;
+        let original = serde_json::to_value(&config).unwrap();
+
+        for time in [0.0, 0.999, 3.0, 4.0] {
+            assert!(matches!(config.style_at(time), Cow::Borrowed(_)));
+            assert_eq!(config.camera_only_padding_at(time), 0.0);
+        }
+        for time in [1.0, 2.0, 2.999] {
+            let resolved = config.style_at(time);
+            assert!(matches!(resolved, Cow::Owned(_)));
+            assert_eq!(resolved.background.padding, 20.0);
+            assert_eq!(
+                resolved.background.shadow,
+                BackgroundConfiguration::default().shadow
+            );
+            assert_eq!(resolved.camera.size, 55.0);
+            assert_eq!(resolved.cursor.size, 175);
+            assert_eq!(resolved.camera_only_padding_at(time), 15.0);
+            let mut expected = original.clone();
+            expected["background"] = serde_json::to_value(&resolved.background).unwrap();
+            assert_eq!(serde_json::to_value(resolved.as_ref()).unwrap(), expected);
+        }
+        assert_eq!(serde_json::to_value(&config).unwrap(), original);
+    }
+
+    #[test]
+    fn styles_use_track_then_start_then_original_index_precedence() {
+        let make_style =
+            |track, start, padding, camera_size: Option<f32>, cursor_size: Option<u32>| {
+                StyleSegment {
+                    start,
+                    end: 6.0,
+                    track,
+                    overrides: StyleOverrides {
+                        background: Some(BackgroundConfiguration {
+                            padding,
+                            ..Default::default()
+                        }),
+                        camera: camera_size.map(|size| Camera {
+                            size,
+                            ..Default::default()
+                        }),
+                        cursor: cursor_size.map(|size| CursorConfiguration {
+                            size,
+                            ..Default::default()
+                        }),
+                        camera_only_padding: Some(padding),
+                    },
+                    ..Default::default()
+                }
+            };
+        let config = project_with_styles(vec![
+            make_style(2, 2.0, 20.0, Some(20.0), None),
+            make_style(0, 4.0, 39.0, Some(39.0), Some(190)),
+            make_style(2, 1.0, 10.0, None, None),
+            make_style(2, 2.0, 30.0, None, None),
+            make_style(2, 0.0, 5.0, Some(5.0), None),
+        ]);
+        let original = serde_json::to_value(&config).unwrap();
+        for (time, padding, camera_size, cursor_size) in [
+            (0.0, 5.0, 5.0, 100),
+            (1.0, 10.0, 5.0, 100),
+            (2.0, 30.0, 20.0, 100),
+            (4.0, 30.0, 20.0, 190),
+        ] {
+            let resolved = config.style_at(time);
+            assert_eq!(resolved.background.padding, padding);
+            assert_eq!(resolved.camera.size, camera_size);
+            assert_eq!(resolved.cursor.size, cursor_size);
+            assert_eq!(config.camera_only_padding_at(time), padding);
+            let expected_cursor = if time >= 4.0 {
+                config.timeline.as_ref().unwrap().style_segments[1]
+                    .overrides
+                    .cursor
+                    .as_ref()
+                    .unwrap()
+            } else {
+                &config.cursor
+            };
+            assert!(std::ptr::eq(config.cursor_at(time), expected_cursor));
+        }
+        assert!(matches!(config.style_at(6.0), Cow::Borrowed(_)));
+        assert!(std::ptr::eq(config.cursor_at(6.0), &config.cursor));
+        assert_eq!(serde_json::to_value(&config).unwrap(), original);
+    }
+
+    #[test]
+    fn style_precedence_treats_signed_zero_start_times_as_equal() {
+        let config = project_with_styles(
+            [(0.0, 10.0), (-0.0, 20.0)]
+                .into_iter()
+                .map(|(start, padding)| StyleSegment {
+                    start,
+                    end: 5.0,
+                    overrides: StyleOverrides {
+                        background: Some(BackgroundConfiguration {
+                            padding,
+                            ..Default::default()
+                        }),
+                        camera_only_padding: Some(padding),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        assert_eq!(config.style_at(0.0).background.padding, 20.0);
+        assert_eq!(config.camera_only_padding_at(0.0), 20.0);
+    }
+
+    #[test]
+    fn styles_borrow_the_base_when_no_configuration_group_is_overridden() {
+        let without_timeline = ProjectConfiguration::default();
+        assert!(matches!(without_timeline.style_at(1.0), Cow::Borrowed(_)));
+        assert_eq!(without_timeline.camera_only_padding_at(1.0), 0.0);
+
+        let config = project_with_styles(vec![
+            StyleSegment {
+                end: 5.0,
+                ..Default::default()
+            },
+            StyleSegment {
+                end: 5.0,
+                overrides: StyleOverrides {
+                    camera_only_padding: Some(15.0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ]);
+        let Cow::Borrowed(resolved) = config.style_at(1.0) else {
+            panic!("Empty and padding-only styles must preserve the borrowed configuration");
+        };
+        assert!(std::ptr::eq(resolved, &config));
+        assert_eq!(config.camera_only_padding_at(1.0), 15.0);
+    }
+
+    #[test]
+    fn requires_camera_includes_a_style_that_reveals_a_hidden_base() {
+        let config = ProjectConfiguration {
+            camera: Camera {
+                hide: true,
+                ..Default::default()
+            },
+            ..project_with_styles(vec![StyleSegment {
+                start: 10.0,
+                end: 20.0,
+                overrides: StyleOverrides {
+                    camera: Some(Camera::default()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }])
+        };
+
+        assert!(config.requires_camera());
+        assert!(config.camera.hide);
+        assert!(config.style_at(0.0).camera.hide);
+        assert!(!config.style_at(10.0).camera.hide);
+    }
+
+    #[test]
+    fn requires_camera_ignores_disabled_and_invalid_revealing_styles() {
+        for (start, end, enabled) in [
+            (1.0, 5.0, false),
+            (-1.0, 5.0, true),
+            (1.0, 1.0, true),
+            (5.0, 1.0, true),
+            (f64::NAN, 5.0, true),
+            (1.0, f64::NAN, true),
+            (f64::NEG_INFINITY, 5.0, true),
+            (1.0, f64::INFINITY, true),
+        ] {
+            let config = ProjectConfiguration {
+                camera: Camera {
+                    hide: true,
+                    ..Default::default()
+                },
+                ..project_with_styles(vec![StyleSegment {
+                    start,
+                    end,
+                    enabled,
+                    overrides: StyleOverrides {
+                        camera: Some(Camera::default()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }])
+            };
+
+            assert!(
+                !config.requires_camera(),
+                "{start}..{end}, enabled={enabled}"
+            );
+        }
+    }
+
+    #[test]
+    fn requires_camera_inherits_the_base_without_a_revealing_style() {
+        let mut config = ProjectConfiguration::default();
+        assert!(config.requires_camera());
+        config.camera.hide = true;
+        assert!(!config.requires_camera());
+
+        config.timeline = project_with_styles(vec![
+            StyleSegment {
+                end: 5.0,
+                overrides: StyleOverrides {
+                    background: Some(BackgroundConfiguration::default()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            StyleSegment {
+                end: 5.0,
+                overrides: StyleOverrides {
+                    camera: Some(Camera {
+                        hide: true,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ])
+        .timeline;
+        assert!(!config.requires_camera());
+        config.camera.hide = false;
+        assert!(config.requires_camera());
+    }
+
+    #[test]
+    fn camera_only_padding_clamps_finite_values_and_inherits_past_invalid_values() {
+        for (padding, expected) in [
+            (None, 12.0),
+            (Some(f64::NAN), 12.0),
+            (Some(f64::INFINITY), 12.0),
+            (Some(f64::NEG_INFINITY), 12.0),
+            (Some(-10.0), 0.0),
+            (Some(0.0), 0.0),
+            (Some(25.0), 25.0),
+            (Some(40.0), 40.0),
+            (Some(60.0), 40.0),
+        ] {
+            let config = project_with_styles(vec![
+                StyleSegment {
+                    end: 5.0,
+                    track: 1,
+                    overrides: StyleOverrides {
+                        camera_only_padding: padding,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                StyleSegment {
+                    end: 5.0,
+                    overrides: StyleOverrides {
+                        camera_only_padding: Some(12.0),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ]);
+            assert_eq!(config.camera_only_padding_at(1.0), expected);
+            assert!(matches!(config.style_at(1.0), Cow::Borrowed(_)));
+        }
+    }
+
+    #[test]
+    fn style_and_image_segments_ignore_invalid_intervals_and_query_times() {
+        for (start, end) in [
+            (f64::NAN, 3.0),
+            (0.0, f64::NAN),
+            (0.0, f64::INFINITY),
+            (f64::NEG_INFINITY, 3.0),
+            (f64::INFINITY, f64::INFINITY),
+            (-1.0, 3.0),
+            (3.0, 2.0),
+            (2.0, 2.0),
+            (0.0, -1.0),
+            (0.0, f64::NEG_INFINITY),
+        ] {
+            let config = project_with_styles(vec![StyleSegment {
+                start,
+                end,
+                overrides: StyleOverrides {
+                    background: Some(BackgroundConfiguration::default()),
+                    camera_only_padding: Some(20.0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }]);
+            let image = ImageSegment {
+                start,
+                end,
+                ..Default::default()
+            };
+            for time in [
+                -1.0,
+                0.0,
+                1.0,
+                2.0,
+                3.0,
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+            ] {
+                assert!(matches!(config.style_at(time), Cow::Borrowed(_)));
+                assert_eq!(config.camera_only_padding_at(time), 0.0);
+                assert!(!image.is_active_at(time));
+            }
+        }
+
+        let config = project_with_styles(vec![StyleSegment {
+            end: 5.0,
+            overrides: StyleOverrides {
+                camera: Some(Camera::default()),
+                camera_only_padding: Some(20.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        }]);
+        let mut image = ImageSegment {
+            end: 5.0,
+            ..Default::default()
+        };
+        for time in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(matches!(config.style_at(time), Cow::Borrowed(_)));
+            assert_eq!(config.camera_only_padding_at(time), 0.0);
+            assert!(!image.is_active_at(time));
+        }
+        assert!(image.is_active_at(0.0));
+        assert!(image.is_active_at(4.999));
+        assert!(!image.is_active_at(5.0));
+        image.enabled = false;
+        assert!(!image.is_active_at(1.0));
     }
 
     fn fullscreen_text(start: f64, end: f64) -> TextSegment {
@@ -3162,6 +3840,8 @@ mod tests {
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             }),
             ..Default::default()
@@ -3263,6 +3943,8 @@ mod tests {
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
+                style_segments: Vec::new(),
+                image_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             }),
             ..Default::default()

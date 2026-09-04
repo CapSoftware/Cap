@@ -67,6 +67,7 @@
 			"../src/assets/music/*.mp3": "assets/music/"
 		},
 		"macOS": {
+			"minimumSystemVersion": "12.3",
 			"dmg": {
 				"background": "assets/dmg-background.png",
 				"appPosition": {

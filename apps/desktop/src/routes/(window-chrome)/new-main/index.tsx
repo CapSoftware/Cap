@@ -75,6 +75,11 @@ import {
 	revealRecordingWindow,
 } from "~/utils/queries";
 import {
+	isRecordingStartCancelled,
+	recordingMetaNeedsRecovery,
+	recordingOpenErrorMessage,
+} from "~/utils/recording";
+import {
 	type CaptureDisplay,
 	type CaptureDisplayWithThumbnail,
 	type CaptureWindow,
@@ -137,6 +142,17 @@ const CAPTURE_LIST_STALE_TIME = 5_000;
 const CAPTURE_LIST_GC_TIME = 60_000;
 const CAPTURE_THUMBNAIL_STALE_TIME = 10_000;
 const CAPTURE_THUMBNAIL_GC_TIME = 60_000;
+
+async function restoreCameraWhenPermitted(
+	check: () => Promise<OSPermissionsCheck>,
+	isCurrent: () => boolean,
+	restore: () => Promise<unknown>,
+) {
+	const { camera } = await check();
+	if (isCurrent() && (camera === "granted" || camera === "notNeeded")) {
+		await restore();
+	}
+}
 
 const findCamera = (cameras: CameraWithDetails[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {
@@ -1848,9 +1864,60 @@ function MainWindowHelpButton() {
 
 function Page() {
 	const queryClient = useQueryClient();
-	const { rawOptions, setOptions } = useRecordingOptions();
+	const { rawOptions, setOptions, getCameraRevision } = useRecordingOptions();
 	const currentRecording = createCurrentRecordingQuery();
 	const cleanCapture = createCleanCaptureQuery();
+	const [stopRequested, setStopRequested] = createSignal(false);
+	const [stopError, setStopError] = createSignal<string | null>(null);
+	const recordingErrors = createMemo(() => {
+		const errors: string[] = [];
+		const nativeError = cleanCapture.data?.error;
+		if (nativeError) errors.push(nativeError);
+		const localError = stopError();
+		if (localError) errors.push(localError);
+		return [...new Set(errors)];
+	});
+	let stopRequest: { cleanCaptureGeneration: number | undefined } | undefined;
+	let stopErrorRequest: typeof stopRequest;
+	const resetStopRequest = () => {
+		stopRequest = undefined;
+		setStopRequested(false);
+	};
+	const resetStopNotice = () => {
+		resetStopRequest();
+		stopErrorRequest = undefined;
+		setStopError(null);
+	};
+	onCleanup(() => {
+		stopRequest = undefined;
+		stopErrorRequest = undefined;
+	});
+	createEffect(() => {
+		const snapshot = cleanCapture.data;
+		const status = currentRecording.data?.status;
+		if (!snapshot) return;
+		for (const request of [stopRequest, stopErrorRequest]) {
+			if (!request) continue;
+			if (
+				((snapshot.phase === "awaitingShortcut" && status === "pending") ||
+					((snapshot.phase === "recording" || snapshot.phase === "paused") &&
+						status === "recording")) &&
+				request.cleanCaptureGeneration !== undefined &&
+				snapshot.generation > request.cleanCaptureGeneration
+			) {
+				if (stopRequest === request) {
+					stopRequest = undefined;
+					setStopRequested(false);
+				}
+				if (stopErrorRequest === request) {
+					stopErrorRequest = undefined;
+					setStopError(null);
+				}
+			} else if (request.cleanCaptureGeneration === undefined) {
+				request.cleanCaptureGeneration = snapshot.generation;
+			}
+		}
+	});
 	const [isExpanded, setIsExpanded] = createSignal(false);
 	const [isWindowFocused, setIsWindowFocused] = createSignal(false);
 	const [isWindowResizing, setIsWindowResizing] = createSignal(false);
@@ -2170,9 +2237,11 @@ function Page() {
 	// picker flow also hides this window, so reveal it first or the toast lands
 	// in a hidden webview and the failure is invisible again.
 	createTauriEventListener(events.recordingEvent, (payload) => {
+		if (payload.variant === "Started" || payload.variant === "Countdown")
+			resetStopNotice();
 		if (payload.variant === "StartFailed") {
 			void revealRecordingWindow();
-			toast.error(payload.error);
+			if (!isRecordingStartCancelled(payload.error)) toast.error(payload.error);
 		}
 	});
 
@@ -2464,6 +2533,10 @@ function Page() {
 
 	const setMicInput = createMicrophoneMutation();
 	const setCamera = createCameraMutation();
+	let cameraRestoreDisposed = false;
+	onCleanup(() => {
+		cameraRestoreDisposed = true;
+	});
 
 	createUpdateCheck();
 	createUpdateReadyToast();
@@ -2515,9 +2588,19 @@ function Page() {
 		}
 
 		if (rawOptions.cameraID) {
-			setCamera
-				.mutateAsync({ model: rawOptions.cameraID })
-				.catch((error) => console.error("Failed to set camera input:", error));
+			const model = rawOptions.cameraID;
+			const cameraKey = JSON.stringify(model);
+			const restoreRevision = getCameraRevision();
+			void restoreCameraWhenPermitted(
+				() => commands.doPermissionsCheck(false),
+				() =>
+					!cameraRestoreDisposed &&
+					getCameraRevision() === restoreRevision &&
+					JSON.stringify(rawOptions.cameraID) === cameraKey,
+				() => setCamera.mutateAsync({ model }),
+			).catch((error) =>
+				console.error("Failed to restore camera input:", error),
+			);
 		}
 
 		const unlistenFocus = currentWindow.onFocusChanged(
@@ -2818,15 +2901,21 @@ function Page() {
 	const signIn = createSignInMutation();
 	const stopRecording = createMutation(() => ({
 		mutationFn: async () => {
+			if (stopRequested()) return;
+			const request = {
+				cleanCaptureGeneration: cleanCapture.data?.generation,
+			};
+			stopRequest = request;
+			setStopRequested(true);
 			try {
 				await commands.stopRecording();
 			} catch (error) {
-				await dialog.message(
-					`Failed to stop recording: ${
-						error instanceof Error ? error.message : String(error)
-					}`,
-					{ title: "Stop Recording", kind: "error" },
-				);
+				if (stopRequest === request) {
+					stopErrorRequest = request;
+					setStopError(error instanceof Error ? error.message : String(error));
+				}
+			} finally {
+				if (stopRequest === request) resetStopRequest();
 			}
 		},
 	}));
@@ -2870,16 +2959,25 @@ function Page() {
 	const openRecording = async (recording: RecordingWithPath) => {
 		if (recording.mode === "studio") {
 			let projectPath = recording.path;
-			const needsRecovery =
-				recording.status.status === "InProgress" ||
-				recording.status.status === "NeedsRemux";
-
-			if (needsRecovery) {
-				try {
+			try {
+				const meta = await commands.getRecordingMetaByPath(projectPath);
+				if (recordingMetaNeedsRecovery(meta)) {
 					projectPath = await commands.recoverRecording(projectPath);
-				} catch (error) {
-					console.error("Failed to recover recording:", error);
 				}
+			} catch (error) {
+				console.error("Failed to recover recording:", error);
+				await dialog
+					.message(recordingOpenErrorMessage(error, projectPath), {
+						title: "Recover Recording",
+						kind: "error",
+					})
+					.catch((dialogError: unknown) => {
+						console.error(
+							"Failed to show recording recovery error",
+							dialogError,
+						);
+					});
+				return;
 			}
 
 			await commands.showWindow({
@@ -3186,7 +3284,7 @@ function Page() {
 					<button
 						type="button"
 						class="rounded-lg border border-gray-5 px-4 py-2"
-						disabled={stopRecording.isPending}
+						disabled={stopRequested()}
 						onClick={() => stopRecording.mutate()}
 					>
 						Cancel
@@ -3300,12 +3398,13 @@ function Page() {
 					</div>
 				</div>
 			</WindowChromeHeader>
-			<Show when={!isActivelyRecording() && cleanCapture.data?.error}>
+			<Show when={!isActivelyRecording() && recordingErrors().length > 0}>
 				<div
 					role="alert"
-					class="max-h-20 shrink-0 overflow-auto rounded-lg bg-red-3 p-2 text-sm text-red-11"
+					tabIndex={0}
+					class="max-h-20 shrink-0 space-y-1 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-red-3 p-2 text-sm text-red-11"
 				>
-					{cleanCapture.data?.error}
+					<For each={recordingErrors()}>{(error) => <p>{error}</p>}</For>
 				</div>
 			</Show>
 			<Show when={!activeMenu()}>
@@ -3524,17 +3623,18 @@ function Page() {
 			<Show when={isActivelyRecording()}>
 				<div class="absolute inset-0 z-10 flex flex-col justify-end bg-gray-1/80 px-6 pb-8 backdrop-blur-xs">
 					<div class="pointer-events-auto">
+						<Show when={recordingErrors().length > 0}>
+							<div
+								role="alert"
+								tabIndex={0}
+								class="mb-3 max-h-20 space-y-1 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-red-3 p-2 text-sm text-red-11"
+							>
+								<For each={recordingErrors()}>{(error) => <p>{error}</p>}</For>
+							</div>
+						</Show>
 						<Show when={cleanCapture.data?.phase === "paused"}>
 							<div class="mb-3 flex items-center justify-between gap-2 rounded-lg bg-gray-3 p-2 text-sm">
 								<div class="min-w-0">
-									<Show when={cleanCapture.data?.error}>
-										<p
-											role="alert"
-											class="mb-1 max-h-20 overflow-auto text-red-11"
-										>
-											{cleanCapture.data?.error}
-										</p>
-									</Show>
 									<span>Recording paused. Cap will hide before resuming.</span>
 								</div>
 								<button
@@ -3552,12 +3652,12 @@ function Page() {
 						</Show>
 						<button
 							type="button"
-							disabled={stopRecording.isPending}
+							disabled={stopRequested()}
 							onClick={() => stopRecording.mutate()}
 							class="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-red-9 px-4 text-sm font-medium text-white transition hover:bg-red-10 disabled:cursor-not-allowed disabled:opacity-60"
 						>
 							<Show
-								when={!stopRecording.isPending}
+								when={!stopRequested()}
 								fallback={<IconLucideLoader2 class="size-4 animate-spin" />}
 							>
 								<IconCapStopCircle class="size-4" />

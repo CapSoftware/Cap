@@ -2,7 +2,47 @@ import { emit } from "@tauri-apps/api/event";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { createOptionsQuery } from "./queries";
-import { commands, type RecordingAction, type RecordingMode } from "./tauri";
+import {
+	commands,
+	type RecordingAction,
+	type RecordingMeta,
+	type RecordingMode,
+} from "./tauri";
+
+export function isRecordingStartCancelled(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : error;
+	return message === "Recording cancelled before starting.";
+}
+
+export function isRecordingStorageError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : error;
+	return (
+		typeof message === "string" &&
+		message.startsWith("Not enough space to finish this recording.")
+	);
+}
+
+export function recordingMetaNeedsRecovery(meta: RecordingMeta): boolean {
+	const status =
+		"status" in meta
+			? meta.status
+			: "inner" in meta
+				? meta.inner.status
+				: undefined;
+	if (!status || typeof status !== "object" || !("status" in status))
+		return false;
+	return status.status === "InProgress" || status.status === "NeedsRemux";
+}
+
+export function recordingOpenErrorMessage(
+	error: unknown,
+	projectPath: string,
+): string {
+	if (isRecordingStorageError(error)) {
+		return `Not enough space to finish this recording. Your recording files have been kept at ${projectPath}. Free up space, then open the recording again.`;
+	}
+	return error instanceof Error ? error.message : String(error);
+}
 
 export function handleRecordingResult(
 	result: Promise<RecordingAction>,
@@ -43,12 +83,16 @@ export function handleRecordingResult(
 					title: "Error starting recording",
 				});
 		})
-		.catch((err) =>
-			dialog.message(err, {
-				title: "Error starting recording",
-				kind: "error",
-			}),
-		);
+		.catch((error: unknown) => {
+			if (isRecordingStartCancelled(error)) return;
+			return dialog.message(
+				error instanceof Error ? error.message : String(error),
+				{
+					title: "Error starting recording",
+					kind: "error",
+				},
+			);
+		});
 }
 
 export async function openRecordingFolder(

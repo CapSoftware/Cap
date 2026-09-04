@@ -298,7 +298,7 @@ export function createOptionsQuery() {
 			return Reflect.apply(target, thisArg, args);
 		},
 	});
-	return { rawOptions: state, setOptions };
+	return { rawOptions: state, setOptions, getCameraRevision: () => cameraRevision };
 }
 
 export function createCleanCaptureQuery() {

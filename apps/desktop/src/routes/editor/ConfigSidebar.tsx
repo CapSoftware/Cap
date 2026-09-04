@@ -128,9 +128,14 @@ import {
 import { syncCaptionWordsWithText } from "./captions";
 import { type ClipTransition, clipSourceTimeAt } from "./clip-transitions";
 import { getColorPreviewBorderColor, hexToRgb, RgbInput } from "./color-utils";
-import { type CornerRoundingType, useEditorContext } from "./context";
+import {
+	type CornerRoundingType,
+	EditorStyleContext,
+	useEditorContext,
+} from "./context";
 import { FontPicker } from "./FontPicker";
 import { GradientEditor } from "./GradientEditor";
+import { ImageSegmentConfig } from "./ImageSegmentConfig";
 import { KeyboardTab } from "./KeyboardTab";
 import {
 	encodeMaskEffect,
@@ -150,6 +155,7 @@ import {
 	DEFAULT_SPLIT_LAYOUT,
 } from "./projectConfig";
 import ShadowSettings from "./ShadowSettings";
+import { StyleGroupToggle, StyleSegmentConfig } from "./StyleSegmentConfig";
 import { TextInput } from "./TextInput";
 import {
 	TEXT_FONT_SIZE_MAX,
@@ -505,8 +511,28 @@ const TAB_IDS = {
 } as const;
 
 export function ConfigSidebar() {
+	const context = useEditorContext();
+	return (
+		<Show when={context.styleScopeToken()} keyed>
+			{(_scope) => (
+				<EditorStyleContext.Provider
+					value={{
+						...context,
+						project: context.styleProject,
+						setProject: context.createStyleProjectSetter(),
+					}}
+				>
+					<ConfigSidebarContent />
+				</EditorStyleContext.Provider>
+			)}
+		</Show>
+	);
+}
+
+function ConfigSidebarContent() {
 	const {
 		project,
+		selectedStyle,
 		setProject,
 		setEditorState,
 		projectActions,
@@ -578,9 +604,20 @@ export function ConfigSidebar() {
 	// multi-select); it must not swap the sidebar away from the current tab.
 	const sidebarSelection = () => {
 		const selection = editorState.timeline.selection;
-		return selection && selection.type !== "clip" ? selection : null;
+		return selection && selection.type !== "clip" && selection.type !== "style"
+			? selection
+			: null;
 	};
 
+	createEffect(() => {
+		if (
+			selectedStyle() &&
+			state.selectedTab !== "background" &&
+			state.selectedTab !== "camera" &&
+			state.selectedTab !== "cursor"
+		)
+			setState("selectedTab", "background");
+	});
 	let scrollRef!: HTMLDivElement;
 
 	return (
@@ -594,6 +631,7 @@ export function ConfigSidebar() {
 			}
 			class="flex flex-col min-h-0 shrink-0 flex-1 max-w-104 overflow-hidden rounded-xl z-10 bg-gray-1 dark:bg-gray-2 border border-gray-3"
 		>
+			<StyleSegmentConfig />
 			<KTabs.List class="flex overflow-hidden sticky top-0 z-60 flex-row items-center h-16 text-lg border-b border-gray-3 shrink-0 bg-gray-1 dark:bg-gray-2">
 				<For
 					each={[
@@ -620,7 +658,13 @@ export function ConfigSidebar() {
 							icon: IconCapMessageBubble,
 						},
 						// { id: "hotkeys" as const, icon: IconCapHotkeys },
-					].filter(Boolean)}
+					].filter(
+						(item) =>
+							!selectedStyle() ||
+							item.id === "background" ||
+							item.id === "camera" ||
+							item.id === "cursor",
+					)}
 				>
 					{(item) => (
 						<KTabs.Trigger
@@ -821,167 +865,171 @@ export function ConfigSidebar() {
 					value="cursor"
 					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 				>
-					<Field
-						name="Show cursor"
-						value={
-							<Toggle
-								checked={!project.cursor.hide}
-								onChange={(v) => {
-									setProject("cursor", "hide", !v);
-								}}
-							/>
-						}
-					/>
-					<Show when={!project.cursor.hide}>
-						<CursorStylePicker />
-						<Field name="Size" icon={<IconCapEnlarge />}>
-							<Slider
-								value={[project.cursor.size]}
-								onChange={(v) => setProject("cursor", "size", v[0])}
-								minValue={20}
-								maxValue={300}
-								step={1}
-							/>
-						</Field>
-						<Field name="Tilt" icon={<IconLucideRotate3d class="size-4" />}>
-							<Slider
-								value={[project.cursor.rotationAmount ?? 0.15]}
-								onChange={(v) => setProject("cursor", "rotationAmount", v[0])}
-								minValue={0}
-								maxValue={1}
-								step={0.01}
-								formatTooltip={(value) => `${Math.round(value * 100)}%`}
-							/>
-						</Field>
-						<CursorRippleSection />
+					<StyleGroupToggle group="cursor" />
+					<Show
+						when={!selectedStyle() || selectedStyle()?.overrides.cursor != null}
+					>
 						<Field
-							name="Hide When Idle"
-							icon={<IconLucideTimer class="size-4" />}
+							name="Show cursor"
 							value={
 								<Toggle
-									checked={project.cursor.hideWhenIdle}
-									onChange={(value) =>
-										setProject("cursor", "hideWhenIdle", value)
-									}
+									checked={!project.cursor.hide}
+									onChange={(v) => {
+										setProject("cursor", "hide", !v);
+									}}
 								/>
 							}
 						/>
-						<Show when={project.cursor.hideWhenIdle}>
-							<Subfield name="Inactivity Delay" class="gap-4 items-center">
-								<div class="flex flex-1 gap-3 items-center">
-									<Slider
-										class="flex-1"
-										value={[cursorIdleDelay()]}
-										onChange={(v) => {
-											const rounded = clampIdleDelay(v[0]);
-											setProject("cursor", "hideWhenIdleDelay", rounded);
-										}}
-										minValue={0.5}
-										maxValue={5}
-										step={0.1}
-										formatTooltip={(value) => `${value.toFixed(1)}s`}
-									/>
-									<span class="w-12 text-xs text-right text-gray-11">
-										{cursorIdleDelay().toFixed(1)}s
-									</span>
-								</div>
-							</Subfield>
-						</Show>
-						<Field
-							name="Cursor Movement Style"
-							icon={<IconLucideRabbit class="size-4" />}
-						>
-							<RadioGroup
-								class="flex flex-col gap-2"
-								value={project.cursor.animationStyle}
-								onChange={(value) =>
-									applyCursorStylePreset(value as CursorAnimationStyle)
-								}
-							>
-								{CURSOR_ANIMATION_STYLE_OPTIONS.map((option) => (
-									<RadioGroup.Item
-										value={option.value}
-										class="rounded-lg border border-gray-3 transition-colors data-checked:border-blue-8 data-checked:bg-blue-3/40"
-									>
-										<RadioGroup.ItemInput class="sr-only" />
-										<RadioGroup.ItemLabel class="flex items-start gap-3 p-3">
-											<RadioGroup.ItemControl class="mt-1 size-4 rounded-full border border-gray-7 data-checked:border-blue-9 data-checked:bg-blue-9" />
-											<div class="flex flex-col text-left">
-												<span class="text-sm font-medium text-gray-12">
-													{option.label}
-												</span>
-												<span class="text-xs text-gray-11">
-													{option.description}
-												</span>
-											</div>
-										</RadioGroup.ItemLabel>
-									</RadioGroup.Item>
-								))}
-							</RadioGroup>
-						</Field>
-						<KCollapsible open={!project.cursor.raw}>
+						<Show when={!project.cursor.hide}>
+							<CursorStylePicker />
+							<Field name="Size" icon={<IconCapEnlarge />}>
+								<Slider
+									value={[project.cursor.size]}
+									onChange={(v) => setProject("cursor", "size", v[0])}
+									minValue={20}
+									maxValue={300}
+									step={1}
+								/>
+							</Field>
+							<Field name="Tilt" icon={<IconLucideRotate3d class="size-4" />}>
+								<Slider
+									value={[project.cursor.rotationAmount ?? 0.15]}
+									onChange={(v) => setProject("cursor", "rotationAmount", v[0])}
+									minValue={0}
+									maxValue={1}
+									step={0.01}
+									formatTooltip={(value) => `${Math.round(value * 100)}%`}
+								/>
+							</Field>
+							<CursorRippleSection />
 							<Field
-								name="Smooth Movement"
-								icon={<IconHugeiconsEaseCurveControlPoints />}
+								name="Hide When Idle"
+								icon={<IconLucideTimer class="size-4" />}
 								value={
 									<Toggle
-										checked={!project.cursor.raw}
-										onChange={(value) => {
-											setProject("cursor", "raw", !value);
-										}}
+										checked={project.cursor.hideWhenIdle}
+										onChange={(value) =>
+											setProject("cursor", "hideWhenIdle", value)
+										}
 									/>
 								}
 							/>
-							<KCollapsible.Content class="overflow-hidden border-b opacity-0 transition-opacity border-gray-3 animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
-								{/* if Content has padding or margin the animation doesn't look as good */}
-								<div class="flex flex-col gap-4 pt-4 pb-6">
-									<Field name="Tension">
+							<Show when={project.cursor.hideWhenIdle}>
+								<Subfield name="Inactivity Delay" class="gap-4 items-center">
+									<div class="flex flex-1 gap-3 items-center">
 										<Slider
-											value={[project.cursor.tension]}
-											onChange={(v) => setCursorPhysics("tension", v[0])}
-											minValue={1}
-											maxValue={600}
-											step={1}
-										/>
-									</Field>
-									<Field name="Friction">
-										<Slider
-											value={[project.cursor.friction]}
-											onChange={(v) => setCursorPhysics("friction", v[0])}
-											minValue={0}
-											maxValue={200}
+											class="flex-1"
+											value={[cursorIdleDelay()]}
+											onChange={(v) => {
+												const rounded = clampIdleDelay(v[0]);
+												setProject("cursor", "hideWhenIdleDelay", rounded);
+											}}
+											minValue={0.5}
+											maxValue={5}
 											step={0.1}
+											formatTooltip={(value) => `${value.toFixed(1)}s`}
 										/>
-									</Field>
-									<Field name="Mass">
-										<Slider
-											value={[project.cursor.mass]}
-											onChange={(v) => setCursorPhysics("mass", v[0])}
-											minValue={0.1}
-											maxValue={15}
-											step={0.01}
-										/>
-									</Field>
-								</div>
-							</KCollapsible.Content>
-						</KCollapsible>
-						<Show when={!isExplicitCursorFamily(project.cursor.type)}>
+										<span class="w-12 text-xs text-right text-gray-11">
+											{cursorIdleDelay().toFixed(1)}s
+										</span>
+									</div>
+								</Subfield>
+							</Show>
 							<Field
-								name="High Quality SVG Cursors"
-								icon={<IconLucideSparkles />}
-								value={
-									<Toggle
-										checked={project.cursor.useSvg ?? true}
-										onChange={(value) => {
-											setProject("cursor", "useSvg", value);
-										}}
-									/>
-								}
-							/>
+								name="Cursor Movement Style"
+								icon={<IconLucideRabbit class="size-4" />}
+							>
+								<RadioGroup
+									class="flex flex-col gap-2"
+									value={project.cursor.animationStyle}
+									onChange={(value) =>
+										applyCursorStylePreset(value as CursorAnimationStyle)
+									}
+								>
+									{CURSOR_ANIMATION_STYLE_OPTIONS.map((option) => (
+										<RadioGroup.Item
+											value={option.value}
+											class="rounded-lg border border-gray-3 transition-colors data-checked:border-blue-8 data-checked:bg-blue-3/40"
+										>
+											<RadioGroup.ItemInput class="sr-only" />
+											<RadioGroup.ItemLabel class="flex items-start gap-3 p-3">
+												<RadioGroup.ItemControl class="mt-1 size-4 rounded-full border border-gray-7 data-checked:border-blue-9 data-checked:bg-blue-9" />
+												<div class="flex flex-col text-left">
+													<span class="text-sm font-medium text-gray-12">
+														{option.label}
+													</span>
+													<span class="text-xs text-gray-11">
+														{option.description}
+													</span>
+												</div>
+											</RadioGroup.ItemLabel>
+										</RadioGroup.Item>
+									))}
+								</RadioGroup>
+							</Field>
+							<KCollapsible open={!project.cursor.raw}>
+								<Field
+									name="Smooth Movement"
+									icon={<IconHugeiconsEaseCurveControlPoints />}
+									value={
+										<Toggle
+											checked={!project.cursor.raw}
+											onChange={(value) => {
+												setProject("cursor", "raw", !value);
+											}}
+										/>
+									}
+								/>
+								<KCollapsible.Content class="overflow-hidden border-b opacity-0 transition-opacity border-gray-3 animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
+									{/* if Content has padding or margin the animation doesn't look as good */}
+									<div class="flex flex-col gap-4 pt-4 pb-6">
+										<Field name="Tension">
+											<Slider
+												value={[project.cursor.tension]}
+												onChange={(v) => setCursorPhysics("tension", v[0])}
+												minValue={1}
+												maxValue={600}
+												step={1}
+											/>
+										</Field>
+										<Field name="Friction">
+											<Slider
+												value={[project.cursor.friction]}
+												onChange={(v) => setCursorPhysics("friction", v[0])}
+												minValue={0}
+												maxValue={200}
+												step={0.1}
+											/>
+										</Field>
+										<Field name="Mass">
+											<Slider
+												value={[project.cursor.mass]}
+												onChange={(v) => setCursorPhysics("mass", v[0])}
+												minValue={0.1}
+												maxValue={15}
+												step={0.01}
+											/>
+										</Field>
+									</div>
+								</KCollapsible.Content>
+							</KCollapsible>
+							<Show when={!isExplicitCursorFamily(project.cursor.type)}>
+								<Field
+									name="High Quality SVG Cursors"
+									icon={<IconLucideSparkles />}
+									value={
+										<Toggle
+											checked={project.cursor.useSvg ?? true}
+											onChange={(value) => {
+												setProject("cursor", "useSvg", value);
+											}}
+										/>
+									}
+								/>
+							</Show>
 						</Show>
-					</Show>
 
-					{/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
+						{/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
             <RadioGroup
               defaultValue="regular"
               value={project.cursor.animationStyle}
@@ -1026,6 +1074,7 @@ export function ConfigSidebar() {
               ))}
             </RadioGroup>
           </Field> */}
+					</Show>
 				</KTabs.Content>
 				<KTabs.Content value="hotkeys" class="flex flex-1 p-4 min-h-0">
 					<Field name="Hotkeys" icon={<IconCapHotkeys />}>
@@ -1128,6 +1177,18 @@ export function ConfigSidebar() {
 				>
 					{(selection) => (
 						<Suspense>
+							<Show when={selection().type === "image"}>
+								<For
+									each={
+										selection().type === "image"
+											? (selection() as { type: "image"; indices: number[] })
+													.indices
+											: []
+									}
+								>
+									{(index) => <ImageSegmentConfig index={index} />}
+								</For>
+							</Show>
 							<Show
 								when={(() => {
 									const captionSelection = selection();
@@ -1743,7 +1804,7 @@ function BackgroundConfig(props: {
 	scrollRef: HTMLDivElement;
 	brandColorSwatches: OrganizationBrandColorSwatch[];
 }) {
-	const { project, setProject, editorInstance, projectHistory } =
+	const { project, setProject, editorInstance, projectHistory, selectedStyle } =
 		useEditorContext();
 	const notchXMax = () => {
 		const width =
@@ -2227,211 +2288,177 @@ function BackgroundConfig(props: {
 
 	return (
 		<KTabs.Content value={TAB_IDS.background} class="flex flex-col gap-6 p-4">
-			<Field icon={<IconCapImage class="size-4" />} name="Background Image">
-				<KTabs
-					value={backgroundSourceTab()}
-					onChange={(v) => {
-						const tab = v as BackgroundSourceTab;
-						if (
-							tab === "animatedGradient" &&
-							(!animatedGradientCatalog.data ||
-								animatedGradientLibrary.isPending ||
-								animatedGradientLibrary.isError)
-						)
-							return;
-						const fromNone = backgroundSourceTab() === "none";
-						if (tab === "none") {
-							batch(() => {
-								const source = project.background.source;
-								if (source.type === "animatedGradient") {
-									lastAnimatedGradient = copyAnimatedGradientConfig(
-										source.config,
-									);
-									pendingGradientPreference = {
-										lastUsed: lastAnimatedGradient,
-										selected: false,
-									};
+			<StyleGroupToggle group="background" />
+			<Show
+				when={!selectedStyle() || selectedStyle()?.overrides.background != null}
+			>
+				<Field icon={<IconCapImage class="size-4" />} name="Background Image">
+					<KTabs
+						value={backgroundSourceTab()}
+						onChange={(v) => {
+							const tab = v as BackgroundSourceTab;
+							if (
+								tab === "animatedGradient" &&
+								(!animatedGradientCatalog.data ||
+									animatedGradientLibrary.isPending ||
+									animatedGradientLibrary.isError)
+							)
+								return;
+							const fromNone = backgroundSourceTab() === "none";
+							if (tab === "none") {
+								batch(() => {
+									const source = project.background.source;
+									if (source.type === "animatedGradient") {
+										lastAnimatedGradient = copyAnimatedGradientConfig(
+											source.config,
+										);
+										pendingGradientPreference = {
+											lastUsed: lastAnimatedGradient,
+											selected: false,
+										};
+										setProject("background", "source", {
+											type: "color",
+											value: [255, 255, 255],
+											alpha: 255,
+										});
+									}
+									setBackgroundSourceTab(tab);
+									setProject("background", "padding", 0);
+									setProject("background", "rounding", 0);
+								});
+								return;
+							}
+							setBackgroundSourceTab(tab);
+							if (tab === "desktop") {
+								const desktopBackground = currentDesktopBackground();
+								if (desktopBackground) {
+									ensureBackgroundPresentation(fromNone);
+									setWallpaperSource(desktopBackground.rawPath);
+								}
+								return;
+							}
+							ensureBackgroundPresentation(fromNone);
+							switch (tab) {
+								case "animatedGradient": {
+									const config =
+										lastAnimatedGradient ??
+										animatedGradientLibrary.data?.lastUsed ??
+										animatedGradientCatalog.data?.defaultConfig;
+									if (!config) return;
+									setProject("background", "source", {
+										type: "animatedGradient",
+										config: copyAnimatedGradientConfig(config),
+									});
+									break;
+								}
+								case "image": {
+									setProject("background", "source", {
+										type: "image",
+										path:
+											project.background.source.type === "image"
+												? project.background.source.path
+												: null,
+									});
+									break;
+								}
+								case "color": {
 									setProject("background", "source", {
 										type: "color",
-										value: [255, 255, 255],
-										alpha: 255,
+										value:
+											project.background.source.type === "color"
+												? project.background.source.value
+												: DEFAULT_GRADIENT_FROM,
 									});
+									break;
 								}
-								setBackgroundSourceTab(tab);
-								setProject("background", "padding", 0);
-								setProject("background", "rounding", 0);
-							});
-							return;
-						}
-						setBackgroundSourceTab(tab);
-						if (tab === "desktop") {
-							const desktopBackground = currentDesktopBackground();
-							if (desktopBackground) {
-								ensureBackgroundPresentation(fromNone);
-								setWallpaperSource(desktopBackground.rawPath);
-							}
-							return;
-						}
-						ensureBackgroundPresentation(fromNone);
-						switch (tab) {
-							case "animatedGradient": {
-								const config =
-									lastAnimatedGradient ??
-									animatedGradientLibrary.data?.lastUsed ??
-									animatedGradientCatalog.data?.defaultConfig;
-								if (!config) return;
-								setProject("background", "source", {
-									type: "animatedGradient",
-									config: copyAnimatedGradientConfig(config),
-								});
-								break;
-							}
-							case "image": {
-								setProject("background", "source", {
-									type: "image",
-									path:
-										project.background.source.type === "image"
+								case "gradient": {
+									setProject("background", "source", {
+										type: "gradient",
+										from:
+											project.background.source.type === "gradient"
+												? project.background.source.from
+												: DEFAULT_GRADIENT_FROM,
+										to:
+											project.background.source.type === "gradient"
+												? project.background.source.to
+												: DEFAULT_GRADIENT_TO,
+										angle:
+											project.background.source.type === "gradient"
+												? project.background.source.angle
+												: 90,
+									});
+									break;
+								}
+								case "wallpaper": {
+									const path =
+										project.background.source.type === "wallpaper" &&
+										!isCurrentDesktopBackgroundPath(
+											project.background.source.path,
+										)
 											? project.background.source.path
-											: null,
-								});
-								break;
+											: null;
+									setProject("background", "source", {
+										type: "wallpaper",
+										path,
+									});
+									break;
+								}
 							}
-							case "color": {
-								setProject("background", "source", {
-									type: "color",
-									value:
-										project.background.source.type === "color"
-											? project.background.source.value
-											: DEFAULT_GRADIENT_FROM,
-								});
-								break;
-							}
-							case "gradient": {
-								setProject("background", "source", {
-									type: "gradient",
-									from:
-										project.background.source.type === "gradient"
-											? project.background.source.from
-											: DEFAULT_GRADIENT_FROM,
-									to:
-										project.background.source.type === "gradient"
-											? project.background.source.to
-											: DEFAULT_GRADIENT_TO,
-									angle:
-										project.background.source.type === "gradient"
-											? project.background.source.angle
-											: 90,
-								});
-								break;
-							}
-							case "wallpaper": {
-								const path =
-									project.background.source.type === "wallpaper" &&
-									!isCurrentDesktopBackgroundPath(
-										project.background.source.path,
-									)
-										? project.background.source.path
-										: null;
-								setProject("background", "source", {
-									type: "wallpaper",
-									path,
-								});
-								break;
-							}
-						}
-					}}
-				>
-					<KTabs.List class="flex relative flex-col gap-2">
-						<div class="flex flex-row gap-2 items-center">
-							<For each={BACKGROUND_SOURCES_ROW_ONE}>
-								{(item) => (
-									<BackgroundSourceTrigger item={item} class="flex-1" />
-								)}
-							</For>
-						</div>
-						<div class="flex flex-row gap-2 items-center">
-							<For each={BACKGROUND_SOURCES_ROW_TWO}>
-								{(item) => (
-									<BackgroundSourceTrigger item={item} class="flex-1" />
-								)}
-							</For>
-						</div>
-						<BackgroundSourceTrigger
-							item="none"
-							class="w-full not-data-selected:border-gray-5"
-						/>
-					</KTabs.List>
-					<Show
-						when={
-							animatedGradientCatalog.isError || animatedGradientLibrary.isError
-						}
+						}}
 					>
-						<div class="mt-2 flex items-center justify-between gap-2 text-xs">
-							<span role="alert" class="text-red-11">
-								Could not load animated gradients.
-							</span>
-							<button
-								type="button"
-								class="text-gray-12 underline"
-								onClick={() => {
-									void animatedGradientCatalog.refetch();
-									void animatedGradientLibrary.refetch();
-								}}
-							>
-								Retry
-							</button>
-						</div>
-					</Show>
-					{/** Dashed divider */}
-					<div class="my-5 w-full border-t border-dashed border-gray-5" />
-					<KTabs.Content value="desktop">
+						<KTabs.List class="flex relative flex-col gap-2">
+							<div class="flex flex-row gap-2 items-center">
+								<For each={BACKGROUND_SOURCES_ROW_ONE}>
+									{(item) => (
+										<BackgroundSourceTrigger item={item} class="flex-1" />
+									)}
+								</For>
+							</div>
+							<div class="flex flex-row gap-2 items-center">
+								<For each={BACKGROUND_SOURCES_ROW_TWO}>
+									{(item) => (
+										<BackgroundSourceTrigger item={item} class="flex-1" />
+									)}
+								</For>
+							</div>
+							<BackgroundSourceTrigger
+								item="none"
+								class="w-full not-data-selected:border-gray-5"
+							/>
+						</KTabs.List>
 						<Show
-							when={currentDesktopBackground()}
-							fallback={
-								<div class="flex flex-col gap-3 items-center justify-center p-6 w-full rounded-lg border border-dashed bg-gray-2 border-gray-5">
-									<IconLucideMonitor class="size-6 text-gray-11" />
-									<span class="text-[13px] text-center text-gray-12">
-										Use the wallpaper from your desktop
-									</span>
-									<EditorButton
-										onClick={importDesktopBackground}
-										disabled={importingDesktopBackground()}
-										leftIcon={<IconLucideMonitor />}
-									>
-										{importingDesktopBackground()
-											? "Importing..."
-											: "Import desktop background"}
-									</EditorButton>
-								</div>
+							when={
+								animatedGradientCatalog.isError ||
+								animatedGradientLibrary.isError
 							}
 						>
-							{(photo) => (
-								<div class="flex flex-col gap-3">
-									<button
-										type="button"
-										onClick={() => {
-											setWallpaperSource(photo().rawPath);
-											ensureBackgroundPresentation();
-										}}
-										class={cx(
-											"overflow-hidden relative w-full h-48 rounded-lg border transition group",
-											project.background.source.type === "wallpaper" &&
-												project.background.source.path === photo().rawPath
-												? "border-blue-9 ring-2 ring-blue-9"
-												: "border-gray-5 hover:border-gray-7",
-										)}
-									>
-										<img
-											src={photo().url}
-											loading="eager"
-											class="object-cover w-full h-full"
-											alt={photo().label ?? getCurrentDesktopBackgroundLabel()}
-										/>
-										<span class="flex absolute right-2 bottom-2 justify-center items-center w-7 h-7 rounded-full text-white/95 bg-black/55 backdrop-blur-sm">
-											<IconLucideMonitor class="size-4" />
+							<div class="mt-2 flex items-center justify-between gap-2 text-xs">
+								<span role="alert" class="text-red-11">
+									Could not load animated gradients.
+								</span>
+								<button
+									type="button"
+									class="text-gray-12 underline"
+									onClick={() => {
+										void animatedGradientCatalog.refetch();
+										void animatedGradientLibrary.refetch();
+									}}
+								>
+									Retry
+								</button>
+							</div>
+						</Show>
+						{/** Dashed divider */}
+						<div class="my-5 w-full border-t border-dashed border-gray-5" />
+						<KTabs.Content value="desktop">
+							<Show
+								when={currentDesktopBackground()}
+								fallback={
+									<div class="flex flex-col gap-3 items-center justify-center p-6 w-full rounded-lg border border-dashed bg-gray-2 border-gray-5">
+										<IconLucideMonitor class="size-6 text-gray-11" />
+										<span class="text-[13px] text-center text-gray-12">
+											Use the wallpaper from your desktop
 										</span>
-									</button>
-									<div class="flex justify-end">
 										<EditorButton
 											onClick={importDesktopBackground}
 											disabled={importingDesktopBackground()}
@@ -2439,278 +2466,323 @@ function BackgroundConfig(props: {
 										>
 											{importingDesktopBackground()
 												? "Importing..."
-												: "Re-import"}
+												: "Import desktop background"}
 										</EditorButton>
 									</div>
-								</div>
-							)}
-						</Show>
-					</KTabs.Content>
-					<KTabs.Content value="wallpaper">
-						{/** Background Tabs */}
-						<KTabs class="overflow-hidden relative" value={backgroundTab()}>
-							<KTabs.List
-								ref={setBackgroundRef}
-								class="flex overflow-x-auto overscroll-contain relative z-10 flex-row gap-2 items-center mb-3 text-xs hide-scroll"
-								style={{
-									"-webkit-mask-image": `linear-gradient(to right, transparent, black ${
-										scrollX() > 0 ? "24px" : "0"
-									}, black calc(100% - ${
-										reachedEndOfScroll() ? "0px" : "24px"
-									}), transparent)`,
-
-									"mask-image": `linear-gradient(to right, transparent, black ${
-										scrollX() > 0 ? "24px" : "0"
-									}, black calc(100% - ${
-										reachedEndOfScroll() ? "0px" : "24px"
-									}), transparent);`,
-								}}
-							>
-								<For each={Object.entries(BACKGROUND_THEMES)}>
-									{([key, value]) => (
-										<>
-											<KTabs.Trigger
-												onClick={() =>
-													setBackgroundTab(
-														key as keyof typeof BACKGROUND_THEMES,
-													)
-												}
-												value={key}
-												class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 bg-transparent rounded-lg border transition-colors duration-200 text-gray-11 not-data-selected:hover:border-gray-7 data-selected:bg-gray-3 data-selected:border-gray-3 group data-selected:text-gray-12 disabled:opacity-50 focus:outline-hidden"
-											>
-												{value}
-											</KTabs.Trigger>
-										</>
-									)}
-								</For>
-							</KTabs.List>
-						</KTabs>
-						{/** End of Background Tabs */}
-						<KRadioGroup
-							value={
-								project.background.source.type === "wallpaper"
-									? (selectedWallpaper()?.url ?? undefined)
-									: undefined
-							}
-							onChange={(photoUrl) => {
-								try {
-									const wallpaper = wallpaperOptions().find(
-										(w) => w.url === photoUrl,
-									);
-									if (!wallpaper) return;
-
-									// Get the raw path without any URL prefixes
-
-									setWallpaperSource(wallpaper.rawPath);
-
-									ensureBackgroundPresentation();
-								} catch (_err) {
-									toast.error("Failed to set wallpaper");
-								}
-							}}
-							class="grid grid-cols-7 gap-2 h-auto"
-						>
-							<Show
-								when={!wallpapers.loading}
-								fallback={
-									<div class="flex col-span-7 justify-center items-center h-32 text-gray-11">
-										<div class="flex flex-col gap-2 items-center">
-											<div class="w-6 h-6 rounded-full border-2 animate-spin border-gray-5 border-t-blue-400" />
-											<span>Loading wallpapers...</span>
-										</div>
-									</div>
 								}
 							>
-								<For each={filteredWallpapers().slice(0, 21)}>
-									{(photo) => (
-										<KRadioGroup.Item
-											value={photo.url}
-											class="relative aspect-square group"
-										>
-											<KRadioGroup.ItemInput class="peer" />
-											<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition not-data-checked:ring-offset-1 not-data-checked:ring-offset-gray-200 not-data-checked:hover:ring-1 not-data-checked:hover:ring-gray-400 data-checked:ring-2 data-checked:ring-gray-500 data-checked:ring-offset-2 data-checked:ring-offset-gray-200">
-												<img
-													src={photo.thumbnailUrl}
-													loading="eager"
-													class="object-cover w-full h-full"
-													alt="Wallpaper option"
-												/>
-											</KRadioGroup.ItemControl>
-										</KRadioGroup.Item>
-									)}
-								</For>
-								<Collapsible class="col-span-7">
-									<Collapsible.Content class="animate-in slide-in-from-top-2 fade-in">
-										<div class="grid grid-cols-7 gap-2">
-											<For each={filteredWallpapers()}>
-												{(photo) => (
-													<KRadioGroup.Item
-														value={photo.url}
-														class="relative aspect-square group"
-													>
-														<KRadioGroup.ItemInput class="peer" />
-														<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg border border-gray-5 data-checked:border-blue-9 data-checked:ring-2 data-checked:ring-blue-9 peer-focus-visible:border-2 peer-focus-visible:border-blue-9">
-															<img
-																src={photo.thumbnailUrl}
-																alt="Wallpaper option"
-																class="object-cover w-full h-full"
-																loading="lazy"
-															/>
-														</KRadioGroup.ItemControl>
-													</KRadioGroup.Item>
-												)}
-											</For>
-										</div>
-									</Collapsible.Content>
-								</Collapsible>
-							</Show>
-						</KRadioGroup>
-					</KTabs.Content>
-					<KTabs.Content value="image">
-						<Show
-							when={
-								project.background.source.type === "image" &&
-								project.background.source.path
-							}
-							fallback={
-								<button
-									type="button"
-									onClick={() => fileInput.click()}
-									class="p-6 bg-gray-2 text-[13px] w-full rounded-lg border border-gray-5 border-dashed flex flex-col items-center justify-center gap-2 hover:bg-gray-3 transition-colors duration-100"
-								>
-									<IconCapImage class="text-gray-11 size-6" />
-									<span class="text-gray-12">
-										Click to select or drag and drop image
-									</span>
-								</button>
-							}
-						>
-							{(source) => (
-								<div class="overflow-hidden relative w-full h-48 rounded-md border border-gray-3 group">
-									<img
-										src={convertFileSrc(source())}
-										class="object-cover w-full h-full"
-										alt="Selected background"
-									/>
-									<div class="absolute top-2 right-2">
+								{(photo) => (
+									<div class="flex flex-col gap-3">
 										<button
 											type="button"
-											onClick={() =>
-												setProject("background", "source", {
-													type: "image",
-													path: null,
-												})
-											}
-											class="p-2 text-white rounded-full transition-colors bg-black/50 hover:bg-black/70"
+											onClick={() => {
+												setWallpaperSource(photo().rawPath);
+												ensureBackgroundPresentation();
+											}}
+											class={cx(
+												"overflow-hidden relative w-full h-48 rounded-lg border transition group",
+												project.background.source.type === "wallpaper" &&
+													project.background.source.path === photo().rawPath
+													? "border-blue-9 ring-2 ring-blue-9"
+													: "border-gray-5 hover:border-gray-7",
+											)}
 										>
-											<IconCapCircleX class="w-4 h-4" />
+											<img
+												src={photo().url}
+												loading="eager"
+												class="object-cover w-full h-full"
+												alt={
+													photo().label ?? getCurrentDesktopBackgroundLabel()
+												}
+											/>
+											<span class="flex absolute right-2 bottom-2 justify-center items-center w-7 h-7 rounded-full text-white/95 bg-black/55 backdrop-blur-sm">
+												<IconLucideMonitor class="size-4" />
+											</span>
 										</button>
+										<div class="flex justify-end">
+											<EditorButton
+												onClick={importDesktopBackground}
+												disabled={importingDesktopBackground()}
+												leftIcon={<IconLucideMonitor />}
+											>
+												{importingDesktopBackground()
+													? "Importing..."
+													: "Re-import"}
+											</EditorButton>
+										</div>
 									</div>
-								</div>
-							)}
-						</Show>
-						<input
-							type="file"
-							ref={fileInput}
-							class="hidden"
-							accept={BACKGROUND_IMAGE_ACCEPT}
-							onChange={async (e) => {
-								const file = e.currentTarget.files?.[0];
-								if (!file) return;
+								)}
+							</Show>
+						</KTabs.Content>
+						<KTabs.Content value="wallpaper">
+							{/** Background Tabs */}
+							<KTabs class="overflow-hidden relative" value={backgroundTab()}>
+								<KTabs.List
+									ref={setBackgroundRef}
+									class="flex overflow-x-auto overscroll-contain relative z-10 flex-row gap-2 items-center mb-3 text-xs hide-scroll"
+									style={{
+										"-webkit-mask-image": `linear-gradient(to right, transparent, black ${
+											scrollX() > 0 ? "24px" : "0"
+										}, black calc(100% - ${
+											reachedEndOfScroll() ? "0px" : "24px"
+										}), transparent)`,
 
-								const extension = getValidBackgroundImageExtension(file);
-								if (!extension) {
-									toast.error("Invalid image file type");
-									return;
-								}
-
-								try {
-									const fileName = `bg-${Date.now()}-${file.name}`;
-									const arrayBuffer = await file.arrayBuffer();
-									const uint8Array = new Uint8Array(arrayBuffer);
-
-									const fullPath = `${await appDataDir()}/${fileName}`;
-
-									await writeFile(fileName, uint8Array, {
-										baseDir: BaseDirectory.AppData,
-									});
-
-									setProject("background", "source", {
-										type: "image",
-										path: fullPath,
-									});
-								} catch (_err) {
-									toast.error("Failed to save image");
-								}
-							}}
-						/>
-					</KTabs.Content>
-					<KTabs.Content value="color">
-						<Show
-							when={
-								project.background.source.type === "color" &&
-								project.background.source
-							}
-						>
-							<div class="flex flex-col flex-wrap gap-3">
-								<div class="flex flex-col gap-2">
-									<RgbInput
-										value={
-											project.background.source.type === "color"
-												? project.background.source.value
-												: [0, 0, 0]
-										}
-										onChange={(value) => {
-											setProject("background", "source", {
-												type: "color",
-												value,
-											});
-										}}
-									/>
-									<BrandColorsDropdown
-										swatches={props.brandColorSwatches}
-										onSelect={setColorBackgroundSource}
-									/>
-								</div>
-
-								<div class="flex flex-wrap gap-2">
-									<For each={BACKGROUND_COLORS}>
-										{(color) => (
-											<label class="relative">
-												<input
-													type="radio"
-													class="sr-only peer"
-													name="colorPicker"
-													onChange={(e) => {
-														if (!e.target.checked) return;
-
-														const rgbValue = hexToRgb(color);
-														if (!rgbValue) return;
-
-														const [r, g, b, a] = rgbValue;
-														colorBackground = {
-															type: "color",
-															value: [r, g, b],
-															alpha: a,
-														};
-
-														setProject("background", "source", colorBackground);
-													}}
-												/>
-												<div
-													class="rounded-lg transition-all duration-200 size-8 hover:peer-checked:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
-													style={{
-														background:
-															color === "#00000000"
-																? CHECKERED_BUTTON_BACKGROUND
-																: color,
-													}}
-												/>
-											</label>
+										"mask-image": `linear-gradient(to right, transparent, black ${
+											scrollX() > 0 ? "24px" : "0"
+										}, black calc(100% - ${
+											reachedEndOfScroll() ? "0px" : "24px"
+										}), transparent);`,
+									}}
+								>
+									<For each={Object.entries(BACKGROUND_THEMES)}>
+										{([key, value]) => (
+											<>
+												<KTabs.Trigger
+													onClick={() =>
+														setBackgroundTab(
+															key as keyof typeof BACKGROUND_THEMES,
+														)
+													}
+													value={key}
+													class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 bg-transparent rounded-lg border transition-colors duration-200 text-gray-11 not-data-selected:hover:border-gray-7 data-selected:bg-gray-3 data-selected:border-gray-3 group data-selected:text-gray-12 disabled:opacity-50 focus:outline-hidden"
+												>
+													{value}
+												</KTabs.Trigger>
+											</>
 										)}
 									</For>
-								</div>
-								{/* <Tooltip content="Add custom color">
+								</KTabs.List>
+							</KTabs>
+							{/** End of Background Tabs */}
+							<KRadioGroup
+								value={
+									project.background.source.type === "wallpaper"
+										? (selectedWallpaper()?.url ?? undefined)
+										: undefined
+								}
+								onChange={(photoUrl) => {
+									try {
+										const wallpaper = wallpaperOptions().find(
+											(w) => w.url === photoUrl,
+										);
+										if (!wallpaper) return;
+
+										// Get the raw path without any URL prefixes
+
+										setWallpaperSource(wallpaper.rawPath);
+
+										ensureBackgroundPresentation();
+									} catch (_err) {
+										toast.error("Failed to set wallpaper");
+									}
+								}}
+								class="grid grid-cols-7 gap-2 h-auto"
+							>
+								<Show
+									when={!wallpapers.loading}
+									fallback={
+										<div class="flex col-span-7 justify-center items-center h-32 text-gray-11">
+											<div class="flex flex-col gap-2 items-center">
+												<div class="w-6 h-6 rounded-full border-2 animate-spin border-gray-5 border-t-blue-400" />
+												<span>Loading wallpapers...</span>
+											</div>
+										</div>
+									}
+								>
+									<For each={filteredWallpapers().slice(0, 21)}>
+										{(photo) => (
+											<KRadioGroup.Item
+												value={photo.url}
+												class="relative aspect-square group"
+											>
+												<KRadioGroup.ItemInput class="peer" />
+												<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition not-data-checked:ring-offset-1 not-data-checked:ring-offset-gray-200 not-data-checked:hover:ring-1 not-data-checked:hover:ring-gray-400 data-checked:ring-2 data-checked:ring-gray-500 data-checked:ring-offset-2 data-checked:ring-offset-gray-200">
+													<img
+														src={photo.thumbnailUrl}
+														loading="eager"
+														class="object-cover w-full h-full"
+														alt="Wallpaper option"
+													/>
+												</KRadioGroup.ItemControl>
+											</KRadioGroup.Item>
+										)}
+									</For>
+									<Collapsible class="col-span-7">
+										<Collapsible.Content class="animate-in slide-in-from-top-2 fade-in">
+											<div class="grid grid-cols-7 gap-2">
+												<For each={filteredWallpapers()}>
+													{(photo) => (
+														<KRadioGroup.Item
+															value={photo.url}
+															class="relative aspect-square group"
+														>
+															<KRadioGroup.ItemInput class="peer" />
+															<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg border border-gray-5 data-checked:border-blue-9 data-checked:ring-2 data-checked:ring-blue-9 peer-focus-visible:border-2 peer-focus-visible:border-blue-9">
+																<img
+																	src={photo.thumbnailUrl}
+																	alt="Wallpaper option"
+																	class="object-cover w-full h-full"
+																	loading="lazy"
+																/>
+															</KRadioGroup.ItemControl>
+														</KRadioGroup.Item>
+													)}
+												</For>
+											</div>
+										</Collapsible.Content>
+									</Collapsible>
+								</Show>
+							</KRadioGroup>
+						</KTabs.Content>
+						<KTabs.Content value="image">
+							<Show
+								when={
+									project.background.source.type === "image" &&
+									project.background.source.path
+								}
+								fallback={
+									<button
+										type="button"
+										onClick={() => fileInput.click()}
+										class="p-6 bg-gray-2 text-[13px] w-full rounded-lg border border-gray-5 border-dashed flex flex-col items-center justify-center gap-2 hover:bg-gray-3 transition-colors duration-100"
+									>
+										<IconCapImage class="text-gray-11 size-6" />
+										<span class="text-gray-12">
+											Click to select or drag and drop image
+										</span>
+									</button>
+								}
+							>
+								{(source) => (
+									<div class="overflow-hidden relative w-full h-48 rounded-md border border-gray-3 group">
+										<img
+											src={convertFileSrc(source())}
+											class="object-cover w-full h-full"
+											alt="Selected background"
+										/>
+										<div class="absolute top-2 right-2">
+											<button
+												type="button"
+												onClick={() =>
+													setProject("background", "source", {
+														type: "image",
+														path: null,
+													})
+												}
+												class="p-2 text-white rounded-full transition-colors bg-black/50 hover:bg-black/70"
+											>
+												<IconCapCircleX class="w-4 h-4" />
+											</button>
+										</div>
+									</div>
+								)}
+							</Show>
+							<input
+								type="file"
+								ref={fileInput}
+								class="hidden"
+								accept={BACKGROUND_IMAGE_ACCEPT}
+								onChange={async (e) => {
+									const file = e.currentTarget.files?.[0];
+									if (!file) return;
+
+									const extension = getValidBackgroundImageExtension(file);
+									if (!extension) {
+										toast.error("Invalid image file type");
+										return;
+									}
+
+									try {
+										const fileName = `bg-${Date.now()}-${file.name}`;
+										const arrayBuffer = await file.arrayBuffer();
+										const uint8Array = new Uint8Array(arrayBuffer);
+
+										const fullPath = `${await appDataDir()}/${fileName}`;
+
+										await writeFile(fileName, uint8Array, {
+											baseDir: BaseDirectory.AppData,
+										});
+
+										setProject("background", "source", {
+											type: "image",
+											path: fullPath,
+										});
+									} catch (_err) {
+										toast.error("Failed to save image");
+									}
+								}}
+							/>
+						</KTabs.Content>
+						<KTabs.Content value="color">
+							<Show
+								when={
+									project.background.source.type === "color" &&
+									project.background.source
+								}
+							>
+								<div class="flex flex-col flex-wrap gap-3">
+									<div class="flex flex-col gap-2">
+										<RgbInput
+											value={
+												project.background.source.type === "color"
+													? project.background.source.value
+													: [0, 0, 0]
+											}
+											onChange={(value) => {
+												setProject("background", "source", {
+													type: "color",
+													value,
+												});
+											}}
+										/>
+										<BrandColorsDropdown
+											swatches={props.brandColorSwatches}
+											onSelect={setColorBackgroundSource}
+										/>
+									</div>
+
+									<div class="flex flex-wrap gap-2">
+										<For each={BACKGROUND_COLORS}>
+											{(color) => (
+												<label class="relative">
+													<input
+														type="radio"
+														class="sr-only peer"
+														name="colorPicker"
+														onChange={(e) => {
+															if (!e.target.checked) return;
+
+															const rgbValue = hexToRgb(color);
+															if (!rgbValue) return;
+
+															const [r, g, b, a] = rgbValue;
+															colorBackground = {
+																type: "color",
+																value: [r, g, b],
+																alpha: a,
+															};
+
+															setProject(
+																"background",
+																"source",
+																colorBackground,
+															);
+														}}
+													/>
+													<div
+														class="rounded-lg transition-all duration-200 size-8 hover:peer-checked:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
+														style={{
+															background:
+																color === "#00000000"
+																	? CHECKERED_BUTTON_BACKGROUND
+																	: color,
+														}}
+													/>
+												</label>
+											)}
+										</For>
+									</div>
+									{/* <Tooltip content="Add custom color">
                       <button
                         class="flex justify-center items-center w-6 h-6 rounded-lg border border-gray-400 border-dashed text-gray-12 hover:border-gray-500"
                         onClick={() => {
@@ -2723,154 +2795,140 @@ function BackgroundConfig(props: {
                         +
                       </button>
                     </Tooltip> */}
-							</div>
-						</Show>
-					</KTabs.Content>
-					<KTabs.Content value="gradient">
-						<GradientEditor brandColorSwatches={props.brandColorSwatches} />
-					</KTabs.Content>
-					<KTabs.Content value="animatedGradient">
-						<AnimatedGradientEditor
-							brandColorSwatches={props.brandColorSwatches}
-						/>
-					</KTabs.Content>
-				</KTabs>
-			</Field>
+								</div>
+							</Show>
+						</KTabs.Content>
+						<KTabs.Content value="gradient">
+							<GradientEditor brandColorSwatches={props.brandColorSwatches} />
+						</KTabs.Content>
+						<KTabs.Content value="animatedGradient">
+							<AnimatedGradientEditor
+								brandColorSwatches={props.brandColorSwatches}
+							/>
+						</KTabs.Content>
+					</KTabs>
+				</Field>
 
-			<Field name="Background Blur" icon={<IconCapBgBlur />}>
-				<Slider
-					value={[project.background.blur]}
-					onChange={(v) => setProject("background", "blur", v[0])}
-					minValue={0}
-					maxValue={100}
-					step={0.1}
-					formatTooltip="%"
-				/>
-			</Field>
-			{/** Dashed divider */}
-			<div class="w-full border-t border-gray-300 border-dashed" />
-			<Field name="Padding" icon={<IconCapPadding class="size-4" />}>
-				<Slider
-					value={[project.background.padding]}
-					onChange={(v) => setBackgroundDimension("padding", v[0])}
-					minValue={0}
-					maxValue={40}
-					step={0.1}
-					formatTooltip="%"
-				/>
-				<Show when={project.background.displayPosition}>
-					<div class="flex justify-between items-center mt-3">
-						<span class="text-xs text-gray-11">
-							Custom screen position (dragged on canvas)
-						</span>
-						<EditorButton
-							onClick={() => setProject("background", "displayPosition", null)}
-						>
-							Reset
-						</EditorButton>
-					</div>
-				</Show>
-			</Field>
-			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
-				<div class="flex flex-col gap-3">
+				<Field name="Background Blur" icon={<IconCapBgBlur />}>
 					<Slider
-						value={[project.background.rounding]}
-						onChange={(v) => setBackgroundDimension("rounding", v[0])}
+						value={[project.background.blur]}
+						onChange={(v) => setProject("background", "blur", v[0])}
 						minValue={0}
 						maxValue={100}
 						step={0.1}
 						formatTooltip="%"
 					/>
-					<CornerStyleSelect
-						label="Corner Style"
-						value={project.background.roundingType}
-						onChange={(value) =>
-							setProject("background", "roundingType", value)
-						}
+				</Field>
+				{/** Dashed divider */}
+				<div class="w-full border-t border-gray-300 border-dashed" />
+				<Field name="Padding" icon={<IconCapPadding class="size-4" />}>
+					<Slider
+						value={[project.background.padding]}
+						onChange={(v) => setBackgroundDimension("padding", v[0])}
+						minValue={0}
+						maxValue={40}
+						step={0.1}
+						formatTooltip="%"
 					/>
-				</div>
-			</Field>
-			<Field name="Motion Blur" icon={<IconLucideWind class="size-4" />}>
-				<Slider
-					value={[
-						project.screenMotionBlur ??
-							project.cursor.motionBlur ??
-							DEFAULT_MOTION_BLUR,
-					]}
-					onChange={(v) => {
-						const value = v[0] ?? 0;
-						batch(() => {
-							setProject("cursor", "motionBlur", value);
-							setProject("screenMotionBlur", value);
-						});
-					}}
-					minValue={0}
-					maxValue={1}
-					step={0.01}
-					formatTooltip={(value) => `${Math.round(value * 100)}%`}
-				/>
-			</Field>
-			<Field
-				name="Border"
-				icon={<IconCapSettings class="size-4" />}
-				value={
-					<Toggle
-						checked={project.background.border?.enabled ?? false}
-						onChange={(enabled) => {
-							const prev = project.background.border ?? {
-								enabled: false,
-								width: 5.0,
-								color: [0, 0, 0],
-								opacity: 50.0,
-							};
-
-							if (props.scrollRef && enabled) {
-								setTimeout(
-									() =>
-										props.scrollRef.scrollTo({
-											top: props.scrollRef.scrollHeight,
-											behavior: "smooth",
-										}),
-									100,
-								);
-							}
-
-							setProject("background", "border", {
-								...prev,
-								enabled,
-							});
-						}}
-					/>
-				}
-			/>
-			<KCollapsible open={project.background.border?.enabled ?? false}>
-				<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
-					<div class="flex flex-col gap-6 pb-6">
-						<Field name="Border Width" icon={<IconCapEnlarge class="size-4" />}>
-							<Slider
-								value={[project.background.border?.width ?? 5.0]}
-								onChange={(v) =>
-									setProject("background", "border", {
-										...(project.background.border ?? {
-											enabled: true,
-											width: 5.0,
-											color: [0, 0, 0],
-											opacity: 50.0,
-										}),
-										width: v[0],
-									})
+					<Show when={project.background.displayPosition}>
+						<div class="flex justify-between items-center mt-3">
+							<span class="text-xs text-gray-11">
+								Custom screen position (dragged on canvas)
+							</span>
+							<EditorButton
+								onClick={() =>
+									setProject("background", "displayPosition", null)
 								}
-								minValue={1}
-								maxValue={20}
-								step={0.1}
-								formatTooltip="px"
-							/>
-						</Field>
-						<Field name="Border Color" icon={<IconCapImage class="size-4" />}>
-							<div class="flex flex-col gap-2">
-								<RgbInput
-									value={project.background.border?.color ?? [0, 0, 0]}
-									onChange={(color) =>
+							>
+								Reset
+							</EditorButton>
+						</div>
+					</Show>
+				</Field>
+				<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
+					<div class="flex flex-col gap-3">
+						<Slider
+							value={[project.background.rounding]}
+							onChange={(v) => setBackgroundDimension("rounding", v[0])}
+							minValue={0}
+							maxValue={100}
+							step={0.1}
+							formatTooltip="%"
+						/>
+						<CornerStyleSelect
+							label="Corner Style"
+							value={project.background.roundingType}
+							onChange={(value) =>
+								setProject("background", "roundingType", value)
+							}
+						/>
+					</div>
+				</Field>
+				<Show when={!selectedStyle()}>
+					<Field name="Motion Blur" icon={<IconLucideWind class="size-4" />}>
+						<Slider
+							value={[
+								project.screenMotionBlur ??
+									project.cursor.motionBlur ??
+									DEFAULT_MOTION_BLUR,
+							]}
+							onChange={(v) => {
+								const value = v[0] ?? 0;
+								batch(() => {
+									setProject("cursor", "motionBlur", value);
+									setProject("screenMotionBlur", value);
+								});
+							}}
+							minValue={0}
+							maxValue={1}
+							step={0.01}
+							formatTooltip={(value) => `${Math.round(value * 100)}%`}
+						/>
+					</Field>
+				</Show>
+				<Field
+					name="Border"
+					icon={<IconCapSettings class="size-4" />}
+					value={
+						<Toggle
+							checked={project.background.border?.enabled ?? false}
+							onChange={(enabled) => {
+								const prev = project.background.border ?? {
+									enabled: false,
+									width: 5.0,
+									color: [0, 0, 0],
+									opacity: 50.0,
+								};
+
+								if (props.scrollRef && enabled) {
+									setTimeout(
+										() =>
+											props.scrollRef.scrollTo({
+												top: props.scrollRef.scrollHeight,
+												behavior: "smooth",
+											}),
+										100,
+									);
+								}
+
+								setProject("background", "border", {
+									...prev,
+									enabled,
+								});
+							}}
+						/>
+					}
+				/>
+				<KCollapsible open={project.background.border?.enabled ?? false}>
+					<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
+						<div class="flex flex-col gap-6 pb-6">
+							<Field
+								name="Border Width"
+								icon={<IconCapEnlarge class="size-4" />}
+							>
+								<Slider
+									value={[project.background.border?.width ?? 5.0]}
+									onChange={(v) =>
 										setProject("background", "border", {
 											...(project.background.border ?? {
 												enabled: true,
@@ -2878,194 +2936,217 @@ function BackgroundConfig(props: {
 												color: [0, 0, 0],
 												opacity: 50.0,
 											}),
-											color,
+											width: v[0],
 										})
 									}
+									minValue={1}
+									maxValue={20}
+									step={0.1}
+									formatTooltip="px"
 								/>
-								<BrandColorsDropdown
-									swatches={props.brandColorSwatches}
-									onSelect={setBackgroundBorderColor}
-								/>
-							</div>
-						</Field>
-						<Field
-							name="Border Opacity"
-							icon={<IconCapShadow class="size-4" />}
-						>
-							<Slider
-								value={[project.background.border?.opacity ?? 50.0]}
-								onChange={(v) =>
-									setProject("background", "border", {
-										...(project.background.border ?? {
-											enabled: true,
-											width: 5.0,
-											color: [0, 0, 0],
-											opacity: 50.0,
-										}),
-										opacity: v[0],
-									})
-								}
-								minValue={0}
-								maxValue={100}
-								step={0.1}
-								formatTooltip="%"
-							/>
-						</Field>
-					</div>
-				</KCollapsible.Content>
-			</KCollapsible>
-			<Field
-				name="MacBook notch"
-				icon={<IconLucideLaptop class="size-4" />}
-				value={
-					<Toggle
-						checked={project.background.notch?.enabled ?? false}
-						onChange={(enabled) =>
-							setProject("background", "notch", {
-								...(project.background.notch ?? UNPLACED_NOTCH),
-								enabled,
-							})
-						}
-					/>
-				}
-			/>
-			<KCollapsible open={project.background.notch?.enabled ?? false}>
-				<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
-					<div class="flex flex-col gap-6 pb-6">
-						<p class="text-xs text-gray-11">
-							Draws a MacBook notch over the recording. Recordings made on a Mac
-							with a notch use their own measurements; otherwise start from the
-							size below and adjust to match.
-						</p>
-						<For
-							each={
-								[
-									{ key: "width", name: "Notch Width", max: 0.4 },
-									{ key: "height", name: "Notch Height", max: 0.15 },
-									{ key: "x", name: "Notch Position", max: 1 },
-								] as const
-							}
-						>
-							{(field) => (
-								<Field
-									name={field.name}
-									icon={<IconCapEnlarge class="size-4" />}
-								>
-									<Slider
-										value={[
-											field.key === "x"
-												? Math.min(
-														project.background.notch?.x ??
-															editorInstance.notchBase.x,
-														notchXMax(),
-													)
-												: (project.background.notch?.[field.key] ??
-													editorInstance.notchBase[field.key]),
-										]}
-										onChange={(v) => {
-											const base = editorInstance.notchBase;
-											const prev = project.background.notch ?? UNPLACED_NOTCH;
-											const next: NotchConfiguration = {
-												...prev,
-												enabled: true,
-											};
-											if (field.key === "x") {
-												next.x = Math.min(v[0], notchXMax());
-											} else {
-												next[field.key] = v[0];
-											}
-
-											if (field.key === "width") {
-												// Resize about the centre rather than dragging the
-												// left edge along with the width.
-												const centre =
-													(prev.x ?? base.x) + (prev.width ?? base.width) / 2;
-												next.x = Math.min(
-													Math.max(centre - v[0] / 2, 0),
-													1 - v[0],
-												);
-											}
-
-											setProject("background", "notch", next);
-										}}
-										minValue={0}
-										maxValue={field.key === "x" ? notchXMax() : field.max}
-										step={0.001}
-										formatTooltip={(value) => `${(value * 100).toFixed(1)}%`}
+							</Field>
+							<Field name="Border Color" icon={<IconCapImage class="size-4" />}>
+								<div class="flex flex-col gap-2">
+									<RgbInput
+										value={project.background.border?.color ?? [0, 0, 0]}
+										onChange={(color) =>
+											setProject("background", "border", {
+												...(project.background.border ?? {
+													enabled: true,
+													width: 5.0,
+													color: [0, 0, 0],
+													opacity: 50.0,
+												}),
+												color,
+											})
+										}
 									/>
-								</Field>
-							)}
-						</For>
-					</div>
-				</KCollapsible.Content>
-			</KCollapsible>
-			<Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
-				<Slider
-					value={[project.background.shadow ?? 0]}
-					onChange={(v) => {
-						batch(() => {
-							setProject("background", "shadow", v[0]);
-							// Initialize advanced shadow settings if they don't exist and shadow is enabled
-							if (v[0] > 0 && !project.background.advancedShadow) {
-								setProject("background", "advancedShadow", {
-									size: 50,
-									opacity: 18,
-									blur: 50,
-								});
+									<BrandColorsDropdown
+										swatches={props.brandColorSwatches}
+										onSelect={setBackgroundBorderColor}
+									/>
+								</div>
+							</Field>
+							<Field
+								name="Border Opacity"
+								icon={<IconCapShadow class="size-4" />}
+							>
+								<Slider
+									value={[project.background.border?.opacity ?? 50.0]}
+									onChange={(v) =>
+										setProject("background", "border", {
+											...(project.background.border ?? {
+												enabled: true,
+												width: 5.0,
+												color: [0, 0, 0],
+												opacity: 50.0,
+											}),
+											opacity: v[0],
+										})
+									}
+									minValue={0}
+									maxValue={100}
+									step={0.1}
+									formatTooltip="%"
+								/>
+							</Field>
+						</div>
+					</KCollapsible.Content>
+				</KCollapsible>
+				<Field
+					name="MacBook notch"
+					icon={<IconLucideLaptop class="size-4" />}
+					value={
+						<Toggle
+							checked={project.background.notch?.enabled ?? false}
+							onChange={(enabled) =>
+								setProject("background", "notch", {
+									...(project.background.notch ?? UNPLACED_NOTCH),
+									enabled,
+								})
 							}
-						});
-					}}
-					minValue={0}
-					maxValue={100}
-					step={0.1}
-					formatTooltip="%"
+						/>
+					}
 				/>
+				<KCollapsible open={project.background.notch?.enabled ?? false}>
+					<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
+						<div class="flex flex-col gap-6 pb-6">
+							<p class="text-xs text-gray-11">
+								Draws a MacBook notch over the recording. Recordings made on a
+								Mac with a notch use their own measurements; otherwise start
+								from the size below and adjust to match.
+							</p>
+							<For
+								each={
+									[
+										{ key: "width", name: "Notch Width", max: 0.4 },
+										{ key: "height", name: "Notch Height", max: 0.15 },
+										{ key: "x", name: "Notch Position", max: 1 },
+									] as const
+								}
+							>
+								{(field) => (
+									<Field
+										name={field.name}
+										icon={<IconCapEnlarge class="size-4" />}
+									>
+										<Slider
+											value={[
+												field.key === "x"
+													? Math.min(
+															project.background.notch?.x ??
+																editorInstance.notchBase.x,
+															notchXMax(),
+														)
+													: (project.background.notch?.[field.key] ??
+														editorInstance.notchBase[field.key]),
+											]}
+											onChange={(v) => {
+												const base = editorInstance.notchBase;
+												const prev = project.background.notch ?? UNPLACED_NOTCH;
+												const next: NotchConfiguration = {
+													...prev,
+													enabled: true,
+												};
+												if (field.key === "x") {
+													next.x = Math.min(v[0], notchXMax());
+												} else {
+													next[field.key] = v[0];
+												}
 
-				<ShadowSettings
-					scrollRef={props.scrollRef}
-					size={{
-						value: [project.background.advancedShadow?.size ?? 50],
-						onChange: (v) => {
-							setProject("background", "advancedShadow", {
-								...(project.background.advancedShadow ?? {
-									size: 50,
-									opacity: 18,
-									blur: 50,
-								}),
-								size: v[0],
+												if (field.key === "width") {
+													// Resize about the centre rather than dragging the
+													// left edge along with the width.
+													const centre =
+														(prev.x ?? base.x) + (prev.width ?? base.width) / 2;
+													next.x = Math.min(
+														Math.max(centre - v[0] / 2, 0),
+														1 - v[0],
+													);
+												}
+
+												setProject("background", "notch", next);
+											}}
+											minValue={0}
+											maxValue={field.key === "x" ? notchXMax() : field.max}
+											step={0.001}
+											formatTooltip={(value) => `${(value * 100).toFixed(1)}%`}
+										/>
+									</Field>
+								)}
+							</For>
+						</div>
+					</KCollapsible.Content>
+				</KCollapsible>
+				<Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
+					<Slider
+						value={[project.background.shadow ?? 0]}
+						onChange={(v) => {
+							batch(() => {
+								setProject("background", "shadow", v[0]);
+								// Initialize advanced shadow settings if they don't exist and shadow is enabled
+								if (v[0] > 0 && !project.background.advancedShadow) {
+									setProject("background", "advancedShadow", {
+										size: 50,
+										opacity: 18,
+										blur: 50,
+									});
+								}
 							});
-						},
-					}}
-					opacity={{
-						value: [project.background.advancedShadow?.opacity ?? 18],
-						onChange: (v) => {
-							setProject("background", "advancedShadow", {
-								...(project.background.advancedShadow ?? {
-									size: 50,
-									opacity: 18,
-									blur: 50,
-								}),
-								opacity: v[0],
-							});
-						},
-					}}
-					blur={{
-						value: [project.background.advancedShadow?.blur ?? 50],
-						onChange: (v) => {
-							setProject("background", "advancedShadow", {
-								...(project.background.advancedShadow ?? {
-									size: 50,
-									opacity: 18,
-									blur: 50,
-								}),
-								blur: v[0],
-							});
-						},
-					}}
-				/>
-			</Field>
-			<ColorCorrectionSection target="screen" scrollRef={props.scrollRef} />
-			{/* <ComingSoonTooltip>
+						}}
+						minValue={0}
+						maxValue={100}
+						step={0.1}
+						formatTooltip="%"
+					/>
+
+					<ShadowSettings
+						scrollRef={props.scrollRef}
+						size={{
+							value: [project.background.advancedShadow?.size ?? 50],
+							onChange: (v) => {
+								setProject("background", "advancedShadow", {
+									...(project.background.advancedShadow ?? {
+										size: 50,
+										opacity: 18,
+										blur: 50,
+									}),
+									size: v[0],
+								});
+							},
+						}}
+						opacity={{
+							value: [project.background.advancedShadow?.opacity ?? 18],
+							onChange: (v) => {
+								setProject("background", "advancedShadow", {
+									...(project.background.advancedShadow ?? {
+										size: 50,
+										opacity: 18,
+										blur: 50,
+									}),
+									opacity: v[0],
+								});
+							},
+						}}
+						blur={{
+							value: [project.background.advancedShadow?.blur ?? 50],
+							onChange: (v) => {
+								setProject("background", "advancedShadow", {
+									...(project.background.advancedShadow ?? {
+										size: 50,
+										opacity: 18,
+										blur: 50,
+									}),
+									blur: v[0],
+								});
+							},
+						}}
+					/>
+				</Field>
+				<Show when={!selectedStyle()}>
+					<ColorCorrectionSection target="screen" scrollRef={props.scrollRef} />
+				</Show>
+				{/* <ComingSoonTooltip>
             <Field name="Inset" icon={<IconCapInset />}>
               <Slider
                 disabled
@@ -3076,12 +3157,13 @@ function BackgroundConfig(props: {
               />
             </Field>
           </ComingSoonTooltip> */}
+			</Show>
 		</KTabs.Content>
 	);
 }
 
 function CameraConfig(props: { scrollRef: HTMLDivElement }) {
-	const { project, setProject } = useEditorContext();
+	const { project, setProject, selectedStyle } = useEditorContext();
 	// A camera dragged on the preview canvas has a manual position; none of
 	// the preset dots match until it is reset.
 	const cameraPositionValue = createMemo(() =>
@@ -3095,330 +3177,337 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 			value={TAB_IDS.camera}
 			class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 		>
-			<Field icon={<IconCapCamera class="size-4" />} name="Camera">
-				<div class="flex flex-col gap-6">
-					<div>
-						<Subfield name="Position" />
-						<KRadioGroup
-							value={cameraPositionValue()}
-							onChange={(v) => {
-								const [x, y] = v.split(":");
-								const xPosition = CAMERA_X_POSITIONS.find(
-									(position) => position === x,
-								);
-								const yPosition = CAMERA_Y_POSITIONS.find(
-									(position) => position === y,
-								);
-								if (!xPosition || !yPosition) return;
-								batch(() => {
-									setProject("camera", "position", {
-										x: xPosition,
-										y: yPosition,
-									});
-									setProject("camera", "manualPosition", null);
-								});
-							}}
-							class="mt-3 rounded-lg border border-gray-3 bg-gray-2 w-full h-30 relative"
-						>
-							<For
-								each={[
-									{ x: "left", y: "top" } as const,
-									{ x: "center", y: "top" } as const,
-									{ x: "right", y: "top" } as const,
-									{ x: "left", y: "bottom" } as const,
-									{ x: "center", y: "bottom" } as const,
-									{ x: "right", y: "bottom" } as const,
-								]}
-							>
-								{(item) => {
-									const itemValue = `${item.x}:${item.y}`;
-									const selected = () => cameraPositionValue() === itemValue;
-									return (
-										<RadioGroup.Item value={itemValue}>
-											<RadioGroup.ItemInput class="peer" />
-											<RadioGroup.ItemControl
-												class={cx(
-													"size-6 shrink-0 rounded-md absolute flex justify-center items-center focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-blue-9 focus-visible:outline-offset-2 peer-focus-visible:outline-solid peer-focus-visible:outline-2 peer-focus-visible:outline-blue-9 peer-focus-visible:outline-offset-2 transition-colors duration-100",
-													selected() ? "bg-blue-9" : "bg-gray-5",
-													item.x === "left"
-														? "left-2"
-														: item.x === "right"
-															? "right-2"
-															: "left-1/2 transform -translate-x-1/2",
-													item.y === "top" ? "top-2" : "bottom-2",
-												)}
-											>
-												<div class="size-2 shrink-0 bg-solid-white rounded-full" />
-											</RadioGroup.ItemControl>
-										</RadioGroup.Item>
+			<StyleGroupToggle group="camera" />
+			<Show
+				when={!selectedStyle() || selectedStyle()?.overrides.camera != null}
+			>
+				<Field icon={<IconCapCamera class="size-4" />} name="Camera">
+					<div class="flex flex-col gap-6">
+						<div>
+							<Subfield name="Position" />
+							<KRadioGroup
+								value={cameraPositionValue()}
+								onChange={(v) => {
+									const [x, y] = v.split(":");
+									const xPosition = CAMERA_X_POSITIONS.find(
+										(position) => position === x,
 									);
-								}}
-							</For>
-						</KRadioGroup>
-						<Show when={project.camera.manualPosition}>
-							<div class="flex justify-between items-center mt-3">
-								<span class="text-xs text-gray-11">
-									Custom position (dragged on canvas)
-								</span>
-								<EditorButton
-									onClick={() => setProject("camera", "manualPosition", null)}
-								>
-									Reset
-								</EditorButton>
-							</div>
-						</Show>
-					</div>
-					<Subfield name="Hide Camera">
-						<Toggle
-							checked={project.camera.hide}
-							onChange={(hide) => setProject("camera", "hide", hide)}
-						/>
-					</Subfield>
-					<Subfield name="Mirror Camera">
-						<Toggle
-							checked={project.camera.mirror}
-							onChange={(mirror) => setProject("camera", "mirror", mirror)}
-						/>
-					</Subfield>
-					<Subfield name="Background Blur">
-						<KSelect<{ name: string; value: BackgroundBlurMode }>
-							options={[
-								{ name: "Off", value: "off" },
-								{ name: "Light Blur", value: "light" },
-								{ name: "Heavy Blur", value: "heavy" },
-							]}
-							optionValue="value"
-							optionTextValue="name"
-							value={
-								(
-									[
-										{ name: "Off", value: "off" },
-										{ name: "Light Blur", value: "light" },
-										{ name: "Heavy Blur", value: "heavy" },
-									] as const
-								).find(
-									(v) =>
-										v.value === (project.camera.backgroundBlur?.mode ?? "off"),
-								) ?? { name: "Off", value: "off" }
-							}
-							onChange={(v) => {
-								if (v)
-									setProject("camera", "backgroundBlur", {
-										mode: v.value,
+									const yPosition = CAMERA_Y_POSITIONS.find(
+										(position) => position === y,
+									);
+									if (!xPosition || !yPosition) return;
+									batch(() => {
+										setProject("camera", "position", {
+											x: xPosition,
+											y: yPosition,
+										});
+										setProject("camera", "manualPosition", null);
 									});
-							}}
-							disallowEmptySelection
-							itemComponent={(props) => (
-								<MenuItem<typeof KSelect.Item>
-									as={KSelect.Item}
-									item={props.item}
+								}}
+								class="mt-3 rounded-lg border border-gray-3 bg-gray-2 w-full h-30 relative"
+							>
+								<For
+									each={[
+										{ x: "left", y: "top" } as const,
+										{ x: "center", y: "top" } as const,
+										{ x: "right", y: "top" } as const,
+										{ x: "left", y: "bottom" } as const,
+										{ x: "center", y: "bottom" } as const,
+										{ x: "right", y: "bottom" } as const,
+									]}
 								>
-									<KSelect.ItemLabel class="flex-1">
-										{props.item.rawValue.name}
-									</KSelect.ItemLabel>
-								</MenuItem>
-							)}
-						>
-							<KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
-								<KSelect.Value<{
-									name: string;
-									value: string;
-								}> class="flex-1 text-sm text-left truncate text-(--gray-500) font-normal">
-									{(state) => <span>{state.selectedOption().name}</span>}
-								</KSelect.Value>
-								<KSelect.Icon<ValidComponent>
-									as={(iconProps) => (
-										<IconCapChevronDown
-											{...iconProps}
-											class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)"
-										/>
-									)}
-								/>
-							</KSelect.Trigger>
-							<KSelect.Portal>
-								<PopperContent<typeof KSelect.Content>
-									as={KSelect.Content}
-									class={cx(topSlideAnimateClasses, "z-50")}
-								>
-									<MenuItemList<typeof KSelect.Listbox>
-										class="overflow-y-auto max-h-32"
-										as={KSelect.Listbox}
+									{(item) => {
+										const itemValue = `${item.x}:${item.y}`;
+										const selected = () => cameraPositionValue() === itemValue;
+										return (
+											<RadioGroup.Item value={itemValue}>
+												<RadioGroup.ItemInput class="peer" />
+												<RadioGroup.ItemControl
+													class={cx(
+														"size-6 shrink-0 rounded-md absolute flex justify-center items-center focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-blue-9 focus-visible:outline-offset-2 peer-focus-visible:outline-solid peer-focus-visible:outline-2 peer-focus-visible:outline-blue-9 peer-focus-visible:outline-offset-2 transition-colors duration-100",
+														selected() ? "bg-blue-9" : "bg-gray-5",
+														item.x === "left"
+															? "left-2"
+															: item.x === "right"
+																? "right-2"
+																: "left-1/2 transform -translate-x-1/2",
+														item.y === "top" ? "top-2" : "bottom-2",
+													)}
+												>
+													<div class="size-2 shrink-0 bg-solid-white rounded-full" />
+												</RadioGroup.ItemControl>
+											</RadioGroup.Item>
+										);
+									}}
+								</For>
+							</KRadioGroup>
+							<Show when={project.camera.manualPosition}>
+								<div class="flex justify-between items-center mt-3">
+									<span class="text-xs text-gray-11">
+										Custom position (dragged on canvas)
+									</span>
+									<EditorButton
+										onClick={() => setProject("camera", "manualPosition", null)}
+									>
+										Reset
+									</EditorButton>
+								</div>
+							</Show>
+						</div>
+						<Subfield name="Hide Camera">
+							<Toggle
+								checked={project.camera.hide}
+								onChange={(hide) => setProject("camera", "hide", hide)}
+							/>
+						</Subfield>
+						<Subfield name="Mirror Camera">
+							<Toggle
+								checked={project.camera.mirror}
+								onChange={(mirror) => setProject("camera", "mirror", mirror)}
+							/>
+						</Subfield>
+						<Subfield name="Background Blur">
+							<KSelect<{ name: string; value: BackgroundBlurMode }>
+								options={[
+									{ name: "Off", value: "off" },
+									{ name: "Light Blur", value: "light" },
+									{ name: "Heavy Blur", value: "heavy" },
+								]}
+								optionValue="value"
+								optionTextValue="name"
+								value={
+									(
+										[
+											{ name: "Off", value: "off" },
+											{ name: "Light Blur", value: "light" },
+											{ name: "Heavy Blur", value: "heavy" },
+										] as const
+									).find(
+										(v) =>
+											v.value ===
+											(project.camera.backgroundBlur?.mode ?? "off"),
+									) ?? { name: "Off", value: "off" }
+								}
+								onChange={(v) => {
+									if (v)
+										setProject("camera", "backgroundBlur", {
+											mode: v.value,
+										});
+								}}
+								disallowEmptySelection
+								itemComponent={(props) => (
+									<MenuItem<typeof KSelect.Item>
+										as={KSelect.Item}
+										item={props.item}
+									>
+										<KSelect.ItemLabel class="flex-1">
+											{props.item.rawValue.name}
+										</KSelect.ItemLabel>
+									</MenuItem>
+								)}
+							>
+								<KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
+									<KSelect.Value<{
+										name: string;
+										value: string;
+									}> class="flex-1 text-sm text-left truncate text-(--gray-500) font-normal">
+										{(state) => <span>{state.selectedOption().name}</span>}
+									</KSelect.Value>
+									<KSelect.Icon<ValidComponent>
+										as={(iconProps) => (
+											<IconCapChevronDown
+												{...iconProps}
+												class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)"
+											/>
+										)}
 									/>
-								</PopperContent>
-							</KSelect.Portal>
-						</KSelect>
-					</Subfield>
-					<Subfield name="Shape">
-						<KSelect<{ name: string; value: CameraShape }>
-							options={CAMERA_SHAPES}
-							optionValue="value"
-							optionTextValue="name"
-							value={CAMERA_SHAPES.find(
-								(v) => v.value === project.camera.shape,
-							)}
-							onChange={(v) => {
-								if (v) setProject("camera", "shape", v.value);
-							}}
-							disallowEmptySelection
-							itemComponent={(props) => (
-								<MenuItem<typeof KSelect.Item>
-									as={KSelect.Item}
-									item={props.item}
-								>
-									<KSelect.ItemLabel class="flex-1">
-										{props.item.rawValue.name}
-									</KSelect.ItemLabel>
-								</MenuItem>
-							)}
-						>
-							<KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
-								<KSelect.Value<{
-									name: string;
-									value: StereoMode;
-								}> class="flex-1 text-sm text-left truncate text-(--gray-500) font-normal">
-									{(state) => <span>{state.selectedOption().name}</span>}
-								</KSelect.Value>
-								<KSelect.Icon<ValidComponent>
-									as={(props) => (
-										<IconCapChevronDown
-											{...props}
-											class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)"
+								</KSelect.Trigger>
+								<KSelect.Portal>
+									<PopperContent<typeof KSelect.Content>
+										as={KSelect.Content}
+										class={cx(topSlideAnimateClasses, "z-50")}
+									>
+										<MenuItemList<typeof KSelect.Listbox>
+											class="overflow-y-auto max-h-32"
+											as={KSelect.Listbox}
 										/>
-									)}
-								/>
-							</KSelect.Trigger>
-							<KSelect.Portal>
-								<PopperContent<typeof KSelect.Content>
-									as={KSelect.Content}
-									class={cx(topSlideAnimateClasses, "z-50")}
-								>
-									<MenuItemList<typeof KSelect.Listbox>
-										class="overflow-y-auto max-h-32"
-										as={KSelect.Listbox}
+									</PopperContent>
+								</KSelect.Portal>
+							</KSelect>
+						</Subfield>
+						<Subfield name="Shape">
+							<KSelect<{ name: string; value: CameraShape }>
+								options={CAMERA_SHAPES}
+								optionValue="value"
+								optionTextValue="name"
+								value={CAMERA_SHAPES.find(
+									(v) => v.value === project.camera.shape,
+								)}
+								onChange={(v) => {
+									if (v) setProject("camera", "shape", v.value);
+								}}
+								disallowEmptySelection
+								itemComponent={(props) => (
+									<MenuItem<typeof KSelect.Item>
+										as={KSelect.Item}
+										item={props.item}
+									>
+										<KSelect.ItemLabel class="flex-1">
+											{props.item.rawValue.name}
+										</KSelect.ItemLabel>
+									</MenuItem>
+								)}
+							>
+								<KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
+									<KSelect.Value<{
+										name: string;
+										value: StereoMode;
+									}> class="flex-1 text-sm text-left truncate text-(--gray-500) font-normal">
+										{(state) => <span>{state.selectedOption().name}</span>}
+									</KSelect.Value>
+									<KSelect.Icon<ValidComponent>
+										as={(props) => (
+											<IconCapChevronDown
+												{...props}
+												class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)"
+											/>
+										)}
 									/>
-								</PopperContent>
-							</KSelect.Portal>
-						</KSelect>
-					</Subfield>
+								</KSelect.Trigger>
+								<KSelect.Portal>
+									<PopperContent<typeof KSelect.Content>
+										as={KSelect.Content}
+										class={cx(topSlideAnimateClasses, "z-50")}
+									>
+										<MenuItemList<typeof KSelect.Listbox>
+											class="overflow-y-auto max-h-32"
+											as={KSelect.Listbox}
+										/>
+									</PopperContent>
+								</KSelect.Portal>
+							</KSelect>
+						</Subfield>
 
-					{/* <Subfield name="Use Camera Aspect Ratio">
+						{/* <Subfield name="Use Camera Aspect Ratio">
             <Toggle
               checked={project.camera.use_camera_aspect}
               onChange={(v) => setProject("camera", "use_camera_aspect", v)}
             />
           </Subfield> */}
-				</div>
-			</Field>
-			{/** Dashed divider */}
-			<div class="w-full border-t border-dashed border-gray-5" />
-			<Field name="Size" icon={<IconCapEnlarge class="size-4" />}>
-				<Slider
-					value={[project.camera.size]}
-					onChange={(v) => setProject("camera", "size", v[0])}
-					minValue={20}
-					maxValue={80}
-					step={0.1}
-					formatTooltip="%"
-				/>
-			</Field>
-			<Field name="Size During Zoom" icon={<IconCapEnlarge class="size-4" />}>
-				<Slider
-					value={[project.camera.zoomSize ?? 60]}
-					onChange={(v) => setProject("camera", "zoomSize", v[0])}
-					minValue={10}
-					maxValue={60}
-					step={0.1}
-					formatTooltip="%"
-				/>
-			</Field>
-			<Subfield name="Keep original size during zoom">
-				<Toggle
-					checked={
-						(project.camera.scaleDuringZoom ??
-							DEFAULT_CAMERA_SCALE_DURING_ZOOM) >= 1
-					}
-					onChange={(keep) =>
-						setProject(
-							"camera",
-							"scaleDuringZoom",
-							keep ? 1 : DEFAULT_CAMERA_SCALE_DURING_ZOOM,
-						)
-					}
-				/>
-			</Subfield>
-			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
-				<div class="flex flex-col gap-3">
+					</div>
+				</Field>
+				{/** Dashed divider */}
+				<div class="w-full border-t border-dashed border-gray-5" />
+				<Field name="Size" icon={<IconCapEnlarge class="size-4" />}>
 					<Slider
-						value={[project.camera.rounding ?? 0]}
-						onChange={(v) => setProject("camera", "rounding", v[0])}
-						minValue={0}
-						maxValue={100}
+						value={[project.camera.size]}
+						onChange={(v) => setProject("camera", "size", v[0])}
+						minValue={20}
+						maxValue={80}
 						step={0.1}
 						formatTooltip="%"
 					/>
-					<CornerStyleSelect
-						label="Corner Style"
-						value={project.camera.roundingType}
-						onChange={(value) => setProject("camera", "roundingType", value)}
-					/>
-				</div>
-			</Field>
-			<Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
-				<div class="space-y-8">
+				</Field>
+				<Field name="Size During Zoom" icon={<IconCapEnlarge class="size-4" />}>
 					<Slider
-						value={[project.camera.shadow ?? 0]}
-						onChange={(v) => setProject("camera", "shadow", v[0])}
-						minValue={0}
-						maxValue={100}
+						value={[project.camera.zoomSize ?? 60]}
+						onChange={(v) => setProject("camera", "zoomSize", v[0])}
+						minValue={10}
+						maxValue={60}
 						step={0.1}
 						formatTooltip="%"
 					/>
-					<ShadowSettings
-						scrollRef={props.scrollRef}
-						size={{
-							value: [project.camera.advancedShadow?.size ?? 50],
-							onChange: (v) => {
-								setProject("camera", "advancedShadow", {
-									...(project.camera.advancedShadow ?? {
-										size: 50,
-										opacity: 18,
-										blur: 50,
-									}),
-									size: v[0],
-								});
-							},
-						}}
-						opacity={{
-							value: [project.camera.advancedShadow?.opacity ?? 18],
-							onChange: (v) => {
-								setProject("camera", "advancedShadow", {
-									...(project.camera.advancedShadow ?? {
-										size: 50,
-										opacity: 18,
-										blur: 50,
-									}),
-									opacity: v[0],
-								});
-							},
-						}}
-						blur={{
-							value: [project.camera.advancedShadow?.blur ?? 50],
-							onChange: (v) => {
-								setProject("camera", "advancedShadow", {
-									...(project.camera.advancedShadow ?? {
-										size: 50,
-										opacity: 18,
-										blur: 50,
-									}),
-									blur: v[0],
-								});
-							},
-						}}
+				</Field>
+				<Subfield name="Keep original size during zoom">
+					<Toggle
+						checked={
+							(project.camera.scaleDuringZoom ??
+								DEFAULT_CAMERA_SCALE_DURING_ZOOM) >= 1
+						}
+						onChange={(keep) =>
+							setProject(
+								"camera",
+								"scaleDuringZoom",
+								keep ? 1 : DEFAULT_CAMERA_SCALE_DURING_ZOOM,
+							)
+						}
 					/>
-				</div>
-			</Field>
-			<ColorCorrectionSection target="camera" scrollRef={props.scrollRef} />
-			{/* <ComingSoonTooltip>
+				</Subfield>
+				<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
+					<div class="flex flex-col gap-3">
+						<Slider
+							value={[project.camera.rounding ?? 0]}
+							onChange={(v) => setProject("camera", "rounding", v[0])}
+							minValue={0}
+							maxValue={100}
+							step={0.1}
+							formatTooltip="%"
+						/>
+						<CornerStyleSelect
+							label="Corner Style"
+							value={project.camera.roundingType}
+							onChange={(value) => setProject("camera", "roundingType", value)}
+						/>
+					</div>
+				</Field>
+				<Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
+					<div class="space-y-8">
+						<Slider
+							value={[project.camera.shadow ?? 0]}
+							onChange={(v) => setProject("camera", "shadow", v[0])}
+							minValue={0}
+							maxValue={100}
+							step={0.1}
+							formatTooltip="%"
+						/>
+						<ShadowSettings
+							scrollRef={props.scrollRef}
+							size={{
+								value: [project.camera.advancedShadow?.size ?? 50],
+								onChange: (v) => {
+									setProject("camera", "advancedShadow", {
+										...(project.camera.advancedShadow ?? {
+											size: 50,
+											opacity: 18,
+											blur: 50,
+										}),
+										size: v[0],
+									});
+								},
+							}}
+							opacity={{
+								value: [project.camera.advancedShadow?.opacity ?? 18],
+								onChange: (v) => {
+									setProject("camera", "advancedShadow", {
+										...(project.camera.advancedShadow ?? {
+											size: 50,
+											opacity: 18,
+											blur: 50,
+										}),
+										opacity: v[0],
+									});
+								},
+							}}
+							blur={{
+								value: [project.camera.advancedShadow?.blur ?? 50],
+								onChange: (v) => {
+									setProject("camera", "advancedShadow", {
+										...(project.camera.advancedShadow ?? {
+											size: 50,
+											opacity: 18,
+											blur: 50,
+										}),
+										blur: v[0],
+									});
+								},
+							}}
+						/>
+					</div>
+				</Field>
+				<Show when={!selectedStyle()}>
+					<ColorCorrectionSection target="camera" scrollRef={props.scrollRef} />
+				</Show>
+				{/* <ComingSoonTooltip>
             <Field name="Shadow" icon={<IconCapShadow />}>
               <Slider
                 disabled
@@ -3429,6 +3518,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
               />
             </Field>
           </ComingSoonTooltip> */}
+			</Show>
 		</KTabs.Content>
 	);
 }

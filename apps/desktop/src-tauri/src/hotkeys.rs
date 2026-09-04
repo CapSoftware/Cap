@@ -156,7 +156,27 @@ fn should_confirm_without_microphone(enabled: bool, microphone_available: bool) 
     enabled && !microphone_available
 }
 
-fn should_confirm_direct_recording(app: &AppHandle) -> bool {
+#[cfg(any(target_os = "macos", test))]
+fn microphone_available_for_confirmation(
+    name: Option<&str>,
+    permission: impl FnOnce() -> Result<(), String>,
+    contains: impl FnOnce(&str) -> bool,
+) -> Result<bool, String> {
+    let Some(name) = name else {
+        return Ok(false);
+    };
+    permission().map_err(|error| {
+        format!("{error} To record without a microphone, turn the microphone Off in Cap.")
+    })?;
+    if !contains(name) {
+        return Err(format!(
+            "Selected microphone '{name}' is no longer available. Reconnect it, select another microphone, or turn the microphone Off to record without it."
+        ));
+    }
+    Ok(true)
+}
+
+fn should_confirm_direct_recording(app: &AppHandle) -> Result<bool, String> {
     let enabled = app
         .store("store")
         .ok()
@@ -165,24 +185,49 @@ fn should_confirm_direct_recording(app: &AppHandle) -> bool {
         .unwrap_or_default()
         .confirm_before_recording_without_microphone;
 
+    #[cfg(not(target_os = "macos"))]
     if !enabled {
-        return false;
+        return Ok(false);
     }
 
     let microphone_name = RecordingSettingsStore::get(app)
         .ok()
         .flatten()
         .and_then(|settings| settings.mic_name);
+    #[cfg(target_os = "macos")]
+    let microphone_available = microphone_available_for_confirmation(
+        microphone_name.as_deref(),
+        crate::permissions::check_microphone_access,
+        |name| {
+            MicrophoneFeed::list_names()
+                .iter()
+                .any(|device| device == name)
+        },
+    )?;
+    #[cfg(not(target_os = "macos"))]
     let microphone_available = microphone_name
         .as_deref()
         .is_some_and(|name| MicrophoneFeed::list().contains_key(name));
 
-    should_confirm_without_microphone(enabled, microphone_available)
+    Ok(should_confirm_without_microphone(
+        enabled,
+        microphone_available,
+    ))
 }
 
 async fn confirm_direct_recording_without_microphone(app: &AppHandle) -> bool {
-    if !should_confirm_direct_recording(app) {
-        return true;
+    match should_confirm_direct_recording(app) {
+        Ok(false) => return true,
+        Ok(true) => {}
+        Err(message) => {
+            app.dialog()
+                .message(message)
+                .title("Microphone unavailable")
+                .kind(MessageDialogKind::Warning)
+                .buttons(MessageDialogButtons::Ok)
+                .show(|_| {});
+            return false;
+        }
     }
 
     let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -678,8 +723,52 @@ async fn run_wayland_tray(
 
 #[cfg(test)]
 mod tests {
-    use super::{should_confirm_without_microphone, spawn_shortcut_task};
+    use super::{
+        microphone_available_for_confirmation, should_confirm_without_microphone,
+        spawn_shortcut_task,
+    };
     use std::time::Duration;
+
+    #[test]
+    fn microphone_confirmation_does_not_probe_without_permission_or_selection() {
+        assert!(
+            microphone_available_for_confirmation(
+                Some("Saved microphone"),
+                || Err("Permission denied".into()),
+                |_| panic!("denied microphone must not be enumerated"),
+            )
+            .unwrap_err()
+            .contains("turn the microphone Off")
+        );
+        assert!(
+            !microphone_available_for_confirmation(
+                None,
+                || panic!("disabled microphone does not need permission"),
+                |_| panic!("disabled microphone must not be enumerated"),
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn microphone_confirmation_checks_only_the_requested_name_after_grant() {
+        assert!(
+            microphone_available_for_confirmation(
+                Some("Saved microphone"),
+                || Ok(()),
+                |name| name == "Saved microphone",
+            )
+            .unwrap()
+        );
+        let error = microphone_available_for_confirmation(
+            Some("Disconnected microphone"),
+            || Ok(()),
+            |_| false,
+        )
+        .unwrap_err();
+        assert!(error.contains("Reconnect it"));
+        assert!(error.contains("turn the microphone Off"));
+    }
 
     #[test]
     fn clean_capture_reuses_only_an_existing_stop_binding() {

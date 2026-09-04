@@ -214,6 +214,8 @@ export function TranscriptPanel() {
 					sceneSegments: [],
 					maskSegments: [],
 					textSegments: [],
+					styleSegments: [],
+					imageSegments: [],
 					captionSegments: [],
 					keyboardSegments: [],
 					camera3dSegments: [],
@@ -438,6 +440,7 @@ export function TranscriptPanel() {
 				}
 			}),
 		);
+		setEditorState("styleEditIndex", null);
 		setEditorState("timeline", "selection", null);
 
 		setEditorState("captions", "isStale", false);

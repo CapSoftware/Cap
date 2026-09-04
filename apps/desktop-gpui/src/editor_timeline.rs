@@ -648,6 +648,8 @@ pub fn waveform_system_color() -> Hsla {
 /// The nine rows, in the source order `TL/index.tsx:1334-1496` mounts them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackKind {
+    Style,
+    Image,
     Clip,
     Caption,
     Keyboard,
@@ -666,6 +668,8 @@ impl TrackKind {
             // The clip row's gutter label is "Video", not the definition's
             // "Clip" (`TL/index.tsx:1334`).
             Self::Clip => "Video",
+            Self::Style => "Style",
+            Self::Image => "Image",
             Self::Caption => "Captions",
             Self::Keyboard => "Keyboard",
             Self::Text => "Text",
@@ -680,6 +684,8 @@ impl TrackKind {
     pub fn icon(self) -> &'static str {
         match self {
             Self::Clip => "icons/clapperboard.svg",
+            Self::Style => "icons/palette.svg",
+            Self::Image => "icons/image.svg",
             Self::Caption => "icons/captions.svg",
             Self::Keyboard => "icons/keyboard.svg",
             Self::Text => "icons/type.svg",
@@ -694,6 +700,8 @@ impl TrackKind {
     pub fn color(self) -> Hsla {
         gpui::rgb(match self {
             Self::Clip => track_color::CLIP,
+            Self::Style => 0xa855f7,
+            Self::Image => 0xf59e0b,
             Self::Caption => track_color::CAPTION,
             Self::Keyboard => track_color::KEYBOARD,
             Self::Text => track_color::TEXT,
@@ -716,6 +724,8 @@ impl TrackKind {
     pub fn picker_description(self) -> &'static str {
         match self {
             Self::Clip => "Your recorded screen footage.",
+            Self::Style => "Change background, camera and cursor settings over time.",
+            Self::Image => "Add an image to your recording.",
             Self::Zoom => "Smooth zoom-ins that follow the action.",
             Self::Caption => "Auto-transcribe your recording into on-screen subtitles.",
             Self::Keyboard => "Display key presses on screen as you type.",
@@ -735,11 +745,16 @@ impl TrackKind {
     }
 
     pub fn supports_multiple(self) -> bool {
-        matches!(self, Self::Text | Self::Mask | Self::Audio)
+        matches!(
+            self,
+            Self::Text | Self::Mask | Self::Audio | Self::Style | Self::Image
+        )
     }
 }
 
 pub const ADD_TRACK_OPTIONS: &[TrackKind] = &[
+    TrackKind::Style,
+    TrackKind::Image,
     TrackKind::Caption,
     TrackKind::Keyboard,
     TrackKind::Text,
@@ -751,6 +766,8 @@ pub const ADD_TRACK_OPTIONS: &[TrackKind] = &[
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrackLanes {
+    pub style: u32,
+    pub image: u32,
     pub caption: bool,
     pub keyboard: bool,
     pub scene: bool,
@@ -760,10 +777,25 @@ pub struct TrackLanes {
     pub audio: u32,
 }
 
+pub(crate) fn scene_available(config: &ProjectConfiguration, has_camera: bool) -> bool {
+    has_camera
+        && (config.requires_camera()
+            || config
+                .timeline
+                .as_ref()
+                .is_some_and(|timeline| !timeline.scene_segments.is_empty()))
+}
+
 impl TrackLanes {
     pub fn from_project(config: &ProjectConfiguration, has_camera: bool) -> Self {
         let timeline = config.timeline.as_ref();
         Self {
+            style: timeline.map_or(0, |timeline| {
+                used_config_lane_count(timeline.style_segments.iter().map(|segment| segment.track))
+            }),
+            image: timeline.map_or(0, |timeline| {
+                used_config_lane_count(timeline.image_segments.iter().map(|segment| segment.track))
+            }),
             caption: config
                 .captions
                 .as_ref()
@@ -775,7 +807,7 @@ impl TrackLanes {
                 .keyboard
                 .as_ref()
                 .is_some_and(|keyboard| keyboard.settings.enabled),
-            scene: has_camera && !config.camera.hide,
+            scene: scene_available(config, has_camera),
             three_d: timeline.is_some_and(|timeline| !timeline.camera3d_segments.is_empty()),
             text: timeline.map_or(0, |timeline| {
                 used_config_lane_count(timeline.text_segments.iter().map(|segment| segment.track))
@@ -795,6 +827,8 @@ impl TrackLanes {
             TrackKind::Keyboard => self.keyboard,
             TrackKind::Scene => self.scene,
             TrackKind::ThreeD => self.three_d,
+            TrackKind::Style => self.style > 0,
+            TrackKind::Image => self.image > 0,
             TrackKind::Text => self.text > 0,
             TrackKind::Mask => self.mask > 0,
             TrackKind::Audio => self.audio > 0,
@@ -804,6 +838,8 @@ impl TrackLanes {
 
     pub fn count(self, kind: TrackKind) -> u32 {
         match kind {
+            TrackKind::Style => self.style,
+            TrackKind::Image => self.image,
             TrackKind::Text => self.text,
             TrackKind::Mask => self.mask,
             TrackKind::Audio => self.audio,
@@ -833,6 +869,14 @@ pub struct Segment {
 /// per segment per frame through the allocator for nothing.
 #[derive(Debug, Clone)]
 pub enum SegmentDetail {
+    Style {
+        name: SharedString,
+        enabled: bool,
+    },
+    Image {
+        name: SharedString,
+        enabled: bool,
+    },
     /// `TL/ClipTrack.tsx`. `start`/`end` above are the **output-time** box;
     /// these carry the recording-domain numbers the label reads.
     Clip {
@@ -852,11 +896,18 @@ pub enum SegmentDetail {
         holds: Arc<[(f64, f64)]>,
     },
     /// `TL/ZoomTrack.tsx:343-349`.
-    Zoom { amount: f64, automatic: bool },
+    Zoom {
+        amount: f64,
+        automatic: bool,
+    },
     /// `TL/SceneTrack.tsx:80-102`.
-    Scene { mode: SceneMode },
+    Scene {
+        mode: SceneMode,
+    },
     /// `TL/ThreeDTrack.tsx:648-651`.
-    ThreeD { motion: bool },
+    ThreeD {
+        motion: bool,
+    },
     /// `TL/TextTrack.tsx:428-450`.
     Text {
         content: SharedString,
@@ -867,7 +918,9 @@ pub enum SegmentDetail {
         enabled: bool,
     },
     /// `TL/MaskTrack.tsx:349-350`.
-    Mask { label: &'static str },
+    Mask {
+        label: &'static str,
+    },
     /// `TL/AudioTrack.tsx:449-540`.
     Audio {
         name: SharedString,
@@ -876,9 +929,13 @@ pub enum SegmentDetail {
         fade_out: f64,
     },
     /// `TL/CaptionsTrack.tsx:176-273`.
-    Caption { text: SharedString },
+    Caption {
+        text: SharedString,
+    },
     /// `TL/KeyboardTrack.tsx:168-266`.
-    Keyboard { text: SharedString },
+    Keyboard {
+        text: SharedString,
+    },
 }
 
 impl SegmentDetail {
@@ -904,6 +961,8 @@ pub struct TrackRow {
 /// Everything the timeline draws, derived once per project-config change.
 #[derive(Debug, Clone, Default)]
 pub struct TimelineModel {
+    pub style: Vec<Segment>,
+    pub image: Vec<Segment>,
     pub rows: Vec<TrackRow>,
     pub clips: Vec<Segment>,
     pub zoom: Vec<Segment>,
@@ -952,6 +1011,8 @@ impl TimelineModel {
     /// them by. Multi-lane tracks keep every lane in one list; the row filters.
     pub fn segments(&self, kind: TrackKind) -> &[Segment] {
         match kind {
+            TrackKind::Style => &self.style,
+            TrackKind::Image => &self.image,
             TrackKind::Clip => &self.clips,
             TrackKind::Caption => &self.caption,
             TrackKind::Keyboard => &self.keyboard,
@@ -1115,7 +1176,35 @@ impl TimelineModel {
             })
             .collect();
 
+        let style = timeline
+            .style_segments
+            .iter()
+            .map(|segment| Segment {
+                start: segment.start,
+                end: segment.end,
+                lane: segment.track,
+                detail: SegmentDetail::Style {
+                    name: segment.name.clone().into(),
+                    enabled: segment.enabled,
+                },
+            })
+            .collect();
+        let image = timeline
+            .image_segments
+            .iter()
+            .map(|segment| Segment {
+                start: segment.start,
+                end: segment.end,
+                lane: segment.track,
+                detail: SegmentDetail::Image {
+                    name: segment.name.clone().into(),
+                    enabled: segment.enabled,
+                },
+            })
+            .collect();
         let mut model = Self {
+            style,
+            image,
             rows: Vec::new(),
             clips,
             zoom,
@@ -1189,6 +1278,8 @@ fn build_rows(
         });
     }
     for (kind, segments, count) in [
+        (TrackKind::Style, &model.style, lanes.style),
+        (TrackKind::Image, &model.image, lanes.image),
         (TrackKind::Text, &model.text, lanes.text),
         (TrackKind::Mask, &model.mask, lanes.mask),
         (TrackKind::Audio, &model.audio, lanes.audio),
@@ -1207,7 +1298,7 @@ fn build_rows(
             lane: 0,
         });
     }
-    if lanes.scene && has_camera && !config.camera.hide {
+    if lanes.scene && scene_available(config, has_camera) {
         rows.push(TrackRow {
             kind: TrackKind::Scene,
             lane: 0,
@@ -2329,7 +2420,13 @@ fn render_segment(
     // `!segment.enabled && "opacity-60"` (text, `TL/TextTrack.tsx:365`) and
     // `"opacity-50"` (audio, `TL/AudioTrack.tsx:457`).
     let dim = match &segment.detail {
-        SegmentDetail::Text { enabled, .. } if !enabled => Some(0.6),
+        SegmentDetail::Text { enabled, .. }
+        | SegmentDetail::Style { enabled, .. }
+        | SegmentDetail::Image { enabled, .. }
+            if !enabled =>
+        {
+            Some(0.6)
+        }
         SegmentDetail::Audio { enabled, .. } if !enabled => Some(0.5),
         _ => None,
     };
@@ -2849,6 +2946,25 @@ fn label_body(
     };
 
     Some(match (&segment.detail, tier) {
+        (
+            SegmentDetail::Style { name, .. } | SegmentDetail::Image { name, .. },
+            LabelTier::Full | LabelTier::Compact,
+        ) => div()
+            .text_color(on_fill)
+            .overflow_hidden()
+            .text_ellipsis()
+            .child(name.clone())
+            .into_any_element(),
+        (SegmentDetail::Style { .. }, LabelTier::Glyph) => svg()
+            .path("icons/palette.svg")
+            .size(px(12.))
+            .text_color(on_fill)
+            .into_any_element(),
+        (SegmentDetail::Image { .. }, LabelTier::Glyph) => svg()
+            .path("icons/image.svg")
+            .size(px(12.))
+            .text_color(on_fill)
+            .into_any_element(),
         // -- Clip (`TL/ClipTrack.tsx:1255-1279`) --------------------------
         (
             SegmentDetail::Clip {
@@ -3406,7 +3522,9 @@ pub fn selected_border_color(theme: &Theme, kind: TrackKind) -> Hsla {
         | TrackKind::Zoom
         | TrackKind::Scene
         | TrackKind::ThreeD
-        | TrackKind::Mask => Hsla::from(theme.gray_12),
+        | TrackKind::Mask
+        | TrackKind::Style
+        | TrackKind::Image => Hsla::from(theme.gray_12),
         // `border-blue-7`: Radix blue-7 is `#205d9e` light / `#8ec8f6` dark.
         TrackKind::Text => {
             if theme.is_dark() {
@@ -4280,5 +4398,36 @@ mod tests {
         let (left, right) = edge_fade_strengths(&model, at_end, 1275.);
         assert_eq!(left, 1.);
         assert_eq!(right, 0.);
+    }
+}
+
+#[cfg(test)]
+mod style_image_tests {
+    use super::*;
+
+    #[test]
+    fn style_image_scene_availability_uses_source_camera_and_stable_style_requirement() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "camera":{"hide":true}, "timeline":{"zoomSegments":[],"segments":[{"start":0,"end":20,"timescale":1}],
+            "styleSegments":[{"start":3,"end":5,"overrides":{"camera":{"hide":false}}}]}
+        }))
+        .unwrap();
+        assert!(scene_available(&project, true));
+        assert!(!scene_available(&project, false));
+        assert!(TrackLanes::from_project(&project, true).scene);
+        assert!(
+            TimelineModel::build(&project, true, false)
+                .rows
+                .iter()
+                .any(|row| row.kind == TrackKind::Scene)
+        );
+        project.timeline.as_mut().unwrap().style_segments[0].enabled = false;
+        assert!(!scene_available(&project, true));
+        project.timeline.as_mut().unwrap().scene_segments.push(
+            serde_json::from_value(serde_json::json!({"start":1,"end":3,"mode":"cameraOnly"}))
+                .unwrap(),
+        );
+        assert!(scene_available(&project, true));
+        assert!(!scene_available(&project, false));
     }
 }

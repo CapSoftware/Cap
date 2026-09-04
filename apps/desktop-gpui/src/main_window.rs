@@ -347,6 +347,55 @@ pub enum DeviceMenu {
     Microphone,
 }
 
+fn input_refresh_is_current(
+    current_generation: u64,
+    current_menu: Option<DeviceMenu>,
+    generation: u64,
+    menu: DeviceMenu,
+) -> bool {
+    current_generation == generation && current_menu == Some(menu)
+}
+
+fn input_refresh_scan_allowed(current: bool, visible_idle_and_owned: bool) -> Option<bool> {
+    current.then_some(visible_idle_and_owned)
+}
+
+#[cfg(test)]
+mod input_refresh_tests {
+    use super::{DeviceMenu, input_refresh_is_current, input_refresh_scan_allowed};
+
+    #[test]
+    fn hidden_or_busy_picker_pauses_and_resumes_without_a_scan() {
+        assert_eq!(input_refresh_scan_allowed(true, false), Some(false));
+        assert_eq!(input_refresh_scan_allowed(true, true), Some(true));
+        assert_eq!(input_refresh_scan_allowed(false, true), None);
+        assert_eq!(input_refresh_scan_allowed(false, false), None);
+    }
+
+    #[test]
+    fn late_refresh_cannot_replace_a_reopened_picker() {
+        assert!(input_refresh_is_current(
+            2,
+            Some(DeviceMenu::Camera),
+            2,
+            DeviceMenu::Camera
+        ));
+        assert!(!input_refresh_is_current(
+            3,
+            Some(DeviceMenu::Camera),
+            2,
+            DeviceMenu::Camera
+        ));
+        assert!(!input_refresh_is_current(2, None, 2, DeviceMenu::Camera));
+        assert!(!input_refresh_is_current(
+            2,
+            Some(DeviceMenu::Microphone),
+            2,
+            DeviceMenu::Camera
+        ));
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum DeviceFormatTarget {
     Camera(CameraOption),
@@ -676,6 +725,9 @@ pub struct MainWindow {
     /// The `staleTime: 5_000` re-read of the cheap target list that runs while
     /// a target panel is open, and nothing else. Dropped by `close_panel`.
     target_poll_task: Option<gpui::Task<()>>,
+    input_poll_task: Option<gpui::Task<()>>,
+    input_poll_generation: u64,
+    input_enumeration_gate: devices::InputEnumerationGate,
     /// `scheduleTargetListPrewarm` (`new-main/index.tsx:1897-1965`).
     prewarm_task: Option<gpui::Task<()>>,
 }
@@ -885,6 +937,9 @@ impl MainWindow {
             display_thumbnail_task: None,
             window_thumbnail_task: None,
             target_poll_task: None,
+            input_poll_task: None,
+            input_poll_generation: 0,
+            input_enumeration_gate: devices::InputEnumerationGate::default(),
             prewarm_task: None,
         }
     }
@@ -1233,6 +1288,76 @@ impl MainWindow {
 
                 cx.background_executor()
                     .timer(target_thumbnails::LIST_STALE_TIME)
+                    .await;
+            }
+        }));
+    }
+
+    fn start_input_poll(&mut self, menu: DeviceMenu, window: &mut Window, cx: &mut Context<Self>) {
+        let generation = self.input_poll_generation;
+        let gate = self.input_enumeration_gate.clone();
+        self.input_poll_task = Some(cx.spawn_in(window, async move |this, cx| {
+            loop {
+                let Ok(allowed) = this.update_in(cx, |this, window, cx| {
+                    let current_menu = match this.panel {
+                        Some(Panel::Device(menu)) => Some(menu),
+                        _ => None,
+                    };
+                    input_refresh_scan_allowed(
+                        input_refresh_is_current(
+                            this.input_poll_generation,
+                            current_menu,
+                            generation,
+                            menu,
+                        ),
+                        !this.device_restore_suspended && this.target_prewarm_allowed(window, cx),
+                    )
+                }) else {
+                    return;
+                };
+                let Some(allowed) = allowed else {
+                    return;
+                };
+                if allowed && let Some(permit) = gate.try_enter() {
+                    let snapshot = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let _permit = permit;
+                            match menu {
+                                DeviceMenu::Camera => devices::InputSnapshot::cameras(),
+                                DeviceMenu::Microphone => devices::InputSnapshot::microphones(),
+                            }
+                        })
+                        .await;
+                    let Ok(current) = this.update_in(cx, |this, window, cx| {
+                        let current_menu = match this.panel {
+                            Some(Panel::Device(menu)) => Some(menu),
+                            _ => None,
+                        };
+                        if !input_refresh_is_current(
+                            this.input_poll_generation,
+                            current_menu,
+                            generation,
+                            menu,
+                        ) {
+                            return false;
+                        }
+                        if !this.device_restore_suspended
+                            && this.target_prewarm_allowed(window, cx)
+                            && snapshot.install(&mut this.devices)
+                        {
+                            cx.notify();
+                        }
+                        true
+                    }) else {
+                        return;
+                    };
+                    if !current {
+                        return;
+                    }
+                }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
                     .await;
             }
         }));
@@ -3610,6 +3735,8 @@ impl MainWindow {
     }
 
     fn close_panel(&mut self, cx: &mut Context<Self>) {
+        self.input_poll_task = None;
+        self.input_poll_generation = self.input_poll_generation.wrapping_add(1);
         self.device_format_target = None;
         self.device_formats = None;
         self.device_format_generation += 1;
@@ -3663,6 +3790,8 @@ impl MainWindow {
     }
 
     pub fn open_panel(&mut self, panel: Panel, window: &mut Window, cx: &mut Context<Self>) {
+        self.input_poll_task = None;
+        self.input_poll_generation = self.input_poll_generation.wrapping_add(1);
         self.clear_mode_hover();
         self.device_format_target = None;
         self.device_formats = None;
@@ -3689,6 +3818,9 @@ impl MainWindow {
         match panel {
             Panel::Target(kind) => self.start_target_poll(kind, window, cx),
             _ => self.target_poll_task = None,
+        }
+        if let Panel::Device(menu) = panel {
+            self.start_input_poll(menu, window, cx);
         }
         cx.notify();
     }
@@ -4552,8 +4684,12 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        cx.spawn_in(window, async move |_this, _cx| {
-            let dest = crate::platform::save_file_panel(&format!("{name}.png"), &["png"]);
+        cx.spawn_in(window, async move |this, cx| {
+            let dest =
+                crate::platform::save_file_panel_async(&format!("{name}.png"), &["png"], cx).await;
+            if this.update_in(cx, |_, _, _| ()).is_err() {
+                return;
+            }
             let Some(dest) = dest else {
                 return;
             };

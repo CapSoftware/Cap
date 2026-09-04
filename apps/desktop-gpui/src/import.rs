@@ -35,6 +35,7 @@ const MEDIA_IMPORT_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv", "png", "jpg", "jpeg", "webp", "gif",
     "bmp", "tif", "tiff",
 ];
+pub(crate) const OVERLAY_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 const MAX_IMAGE_DIMENSION: u32 = 16_384;
 static ACTIVE_IMPORT_WORKERS: AtomicUsize = AtomicUsize::new(0);
 
@@ -291,7 +292,8 @@ pub fn pick_and_import_video(cx: &mut App) {
     cx.spawn(async move |cx| {
         // Blocking modal, so from a spawned task with no borrow held -- the
         // `save_file_panel` rule.
-        let Some(path) = pick_import_file(&[("Video Files", VIDEO_IMPORT_EXTENSIONS)]) else {
+        let Some(path) = pick_import_file(&[("Video Files", VIDEO_IMPORT_EXTENSIONS)], cx).await
+        else {
             return;
         };
         cx.update(|cx| import_video_from_path(path, cx));
@@ -301,7 +303,8 @@ pub fn pick_and_import_video(cx: &mut App) {
 
 pub fn pick_and_import_image(cx: &mut App) {
     cx.spawn(async move |cx| {
-        let Some(path) = pick_import_file(&[("Image Files", IMAGE_IMPORT_EXTENSIONS)]) else {
+        let Some(path) = pick_import_file(&[("Image Files", IMAGE_IMPORT_EXTENSIONS)], cx).await
+        else {
             return;
         };
         cx.update(|cx| import_image_from_path(path, cx));
@@ -313,11 +316,16 @@ pub fn pick_and_import_image(cx: &mut App) {
 /// extension (`src-tauri/src/tray.rs:839-911`).
 pub fn pick_and_import_media(cx: &mut App) {
     cx.spawn(async move |cx| {
-        let Some(path) = pick_import_file(&[
-            ("Media Files", MEDIA_IMPORT_EXTENSIONS),
-            ("Video Files", VIDEO_IMPORT_EXTENSIONS),
-            ("Image Files", IMAGE_IMPORT_EXTENSIONS),
-        ]) else {
+        let Some(path) = pick_import_file(
+            &[
+                ("Media Files", MEDIA_IMPORT_EXTENSIONS),
+                ("Video Files", VIDEO_IMPORT_EXTENSIONS),
+                ("Image Files", IMAGE_IMPORT_EXTENSIONS),
+            ],
+            cx,
+        )
+        .await
+        else {
             return;
         };
         if is_supported_video_import_path(&path) {
@@ -383,7 +391,10 @@ fn spawn_import(cx: &mut App, work: impl FnOnce(flume::Sender<ImportProgress>) +
 /// `NSOpenPanel` through the platform helper on macOS (the generic file panel
 /// behind `open_image_panel`), rfd elsewhere -- the same split the delete
 /// confirms use.
-fn pick_import_file(filters: &[(&str, &[&str])]) -> Option<PathBuf> {
+pub(crate) async fn pick_import_file(
+    filters: &[(&str, &[&str])],
+    _cx: &mut gpui::AsyncApp,
+) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let extensions: Vec<&str> = filters
@@ -392,7 +403,11 @@ fn pick_import_file(filters: &[(&str, &[&str])]) -> Option<PathBuf> {
             .collect();
         crate::platform::open_image_panel(&extensions)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::platform::open_file_panel_from_app_async(filters, _cx).await
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let mut dialog = rfd::FileDialog::new();
         for (name, extensions) in filters {
@@ -2064,5 +2079,193 @@ mod tests {
         assert_eq!(converted.height(), 12);
         assert_eq!(converted.pts(), Some(819));
         assert_ne!(converted.data(0).as_ptr(), original.data(0).as_ptr());
+    }
+}
+
+pub(crate) struct ImportedEditorImage {
+    pub path: String,
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+pub(crate) fn import_editor_image(
+    project_path: &Path,
+    source: &Path,
+) -> Result<ImportedEditorImage, String> {
+    use image::ImageDecoder;
+    use std::{
+        hash::BuildHasher,
+        io::{Read, Write},
+    };
+    const MAX_BYTES: u64 = 64 * 1024 * 1024;
+    if !project_path.is_dir() || !has_supported_extension(source, OVERLAY_IMAGE_EXTENSIONS) {
+        return Err("Choose a PNG, JPEG, WebP, GIF or BMP image for this project".into());
+    }
+    let file = std::fs::File::open(source).map_err(|error| error.to_string())?;
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    if !metadata.is_file() || metadata.len() > MAX_BYTES {
+        return Err("Image files must be 64 MiB or smaller".into());
+    }
+    let mut encoded = Vec::new();
+    file.take(MAX_BYTES + 1)
+        .read_to_end(&mut encoded)
+        .map_err(|error| error.to_string())?;
+    if encoded.len() as u64 > MAX_BYTES {
+        return Err("Image files must be 64 MiB or smaller".into());
+    }
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(&encoded))
+        .with_guessed_format()
+        .map_err(|error| error.to_string())?;
+    let extension = match reader.format() {
+        Some(image::ImageFormat::Png) => "png",
+        Some(image::ImageFormat::Jpeg) => "jpg",
+        Some(image::ImageFormat::WebP) => "webp",
+        Some(image::ImageFormat::Gif) => "gif",
+        Some(image::ImageFormat::Bmp) => "bmp",
+        _ => return Err("Choose a PNG, JPEG, WebP, GIF or BMP image".into()),
+    };
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    limits.max_image_width = Some(32_768);
+    limits.max_image_height = Some(32_768);
+    reader.limits(limits);
+    let mut decoder = reader.into_decoder().map_err(|error| {
+        format!("Cannot decode image (maximum 32,768 pixels per side): {error}")
+    })?;
+    let (source_width, source_height) = decoder.dimensions();
+    if source_width == 0
+        || source_height == 0
+        || u64::from(source_width) * u64::from(source_height) > 16_777_216
+        || decoder.total_bytes() > 128 * 1024 * 1024
+    {
+        return Err("Images must have at most 16,777,216 pixels (32,768 per side) and decode to at most 128 MiB".into());
+    }
+    let orientation = decoder.orientation().map_err(|error| error.to_string())?;
+    let mut decoded = image::DynamicImage::from_decoder(decoder)
+        .map_err(|error| format!("Cannot decode image: {error}"))?;
+    decoded.apply_orientation(orientation);
+    let (width, height) = (decoded.width(), decoded.height());
+    drop(decoded);
+    let mut bytes = [0u8; 16];
+    for chunk in bytes.chunks_exact_mut(8) {
+        chunk.copy_from_slice(
+            &std::collections::hash_map::RandomState::new()
+                .hash_one(source)
+                .to_be_bytes(),
+        );
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let id = format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    );
+    let relative = format!("content/images/{id}.{extension}");
+    let destination = project_path.join(&relative);
+    std::fs::create_dir_all(project_path.join("content/images"))
+        .map_err(|error| error.to_string())?;
+    let mut destination_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = destination_file
+        .write_all(&encoded)
+        .and_then(|()| destination_file.sync_all())
+    {
+        drop(destination_file);
+        let _ = std::fs::remove_file(&destination);
+        return Err(format!("Failed to save image: {error}"));
+    }
+    Ok(ImportedEditorImage {
+        path: relative,
+        name: source
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Image")
+            .to_string(),
+        width,
+        height,
+    })
+}
+
+#[cfg(test)]
+mod style_image_tests {
+    use super::*;
+
+    #[test]
+    fn style_image_import_rotates_exif_copies_source_and_keeps_relative_unique_assets() {
+        let dir = std::env::temp_dir().join(format!(
+            "cap-overlay-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.jpg");
+        image::RgbImage::from_pixel(3, 2, image::Rgb([255, 30, 20]))
+            .save(&source)
+            .unwrap();
+        let original = std::fs::read(&source).unwrap();
+        let exif = b"Exif\0\0MM\0*\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01\0\x06\0\0\0\0\0\0";
+        let mut oriented = original[..2].to_vec();
+        oriented.extend_from_slice(&[0xff, 0xe1]);
+        oriented.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+        oriented.extend_from_slice(exif);
+        oriented.extend_from_slice(&original[2..]);
+        std::fs::write(&source, &oriented).unwrap();
+        let first = import_editor_image(&dir, &source).unwrap();
+        let second = import_editor_image(&dir, &source).unwrap();
+        assert_ne!(first.path, second.path);
+        assert!(first.path.starts_with("content/images/"));
+        assert!(!Path::new(&first.path).is_absolute());
+        assert_eq!((first.width, first.height), (2, 3));
+        assert_eq!(
+            image::image_dimensions(dir.join(&first.path)).unwrap(),
+            (3, 2)
+        );
+        assert_eq!(std::fs::read(dir.join(&first.path)).unwrap(), oriented);
+        assert_eq!(std::fs::read(&source).unwrap(), oriented);
+        for extension in ["gif", "bmp"] {
+            let source = dir.join(format!("source.{extension}"));
+            image::RgbaImage::from_pixel(3, 2, image::Rgba([200, 50, 80, 255]))
+                .save(&source)
+                .unwrap();
+            let imported = import_editor_image(&dir, &source).unwrap();
+            assert_eq!((imported.width, imported.height), (3, 2));
+            assert_eq!(
+                std::fs::read(dir.join(imported.path)).unwrap(),
+                std::fs::read(source).unwrap()
+            );
+        }
+        let invalid = dir.join("invalid.png");
+        std::fs::write(&invalid, b"not an image").unwrap();
+        assert!(import_editor_image(&dir, &invalid).is_err());
+        let large = dir.join("large.png");
+        std::fs::File::create(&large)
+            .unwrap()
+            .set_len(64 * 1024 * 1024 + 1)
+            .unwrap();
+        assert!(
+            import_editor_image(&dir, &large)
+                .err()
+                .unwrap()
+                .contains("64 MiB")
+        );
+        assert_eq!(
+            std::fs::read_dir(dir.join("content/images"))
+                .unwrap()
+                .count(),
+            4
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

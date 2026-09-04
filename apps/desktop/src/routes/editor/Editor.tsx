@@ -79,6 +79,7 @@ const TranscriptPanel = lazy(() =>
 const DEFAULT_TIMELINE_HEIGHT = 260;
 const MIN_PLAYER_CONTENT_HEIGHT = 320;
 const MIN_TIMELINE_HEIGHT = 240;
+const MIN_COMPACT_TIMELINE_HEIGHT = 144;
 const RESIZE_HANDLE_HEIGHT = 16;
 const MIN_PLAYER_HEIGHT = MIN_PLAYER_CONTENT_HEIGHT + RESIZE_HANDLE_HEIGHT;
 const TIMELINE_RESIZE_GRIP_MARKS = [0, 1, 2] as const;
@@ -386,6 +387,7 @@ function Inner(props: {
 }) {
 	const {
 		project,
+		flushProjectConfig,
 		editorInstance,
 		editorState,
 		setEditorState,
@@ -393,6 +395,27 @@ function Inner(props: {
 		dialog,
 		exportState,
 	} = useEditorContext();
+
+	const registerEditorSave = (
+		registration: TitleSaveRegistration | undefined,
+	) => {
+		props.registerTitleSave(
+			registration
+				? {
+						...registration,
+						flush: async () => {
+							await registration.flush();
+							try {
+								await flushProjectConfig();
+							} catch (error) {
+								toast.error(getEditorErrorMessage(error));
+								throw error;
+							}
+						},
+					}
+				: undefined,
+		);
+	};
 
 	createTauriEventListener(events.editorRecordingAdded, (payload) => {
 		const normalize = (p: string) => p.replace(/[\\/]+$/, "");
@@ -408,7 +431,7 @@ function Inner(props: {
 				await commands.stopPlayback();
 				setEditorState("playing", false);
 			}
-			await commands.setProjectConfig(serializeProjectConfiguration(project));
+			await flushProjectConfig();
 			await commands.addExistingRecordingToEditor(recordingPath);
 			await commands.deleteRecordingDirectory(recordingPath).catch(() => {});
 			toast.success("Clip added", { id: toastId });
@@ -511,16 +534,40 @@ function Inner(props: {
 		visibleTrackCount: number;
 	} | null>(null);
 
+	const layoutLimits = createMemo(() => {
+		const fullHeight = MIN_PLAYER_HEIGHT + MIN_TIMELINE_HEIGHT;
+		const available = Math.max(layoutBounds.height ?? fullHeight, 0);
+		const minPlayerHeight =
+			MIN_PLAYER_HEIGHT * Math.min(1, available / fullHeight);
+		const maxTimelineHeight = Math.floor(
+			Math.max(0, available - minPlayerHeight),
+		);
+
+		return {
+			minPlayerHeight,
+			maxTimelineHeight,
+			minTimelineHeight: Math.min(
+				maxTimelineHeight,
+				MIN_TIMELINE_HEIGHT,
+				Math.max(MIN_COMPACT_TIMELINE_HEIGHT, available - MIN_PLAYER_HEIGHT),
+			),
+			compactness: Math.min(
+				1,
+				Math.max(
+					0,
+					(fullHeight - available) /
+						(MIN_TIMELINE_HEIGHT - MIN_COMPACT_TIMELINE_HEIGHT),
+				),
+			),
+		};
+	});
+
 	const clampTimelineHeight = (value: number) => {
-		const available = layoutBounds.height ?? 0;
-		const maxHeight =
-			available > 0
-				? Math.max(MIN_TIMELINE_HEIGHT, available - MIN_PLAYER_HEIGHT)
-				: Number.POSITIVE_INFINITY;
-		const upperBound = Number.isFinite(maxHeight)
-			? maxHeight
-			: Math.max(value, MIN_TIMELINE_HEIGHT);
-		return Math.min(Math.max(value, MIN_TIMELINE_HEIGHT), upperBound);
+		const limits = layoutLimits();
+		return Math.min(
+			Math.max(value, limits.minTimelineHeight),
+			limits.maxTimelineHeight,
+		);
 	};
 
 	const timelineHeight = createMemo(() =>
@@ -549,12 +596,6 @@ function Inner(props: {
 		window.addEventListener("mouseup", handleUp);
 	};
 
-	createEffect(() => {
-		const available = layoutBounds.height;
-		if (!available) return;
-		setStoredTimelineHeight((height) => clampTimelineHeight(height));
-	});
-
 	createEffect(
 		on(timelineViewportOverflow, (next, prev) => {
 			if (
@@ -563,9 +604,13 @@ function Inner(props: {
 				next.visibleTrackCount > prev.visibleTrackCount &&
 				next.overflow > 0
 			) {
-				setStoredTimelineHeight((height) =>
-					clampTimelineHeight(height + next.overflow),
-				);
+				const height = timelineHeight();
+				const expandedHeight = clampTimelineHeight(height + next.overflow);
+				if (expandedHeight > height) {
+					setStoredTimelineHeight((preferredHeight) =>
+						Math.max(preferredHeight, expandedHeight),
+					);
+				}
 			}
 
 			return next;
@@ -764,7 +809,7 @@ function Inner(props: {
 			}
 		>
 			<div class="flex flex-col flex-1 min-h-0">
-				<Header registerTitleSave={props.registerTitleSave} />
+				<Header registerTitleSave={registerEditorSave} />
 				<div
 					class="flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0 leading-5"
 					data-tauri-drag-region
@@ -777,7 +822,7 @@ function Inner(props: {
 							ref={setSplitContainerRef}
 							class="flex overflow-hidden flex-row flex-1 min-h-0 px-2"
 							style={{
-								"min-height": `${MIN_PLAYER_HEIGHT}px`,
+								"min-height": `${layoutLimits().minPlayerHeight}px`,
 							}}
 						>
 							<div
@@ -789,7 +834,7 @@ function Inner(props: {
 									"min-width": "0",
 								}}
 							>
-								<PlayerContent />
+								<PlayerContent compactness={layoutLimits().compactness} />
 								<div
 									role="separator"
 									aria-orientation="horizontal"
@@ -1047,6 +1092,7 @@ function Dialogs() {
 							{(dialog) => {
 								const {
 									setProject: setState,
+									styleScopeToken,
 									editorInstance,
 									editorState,
 									canvasControls,
@@ -1054,6 +1100,16 @@ function Dialogs() {
 									previewResolutionBase,
 								} = useEditorContext();
 								const display = editorInstance.recordings.segments[0].display;
+								const cropTarget = dialog().styleTarget ?? null;
+								const cropToken = dialog().scopeToken;
+								const cropStyle =
+									cropTarget === null
+										? null
+										: project.timeline?.styleSegments[cropTarget];
+								const cropTargetValid = () =>
+									(!cropToken || cropToken === styleScopeToken()) &&
+									(cropTarget === null ||
+										project.timeline?.styleSegments[cropTarget] === cropStyle);
 
 								let cropperRef: CropperRef | undefined;
 								let previewCanvas: HTMLCanvasElement | undefined;
@@ -1172,13 +1228,37 @@ function Dialogs() {
 								const queueConfig = (bounds: CropBounds | null) => {
 									const config = getPreviewProjectConfig(project, editorState);
 									if (bounds) {
-										config.background = {
-											...config.background,
-											crop: {
-												position: { x: bounds.x, y: bounds.y },
-												size: { x: bounds.width, y: bounds.height },
-											},
+										if (!cropTargetValid()) return;
+										const nextCrop = {
+											position: { x: bounds.x, y: bounds.y },
+											size: { x: bounds.width, y: bounds.height },
 										};
+										if (cropTarget === null)
+											config.background = {
+												...config.background,
+												crop: nextCrop,
+											};
+										else if (config.timeline) {
+											config.timeline = {
+												...config.timeline,
+												styleSegments: config.timeline.styleSegments.map(
+													(segment, index) =>
+														index === cropTarget
+															? {
+																	...segment,
+																	overrides: {
+																		...segment.overrides,
+																		background: {
+																			...(segment.overrides.background ??
+																				config.background),
+																			crop: nextCrop,
+																		},
+																	},
+																}
+															: segment,
+												),
+											};
+										}
 									}
 									pendingConfig = {
 										config,
@@ -1508,10 +1588,22 @@ function Dialogs() {
 											</div>
 										</Dialog.Content>
 										<Dialog.Footer>
+											<Show when={!cropTargetValid()}>
+												<p role="alert" class="text-sm text-orange-11">
+													Crop target changed. Close and reopen Crop to
+													continue.
+												</p>
+											</Show>
 											<Button
+												disabled={
+													!frameLoaded() ||
+													crop().width <= 0 ||
+													crop().height <= 0 ||
+													!cropTargetValid()
+												}
 												onClick={() => {
 													const bounds = crop();
-													setState("background", "crop", {
+													const nextCrop = {
 														position: {
 															x: bounds.x,
 															y: bounds.y,
@@ -1520,7 +1612,25 @@ function Dialogs() {
 															x: bounds.width,
 															y: bounds.height,
 														},
-													});
+													};
+													if (!cropTargetValid()) {
+														toast.error(
+															"Crop target changed. Reopen Crop to continue.",
+														);
+														return;
+													}
+													if (cropTarget === null)
+														setState("background", "crop", nextCrop);
+													else
+														setState(
+															"timeline",
+															"styleSegments",
+															cropTarget,
+															"overrides",
+															"background",
+															"crop",
+															nextCrop,
+														);
 													setDialog((d) => ({ ...d, open: false }));
 												}}
 											>

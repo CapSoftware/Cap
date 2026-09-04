@@ -1,9 +1,13 @@
 import { Button } from "@cap/ui-solid";
 import { createMutation } from "@tanstack/solid-query";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import { Show } from "solid-js";
+import { createEffect, onCleanup, Show } from "solid-js";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { createTauriEventListener } from "~/utils/createEventListener";
+import { isRecordingStorageError } from "~/utils/recording";
 import { commands } from "~/utils/tauri";
 import IconAlertTriangle from "~icons/lucide/alert-triangle";
 import IconFolder from "~icons/lucide/folder";
@@ -20,19 +24,145 @@ export function EditorErrorScreen(props: {
 	error: string;
 	projectPath: string;
 }) {
-	const needsRecovery = () => isRecoveryNeededError(props.error);
+	const storageShortage = () => isRecordingStorageError(props.error);
+	const needsRecovery = () =>
+		storageShortage() || isRecoveryNeededError(props.error);
 	const isMac = () => ostype() === "macos";
 
+	let disposed = false;
+	let listening = false;
+	let checkAfterPending = false;
+	let queryRequest = 0;
+	let recoveryRequest = 0;
+	let activeProjectPath = props.projectPath;
+
+	const successStorageKey = (projectPath: string) =>
+		`cap:recording-recovery-success:${projectPath}`;
+
+	const isCurrentRecovery = (projectPath: string, request: number) =>
+		!disposed &&
+		props.projectPath === projectPath &&
+		recoveryRequest === request;
+
 	const recoverMutation = createMutation(() => ({
-		mutationFn: async () => {
-			const result = await commands.recoverRecording(props.projectPath);
+		onMutate: () => {
+			queryRequest += 1;
+			checkAfterPending = false;
+		},
+		mutationFn: async ({
+			projectPath,
+			request,
+		}: {
+			projectPath: string;
+			request: number;
+		}) => {
+			if (!isCurrentRecovery(projectPath, request)) return projectPath;
+			const result = await commands.recoverRecording(projectPath);
+			if (!isCurrentRecovery(projectPath, request)) return result;
 			await commands.showWindow({ Editor: { project_path: result } });
 			return result;
 		},
-		onSuccess: () => {
+		onSuccess: async (_result, { projectPath, request }) => {
+			if (!isCurrentRecovery(projectPath, request)) return;
+			queryRequest += 1;
+			checkAfterPending = false;
+			try {
+				const successId = await invoke<string | null>(
+					"get_recording_recovery_success",
+					{ projectPath },
+				);
+				if (!isCurrentRecovery(projectPath, request)) return;
+				if (typeof successId === "string" && successId.length > 0) {
+					window.sessionStorage.setItem(
+						successStorageKey(projectPath),
+						successId,
+					);
+				}
+			} catch (error) {
+				console.error("Failed to remember recording recovery", error);
+			}
+			if (!isCurrentRecovery(projectPath, request)) return;
+			queryRequest += 1;
+			checkAfterPending = false;
 			window.location.reload();
 		},
 	}));
+
+	const checkRecoverySuccess = async (projectPath: string) => {
+		if (disposed || !listening || projectPath !== props.projectPath) return;
+		if (recoverMutation.isPending) {
+			checkAfterPending = true;
+			return;
+		}
+		const request = ++queryRequest;
+		try {
+			const successId = await invoke<string | null>(
+				"get_recording_recovery_success",
+				{ projectPath },
+			);
+			if (
+				disposed ||
+				request !== queryRequest ||
+				projectPath !== props.projectPath
+			)
+				return;
+			if (recoverMutation.isPending) {
+				checkAfterPending = true;
+				return;
+			}
+			if (typeof successId !== "string" || successId.length === 0) return;
+			const key = successStorageKey(projectPath);
+			if (window.sessionStorage.getItem(key) === successId) return;
+			window.sessionStorage.setItem(key, successId);
+			window.location.reload();
+		} catch (error) {
+			console.error("Failed to check recording recovery", error);
+		}
+	};
+
+	createTauriEventListener<string>(
+		{
+			listen: (callback) =>
+				listen<string>("recording-recovery-completed", callback)
+					.then((unlisten) => {
+						if (!disposed) {
+							listening = true;
+							void checkRecoverySuccess(props.projectPath);
+						}
+						return unlisten;
+					})
+					.catch((error: unknown) => {
+						console.error("Failed to listen for recording recovery", error);
+						return () => undefined;
+					}),
+		},
+		() => {
+			listening = true;
+			void checkRecoverySuccess(props.projectPath);
+		},
+	);
+
+	createEffect(() => {
+		const projectPath = props.projectPath;
+		const pending = recoverMutation.isPending;
+		if (projectPath !== activeProjectPath) {
+			activeProjectPath = projectPath;
+			queryRequest += 1;
+			recoveryRequest += 1;
+			checkAfterPending = false;
+			void checkRecoverySuccess(projectPath);
+		} else if (!pending && checkAfterPending) {
+			checkAfterPending = false;
+			void checkRecoverySuccess(projectPath);
+		}
+	});
+
+	onCleanup(() => {
+		disposed = true;
+		queryRequest += 1;
+		recoveryRequest += 1;
+		checkAfterPending = false;
+	});
 
 	const handleOpenFolder = () => {
 		revealItemInDir(props.projectPath);
@@ -56,9 +186,11 @@ export function EditorErrorScreen(props: {
 							<IconAlertTriangle class="size-8 text-red-9" />
 						</div>
 						<h2 class="text-xl font-semibold text-gray-12">
-							{needsRecovery()
-								? "Recording Needs Recovery"
-								: "Unable to Open Recording"}
+							{storageShortage()
+								? "More space needed"
+								: needsRecovery()
+									? "Recording Needs Recovery"
+									: "Unable to Open Recording"}
 						</h2>
 						<p class="text-sm text-gray-11">{props.error}</p>
 					</div>
@@ -67,16 +199,24 @@ export function EditorErrorScreen(props: {
 						<div class="bg-gray-2 border border-gray-4 rounded-xl p-4 space-y-4">
 							<div class="space-y-2">
 								<h3 class="font-medium text-gray-12 text-sm">
-									Automatic Recovery
+									{storageShortage()
+										? "Finish saving your recording"
+										: "Automatic Recovery"}
 								</h3>
 								<p class="text-xs text-gray-11">
-									Cap can attempt to recover your recording automatically. This
-									will reconstruct the recording from available segment data.
+									{storageShortage()
+										? "Free up space on the recording drive, then click Recover Recording. Your recording files have been kept."
+										: "Cap can attempt to recover your recording automatically. This will reconstruct the recording from available segment data."}
 								</p>
 							</div>
 
 							<Button
-								onClick={() => recoverMutation.mutate()}
+								onClick={() =>
+									recoverMutation.mutate({
+										projectPath: props.projectPath,
+										request: ++recoveryRequest,
+									})
+								}
 								disabled={recoverMutation.isPending}
 								variant="primary"
 								class="w-full"

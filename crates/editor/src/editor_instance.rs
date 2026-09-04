@@ -34,7 +34,7 @@ struct PreviewCursorCache {
 struct PreviewCursorCacheEntry {
     recording_clip: u32,
     cursor: Arc<CursorEvents>,
-    settings: [u32; 6],
+    settings: [u32; 7],
     timeline: Arc<PrecomputedCursorTimeline>,
 }
 
@@ -45,7 +45,18 @@ impl PreviewCursorCache {
         cursor: &Arc<CursorEvents>,
         project: &ProjectConfiguration,
     ) -> Option<Arc<PrecomputedCursorTimeline>> {
-        if project.cursor.raw {
+        if project.cursor.raw
+            && !project.timeline.as_ref().is_some_and(|timeline| {
+                timeline.style_segments.iter().any(|style| {
+                    style.is_active_at(style.start)
+                        && style
+                            .overrides
+                            .cursor
+                            .as_ref()
+                            .is_some_and(|cursor| !cursor.raw)
+                })
+            })
+        {
             self.entries.clear();
             return None;
         }
@@ -62,6 +73,7 @@ impl PreviewCursorCache {
         };
         let click_spring = project.cursor.click_spring_config();
         let settings = [
+            u32::from(project.cursor.raw),
             smoothing.tension.to_bits(),
             smoothing.mass.to_bits(),
             smoothing.friction.to_bits(),
@@ -89,7 +101,7 @@ impl PreviewCursorCache {
 
         let timeline = Arc::new(PrecomputedCursorTimeline::new(
             cursor,
-            Some(smoothing),
+            (!project.cursor.raw).then_some(smoothing),
             Some(click_spring),
         ));
         self.entries.push(PreviewCursorCacheEntry {
@@ -380,6 +392,8 @@ impl EditorInstance {
                     transitions: Vec::new(),
                     zoom_segments: Vec::new(),
                     scene_segments: Vec::new(),
+                    style_segments: Vec::new(),
+                    image_segments: Vec::new(),
                     mask_segments: Vec::new(),
                     text_segments: Vec::new(),
                     caption_segments: Vec::new(),
@@ -777,7 +791,7 @@ impl EditorInstance {
 
                         segment_frames_opt = segment_medias.decoders.get_frames_initial(
                             segment_time as f32,
-                            !project.camera.hide,
+                            project.requires_camera(),
                             true,
                             clip_offsets,
                         ) => {
@@ -829,7 +843,7 @@ impl EditorInstance {
                                     }
                                     frames = outgoing_media.decoders.get_frames_initial(
                                         outgoing.source_time as f32,
-                                        !project.camera.hide,
+                                        project.requires_camera(),
                                         true,
                                         outgoing_offsets,
                                     ) => frames,
@@ -995,7 +1009,7 @@ impl EditorInstance {
                                         .decoders
                                         .get_frames(
                                             segment_time as f32,
-                                            !project.camera.hide,
+                                            project.requires_camera(),
                                             true,
                                             clip_offsets,
                                         )
@@ -1059,7 +1073,7 @@ impl EditorInstance {
                                             _ = cancel_token.cancelled() => break,
                                             _ = prefetch_segment_media.decoders.get_frames(
                                                 prefetch_segment_time as f32,
-                                                !project.camera.hide,
+                                                project.requires_camera(),
                                                 true,
                                                 prefetch_clip_offsets,
                                             ) => {}
@@ -1659,6 +1673,79 @@ mod tests {
         project.cursor.raw = false;
         assert!(cache.get(0, &cursor, &project).is_some());
         assert_eq!(cache.entries.len(), 1);
+    }
+
+    #[test]
+    fn preview_cursor_cache_retains_raw_source_for_style_smoothing() {
+        let cursor = preview_cursor_events();
+        let mut project = ProjectConfiguration::default();
+        project.cursor.raw = true;
+        project.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [], "zoomSegments": [],
+                "styleSegments": [{
+                    "start": 1.0, "end": 2.0,
+                    "overrides": { "cursor": { "raw": false } }
+                }]
+            }))
+            .unwrap(),
+        );
+        let mut cache = PreviewCursorCache::default();
+        let first = cache.get(0, &cursor, &project).unwrap();
+        let second = cache.get(0, &cursor, &project).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        let raw = PrecomputedCursorTimeline::new(&cursor, None, None);
+        for time in [0.0, 0.5, 1.0, 1.5, 2.5] {
+            let actual = first.interpolate(time).unwrap();
+            let expected = raw.interpolate(time).unwrap();
+            assert_eq!(
+                actual.position.coord.x.to_bits(),
+                expected.position.coord.x.to_bits()
+            );
+            assert_eq!(
+                actual.position.coord.y.to_bits(),
+                expected.position.coord.y.to_bits()
+            );
+            assert_eq!(actual.velocity.x.to_bits(), expected.velocity.x.to_bits());
+            assert_eq!(actual.velocity.y.to_bits(), expected.velocity.y.to_bits());
+            assert_eq!(actual.cursor_id, expected.cursor_id);
+        }
+        project.cursor.raw = false;
+        let smoothed = cache.get(0, &cursor, &project).unwrap();
+        assert!(!Arc::ptr_eq(&first, &smoothed));
+        project.cursor.raw = true;
+        project.timeline.as_mut().unwrap().style_segments[0].enabled = false;
+        assert!(cache.get(0, &cursor, &project).is_none());
+        assert!(cache.entries.is_empty());
+    }
+
+    #[test]
+    fn raw_preview_cache_ignores_invalid_disabled_and_raw_styles() {
+        let cursor = preview_cursor_events();
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "cursor": { "raw": true },
+            "timeline": { "segments": [], "zoomSegments": [], "styleSegments": [{
+                "start": 1.0, "end": 2.0, "overrides": { "cursor": { "raw": false } }
+            }] }
+        }))
+        .unwrap();
+        for (start, end, enabled, raw) in [
+            (1.0, 2.0, false, false),
+            (1.0, 1.0, true, false),
+            (2.0, 1.0, true, false),
+            (f64::NAN, 2.0, true, false),
+            (1.0, f64::INFINITY, true, false),
+            (1.0, 2.0, true, true),
+        ] {
+            let style = &mut project.timeline.as_mut().unwrap().style_segments[0];
+            style.start = start;
+            style.end = end;
+            style.enabled = enabled;
+            style.overrides.cursor.as_mut().unwrap().raw = raw;
+            let mut cache = PreviewCursorCache::default();
+            assert!(cache.get(0, &cursor, &project).is_none());
+            assert!(cache.entries.is_empty());
+        }
     }
 
     #[test]

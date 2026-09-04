@@ -491,8 +491,14 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
 
             consecutive_errors = 0;
             #[cfg(target_os = "macos")]
-            let mouse_position = match window.primary_monitor().ok().flatten().and_then(|monitor| {
-                macos_cursor_in_window_scale(mouse_position, monitor.scale_factor(), scale_factor)
+            let mouse_position = match objc2::rc::autoreleasepool(|_| {
+                window.primary_monitor().ok().flatten().and_then(|monitor| {
+                    macos_cursor_in_window_scale(
+                        mouse_position,
+                        monitor.scale_factor(),
+                        scale_factor,
+                    )
+                })
             }) {
                 Some(position) => position,
                 None => {

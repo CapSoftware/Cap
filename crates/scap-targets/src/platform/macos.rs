@@ -267,7 +267,7 @@ impl DisplayImpl {
 
 fn get_cursor_position() -> Option<LogicalPosition> {
     let event_source = core_graphics::event_source::CGEventSource::new(
-        core_graphics::event_source::CGEventSourceStateID::Private,
+        core_graphics::event_source::CGEventSourceStateID::CombinedSessionState,
     )
     .ok()?;
 

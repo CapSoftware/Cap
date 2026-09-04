@@ -23,7 +23,7 @@ name = "Cap GPUI"
 identifier = "so.cap.desktop.gpui"
 icon = ["assets/dock-icon.png"]
 category = "public.app-category.productivity"
-osx_minimum_system_version = "11.0"
+osx_minimum_system_version = "12.3"
 osx_info_plist_exts = ["resources/Info.plist"]
 osx_url_schemes = ["cap-desktop"]
 
@@ -188,6 +188,7 @@ windows-sys = { version = "0.59", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+wayland-client = "0.31"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 raw-window-handle = "0.6"

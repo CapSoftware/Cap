@@ -15,8 +15,8 @@ use std::{
 
 use cap_recording::sources::screen_capture::ScreenCaptureTarget;
 use gpui::{
-    App, AppContext as _, Bounds, Entity, Global, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, point, px, size,
+    App, AppContext as _, Bounds, Entity, Global, Pixels, Size, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, point, px, size,
 };
 use scap_targets::DisplayId;
 
@@ -43,6 +43,151 @@ pub const CONTROLS_WIDTH: f32 = 320.;
 pub const CONTROLS_HEIGHT: f32 = 150.;
 const CONTROLS_BOTTOM_OFFSET: f64 = 120.;
 const TARGET_CONTROLS_OFFSET_Y: f64 = 48.;
+
+pub(crate) fn display_work_area(
+    target: Option<&scap_targets::Display>,
+    cx: &App,
+) -> Option<Bounds<Pixels>> {
+    #[cfg(target_os = "macos")]
+    let display = target
+        .and_then(|target| target.id().to_string().parse::<u64>().ok())
+        .and_then(|id| cx.find_display(gpui::DisplayId::new(id)));
+    #[cfg(not(target_os = "macos"))]
+    let display = target.and_then(|target| platform_display_for_capture(target, cx));
+    #[cfg(target_os = "linux")]
+    if uses_wayland() {
+        return target.and_then(capture_display_bounds);
+    }
+    let display = display.or_else(|| cx.primary_display())?;
+    let available = display.visible_bounds();
+    #[cfg(target_os = "macos")]
+    {
+        let id = u64::from(display.id()).to_string().parse().ok()?;
+        let bounds = scap_targets::Display::from_id(&id)
+            .as_ref()
+            .and_then(capture_display_bounds)?;
+        let primary_height = cx.primary_display()?.bounds().size.height;
+        Some(global_macos_work_area(available, bounds, primary_height))
+    }
+    #[cfg(not(target_os = "macos"))]
+    Some(available)
+}
+
+#[cfg(target_os = "linux")]
+fn uses_wayland() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && (std::env::var_os("DISPLAY").is_none()
+            || std::env::var("XDG_SESSION_TYPE")
+                .is_ok_and(|session| session.eq_ignore_ascii_case("wayland")))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_display_for_capture(
+    target: &scap_targets::Display,
+    cx: &App,
+) -> Option<std::rc::Rc<dyn gpui::PlatformDisplay>> {
+    #[cfg(target_os = "linux")]
+    if let Some(uuid) = target.raw_handle().wayland_uuid() {
+        return cx
+            .displays()
+            .into_iter()
+            .find(|display| display.uuid().is_ok_and(|candidate| candidate == uuid));
+    }
+    let bounds = capture_display_bounds(target)?;
+    let mut matching = cx
+        .displays()
+        .into_iter()
+        .filter(|display| display.bounds().contains(&bounds.center()));
+    let display = matching.next()?;
+    #[cfg(target_os = "linux")]
+    if uses_wayland() && matching.next().is_some() {
+        return None;
+    }
+    Some(display)
+}
+
+fn capture_display_bounds(display: &scap_targets::Display) -> Option<Bounds<Pixels>> {
+    let bounds = display.raw_handle().logical_bounds()?;
+    Some(Bounds {
+        origin: point(
+            px(bounds.position().x() as f32),
+            px(bounds.position().y() as f32),
+        ),
+        size: size(
+            px(bounds.size().width() as f32),
+            px(bounds.size().height() as f32),
+        ),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn global_macos_work_area(
+    mut available: Bounds<Pixels>,
+    display: Bounds<Pixels>,
+    primary_height: Pixels,
+) -> Bounds<Pixels> {
+    // GPUI's macOS work area uses local x but includes the AppKit screen y.
+    // Windows opened without a display ID need primary-display coordinates.
+    let appkit_origin_y = primary_height - display.origin.y - display.size.height;
+    available.origin.x += display.origin.x;
+    available.origin.y += display.origin.y - appkit_origin_y;
+    available
+}
+
+fn inset_work_area(available: Bounds<Pixels>) -> Bounds<Pixels> {
+    let inset = point(
+        px(16.).min((available.size.width - px(1.)).max(px(0.)) / 2.),
+        px(16.).min((available.size.height - px(1.)).max(px(0.)) / 2.),
+    );
+    Bounds {
+        origin: available.origin + inset,
+        size: size(
+            (available.size.width - inset.x * 2.).max(px(1.)),
+            (available.size.height - inset.y * 2.).max(px(1.)),
+        ),
+    }
+}
+
+fn fit_window_bounds(bounds: Bounds<Pixels>, available: Bounds<Pixels>) -> Bounds<Pixels> {
+    let size = size(
+        bounds.size.width.min(available.size.width).max(px(1.)),
+        bounds.size.height.min(available.size.height).max(px(1.)),
+    );
+    Bounds {
+        origin: point(
+            bounds.origin.x.clamp(
+                available.origin.x,
+                available.origin.x + (available.size.width - size.width).max(px(0.)),
+            ),
+            bounds.origin.y.clamp(
+                available.origin.y,
+                available.origin.y + (available.size.height - size.height).max(px(0.)),
+            ),
+        ),
+        size,
+    }
+}
+
+fn opening_window_bounds(preferred: Size<Pixels>, cx: &App) -> Bounds<Pixels> {
+    let target = scap_targets::Display::get_containing_cursor();
+    match display_work_area(target.as_ref(), cx) {
+        Some(available) => {
+            let available = inset_work_area(available);
+            fit_window_bounds(
+                Bounds::centered_at(available.center(), preferred),
+                available,
+            )
+        }
+        None => Bounds::centered(None, preferred, cx),
+    }
+}
+
+fn fitted_window_min_size(preferred: Size<Pixels>, bounds: Bounds<Pixels>) -> Size<Pixels> {
+    size(
+        preferred.width.min(bounds.size.width),
+        preferred.height.min(bounds.size.height),
+    )
+}
 
 pub struct AppWindows {
     pub main: WindowHandle<MainWindow>,
@@ -929,8 +1074,7 @@ pub fn open_settings(page: Page, cx: &mut App) {
         return;
     }
 
-    let bounds = Bounds::centered(
-        None,
+    let bounds = opening_window_bounds(
         size(
             px(settings_window::SETTINGS_WIDTH),
             px(settings_window::SETTINGS_HEIGHT),
@@ -962,9 +1106,12 @@ pub fn open_settings(page: Page, cx: &mut App) {
             // `.resizable(true).maximized(false)`, and `min_inner_size`.
             is_resizable: true,
             is_minimizable: true,
-            window_min_size: Some(size(
-                px(settings_window::SETTINGS_MIN_WIDTH),
-                px(settings_window::SETTINGS_MIN_HEIGHT),
+            window_min_size: Some(fitted_window_min_size(
+                size(
+                    px(settings_window::SETTINGS_MIN_WIDTH),
+                    px(settings_window::SETTINGS_MIN_HEIGHT),
+                ),
+                bounds,
             )),
             // `builder.transparent(true)` on macOS -- the panes paint, the
             // material shows through the gap.
@@ -1079,27 +1226,19 @@ pub fn open_onboarding(cx: &mut App) {
             }
         })
         .detach();
-        hide_main_window(cx);
+        hide_main_and_park_camera_preview(cx);
         return;
     }
 
-    let cursor_display = scap_targets::Display::get_containing_cursor()
-        .and_then(|display| display.raw_handle().logical_bounds());
-    let display = cursor_display
-        .and_then(|bounds| {
-            let center = point(
-                px((bounds.position().x() + bounds.size().width() / 2.) as f32),
-                px((bounds.position().y() + bounds.size().height() / 2.) as f32),
-            );
-            cx.displays()
-                .into_iter()
-                .find(|display| display.bounds().contains(&center))
-        })
-        .or_else(|| cx.primary_display());
-    let bounds = match display {
-        Some(display) => {
-            let available = display.visible_bounds();
-            let width = (f32::from(display.bounds().size.width) * 0.58)
+    let display = scap_targets::Display::get_containing_cursor();
+    let bounds = match display_work_area(display.as_ref(), cx) {
+        Some(available) => {
+            let display_width = display
+                .as_ref()
+                .and_then(capture_display_bounds)
+                .map(|bounds| bounds.size.width)
+                .unwrap_or(available.size.width);
+            let width = (f32::from(display_width) * 0.58)
                 .clamp(onboarding_window::ONBOARDING_WIDTH, 1080.)
                 .min((f32::from(available.size.width) - 32.).max(1.));
             let height = (width * 0.72)
@@ -1163,7 +1302,7 @@ pub fn open_onboarding(cx: &mut App) {
         }
     })
     .detach();
-    hide_main_window(cx);
+    hide_main_and_park_camera_preview(cx);
     crate::tray::refresh_menu(cx);
 }
 
@@ -1258,8 +1397,7 @@ pub fn open_mode_select(cx: &mut App) -> bool {
         return true;
     }
 
-    let bounds = Bounds::centered(
-        None,
+    let bounds = opening_window_bounds(
         size(
             px(mode_select_window::MODE_SELECT_WIDTH),
             px(mode_select_window::MODE_SELECT_HEIGHT),
@@ -1378,8 +1516,7 @@ pub fn open_teleprompter(cx: &mut App) {
         return;
     }
 
-    let bounds = Bounds::centered(
-        None,
+    let bounds = opening_window_bounds(
         size(
             px(teleprompter_window::TELEPROMPTER_WIDTH),
             px(teleprompter_window::TELEPROMPTER_HEIGHT),
@@ -1407,9 +1544,12 @@ pub fn open_teleprompter(cx: &mut App) {
             // `resizable: true`, `minWidth: 420, minHeight: 220`.
             is_resizable: true,
             is_minimizable: true,
-            window_min_size: Some(size(
-                px(teleprompter_window::TELEPROMPTER_MIN_WIDTH),
-                px(teleprompter_window::TELEPROMPTER_MIN_HEIGHT),
+            window_min_size: Some(fitted_window_min_size(
+                size(
+                    px(teleprompter_window::TELEPROMPTER_MIN_WIDTH),
+                    px(teleprompter_window::TELEPROMPTER_MIN_HEIGHT),
+                ),
+                bounds,
             )),
             // `transparent: true`, `shadow: true`: the shell paints a tint and
             // the material shows through.
@@ -1781,6 +1921,10 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
     // (`target_select_overlay.rs:595-617`): with the main window hidden below
     // and the overlays non-activating, a plain key handler has nothing to be
     // delivered to.
+    if cx.global::<AppWindows>().overlays.is_empty() {
+        disarm_target_selection(cx);
+        return false;
+    }
     platform::register_escape_hotkey();
     true
 }
@@ -2060,8 +2204,6 @@ pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
     } else {
         release_camera_park(cx);
         close_target_overlays(cx);
-        cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
-        cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
     }
 
     let preparing = main
@@ -2070,8 +2212,11 @@ pub fn start_recording_from_overlay(target: ScreenCaptureTarget, cx: &mut App) {
             view.is_preparing_recording()
         })
         .unwrap_or(false);
-    if retained_area && !preparing && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
+    if !preparing && RecordingSession::global(cx).read(cx).phase == Phase::Idle {
         dismiss_target_overlays(cx);
+    } else if !retained_area {
+        cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
+        cx.global_mut::<AppWindows>().editor_hidden_for_picker = None;
     }
 }
 
@@ -2119,6 +2264,30 @@ fn open_overlay(
     };
     let width = bounds.size().width();
     let height = bounds.size().height();
+    let window_bounds = WindowBounds::Windowed(Bounds {
+        origin: point(px(0.), px(0.)),
+        size: size(px(width as f32), px(height as f32)),
+    });
+    #[cfg(target_os = "linux")]
+    let overlay_display = if uses_wayland() {
+        let Some(matched) = platform_display_for_capture(display, cx) else {
+            let capture_display_id = display.id();
+            tracing::warn!(%capture_display_id, "could not match capture display to a Wayland output");
+            return;
+        };
+        Some(matched)
+    } else {
+        None
+    };
+    #[cfg(target_os = "linux")]
+    let window_bounds = if overlay_display.is_some() {
+        WindowBounds::Fullscreen(Bounds {
+            origin: point(px(0.), px(0.)),
+            size: size(px(width as f32), px(height as f32)),
+        })
+    } else {
+        window_bounds
+    };
 
     let handle = cx.open_window(
         WindowOptions {
@@ -2126,10 +2295,9 @@ fn open_overlay(
             // window-origin math cannot express "cover this display" (see
             // `platform::set_window_frame_cg`). The size is honoured, and it is
             // the size the renderer is built for.
-            window_bounds: Some(WindowBounds::Windowed(Bounds {
-                origin: point(px(0.), px(0.)),
-                size: size(px(width as f32), px(height as f32)),
-            })),
+            window_bounds: Some(window_bounds),
+            #[cfg(target_os = "linux")]
+            display_id: overlay_display.as_ref().map(|display| display.id()),
             titlebar: None,
             // `NSWindowStyleMaskNonActivatingPanel` in windows.rs: the overlay
             // takes clicks without activating the app over the one being
@@ -2351,14 +2519,13 @@ fn excluded_own_windows(rules: &[crate::store::WindowExclusion]) -> Vec<OwnWindo
         .collect()
 }
 
-/// `apply_content_protection` (`windows.rs:3382-3407`): the same set, minus the
-/// camera window, which that loop skips outright (`:3393-3398`) because its
-/// protection is mode-driven from the start path instead
-/// (`recording.rs:1617-1624`).
 fn content_protection_targets(rules: &[crate::store::WindowExclusion]) -> Vec<OwnWindow> {
     excluded_own_windows(rules)
         .into_iter()
         .filter(|kind| *kind != OwnWindow::Camera)
+        // SCK excludes the controls by window ID. NSWindowSharingNone also hides
+        // them from Screen Sharing, leaving remote users without recording controls.
+        .filter(|kind| !cfg!(target_os = "macos") || *kind != OwnWindow::Controls)
         .collect()
 }
 
@@ -3595,6 +3762,7 @@ pub fn open_camera_window(cx: &mut App) {
                             shadow: false,
                         },
                     );
+                    #[cfg(not(target_os = "macos"))]
                     if !inline {
                         platform::show_window_without_focus(window);
                     }
@@ -3603,6 +3771,9 @@ pub fn open_camera_window(cx: &mut App) {
                 .ok()
                 .flatten();
             remove_popup_window_chrome(native, cx);
+            #[cfg(target_os = "macos")]
+            update_camera_presentation(!inline, cx);
+            #[cfg(not(target_os = "macos"))]
             sync_camera_presentation(cx);
             sync_opened_camera_with_picker(cx);
             refresh_target_overlays(cx);
@@ -4349,11 +4520,7 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
         return;
     }
 
-    // `cursor_monitor.center_position(1275.0, 800.0)` in the Tauri arm; gpui
-    // centres on the active display, which is the same one in every
-    // single-pointer case.
-    let bounds = Bounds::centered(
-        None,
+    let bounds = opening_window_bounds(
         size(
             px(editor_window::EDITOR_WIDTH),
             px(editor_window::EDITOR_HEIGHT),
@@ -4379,12 +4546,14 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
             kind: WindowKind::Normal,
             focus: true,
             show: true,
-            // `.maximizable(true)` with `min_inner_size == inner_size`.
             is_resizable: true,
             is_minimizable: true,
-            window_min_size: Some(size(
-                px(editor_window::EDITOR_WIDTH),
-                px(editor_window::EDITOR_HEIGHT),
+            window_min_size: Some(fitted_window_min_size(
+                size(
+                    px(editor_window::EDITOR_WIDTH),
+                    px(editor_window::EDITOR_HEIGHT),
+                ),
+                bounds,
             )),
             // Opaque, and no native material: `is_transparent()`
             // (`windows.rs:1069-1082`) does not list Editor, and
@@ -5566,11 +5735,11 @@ fn controls_origin(config: &StartConfig) -> (f64, f64) {
         return (x, y);
     }
 
-    let display = match &config.target {
-        ScreenCaptureTarget::Display { id } => scap_targets::Display::from_id(id),
-        _ => scap_targets::Display::get_containing_cursor(),
-    }
-    .unwrap_or_else(scap_targets::Display::primary);
+    let display = config
+        .target
+        .display()
+        .or_else(scap_targets::Display::get_containing_cursor)
+        .unwrap_or_else(scap_targets::Display::primary);
 
     match display.raw_handle().logical_bounds() {
         Some(bounds) => (
@@ -5592,14 +5761,22 @@ fn open_controls(
         return None;
     }
     let (x, y) = controls_origin(config);
+    let bounds = Bounds {
+        origin: point(px(x as f32), px(y as f32)),
+        size: size(px(CONTROLS_WIDTH), px(CONTROLS_HEIGHT)),
+    };
+    let display = config
+        .target
+        .display()
+        .or_else(scap_targets::Display::get_containing_cursor);
+    let bounds = display_work_area(display.as_ref(), cx)
+        .map(|available| fit_window_bounds(bounds, inset_work_area(available)))
+        .unwrap_or(bounds);
     let has_microphone = config.microphone.is_some();
 
     let handle = cx.open_window(
         WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds {
-                origin: point(px(x as f32), px(y as f32)),
-                size: size(px(CONTROLS_WIDTH), px(CONTROLS_HEIGHT)),
-            })),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
             // No titlebar at all: with one, the panel still draws standard
             // window buttons floating in the transparent top of the window.
             titlebar: None,
@@ -5742,8 +5919,7 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
         return;
     }
 
-    let bounds = Bounds::centered(
-        None,
+    let bounds = opening_window_bounds(
         size(
             px(screenshot_editor::SCREENSHOT_EDITOR_WIDTH),
             px(screenshot_editor::SCREENSHOT_EDITOR_HEIGHT),
@@ -5764,9 +5940,12 @@ pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
             show: true,
             is_resizable: true,
             is_minimizable: true,
-            window_min_size: Some(size(
-                px(screenshot_editor::SCREENSHOT_EDITOR_MIN_WIDTH),
-                px(screenshot_editor::SCREENSHOT_EDITOR_MIN_HEIGHT),
+            window_min_size: Some(fitted_window_min_size(
+                size(
+                    px(screenshot_editor::SCREENSHOT_EDITOR_MIN_WIDTH),
+                    px(screenshot_editor::SCREENSHOT_EDITOR_MIN_HEIGHT),
+                ),
+                bounds,
             )),
             ..Default::default()
         },
@@ -5898,6 +6077,114 @@ fn close_controls(session: &Entity<RecordingSession>, cx: &mut App) {
 mod tests {
     use super::*;
     use crate::store::{DEFAULT_EXCLUDED_WINDOW_TITLES, WindowExclusion, default_excluded_windows};
+
+    #[test]
+    fn small_display_keeps_editor_and_minimum_size_inside_the_work_area() {
+        let available = inset_work_area(Bounds {
+            origin: point(px(0.), px(25.)),
+            size: size(px(1024.), px(684.)),
+        });
+        let preferred = size(px(1275.), px(800.));
+        let bounds = fit_window_bounds(
+            Bounds::centered_at(available.center(), preferred),
+            available,
+        );
+        assert_eq!(bounds.origin, point(px(16.), px(41.)));
+        assert_eq!(bounds.size, size(px(992.), px(652.)));
+        assert_eq!(fitted_window_min_size(preferred, bounds), bounds.size);
+    }
+
+    #[test]
+    fn spacious_display_preserves_preferred_editor_size() {
+        let available = inset_work_area(Bounds {
+            origin: point(px(0.), px(25.)),
+            size: size(px(1920.), px(995.)),
+        });
+        let preferred = size(px(1275.), px(800.));
+        let centered = Bounds::centered_at(available.center(), preferred);
+        assert_eq!(fit_window_bounds(centered, available), centered);
+        assert_eq!(fitted_window_min_size(preferred, centered), preferred);
+    }
+
+    #[test]
+    fn controls_for_an_offscreen_target_stay_on_its_negative_origin_display() {
+        let available = inset_work_area(Bounds {
+            origin: point(px(-1440.), px(-180.)),
+            size: size(px(1440.), px(850.)),
+        });
+        for origin in [point(px(-2200.), px(-500.)), point(px(20.), px(800.))] {
+            let bounds = fit_window_bounds(
+                Bounds {
+                    origin,
+                    size: size(px(CONTROLS_WIDTH), px(CONTROLS_HEIGHT)),
+                },
+                available,
+            );
+            assert_eq!(bounds.size, size(px(CONTROLS_WIDTH), px(CONTROLS_HEIGHT)));
+            assert!(bounds.origin.x >= available.origin.x);
+            assert!(bounds.origin.y >= available.origin.y);
+            assert!(bounds.right() <= available.right());
+            assert!(bounds.bottom() <= available.bottom());
+        }
+    }
+
+    #[test]
+    fn scaled_work_areas_fit_without_changing_logical_pixel_sizes() {
+        for logical_size in [size(px(1280.), px(650.)), size(px(853.), px(455.))] {
+            let available = inset_work_area(Bounds {
+                origin: point(px(0.), px(0.)),
+                size: logical_size,
+            });
+            let bounds = fit_window_bounds(
+                Bounds::centered_at(available.center(), size(px(782.), px(775.))),
+                available,
+            );
+            assert_eq!(bounds.size.width, px(782.));
+            assert_eq!(bounds.size.height, logical_size.height - px(32.));
+            let minimum = fitted_window_min_size(size(px(780.), px(560.)), bounds);
+            assert!(minimum.width <= bounds.size.width);
+            assert!(minimum.height <= bounds.size.height);
+        }
+    }
+
+    #[test]
+    fn tiny_work_area_cannot_produce_an_inverted_clamp_range() {
+        let available = inset_work_area(Bounds {
+            origin: point(px(10.), px(20.)),
+            size: size(px(1.), px(1.)),
+        });
+        let bounds = fit_window_bounds(
+            Bounds::centered_at(available.center(), size(px(782.), px(775.))),
+            available,
+        );
+        assert_eq!(bounds, available);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_work_area_preserves_horizontal_and_vertical_display_origins() {
+        for (display_origin, appkit_y) in [
+            (point(px(-1440.), px(0.)), 180.),
+            (point(px(1920.), px(0.)), 180.),
+            (point(px(0.), px(-900.)), 1080.),
+            (point(px(0.), px(1080.)), -900.),
+        ] {
+            let display = Bounds {
+                origin: display_origin,
+                size: size(px(1440.), px(900.)),
+            };
+            let available = global_macos_work_area(
+                Bounds {
+                    origin: point(px(0.), px(appkit_y + 25.)),
+                    size: size(px(1440.), px(825.)),
+                },
+                display,
+                px(1080.),
+            );
+            assert_eq!(available.origin, display_origin + point(px(0.), px(25.)));
+            assert_eq!(available.size, size(px(1440.), px(825.)));
+        }
+    }
 
     fn area_target(display: &str, x: f64, y: f64, width: f64, height: f64) -> ScreenCaptureTarget {
         ScreenCaptureTarget::Area {
@@ -6876,9 +7163,6 @@ mod tests {
         assert!(excluded_own_windows(&by_identity).is_empty());
     }
 
-    /// `apply_content_protection` walks the same rules but skips the camera
-    /// window outright (`windows.rs:3393-3398`); the camera's protection is the
-    /// mode's business instead (`recording.rs:1617-1624`).
     #[test]
     fn content_protection_skips_the_camera_and_follows_the_mode() {
         let studio = own_window_exclusion_rules(default_excluded_windows(), RecordingMode::Studio);
@@ -6887,6 +7171,7 @@ mod tests {
             vec![
                 OwnWindow::Main,
                 OwnWindow::Settings,
+                #[cfg(not(target_os = "macos"))]
                 OwnWindow::Controls,
                 OwnWindow::ModeSelect,
                 OwnWindow::Teleprompter,

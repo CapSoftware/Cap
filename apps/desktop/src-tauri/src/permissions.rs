@@ -148,7 +148,7 @@ fn macos_focus_permission_window(app: &tauri::AppHandle) {
 }
 
 #[cfg(target_os = "macos")]
-fn macos_activate_permission_request(app: &tauri::AppHandle) {
+fn macos_prepare_permission_request(app: &tauri::AppHandle, focus_app: bool) {
     if crate::app_is_exiting(app) {
         return;
     }
@@ -159,6 +159,10 @@ fn macos_activate_permission_request(app: &tauri::AppHandle) {
 
     if let Err(err) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
         tracing::warn!("Failed to set activation policy to Regular: {err}");
+    }
+
+    if !focus_app {
+        return;
     }
 
     macos_focus_permission_window(app);
@@ -607,7 +611,7 @@ pub enum OSPermission {
 pub fn open_permission_settings(_app: tauri::AppHandle, _permission: OSPermission) {
     #[cfg(target_os = "macos")]
     {
-        macos_activate_permission_request(&_app);
+        macos_prepare_permission_request(&_app, false);
         macos_open_permission_settings(&_app, &_permission);
     }
 }
@@ -618,7 +622,7 @@ pub fn open_permission_settings(_app: tauri::AppHandle, _permission: OSPermissio
 pub async fn request_permission(_app: tauri::AppHandle, _permission: OSPermission) {
     #[cfg(target_os = "macos")]
     {
-        macos_activate_permission_request(&_app);
+        macos_prepare_permission_request(&_app, true);
 
         let permission = _permission;
         let app = _app.clone();
@@ -638,6 +642,52 @@ pub async fn request_permission(_app: tauri::AppHandle, _permission: OSPermissio
     }
 
     crate::tray::refresh_tray_menu_for_app(&_app);
+}
+
+pub(crate) fn check_camera_access() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let status =
+        objc2::rc::autoreleasepool(|_| macos_permission_status(&OSPermission::Camera, false));
+    #[cfg(not(target_os = "macos"))]
+    let status = OSPermissionStatus::NotNeeded;
+    camera_access_result(status)
+}
+
+fn camera_access_result(status: OSPermissionStatus) -> Result<(), String> {
+    match status {
+        OSPermissionStatus::Granted | OSPermissionStatus::NotNeeded => Ok(()),
+        OSPermissionStatus::Empty => Err(
+            "Camera access is required. Click the camera control to allow access, then select your camera again."
+                .into(),
+        ),
+        OSPermissionStatus::Denied => Err(
+            "Camera access is blocked. Allow Cap in System Settings > Privacy & Security > Camera, then select your camera again. If access is restricted, contact your administrator."
+                .into(),
+        ),
+    }
+}
+
+pub(crate) fn check_microphone_access() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let status =
+        objc2::rc::autoreleasepool(|_| macos_permission_status(&OSPermission::Microphone, false));
+    #[cfg(not(target_os = "macos"))]
+    let status = OSPermissionStatus::NotNeeded;
+    microphone_access_result(status)
+}
+
+fn microphone_access_result(status: OSPermissionStatus) -> Result<(), String> {
+    match status {
+        OSPermissionStatus::Granted | OSPermissionStatus::NotNeeded => Ok(()),
+        OSPermissionStatus::Empty => Err(
+            "Microphone access is required. Click the microphone control to allow access, then select your microphone again."
+                .into(),
+        ),
+        OSPermissionStatus::Denied => Err(
+            "Microphone access is blocked. Allow Cap in System Settings > Privacy & Security > Microphone, then select your microphone again."
+                .into(),
+        ),
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, specta::Type, Clone)]
@@ -707,6 +757,38 @@ pub fn do_permissions_check(_initial_check: bool) -> OSPermissionsCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_setup_requires_granted_access() {
+        for status in [OSPermissionStatus::Granted, OSPermissionStatus::NotNeeded] {
+            assert!(camera_access_result(status).is_ok());
+        }
+        assert!(
+            camera_access_result(OSPermissionStatus::Empty)
+                .unwrap_err()
+                .contains("camera control")
+        );
+        let blocked = camera_access_result(OSPermissionStatus::Denied).unwrap_err();
+        assert!(blocked.contains("System Settings > Privacy & Security > Camera"));
+        assert!(blocked.contains("restricted"));
+    }
+
+    #[test]
+    fn microphone_setup_requires_granted_access() {
+        for status in [OSPermissionStatus::Granted, OSPermissionStatus::NotNeeded] {
+            assert!(microphone_access_result(status).is_ok());
+        }
+        assert!(
+            microphone_access_result(OSPermissionStatus::Empty)
+                .unwrap_err()
+                .contains("microphone control")
+        );
+        assert!(
+            microphone_access_result(OSPermissionStatus::Denied)
+                .unwrap_err()
+                .contains("System Settings > Privacy & Security > Microphone")
+        );
+    }
 
     #[test]
     fn permission_status_permitted_matches_granted_states() {

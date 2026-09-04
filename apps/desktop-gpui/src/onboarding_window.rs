@@ -611,8 +611,6 @@ impl OnboardingWindow {
                 this.pending = None;
                 if permission.required() && !this.state.status(permission).permitted() {
                     this.state.note_request_failed(permission);
-                    this.state.note_settings_opened(permission);
-                    permissions::open_permission_settings(permission);
                 }
                 if this.state.all_shown_granted() {
                     this.poll = None;

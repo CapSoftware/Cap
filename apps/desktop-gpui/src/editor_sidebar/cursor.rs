@@ -150,7 +150,7 @@ impl EditorWindow {
 
     fn selected_cursor_card(&self) -> CursorCard {
         selected_card(
-            self.project.cursor.cursor_type(),
+            self.style_control_project().cursor.cursor_type(),
             self.recorded_cursor_family,
         )
     }
@@ -295,7 +295,8 @@ impl EditorWindow {
 
     pub(crate) fn render_cursor_ripple(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
-        let ripple = &self.project.cursor.ripple;
+        let project = self.style_control_project();
+        let ripple = &project.cursor.ripple;
         let enabled = ripple.enabled;
         let color = ripple.color;
 
@@ -308,7 +309,7 @@ impl EditorWindow {
                     .value(
                         ui::Toggle::plain(&theme, "cursor-ripple", enabled)
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                let next = !this.project.cursor.ripple.enabled;
+                                let next = !this.style_control_project().cursor.ripple.enabled;
                                 this.sidebar.cursor_ripple_open.set_open(next);
                                 this.animate_collapsibles(window, cx);
                                 this.edit_project("cursor-ripple", window, cx, move |project| {

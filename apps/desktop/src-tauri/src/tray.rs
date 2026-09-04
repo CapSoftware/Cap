@@ -971,8 +971,11 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             let is_recording = Arc::clone(&is_recording);
             let app_handle = app.clone();
             move |tray, event| {
-                if let tauri::tray::TrayIconEvent::Click { .. } = event {
+                if let tauri::tray::TrayIconEvent::Click { button_state, .. } = event {
                     if is_recording.load(Ordering::Relaxed) {
+                        if button_state != tauri::tray::MouseButtonState::Down {
+                            return;
+                        }
                         let app = app_handle.clone();
                         tokio::spawn(async move {
                             let _ = recording::stop_recording(app.clone(), app.state()).await;

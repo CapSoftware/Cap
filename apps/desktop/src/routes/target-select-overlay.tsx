@@ -82,6 +82,7 @@ import {
 	createOptionsQuery,
 	createOrganizationsQuery,
 } from "~/utils/queries";
+import { isRecordingStartCancelled } from "~/utils/recording";
 import { createRecordingMenuPopup } from "~/utils/recording-menu";
 import {
 	type CanvasControls,
@@ -833,12 +834,51 @@ function Inner() {
 							minSize(),
 						);
 					});
+					const linux = ostype() === "linux";
+					const [localPointerInside, setLocalPointerInside] = createSignal<
+						boolean | undefined
+					>();
+					if (linux) {
+						const updateLocalPointer = (event: PointerEvent) => {
+							setLocalPointerInside(
+								event.clientX >= 0 &&
+									event.clientY >= 0 &&
+									event.clientX < window.innerWidth &&
+									event.clientY < window.innerHeight,
+							);
+						};
+						createEventListener(
+							window,
+							"pointerover",
+							updateLocalPointer,
+							true,
+						);
+						createEventListener(
+							window,
+							"pointermove",
+							updateLocalPointer,
+							true,
+						);
+						createEventListener(
+							window,
+							"pointerout",
+							(event) => {
+								if (event.relatedTarget === null) setLocalPointerInside(false);
+							},
+							true,
+						);
+						createEventListener(window, "blur", () =>
+							setLocalPointerInside(false),
+						);
+					}
 					const isActiveDisplay = createMemo(() => {
 						const activeDisplayId = targetUnderCursor.display_id;
-						if (activeDisplayId) {
+						if (activeDisplayId != null) {
 							return activeDisplayId === displayId();
 						}
-						return params.isHoveredDisplay === "true";
+						return linux
+							? (localPointerInside() ?? params.isHoveredDisplay === "true")
+							: params.isHoveredDisplay === "true";
 					});
 					const shouldShowOverlay = createMemo(
 						() => isInteracting() || isActiveDisplay(),
@@ -2078,7 +2118,7 @@ function RecordingControls(props: {
 					toast.error(
 						"Selected microphone is not available. Please select a different microphone in settings.",
 					);
-				} else {
+				} else if (!isRecordingStartCancelled(e)) {
 					toast.error(`Failed to start recording: ${msg}`);
 				}
 				// An IPC-level rejection never reaches the backend, so no

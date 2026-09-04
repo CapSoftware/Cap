@@ -53,9 +53,14 @@ impl Default for CaptionData {
 }
 
 lazy_static::lazy_static! {
-    static ref WHISPER_CONTEXT: Arc<Mutex<Option<Arc<WhisperContext>>>> = Arc::new(Mutex::new(None));
+    static ref WHISPER_CONTEXT: Arc<Mutex<Option<CachedWhisperContext>>> = Arc::new(Mutex::new(None));
     static ref MODEL_DOWNLOADS: Mutex<HashMap<String, ActiveModelDownload>> = Mutex::new(HashMap::new());
     static ref TRANSCRIPTION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+}
+
+struct CachedWhisperContext {
+    model_path: String,
+    context: Arc<WhisperContext>,
 }
 
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
@@ -102,6 +107,22 @@ async fn invalidate_parakeet_cache_for_dir(model_dir: &Path) {
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 async fn invalidate_parakeet_cache_for_dir(_model_dir: &Path) {}
+
+async fn invalidate_whisper_cache_for_path(model_path: &Path) {
+    let cached_context = {
+        let mut context = WHISPER_CONTEXT.lock().await;
+        if context
+            .as_ref()
+            .is_some_and(|cached| Path::new(&cached.model_path) == model_path)
+        {
+            tracing::info!("Releasing deleted Whisper model from cache");
+            context.take()
+        } else {
+            None
+        }
+    };
+    drop(cached_context);
+}
 
 pub async fn release_ml_models() {
     {
@@ -689,11 +710,14 @@ fn lock_transcription_worker_slot() -> std::sync::MutexGuard<'static, ()> {
 }
 
 fn get_whisper_context_blocking(model_path: &str) -> Result<Arc<WhisperContext>, String> {
+    cap_utils::local_captions::ensure_whisper_cpu_support()?;
     let mut context_guard = WHISPER_CONTEXT.blocking_lock();
 
-    if let Some(ref existing) = *context_guard {
+    if let Some(ref existing) = *context_guard
+        && existing.model_path == model_path
+    {
         log::info!("Reusing cached Whisper context");
-        return Ok(existing.clone());
+        return Ok(existing.context.clone());
     }
 
     log::info!("Initializing Whisper context with model: {model_path}");
@@ -701,7 +725,10 @@ fn get_whisper_context_blocking(model_path: &str) -> Result<Arc<WhisperContext>,
         .map_err(|e| format!("Failed to load Whisper model: {e}"))?;
 
     let ctx_arc = Arc::new(ctx);
-    *context_guard = Some(ctx_arc.clone());
+    *context_guard = Some(CachedWhisperContext {
+        model_path: model_path.to_string(),
+        context: ctx_arc.clone(),
+    });
 
     Ok(ctx_arc)
 }
@@ -1228,6 +1255,7 @@ fn process_with_parakeet(
         model
     } else {
         tracing::info!("Loading Parakeet TDT model from: {model_dir}");
+        cap_camera_effects::initialize_onnx_runtime().map_err(|error| format!("{error:#}"))?;
         let model = ParakeetTDT::from_pretrained(model_dir, None).map_err(|e| format!("{e}"))?;
         let loaded_model = Arc::new(std::sync::Mutex::new(model));
 
@@ -2245,6 +2273,8 @@ pub async fn delete_whisper_model(app: AppHandle, model_path: String) -> Result<
     tokio::fs::remove_file(&validated_path)
         .await
         .map_err(|e| format!("Failed to delete model file: {e}"))?;
+
+    invalidate_whisper_cache_for_path(&validated_path).await;
 
     Ok(())
 }

@@ -385,7 +385,7 @@ fn icon_button(
 
 impl EditorWindow {
     pub(crate) fn animated_gradient_config(&self) -> Option<&AnimatedGradientConfig> {
-        match &self.project.background.source {
+        match &self.style_background().source {
             BackgroundSource::AnimatedGradient { config } => Some(config),
             _ => None,
         }
@@ -398,7 +398,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         let selection = pending_selection(
-            &self.project.background.source,
+            &self.style_background().source,
             previous,
             self.sidebar.source_tab,
         );

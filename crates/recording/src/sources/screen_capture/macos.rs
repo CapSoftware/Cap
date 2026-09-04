@@ -28,6 +28,45 @@ use tracing::{debug, error, info, warn};
 const MAX_CAPTURE_RESTARTS: u32 = 3;
 const RESTART_DELAY: Duration = Duration::from_secs(2);
 
+fn excluded_shareable_windows(
+    excluded_windows: &[WindowId],
+    content: &sc::ShareableContent,
+    capture_phase: &'static str,
+) -> Vec<arc::R<sc::Window>> {
+    if excluded_windows.is_empty() {
+        return Vec::new();
+    }
+
+    let windows = content.windows();
+    let mut collected = Vec::new();
+    for window_id in excluded_windows {
+        let Ok(native_id) = window_id.to_string().parse::<u32>() else {
+            warn!(%window_id, capture_phase, "Excluded window has an invalid native id");
+            continue;
+        };
+
+        // New or protected panels can be absent from the CG on-screen list
+        // while still belonging to the snapshot used to build this filter.
+        if let Some(window) = windows.iter().find(|window| window.id() == native_id) {
+            collected.push(window.retained());
+        } else {
+            warn!(
+                %window_id,
+                capture_phase,
+                "Excluded window missing from ScreenCaptureKit shareable content"
+            );
+        }
+    }
+
+    info!(
+        capture_phase,
+        configured_excluded_windows = excluded_windows.len(),
+        mapped_excluded_windows = collected.len(),
+        "Mapped ScreenCaptureKit excluded windows"
+    );
+    collected
+}
+
 struct FrameScaler {
     session: arc::R<cidre::vt::PixelTransferSession>,
     pool: arc::R<cv::PixelBufPool>,
@@ -180,37 +219,8 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         let display = Display::from_id(&self.config.display)
             .ok_or_else(|| SourceError::NoDisplay(self.config.display.clone()))?;
 
-        let excluded_sc_windows = if self.excluded_windows.is_empty() {
-            Vec::new()
-        } else {
-            let mut collected = Vec::new();
-
-            for window_id in &self.excluded_windows {
-                let Some(window) = Window::from_id(window_id) else {
-                    warn!(%window_id, "Excluded window id no longer resolves");
-                    continue;
-                };
-
-                if let Some(sc_window) = window.raw_handle().as_sc(self.shareable_content.clone()) {
-                    collected.push(sc_window);
-                } else {
-                    warn!(
-                        %window_id,
-                        window_title = ?window.name(),
-                        owner_name = ?window.owner_name(),
-                        "Excluded window missing from ScreenCaptureKit shareable content"
-                    );
-                }
-            }
-
-            info!(
-                configured_excluded_windows = self.excluded_windows.len(),
-                mapped_excluded_windows = collected.len(),
-                "Mapped ScreenCaptureKit excluded windows"
-            );
-
-            collected
-        };
+        let excluded_sc_windows =
+            excluded_shareable_windows(&self.excluded_windows, &self.shareable_content, "initial");
 
         let content_filter = display
             .raw_handle()
@@ -938,33 +948,8 @@ async fn rebuild_capturer(params: &CapturerRebuildParams) -> anyhow::Result<Capt
     let display = Display::from_id(&params.display_id)
         .ok_or_else(|| anyhow!("Display not found during restart: {:?}", params.display_id))?;
 
-    let excluded_sc_windows = if params.excluded_windows.is_empty() {
-        Vec::new()
-    } else {
-        let mut collected = Vec::new();
-        for window_id in &params.excluded_windows {
-            let Some(window) = Window::from_id(window_id) else {
-                warn!(%window_id, "Excluded screenshot window id no longer resolves");
-                continue;
-            };
-            if let Some(sc_window) = window.raw_handle().as_sc(shareable_content.clone()) {
-                collected.push(sc_window);
-            } else {
-                warn!(
-                    %window_id,
-                    window_title = ?window.name(),
-                    owner_name = ?window.owner_name(),
-                    "Excluded screenshot window missing from ScreenCaptureKit shareable content"
-                );
-            }
-        }
-        info!(
-            configured_excluded_windows = params.excluded_windows.len(),
-            mapped_excluded_windows = collected.len(),
-            "Mapped screenshot ScreenCaptureKit excluded windows"
-        );
-        collected
-    };
+    let excluded_sc_windows =
+        excluded_shareable_windows(&params.excluded_windows, &shareable_content, "restart");
 
     let content_filter = display
         .raw_handle()
