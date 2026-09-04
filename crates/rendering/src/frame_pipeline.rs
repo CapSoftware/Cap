@@ -10,7 +10,7 @@ use crate::{ProjectUniforms, RenderingError};
 #[cfg(target_os = "macos")]
 use crate::iosurface_texture::{IOSurfaceTextureCache, import_metal_texture_to_wgpu_with_usage};
 #[cfg(target_os = "macos")]
-use cidre::{arc, cf, cv, mtl};
+use cidre::{arc, cf, cv, io, mtl};
 
 const GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 10;
 const SOFTWARE_GPU_BUFFER_WAIT_TIMEOUT_SECS: u64 = 60;
@@ -206,8 +206,42 @@ impl Nv12Surface {
 }
 
 #[cfg(target_os = "macos")]
+fn surface_allocation_attributes(limit: usize) -> Result<arc::R<cf::Dictionary>, RenderingError> {
+    let threshold = cf::Number::from_usize(limit);
+    cf::Dictionary::with_keys_values(
+        &[cv::pixel_buffer_pool::aux_attr_keys::allocation_threashold().as_ref()],
+        &[threshold.as_ref()],
+    )
+    .ok_or_else(|| RenderingError::Surface("Failed to create surface allocation limit".to_string()))
+}
+
+#[cfg(target_os = "macos")]
+async fn acquire_surface_buffer<T: Send>(
+    owner: &mut T,
+    mut allocate: impl FnMut(&mut T) -> Result<arc::R<cv::PixelBuf>, cidre::os::Error> + Send,
+) -> Result<arc::R<cv::PixelBuf>, RenderingError> {
+    let started = Instant::now();
+    loop {
+        let error = match allocate(owner) {
+            Ok(buffer) => return Ok(buffer),
+            Err(error) => error,
+        };
+        if error != cv::err::WOULD_EXCEED_ALLOCATION_THRESHOLD
+            || started.elapsed() >= std::time::Duration::from_secs(2)
+        {
+            return Err(RenderingError::Surface(format!(
+                "Surface pool is unavailable: {error}"
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+}
+
+#[cfg(target_os = "macos")]
+// The pool controls reuse; cached imports must not keep a CVPixelBuffer lease.
+// CoreVideo also tracks CVMetalTexture consumers that do not retain that buffer.
 struct Nv12SurfaceSlot {
-    pixel_buffer: arc::R<cv::PixelBuf>,
+    surface: arc::R<io::Surf>,
     y_texture: wgpu::Texture,
     uv_texture: wgpu::Texture,
 }
@@ -216,6 +250,8 @@ struct Nv12SurfaceSlot {
 struct Nv12SurfaceRing {
     texture_cache: IOSurfaceTextureCache,
     slots: Vec<Nv12SurfaceSlot>,
+    pool: Option<arc::R<cv::PixelBufPool>>,
+    allocation_attributes: arc::R<cf::Dictionary>,
     next: usize,
     size: (u32, u32),
 }
@@ -228,6 +264,7 @@ unsafe impl Send for Nv12SurfaceRing {}
 #[cfg(target_os = "macos")]
 impl Nv12SurfaceRing {
     const SLOTS: usize = 8;
+    const MAX_BUFFERS: usize = 32;
 
     fn new() -> Result<Self, RenderingError> {
         let texture_cache = IOSurfaceTextureCache::new()
@@ -235,6 +272,8 @@ impl Nv12SurfaceRing {
         Ok(Self {
             texture_cache,
             slots: Vec::new(),
+            pool: None,
+            allocation_attributes: surface_allocation_attributes(Self::MAX_BUFFERS)?,
             next: 0,
             size: (0, 0),
         })
@@ -242,11 +281,11 @@ impl Nv12SurfaceRing {
 
     fn ensure_size(
         &mut self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         width: u32,
         height: u32,
     ) -> Result<(), RenderingError> {
-        if self.size == (width, height) && !self.slots.is_empty() {
+        if self.size == (width, height) && self.pool.is_some() {
             return Ok(());
         }
 
@@ -285,14 +324,40 @@ impl Nv12SurfaceRing {
         )
         .map_err(|error| RenderingError::Surface(error.to_string()))?;
 
-        let mut slots = Vec::with_capacity(Self::SLOTS);
-        for _ in 0..Self::SLOTS {
-            let pixel_buffer = pool
-                .pixel_buf()
-                .map_err(|error| RenderingError::Surface(error.to_string()))?;
-            let io_surface = pixel_buffer.io_surf().ok_or_else(|| {
-                RenderingError::Surface("Pixel buffer has no IOSurface".to_string())
-            })?;
+        self.pool = Some(pool);
+        self.slots.clear();
+        self.next = 0;
+        self.size = (width, height);
+        Ok(())
+    }
+
+    async fn next_slot(
+        &mut self,
+        device: &wgpu::Device,
+    ) -> Result<(arc::R<cv::PixelBuf>, &Nv12SurfaceSlot), RenderingError> {
+        if self.pool.is_none() {
+            return Err(RenderingError::Surface(
+                "NV12 pool is unavailable".to_string(),
+            ));
+        }
+        let pixel_buffer = acquire_surface_buffer(self, |this| {
+            this.pool
+                .as_ref()
+                .expect("pool checked above")
+                .pixel_buf_with_aux_attrs(Some(&this.allocation_attributes))
+        })
+        .await?;
+        let io_surface = pixel_buffer
+            .io_surf()
+            .ok_or_else(|| RenderingError::Surface("Pixel buffer has no IOSurface".to_string()))?;
+        let index = if let Some(index) = self
+            .slots
+            .iter()
+            .position(|slot| std::ptr::eq(slot.surface.as_ref(), io_surface))
+        {
+            index
+        } else {
+            let (width, height) = self.size;
             let y_metal = self
                 .texture_cache
                 .create_y_texture(io_surface, width, height)
@@ -321,23 +386,22 @@ impl Nv12SurfaceRing {
                 Some("NV12 IOSurface UV"),
             )
             .map_err(|error| RenderingError::Surface(error.to_string()))?;
-            slots.push(Nv12SurfaceSlot {
-                pixel_buffer,
+            let slot = Nv12SurfaceSlot {
+                surface: io_surface.retained(),
                 y_texture,
                 uv_texture,
-            });
-        }
-
-        self.slots = slots;
-        self.next = 0;
-        self.size = (width, height);
-        Ok(())
-    }
-
-    fn next_slot(&mut self) -> &Nv12SurfaceSlot {
-        let index = self.next;
-        self.next = (self.next + 1) % self.slots.len();
-        &self.slots[index]
+            };
+            if self.slots.len() < Self::SLOTS {
+                self.slots.push(slot);
+                self.slots.len() - 1
+            } else {
+                let index = self.next;
+                self.slots[index] = slot;
+                self.next = (index + 1) % Self::SLOTS;
+                index
+            }
+        };
+        Ok((pixel_buffer, &self.slots[index]))
     }
 }
 
@@ -553,7 +617,7 @@ impl RgbaToNv12Converter {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn submit_conversion(
+    pub async fn submit_conversion(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -563,15 +627,15 @@ impl RgbaToNv12Converter {
         height: u32,
         frame_number: u32,
         frame_rate: u32,
-    ) -> bool {
+    ) -> Result<bool, RenderingError> {
         if width == 0 || height == 0 {
-            return false;
+            return Ok(false);
         }
 
         self.ensure_buffers(device, width, height);
 
         let Some(nv12_buffer) = self.nv12_buffer.as_ref() else {
-            return false;
+            return Ok(false);
         };
 
         let readback_idx = self.current_readback;
@@ -640,7 +704,7 @@ impl RgbaToNv12Converter {
         if self.surface_output
             && let Some(ring) = self.surface_ring.as_mut()
         {
-            let slot = ring.next_slot();
+            let (pixel_buffer, slot) = ring.next_slot(device).await?;
             let y_plane_bytes = (y_stride as u64) * (height as u64);
             encoder.copy_buffer_to_texture(
                 wgpu::TexelCopyBufferInfo {
@@ -675,7 +739,7 @@ impl RgbaToNv12Converter {
                 },
             );
             self.pending = Some(PendingNv12Output::Surface(PendingNv12Surface {
-                pixel_buffer: slot.pixel_buffer.clone(),
+                pixel_buffer,
                 completed: None,
                 width,
                 height,
@@ -683,12 +747,12 @@ impl RgbaToNv12Converter {
                 frame_number,
                 frame_rate,
             }));
-            return true;
+            return Ok(true);
         }
 
         let readback_buffer = match self.readback_buffers[readback_idx].as_ref() {
             Some(b) => b.clone(),
-            None => return false,
+            None => return Ok(false),
         };
         let nv12_size = self.nv12_size(width, height);
         encoder.copy_buffer_to_buffer(nv12_buffer, 0, &readback_buffer, 0, nv12_size);
@@ -703,7 +767,7 @@ impl RgbaToNv12Converter {
             frame_rate,
         }));
 
-        true
+        Ok(true)
     }
 
     /// Arms the pending output after its command buffer has been submitted:
@@ -981,13 +1045,7 @@ pub struct RgbaToBgraSurfaceConverter {
     surface_ring: Vec<BgraSurfaceSlot>,
     next_surface: usize,
     pool: Option<arc::R<cv::PixelBufPool>>,
-    /// Both liveness signals are calibrated against a slot the ring alone owns
-    /// rather than hardcoded: the pool's own bookkeeping and the Metal import
-    /// each add a fixed retain, and if a never-displayed surface already
-    /// reported in-use, that half of the test would starve every frame, so it
-    /// is disabled instead.
-    baseline_retain: isize,
-    honor_use_count: bool,
+    allocation_attributes: arc::R<cf::Dictionary>,
     pool_size: (u32, u32),
     /// Bind groups keyed by source-texture identity. The session ping-pongs
     /// between two render targets, so two entries cover the steady state; a
@@ -1007,27 +1065,11 @@ const BGRA_SURFACE_RING_MAX: usize = 12;
 
 #[cfg(target_os = "macos")]
 struct BgraSurfaceSlot {
-    pixel_buffer: arc::R<cv::PixelBuf>,
+    surface: arc::R<io::Surf>,
     /// Held so the IOSurface-imported texture's lifetime is explicit rather
     /// than riding on `view`'s internal parent reference.
     _texture: wgpu::Texture,
     view: wgpu::TextureView,
-}
-
-#[cfg(target_os = "macos")]
-impl BgraSurfaceSlot {
-    fn is_free(&self, baseline_retain: isize, honor_use_count: bool) -> bool {
-        if self.pixel_buffer.retain_count() > baseline_retain {
-            return false;
-        }
-        if honor_use_count
-            && let Some(surface) = self.pixel_buffer.io_surf()
-            && surface.is_in_use()
-        {
-            return false;
-        }
-        true
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1092,8 +1134,7 @@ impl RgbaToBgraSurfaceConverter {
             surface_ring: Vec::new(),
             next_surface: 0,
             pool: None,
-            baseline_retain: 0,
-            honor_use_count: false,
+            allocation_attributes: surface_allocation_attributes(BGRA_SURFACE_RING_MAX)?,
             pool_size: (0, 0),
             source_bind_groups: Vec::new(),
         })
@@ -1130,11 +1171,11 @@ impl RgbaToBgraSurfaceConverter {
 
     fn ensure_pixel_buffer_pool(
         &mut self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         width: u32,
         height: u32,
     ) -> Result<(), RenderingError> {
-        if self.pool_size == (width, height) && !self.surface_ring.is_empty() {
+        if self.pool_size == (width, height) && self.pool.is_some() {
             return Ok(());
         }
 
@@ -1172,20 +1213,7 @@ impl RgbaToBgraSurfaceConverter {
             Some(pixel_buffer_attributes.as_ref()),
         )
         .map_err(|error| RenderingError::Surface(error.to_string()))?;
-        let mut surface_ring = Vec::with_capacity(BGRA_SURFACE_RING_SIZE);
-        for _ in 0..BGRA_SURFACE_RING_SIZE {
-            surface_ring.push(self.build_slot(device, &pool, width, height)?);
-        }
-
-        self.baseline_retain = surface_ring
-            .first()
-            .map(|slot| slot.pixel_buffer.retain_count())
-            .unwrap_or(1);
-        self.honor_use_count = surface_ring
-            .first()
-            .and_then(|slot| slot.pixel_buffer.io_surf())
-            .is_some_and(|surface| !surface.is_in_use());
-        self.surface_ring = surface_ring;
+        self.surface_ring.clear();
         self.pool = Some(pool);
         self.next_surface = 0;
         self.pool_size = (width, height);
@@ -1195,14 +1223,11 @@ impl RgbaToBgraSurfaceConverter {
     fn build_slot(
         &mut self,
         device: &wgpu::Device,
-        pool: &cv::PixelBufPool,
+        pixel_buffer: &cv::PixelBuf,
         width: u32,
         height: u32,
     ) -> Result<BgraSurfaceSlot, RenderingError> {
         let metal_usage = mtl::TextureUsage::SHADER_READ | mtl::TextureUsage::RENDER_TARGET;
-        let pixel_buffer = pool
-            .pixel_buf()
-            .map_err(|error| RenderingError::Surface(error.to_string()))?;
         let io_surface = pixel_buffer
             .io_surf()
             .ok_or_else(|| RenderingError::Surface("Pixel buffer has no IOSurface".to_string()))?;
@@ -1222,48 +1247,56 @@ impl RgbaToBgraSurfaceConverter {
         .map_err(|error| RenderingError::Surface(error.to_string()))?;
         let view = texture.create_view(&Default::default());
         Ok(BgraSurfaceSlot {
-            pixel_buffer,
+            surface: io_surface.retained(),
             _texture: texture,
             view,
         })
     }
 
-    fn acquire_slot(
+    async fn acquire_slot(
         &mut self,
         device: &wgpu::Device,
         width: u32,
         height: u32,
-    ) -> Result<usize, RenderingError> {
-        let len = self.surface_ring.len();
-        for offset in 0..len {
-            let index = (self.next_surface + offset) % len;
-            if self.surface_ring[index].is_free(self.baseline_retain, self.honor_use_count) {
-                self.next_surface = (index + 1) % len;
-                return Ok(index);
-            }
-        }
-
-        if len < BGRA_SURFACE_RING_MAX
-            && let Some(pool) = self.pool.clone()
-        {
-            let slot = self.build_slot(device, &pool, width, height)?;
-            self.surface_ring.push(slot);
-            self.next_surface = 0;
-            return Ok(self.surface_ring.len() - 1);
-        }
-
-        if len == 0 {
+    ) -> Result<(arc::R<cv::PixelBuf>, usize), RenderingError> {
+        if self.pool.is_none() {
             return Err(RenderingError::Surface(
-                "BGRA surface ring is empty".to_string(),
+                "BGRA pool is unavailable".to_string(),
             ));
         }
-        let index = self.next_surface % len;
-        self.next_surface = (index + 1) % len;
-        Ok(index)
+        let pixel_buffer = acquire_surface_buffer(self, |this| {
+            this.pool
+                .as_ref()
+                .expect("pool checked above")
+                .pixel_buf_with_aux_attrs(Some(&this.allocation_attributes))
+        })
+        .await?;
+        let surface = pixel_buffer
+            .io_surf()
+            .ok_or_else(|| RenderingError::Surface("Pixel buffer has no IOSurface".to_string()))?;
+        let index = if let Some(index) = self
+            .surface_ring
+            .iter()
+            .position(|slot| std::ptr::eq(slot.surface.as_ref(), surface))
+        {
+            index
+        } else {
+            let slot = self.build_slot(device, &pixel_buffer, width, height)?;
+            if self.surface_ring.len() < BGRA_SURFACE_RING_SIZE {
+                self.surface_ring.push(slot);
+                self.surface_ring.len() - 1
+            } else {
+                let index = self.next_surface;
+                self.surface_ring[index] = slot;
+                self.next_surface = (index + 1) % BGRA_SURFACE_RING_SIZE;
+                index
+            }
+        };
+        Ok((pixel_buffer, index))
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn encode(
+    pub async fn encode(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
@@ -1275,9 +1308,8 @@ impl RgbaToBgraSurfaceConverter {
     ) -> Result<PendingSurface, RenderingError> {
         self.ensure_pixel_buffer_pool(device, width, height)?;
         let bind_group = self.source_bind_group(device, source_texture);
-        let slot_index = self.acquire_slot(device, width, height)?;
+        let (pixel_buffer, slot_index) = self.acquire_slot(device, width, height).await?;
         let slot = &self.surface_ring[slot_index];
-        let pixel_buffer = slot.pixel_buffer.clone();
         let dest_view = slot.view.clone();
 
         {
@@ -1882,16 +1914,18 @@ pub async fn finish_encoder_nv12_pooled(
         &session.textures.1
     };
 
-    let submitted = nv12_converter.submit_conversion(
-        device,
-        queue,
-        &mut encoder,
-        texture,
-        width,
-        height,
-        uniforms.frame_number,
-        uniforms.frame_rate,
-    );
+    let submitted = nv12_converter
+        .submit_conversion(
+            device,
+            queue,
+            &mut encoder,
+            texture,
+            width,
+            height,
+            uniforms.frame_number,
+            uniforms.frame_rate,
+        )
+        .await?;
 
     if submitted {
         queue.submit(std::iter::once(encoder.finish()));
@@ -1931,15 +1965,17 @@ pub async fn finish_encoder_bgra_surface(
     } else {
         &session.textures.1
     };
-    let pending = converter.encode(
-        device,
-        &mut encoder,
-        texture,
-        uniforms.output_size.0,
-        uniforms.output_size.1,
-        uniforms.frame_number,
-        uniforms.frame_rate,
-    )?;
+    let pending = converter
+        .encode(
+            device,
+            &mut encoder,
+            texture,
+            uniforms.output_size.0,
+            uniforms.output_size.1,
+            uniforms.frame_number,
+            uniforms.frame_rate,
+        )
+        .await?;
     queue.submit(std::iter::once(encoder.finish()));
     pending.wait(device, queue).await
 }
@@ -2078,16 +2114,12 @@ mod surface_output_tests {
         height: u32,
     ) -> Nv12RenderedFrame {
         let mut encoder = device.create_command_encoder(&Default::default());
-        assert!(converter.submit_conversion(
-            device,
-            queue,
-            &mut encoder,
-            source,
-            width,
-            height,
-            0,
-            30
-        ));
+        assert!(
+            converter
+                .submit_conversion(device, queue, &mut encoder, source, width, height, 0, 30)
+                .await
+                .expect("conversion submission")
+        );
         queue.submit(std::iter::once(encoder.finish()));
         converter.after_submit(queue);
         converter
@@ -2387,5 +2419,272 @@ mod surface_output_tests {
         assert_eq!(first_buffer_ids, second_buffer_ids);
         assert!(resized_second.surface.is_none());
         assert_eq!(resized_second.data.as_ref(), expected_resized.data.as_ref());
+    }
+    fn fill_gray(queue: &wgpu::Queue, texture: &wgpu::Texture, width: u32, height: u32, value: u8) {
+        let data = [value, value, value, 255].repeat((width * height) as usize);
+        queue.write_texture(
+            texture.as_image_copy(),
+            &data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    fn nv12_first_y(frame: &Nv12RenderedFrame) -> u8 {
+        match frame.surface.as_ref() {
+            Some(surface) => surface
+                .with_locked_planes(|y, _, _, _| y[0])
+                .expect("lock Y plane"),
+            None => frame.data[0],
+        }
+    }
+
+    fn bgra_first_pixel(frame: &SurfaceFrame) -> [u8; 4] {
+        unsafe extern "C" {
+            fn CVPixelBufferGetBaseAddress(buffer: *const std::ffi::c_void) -> *const u8;
+        }
+        let mut buffer = frame.pixel_buffer.clone();
+        unsafe {
+            buffer
+                .lock_base_addr(cv::pixel_buffer::LockFlags::READ_ONLY)
+                .result()
+                .expect("lock BGRA");
+        }
+        let pixel = unsafe {
+            std::slice::from_raw_parts(
+                CVPixelBufferGetBaseAddress((buffer.as_ref() as *const cv::PixelBuf).cast()),
+                4,
+            )
+        };
+        let result = [pixel[0], pixel[1], pixel[2], pixel[3]];
+        unsafe {
+            buffer.unlock_lock_base_addr(cv::pixel_buffer::LockFlags::READ_ONLY);
+        }
+        result
+    }
+
+    #[tokio::test]
+    async fn retained_nv12_frames_are_not_overwritten_at_ring_wrap() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+        let (width, height) = (64, 32);
+        let source = gradient_texture(&device, &queue, width, height);
+        let mut converter = RgbaToNv12Converter::new(&device);
+        converter.enable_surface_output();
+        let mut held = Vec::new();
+        let mut expected = Vec::new();
+        for index in 0..12u8 {
+            fill_gray(&queue, &source, width, height, index * 17);
+            let frame = convert(&device, &queue, &mut converter, &source, width, height).await;
+            expected.push(nv12_first_y(&frame));
+            held.push(frame);
+        }
+        let actual: Vec<_> = held.iter().map(nv12_first_y).collect();
+        eprintln!("NV12 held expected={expected:?} actual={actual:?}");
+        assert_eq!(
+            actual, expected,
+            "a retained frame changed after producer ring wrap"
+        );
+    }
+
+    #[tokio::test]
+    async fn retained_bgra_frames_are_not_overwritten_at_ring_cap() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+        let (width, height) = (64, 32);
+        let source = gradient_texture(&device, &queue, width, height);
+        let mut converter = RgbaToBgraSurfaceConverter::new(&device).expect("BGRA converter");
+        let mut held = Vec::new();
+        let mut expected = Vec::new();
+        for index in 0..12u8 {
+            fill_gray(&queue, &source, width, height, index * 17);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let pending = converter
+                .encode(
+                    &device,
+                    &mut encoder,
+                    &source,
+                    width,
+                    height,
+                    u32::from(index),
+                    30,
+                )
+                .await
+                .expect("BGRA output");
+            queue.submit(std::iter::once(encoder.finish()));
+            let frame = pending
+                .wait(&device, &queue)
+                .await
+                .expect("BGRA completion");
+            expected.push(bgra_first_pixel(&frame));
+            held.push(frame);
+        }
+        let actual: Vec<_> = held.iter().map(bgra_first_pixel).collect();
+        eprintln!("BGRA held expected={expected:?} actual={actual:?}");
+        assert_eq!(
+            actual, expected,
+            "a retained frame changed after producer ring cap"
+        );
+    }
+
+    async fn convert_bgra(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        converter: &mut RgbaToBgraSurfaceConverter,
+        source: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) -> SurfaceFrame {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let pending = converter
+            .encode(device, &mut encoder, source, width, height, 0, 30)
+            .await
+            .expect("BGRA submission");
+        queue.submit(std::iter::once(encoder.finish()));
+        pending.wait(device, queue).await.expect("BGRA output")
+    }
+
+    #[tokio::test]
+    async fn cvmetal_texture_leases_prevent_bgra_recycling() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+        let source = gradient_texture(&device, &queue, 64, 32);
+        let metal_device = mtl::Device::sys_default().expect("native Metal device");
+        let cache =
+            cv::MetalTextureCache::create(None, &metal_device, None).expect("CVMetal cache");
+        let mut converter = RgbaToBgraSurfaceConverter::new(&device).expect("BGRA converter");
+        let mut held = Vec::new();
+        for index in 0..12u8 {
+            fill_gray(&queue, &source, 64, 32, index * 17);
+            let frame = convert_bgra(&device, &queue, &mut converter, &source, 64, 32).await;
+            let texture = cache
+                .texture(
+                    &frame.pixel_buffer,
+                    None,
+                    mtl::PixelFormat::Bgra8UNorm,
+                    64,
+                    32,
+                    0,
+                )
+                .expect("CVMetal texture");
+            held.push((
+                texture,
+                frame.pixel_buffer.io_surf().expect("IOSurface").retained(),
+                bgra_first_pixel(&frame),
+            ));
+        }
+        for (_, surface, expected) in &held {
+            let pixel_buffer = cv::PixelBuf::with_io_surf(surface, None).expect("temporary reader");
+            let frame = SurfaceFrame {
+                pixel_buffer,
+                width: 64,
+                height: 32,
+                frame_number: 0,
+                target_time_ns: 0,
+            };
+            assert_eq!(
+                bgra_first_pixel(&frame),
+                *expected,
+                "CVMetalTexture-only owner was overwritten"
+            );
+        }
+        assert_eq!(converter.surface_ring.len(), BGRA_SURFACE_RING_SIZE);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(20),
+                converter.encode(&device, &mut encoder, &source, 64, 32, 0, 30)
+            )
+            .await
+            .is_err()
+        );
+        drop(held.remove(0));
+        let resumed = convert_bgra(&device, &queue, &mut converter, &source, 64, 32).await;
+        assert_eq!(bgra_first_pixel(&resumed), [187, 187, 187, 255]);
+    }
+
+    #[tokio::test]
+    async fn nv12_pool_is_bounded_and_recovers_after_cancelled_wait() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+        let source = gradient_texture(&device, &queue, 64, 32);
+        let mut converter = RgbaToNv12Converter::new(&device);
+        converter.enable_surface_output();
+        let mut held = Vec::new();
+        for index in 0..Nv12SurfaceRing::MAX_BUFFERS {
+            fill_gray(&queue, &source, 64, 32, index as u8 * 7);
+            held.push(convert(&device, &queue, &mut converter, &source, 64, 32).await);
+        }
+        assert_eq!(
+            converter.surface_ring.as_ref().unwrap().slots.len(),
+            Nv12SurfaceRing::SLOTS
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(20),
+                converter.submit_conversion(&device, &queue, &mut encoder, &source, 64, 32, 0, 30)
+            )
+            .await
+            .is_err()
+        );
+        drop(held.remove(0));
+        let resumed = convert(&device, &queue, &mut converter, &source, 64, 32).await;
+        assert!(resumed.surface.is_some());
+        assert!(converter.readback_buffers.iter().all(Option::is_none));
+        drop(resumed);
+        let old = nv12_first_y(&held[0]);
+        let resized_source = gradient_texture(&device, &queue, 128, 64);
+        let resized = convert(&device, &queue, &mut converter, &resized_source, 128, 64).await;
+        assert_eq!((resized.width, resized.height), (128, 64));
+        assert_eq!(nv12_first_y(&held[0]), old);
+    }
+
+    #[tokio::test]
+    async fn surface_texture_cache_reuses_imports_after_consumers_release() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+        let source = gradient_texture(&device, &queue, 1920, 1080);
+        let mut nv12 = RgbaToNv12Converter::new(&device);
+        nv12.enable_surface_output();
+        let mut bgra = RgbaToBgraSurfaceConverter::new(&device).expect("BGRA converter");
+        let started = Instant::now();
+        for _ in 0..120 {
+            drop(convert(&device, &queue, &mut nv12, &source, 1920, 1080).await);
+        }
+        eprintln!(
+            "NV12 120 sequential1920x1080 {:?}, imports={}",
+            started.elapsed(),
+            nv12.surface_ring.as_ref().unwrap().slots.len()
+        );
+        assert_eq!(nv12.surface_ring.as_ref().unwrap().slots.len(), 1);
+        let started = Instant::now();
+        for _ in 0..120 {
+            drop(convert_bgra(&device, &queue, &mut bgra, &source, 1920, 1080).await);
+        }
+        eprintln!(
+            "BGRA 120 sequential1920x1080 {:?}, imports={}",
+            started.elapsed(),
+            bgra.surface_ring.len()
+        );
+        assert_eq!(bgra.surface_ring.len(), 1);
     }
 }
