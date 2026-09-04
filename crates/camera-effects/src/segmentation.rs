@@ -2,7 +2,7 @@ use anyhow::Context;
 use ort::session::Session;
 use ort::value::TensorRef;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
 const ORT_LIBRARY_NAME: &str = "libonnxruntime.dylib";
@@ -182,7 +182,7 @@ pub(crate) fn onnx_runtime_library_path() -> Option<PathBuf> {
     std::env::var_os("ORT_DYLIB_PATH")
         .map(PathBuf::from)
         .or_else(|| {
-            onnx_runtime_candidates()
+            onnx_runtime_candidates(std::env::current_exe().ok().as_deref())
                 .into_iter()
                 .find(|path| path.exists())
         })
@@ -194,15 +194,16 @@ pub(crate) fn init_runtime() -> anyhow::Result<()> {
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-fn onnx_runtime_candidates() -> Vec<PathBuf> {
+fn onnx_runtime_candidates(executable: Option<&Path>) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(exe_dir) = exe.parent()
-    {
+    if let Some(exe_dir) = executable.and_then(Path::parent) {
         candidates.push(exe_dir.join(ORT_LIBRARY_NAME));
 
         if let Some(contents_dir) = exe_dir.parent() {
+            #[cfg(target_os = "linux")]
+            candidates.push(contents_dir.join("lib/cap").join(ORT_LIBRARY_NAME));
+
             candidates.push(
                 contents_dir
                     .join("Resources")
@@ -272,6 +273,28 @@ fn try_register_directml(
 #[cfg(test)]
 mod tests {
     use super::{MODEL_CHANNEL_SIZE, populate_rgb_planes};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn runtime_candidates_include_installed_and_relocated_linux_packages() {
+        for (executable, library) in [
+            ("/usr/bin/cap", "/usr/lib/cap/libonnxruntime.so"),
+            (
+                "/tmp/.mount_Cap/usr/bin/cap",
+                "/tmp/.mount_Cap/usr/lib/cap/libonnxruntime.so",
+            ),
+        ] {
+            let candidates = super::onnx_runtime_candidates(Some(std::path::Path::new(executable)));
+            assert!(candidates.contains(&std::path::PathBuf::from(library)));
+            assert!(
+                candidates
+                    .iter()
+                    .position(|path| path.as_path() == std::path::Path::new(library))
+                    .unwrap()
+                    < candidates.len() - 1
+            );
+        }
+    }
 
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     #[test]
