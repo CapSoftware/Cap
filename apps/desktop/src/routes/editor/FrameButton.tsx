@@ -12,7 +12,7 @@ import IconLucideBan from "~icons/lucide/ban";
 import IconLucideGlobe from "~icons/lucide/globe";
 import IconLucideLaptop from "~icons/lucide/laptop";
 import { EditorStyleContext, useEditorContext } from "./context";
-import { StyleGroupToggle } from "./StyleSegmentConfig";
+import { StyleGroupToggle } from "./style-segment-config";
 import { EditorButton, Input } from "./ui";
 
 const DEFAULT_FRAME_CONFIG: FrameConfiguration = {

@@ -24,8 +24,8 @@ import { produce } from "solid-js/store";
 import toast from "solid-toast";
 import IconLucidePalette from "~icons/lucide/palette";
 import { stylesRevealCamera } from "../style";
-import { ImageTrack } from "./ImageTrack";
-import { type OverlayDragState, StyleTrack } from "./StyleTrack";
+import { ImageTrack } from "./image-track";
+import { type OverlayDragState, StyleTrack } from "./style-track";
 
 import "./styles.css";
 
