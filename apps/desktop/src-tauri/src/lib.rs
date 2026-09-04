@@ -459,6 +459,20 @@ const APP_MENU_QUIT_ID: &str = "app_quit";
 #[cfg(target_os = "macos")]
 static MACOS_NATIVE_TERMINATE_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum AppExitSource {
+    #[cfg(target_os = "macos")]
+    AppMenu,
+    #[cfg(target_os = "macos")]
+    MacOsNativeTermination,
+    Runtime,
+    #[cfg(unix)]
+    SigHup,
+    #[cfg(unix)]
+    SigTerm,
+    TrayMenu,
+}
+
 async fn await_exit_step<T, E, F>(name: &'static str, timeout: Duration, fut: F) -> Option<T>
 where
     E: std::fmt::Display,
@@ -671,7 +685,7 @@ unsafe extern "C" fn macos_application_should_terminate(
     if let Some(app) = MACOS_NATIVE_TERMINATE_APP.get() {
         let app = app.clone();
         tokio::spawn(async move {
-            request_app_exit(app).await;
+            request_app_exit(app, AppExitSource::MacOsNativeTermination).await;
         });
     } else {
         warn!("macOS native termination requested before app exit handler was installed");
@@ -3002,7 +3016,8 @@ fn restart_app(app: AppHandle) -> Result<(), String> {
     }
 }
 
-pub async fn request_app_exit(app: AppHandle) {
+pub(crate) async fn request_app_exit(app: AppHandle, source: AppExitSource) {
+    info!(?source, "Starting app exit request");
     let Some(exit_state) = app.try_state::<AppExitState>() else {
         show_exit_blocked(&app, ExitBlocked::StateUnavailable);
         return;
@@ -6182,7 +6197,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             if event.id() == APP_MENU_QUIT_ID {
                 let app = app.clone();
                 tokio::spawn(async move {
-                    request_app_exit(app).await;
+                    request_app_exit(app, AppExitSource::AppMenu).await;
                 });
             }
         })
@@ -6323,21 +6338,23 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         return;
                     };
                     loop {
-                        tokio::select! {
+                        let source = tokio::select! {
                             signal = term.recv() => {
                                 if signal.is_none() {
                                     return;
                                 }
                                 tracing::info!("Received SIGTERM; requesting graceful shutdown");
+                                AppExitSource::SigTerm
                             }
                             signal = hup.recv() => {
                                 if signal.is_none() {
                                     return;
                                 }
                                 tracing::info!("Received SIGHUP; requesting graceful shutdown");
+                                AppExitSource::SigHup
                             }
-                        }
-                        request_app_exit(app_for_signal.clone()).await;
+                        };
+                        request_app_exit(app_for_signal.clone(), source).await;
                         if app_is_exiting(&app_for_signal) {
                             return;
                         }
@@ -7294,7 +7311,7 @@ fn handle_run_event(_handle: &AppHandle, event: tauri::RunEvent) {
                 ExitRequestDecision::StartCleanup => {
                     let handle = _handle.clone();
                     spawn_on_runtime(async move {
-                        request_app_exit(handle).await;
+                        request_app_exit(handle, AppExitSource::Runtime).await;
                     });
                 }
                 ExitRequestDecision::AlreadyExiting => {}
