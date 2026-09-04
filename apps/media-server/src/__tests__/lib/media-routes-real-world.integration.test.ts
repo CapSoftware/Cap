@@ -18,7 +18,7 @@ import { pathToFileURL } from "node:url";
 import type appType from "../../app";
 import * as containerCpu from "../../lib/container-cpu";
 import * as containerMemory from "../../lib/container-memory";
-import type { Job } from "../../lib/job-manager";
+import type { Job, JobProgress } from "../../lib/job-manager";
 import { probeVideoFile } from "../../lib/media-probe";
 import * as recordingVerification from "../../lib/recording-verification";
 
@@ -78,6 +78,8 @@ function fencedMuxRequest(name: string) {
 		attemptId: `attempt-${name}`,
 		manifestSha256: "a".repeat(64),
 		inventorySha256: "b".repeat(64),
+		webhookUrl: `${baseUrl}/ignored-webhook`,
+		webhookSecret: MEDIA_SERVER_SECRET,
 		outputKey: `recording-generations/${name}/result.mp4`,
 		outputUpload: {
 			type: "put",
@@ -246,8 +248,26 @@ beforeAll(async () => {
 		port: 0,
 		async fetch(request) {
 			const url = new URL(request.url);
-			if (request.method === "POST" && url.pathname === "/ignored-webhook")
-				return new Response(null, { status: 200 });
+			if (request.method === "POST" && url.pathname === "/ignored-webhook") {
+				const payload = (await request.json()) as JobProgress;
+				if (!payload.recordingWorker)
+					return new Response(null, { status: 200 });
+				if (
+					request.headers.get("x-media-server-secret") !== MEDIA_SERVER_SECRET
+				)
+					return new Response(null, { status: 401 });
+				return Response.json({
+					recordingWorker: {
+						version: 1,
+						status: "accepted",
+						generation: payload.generation,
+						attemptId: payload.attemptId,
+						jobId: payload.jobId,
+						sequence: payload.recordingWorker.sequence,
+						leaseDurationMs: 300_000,
+					},
+				});
+			}
 			if (request.method === "POST" && url.pathname.startsWith("/multipart/")) {
 				const [, , name, action] = url.pathname.split("/");
 				const payload: unknown = await request.json();
@@ -494,6 +514,7 @@ describe("media routes real-world integration tests", () => {
 				sourceObjectIdentity: objectIdentity(bytes),
 				outputKey: "recording-generations/mp4-generation/source.mp4",
 				webhookUrl: `${baseUrl}/ignored-webhook`,
+				webhookSecret: MEDIA_SERVER_SECRET,
 			}),
 		);
 		expect(response.status).toBe(200);

@@ -1,13 +1,18 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { file } from "bun";
 import { Hono } from "hono";
 import { z } from "zod";
 import { validateMediaServerSecret } from "../lib/auth";
-import type { RecordingErrorCode, VideoMetadata } from "../lib/job-manager";
+import type {
+	Job,
+	RecordingErrorCode,
+	VideoMetadata,
+} from "../lib/job-manager";
 import {
 	beginRecordingProcessing,
 	beginRecordingVerification,
 	canAcceptNewVideoProcess,
+	claimRecordingWorker,
 	createJob,
 	deleteJob,
 	forceCleanupActiveJobs,
@@ -66,6 +71,7 @@ import {
 
 const video = new Hono();
 const PROCESSING_HEARTBEAT_MS = 60 * 1000;
+const RECORDING_WORKER_INSTANCE = randomUUID();
 const SEGMENTED_RECORDING_TIMEOUT_MS = 3 * PROCESS_TIMEOUT_MS + 35 * 60 * 1000;
 const POST_VERIFICATION_ASSET_BUDGET_MS = 5 * 60 * 1000;
 const RECORDING_VERIFICATION_RETRY_ERROR =
@@ -1019,6 +1025,7 @@ async function generateAndUploadPreviewGif(
 			previewGifFile.path,
 			previewGifPresignedUrl,
 			"image/gif",
+			abortSignal,
 		);
 	} catch (previewErr) {
 		if (abortSignal?.aborted) {
@@ -1650,12 +1657,34 @@ function recordingJobId(
 						body.attemptId,
 					]),
 				)
-				.digest("hex")}`
+				.digest("hex")}_${RECORDING_WORKER_INSTANCE}`
 		: generateJobId();
 }
 
 function recordingRequestKey(values: unknown[]): string {
 	return createHash("sha256").update(JSON.stringify(values)).digest("hex");
+}
+
+async function recordingWorkerOwner(job: Job): Promise<string | undefined> {
+	if (!job.generation || !job.attemptId) return job.jobId;
+	const acknowledgement = await claimRecordingWorker(job);
+	if (acknowledgement?.status === "owned" && acknowledgement.ownerJobId) {
+		return acknowledgement.ownerJobId;
+	}
+	if (
+		acknowledgement?.status === "accepted" &&
+		job.recordingWorkerClaimed &&
+		!job.recordingWorkerRevoked
+	)
+		return job.jobId;
+	return undefined;
+}
+
+function recordingWorkerResponse(job: Job, ownerJobId: string) {
+	return {
+		jobId: ownerJobId,
+		...(job.generation && job.attemptId && { recordingWorkerVersion: 1 }),
+	};
 }
 
 function classifySourceError(error: unknown): RecordingErrorCode {
@@ -1713,13 +1742,22 @@ video.post("/verify-recording", async (c) => {
 	if (existing) {
 		if (existing.recordingRequestKey !== requestKey)
 			return c.json({ error: "Recording attempt context changed" }, 409);
-		return c.json({ jobId });
+		const ownerJobId = await recordingWorkerOwner(existing);
+		if (!ownerJobId)
+			return c.json(
+				{
+					error: "Recording worker ownership unavailable",
+					code: "RECORDING_OWNERSHIP_UNAVAILABLE",
+				},
+				503,
+			);
+		return c.json(recordingWorkerResponse(existing, ownerJobId));
 	}
 	if (!canAcceptNewVideoProcess()) {
 		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
 		return c.json(getMuxBusyResponseBody(getVideoCapacitySnapshot()), 503);
 	}
-	createJob(
+	const job = createJob(
 		jobId,
 		body.videoId,
 		body.userId,
@@ -1732,8 +1770,23 @@ video.post("/verify-recording", async (c) => {
 		inventorySha256: body.inventorySha256,
 		recordingRequestKey: requestKey,
 	});
+	const ownerJobId = await recordingWorkerOwner(job);
+	if (!ownerJobId) {
+		deleteJob(jobId);
+		return c.json(
+			{
+				error: "Recording worker ownership unavailable",
+				code: "RECORDING_OWNERSHIP_UNAVAILABLE",
+			},
+			503,
+		);
+	}
+	if (ownerJobId !== jobId) {
+		deleteJob(jobId);
+		return c.json(recordingWorkerResponse(job, ownerJobId));
+	}
 	void verifyUploadedRecordingAsync(jobId, body);
-	return c.json({ jobId });
+	return c.json(recordingWorkerResponse(job, jobId));
 });
 
 async function verifyUploadedRecordingAsync(
@@ -1741,7 +1794,8 @@ async function verifyUploadedRecordingAsync(
 	body: z.infer<typeof recordingVerificationSchema>,
 ) {
 	const abortController = new AbortController();
-	updateJob(jobId, { abortController, phase: "processing", progress: 0 });
+	if (!updateJob(jobId, { abortController, phase: "processing", progress: 0 }))
+		return;
 	try {
 		const metadata = await probeVideo(body.videoUrl).catch(() => {
 			throw new Error(RECORDING_VERIFICATION_RETRY_ERROR);
@@ -1769,6 +1823,7 @@ async function verifyUploadedRecordingAsync(
 					expectedDuration: body.duration,
 					allowObservedDuration: body.duration === undefined,
 					requireAudio: body.requiredAudio,
+					hasAudio: metadata.audioChannels !== null,
 					expectedObjectIdentity:
 						body.sourceObjectIdentity ?? body.objectIdentity,
 					expectedFileSize: body.fileSize,
@@ -1996,7 +2051,20 @@ video.post("/mux-segments", async (c) => {
 	if (existing) {
 		if (existing.recordingRequestKey !== requestKey)
 			return c.json({ error: "Recording attempt context changed" }, 409);
-		return c.json({ jobId, status: "queued", videoId });
+		const ownerJobId = await recordingWorkerOwner(existing);
+		if (!ownerJobId)
+			return c.json(
+				{
+					error: "Recording worker ownership unavailable",
+					code: "RECORDING_OWNERSHIP_UNAVAILABLE",
+				},
+				503,
+			);
+		return c.json({
+			...recordingWorkerResponse(existing, ownerJobId),
+			status: "queued",
+			videoId,
+		});
 	}
 
 	if (!canAcceptNewVideoProcess()) {
@@ -2004,7 +2072,7 @@ video.post("/mux-segments", async (c) => {
 		return c.json(getMuxBusyResponseBody(getVideoCapacitySnapshot()), 503);
 	}
 
-	createJob(jobId, videoId, userId, webhookUrl, webhookSecret);
+	const job = createJob(jobId, videoId, userId, webhookUrl, webhookSecret);
 
 	const {
 		videoInitUrl,
@@ -2020,6 +2088,25 @@ video.post("/mux-segments", async (c) => {
 		inventorySha256: body.data.inventorySha256,
 		recordingRequestKey: requestKey,
 	});
+	const ownerJobId = await recordingWorkerOwner(job);
+	if (!ownerJobId) {
+		deleteJob(jobId);
+		return c.json(
+			{
+				error: "Recording worker ownership unavailable",
+				code: "RECORDING_OWNERSHIP_UNAVAILABLE",
+			},
+			503,
+		);
+	}
+	if (ownerJobId !== jobId) {
+		deleteJob(jobId);
+		return c.json({
+			...recordingWorkerResponse(job, ownerJobId),
+			status: "queued",
+			videoId,
+		});
+	}
 
 	muxSegmentsAsync(
 		jobId,
@@ -2039,7 +2126,8 @@ video.post("/mux-segments", async (c) => {
 		if (
 			currentJob &&
 			currentJob.phase !== "error" &&
-			currentJob.phase !== "complete"
+			currentJob.phase !== "complete" &&
+			currentJob.phase !== "cancelled"
 		) {
 			updateJob(jobId, {
 				phase: "error",
@@ -2050,7 +2138,7 @@ video.post("/mux-segments", async (c) => {
 	});
 
 	return c.json({
-		jobId,
+		...recordingWorkerResponse(job, jobId),
 		status: "queued",
 		videoId,
 	});
@@ -2442,7 +2530,11 @@ async function muxSegmentsAsync(
 			);
 		}
 
-		updateJob(jobId, { phase: "processing", progress: 60 });
+		updateJob(jobId, {
+			phase: "processing",
+			progress: 60,
+			message: "Preparing recording tracks...",
+		});
 		sendCurrentJobWebhook(jobId);
 
 		const combinedVideoPath = join(workDir, "combined_video.mp4");
@@ -2480,6 +2572,8 @@ async function muxSegmentsAsync(
 			resources: getSystemResources(),
 		});
 
+		updateJob(jobId, { message: "Checking the original recording..." });
+		sendCurrentJobWebhook(jobId);
 		const sourceEvidence = await withJobHeartbeat(jobId, () =>
 			withMuxMemoryGuard(abortController, () =>
 				inspectRecordingSources(combinedVideoPath, combinedAudioPath, {
@@ -2493,6 +2587,8 @@ async function muxSegmentsAsync(
 		const requiredAudio = context.requiredAudio ?? Boolean(audioInput);
 		const resultPath = join(workDir, "result.mp4");
 		errorCode = "output-invalid";
+		updateJob(jobId, { progress: 65, message: "Combining video and audio..." });
+		sendCurrentJobWebhook(jobId);
 		await withJobHeartbeat(jobId, () =>
 			withMuxMemoryGuard(abortController, () =>
 				muxMediaTracksToMp4(
@@ -2506,6 +2602,11 @@ async function muxSegmentsAsync(
 		const beforeDecode = await lstat(resultPath, { bigint: true });
 		if (!beforeDecode.isFile())
 			throw new Error("Recording verification requires a local regular file");
+		updateJob(jobId, {
+			progress: 70,
+			message: "Checking the processed recording...",
+		});
+		sendCurrentJobWebhook(jobId);
 		const localVerified = await withJobHeartbeat(jobId, () =>
 			withMuxMemoryGuard(abortController, () =>
 				verifyRecording(resultPath, {
@@ -2517,6 +2618,11 @@ async function muxSegmentsAsync(
 		);
 		if (!localVerified.sourcePreserved)
 			throw new Error("Recording source preservation was not verified");
+		updateJob(jobId, {
+			progress: 75,
+			message: "Verifying the recording file...",
+		});
+		sendCurrentJobWebhook(jobId);
 		const outputSha256 = await withJobHeartbeat(jobId, () =>
 			hashRecordingFile(resultPath, abortController.signal),
 		);
@@ -2560,7 +2666,11 @@ async function muxSegmentsAsync(
 		}
 		metadata = { ...metadata, duration: localVerified.video.duration };
 
-		updateJob(jobId, { phase: "uploading", progress: 80 });
+		updateJob(jobId, {
+			phase: "uploading",
+			progress: 80,
+			message: "Uploading the processed recording...",
+		});
 		sendCurrentJobWebhook(jobId);
 
 		outputUploadStarted = true;
@@ -2585,6 +2695,11 @@ async function muxSegmentsAsync(
 				)
 			)
 				throw new Error("Recording verification job is no longer active");
+			updateJob(jobId, {
+				progress: 90,
+				message: "Verifying the uploaded recording...",
+			});
+			sendCurrentJobWebhook(jobId);
 			const remoteBytes = await withJobHeartbeat(jobId, () =>
 				verifyRemoteRecordingBytes(outputVerificationUrl, {
 					expectedSha256: outputSha256,
@@ -2642,7 +2757,7 @@ async function muxSegmentsAsync(
 		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
 			updateJob(jobId, {
 				phase: "generating_thumbnail",
-				progress: 90,
+				progress: 95,
 				message: "Generating preview assets...",
 			});
 			sendCurrentJobWebhook(jobId);
@@ -2651,9 +2766,20 @@ async function muxSegmentsAsync(
 		if (thumbnailPresignedUrl) {
 			try {
 				const duration = metadata?.duration ?? 0;
-				const thumbnailData = await generateThumbnail(resultPath, duration);
-				await uploadToS3(thumbnailData, thumbnailPresignedUrl, "image/jpeg");
+				const thumbnailData = await generateThumbnail(
+					resultPath,
+					duration,
+					{},
+					abortController.signal,
+				);
+				await uploadToS3(
+					thumbnailData,
+					thumbnailPresignedUrl,
+					"image/jpeg",
+					abortController.signal,
+				);
 			} catch (thumbErr) {
+				abortController.signal.throwIfAborted();
 				console.warn(
 					`[mux-segments] Thumbnail generation failed for ${videoId}:`,
 					thumbErr,

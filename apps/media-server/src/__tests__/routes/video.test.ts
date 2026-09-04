@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import app from "../../app";
 import * as jobManager from "../../lib/job-manager";
 import * as mediaProbe from "../../lib/media-probe";
@@ -281,6 +281,7 @@ describe("POST /video/thumbnail", () => {
 describe("POST /video/convert", () => {
 	beforeEach(() => {
 		mock.restore();
+		spyOn(jobManager, "canAcceptNewVideoProcess").mockReturnValue(true);
 	});
 
 	test("returns 401 without media server secret", async () => {

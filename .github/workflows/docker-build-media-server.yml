@@ -13,6 +13,15 @@ on:
       - main
     paths:
       - "apps/media-server/**"
+      - ".github/workflows/docker-build-media-server.yml"
+  pull_request:
+    paths:
+      - "apps/media-server/**"
+      - ".github/workflows/docker-build-media-server.yml"
+
+concurrency:
+  group: media-server-${{ github.head_ref || github.ref_name }}-${{ inputs.tag || 'latest' }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -38,6 +47,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Login to GitHub Container Registry
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -46,37 +56,57 @@ jobs:
 
       - name: Downcase GITHUB_REPOSITORY_OWNER
         run: |
-          echo "REPOSITORY_OWNER=${GITHUB_REPOSITORY_OWNER@L}" >>${GITHUB_ENV}
+          echo "REPOSITORY_OWNER=${GITHUB_REPOSITORY_OWNER@L}" >>"${GITHUB_ENV}"
 
-      - name: Build and Push Platform Image
+      - name: Build Platform Image
         id: build
         uses: docker/build-push-action@v5
         with:
           context: ./apps/media-server
           file: ./apps/media-server/Dockerfile.standalone
           platforms: linux/${{ matrix.platform }}
-          push: true
-          outputs: type=image,name=ghcr.io/${{ env.REPOSITORY_OWNER }}/cap-media-server,push-by-digest=true
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ github.event_name == 'pull_request' && 'cap-media-server:verification' || '' }}
+          outputs: ${{ github.event_name != 'pull_request' && format('type=image,name=ghcr.io/{0}/cap-media-server,push-by-digest=true', env.REPOSITORY_OWNER) || '' }}
           cache-from: type=gha,scope=media-server-${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=media-server-${{ matrix.platform }}
 
       - name: Verify recording decode in the production image
         env:
-          MEDIA_IMAGE: ghcr.io/${{ env.REPOSITORY_OWNER }}/cap-media-server@${{ steps.build.outputs.digest }}
+          MEDIA_IMAGE: ${{ github.event_name == 'pull_request' && 'cap-media-server:verification' || format('ghcr.io/{0}/cap-media-server@{1}', env.REPOSITORY_OWNER, steps.build.outputs.digest) }}
         run: |
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/lib/recording-verification.integration.test.ts \
             src/__tests__/lib/job-manager.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/routes/recording-verification.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/routes/video.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/media-routes-real-world.integration.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/media-video.integration.test.ts
+
+      - name: Verify long recording performance in the production image
+        env:
+          MEDIA_IMAGE: ${{ github.event_name == 'pull_request' && 'cap-media-server:verification' || format('ghcr.io/{0}/cap-media-server@{1}', env.REPOSITORY_OWNER, steps.build.outputs.digest) }}
+        run: |
+          docker run --rm --network none --cpus 2 --memory 2g \
+            -e MEDIA_SERVER_RECORDING_PERFORMANCE_TESTS=1 \
+            --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/recording-verification.integration.test.ts \
+            --test-name-pattern 'streams a complete long recording'
 
       - name: Export Digest
+        if: github.event_name != 'pull_request'
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload Digest
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: digests-media-server-${{ matrix.platform }}
@@ -87,6 +117,7 @@ jobs:
   merge:
     name: Create Multi-Architecture Manifest
     needs: build
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -112,9 +143,22 @@ jobs:
 
       - name: Downcase GITHUB_REPOSITORY_OWNER
         run: |
-          echo "REPOSITORY_OWNER=${GITHUB_REPOSITORY_OWNER@L}" >>${GITHUB_ENV}
+          echo "REPOSITORY_OWNER=${GITHUB_REPOSITORY_OWNER@L}" >>"${GITHUB_ENV}"
 
       - name: Create Image Manifest
+        env:
+          IMAGE_TAG: ${{ inputs.tag || 'latest' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          docker buildx imagetools create -t ghcr.io/${{ env.REPOSITORY_OWNER }}/cap-media-server:${{ inputs.tag || 'latest' }} \
-            $(find /tmp/digests -type f -not -path "*/\.*" -exec basename {} \; | xargs -I {} echo "ghcr.io/${{ env.REPOSITORY_OWNER }}/cap-media-server@sha256:{}")
+          if [[ "$IMAGE_TAG" == "latest" ]]; then
+            current="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+            [[ "$current" == "$GITHUB_SHA" ]] || exit 1
+          fi
+          sources=()
+          for path in /tmp/digests/*; do
+            digest="${path##*/}"
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || exit 1
+            sources+=("ghcr.io/${REPOSITORY_OWNER}/cap-media-server@sha256:${digest}")
+          done
+          ((${#sources[@]} > 0))
+          docker buildx imagetools create -t "ghcr.io/${REPOSITORY_OWNER}/cap-media-server:${IMAGE_TAG}" "${sources[@]}"

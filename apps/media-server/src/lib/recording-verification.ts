@@ -1,8 +1,9 @@
+import { spawn } from "node:child_process";
 import { createHash, type Hash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
-import { spawn } from "bun";
+import { Readable } from "node:stream";
 import { PROCESS_TIMEOUT_MS } from "./media-common";
 import {
 	RecordingTimingError,
@@ -36,6 +37,7 @@ export function isRetryableRecordingVerificationError(error: unknown): boolean {
 export interface RecordingVerificationOptions {
 	expectedDuration?: number;
 	requireAudio: boolean;
+	hasAudio?: boolean;
 	sourceEvidence?: RecordingSourceEvidence;
 	allowObservedDuration?: boolean;
 	abortSignal?: AbortSignal;
@@ -119,6 +121,7 @@ interface DecodedStream {
 	sampleRate?: number;
 	frameCount: number;
 	sampleCount: number;
+	decodedBytes: number;
 	startTime: number;
 	endTime: number;
 	previousTime: number;
@@ -238,6 +241,7 @@ function decodeLine(
 		const stream = streams.get(index) ?? {
 			frameCount: 0,
 			sampleCount: 0,
+			decodedBytes: 0,
 			startTime: Number.POSITIVE_INFINITY,
 			endTime: Number.NEGATIVE_INFINITY,
 			previousTime: Number.NEGATIVE_INFINITY,
@@ -308,6 +312,10 @@ function decodeLine(
 	stream.endTime = Math.max(stream.endTime, endTime);
 	stream.previousTime = startTime;
 	stream.frameCount++;
+	if (!Number.isSafeInteger(stream.decodedBytes + bytes)) {
+		throw new Error("Decoded recording byte count exceeded its limit");
+	}
+	stream.decodedBytes += bytes;
 	if (stream.kind === "video") {
 		const timestamp = BigInt(pts);
 		if (stream.lastVideoPts !== undefined && timestamp < stream.lastVideoPts) {
@@ -347,7 +355,7 @@ function decodeLine(
 }
 
 async function readFrameEvidence(
-	stream: ReadableStream<Uint8Array>,
+	stream: AsyncIterable<Uint8Array>,
 	streams: Map<number, DecodedStream>,
 	allowVideoTies: boolean,
 ): Promise<void> {
@@ -373,7 +381,7 @@ async function readFrameEvidence(
 }
 
 async function readDecoderErrors(
-	stream: ReadableStream<Uint8Array>,
+	stream: AsyncIterable<Uint8Array>,
 	input: string,
 ): Promise<{ error: string; digests: string[] }> {
 	const decoder = new TextDecoder();
@@ -404,6 +412,59 @@ async function readDecoderErrors(
 				.trim()
 				.slice(-MAX_ERROR_LENGTH) ||
 			(truncated ? "Decoder error output exceeded its limit" : ""),
+	};
+}
+
+async function hashDecodedStream(stream: Readable): Promise<{
+	bytes: number;
+	sha256: string;
+}> {
+	const hash = createHash("sha256");
+	let bytes = 0;
+	for await (const chunk of stream) {
+		if (!Buffer.isBuffer(chunk)) {
+			throw new Error("Decoded recording pipe returned invalid bytes");
+		}
+		if (!Number.isSafeInteger(bytes + chunk.byteLength)) {
+			throw new Error("Decoded recording byte count exceeded its limit");
+		}
+		bytes += chunk.byteLength;
+		hash.update(chunk);
+	}
+	return { bytes, sha256: hash.digest("hex") };
+}
+
+async function spawnRecordingDecoder(args: string[], contentPipes: number) {
+	const child = spawn("ffmpeg", args, {
+		stdio: [
+			"ignore",
+			"pipe",
+			"pipe",
+			...Array<"pipe">(contentPipes).fill("pipe"),
+		],
+	});
+	const exited = new Promise<number>((resolve, reject) => {
+		child.once("error", reject);
+		child.once("close", (code) => resolve(code ?? -1));
+	});
+	if (!child.pid || !child.stdout || !child.stderr) {
+		child.kill("SIGKILL");
+		await exited;
+		throw new Error("Recording decoder pipes are unavailable");
+	}
+	return {
+		pid: child.pid,
+		exited,
+		stdout: Readable.toWeb(child.stdout),
+		stderr: Readable.toWeb(child.stderr),
+		stdio: child.stdio,
+		get exitCode() {
+			return child.exitCode;
+		},
+		get signalCode() {
+			return child.signalCode;
+		},
+		kill: (signal?: NodeJS.Signals | number) => child.kill(signal),
 	};
 }
 
@@ -669,6 +730,20 @@ async function decodeRecording(
 			true,
 		);
 	}
+	const knownAudio =
+		sourceAudioInput === undefined
+			? options.sourceEvidence
+				? Boolean(options.sourceEvidence.audio)
+				: options.hasAudio
+			: sourceAudioInput !== null;
+	const streamDecodedContent =
+		process.platform !== "win32" && knownAudio !== undefined;
+	if (streamDecodedContent && !Bun.semver.satisfies(Bun.version, ">=1.4.0")) {
+		throw new Error(
+			"Recording content verification requires Bun 1.4.0 or newer; upgrade the media-server runtime to avoid double-closing decoded-content pipes",
+		);
+	}
+	const hashAudio = Boolean(knownAudio);
 	const outputOptions = [
 		"-map",
 		"0:v:0",
@@ -689,9 +764,8 @@ async function decodeRecording(
 		"1",
 	];
 	const proc = registerSubprocess(
-		spawn({
-			cmd: [
-				"ffmpeg",
+		await spawnRecordingDecoder(
+			[
 				"-hide_banner",
 				"-nostdin",
 				"-copyts",
@@ -736,17 +810,53 @@ async function decodeRecording(
 				"-f",
 				"framecrc",
 				"pipe:1",
-				...outputOptions,
-				"-f",
-				"streamhash",
-				"-hash",
-				"sha256",
-				"pipe:2",
+				...(streamDecodedContent
+					? [
+							"-map",
+							"0:v:0",
+							"-fps_mode",
+							"passthrough",
+							"-enc_time_base:v",
+							"-1",
+							"-c:v",
+							"rawvideo",
+							// Raw bytes have no timestamps; framecrc retains the original timeline.
+							"-bsf:v",
+							"setts=pts=N:dts=N:duration=1",
+							"-threads",
+							"1",
+							"-max_interleave_delta",
+							"1",
+							"-f",
+							"rawvideo",
+							"pipe:3",
+							...(hashAudio
+								? [
+										"-map",
+										sourceAudioInput ? "1:a:0" : "0:a:0",
+										"-c:a",
+										"pcm_f64le",
+										"-threads",
+										"1",
+										"-max_interleave_delta",
+										"1",
+										"-f",
+										"f64le",
+										"pipe:4",
+									]
+								: []),
+						]
+					: [
+							...outputOptions,
+							"-f",
+							"streamhash",
+							"-hash",
+							"sha256",
+							"pipe:2",
+						]),
 			],
-			stdin: "ignore",
-			stdout: "pipe",
-			stderr: "pipe",
-		}),
+			streamDecodedContent ? (hashAudio ? 2 : 1) : 0,
+		),
 	);
 	let failure: Error | undefined;
 	const stop = () => {
@@ -777,13 +887,34 @@ async function decodeRecording(
 		videoTiming !== undefined,
 	);
 	const errors = readDecoderErrors(proc.stderr, input);
+	frames.catch(stop);
+	errors.catch(stop);
+	const pipes: Readable[] = [];
+	const hashes: ReturnType<typeof hashDecodedStream>[] = [];
 	let result: RecordingSourceEvidence;
 	try {
+		if (streamDecodedContent) {
+			for (const stream of proc.stdio.slice(3)) {
+				if (!(stream instanceof Readable)) {
+					throw new Error("Decoded recording pipe is unavailable");
+				}
+				pipes.push(stream);
+			}
+			if (pipes.length !== (hashAudio ? 2 : 1)) {
+				throw new Error("Decoded recording pipe is missing");
+			}
+			for (const stream of pipes) {
+				const hash = hashDecodedStream(stream);
+				hash.catch(stop);
+				hashes.push(hash);
+			}
+		}
 		if (options.abortSignal?.aborted) cancel();
-		const [, diagnostics, exitCode] = await Promise.all([
+		const [, diagnostics, exitCode, content] = await Promise.all([
 			frames,
 			errors,
 			proc.exited,
+			Promise.all(hashes),
 		]);
 		const stderr = diagnostics.error;
 		if (failure) throw failure;
@@ -796,19 +927,37 @@ async function decodeRecording(
 					),
 			);
 		}
-		for (const digest of diagnostics.digests) decodeLine(digest, streams);
+		if (streamDecodedContent) {
+			if (diagnostics.digests.length !== 0) {
+				throw new Error("Unexpected decoded recording content digest");
+			}
+			for (const [index, digest] of content.entries()) {
+				const stream = streams.get(index);
+				if (
+					!stream ||
+					digest.bytes === 0 ||
+					digest.bytes !== stream.decodedBytes
+				) {
+					throw new Error("Decoded recording content is incomplete");
+				}
+				stream.contentSha256 = digest.sha256;
+			}
+		} else {
+			for (const digest of diagnostics.digests) decodeLine(digest, streams);
+		}
 		result = validateEvidence(
 			streams,
 			options,
 			sourceAudioInput !== undefined,
 			videoTiming,
 		);
+	} catch (error) {
+		throw failure ?? error;
 	} finally {
 		clearTimeout(timeout);
 		options.abortSignal?.removeEventListener("abort", cancel);
 		stop();
-		await proc.exited;
-		await Promise.allSettled([frames, errors]);
+		await Promise.allSettled([proc.exited, frames, errors, ...hashes]);
 		unregisterSubprocess(proc);
 	}
 	if (failure) throw failure;

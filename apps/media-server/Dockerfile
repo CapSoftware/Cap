@@ -1,4 +1,4 @@
-FROM oven/bun:1.3.14
+FROM oven/bun:1.4.0
 
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ffmpeg \
@@ -10,6 +10,16 @@ COPY apps/media-server/package.json apps/media-server/bun.lock ./
 RUN bun install --frozen-lockfile --production
 
 COPY apps/media-server/src ./src
+
+RUN bun test src/__tests__/lib/recording-verification.integration.test.ts src/__tests__/lib/job-manager.test.ts \
+	&& bun test src/__tests__/routes/recording-verification.test.ts \
+	&& bun test src/__tests__/routes/video.test.ts \
+	&& bun test src/__tests__/lib/media-routes-real-world.integration.test.ts \
+	&& bun test src/__tests__/lib/media-video.integration.test.ts
+
+RUN MEDIA_SERVER_RECORDING_PERFORMANCE_TESTS=1 bun test \
+	src/__tests__/lib/recording-verification.integration.test.ts \
+	--test-name-pattern 'streams a complete long recording'
 
 ENV PORT=3456
 EXPOSE 3456

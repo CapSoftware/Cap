@@ -341,6 +341,35 @@ mod tests {
     };
     use std::{path::PathBuf, sync::OnceLock, time::Duration};
 
+    const ROUND_TRIP_DURATIONS: [(u64, &str, u64); 4] = [
+        (2_017_793_167, "2.0177931669999998", 0x4000_2470_be72_dbae),
+        (2_014_456_625, "2.0144566250000002", 0x4000_1d9b_6f5c_af2e),
+        (2_013_162_750, "2.0131627500000002", 0x4000_1af5_1266_3412),
+        (2_015_835_292, "2.0158352920000002", 0x4000_206e_40ea_19d4),
+    ];
+
+    #[test]
+    fn legacy_manifest_durations_round_trip_without_changing_bits() {
+        for (nanos, json, expected_bits) in ROUND_TRIP_DURATIONS {
+            let live_duration = Duration::from_nanos(nanos).as_secs_f64();
+            assert_eq!(live_duration.to_bits(), expected_bits);
+            assert_eq!(serde_json::to_string(&live_duration).unwrap(), json);
+            for (version, kind) in [(5, "m4s_segments"), (2, "m4s_audio_segments")] {
+                let manifest_json = format!(
+                    r#"{{"version":{version},"type":"{kind}","init_segment":"init.mp4","segments":[{{"path":"segment_001.m4s","index":1,"duration":{json},"is_complete":true,"file_size":1}}],"is_complete":true}}"#
+                );
+                let manifest: Manifest = serde_json::from_str(&manifest_json).unwrap();
+                let mut duration = manifest.segments[0].duration;
+                for _ in 0..16 {
+                    assert_eq!(duration.to_bits(), expected_bits);
+                    let serialized = serde_json::to_string(&duration).unwrap();
+                    assert_eq!(serialized, json);
+                    duration = serde_json::from_str(&serialized).unwrap();
+                }
+            }
+        }
+    }
+
     #[test]
     fn upload_lock_defers_other_owners_and_survives_bundle_deletion() {
         let directory = tempfile::tempdir().unwrap();
@@ -533,6 +562,44 @@ mod tests {
                 .unwrap();
             assert_eq!(entry["file_size"].as_u64(), Some(event.file_size));
             assert_eq!(entry["duration"].as_f64(), Some(event.duration));
+        }
+    }
+
+    #[test]
+    fn repeated_resume_preserves_live_durations_and_manifest_bytes() {
+        for (nanos, json, expected_bits) in ROUND_TRIP_DURATIONS {
+            let project = fixture();
+            let mut manifests = Vec::new();
+            for track in ["display", "audio"] {
+                let path = project
+                    .path()
+                    .join("content")
+                    .join(track)
+                    .join("manifest.json");
+                let mut manifest: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                manifest["segments"][0]["duration"] =
+                    serde_json::json!(Duration::from_nanos(nanos).as_secs_f64());
+                let bytes = serde_json::to_vec(&manifest).unwrap();
+                fs::write(&path, &bytes).unwrap();
+                manifests.push((path, bytes));
+            }
+            for _ in 0..3 {
+                let events = collect_segment_events(project.path(), true).unwrap();
+                for media_type in [SegmentMediaType::Video, SegmentMediaType::Audio] {
+                    let segment = events
+                        .iter()
+                        .find(|event| {
+                            !event.is_init && event.index == 1 && event.media_type == media_type
+                        })
+                        .unwrap();
+                    assert_eq!(segment.duration.to_bits(), expected_bits);
+                    assert_eq!(serde_json::to_string(&segment.duration).unwrap(), json);
+                }
+                for (path, bytes) in &manifests {
+                    assert_eq!(&fs::read(path).unwrap(), bytes);
+                }
+            }
         }
     }
 

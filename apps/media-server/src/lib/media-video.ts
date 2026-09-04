@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { type BunFile, file, spawn } from "bun";
 import type { VideoMetadata } from "./job-manager";
 import {
@@ -1667,7 +1668,9 @@ export async function generateThumbnail(
 	inputPath: string,
 	duration: number,
 	options: ThumbnailOptions = {},
+	abortSignal?: AbortSignal,
 ): Promise<Uint8Array> {
+	abortSignal?.throwIfAborted();
 	const opts = { ...DEFAULT_THUMBNAIL_OPTIONS, ...options };
 	const timestamp = getThumbnailTimestamp(duration, opts.timestamp);
 	const qualityValue = Math.max(
@@ -1697,31 +1700,45 @@ export async function generateThumbnail(
 			stderr: "pipe",
 		}),
 	);
+	let termination: Promise<void> | undefined;
+	const stop = () => {
+		termination ??= terminateProcess(proc);
+		return termination;
+	};
+	const abort = () => {
+		void stop();
+	};
+	abortSignal?.addEventListener("abort", abort, { once: true });
 
 	try {
+		abortSignal?.throwIfAborted();
 		return await withTimeout(
 			(async () => {
-				const stderrPromise = readStreamWithLimit(
-					proc.stderr as ReadableStream<Uint8Array>,
-					MAX_STDERR_BYTES,
-				);
-
 				const chunks: Uint8Array[] = [];
 				let totalBytes = 0;
-				const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
-
-				try {
-					while (true) {
-						const { done, value } = await reader.read();
-						if (done) break;
-						chunks.push(value);
-						totalBytes += value.length;
-					}
-				} finally {
-					reader.releaseLock();
-				}
-
-				const [, exitCode] = await Promise.all([stderrPromise, proc.exited]);
+				const [, , exitCode] = await Promise.all([
+					(async () => {
+						const reader = (
+							proc.stdout as ReadableStream<Uint8Array>
+						).getReader();
+						try {
+							while (true) {
+								const { done, value } = await reader.read();
+								if (done) break;
+								chunks.push(value);
+								totalBytes += value.length;
+							}
+						} finally {
+							reader.releaseLock();
+						}
+					})(),
+					readStreamWithLimit(
+						proc.stderr as ReadableStream<Uint8Array>,
+						MAX_STDERR_BYTES,
+					),
+					proc.exited,
+				]);
+				abortSignal?.throwIfAborted();
 
 				if (exitCode !== 0) {
 					throw new Error(`FFmpeg thumbnail exited with code ${exitCode}`);
@@ -1740,10 +1757,14 @@ export async function generateThumbnail(
 				return output;
 			})(),
 			THUMBNAIL_TIMEOUT_MS,
-			() => terminateProcess(proc),
+			stop,
 		);
+	} catch (error) {
+		abortSignal?.throwIfAborted();
+		throw error;
 	} finally {
-		await terminateProcess(proc);
+		abortSignal?.removeEventListener("abort", abort);
+		await stop();
 	}
 }
 
@@ -2027,10 +2048,6 @@ async function readUploadReceipt(
 	return { objectIdentity: `"cap-drive-content-v1:${digest}"` };
 }
 
-async function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function uploadSignal(abortSignal?: AbortSignal) {
 	const timeout = AbortSignal.timeout(UPLOAD_TIMEOUT_MS);
 	return abortSignal ? AbortSignal.any([abortSignal, timeout]) : timeout;
@@ -2076,7 +2093,9 @@ async function uploadWithRetry(
 			}
 
 			lastError = uploadError;
-			await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt);
+			await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt, undefined, {
+				signal: abortSignal,
+			});
 			continue;
 		}
 
@@ -2103,7 +2122,9 @@ async function uploadWithRetry(
 		}
 
 		lastError = responseError;
-		await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt);
+		await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt, undefined, {
+			signal: abortSignal,
+		});
 	}
 
 	throw lastError ?? new Error("Storage upload failed after retries");
@@ -2113,24 +2134,40 @@ export async function uploadToS3(
 	data: Uint8Array | Blob,
 	presignedUrl: string,
 	contentType: string,
+	abortSignal?: AbortSignal,
 ): Promise<void> {
+	abortSignal?.throwIfAborted();
 	const blob =
 		data instanceof Blob
 			? data
-			: new Blob([data.buffer as ArrayBuffer], { type: contentType });
+			: new Blob([new Uint8Array(data)], { type: contentType });
 
-	await uploadWithRetry(presignedUrl, contentType, blob.size, () => blob);
+	await uploadWithRetry(
+		presignedUrl,
+		contentType,
+		blob.size,
+		() => blob,
+		undefined,
+		abortSignal,
+	);
 }
 
 export async function uploadFileToS3(
 	filePath: string,
 	presignedUrl: string,
 	contentType: string,
+	abortSignal?: AbortSignal,
 ): Promise<StorageUploadReceipt> {
+	abortSignal?.throwIfAborted();
 	const fileHandle = file(filePath);
 
-	return uploadWithRetry(presignedUrl, contentType, fileHandle.size, () =>
-		file(filePath),
+	return uploadWithRetry(
+		presignedUrl,
+		contentType,
+		fileHandle.size,
+		() => file(filePath),
+		undefined,
+		abortSignal,
 	);
 }
 
@@ -2221,7 +2258,9 @@ async function uploadMultipartPart(
 			}
 
 			lastError = uploadError;
-			await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt);
+			await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt, undefined, {
+				signal: abortSignal,
+			});
 			continue;
 		}
 
@@ -2248,7 +2287,9 @@ async function uploadMultipartPart(
 		}
 
 		lastError = responseError;
-		await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt);
+		await sleep(UPLOAD_RETRY_BASE_MS * 2 ** attempt, undefined, {
+			signal: abortSignal,
+		});
 	}
 
 	throw lastError ?? new Error(`Multipart upload part ${partNumber} failed`);
