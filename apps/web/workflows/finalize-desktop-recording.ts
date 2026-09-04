@@ -104,11 +104,15 @@ export async function finalizeDesktopRecordingWorkflow(
 	const generation = await ensureWorkflowJob(payload);
 	let completedJobId: string | undefined;
 	let mediaServerUnavailable = false;
+	let retainedAttempt: DesktopRecordingAttempt | undefined;
 	processing: for (;;) {
-		const next = await acquireDesktopRecordingAttempt({
-			...payload,
-			generation,
-		});
+		const next = retainedAttempt
+			? { status: "attempt" as const, attempt: retainedAttempt }
+			: await acquireDesktopRecordingAttempt({
+					...payload,
+					generation,
+				});
+		retainedAttempt = undefined;
 		if (next.status === "verified") break;
 		if (next.status === "wait") {
 			await sleep(next.until);
@@ -156,6 +160,12 @@ export async function finalizeDesktopRecordingWorkflow(
 				getErrorMessage(error),
 				getSourceErrorCode(error),
 			);
+			if (retained === "verified") break;
+			if (retained === "waiting") {
+				retainedAttempt = attempt;
+				await sleep(COMPLETION_POLL_INTERVAL_MS);
+				continue;
+			}
 			if (retained !== "retry") return { success: false, reason: retained };
 		}
 	}
@@ -392,7 +402,7 @@ async function buildDesktopSegmentsOutput({
 
 export async function startDesktopRecordingJob(
 	attempt: DesktopRecordingAttempt,
-): Promise<string> {
+): Promise<string | undefined> {
 	"use step";
 
 	const current = await getProcessingState(attempt);
@@ -480,33 +490,47 @@ export async function startDesktopRecordingJob(
 			manifestSha256: current.source.manifestSha256,
 		};
 	}
-	const response = await fetch(
-		`${env.MEDIA_SERVER_URL.replace(/\/$/, "")}${path}`,
-		{
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"x-media-server-secret": env.MEDIA_SERVER_WEBHOOK_SECRET,
+	try {
+		const response = await fetch(
+			`${env.MEDIA_SERVER_URL.replace(/\/$/, "")}${path}`,
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"x-media-server-secret": env.MEDIA_SERVER_WEBHOOK_SECRET,
+				},
+				body: JSON.stringify(body),
+				signal: AbortSignal.timeout(30_000),
 			},
-			body: JSON.stringify(body),
-			signal: AbortSignal.timeout(30_000),
-		},
-	);
-	if (!response.ok) {
-		const detail = await response.text().catch(() => "");
-		throw new Error(
-			`Failed to start recording processing: ${response.status} ${detail}`,
+		);
+		if (response.ok) {
+			const result = z
+				.object({
+					jobId: z.string().min(1),
+					recordingWorkerVersion: z.literal(1).optional(),
+				})
+				.parse(await response.json());
+			if (
+				result.recordingWorkerVersion === undefined &&
+				(await attachRemoteJob({ ...attempt, remoteJobId: result.jobId }))
+			) {
+				return result.jobId;
+			}
+		}
+	} catch {
+		console.warn(
+			"[finalizeDesktopRecordingWorkflow] Reconciling worker dispatch",
+			{
+				videoId: attempt.videoId,
+				generation: attempt.generation,
+				attemptId: attempt.attemptId,
+			},
 		);
 	}
-	const result = z
-		.object({ jobId: z.string().min(1) })
-		.parse(await response.json());
-	if (!(await attachRemoteJob({ ...attempt, remoteJobId: result.jobId }))) {
-		throw new Error(
-			"Recording processing attempt expired before the worker was attached",
-		);
-	}
-	return result.jobId;
+	const reconciled = await getProcessingState(attempt);
+	return reconciled?.attemptId === attempt.attemptId
+		? (reconciled.remoteJobId ?? undefined)
+		: undefined;
 }
 
 export async function pollDesktopRecordingAttempt({
@@ -516,7 +540,7 @@ export async function pollDesktopRecordingAttempt({
 	jobId,
 	deadline,
 }: DesktopRecordingAttemptFence & {
-	jobId: string;
+	jobId?: string;
 	deadline: Date;
 }): Promise<
 	"waiting" | "verified" | "retry" | "source-blocked" | "superseded"
@@ -543,10 +567,11 @@ export async function pollDesktopRecordingAttempt({
 			: "superseded";
 	}
 	const env = serverEnv();
-	if (env.MEDIA_SERVER_URL && current.source) {
+	const ownerJobId = current.remoteJobId ?? jobId;
+	if (env.MEDIA_SERVER_URL && current.source && ownerJobId) {
 		const observation = await observeDesktopRecordingJob({
 			...fence,
-			jobId,
+			jobId: ownerJobId,
 			inventorySha256: current.source.inventorySha256,
 			mediaServerUrl: env.MEDIA_SERVER_URL,
 			webhookUrl: getMediaServerWebhookUrl(
@@ -555,7 +580,9 @@ export async function pollDesktopRecordingAttempt({
 			),
 			secret: env.MEDIA_SERVER_WEBHOOK_SECRET,
 		});
-		if (observation.status === "active") await heartbeatAttempt(fence);
+		if (observation.status === "active" && !observation.workerProtocol) {
+			await heartbeatAttempt(fence);
+		}
 	}
 	current = await getProcessingState(fence);
 	if (!current) return "superseded";
@@ -580,11 +607,12 @@ async function retryDesktopRecordingAttempt(
 	{ videoId, generation, attemptId }: DesktopRecordingAttemptFence,
 	errorMessage: string,
 	sourceErrorCode: ReturnType<typeof getSourceErrorCode>,
-): Promise<"retry" | "source-blocked" | "superseded"> {
+): Promise<"waiting" | "verified" | "retry" | "source-blocked" | "superseded"> {
 	"use step";
 
 	const fence = { videoId, generation, attemptId };
 	const current = await getProcessingState(fence);
+	if (current?.state === "verified") return "verified";
 	if (!current || current.attemptId !== attemptId) return "superseded";
 	if (current.state === "source-blocked") return "source-blocked";
 	if (sourceErrorCode) {
@@ -595,6 +623,14 @@ async function retryDesktopRecordingAttempt(
 		}))
 			? "source-blocked"
 			: "superseded";
+	}
+	if (
+		current.state === "processing" &&
+		current.source &&
+		current.leaseExpiresAt &&
+		current.leaseExpiresAt > new Date()
+	) {
+		return "waiting";
 	}
 	return (await scheduleRetry({
 		...fence,

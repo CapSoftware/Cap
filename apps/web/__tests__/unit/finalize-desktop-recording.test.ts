@@ -334,6 +334,37 @@ function pollingInput() {
 }
 
 describe("short durable processing polls", () => {
+	it("keeps an unchanged stage alive from durable heartbeats while every status lookup misses", async () => {
+		withCurrent({ remoteJobId: "owning-replica" });
+		mocks.observe.mockResolvedValue({
+			status: "unavailable",
+			delivered: false,
+		});
+		for (let minute = 1; minute <= 10; minute++) {
+			vi.setSystemTime(new Date(now.getTime() + minute * 60_000));
+			withCurrent({ leaseExpiresAt: new Date(Date.now() + 5 * 60_000) });
+			expect(await pollDesktopRecordingAttempt(pollingInput())).toBe("waiting");
+		}
+		expect(mocks.observe).toHaveBeenLastCalledWith(
+			expect.objectContaining({ jobId: "owning-replica" }),
+		);
+		expect(mocks.retry).not.toHaveBeenCalled();
+		expect(mocks.heartbeat).not.toHaveBeenCalled();
+	});
+
+	it("does not renew an owned worker from a status probe", async () => {
+		mocks.observe.mockResolvedValue({
+			status: "active",
+			delivered: false,
+			workerProtocol: 1,
+		});
+		expect(await pollDesktopRecordingAttempt(pollingInput())).toBe("waiting");
+		expect(mocks.heartbeat).not.toHaveBeenCalled();
+		vi.setSystemTime(new Date(now.getTime() + 5 * 60_000));
+		expect(await pollDesktopRecordingAttempt(pollingInput())).toBe("retry");
+		expect(mocks.heartbeat).not.toHaveBeenCalled();
+	});
+
 	it.each(["processing-timeout", "worker-lease-expired"])(
 		"does not reuse a rich attempt's stale retry date after %s",
 		async (errorCode) => {
@@ -563,6 +594,90 @@ describe("source commitment and media request compatibility", () => {
 });
 
 describe("workflow retry lifetime", () => {
+	it("finishes normally when publication commits during a failing poll", async () => {
+		withCurrent({ state: "queued", leaseExpiresAt: null });
+		mocks.observe.mockImplementationOnce(async () => {
+			withCurrent({ state: "verified", leaseExpiresAt: null });
+			throw new Error("Response lost after publication");
+		});
+		expect(
+			await finalizeDesktopRecordingWorkflow({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).toMatchObject({ success: true });
+		expect(mocks.retry).not.toHaveBeenCalled();
+		expect(mocks.claim).toHaveBeenCalledOnce();
+		expect(mocks.transcribe).toHaveBeenCalledOnce();
+	});
+
+	it("waits for an uncertain dispatch without reserving the unacknowledged worker", async () => {
+		mocks.fetch.mockResolvedValue(
+			Response.json({ jobId: "unclaimed-worker", recordingWorkerVersion: 1 }),
+		);
+		expect(await startDesktopRecordingJob(fixture)).toBeUndefined();
+		expect(mocks.attach).not.toHaveBeenCalled();
+		expect(mocks.retry).not.toHaveBeenCalled();
+		const input = { ...pollingInput(), jobId: undefined };
+		expect(await pollDesktopRecordingAttempt(input)).toBe("waiting");
+		expect(mocks.observe).not.toHaveBeenCalled();
+		withCurrent({ remoteJobId: "actual-owner" });
+		expect(await pollDesktopRecordingAttempt(input)).toBe("verified");
+		expect(mocks.observe).toHaveBeenCalledWith(
+			expect.objectContaining({ jobId: "actual-owner" }),
+		);
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+	});
+
+	it("uses the durable winning replica instead of a dispatch response", async () => {
+		mocks.fetch.mockImplementation(async () => {
+			withCurrent({ remoteJobId: "winner" });
+			return Response.json({ jobId: "loser", recordingWorkerVersion: 1 });
+		});
+		expect(await startDesktopRecordingJob(fixture)).toBe("winner");
+		expect(mocks.attach).not.toHaveBeenCalled();
+	});
+
+	it("reconciles a committed ownership claim after the dispatch ACK is lost", async () => {
+		mocks.fetch.mockImplementation(async () => {
+			withCurrent({ remoteJobId: "winner" });
+			throw new Error("Response lost after acceptance");
+		});
+		expect(await startDesktopRecordingJob(fixture)).toBe("winner");
+		expect(await startDesktopRecordingJob(fixture)).toBe("winner");
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+		expect(mocks.attach).not.toHaveBeenCalled();
+		expect(mocks.retry).not.toHaveBeenCalled();
+	});
+
+	it("waits for the existing lease to expire if dispatch was never accepted", async () => {
+		mocks.fetch.mockRejectedValue(new Error("offline"));
+		expect(await startDesktopRecordingJob(fixture)).toBeUndefined();
+		const input = { ...pollingInput(), jobId: undefined };
+		expect(await pollDesktopRecordingAttempt(input)).toBe("waiting");
+		expect(mocks.retry).not.toHaveBeenCalled();
+		vi.setSystemTime(new Date(now.getTime() + 5 * 60_000));
+		expect(await pollDesktopRecordingAttempt(input)).toBe("retry");
+		expect(current?.source).toEqual(source);
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+	});
+
+	it("resumes the same live attempt after a polling exception", async () => {
+		withCurrent({ state: "queued", leaseExpiresAt: null });
+		mocks.observe.mockRejectedValueOnce(new Error("Transient polling failure"));
+		expect(
+			await finalizeDesktopRecordingWorkflow({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).toEqual({ success: true, jobId: "remote-job" });
+		expect(mocks.claim).toHaveBeenCalledOnce();
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+		expect(mocks.retry).not.toHaveBeenCalled();
+	});
+
 	it("waits for fresh backoff after a source commit failure with a rich stale attempt", async () => {
 		withCurrent({
 			state: "committing",

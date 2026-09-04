@@ -304,6 +304,46 @@ describe("media-server recording progress webhook", () => {
 		expect(mocks.getState).not.toHaveBeenCalled();
 	});
 
+	it("returns a fenced lease acknowledgement only after an authenticated worker claim", async () => {
+		const { job, payload } = fixture();
+		const database = databaseFixture({ ...job, remoteJobId: null });
+		const claim = {
+			jobId: payload.jobId,
+			videoId,
+			generation,
+			attemptId,
+			inventorySha256,
+			manifestSha256,
+			phase: "queued",
+			progress: 0,
+			recordingWorker: { version: 1, action: "claim", sequence: 0 },
+		};
+		expect((await request(claim, "wrong-secret")).status).toBe(401);
+		expect(database.mutations).toEqual([]);
+		const accepted = await request(claim);
+		expect(accepted.status).toBe(200);
+		expect(await accepted.json()).toEqual({
+			success: true,
+			recordingWorker: {
+				version: 1,
+				status: "accepted",
+				generation,
+				attemptId,
+				jobId: payload.jobId,
+				sequence: 0,
+				leaseDurationMs: 300_000,
+			},
+		});
+		const before = database.mutations.length;
+		const rejected = await request({ ...claim, jobId: "another-replica" });
+		expect(await rejected.json()).toMatchObject({
+			recordingWorker: { status: "owned", ownerJobId: payload.jobId },
+		});
+		expect(database.mutations).toHaveLength(before);
+		expect(mocks.head).not.toHaveBeenCalled();
+		expect(mocks.transcribe).not.toHaveBeenCalled();
+	});
+
 	it("publishes the fenced immutable output before queueing transcription", async () => {
 		const database = databaseFixture();
 		mocks.transcribe.mockImplementation(async () => {
@@ -427,16 +467,24 @@ describe("media-server recording progress webhook", () => {
 				error: "Worker failed",
 			});
 			expect(response.status).toBe(200);
-			const expected =
-				errorCode === "source-missing" ? mocks.blocked : mocks.retry;
-			expect(expected).toHaveBeenCalledWith({
-				videoId,
-				generation,
-				attemptId,
-				errorCode,
-				errorMessage: "Worker failed",
+			expect(database.mutations).toContainEqual({
+				operation: "update",
+				table: mocks.tables.jobs,
+				values: expect.objectContaining({
+					state: errorCode === "source-missing" ? "source-blocked" : "retry",
+					leaseExpiresAt: null,
+					errorCode,
+					errorMessage: "Worker failed",
+				}),
 			});
-			expect(database.mutations).toEqual([]);
+			expect(await mocks.getState()).toMatchObject({
+				source: fixture().job.source,
+			});
+			expect(
+				database.mutations.some(
+					(mutation) => mutation.table === mocks.tables.videos,
+				),
+			).toBe(false);
 			expect(mocks.transcribe).not.toHaveBeenCalled();
 		},
 	);

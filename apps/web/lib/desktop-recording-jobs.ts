@@ -70,6 +70,50 @@ export type DesktopRecordingAttemptFence = {
 	attemptId: string;
 };
 
+export const desktopRecordingWorkerCheckpointSchema = z.object({
+	version: z.literal(1),
+	kind: z.literal("recording-worker"),
+	generation: z.string().min(1),
+	attemptId: z.string().min(1),
+	jobId: z.string().min(1),
+	sequence: z.number().int().nonnegative().safe(),
+	phase: z.enum([
+		"queued",
+		"downloading",
+		"probing",
+		"processing",
+		"uploading",
+		"generating_thumbnail",
+		"complete",
+		"error",
+		"cancelled",
+	]),
+	progress: z.number().finite().min(0).max(100),
+	payloadSha256: z.string().regex(/^[a-f0-9]{64}$/),
+	updatedAt: z.string().datetime(),
+	stateChangedAt: z.string().datetime(),
+});
+
+export function getDesktopRecordingWorkerCheckpoint(job: DesktopRecordingJob) {
+	const output = job.output;
+	if (typeof output !== "object" || output === null) return null;
+	const value =
+		"kind" in output && output.kind === "recording-worker"
+			? output
+			: "recordingWorker" in output
+				? output.recordingWorker
+				: null;
+	if (value === null) return null;
+	const checkpoint = desktopRecordingWorkerCheckpointSchema.parse(value);
+	if (
+		checkpoint.generation !== job.generation ||
+		checkpoint.attemptId !== job.attemptId ||
+		checkpoint.jobId !== job.remoteJobId
+	)
+		throw new Error("Recording worker checkpoint does not match its owner");
+	return checkpoint;
+}
+
 export class SourceCommitPendingError extends Error {
 	readonly code = "source-commit-pending";
 
@@ -360,6 +404,7 @@ export async function claimProcessingAttempt({
 			attemptCount: job.attemptCount + 1,
 			leaseExpiresAt: new Date(now.getTime() + DESKTOP_RECORDING_LEASE_MS),
 			remoteJobId: null,
+			output: job.source ? null : job.output,
 			errorCode: null,
 			errorMessage: null,
 			updatedAt: now,
@@ -563,16 +608,28 @@ export async function heartbeatAttempt({
 	now = new Date(),
 	...fence
 }: DesktopRecordingAttemptFence & { now?: Date }): Promise<boolean> {
-	const result = await db()
-		.update(videoProcessingJobs)
-		.set({
-			leaseExpiresAt: new Date(now.getTime() + DESKTOP_RECORDING_LEASE_MS),
-			updatedAt: now,
-		})
-		.where(
-			and(attemptCondition(fence), gt(videoProcessingJobs.leaseExpiresAt, now)),
-		);
-	return affectedRows(result) > 0;
+	return db().transaction(async (tx) => {
+		const [row] = await tx
+			.select()
+			.from(videoProcessingJobs)
+			.where(attemptCondition(fence))
+			.for("update");
+		if (
+			!row ||
+			!row.leaseExpiresAt ||
+			row.leaseExpiresAt <= now ||
+			getDesktopRecordingWorkerCheckpoint(parseDesktopRecordingJob(row))
+		)
+			return false;
+		const result = await tx
+			.update(videoProcessingJobs)
+			.set({
+				leaseExpiresAt: new Date(now.getTime() + DESKTOP_RECORDING_LEASE_MS),
+				updatedAt: now,
+			})
+			.where(attemptCondition(fence));
+		return affectedRows(result) > 0;
+	});
 }
 
 export async function scheduleRetry({

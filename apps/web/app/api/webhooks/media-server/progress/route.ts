@@ -116,7 +116,12 @@ export async function POST(request: NextRequest) {
 				}
 			}
 			return NextResponse.json(
-				{ success: recordingProgress.status === 200 },
+				{
+					success: recordingProgress.status === 200,
+					...(recordingProgress.recordingWorker
+						? { recordingWorker: recordingProgress.recordingWorker }
+						: {}),
+				},
 				{ status: recordingProgress.status ?? 200 },
 			);
 		}

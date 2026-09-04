@@ -1,0 +1,47 @@
+name: Recording Reliability
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - "apps/media-server/**"
+      - "packages/database/**"
+      - "packages/web-*/**"
+      - "crates/recording/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/recording-reliability.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "apps/media-server/**"
+      - "packages/database/**"
+      - "packages/web-*/**"
+      - "crates/recording/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/recording-reliability.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recording-reliability-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  recording-contract:
+    name: Recording ownership, preservation, and recovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-js
+      - name: Verify recording contracts
+        working-directory: apps/web
+        run: |
+          pnpm exec vitest run \
+            __tests__/unit/desktop-recording-*.test.ts \
+            __tests__/unit/desktop-segments-*.test.ts \
+            __tests__/unit/finalize-desktop-recording.test.ts \
+            __tests__/unit/media-server-progress.test.ts

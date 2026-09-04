@@ -7,6 +7,7 @@ import {
 	type DesktopRecordingJob,
 	ensureSegmentProcessingJob,
 	getDesktopRecordingRetryDelay,
+	getDesktopRecordingWorkerCheckpoint,
 	heartbeatAttempt,
 	initializeSourceCommitCheckpoint,
 	isDesktopRecordingJobRecoverable,
@@ -268,6 +269,60 @@ describe("durable recording job ownership", () => {
 		]);
 		expect(results.filter(Boolean)).toHaveLength(1);
 		expect(rows.jobs?.[0]?.attemptCount).toBe(1);
+	});
+
+	it("keeps physical worker leases private and clears their checkpoint for a new attempt", async () => {
+		const first = await createAttempt();
+		expect(await persistCommittedSource(first, source)).toBe(true);
+		const row = rows.jobs?.[0];
+		if (!row) throw new Error("Missing processing job");
+		Object.assign(row, {
+			remoteJobId: "physical-worker",
+			output: {
+				version: 1,
+				kind: "recording-worker",
+				generation: first.generation,
+				attemptId: first.attemptId,
+				jobId: "physical-worker",
+				sequence: 5,
+				phase: "processing",
+				progress: 60,
+				payloadSha256: "d".repeat(64),
+				updatedAt: now.toISOString(),
+				stateChangedAt: now.toISOString(),
+			},
+		});
+		expect(await heartbeatAttempt(first)).toBe(false);
+		vi.setSystemTime(new Date(now.getTime() + 6 * 60_000));
+		const next = await claimProcessingAttempt({
+			videoId,
+			generation: first.generation,
+		});
+		expect(next).toMatchObject({ source, remoteJobId: null, output: null });
+		expect(next?.attemptId).not.toBe(first.attemptId);
+	});
+
+	it("rejects a worker checkpoint transplanted from another physical attempt", async () => {
+		const first = await createAttempt();
+		expect(() =>
+			getDesktopRecordingWorkerCheckpoint({
+				...first,
+				remoteJobId: "current-worker",
+				output: {
+					version: 1,
+					kind: "recording-worker",
+					generation: first.generation,
+					attemptId: first.attemptId,
+					jobId: "other-worker",
+					sequence: 0,
+					phase: "queued",
+					progress: 0,
+					payloadSha256: "d".repeat(64),
+					updatedAt: now.toISOString(),
+					stateChangedAt: now.toISOString(),
+				},
+			}),
+		).toThrow("does not match its owner");
 	});
 
 	it("rejects stale attempt heartbeats, remote jobs, and errors after a retry takes over", async () => {
