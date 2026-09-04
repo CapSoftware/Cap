@@ -16,6 +16,7 @@ pub mod linux_package;
 pub mod linux_recording_stop;
 #[cfg(any(target_os = "linux", test))]
 pub mod linux_runtime;
+pub mod local_captions;
 #[cfg(target_os = "macos")]
 pub mod macos_qos;
 

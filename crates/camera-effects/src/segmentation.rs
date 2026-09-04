@@ -108,13 +108,72 @@ fn create_session() -> anyhow::Result<Session> {
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-fn init_runtime() -> anyhow::Result<()> {
+pub(crate) fn init_runtime() -> anyhow::Result<()> {
     let path = onnx_runtime_library_path().context("Failed to find ONNX Runtime library")?;
+    let (library, path) = preflight_runtime(&path)?;
 
     let _ = ort::init_from(&path)
         .with_context(|| format!("Failed to load ONNX Runtime from {}", path.display()))?
         .commit();
+    drop(library);
 
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn preflight_runtime(path: &std::path::Path) -> anyhow::Result<(libloading::Library, PathBuf)> {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        let executable = std::env::current_exe().context("Failed to locate current executable")?;
+        let executable_relative = executable
+            .parent()
+            .context("Current executable has no parent directory")?
+            .join(path);
+        if executable_relative.exists() {
+            executable_relative
+        } else {
+            path.to_path_buf()
+        }
+    };
+
+    // ort rc.12 constructs loader errors through its not-yet-loaded API, which
+    // recursively enters its initialization lock. Validate before entering ort,
+    // retaining this handle until ort has acquired its own reference.
+    let library = unsafe { libloading::Library::new(&path) }
+        .with_context(|| format!("Failed to load ONNX Runtime from {}", path.display()))?;
+    unsafe {
+        let get_api_base = library
+            .get::<unsafe extern "C" fn() -> *const ort::sys::OrtApiBase>(b"OrtGetApiBase\0")
+            .context("ONNX Runtime is missing OrtGetApiBase")?;
+        let base = get_api_base()
+            .as_ref()
+            .context("ONNX Runtime returned a null API base")?;
+        let version = (base.GetVersionString)();
+        anyhow::ensure!(!version.is_null(), "ONNX Runtime returned a null version");
+        let version = std::ffi::CStr::from_ptr(version)
+            .to_str()
+            .context("ONNX Runtime returned an invalid version string")?;
+        validate_runtime_version(version)?;
+        anyhow::ensure!(
+            !(base.GetApi)(ort::sys::ORT_API_VERSION).is_null(),
+            "ONNX Runtime {version} does not provide API version {}",
+            ort::sys::ORT_API_VERSION
+        );
+    }
+    Ok((library, path))
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn validate_runtime_version(version: &str) -> anyhow::Result<()> {
+    let mut parts = version.split('.');
+    let major = parts.next().and_then(|part| part.parse::<u32>().ok());
+    let minor = parts.next().and_then(|part| part.parse::<u32>().ok());
+    anyhow::ensure!(
+        major == Some(1) && minor.is_some_and(|minor| minor >= ort::MINOR_VERSION),
+        "Unsupported ONNX Runtime version {version:?}; expected 1.{}.x or newer compatible 1.x runtime",
+        ort::MINOR_VERSION
+    );
     Ok(())
 }
 
@@ -130,7 +189,7 @@ pub(crate) fn onnx_runtime_library_path() -> Option<PathBuf> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn init_runtime() -> anyhow::Result<()> {
+pub(crate) fn init_runtime() -> anyhow::Result<()> {
     Ok(())
 }
 
@@ -213,6 +272,74 @@ fn try_register_directml(
 #[cfg(test)]
 mod tests {
     use super::{MODEL_CHANNEL_SIZE, populate_rgb_planes};
+
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn runtime_version_requires_compatible_major_and_api() {
+        for minor in [ort::MINOR_VERSION, ort::MINOR_VERSION + 1] {
+            super::validate_runtime_version(&format!("1.{minor}.0")).unwrap();
+        }
+        let older = format!("1.{}.0", ort::MINOR_VERSION.saturating_sub(1));
+        for version in ["", "1", &older, "2.24.2", "x.24.2", "1.invalid.0"] {
+            assert!(
+                super::validate_runtime_version(version).is_err(),
+                "{version}"
+            );
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn runtime_load_failures_remain_retryable() {
+        const CHILD_ENV: &str = "CAP_CAMERA_EFFECTS_LOADER_TEST_CHILD";
+        if let Some(path) = std::env::var_os(CHILD_ENV) {
+            assert!(crate::initialize_onnx_runtime().is_err());
+            std::fs::write(&path, b"invalid ONNX Runtime library").unwrap();
+            assert!(crate::initialize_onnx_runtime().is_err());
+            return;
+        }
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory =
+            std::env::temp_dir().join(format!("cap-onnx-loader-{}-{unique}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join(super::ORT_LIBRARY_NAME);
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "segmentation::tests::runtime_load_failures_remain_retryable",
+                "--test-threads=1",
+            ])
+            .env(CHILD_ENV, &path)
+            .env("ORT_DYLIB_PATH", &path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+        let timed_out = loop {
+            if child.try_wait().unwrap().is_some() {
+                break false;
+            }
+            if started.elapsed() >= std::time::Duration::from_secs(10) {
+                child.kill().unwrap();
+                break true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let output = child.wait_with_output().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+        assert!(!timed_out, "ONNX Runtime loader did not return after 10s");
+        assert!(
+            output.status.success(),
+            "ONNX Runtime loader child failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn rgba_pixels_are_written_to_normalized_rgb_planes() {
