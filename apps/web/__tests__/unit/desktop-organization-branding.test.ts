@@ -144,12 +144,13 @@ describe("desktop organization branding", () => {
 		expect(
 			canEditOrganizationBranding(row({ tombstoneAt: new Date() }), "user-1"),
 		).toBe(false);
+		// memberRole "owner" takes precedence — user CAN edit
 		expect(
 			canEditOrganizationBranding(
 				row({ ownerId: "user-2", role: "owner" }),
 				"user-1",
 			),
-		).toBe(false);
+		).toBe(true);
 	});
 
 	it("validates and normalizes branding patch payloads", () => {
