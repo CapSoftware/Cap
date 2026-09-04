@@ -41,6 +41,9 @@ const PREFERRED_STEPWISE_SIZES: &[(u32, u32)] = &[
 ];
 
 const PREFERRED_STEPWISE_FPS: &[u32] = &[60, 30, 24, 15];
+const CAMERA_POLL_INTERVAL_MS: i32 = 250;
+const CAMERA_FRAME_TIMEOUT: Duration = Duration::from_secs(4);
+const POLLIN: i16 = 0x0001;
 
 #[derive(Clone, Debug)]
 pub struct NativeFormat {
@@ -204,49 +207,65 @@ pub fn start_capturing_impl(
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     let started = Instant::now();
 
-    let thread = thread::spawn(move || {
-        let mut stream = match MmapStream::with_buffers(&device, Type::VideoCapture, 4) {
-            Ok(stream) => {
-                let _ = ready_tx.send(Ok(()));
-                stream
-            }
-            Err(e) => {
-                let _ = ready_tx.send(Err(e.to_string()));
-                return;
-            }
-        };
+    let thread = thread::Builder::new()
+        .name("cap-linux-camera".to_string())
+        .spawn(move || {
+            let mut stream = match MmapStream::with_buffers(&device, Type::VideoCapture, 4) {
+                Ok(mut stream) => {
+                    stream.set_timeout(CAMERA_FRAME_TIMEOUT);
+                    if ready_tx.send(Ok(())).is_err() {
+                        return;
+                    }
+                    stream
+                }
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e.to_string()));
+                    return;
+                }
+            };
 
-        loop {
-            if stop_rx.try_recv().is_ok() {
-                break;
-            }
+            let can_poll_before_requeue = has_multiple_capture_buffers(&stream);
+            let mut received_frame = false;
+            loop {
+                if !matches!(stop_rx.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+                    break;
+                }
 
-            match stream.next() {
-                Ok((bytes, meta)) => {
-                    let used = meta.bytesused as usize;
-                    let bytes = bytes.get(..used).unwrap_or(bytes);
-                    callback(CapturedFrame {
-                        native: NativeCapturedFrame {
-                            bytes: bytes.to_vec(),
-                            format: frame_format,
-                        },
-                        timestamp: started.elapsed(),
-                    });
+                // Poll before next() so a stalled camera stays cancellable without
+                // re-queuing a buffer after v4l's internal dequeue times out.
+                if received_frame && can_poll_before_requeue {
+                    match stream.handle().poll(POLLIN, CAMERA_POLL_INTERVAL_MS) {
+                        Ok(0) => continue,
+                        Ok(_) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(error) => {
+                            tracing::warn!(%error, "Linux camera polling failed");
+                            break;
+                        }
+                    }
                 }
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                    ) =>
-                {
-                    thread::sleep(Duration::from_millis(5));
-                }
-                Err(_) => {
-                    thread::sleep(Duration::from_millis(20));
+
+                match stream.next() {
+                    Ok((bytes, meta)) => {
+                        received_frame = true;
+                        let used = meta.bytesused as usize;
+                        let bytes = bytes.get(..used).unwrap_or(bytes);
+                        callback(CapturedFrame {
+                            native: NativeCapturedFrame {
+                                bytes: bytes.to_vec(),
+                                format: frame_format,
+                            },
+                            timestamp: started.elapsed(),
+                        });
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "Linux camera capture ended");
+                        break;
+                    }
                 }
             }
-        }
-    });
+        })
+        .map_err(|error| StartCapturingError::Native(error.to_string()))?;
 
     match ready_rx.recv_timeout(Duration::from_secs(2)) {
         Ok(Ok(())) => Ok(NativeCaptureHandle {
@@ -259,6 +278,25 @@ pub fn start_capturing_impl(
         }
         Err(error) => Err(StartCapturingError::Native(error.to_string())),
     }
+}
+
+fn has_multiple_capture_buffers(stream: &MmapStream<'_>) -> bool {
+    let mut buffer = v4l::v4l_sys::v4l2_buffer {
+        index: 1,
+        type_: Type::VideoCapture as u32,
+        memory: v4l::memory::Memory::Mmap as u32,
+        ..unsafe { std::mem::zeroed() }
+    };
+    // A driver may grant only one buffer; pre-polling then waits on a buffer
+    // still held by next(), so that case must queue before polling.
+    unsafe {
+        v4l::v4l2::ioctl(
+            stream.handle().fd(),
+            v4l::v4l2::vidioc::VIDIOC_QUERYBUF,
+            &mut buffer as *mut _ as *mut std::ffi::c_void,
+        )
+    }
+    .is_ok()
 }
 
 fn video_device_paths() -> Vec<PathBuf> {

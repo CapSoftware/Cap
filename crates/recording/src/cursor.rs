@@ -560,20 +560,44 @@ struct CursorData {
 #[cfg(target_os = "macos")]
 fn get_cursor_data() -> Option<CursorData> {
     use objc::rc::autoreleasepool;
+    use objc2::{ClassType, msg_send, rc::Retained};
     use objc2_app_kit::NSCursor;
-    use sha2::{Digest, Sha256};
 
     autoreleasepool(|| unsafe {
         #[allow(deprecated)]
-        let cursor = NSCursor::currentSystemCursor().unwrap_or(NSCursor::currentCursor());
+        let cursor = NSCursor::currentSystemCursor().or_else(|| {
+            let cursor: Option<Retained<NSCursor>> = msg_send![NSCursor::class(), currentCursor];
+            cursor
+        })?;
 
-        let image = cursor.image();
+        macos_cursor_data(&cursor)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_cursor_data(cursor: &objc2_app_kit::NSCursor) -> Option<CursorData> {
+    use objc2::{msg_send, rc::Retained};
+    use objc2_app_kit::NSImage;
+    use sha2::{Digest, Sha256};
+
+    unsafe {
+        // AppKit can return nil for transient system cursors despite NSCursor.image's nonnull annotation.
+        let image: Option<Retained<NSImage>> = msg_send![cursor, image];
+        let image = image?;
         let size = image.size();
         let hotspot = cursor.hotSpot();
+        if !size.width.is_finite()
+            || !size.height.is_finite()
+            || size.width <= 0.0
+            || size.height <= 0.0
+            || !hotspot.x.is_finite()
+            || !hotspot.y.is_finite()
+        {
+            return None;
+        }
+
         let image_data = image.TIFFRepresentation()?;
-
         let image = image_data.as_bytes_unchecked().to_vec();
-
         let shape =
             cap_cursor_info::CursorShapeMacOS::from_hash(&hex::encode(Sha256::digest(&image)));
 
@@ -582,7 +606,56 @@ fn get_cursor_data() -> Option<CursorData> {
             hotspot: XY::new(hotspot.x / size.width, hotspot.y / size.height),
             shape: shape.map(Into::into),
         })
-    })
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_cursor_tests {
+    use super::macos_cursor_data;
+    use objc2::{AllocAnyThread, class, msg_send, rc::Retained, runtime::AnyObject};
+    use objc2_app_kit::{NSCursor, NSImage};
+
+    #[test]
+    fn cursor_without_image_is_skipped() {
+        let cursor = unsafe { NSCursor::new() };
+        assert!(macos_cursor_data(&cursor).is_none());
+    }
+
+    #[test]
+    fn zero_sized_cursor_is_skipped() {
+        let image = unsafe { NSImage::initWithSize(NSImage::alloc(), Default::default()) };
+        let cursor = NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, Default::default());
+        assert!(macos_cursor_data(&cursor).is_none());
+    }
+
+    #[test]
+    fn valid_cursor_keeps_image_and_hotspot() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 80, 255]))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = png.into_inner();
+        let data: Retained<AnyObject> = unsafe {
+            msg_send![class!(NSData), dataWithBytes: png.as_ptr().cast::<std::ffi::c_void>(), length: png.len()]
+        };
+        let image: Retained<NSImage> = unsafe { msg_send![NSImage::alloc(), initWithData: &*data] };
+        let cursor = NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, Default::default());
+        let image = unsafe { cursor.image() };
+        let expected_image = unsafe {
+            image
+                .TIFFRepresentation()
+                .unwrap()
+                .as_bytes_unchecked()
+                .to_vec()
+        };
+        let size = unsafe { image.size() };
+        let hotspot = unsafe { cursor.hotSpot() };
+        let actual = macos_cursor_data(&cursor).unwrap();
+
+        assert_eq!(actual.image, expected_image);
+        assert_eq!(actual.hotspot.x, hotspot.x / size.width);
+        assert_eq!(actual.hotspot.y, hotspot.y / size.height);
+    }
 }
 
 #[cfg(target_os = "linux")]

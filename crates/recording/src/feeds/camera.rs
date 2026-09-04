@@ -31,6 +31,7 @@ const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 /// Outer deadline for camera readiness. Must cover both capture attempts on
 /// macOS (native + compatibility fallback) plus session teardown in between.
 const CAMERA_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_CONCURRENT_CAMERA_SETUPS: usize = 2;
 
 #[cfg(target_os = "macos")]
 static CAMERA_CAPTURE_LIFECYCLE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -44,6 +45,9 @@ fn camera_capture_lifecycle_guard() -> std::sync::MutexGuard<'static, ()> {
 
 #[derive(Actor)]
 pub struct CameraFeed {
+    setup_slots: Arc<tokio::sync::Semaphore>,
+    setup_cancel: tokio_util::sync::CancellationToken,
+    _cancel_setup: tokio_util::sync::DropGuard,
     lock_generation: u64,
     setup_generation: u64,
     state: State,
@@ -53,7 +57,6 @@ pub struct CameraFeed {
     native_sender_count: Arc<std::sync::atomic::AtomicUsize>,
     on_ready: Vec<oneshot::Sender<()>>,
     on_disconnect: Vec<Box<dyn Fn() + Send>>,
-    previous_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 enum State {
@@ -170,7 +173,7 @@ impl AttachedState {
 
     fn stage_pending_release(&mut self) {
         if let Some(pending) = self.pending_release.take() {
-            let _ = pending.send(());
+            let _ = pending.try_send(());
         }
 
         self.pending_release = Some(self.done_tx.clone());
@@ -178,14 +181,18 @@ impl AttachedState {
 
     fn finalize_pending_release(&mut self) {
         if let Some(pending) = self.pending_release.take() {
-            let _ = pending.send(());
+            let _ = pending.try_send(());
         }
     }
 }
 
 impl Default for CameraFeed {
     fn default() -> Self {
+        let setup_cancel = tokio_util::sync::CancellationToken::new();
         Self {
+            setup_slots: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CAMERA_SETUPS)),
+            _cancel_setup: setup_cancel.clone().drop_guard(),
+            setup_cancel,
             lock_generation: 0,
             setup_generation: 0,
             state: State::Open(OpenState {
@@ -198,7 +205,6 @@ impl Default for CameraFeed {
             native_sender_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             on_ready: Vec::new(),
             on_disconnect: Vec::new(),
-            previous_thread: None,
         }
     }
 }
@@ -308,7 +314,7 @@ type ReadyFuture = Shared<BoxFuture<'static, Result<InputConnected, SetInputErro
 #[derive(Clone, Copy)]
 enum CameraSetupFlow {
     Open,
-    Locked,
+    Locked { lock_generation: u64 },
 }
 
 struct InputConnectFailed {
@@ -317,6 +323,8 @@ struct InputConnectFailed {
 }
 
 struct LockedCameraInputReconnected {
+    generation: u64,
+    lock_generation: u64,
     id: DeviceOrModelID,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
@@ -332,10 +340,13 @@ struct Unlock {
 }
 
 struct FinalizePendingRelease {
+    generation: u64,
     id: DeviceOrModelID,
 }
 
 struct CameraSetupArgs {
+    setup_slots: Arc<tokio::sync::Semaphore>,
+    setup_cancel: tokio_util::sync::CancellationToken,
     id: DeviceOrModelID,
     generation: u64,
     settings: Option<CameraDeviceSettings>,
@@ -347,10 +358,58 @@ struct CameraSetupArgs {
     flow: CameraSetupFlow,
 }
 
-fn spawn_camera_setup(
-    args: CameraSetupArgs,
-) -> (ReadyFuture, SyncSender<()>, std::thread::JoinHandle<()>) {
+fn bounded_camera_ready(
+    ready: BoxFuture<'static, Result<InputConnected, SetInputError>>,
+    cancel: tokio_util::sync::CancellationToken,
+    timeout: Duration,
+) -> ReadyFuture {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let cancel_on_drop = cancel.clone().drop_guard();
+    async move {
+        let result = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(SetInputError::SetupCancelled),
+            result = tokio::time::timeout_at(deadline, ready) => {
+                result.unwrap_or_else(|error| Err(SetInputError::Timeout(error.to_string())))
+            }
+        };
+        if result.is_ok() {
+            drop(cancel_on_drop.disarm());
+        }
+        result
+    }
+    .boxed()
+    .shared()
+}
+
+async fn spawn_camera_worker(
+    slots: Arc<tokio::sync::Semaphore>,
+    cancel: tokio_util::sync::CancellationToken,
+    worker: impl FnOnce(tokio::sync::OwnedSemaphorePermit) + Send + 'static,
+) -> Result<(), SetInputError> {
+    let permit = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(SetInputError::SetupCancelled),
+        permit = slots.acquire_owned() => permit.map_err(|error| {
+            SetInputError::StartCapturing(format!("Camera setup is unavailable: {error}"))
+        })?,
+    };
+    if cancel.is_cancelled() {
+        return Err(SetInputError::SetupCancelled);
+    }
+    std::thread::Builder::new()
+        .name("camera-capture".into())
+        .spawn(move || worker(permit))
+        .map(drop)
+        .map_err(|error| {
+            SetInputError::StartCapturing(format!("Could not start camera worker: {error}"))
+        })
+}
+
+fn spawn_camera_setup(args: CameraSetupArgs) -> (ReadyFuture, SyncSender<()>) {
     let CameraSetupArgs {
+        setup_slots,
+        setup_cancel,
         id,
         generation,
         settings,
@@ -365,41 +424,56 @@ fn spawn_camera_setup(
     let (ready_tx, ready_rx) = oneshot::channel::<Result<InputConnected, SetInputError>>();
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
 
-    let ready = ready_rx
-        .map(|v| {
-            v.map_err(|_| SetInputError::BuildStreamCrashed)
-                .and_then(|v| v)
-        })
-        .boxed()
-        .shared();
+    let ready = bounded_camera_ready(
+        ready_rx
+            .map(|v| {
+                v.map_err(|_| SetInputError::BuildStreamCrashed)
+                    .and_then(|v| v)
+            })
+            .boxed(),
+        setup_cancel.clone(),
+        CAMERA_READY_TIMEOUT,
+    );
+
+    if matches!(flow, CameraSetupFlow::Open) {
+        let ready = ready.clone();
+        let actor = actor_ref.clone();
+        let id = id.clone();
+        tokio::spawn(async move {
+            if ready.await.is_err() {
+                let _ = actor.tell(InputConnectFailed { id, generation }).await;
+            }
+        });
+    }
 
     let done_rx_thread = done_rx;
     let done_tx_thread = done_tx.clone();
     let ready_tx_thread = ready_tx;
 
-    let join_handle = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to build camera tokio runtime");
+    tokio::spawn(async move {
+        let worker = spawn_camera_worker(setup_slots, setup_cancel.clone(), move |setup_permit| {
+            if setup_cancel.is_cancelled() {
+                return;
+            }
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    let _ = ready_tx_thread.send(Err(SetInputError::StartCapturing(format!(
+                        "Could not initialize the camera worker: {error}"
+                    ))));
+                    return;
+                }
+            };
 
-        {
-            #[cfg(target_os = "macos")]
-            let _capture_lifecycle_guard = camera_capture_lifecycle_guard();
+            {
+                #[cfg(target_os = "macos")]
+                let _capture_lifecycle_guard = camera_capture_lifecycle_guard();
 
-            LocalSet::new().block_on(&runtime, async move {
-                if done_rx_thread.try_recv().is_ok() {
-                    let _ = ready_tx_thread.send(Err(SetInputError::BuildStreamCrashed));
-
-                    if matches!(flow, CameraSetupFlow::Open) {
-                        let _ = actor_ref
-                            .tell(InputConnectFailed {
-                                id: id.clone(),
-                                generation,
-                            })
-                            .await;
-                    }
-
+                LocalSet::new().block_on(&runtime, async move {
+                if setup_cancel.is_cancelled() || done_rx_thread.try_recv().is_ok() {
                     return;
                 }
 
@@ -422,6 +496,11 @@ fn spawn_camera_setup(
                             video_info,
                         } = result;
 
+                        if setup_cancel.is_cancelled() {
+                            let _ = handle.stop_capturing();
+                            return;
+                        }
+
                         let ready_payload = InputConnected {
                             generation,
                             id: id.clone(),
@@ -432,12 +511,17 @@ fn spawn_camera_setup(
 
                         match flow {
                             CameraSetupFlow::Open => {
-                                let _ = ready_tx_thread.send(Ok(ready_payload.clone()));
+                                if ready_tx_thread.send(Ok(ready_payload.clone())).is_err() {
+                                    let _ = handle.stop_capturing();
+                                    return;
+                                }
                                 let _ = actor_ref.ask(ready_payload).await;
                             }
-                            CameraSetupFlow::Locked => {
+                            CameraSetupFlow::Locked { lock_generation } => {
                                 let reconnect_result = actor_ref
                                     .ask(LockedCameraInputReconnected {
+                                        generation,
+                                        lock_generation,
                                         id: id.clone(),
                                         camera_info,
                                         video_info,
@@ -449,7 +533,10 @@ fn spawn_camera_setup(
                                     Ok(true) => {
                                         let _ = ready_tx_thread.send(Ok(ready_payload));
                                         let _ = actor_ref
-                                            .tell(FinalizePendingRelease { id: id.clone() })
+                                            .tell(FinalizePendingRelease {
+                                                generation,
+                                                id: id.clone(),
+                                            })
                                             .await;
                                     }
                                     Ok(false) => {
@@ -481,18 +568,15 @@ fn spawn_camera_setup(
                     Err(e) => {
                         let _ = ready_tx_thread.send(Err(e.clone()));
 
-                        if matches!(flow, CameraSetupFlow::Open) {
-                            let _ = actor_ref
-                                .tell(InputConnectFailed {
-                                    id: id.clone(),
-                                    generation,
-                                })
-                                .await;
-                        }
-
                         return;
                     }
                 };
+
+                if setup_cancel.is_cancelled() {
+                    let _ = handle.stop_capturing();
+                    return;
+                }
+                drop(setup_permit);
 
                 debug!(
                     "Camera capture thread: waiting for done signal for {:?}",
@@ -514,49 +598,25 @@ fn spawn_camera_setup(
 
                 debug!("Camera capture thread: capture closed for {:?}", &id);
             });
-        }
+            }
 
-        drop(runtime);
+            drop(runtime);
+        })
+        .await;
+        if let Err(error) = worker {
+            debug!(%error, "Camera setup worker did not start");
+        }
     });
 
-    (ready, done_tx, join_handle)
-}
-
-fn release_camera_thread(handle: std::thread::JoinHandle<()>) {
-    if handle.is_finished() {
-        let _ = handle.join();
-    } else {
-        debug!("Camera setup thread is still running after cancellation");
-        if let Err(err) = std::thread::Builder::new()
-            .name("camera-setup-reaper".to_string())
-            .spawn(move || {
-                let _ = handle.join();
-            })
-        {
-            warn!(?err, "Failed to spawn camera-setup-reaper thread");
-        }
-    }
+    (ready, done_tx)
 }
 
 fn camera_ready_future(
     ready: ReadyFuture,
-    actor_ref: ActorRef<CameraFeed>,
-    id: DeviceOrModelID,
-    generation: u64,
-    flow: CameraSetupFlow,
 ) -> BoxFuture<'static, Result<(CameraInfo, VideoInfo), SetInputError>> {
-    async move {
-        match tokio::time::timeout(CAMERA_READY_TIMEOUT, ready).await {
-            Ok(result) => result.map(|v| (v.camera_info, v.video_info)),
-            Err(err) => {
-                if matches!(flow, CameraSetupFlow::Open) {
-                    let _ = actor_ref.tell(InputConnectFailed { id, generation }).await;
-                }
-                Err(SetInputError::Timeout(err.to_string()))
-            }
-        }
-    }
-    .boxed()
+    ready
+        .map(|result| result.map(|v| (v.camera_info, v.video_info)))
+        .boxed()
 }
 
 // Impls
@@ -573,6 +633,8 @@ pub enum SetInputError {
     DeviceNotFound,
     #[error("BuildStreamCrashed")]
     BuildStreamCrashed, // TODO: Maybe rename this?
+    #[error("Camera setup was cancelled by a newer selection")]
+    SetupCancelled,
     #[error("InvalidFormat")]
     InvalidFormat,
     #[error("CameraTimeout")]
@@ -1126,24 +1188,29 @@ impl Message<SetInput> for CameraFeed {
             SetInputError::Initialisation
         );
 
+        if let State::Locked { inner, .. } = &self.state
+            && inner.id != msg.id
+        {
+            return Err(SetInputError::Locked(FeedLockedError));
+        }
+
         match &self.state {
             State::Open(state) => {
                 if let Some(connecting) = &state.connecting {
-                    let _ = connecting.done_tx.send(());
+                    let _ = connecting.done_tx.try_send(());
                 }
                 if let Some(attached) = &state.attached {
-                    let _ = attached.done_tx.send(());
+                    let _ = attached.done_tx.try_send(());
                 }
             }
             State::Locked { inner, .. } => {
-                let _ = inner.done_tx.send(());
+                let _ = inner.done_tx.try_send(());
             }
         }
 
-        if let Some(handle) = self.previous_thread.take() {
-            release_camera_thread(handle);
-        }
-
+        self.setup_cancel.cancel();
+        self.setup_cancel = tokio_util::sync::CancellationToken::new();
+        self._cancel_setup = self.setup_cancel.clone().drop_guard();
         let generation = self.next_setup_generation();
 
         match &mut self.state {
@@ -1153,7 +1220,9 @@ impl Message<SetInput> for CameraFeed {
                 let native_frame_recipient = actor_ref.clone().recipient();
                 let id = msg.id.clone();
 
-                let (ready, done_tx, join_handle) = spawn_camera_setup(CameraSetupArgs {
+                let (ready, done_tx) = spawn_camera_setup(CameraSetupArgs {
+                    setup_slots: self.setup_slots.clone(),
+                    setup_cancel: self.setup_cancel.clone(),
                     id: id.clone(),
                     generation,
                     settings: msg.settings,
@@ -1165,8 +1234,6 @@ impl Message<SetInput> for CameraFeed {
                     flow: CameraSetupFlow::Open,
                 });
 
-                self.previous_thread = Some(join_handle);
-
                 state.connecting = Some(ConnectingState {
                     id: id.clone(),
                     generation,
@@ -1174,24 +1241,16 @@ impl Message<SetInput> for CameraFeed {
                     done_tx,
                 });
 
-                Ok(camera_ready_future(
-                    ready,
-                    ctx.actor_ref(),
-                    id,
-                    generation,
-                    CameraSetupFlow::Open,
-                ))
+                Ok(camera_ready_future(ready))
             }
-            State::Locked { inner, .. } => {
-                if inner.id != msg.id {
-                    return Err(SetInputError::Locked(FeedLockedError));
-                }
-
+            State::Locked { .. } => {
                 let actor_ref = ctx.actor_ref();
                 let new_frame_recipient = actor_ref.clone().recipient();
                 let native_frame_recipient = actor_ref.clone().recipient();
 
-                let (ready, _done_tx, join_handle) = spawn_camera_setup(CameraSetupArgs {
+                let (ready, _done_tx) = spawn_camera_setup(CameraSetupArgs {
+                    setup_slots: self.setup_slots.clone(),
+                    setup_cancel: self.setup_cancel.clone(),
                     id: msg.id.clone(),
                     generation,
                     settings: msg.settings,
@@ -1200,18 +1259,12 @@ impl Message<SetInput> for CameraFeed {
                     native_frame_recipient,
                     ffmpeg_sender_count: self.ffmpeg_sender_count.clone(),
                     native_sender_count: self.native_sender_count.clone(),
-                    flow: CameraSetupFlow::Locked,
+                    flow: CameraSetupFlow::Locked {
+                        lock_generation: self.lock_generation,
+                    },
                 });
 
-                self.previous_thread = Some(join_handle);
-
-                Ok(camera_ready_future(
-                    ready,
-                    ctx.actor_ref(),
-                    msg.id,
-                    generation,
-                    CameraSetupFlow::Locked,
-                ))
+                Ok(camera_ready_future(ready))
             }
         }
     }
@@ -1224,14 +1277,15 @@ impl Message<RemoveInput> for CameraFeed {
         trace!("CameraFeed.RemoveInput");
 
         let state = self.state.try_as_open()?;
+        self.setup_cancel.cancel();
 
         if let Some(connecting) = state.connecting.take() {
-            let _ = connecting.done_tx.send(());
+            let _ = connecting.done_tx.try_send(());
         }
 
         if let Some(mut attached) = state.attached.take() {
             attached.finalize_pending_release();
-            let _ = attached.done_tx.send(());
+            let _ = attached.done_tx.try_send(());
         }
 
         self.senders.clear();
@@ -1240,10 +1294,6 @@ impl Message<RemoveInput> for CameraFeed {
         self.native_senders.clear();
         self.native_sender_count
             .store(0, std::sync::atomic::Ordering::Release);
-
-        if let Some(handle) = self.previous_thread.take() {
-            release_camera_thread(handle);
-        }
 
         for cb in &self.on_disconnect {
             (cb)();
@@ -1514,11 +1564,17 @@ impl Message<Lock> for CameraFeed {
 
         if let Some(connecting) = &mut state.connecting {
             let ready = &mut connecting.ready;
-            let data = tokio::time::timeout(CAMERA_READY_TIMEOUT, ready)
+            let result = tokio::time::timeout(CAMERA_READY_TIMEOUT, ready)
                 .await
-                .map_err(|err| {
-                    LockFeedError::InitializeFailed(SetInputError::Timeout(err.to_string()))
-                })??;
+                .unwrap_or_else(|error| Err(SetInputError::Timeout(error.to_string())));
+            let data = match result {
+                Ok(data) => data,
+                Err(error) => {
+                    connecting.ready = futures::future::ready(Err(error.clone())).boxed();
+                    self.setup_cancel.cancel();
+                    return Err(error.into());
+                }
+            };
 
             if state.handle_input_connected(data) {
                 if let Some(attached) = &mut state.attached {
@@ -1576,6 +1632,10 @@ impl Message<InputConnected> for CameraFeed {
     ) -> Self::Reply {
         trace!("CameraFeed.InputConnected");
 
+        if self.setup_cancel.is_cancelled() {
+            return;
+        }
+
         // Lock can consume this connection before the notification reaches the mailbox.
         let Ok(state) = self.state.try_as_open() else {
             return;
@@ -1613,7 +1673,11 @@ impl Message<InputConnectFailed> for CameraFeed {
 
         if should_clear {
             if let Some(connecting) = state.connecting.take() {
-                let _ = connecting.done_tx.send(());
+                let _ = connecting.done_tx.try_send(());
+            }
+            if let Some(mut attached) = state.attached.take() {
+                attached.finalize_pending_release();
+                let _ = attached.done_tx.try_send(());
             }
 
             for tx in &mut self.on_ready.drain(..) {
@@ -1631,15 +1695,19 @@ impl Message<LockedCameraInputReconnected> for CameraFeed {
         msg: LockedCameraInputReconnected,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if let State::Locked { inner, .. } = &mut self.state
+        if self.setup_generation == msg.generation
+            && self.lock_generation == msg.lock_generation
+            && !self.setup_cancel.is_cancelled()
+            && let State::Locked { inner, token } = &mut self.state
             && inner.id == msg.id
+            && token.strong_count() > 0
         {
             let id = msg.id;
             inner.stage_pending_release();
             inner.overwrite(
                 id.clone(),
                 InputConnected {
-                    generation: 0,
+                    generation: msg.generation,
                     id,
                     done_tx: msg.done_tx,
                     camera_info: msg.camera_info,
@@ -1661,6 +1729,9 @@ impl Message<FinalizePendingRelease> for CameraFeed {
         msg: FinalizePendingRelease,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        if self.setup_generation != msg.generation {
+            return;
+        }
         match &mut self.state {
             State::Open(OpenState { attached, .. }) => {
                 if let Some(attached) = attached
@@ -1709,17 +1780,12 @@ impl Message<Unlock> for CameraFeed {
 mod tests {
     use super::*;
 
-    async fn locked_test_camera() -> (
-        ActorRef<CameraFeed>,
-        CameraFeedLock,
-        InputConnected,
-        oneshot::Receiver<()>,
-    ) {
-        let (done_tx, _done_rx) = mpsc::sync_channel(1);
+    fn test_camera_connection(generation: u64) -> (InputConnected, mpsc::Receiver<()>) {
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
         let connection = InputConnected {
             id: DeviceOrModelID::DeviceID("test-camera".to_string()),
-            generation: 1,
-            done_tx: done_tx.clone(),
+            generation,
+            done_tx,
             camera_info: serde_json::from_value(serde_json::json!({
                 "device_id": "test-camera",
                 "model_id": null,
@@ -1728,6 +1794,243 @@ mod tests {
             .unwrap(),
             video_info: VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRA, 16, 16, 30),
         };
+        (connection, done_rx)
+    }
+
+    struct AttachedCamera;
+
+    impl Message<AttachedCamera> for CameraFeed {
+        type Reply = Option<DeviceOrModelID>;
+
+        async fn handle(
+            &mut self,
+            _: AttachedCamera,
+            _: &mut Context<Self, Self::Reply>,
+        ) -> Self::Reply {
+            match &self.state {
+                State::Open(state) => state.attached.as_ref().map(|attached| attached.id.clone()),
+                State::Locked { inner, .. } => Some(inner.id.clone()),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn camera_readiness_timeout_cancels_native_work_and_success_stays_attached() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let (native_tx, native_rx) = oneshot::channel();
+        let ready = bounded_camera_ready(
+            async move { native_rx.await.unwrap() }.boxed(),
+            cancel.clone(),
+            Duration::from_millis(20),
+        );
+        assert!(matches!(ready.await, Err(SetInputError::Timeout(_))));
+        assert!(cancel.is_cancelled());
+        assert!(native_tx.is_closed());
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let (connection, done_rx) = test_camera_connection(1);
+        let ready = bounded_camera_ready(
+            futures::future::ready(Ok(connection)).boxed(),
+            cancel.clone(),
+            CAMERA_READY_TIMEOUT,
+        );
+        let attached = ready.await.unwrap();
+        assert!(!cancel.is_cancelled());
+        assert!(matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        drop(attached);
+    }
+
+    #[tokio::test]
+    async fn dropping_camera_readiness_cancels_queued_work_before_native_spawn() {
+        let slots = Arc::new(tokio::sync::Semaphore::new(0));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let ready = bounded_camera_ready(
+            futures::future::pending().boxed(),
+            cancel.clone(),
+            CAMERA_READY_TIMEOUT,
+        );
+        let (started_tx, started_rx) = flume::bounded(1);
+        let queued = tokio::spawn(spawn_camera_worker(slots.clone(), cancel, move |_| {
+            started_tx.send(()).unwrap();
+        }));
+        tokio::task::yield_now().await;
+        drop(ready);
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), queued)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(SetInputError::SetupCancelled)
+        ));
+        slots.add_permits(1);
+        assert!(started_rx.is_empty());
+    }
+
+    #[tokio::test]
+    async fn camera_stuck_setups_bound_workers_without_holding_slots_for_live_capture() {
+        let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CAMERA_SETUPS));
+        let (started_tx, started_rx) = flume::bounded(MAX_CONCURRENT_CAMERA_SETUPS + 1);
+        let (stopped_tx, stopped_rx) = flume::bounded(MAX_CONCURRENT_CAMERA_SETUPS + 1);
+        let mut release = Vec::new();
+        for _ in 0..MAX_CONCURRENT_CAMERA_SETUPS {
+            let (release_tx, release_rx) = mpsc::channel();
+            release.push(release_tx);
+            let started = started_tx.clone();
+            let stopped = stopped_tx.clone();
+            spawn_camera_worker(
+                slots.clone(),
+                tokio_util::sync::CancellationToken::new(),
+                move |permit| {
+                    started.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    drop(permit);
+                    stopped.send(()).unwrap();
+                },
+            )
+            .await
+            .unwrap();
+        }
+        for _ in 0..MAX_CONCURRENT_CAMERA_SETUPS {
+            started_rx.recv_async().await.unwrap();
+        }
+        assert_eq!(slots.available_permits(), 0);
+        for _ in 0..32 {
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let started = started_tx.clone();
+            let queued = tokio::spawn(spawn_camera_worker(
+                slots.clone(),
+                cancel.clone(),
+                move |_| started.send(()).unwrap(),
+            ));
+            tokio::task::yield_now().await;
+            cancel.cancel();
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(1), queued)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                Err(SetInputError::SetupCancelled)
+            ));
+        }
+        assert!(started_rx.is_empty());
+        release[0].send(()).unwrap();
+        stopped_rx.recv_async().await.unwrap();
+
+        let (capture_stop_tx, capture_stop_rx) = mpsc::channel();
+        spawn_camera_worker(
+            slots.clone(),
+            tokio_util::sync::CancellationToken::new(),
+            move |permit| {
+                drop(permit);
+                started_tx.send(()).unwrap();
+                capture_stop_rx.recv().unwrap();
+                stopped_tx.send(()).unwrap();
+            },
+        )
+        .await
+        .unwrap();
+        started_rx.recv_async().await.unwrap();
+        assert_eq!(slots.available_permits(), 1);
+        capture_stop_tx.send(()).unwrap();
+        stopped_rx.recv_async().await.unwrap();
+        for release in &release[1..] {
+            release.send(()).unwrap();
+            stopped_rx.recv_async().await.unwrap();
+        }
+        assert_eq!(slots.available_permits(), MAX_CONCURRENT_CAMERA_SETUPS);
+        assert!(started_rx.is_empty());
+    }
+
+    #[tokio::test]
+    async fn camera_reselection_and_removal_cancel_queued_attempts() {
+        let slots = Arc::new(tokio::sync::Semaphore::new(0));
+        let camera = CameraFeed {
+            setup_slots: slots.clone(),
+            ..CameraFeed::default()
+        };
+        let feed = CameraFeed::spawn(camera);
+        let mut pending = Vec::new();
+        for _ in 0..32 {
+            pending.push(
+                feed.ask(SetInput {
+                    id: DeviceOrModelID::DeviceID("queued-camera".into()),
+                    settings: None,
+                })
+                .await
+                .unwrap(),
+            );
+        }
+        feed.ask(RemoveInput).await.unwrap();
+        for ready in pending {
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(1), ready)
+                    .await
+                    .unwrap(),
+                Err(SetInputError::SetupCancelled)
+            ));
+        }
+        assert!(feed.ask(AttachedCamera).await.unwrap().is_none());
+        assert_eq!(slots.available_permits(), 0);
+        feed.kill();
+        feed.wait_for_stop().await;
+    }
+
+    #[tokio::test]
+    async fn stopping_camera_actor_cancels_queued_setup() {
+        let feed = CameraFeed::spawn(CameraFeed {
+            setup_slots: Arc::new(tokio::sync::Semaphore::new(0)),
+            ..CameraFeed::default()
+        });
+        let ready = feed
+            .ask(SetInput {
+                id: DeviceOrModelID::DeviceID("queued-camera".into()),
+                settings: None,
+            })
+            .await
+            .unwrap();
+        feed.kill();
+        feed.wait_for_stop().await;
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), ready)
+                .await
+                .unwrap(),
+            Err(SetInputError::SetupCancelled)
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancelled_camera_setup_cannot_attach_a_late_success() {
+        let (connection, done_rx) = test_camera_connection(1);
+        let camera = CameraFeed {
+            setup_generation: 1,
+            state: State::Open(OpenState {
+                connecting: Some(ConnectingState {
+                    id: connection.id.clone(),
+                    generation: 1,
+                    ready: futures::future::pending().boxed(),
+                    done_tx: connection.done_tx.clone(),
+                }),
+                attached: None,
+            }),
+            ..CameraFeed::default()
+        };
+        camera.setup_cancel.cancel();
+        let feed = CameraFeed::spawn(camera);
+        feed.ask(connection).await.unwrap();
+        assert!(feed.ask(AttachedCamera).await.unwrap().is_none());
+        feed.ask(RemoveInput).await.unwrap();
+        assert!(done_rx.try_recv().is_ok());
+        feed.kill();
+        feed.wait_for_stop().await;
+    }
+
+    async fn locked_test_camera() -> (
+        ActorRef<CameraFeed>,
+        CameraFeedLock,
+        InputConnected,
+        oneshot::Receiver<()>,
+    ) {
+        let (connection, _done_rx) = test_camera_connection(1);
         let (ready_tx, ready_rx) = oneshot::channel();
         let camera = CameraFeed {
             setup_generation: 1,
@@ -1736,7 +2039,7 @@ mod tests {
                     id: connection.id.clone(),
                     generation: connection.generation,
                     ready: futures::future::ready(Ok(connection.clone())).boxed(),
-                    done_tx,
+                    done_tx: connection.done_tx.clone(),
                 }),
                 attached: None,
             }),
@@ -1746,6 +2049,254 @@ mod tests {
         let feed = CameraFeed::spawn(camera);
         let lock = feed.ask(Lock).await.unwrap();
         (feed, lock, connection, ready_rx)
+    }
+
+    #[tokio::test]
+    async fn failed_camera_reselection_cannot_lock_a_stopped_attachment() {
+        let (connection, stopped) = test_camera_connection(0);
+        let id = connection.id.clone();
+        let camera = CameraFeed {
+            setup_slots: Arc::new(tokio::sync::Semaphore::new(0)),
+            state: State::Open(OpenState {
+                connecting: None,
+                attached: Some(AttachedState::new(id.clone(), connection)),
+            }),
+            ..CameraFeed::default()
+        };
+        let feed = CameraFeed::spawn(camera);
+        let selection = feed
+            .ask(SetInput {
+                id: id.clone(),
+                settings: None,
+            })
+            .await
+            .unwrap();
+        assert!(stopped.try_recv().is_ok());
+        feed.ask(InputConnectFailed { id, generation: 1 })
+            .await
+            .unwrap();
+
+        let mut unavailable = Vec::new();
+        for _ in 0..2 {
+            let result = feed.ask(Lock).await;
+            unavailable.push(matches!(
+                &result,
+                Err(kameo::error::SendError::HandlerError(
+                    LockFeedError::NoInput
+                ))
+            ));
+            drop(result);
+        }
+        feed.ask(RemoveInput).await.unwrap();
+        feed.kill();
+        feed.wait_for_stop().await;
+        assert!(matches!(
+            selection.await,
+            Err(SetInputError::SetupCancelled)
+        ));
+        assert_eq!(unavailable, [true, true]);
+    }
+
+    #[tokio::test]
+    async fn failed_camera_selection_preserves_a_newer_attached_camera() {
+        let (connection, still_running) = test_camera_connection(2);
+        let id = connection.id.clone();
+        let feed = CameraFeed::spawn(CameraFeed {
+            setup_slots: Arc::new(tokio::sync::Semaphore::new(0)),
+            ..CameraFeed::default()
+        });
+        let first_selection = feed
+            .ask(SetInput {
+                id: id.clone(),
+                settings: None,
+            })
+            .await
+            .unwrap();
+        let second_selection = feed
+            .ask(SetInput {
+                id: id.clone(),
+                settings: None,
+            })
+            .await
+            .unwrap();
+        feed.ask(connection).await.unwrap();
+        for generation in [1, 2] {
+            feed.ask(InputConnectFailed {
+                id: id.clone(),
+                generation,
+            })
+            .await
+            .unwrap();
+        }
+        let lock = feed.ask(Lock).await;
+        let connected = lock.is_ok();
+        let running = matches!(still_running.try_recv(), Err(mpsc::TryRecvError::Empty));
+        drop(lock);
+        feed.ask(RemoveInput).await.unwrap();
+        feed.kill();
+        feed.wait_for_stop().await;
+        drop(first_selection);
+        drop(second_selection);
+        assert!(connected);
+        assert!(running);
+    }
+
+    #[tokio::test]
+    async fn queued_locks_keep_camera_setup_failure_without_locking_the_previous_camera() {
+        let (connection, _previous_rx) = test_camera_connection(1);
+        let (done_tx, _done_rx) = mpsc::sync_channel(1);
+        let ready = futures::future::ready(Err(SetInputError::BuildStreamCrashed))
+            .boxed()
+            .shared();
+        let camera = CameraFeed {
+            setup_generation: 2,
+            state: State::Open(OpenState {
+                connecting: Some(ConnectingState {
+                    id: DeviceOrModelID::DeviceID("requested-camera".into()),
+                    generation: 2,
+                    ready: ready.boxed(),
+                    done_tx,
+                }),
+                attached: Some(AttachedState::new(connection.id.clone(), connection)),
+            }),
+            ..CameraFeed::default()
+        };
+        let feed = CameraFeed::spawn(camera);
+        let results = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(feed.ask(Lock), feed.ask(Lock), feed.ask(Lock))
+        })
+        .await
+        .expect("repeated camera locks blocked the actor mailbox");
+        for result in [results.0, results.1, results.2] {
+            assert!(matches!(
+                result,
+                Err(kameo::error::SendError::HandlerError(
+                    LockFeedError::InitializeFailed(SetInputError::BuildStreamCrashed)
+                ))
+            ));
+        }
+        let (sender, _receiver) = flume::bounded(1);
+        feed.ask(AddSender(sender)).await.unwrap();
+        feed.kill();
+        feed.wait_for_stop().await;
+    }
+
+    #[tokio::test]
+    async fn rejected_locked_camera_selection_does_not_stop_the_recording_camera() {
+        let (connection, done_rx) = test_camera_connection(1);
+        let token = Arc::new(());
+        let camera = CameraFeed {
+            lock_generation: 7,
+            setup_generation: 1,
+            state: State::Locked {
+                inner: AttachedState::new(connection.id.clone(), connection),
+                token: Arc::downgrade(&token),
+            },
+            ..CameraFeed::default()
+        };
+        let feed = CameraFeed::spawn(camera);
+        let result = feed
+            .ask(SetInput {
+                id: DeviceOrModelID::DeviceID("different-camera".into()),
+                settings: None,
+            })
+            .await;
+        assert!(matches!(
+            result,
+            Err(kameo::error::SendError::HandlerError(
+                SetInputError::Locked(_)
+            ))
+        ));
+        assert!(matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        drop(token);
+        feed.kill();
+        feed.wait_for_stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn camera_removal_does_not_block_on_an_already_queued_stop() {
+        let (connection, done_rx) = test_camera_connection(1);
+        connection.done_tx.try_send(()).unwrap();
+        let camera = CameraFeed {
+            state: State::Open(OpenState {
+                connecting: None,
+                attached: Some(AttachedState::new(connection.id.clone(), connection)),
+            }),
+            ..CameraFeed::default()
+        };
+        let feed = CameraFeed::spawn(camera);
+        let result = tokio::time::timeout(Duration::from_millis(250), feed.ask(RemoveInput)).await;
+        drop(done_rx);
+        feed.kill();
+        feed.wait_for_stop().await;
+        assert!(matches!(result, Ok(Ok(()))));
+    }
+
+    #[tokio::test]
+    async fn camera_reconnect_requires_current_setup_and_a_live_recording_lock() {
+        for (generation, lock_generation, live, cancelled, expected) in [
+            (11, 8, true, false, false),
+            (12, 7, true, false, false),
+            (12, 8, false, false, false),
+            (12, 8, true, true, false),
+            (12, 8, true, false, true),
+        ] {
+            let (connection, original_rx) = test_camera_connection(10);
+            let (replacement, replacement_rx) = test_camera_connection(generation);
+            let mut token = Some(Arc::new(()));
+            let camera = CameraFeed {
+                lock_generation: 8,
+                setup_generation: 12,
+                state: State::Locked {
+                    inner: AttachedState::new(connection.id.clone(), connection),
+                    token: Arc::downgrade(token.as_ref().unwrap()),
+                },
+                ..CameraFeed::default()
+            };
+            if !live {
+                drop(token.take());
+            }
+            if cancelled {
+                camera.setup_cancel.cancel();
+            }
+            let feed = CameraFeed::spawn(camera);
+            let id = replacement.id.clone();
+            let accepted = feed
+                .ask(LockedCameraInputReconnected {
+                    generation,
+                    lock_generation,
+                    id: replacement.id,
+                    camera_info: replacement.camera_info,
+                    video_info: replacement.video_info,
+                    done_tx: replacement.done_tx,
+                })
+                .await
+                .unwrap();
+            assert_eq!(accepted, expected);
+            assert_eq!(
+                matches!(replacement_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                expected,
+            );
+            if accepted {
+                feed.ask(FinalizePendingRelease {
+                    generation: 11,
+                    id: id.clone(),
+                })
+                .await
+                .unwrap();
+                assert!(matches!(
+                    original_rx.try_recv(),
+                    Err(mpsc::TryRecvError::Empty)
+                ));
+                feed.ask(FinalizePendingRelease { generation: 12, id })
+                    .await
+                    .unwrap();
+                assert!(original_rx.try_recv().is_ok());
+            }
+            drop(token);
+            feed.kill();
+            feed.wait_for_stop().await;
+        }
     }
 
     #[tokio::test]

@@ -640,6 +640,7 @@ fn spawn_stderr_reader(
 
 pub struct RespawningMuxerSubprocess {
     current: Option<MuxerSubprocess>,
+    disk_full_reason: Option<String>,
     bin_path: PathBuf,
     config: MuxerSubprocessConfig,
     health_tx: Option<HealthSender>,
@@ -664,6 +665,7 @@ impl RespawningMuxerSubprocess {
         )?);
         Ok(Self {
             current,
+            disk_full_reason: None,
             bin_path,
             config,
             health_tx,
@@ -702,6 +704,10 @@ impl RespawningMuxerSubprocess {
     where
         F: FnMut(&mut MuxerSubprocess) -> Result<(), MuxerSubprocessError>,
     {
+        if let Some(reason) = &self.disk_full_reason {
+            return Err(MuxerSubprocessError::DiskFull(reason.clone()));
+        }
+
         loop {
             let Some(current) = self.current.as_mut() else {
                 if self.consecutive_fast_failures > self.max_consecutive_fast_failures {
@@ -716,7 +722,7 @@ impl RespawningMuxerSubprocess {
             match op(current) {
                 Ok(()) => return Ok(()),
                 Err(MuxerSubprocessError::DiskFull(reason)) => {
-                    self.current = None;
+                    self.disk_full_reason = Some(reason.clone());
                     return Err(MuxerSubprocessError::DiskFull(reason));
                 }
                 Err(MuxerSubprocessError::Crashed(reason)) => {
@@ -821,4 +827,84 @@ pub fn feature_enabled() -> bool {
 
 pub fn output_path_from_dir(dir: &Path) -> PathBuf {
     dir.to_path_buf()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn exited_subprocess(
+        exit_code: u8,
+        max_failures: u32,
+    ) -> (tempfile::TempDir, RespawningMuxerSubprocess) {
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("muxer");
+        std::fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\nwhile [ ! -f \"$0.exit\" ]; do sleep 0.01; done\nexit {exit_code}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config = MuxerSubprocessConfig {
+            output_directory: directory.path().join("video"),
+            init_segment_name: "init.mp4".into(),
+            media_segment_pattern: "segment_$Number%03d$.m4s".into(),
+            video_init: None,
+            audio_init: None,
+        };
+        let mut subprocess =
+            RespawningMuxerSubprocess::new(binary, config, None, max_failures).unwrap();
+        std::fs::write(directory.path().join("muxer.exit"), b"").unwrap();
+        let status = subprocess
+            .current
+            .as_mut()
+            .unwrap()
+            .child
+            .as_mut()
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert_eq!(status.code(), Some(i32::from(exit_code)));
+        (directory, subprocess)
+    }
+
+    #[test]
+    fn disk_full_stays_terminal_and_finish_confirms_shutdown() {
+        let (_directory, mut subprocess) = exited_subprocess(EXIT_DISK_FULL, 2);
+        let error = subprocess
+            .write_video_packet(0, 0, 1, true, &vec![0; 2 * 1024 * 1024])
+            .unwrap_err();
+        assert!(matches!(error, MuxerSubprocessError::DiskFull(_)));
+
+        for _ in 0..3 {
+            assert!(matches!(
+                subprocess.write_video_packet(1, 1, 1, false, &[0]),
+                Err(MuxerSubprocessError::DiskFull(_))
+            ));
+            assert!(matches!(
+                subprocess.write_audio_packet(1, 1, 1, &[0]),
+                Err(MuxerSubprocessError::DiskFull(_))
+            ));
+        }
+        assert_eq!(subprocess.respawn_attempts(), 0);
+
+        let error = subprocess.finish().unwrap_err();
+        assert!(error.child_reaped());
+        assert!(matches!(
+            error,
+            MuxerSubprocessFinishError::Reaped(MuxerSubprocessError::DiskFull(_))
+        ));
+    }
+
+    #[test]
+    fn missing_child_does_not_claim_confirmed_shutdown() {
+        let (_directory, mut subprocess) = exited_subprocess(EXIT_DISK_FULL, 2);
+        drop(subprocess.current.take());
+        let error = subprocess.finish().unwrap_err();
+        assert!(!error.child_reaped());
+        assert!(matches!(error, MuxerSubprocessFinishError::Unconfirmed(_)));
+    }
 }

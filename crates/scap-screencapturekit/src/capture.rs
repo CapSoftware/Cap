@@ -4,8 +4,43 @@ use cidre::{
 };
 
 define_obj_type!(
-    pub CapturerCallbacks + StreamOutputImpl + StreamDelegateImpl, CapturerCallbacksInner, CAPTURER
+    pub CapturerCallbacks + StreamOutputImpl + StreamDelegateImpl + CapturerCallbacksDeallocation,
+    CapturerCallbacksInner,
+    CAPTURER
 );
+
+trait CapturerCallbacksDeallocation {
+    fn cls_add_methods(cls: &objc::Class<objc::Id>) {
+        extern "C" fn dealloc(callbacks: &mut CapturerCallbacks, selector: &objc::Sel) {
+            let object = callbacks as *mut CapturerCallbacks;
+            unsafe {
+                let superclass_dealloc: unsafe extern "C" fn(*mut CapturerCallbacks, &objc::Sel) =
+                    std::mem::transmute(objc::NS_OBJECT.method_impl(selector));
+                std::ptr::drop_in_place(callbacks.inner_mut());
+                superclass_dealloc(object, selector);
+            }
+        }
+
+        // The pinned cidre macro drops only the Rust payload. Its later
+        // class_addMethod cannot replace this complete NSObject deallocator.
+        let added = unsafe {
+            objc::class_addMethod(
+                cls,
+                objc::sel_reg_name(c"dealloc".as_ptr().cast()),
+                std::mem::transmute::<
+                    extern "C" fn(&mut CapturerCallbacks, &objc::Sel),
+                    extern "C" fn(),
+                >(dealloc),
+                c"v@:".as_ptr().cast(),
+            )
+        };
+        assert!(added, "Capture delegate deallocator already registered");
+    }
+
+    fn cls_add_protocol(_: &objc::Class<objc::Id>) {}
+}
+
+impl CapturerCallbacksDeallocation for CapturerCallbacks {}
 
 unsafe impl Send for CapturerCallbacks {}
 unsafe impl Sync for CapturerCallbacks {}
@@ -212,5 +247,68 @@ impl CapturerBuilder {
             stream,
             _callbacks: callbacks,
         })
+    }
+}
+
+#[cfg(test)]
+mod deallocation_tests {
+    use super::*;
+    use std::{
+        ffi::c_void,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        #[link_name = "objc_setAssociatedObject"]
+        fn set_associated_object(
+            object: *const c_void,
+            key: *const c_void,
+            value: *const c_void,
+            policy: usize,
+        );
+    }
+
+    static ASSOCIATION_KEY: u8 = 0;
+
+    struct DropCounter(Arc<AtomicUsize>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn delegate(counter: DropCounter) -> arc::R<CapturerCallbacks> {
+        CapturerCallbacks::with(CapturerCallbacksInner {
+            did_output_sample_buf_cb: Some(Box::new(move |_| {
+                let _ = &counter;
+            })),
+            did_stop_with_err_cb: None,
+        })
+    }
+
+    #[test]
+    fn final_release_drops_payload_and_native_associated_objects_once() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        for cycle in 0..100 {
+            let outer = delegate(DropCounter(drops.clone()));
+            let associated = delegate(DropCounter(drops.clone()));
+            unsafe {
+                set_associated_object(
+                    std::ptr::from_ref(outer.as_ref()).cast(),
+                    std::ptr::from_ref(&ASSOCIATION_KEY).cast(),
+                    std::ptr::from_ref(associated.as_ref()).cast(),
+                    1,
+                );
+            }
+            drop(associated);
+            assert_eq!(drops.load(Ordering::SeqCst), cycle * 2);
+            drop(outer);
+            assert_eq!(drops.load(Ordering::SeqCst), (cycle + 1) * 2);
+        }
     }
 }
