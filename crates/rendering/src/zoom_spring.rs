@@ -1569,6 +1569,7 @@ mod tests {
                 end: 20.0,
                 name: None,
                 speed_audio_mode: None,
+                audio_muted: false,
             }],
             transitions: vec![],
             zoom_segments: vec![],
@@ -1626,6 +1627,7 @@ mod tests {
                     end: 4.0,
                     name: None,
                     speed_audio_mode: None,
+                    audio_muted: false,
                 },
                 TimelineSegment {
                     recording_clip: 0,
@@ -1634,6 +1636,7 @@ mod tests {
                     end: 14.0,
                     name: None,
                     speed_audio_mode: None,
+                    audio_muted: false,
                 },
             ],
             transitions: vec![ClipTransition {

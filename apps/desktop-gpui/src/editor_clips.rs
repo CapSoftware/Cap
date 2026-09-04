@@ -2342,6 +2342,7 @@ fn full_timeline_for_segments(
                 end: duration,
                 name: None,
                 speed_audio_mode: None,
+                audio_muted: false,
             })
         })
         .collect()
@@ -2935,6 +2936,7 @@ fn full_timeline_for_source_segments(
                 end: duration,
                 name: None,
                 speed_audio_mode: None,
+                audio_muted: false,
             })
         })
         .collect()
@@ -3024,6 +3026,7 @@ fn source_timeline_segments_for_import(
             end,
             name: None,
             speed_audio_mode: None,
+            audio_muted: segment.audio_muted,
         });
     }
 
@@ -3254,6 +3257,7 @@ pub(crate) fn append_cap_project_to_editor(
                 end: source_segment.end,
                 name: None,
                 speed_audio_mode: source_segment.speed_audio_mode,
+                audio_muted: source_segment.audio_muted,
             });
         }
     }
@@ -3637,6 +3641,7 @@ mod tests {
             end,
             name: None,
             speed_audio_mode: None,
+            audio_muted: false,
         }
     }
 

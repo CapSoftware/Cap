@@ -1263,6 +1263,7 @@ pub fn ensure_timeline(project: &mut ProjectConfiguration, clip_display_duration
                 end: *duration,
                 name: None,
                 speed_audio_mode: None,
+                audio_muted: false,
             })
             .collect(),
         transitions: Vec::new(),
@@ -1848,28 +1849,22 @@ pub fn set_clip_segment_timescale(
 }
 
 pub fn clip_is_muted(segment: &TimelineSegment) -> bool {
-    if (segment.timescale - 1.0).abs() < f64::EPSILON {
+    let speed_mode_muted = if (segment.timescale - 1.0).abs() < f64::EPSILON {
         segment.speed_audio_mode == Some(ClipSpeedAudioMode::Mute)
     } else {
         segment.speed_audio_mode.unwrap_or(ClipSpeedAudioMode::Mute) == ClipSpeedAudioMode::Mute
-    }
+    };
+    segment.audio_muted || speed_mode_muted
 }
 
 pub fn set_clip_muted(timeline: &mut TimelineConfiguration, index: usize, muted: bool) -> bool {
     let Some(segment) = timeline.segments.get_mut(index) else {
         return false;
     };
-    let next = if muted {
-        Some(ClipSpeedAudioMode::Mute)
-    } else if (segment.timescale - 1.0).abs() < f64::EPSILON {
-        None
-    } else {
-        Some(ClipSpeedAudioMode::MaintainPitch)
-    };
-    if segment.speed_audio_mode == next {
+    if segment.audio_muted == muted {
         return false;
     }
-    segment.speed_audio_mode = next;
+    segment.audio_muted = muted;
     true
 }
 
@@ -2776,18 +2771,17 @@ mod tests {
     }
 
     #[test]
-    fn muting_a_1x_clip_sets_speed_audio_mode() {
+    fn muting_a_1x_clip_sets_audio_muted() {
         let mut project = zoom_fixture();
         let timeline = project.timeline.as_mut().unwrap();
         assert!(!clip_is_muted(&timeline.segments[0]));
         assert!(set_clip_muted(timeline, 0, true));
         assert!(clip_is_muted(&timeline.segments[0]));
-        assert_eq!(
-            timeline.segments[0].speed_audio_mode,
-            Some(ClipSpeedAudioMode::Mute)
-        );
+        assert!(timeline.segments[0].audio_muted);
+        assert_eq!(timeline.segments[0].speed_audio_mode, None);
         assert!(set_clip_muted(timeline, 0, false));
         assert!(!clip_is_muted(&timeline.segments[0]));
+        assert!(!timeline.segments[0].audio_muted);
         assert_eq!(timeline.segments[0].speed_audio_mode, None);
     }
 

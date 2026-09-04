@@ -356,11 +356,13 @@ function WaveformCanvas(props: {
 function ClipSpeedControl(props: {
 	timescale: number;
 	speedAudioMode?: ClipSpeedAudioMode | null;
+	audioMuted?: boolean;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	triggerClass?: string;
 	onSetTimescale: (timescale: number) => void;
 	onSetSpeedAudioMode: (mode: ClipSpeedAudioMode) => void;
+	onSetAudioMuted: (audioMuted: boolean) => void;
 }) {
 	return (
 		<Popover
@@ -427,6 +429,19 @@ function ClipSpeedControl(props: {
 							))}
 						</div>
 					</Show>
+					<button
+						type="button"
+						aria-pressed={props.audioMuted === true}
+						class={cx(
+							"rounded-lg px-2 py-1 text-xs transition-colors",
+							props.audioMuted
+								? "bg-gray-4 text-gray-12"
+								: "bg-gray-2 text-gray-10 hover:text-gray-12",
+						)}
+						onClick={() => props.onSetAudioMuted(!props.audioMuted)}
+					>
+						{props.audioMuted ? "Unmute audio" : "Mute audio"}
+					</button>
 				</Popover.Content>
 			</Popover.Portal>
 		</Popover>
@@ -1239,6 +1254,7 @@ export function ClipTrack(
 											<ClipSpeedControl
 												timescale={seg.timescale}
 												speedAudioMode={seg.speedAudioMode}
+												audioMuted={seg.audioMuted}
 												open={speedOpen()}
 												onOpenChange={setSpeedOpen}
 												triggerClass={triggerClass}
@@ -1247,6 +1263,12 @@ export function ClipTrack(
 												}
 												onSetSpeedAudioMode={(mode) =>
 													projectActions.setClipSegmentSpeedAudioMode(i(), mode)
+												}
+												onSetAudioMuted={(audioMuted) =>
+													projectActions.setClipSegmentAudioMuted(
+														i(),
+														audioMuted,
+													)
 												}
 											/>
 										);

@@ -1256,7 +1256,7 @@ letterSpacing?: number; lineHeight?: number; opacity?: number; shadow?: number; 
  */
 layoutTransition?: number }
 export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[]; camera3dSegments?: Camera3DSegment[] }
-export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null; speedAudioMode?: ClipSpeedAudioMode | null }
+export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null; speedAudioMode?: ClipSpeedAudioMode | null; audioMuted?: boolean }
 export type TranscriptionEngine = "Whisper" | "Parakeet"
 export type Trigger = "screenshotTaken" | "studioRecordingFinished" | "instantRecordingFinished" | "recordingStarted" | "uploadCompleted" | "videoImported" | "recordingDeleted"
 export type UpdateChannel = "stable" | "nightly"
