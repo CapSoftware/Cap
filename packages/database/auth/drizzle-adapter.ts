@@ -510,31 +510,28 @@ export function DrizzleAdapter(
 			return row;
 		},
 		async useVerificationToken({ identifier, token }) {
+			const normalizedIdentifier = identifier?.toLowerCase() ?? "";
 			const rows = await db
 				.select()
 				.from(verificationTokens)
-				.where(eq(verificationTokens.token, token))
+				.where(eq(verificationTokens.identifier, normalizedIdentifier))
 				.limit(1);
 			const row = rows[0];
 			if (!row) {
 				console.warn("[useVerificationToken] No token found");
 				return null;
 			}
-			const normalizedIdentifier = identifier?.toLowerCase() ?? "";
-			const storedIdentifier = row.identifier?.toLowerCase() ?? "";
-			if (normalizedIdentifier !== storedIdentifier) {
-				console.warn("[useVerificationToken] Identifier mismatch");
-				return null;
-			}
+			// Delete on every attempt (not just a match) so a wrong guess burns the
+			// code instead of leaving it guessable for the rest of its TTL.
 			await db
 				.delete(verificationTokens)
-				.where(
-					and(
-						eq(verificationTokens.token, token),
-						eq(verificationTokens.identifier, row.identifier),
-					),
-				);
-			return { ...row, identifier: storedIdentifier };
+				.where(eq(verificationTokens.identifier, row.identifier));
+
+			if (row.token !== token) {
+				console.warn("[useVerificationToken] Token mismatch");
+				return null;
+			}
+			return { ...row, identifier: normalizedIdentifier };
 		},
 	};
 }
