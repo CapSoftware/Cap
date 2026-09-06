@@ -431,7 +431,10 @@ export async function startDesktopRecordingJob(
 	if (current.state === "retry") return { status: "deferred" };
 	const remainingCapacityWait = current.nextRetryAt.getTime() - Date.now();
 	if (
-		current.output?.kind === "desktop-recording-capacity-wait" &&
+		current.output &&
+		typeof current.output === "object" &&
+		"kind" in current.output &&
+		current.output.kind === "desktop-recording-capacity-wait" &&
 		remainingCapacityWait > 0
 	) {
 		return { status: "capacity", retryAfterMs: remainingCapacityWait };
