@@ -371,5 +371,36 @@ describe.runIf(Boolean(databaseUrl))(
 					.where(eq(verificationTokens.identifier, identifier)),
 			).toHaveLength(0);
 		});
+
+		it("never authenticates a wrong guess when it races the correct one", async () => {
+			const identifier = `${id()}@example.com`;
+			const token = "531942";
+			const adapter = DrizzleAdapter(database());
+			if (!adapter.useVerificationToken) {
+				throw new Error("Missing useVerificationToken adapter.");
+			}
+			await database()
+				.insert(verificationTokens)
+				.values({ identifier, token, expires: new Date(Date.now() + 600_000) });
+
+			const guesses = ["000000", "111111", token, "222222", "333333"];
+			const attempts = await Promise.all(
+				guesses.map((guess) =>
+					adapter.useVerificationToken({ identifier, token: guess }),
+				),
+			);
+
+			const successes = attempts.filter((result) => result !== null);
+			expect(successes.length).toBeLessThanOrEqual(1);
+			for (const success of successes) {
+				expect(success).toMatchObject({ identifier, token });
+			}
+			expect(
+				await database()
+					.select()
+					.from(verificationTokens)
+					.where(eq(verificationTokens.identifier, identifier)),
+			).toHaveLength(0);
+		});
 	},
 );
