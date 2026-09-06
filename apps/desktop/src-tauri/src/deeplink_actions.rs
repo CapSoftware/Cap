@@ -164,11 +164,35 @@ impl TryFrom<&Url> for DeepLinkAction {
                 .map_err(|_| ActionParseFromUrlError::Invalid);
         }
 
-        match url.domain() {
-            Some("action") => {}
-            Some(_) => return Err(ActionParseFromUrlError::NotAction),
-            None => return Err(ActionParseFromUrlError::Invalid),
-        }
+		match url.domain().or_else(|| url.host_str()) {
+			Some("start-recording") => {
+				return Ok(Self::StartRecording {
+					capture_mode: CaptureMode::Screen("default".to_string()),
+					camera: None,
+					mic_label: None,
+					capture_system_audio: true,
+					mode: RecordingMode::Studio,
+				});
+			}
+			Some("stop-recording") => {
+				return Ok(Self::StopRecording);
+			}
+			Some("pause-recording") => {
+				#[cfg(debug_assertions)]
+				return Ok(Self::PauseRecording);
+				#[cfg(not(debug_assertions))]
+				return Err(ActionParseFromUrlError::Invalid);
+			}
+			Some("resume-recording") => {
+				#[cfg(debug_assertions)]
+				return Ok(Self::ResumeRecording);
+				#[cfg(not(debug_assertions))]
+				return Err(ActionParseFromUrlError::Invalid);
+			}
+			Some("action") => {}
+			Some(_) => return Err(ActionParseFromUrlError::NotAction),
+			None => return Err(ActionParseFromUrlError::Invalid),
+		}
 
         let params = url
             .query_pairs()
@@ -299,6 +323,21 @@ impl DeepLinkAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+	#[test]
+	fn parses_direct_host_start_and_stop_recording_urls() {
+		let start_url = Url::parse("cap-desktop://start-recording").unwrap();
+		let stop_url = Url::parse("cap-desktop://stop-recording").unwrap();
+
+		assert!(matches!(
+			DeepLinkAction::try_from(&start_url),
+			Ok(DeepLinkAction::StartRecording { .. })
+		));
+		assert_eq!(
+			DeepLinkAction::try_from(&stop_url),
+			Ok(DeepLinkAction::StopRecording)
+		);
+	}
 
     #[test]
     fn parses_stop_recording_action_url() {
@@ -511,4 +550,9 @@ mod tests {
             Err(ActionParseFromUrlError::NotAction)
         );
     }
+}
+
+pub fn handle_deeplink(url: &str) -> Result<DeepLinkAction, ActionParseFromUrlError> {
+	let parsed = Url::parse(url).map_err(|_| ActionParseFromUrlError::Invalid)?;
+	DeepLinkAction::try_from(&parsed)
 }
