@@ -3,6 +3,7 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type BunFile, file, spawn } from "bun";
+import { uploadDriveResumable } from "./drive-resumable-upload";
 import type { VideoMetadata } from "./job-manager";
 import {
 	DOWNLOAD_TIMEOUT_MS,
@@ -2065,6 +2066,22 @@ async function uploadWithRetry(
 	ifNoneMatch?: "*",
 	abortSignal?: AbortSignal,
 ): Promise<StorageUploadReceipt> {
+	if (isGoogleDriveResumableUrl(presignedUrl) && contentLength > 0) {
+		const response = await uploadDriveResumable(
+			presignedUrl,
+			bodyFactory(),
+			contentType,
+			ifNoneMatch,
+			abortSignal,
+		);
+		const receipt = await readUploadReceipt(
+			response,
+			presignedUrl,
+			contentLength,
+		);
+		abortSignal?.throwIfAborted();
+		return receipt;
+	}
 	let lastError: Error | undefined;
 
 	for (let attempt = 0; attempt <= UPLOAD_MAX_RETRIES; attempt++) {
@@ -2077,10 +2094,6 @@ async function uploadWithRetry(
 				"Content-Length": contentLength.toString(),
 			};
 			if (ifNoneMatch) headers["If-None-Match"] = ifNoneMatch;
-			if (isGoogleDriveResumableUrl(presignedUrl) && contentLength > 0) {
-				headers["Content-Range"] =
-					`bytes 0-${contentLength - 1}/${contentLength}`;
-			}
 
 			response = await fetch(presignedUrl, {
 				method: "PUT",

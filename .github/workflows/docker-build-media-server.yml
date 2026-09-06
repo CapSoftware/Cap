@@ -84,7 +84,10 @@ jobs:
             src/__tests__/lib/media-size.test.ts \
             src/__tests__/lib/media-probe.integration.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
-            src/__tests__/lib/media-transfer.test.ts
+            src/__tests__/lib/media-transfer.test.ts \
+            src/__tests__/lib/drive-resumable-upload.test.ts \
+            src/__tests__/lib/storage-upload.test.ts \
+            src/__tests__/lib/container-memory.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/routes/recording-verification.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
@@ -106,7 +109,8 @@ jobs:
           docker run --rm --network none --cpus 2 --memory 2g \
             -e MEDIA_SERVER_TRANSFER_PERFORMANCE_TESTS=1 \
             --entrypoint bun "$MEDIA_IMAGE" test \
-            src/__tests__/lib/media-transfer.integration.test.ts
+            src/__tests__/lib/media-transfer.integration.test.ts \
+            src/__tests__/lib/drive-resumable-upload.test.ts
 
       - name: Export Digest
         if: github.event_name != 'pull_request'
