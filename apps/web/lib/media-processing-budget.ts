@@ -3,10 +3,9 @@ import { db } from "@cap/database";
 import { mediaProcessingBudgets } from "@cap/database/schema";
 import { asc, inArray, lt, sql } from "drizzle-orm";
 
-const GiB = 1024 ** 3;
 const MiB = 1024 ** 2;
 export class MediaProcessingBudgetError extends Error {
-	constructor(readonly scope: "recording" | "daily") {
+	constructor(readonly scope: "recording") {
 		super(`Recording processing paused: ${scope} transfer budget exhausted`);
 		this.name = "MediaProcessingBudgetError";
 	}
@@ -38,15 +37,6 @@ export async function reserveMediaProcessingBudget(input: {
 	const { attemptBytes, recordingBytes } = getMediaProcessingReservation(
 		input.sourceBytes,
 	);
-	const configured = Number(
-		process.env.MEDIA_PROCESSING_DAILY_BUDGET_GIB ?? "512",
-	);
-	if (
-		!Number.isFinite(configured) ||
-		configured <= 0 ||
-		!Number.isSafeInteger(configured * GiB)
-	)
-		throw new Error("Invalid daily processing budget");
 	const attemptKey = key([
 		"attempt",
 		input.videoId,
@@ -54,13 +44,11 @@ export async function reserveMediaProcessingBudget(input: {
 		input.attemptId,
 	]);
 	const recordingKey = key(["recording", input.videoId, input.generation]);
-	const dailyKey = key(["daily", now.toISOString().slice(0, 10)]);
 	const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60_000);
 	return db().transaction(async (tx) => {
 		const limits = [
 			{ id: attemptKey, limitBytes: attemptBytes },
 			{ id: recordingKey, limitBytes: recordingBytes },
-			{ id: dailyKey, limitBytes: configured * GiB },
 		].sort((left, right) => left.id.localeCompare(right.id));
 		await tx
 			.insert(mediaProcessingBudgets)
@@ -92,10 +80,7 @@ export async function reserveMediaProcessingBudget(input: {
 				throw new Error("Processing reservation changed");
 			return attemptBytes;
 		}
-		for (const [id, scope] of [
-			[recordingKey, "recording"],
-			[dailyKey, "daily"],
-		] as const) {
+		for (const [id, scope] of [[recordingKey, "recording"]] as const) {
 			const row = rows.get(id);
 			if (!row || row.reservedBytes + attemptBytes > row.limitBytes)
 				throw new MediaProcessingBudgetError(scope);

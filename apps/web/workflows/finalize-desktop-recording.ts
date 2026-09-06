@@ -13,7 +13,6 @@ import {
 	claimProcessingAttempt,
 	type DesktopRecordingAttempt,
 	type DesktopRecordingAttemptFence,
-	deferForDailyProcessingBudget,
 	deferWithoutMediaServer,
 	ensureSegmentProcessingJob,
 	getProcessingState,
@@ -140,7 +139,14 @@ export async function finalizeDesktopRecordingWorkflow(
 				break;
 			}
 			const started = await startDesktopRecordingJob(attempt);
-			if (typeof started === "object") continue;
+			if (typeof started === "object") {
+				if (started.status === "capacity") {
+					retainedAttempt = attempt;
+					await sleep(COMPLETION_POLL_INTERVAL_MS);
+				}
+				continue;
+			}
+			const deadline = new Date(Date.now() + ATTEMPT_MAX_DURATION_MS);
 			const jobId = started;
 			for (;;) {
 				await sleep(COMPLETION_POLL_INTERVAL_MS);
@@ -149,9 +155,7 @@ export async function finalizeDesktopRecordingWorkflow(
 					generation: attempt.generation,
 					attemptId: attempt.attemptId,
 					jobId,
-					deadline: new Date(
-						attempt.updatedAt.getTime() + ATTEMPT_MAX_DURATION_MS,
-					),
+					deadline,
 				});
 				if (status === "verified") {
 					completedJobId = jobId;
@@ -409,7 +413,7 @@ async function buildDesktopSegmentsOutput({
 
 export async function startDesktopRecordingJob(
 	attempt: DesktopRecordingAttempt,
-): Promise<string | undefined | { status: "deferred" }> {
+): Promise<string | undefined | { status: "deferred" | "capacity" }> {
 	"use step";
 
 	const current = await getProcessingState(attempt);
@@ -456,10 +460,6 @@ export async function startDesktopRecordingJob(
 		});
 	} catch (error) {
 		if (error instanceof MediaProcessingBudgetError) {
-			if (error.scope === "daily") {
-				await deferForDailyProcessingBudget(attempt);
-				return { status: "deferred" };
-			}
 			await markSourceBlocked({
 				videoId: current.videoId,
 				generation: current.generation,
@@ -540,6 +540,18 @@ export async function startDesktopRecordingJob(
 				signal: AbortSignal.timeout(30_000),
 			},
 		);
+		if (response.status === 503) {
+			const result: unknown = await response.json();
+			if (
+				result &&
+				typeof result === "object" &&
+				"code" in result &&
+				result.code === "SERVER_BUSY" &&
+				(await heartbeatAttempt(attempt))
+			) {
+				return { status: "capacity" };
+			}
+		}
 		if (response.ok) {
 			const result = z
 				.object({

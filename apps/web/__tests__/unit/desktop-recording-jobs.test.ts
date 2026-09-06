@@ -5,7 +5,6 @@ import {
 	claimProcessingAttempt,
 	type DesktopRecordingAttemptFence,
 	type DesktopRecordingJob,
-	deferForDailyProcessingBudget,
 	ensureSegmentProcessingJob,
 	getDesktopRecordingRetryDelay,
 	getDesktopRecordingWorkerCheckpoint,
@@ -601,69 +600,6 @@ describe("late verification and source commitment", () => {
 });
 
 describe("retained-source retry policy", () => {
-	it("waits for the next UTC allowance without spending the final attempt", async () => {
-		await createAttempt();
-		Object.assign(getJobRow(), {
-			state: "processing",
-			source,
-			attemptId: "budget-attempt",
-			attemptCount: 5,
-			remoteJobId: null,
-		});
-		const fence = {
-			videoId,
-			generation: String(getJobRow().generation),
-			attemptId: "budget-attempt",
-		};
-		expect(await deferForDailyProcessingBudget({ ...fence, now })).toBe(true);
-		expect(await deferForDailyProcessingBudget({ ...fence, now })).toBe(false);
-		expect(getJobRow()).toMatchObject({
-			state: "retry",
-			attemptCount: 4,
-			source,
-			nextRetryAt: new Date("2026-09-03T00:00:00Z"),
-			leaseExpiresAt: null,
-		});
-		expect(
-			await claimProcessingAttempt({
-				videoId,
-				generation: fence.generation,
-				now,
-			}),
-		).toBeNull();
-		expect(
-			await claimProcessingAttempt({
-				videoId,
-				generation: fence.generation,
-				now: new Date("2026-09-03T00:00:00Z"),
-			}),
-		).toMatchObject({ attemptCount: 5, state: "processing", source });
-	});
-
-	it("does not defer an attempt already owned by a remote worker", async () => {
-		await createAttempt();
-		Object.assign(getJobRow(), {
-			state: "processing",
-			source,
-			attemptId: "owned",
-			attemptCount: 5,
-			remoteJobId: "worker",
-		});
-		expect(
-			await deferForDailyProcessingBudget({
-				videoId,
-				generation: String(getJobRow().generation),
-				attemptId: "owned",
-				now,
-			}),
-		).toBe(false);
-		expect(getJobRow()).toMatchObject({
-			state: "processing",
-			attemptCount: 5,
-			remoteJobId: "worker",
-		});
-	});
-
 	it.each([null, source])(
 		"does not recreate a recording while deletion is pending",
 		async (retainedSource) => {

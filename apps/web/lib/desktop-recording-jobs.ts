@@ -677,54 +677,6 @@ export async function heartbeatAttempt({
 	});
 }
 
-export async function deferForDailyProcessingBudget({
-	now = new Date(),
-	...fence
-}: DesktopRecordingAttemptFence & { now?: Date }): Promise<boolean> {
-	return db().transaction(async (tx) => {
-		const condition = and(
-			attemptCondition(fence),
-			isNull(videoProcessingJobs.remoteJobId),
-		);
-		const [row] = await tx
-			.select()
-			.from(videoProcessingJobs)
-			.where(condition)
-			.for("update");
-		if (
-			!row ||
-			getDesktopRecordingWorkerCheckpoint(parseDesktopRecordingJob(row))
-		)
-			return false;
-		const nextRetryAt = new Date(now);
-		nextRetryAt.setUTCHours(24, 0, 0, 0);
-		await tx
-			.update(videoProcessingJobs)
-			.set({
-				state: "retry",
-				attemptCount: Math.max(0, row.attemptCount - 1),
-				leaseExpiresAt: null,
-				nextRetryAt,
-				errorCode: "processing-daily-budget-exhausted",
-				errorMessage:
-					"Processing will resume when the daily transfer allowance resets.",
-				updatedAt: now,
-			})
-			.where(condition);
-		await tx
-			.update(videoUploads)
-			.set({
-				phase: "processing",
-				processingMessage:
-					"Waiting for processing capacity. Your recording is safely stored.",
-				processingError: null,
-				updatedAt: now,
-			})
-			.where(eq(videoUploads.videoId, fence.videoId));
-		return true;
-	});
-}
-
 export async function scheduleRetry({
 	errorCode,
 	errorMessage,
