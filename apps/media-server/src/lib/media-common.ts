@@ -198,7 +198,7 @@ export function normalizeLocalPath(path: string): string {
 }
 
 export async function getSourceSize(path: string): Promise<number> {
-	if (/^https?:\/\//.test(path)) {
+	if (/^https?:\/\//i.test(path)) {
 		const response = await mediaFetch(path, {
 			headers: { Range: "bytes=0-0" },
 			signal: AbortSignal.timeout(10_000),

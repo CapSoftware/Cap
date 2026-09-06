@@ -37,7 +37,9 @@ describe("remote media size", () => {
 				},
 			});
 			try {
-				const result = getSourceSize(`${server.url}video.mp4`);
+				const result = getSourceSize(
+					`${server.url}video.mp4`.replace("http:", "HTTP:"),
+				);
 				if (sample.size === null) {
 					await expect(result).rejects.toThrow(
 						"Media input size is unavailable",
