@@ -97,4 +97,15 @@ export const RATE_LIMIT_IDS = {
 	DESKTOP_LOGS: "rl_desktop_logs",
 	/** Unauthed docs Ask AI questions (Anthropic cost). Suggested: 10 / 1m per IP. */
 	DOCS_ASK: "rl_docs_ask",
+	/** Per-workspace API requests rate limiting guard. */
+	WORKSPACE_API: "rl_workspace_api",
 } as const;
+
+import { defaultWorkspaceLimiter } from "./workspace-rate-limiter";
+
+/**
+ * Check in-memory sliding-window rate limit for a given workspace ID.
+ */
+export function checkWorkspaceRateLimit(workspaceId: string): boolean {
+	return defaultWorkspaceLimiter.isAllowed(workspaceId);
+}

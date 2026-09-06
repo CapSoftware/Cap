@@ -11,7 +11,7 @@ export class WorkspaceRateLimiter {
 	public isAllowed(workspaceId: string): boolean {
 		const now = Date.now();
 		const timestamps = (this.requests.get(workspaceId) || []).filter(
-			(ts) => now - ts < this.config.windowMs
+			(ts) => now - ts < this.config.windowMs,
 		);
 		if (timestamps.length >= this.config.maxRequests) {
 			return false;
@@ -21,3 +21,8 @@ export class WorkspaceRateLimiter {
 		return true;
 	}
 }
+
+export const defaultWorkspaceLimiter = new WorkspaceRateLimiter({
+	windowMs: 60 * 1000,
+	maxRequests: 100,
+});
