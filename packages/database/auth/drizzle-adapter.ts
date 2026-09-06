@@ -17,6 +17,15 @@ import {
 } from "../schema.ts";
 import type { ValidatedSsoIdentity } from "./sso.ts";
 
+const getAffectedRows = (result: unknown) => {
+	if (Array.isArray(result)) {
+		return (
+			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
+		);
+	}
+	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
+};
+
 type CreateUserData = Parameters<NonNullable<Adapter["createUser"]>>[0];
 type LinkAccountData = Parameters<NonNullable<Adapter["linkAccount"]>>[0];
 type UnlinkAccountData = Parameters<NonNullable<Adapter["unlinkAccount"]>>[0];
@@ -521,12 +530,24 @@ export function DrizzleAdapter(
 				console.warn("[useVerificationToken] No token found");
 				return null;
 			}
-			// Delete on every attempt (not just a match) so a wrong guess burns the
-			// code instead of leaving it guessable for the rest of its TTL.
-			await db
+			// Claim the exact row we just read (identifier + token) with a single
+			// delete, and only proceed if we actually removed it. This makes
+			// consumption atomic: concurrent requests race on the same delete, so
+			// at most one of them can claim the row, whether the guess is right or
+			// wrong. Scoping by token too (not identifier alone) means the delete
+			// can't clobber a resend that replaced this row after we read it.
+			const result = await db
 				.delete(verificationTokens)
-				.where(eq(verificationTokens.identifier, row.identifier));
-
+				.where(
+					and(
+						eq(verificationTokens.identifier, row.identifier),
+						eq(verificationTokens.token, row.token),
+					),
+				);
+			if (getAffectedRows(result) !== 1) {
+				console.warn("[useVerificationToken] Token already consumed");
+				return null;
+			}
 			if (row.token !== token) {
 				console.warn("[useVerificationToken] Token mismatch");
 				return null;
