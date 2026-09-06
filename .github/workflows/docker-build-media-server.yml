@@ -81,6 +81,9 @@ jobs:
             src/__tests__/lib/recording-verification.integration.test.ts \
             src/__tests__/lib/job-manager.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/media-size.test.ts \
+            src/__tests__/lib/media-probe.integration.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/lib/media-transfer.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/routes/recording-verification.test.ts

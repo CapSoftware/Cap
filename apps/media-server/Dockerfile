@@ -11,7 +11,8 @@ RUN bun install --frozen-lockfile --production
 
 COPY apps/media-server/src ./src
 
-RUN bun test src/__tests__/lib/recording-verification.integration.test.ts src/__tests__/lib/job-manager.test.ts \
+RUN bun test src/__tests__/lib/media-size.test.ts src/__tests__/lib/media-probe.integration.test.ts \
+	&& bun test src/__tests__/lib/recording-verification.integration.test.ts src/__tests__/lib/job-manager.test.ts \
 	&& bun test src/__tests__/lib/media-transfer.test.ts \
 	&& bun test src/__tests__/routes/recording-verification.test.ts \
 	&& bun test src/__tests__/routes/video.test.ts \

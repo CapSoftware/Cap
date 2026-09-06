@@ -130,6 +130,7 @@ describe("mediaProbe integration tests", () => {
 
 				expect(metadata.duration).toBeGreaterThan(0);
 				expect(metadata.videoCodec).toBeTruthy();
+				expect(metadata.fileSize).toBe(videoData.length);
 			} finally {
 				await server.stop(true);
 			}
