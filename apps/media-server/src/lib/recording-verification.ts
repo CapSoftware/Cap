@@ -539,6 +539,19 @@ function validateEvidence(
 			audio: audioEvidence && audio ? integrity(audio) : null,
 		},
 	};
+	if (videoTiming?.terminalPacketCount === 1) {
+		const duration =
+			Number(
+				videoTiming.lastTimestampTicks -
+					videoTiming.firstTimestampTicks +
+					videoTiming.lastDurationTicks,
+			) / videoTiming.timeScale;
+		result.video = {
+			...result.video,
+			duration,
+			endTime: result.video.startTime + duration,
+		};
+	}
 	if (options.sourceEvidence) {
 		assertSourcePreserved(options.sourceEvidence, result);
 		result.sourcePreserved = true;

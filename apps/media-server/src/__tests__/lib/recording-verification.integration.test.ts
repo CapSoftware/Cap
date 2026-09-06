@@ -1075,8 +1075,8 @@ describe("source-preserving recording mux", () => {
 		},
 	);
 
-	test.each([-1, 1, -23_333])(
-		"preserves a true partial final frame with duration offset %d ticks when muxing",
+	test.each([-1, 1, -23_333, 670_000])(
+		"preserves the final frame with duration offset %d ticks when muxing",
 		async (offsetTicks) => {
 			const input = await fragmentedSource(0, { last: offsetTicks });
 			const sourceEvidence = await inspectRecordingSources(input, null);
@@ -1098,12 +1098,21 @@ describe("source-preserving recording mux", () => {
 				throw new Error("Fixture has no final packet");
 			expect(sourceTail.duration).toBe(33_333 + offsetTicks);
 			expect(outputTail.duration).toBe(sourceTail.duration);
+			expect(sourceEvidence.video.duration).toBeCloseTo(
+				(sourceTail.pts + sourceTail.duration - (sourcePackets[0]?.pts ?? 0)) /
+					1_000_000,
+				9,
+			);
 			const verified = await verifyRecording(output, {
 				requireAudio: false,
 				sourceEvidence,
 			});
 			expect(verified.sourcePreserved).toBe(true);
 			expect(verified.video.frameCount).toBe(31);
+			expect(verified.video.duration).toBeCloseTo(
+				sourceEvidence.video.duration,
+				9,
+			);
 			expect(verified.integrity).toEqual(sourceEvidence.integrity);
 		},
 	);
@@ -1287,7 +1296,10 @@ describe("source-preserving recording mux", () => {
 		const output = await fragmentedSource(0, { first: 2_000_000, last: -1 });
 		const sourceEvidence = await inspectRecordingSources(input, null);
 		const outputEvidence = await inspectRecordingSources(output, null);
-		expect(outputEvidence.video).toEqual(sourceEvidence.video);
+		expect(outputEvidence.video.duration).toBeCloseTo(
+			sourceEvidence.video.duration - 0.000_001,
+			9,
+		);
 		expect(outputEvidence.integrity.video.contentSha256).toBe(
 			sourceEvidence.integrity.video.contentSha256,
 		);
