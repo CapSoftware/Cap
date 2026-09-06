@@ -11,6 +11,7 @@ import {
 	heartbeatAttempt,
 	initializeSourceCommitCheckpoint,
 	isDesktopRecordingJobRecoverable,
+	listRecoverableSegmentJobs,
 	markSourceBlocked,
 	persistCommittedSource,
 	persistSourceCommitCheckpoint,
@@ -45,6 +46,9 @@ vi.mock("@cap/database/schema", () => {
 			"nextRetryAt",
 			"leaseExpiresAt",
 			"remoteJobId",
+			"errorCode",
+			"verification",
+			"output",
 		]),
 	};
 });
@@ -134,6 +138,12 @@ function createClient() {
 			const query = {
 				from(value: Table) {
 					table = value.table;
+					return query;
+				},
+				innerJoin() {
+					return query;
+				},
+				orderBy() {
 					return query;
 				},
 				where(value: Condition) {
@@ -881,5 +891,48 @@ describe("retained-source retry policy", () => {
 		expect(await attachRemoteJob({ ...fence, remoteJobId: "remote" })).toBe(
 			false,
 		);
+	});
+});
+
+describe("recovery admission", () => {
+	it("prioritizes interrupted new recordings over an older missing-source backlog", async () => {
+		await createAttempt();
+		const current = {
+			...getJobRow(),
+			state: "committing",
+			source: null,
+			leaseExpiresAt: new Date(now.getTime() - 1),
+			nextRetryAt: now,
+		};
+		rows.jobs = Array.from({ length: 30 }, (_, index) => ({
+			...current,
+			videoId: `old-${index}`,
+			state: "source-blocked",
+			errorCode: "source-missing",
+			nextRetryAt: new Date(now.getTime() - 24 * 60 * 60_000),
+		}));
+		rows.jobs.push(current);
+		const selected = await listRecoverableSegmentJobs({ now, limit: 3 });
+		expect(selected[0]?.videoId).toBe(videoId);
+		expect(selected).toHaveLength(3);
+	});
+
+	it("excludes exhausted and intentionally retired jobs before applying the recovery limit", async () => {
+		await createAttempt();
+		const current = {
+			...getJobRow(),
+			state: "retry",
+			source: null,
+			leaseExpiresAt: null,
+			nextRetryAt: now,
+		};
+		rows.jobs = [
+			"processing-retry-exhausted",
+			"output-replaced",
+			"video-deleting",
+		].map((errorCode) => ({ ...current, videoId: errorCode, errorCode }));
+		rows.jobs.push(current);
+		const selected = await listRecoverableSegmentJobs({ now, limit: 1 });
+		expect(selected.map((job) => job.videoId)).toEqual([videoId]);
 	});
 });

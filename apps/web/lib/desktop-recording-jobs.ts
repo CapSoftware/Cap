@@ -948,60 +948,58 @@ export async function listRecoverableSegmentJobs({
 	limit?: number;
 } = {}): Promise<DesktopRecordingJob[]> {
 	const batchSize = Math.max(1, Math.min(limit, 100));
-	const pending = await db()
-		.select(getTableColumns(videoProcessingJobs))
-		.from(videoProcessingJobs)
-		.innerJoin(videos, eq(videos.id, videoProcessingJobs.videoId))
-		.where(
-			and(
-				inArray(videoProcessingJobs.state, [
-					"committing",
-					"queued",
-					"retry",
-					"source-blocked",
-				]),
-				or(
-					ne(videoProcessingJobs.state, "source-blocked"),
-					isNull(videoProcessingJobs.source),
-				),
-				or(
-					isNull(videoProcessingJobs.errorCode),
-					and(
-						ne(
-							videoProcessingJobs.errorCode,
-							DESKTOP_RECORDING_OUTPUT_REPLACED,
+	const candidates = async (
+		states: DesktopRecordingJob["state"][],
+		candidateLimit: number,
+		byLease = false,
+	) =>
+		db()
+			.select(getTableColumns(videoProcessingJobs))
+			.from(videoProcessingJobs)
+			.innerJoin(videos, eq(videos.id, videoProcessingJobs.videoId))
+			.where(
+				and(
+					inArray(videoProcessingJobs.state, states),
+					or(
+						ne(videoProcessingJobs.state, "source-blocked"),
+						isNull(videoProcessingJobs.source),
+					),
+					or(
+						isNull(videoProcessingJobs.errorCode),
+						and(
+							ne(
+								videoProcessingJobs.errorCode,
+								DESKTOP_RECORDING_OUTPUT_REPLACED,
+							),
+							ne(videoProcessingJobs.errorCode, DESKTOP_RECORDING_DELETING),
+							ne(
+								videoProcessingJobs.errorCode,
+								DESKTOP_RECORDING_RETRY_EXHAUSTED,
+							),
 						),
-						ne(videoProcessingJobs.errorCode, DESKTOP_RECORDING_DELETING),
+					),
+					lte(videoProcessingJobs.nextRetryAt, now),
+					or(
+						isNull(videoProcessingJobs.leaseExpiresAt),
+						lte(videoProcessingJobs.leaseExpiresAt, now),
 					),
 				),
-				lte(videoProcessingJobs.nextRetryAt, now),
-				or(
-					isNull(videoProcessingJobs.leaseExpiresAt),
-					lte(videoProcessingJobs.leaseExpiresAt, now),
+			)
+			.orderBy(
+				asc(
+					byLease
+						? videoProcessingJobs.leaseExpiresAt
+						: videoProcessingJobs.nextRetryAt,
 				),
-			),
-		)
-		.orderBy(
-			asc(videoProcessingJobs.nextRetryAt),
-			asc(videoProcessingJobs.videoId),
-		)
-		.limit(batchSize);
-	const expired = await db()
-		.select(getTableColumns(videoProcessingJobs))
-		.from(videoProcessingJobs)
-		.innerJoin(videos, eq(videos.id, videoProcessingJobs.videoId))
-		.where(
-			and(
-				eq(videoProcessingJobs.state, "processing"),
-				lte(videoProcessingJobs.leaseExpiresAt, now),
-			),
-		)
-		.orderBy(
-			asc(videoProcessingJobs.leaseExpiresAt),
-			asc(videoProcessingJobs.videoId),
-		)
-		.limit(batchSize);
-	return [...pending, ...expired]
+				asc(videoProcessingJobs.videoId),
+			)
+			.limit(candidateLimit);
+	const pending = await candidates(
+		["committing", "queued", "retry"],
+		batchSize,
+	);
+	const expired = await candidates(["processing"], batchSize, true);
+	const active = [...pending, ...expired]
 		.map(parseDesktopRecordingJob)
 		.filter((job) => isDesktopRecordingJobRecoverable(job, now))
 		.sort((left, right) => {
@@ -1013,4 +1011,15 @@ export async function listRecoverableSegmentJobs({
 			);
 		})
 		.slice(0, batchSize);
+	if (active.length === batchSize) return active;
+	const blocked = await candidates(
+		["source-blocked"],
+		batchSize - active.length,
+	);
+	return [
+		...active,
+		...blocked
+			.map(parseDesktopRecordingJob)
+			.filter((job) => isDesktopRecordingJobRecoverable(job, now)),
+	];
 }
