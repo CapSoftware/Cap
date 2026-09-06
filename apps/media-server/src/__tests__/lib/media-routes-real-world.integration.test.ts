@@ -434,6 +434,8 @@ beforeEach(() => {
 	spyOn(containerCpu, "getContainerCpuUsageMicros").mockReturnValue(0);
 	spyOn(containerMemory, "getContainerMemoryMetrics").mockReturnValue({
 		usageMB: 256,
+		workingSetMB: 256,
+		reclaimableCacheMB: 0,
 		limitMB: 4096,
 		pressure: 0.0625,
 	});
