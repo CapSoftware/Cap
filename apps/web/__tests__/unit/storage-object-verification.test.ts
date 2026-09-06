@@ -99,26 +99,29 @@ describe("recording verification object reads", () => {
 		expect(mocks.download).not.toHaveBeenCalled();
 	});
 
-	it("authorizes an internal descriptor without downloading media", async () => {
-		mocks.download.mockReturnValue(
-			Effect.succeed({
-				version: 1,
-				url: "https://www.googleapis.com/drive/v3/files/file/revisions/revision?alt=media",
-			}),
-		);
-		const response = await request({
-			"x-cap-internal-download": "1",
-			"x-media-server-secret": "test-media-secret",
-			"if-match": '"identity"',
-		});
-		expect(response.status).toBe(200);
-		expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-		expect(mocks.download).toHaveBeenCalledWith(
-			"owner/video/result.mp4",
-			expect.objectContaining({ objectIdentity: '"identity"' }),
-		);
-		expect(mocks.read).not.toHaveBeenCalled();
-	});
+	it.each(["if-match", "x-cap-recording-object-identity"])(
+		"authorizes an internal descriptor using %s without downloading media",
+		async (identityHeader) => {
+			mocks.download.mockReturnValue(
+				Effect.succeed({
+					version: 1,
+					url: "https://www.googleapis.com/drive/v3/files/file/revisions/revision?alt=media",
+				}),
+			);
+			const response = await request({
+				"x-cap-internal-download": "1",
+				"x-media-server-secret": "test-media-secret",
+				[identityHeader]: '"identity"',
+			});
+			expect(response.status).toBe(200);
+			expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+			expect(mocks.download).toHaveBeenCalledWith(
+				"owner/video/result.mp4",
+				expect.objectContaining({ objectIdentity: '"identity"' }),
+			);
+			expect(mocks.read).not.toHaveBeenCalled();
+		},
+	);
 
 	it("does not add metadata requests to ordinary playback", async () => {
 		const response = await request();

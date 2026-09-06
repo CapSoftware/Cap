@@ -51,6 +51,33 @@ function fetcher(
 	return Object.assign(run, { preconnect: fetch.preconnect }) as typeof fetch;
 }
 describe("bounded revision downloads", () => {
+	test("pins the descriptor with an application header and rejects changed identity", async () => {
+		process.env.MEDIA_SERVER_WEBHOOK_SECRET = "worker-secret";
+		globalThis.fetch = fetcher((_input, init) => {
+			const headers = new Headers(init?.headers);
+			expect(headers.get("if-match")).toBeNull();
+			expect(headers.get("x-cap-recording-object-identity")).toBe('"identity"');
+			return Response.json(target());
+		});
+		expect(
+			await getMediaDownloadTarget(
+				"https://cap.so/api/storage/object",
+				undefined,
+				'"identity"',
+			),
+		).toEqual(target());
+		globalThis.fetch = fetcher(() =>
+			Response.json({ ...target(), objectIdentity: '"changed"' }),
+		);
+		await expect(
+			getMediaDownloadTarget(
+				"https://cap.so/api/storage/object",
+				undefined,
+				'"identity"',
+			),
+		).rejects.toThrow("Recording object changed");
+	});
+
 	test("resumes an interrupted pinned revision without rereading completed bytes", async () => {
 		const path = await destination();
 		let calls = 0;

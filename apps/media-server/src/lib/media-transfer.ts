@@ -171,7 +171,9 @@ export async function getMediaDownloadTarget(
 		headers: {
 			"x-cap-internal-download": "1",
 			"x-media-server-secret": secret,
-			...(expectedIdentity ? { "if-match": expectedIdentity } : {}),
+			...(expectedIdentity
+				? { "x-cap-recording-object-identity": expectedIdentity }
+				: {}),
 		},
 		signal,
 		redirect: "manual",

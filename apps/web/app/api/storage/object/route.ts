@@ -186,7 +186,10 @@ export async function GET(request: NextRequest) {
 			if (!("getInternalDownload" in storage))
 				return new Response("Unsupported storage", { status: 400 });
 			const target = yield* storage.getInternalDownload(key, {
-				objectIdentity: request.headers.get("if-match") ?? undefined,
+				objectIdentity:
+					request.headers.get("x-cap-recording-object-identity") ??
+					request.headers.get("if-match") ??
+					undefined,
 				signal: request.signal,
 			});
 			return Response.json(target, {
