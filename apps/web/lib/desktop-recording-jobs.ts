@@ -677,6 +677,66 @@ export async function heartbeatAttempt({
 	});
 }
 
+export async function waitForDesktopRecordingCapacity({
+	now = new Date(),
+	retryAfterMs,
+	...fence
+}: DesktopRecordingAttemptFence & {
+	now?: Date;
+	retryAfterMs: number;
+}): Promise<boolean> {
+	if (
+		!Number.isSafeInteger(retryAfterMs) ||
+		retryAfterMs <= 0 ||
+		retryAfterMs > 360_000
+	)
+		throw new Error("Invalid capacity retry delay");
+	return db().transaction(async (tx) => {
+		const condition = and(
+			attemptCondition(fence),
+			isNull(videoProcessingJobs.remoteJobId),
+			gt(videoProcessingJobs.leaseExpiresAt, now),
+		);
+		const [row] = await tx
+			.select()
+			.from(videoProcessingJobs)
+			.where(condition)
+			.for("update");
+		if (
+			!row ||
+			getDesktopRecordingWorkerCheckpoint(parseDesktopRecordingJob(row))
+		)
+			return false;
+		const nextRetryAt = new Date(now.getTime() + retryAfterMs);
+		await tx
+			.update(videoProcessingJobs)
+			.set({
+				leaseExpiresAt: new Date(
+					nextRetryAt.getTime() + DESKTOP_RECORDING_LEASE_MS,
+				),
+				nextRetryAt,
+				output: {
+					kind: "desktop-recording-capacity-wait",
+					version: 1,
+					retryAt: nextRetryAt.toISOString(),
+				},
+				updatedAt: now,
+			})
+			.where(condition);
+		await tx
+			.update(videoUploads)
+			.set({
+				phase: "processing",
+				processingMessage:
+					"Waiting for a processing slot. Your recording is safely stored.",
+				processingError: null,
+				updatedAt: now,
+			})
+			.where(eq(videoUploads.videoId, fence.videoId));
+		return true;
+	});
+}
+
 export async function scheduleRetry({
 	errorCode,
 	errorMessage,

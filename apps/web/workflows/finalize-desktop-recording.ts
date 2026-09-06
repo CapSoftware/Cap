@@ -22,6 +22,7 @@ import {
 	persistCommittedSource,
 	persistSourceCommitCheckpoint,
 	scheduleRetry,
+	waitForDesktopRecordingCapacity,
 } from "@/lib/desktop-recording-jobs";
 import {
 	advanceDesktopRecordingSourceCommit,
@@ -34,6 +35,7 @@ import {
 	MediaProcessingBudgetError,
 	reserveMediaProcessingBudget,
 } from "@/lib/media-processing-budget";
+import { getMediaServerCapacityDelay } from "@/lib/media-server-backpressure";
 import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -142,7 +144,7 @@ export async function finalizeDesktopRecordingWorkflow(
 			if (typeof started === "object") {
 				if (started.status === "capacity") {
 					retainedAttempt = attempt;
-					await sleep(COMPLETION_POLL_INTERVAL_MS);
+					await sleep(started.retryAfterMs);
 				}
 				continue;
 			}
@@ -413,7 +415,12 @@ async function buildDesktopSegmentsOutput({
 
 export async function startDesktopRecordingJob(
 	attempt: DesktopRecordingAttempt,
-): Promise<string | undefined | { status: "deferred" | "capacity" }> {
+): Promise<
+	| string
+	| undefined
+	| { status: "deferred" }
+	| { status: "capacity"; retryAfterMs: number }
+> {
 	"use step";
 
 	const current = await getProcessingState(attempt);
@@ -422,6 +429,13 @@ export async function startDesktopRecordingJob(
 	}
 	if (current.remoteJobId) return current.remoteJobId;
 	if (current.state === "retry") return { status: "deferred" };
+	const remainingCapacityWait = current.nextRetryAt.getTime() - Date.now();
+	if (
+		current.output?.kind === "desktop-recording-capacity-wait" &&
+		remainingCapacityWait > 0
+	) {
+		return { status: "capacity", retryAfterMs: remainingCapacityWait };
+	}
 	const [video] = await db()
 		.select()
 		.from(videos)
@@ -542,14 +556,18 @@ export async function startDesktopRecordingJob(
 		);
 		if (response.status === 503) {
 			const result: unknown = await response.json();
+			const retryAfterMs = getMediaServerCapacityDelay({
+				response,
+				videoId: attempt.videoId,
+			});
 			if (
 				result &&
 				typeof result === "object" &&
 				"code" in result &&
 				result.code === "SERVER_BUSY" &&
-				(await heartbeatAttempt(attempt))
+				(await waitForDesktopRecordingCapacity({ ...attempt, retryAfterMs }))
 			) {
-				return { status: "capacity" };
+				return { status: "capacity", retryAfterMs };
 			}
 		}
 		if (response.ok) {

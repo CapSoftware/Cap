@@ -16,6 +16,7 @@ import {
 	persistSourceCommitCheckpoint,
 	retireDesktopRecordingJobForOutputReplacement,
 	scheduleRetry,
+	waitForDesktopRecordingCapacity,
 } from "@/lib/desktop-recording-jobs";
 import type {
 	RecordingUploadReceipt,
@@ -600,6 +601,58 @@ describe("late verification and source commitment", () => {
 });
 
 describe("retained-source retry policy", () => {
+	it("persists capacity waiting while retaining the attempt and extending its lease past backoff", async () => {
+		const attempt = await createAttempt();
+		Object.assign(getJobRow(), {
+			state: "processing",
+			source,
+			remoteJobId: null,
+			attemptCount: 5,
+		});
+		expect(
+			await waitForDesktopRecordingCapacity({
+				...attempt,
+				now,
+				retryAfterMs: 320_000,
+			}),
+		).toBe(true);
+		expect(getJobRow()).toMatchObject({
+			state: "processing",
+			source,
+			attemptId: attempt.attemptId,
+			attemptCount: 5,
+			output: { kind: "desktop-recording-capacity-wait" },
+			nextRetryAt: new Date(now.getTime() + 320_000),
+		});
+		expect((getJobRow().leaseExpiresAt as Date).getTime()).toBeGreaterThan(
+			now.getTime() + 320_000,
+		);
+		expect(rows.uploads?.[0]?.processingMessage).toContain(
+			"Waiting for a processing slot",
+		);
+	});
+
+	it.each(["owned", "expired"])(
+		"does not overwrite %s work with a capacity wait",
+		async (condition) => {
+			const attempt = await createAttempt();
+			Object.assign(getJobRow(), {
+				state: "processing",
+				source,
+				...(condition === "owned"
+					? { remoteJobId: "worker" }
+					: { leaseExpiresAt: now }),
+			});
+			expect(
+				await waitForDesktopRecordingCapacity({
+					...attempt,
+					now,
+					retryAfterMs: 30_000,
+				}),
+			).toBe(false);
+		},
+	);
+
 	it.each([null, source])(
 		"does not recreate a recording while deletion is pending",
 		async (retainedSource) => {

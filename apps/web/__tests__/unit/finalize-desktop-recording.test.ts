@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	ensure: vi.fn(),
 	persist: vi.fn(),
 	heartbeat: vi.fn(),
+	waitCapacity: vi.fn(),
 	blocked: vi.fn(),
 	retry: vi.fn(),
 	attach: vi.fn(),
@@ -59,6 +60,7 @@ vi.mock("@/lib/desktop-recording-jobs", () => ({
 	initializeSourceCommitCheckpoint: mocks.checkpoint,
 	persistSourceCommitCheckpoint: mocks.saveCheckpoint,
 	heartbeatAttempt: mocks.heartbeat,
+	waitForDesktopRecordingCapacity: mocks.waitCapacity,
 	markSourceBlocked: mocks.blocked,
 	scheduleRetry: mocks.retry,
 	attachRemoteJob: mocks.attach,
@@ -179,6 +181,7 @@ beforeEach(() => {
 		withCurrent({ source: savedSource, state: "processing" });
 		return true;
 	});
+	mocks.waitCapacity.mockResolvedValue(true);
 	mocks.heartbeat.mockImplementation(async () => {
 		withCurrent({ leaseExpiresAt: new Date(Date.now() + 5 * 60_000) });
 		return true;
@@ -517,7 +520,10 @@ describe("source commitment and media request compatibility", () => {
 		withCurrent({ state: "retry", leaseExpiresAt: null, attemptCount: 4 });
 		for (let index = 0; index < 8; index++)
 			mocks.fetch.mockResolvedValueOnce(
-				Response.json({ code: "SERVER_BUSY" }, { status: 503 }),
+				Response.json(
+					{ code: "SERVER_BUSY" },
+					{ status: 503, headers: { "Retry-After": "60" } },
+				),
 			);
 		await expect(
 			finalizeDesktopRecordingWorkflow({
@@ -528,12 +534,32 @@ describe("source commitment and media request compatibility", () => {
 		).resolves.toMatchObject({ success: true });
 		expect(current?.attemptCount).toBe(5);
 		expect(mocks.fetch).toHaveBeenCalledTimes(9);
+		expect(mocks.waitCapacity).toHaveBeenCalledWith(
+			expect.objectContaining({ retryAfterMs: expect.any(Number) }),
+		);
+		expect(
+			mocks.sleep.mock.calls.filter(
+				([delay]) => typeof delay === "number" && delay >= 60_000,
+			),
+		).toHaveLength(8);
 		const attempts = mocks.reserveBudget.mock.calls.map(
 			([input]) => input.attemptId,
 		);
 		expect(new Set(attempts).size).toBe(1);
 		expect(mocks.retry).not.toHaveBeenCalled();
 		expect(mocks.blocked).not.toHaveBeenCalled();
+	});
+
+	it("respects a persisted capacity wait when a dispatch step is replayed", async () => {
+		withCurrent({
+			output: { kind: "desktop-recording-capacity-wait" },
+			nextRetryAt: new Date(Date.now() + 60_000),
+		});
+		await expect(startDesktopRecordingJob(fixture)).resolves.toMatchObject({
+			status: "capacity",
+		});
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.sourceUrls).not.toHaveBeenCalled();
 	});
 
 	it("does not treat an ambiguous dispatch failure as a capacity refusal", async () => {
