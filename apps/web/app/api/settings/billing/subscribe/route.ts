@@ -2,7 +2,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { stripe, userIsPro } from "@cap/utils";
+import { isValidStripePlanPriceId, stripe, userIsPro } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import type Stripe from "stripe";
@@ -13,10 +13,25 @@ export async function POST(request: NextRequest) {
 	let customerId = user?.stripeCustomerId;
 	const { priceId, quantity, isOnBoarding } = await request.json();
 
-	if (!priceId) {
-		console.error("Price ID not found");
-		return Response.json({ error: true }, { status: 400 });
+	if (
+		!priceId ||
+		typeof priceId !== "string" ||
+		!isValidStripePlanPriceId(priceId)
+	) {
+		console.error("Invalid or missing priceId");
+		return Response.json(
+			{ error: true, message: "Invalid priceId" },
+			{ status: 400 },
+		);
 	}
+
+	const safeQuantity =
+		typeof quantity === "number" &&
+		Number.isInteger(quantity) &&
+		quantity >= 1 &&
+		quantity <= 1000
+			? quantity
+			: 1;
 
 	if (!user) {
 		console.error("User not found");
@@ -65,7 +80,7 @@ export async function POST(request: NextRequest) {
 
 		const checkoutSession = await stripe().checkout.sessions.create({
 			customer: customerId as string,
-			line_items: [{ price: priceId, quantity: quantity }],
+			line_items: [{ price: priceId, quantity: safeQuantity }],
 			mode: "subscription",
 			success_url: isOnBoarding
 				? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
@@ -84,7 +99,7 @@ export async function POST(request: NextRequest) {
 		if (checkoutSession.url) {
 			trackServerEvent(user.id, "checkout_started", {
 				price_id: priceId,
-				quantity: quantity,
+				quantity: safeQuantity,
 				platform: "web",
 			});
 

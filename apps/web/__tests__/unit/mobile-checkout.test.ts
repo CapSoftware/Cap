@@ -22,6 +22,7 @@ vi.mock("@cap/utils", () => ({
 			sessions: { create: checkoutMocks.create },
 		},
 	}),
+	isValidStripePlanPriceId: (id: string) => id === "price_pro",
 }));
 
 vi.mock("@/lib/server-analytics", () => ({
@@ -77,6 +78,19 @@ describe("checkout redirects", () => {
 				guestCheckout: "true",
 			},
 		});
+	});
+
+	it("rejects non-allowlisted arbitrary priceId with 400", async () => {
+		const response = await startGuestCheckout(
+			makeGuestCheckoutRequest({
+				priceId: "price_arbitrary_attacker_id",
+				quantity: 1,
+			}),
+		);
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({ error: "Invalid priceId" });
+		expect(checkoutMocks.create).not.toHaveBeenCalled();
 	});
 
 	it("sends mobile checkout results through the HTTPS completion route", () => {
