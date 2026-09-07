@@ -15,6 +15,7 @@ import { buildEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import {
+	ImageUploads,
 	provideOptionalAuth,
 	resolveEffectiveVideoRules,
 	Videos,
@@ -27,6 +28,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import * as EffectRuntime from "@/lib/server";
+import { getSharePageBranding } from "@/lib/share-branding";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { transcribeVideo } from "@/lib/transcribe";
@@ -146,6 +148,9 @@ export default async function EmbedVideoPage(
 						organizationId: sharedVideos.organizationId,
 					},
 					orgSettings: organizations.settings,
+					organizationName: organizations.name,
+					organizationIconUrl: organizations.iconUrl,
+					shareableLinkIconUrl: organizations.shareableLinkIconUrl,
 					hasActiveUpload:
 						sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
 							Boolean,
@@ -204,6 +209,9 @@ async function EmbedContent({
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasActiveUpload: boolean | undefined;
 		orgSettings?: (typeof organizations.$inferSelect)["settings"] | null;
+		organizationName: (typeof organizations.$inferSelect)["name"] | null;
+		organizationIconUrl: (typeof organizations.$inferSelect)["iconUrl"];
+		shareableLinkIconUrl: (typeof organizations.$inferSelect)["shareableLinkIconUrl"];
 	};
 	autoplay: boolean;
 	startTime: number | null;
@@ -347,9 +355,34 @@ async function EmbedContent({
 		.where(eq(users.id, video.ownerId))
 		.limit(1);
 
+	const branding = await Effect.gen(function* () {
+		const brandingInput = {
+			owner: { isPro: ownerIsProUser },
+			orgSettings: video.orgSettings,
+			organizationName: video.organizationName,
+		};
+		const icon = video.orgSettings?.shareableLinkUseOrganizationIcon
+			? video.organizationIconUrl
+			: video.shareableLinkIconUrl;
+
+		if (!ownerIsProUser || !icon || minimal) {
+			return getSharePageBranding(brandingInput);
+		}
+
+		const imageUploads = yield* ImageUploads;
+		const imageUrl = yield* imageUploads.resolveImageUrl(icon);
+
+		return getSharePageBranding({
+			...brandingInput,
+			organizationIconUrl: imageUrl,
+			shareableLinkIconUrl: imageUrl,
+		});
+	}).pipe(EffectRuntime.runPromise);
+
 	return (
 		<EmbedVideo
 			data={video}
+			branding={branding}
 			user={user}
 			comments={commentsQuery}
 			chapters={
