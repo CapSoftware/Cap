@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
-import { setTimeout as yieldToEvents } from "node:timers/promises";
-import { EncodedPacketSink, FilePathSource, Input, MP4 } from "mediabunny";
+import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import {
 	RecordingTimingError,
 	readRecordingVideoTiming,
@@ -22,29 +22,14 @@ interface PacketStream {
 const STREAM_FIELDS =
 	"index,start_pts,codec_type,codec_name,profile,level,codec_tag_string,width,height,sample_aspect_ratio,pix_fmt,color_range,color_space,color_transfer,color_primaries,chroma_location,field_order,refs,sample_fmt,sample_rate,channels,channel_layout,time_base,extradata_hash";
 
-async function probe(
-	path: string,
+async function runInspector(
+	command: string,
 	args: string[],
 	signal: AbortSignal,
 	line: (value: string) => void,
 ) {
 	signal.throwIfAborted();
-	const child = spawn(
-		"ffprobe",
-		[
-			"-v",
-			"error",
-			"-err_detect",
-			"explode",
-			"-protocol_whitelist",
-			"file",
-			...args,
-			path,
-		],
-		{
-			stdio: ["ignore", "pipe", "pipe"],
-		},
-	);
+	const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
 	let error = "";
 	child.stderr.setEncoding("utf8");
 	child.stderr.on("data", (chunk: string) => {
@@ -94,14 +79,38 @@ async function probe(
 
 		const code = await exited;
 		signal.throwIfAborted();
-		if (code !== 0 || error)
-			throw new Error("Recording packet inspection failed");
+		return { code, hasDiagnostics: Boolean(error) };
 	} finally {
 		stop();
 		signal.removeEventListener("abort", stop);
 		await exited.catch(() => {});
 		unregisterSubprocess(managed);
 	}
+}
+
+async function probe(
+	path: string,
+	args: string[],
+	signal: AbortSignal,
+	line: (value: string) => void,
+) {
+	const result = await runInspector(
+		"ffprobe",
+		[
+			"-v",
+			"error",
+			"-err_detect",
+			"explode",
+			"-protocol_whitelist",
+			"file",
+			...args,
+			path,
+		],
+		signal,
+		line,
+	);
+	if (result.code !== 0 || result.hasDiagnostics)
+		throw new Error("Recording packet inspection failed");
 }
 
 function time(value: string | undefined, base: string) {
@@ -117,99 +126,80 @@ function time(value: string | undefined, base: string) {
 	return `${numerator / a}/${BigInt(match[2]) / a}`;
 }
 
+const positiveInteger = z
+	.number()
+	.int()
+	.positive()
+	.max(Number.MAX_SAFE_INTEGER);
+const audioTailSchema = z.object({
+	packetCount: positiveInteger.optional(),
+	durationTicks: positiveInteger,
+	timeScale: positiveInteger,
+	size: positiveInteger,
+	hash: z.string().regex(/^SHA256:[a-f0-9]{64}$/),
+});
+
 export async function readRecordingAudioTail(
 	path: string,
 	signal: AbortSignal,
 	countPackets = false,
 ) {
-	const source = new FilePathSource(path).ref();
-	const input = new Input({ formats: [MP4], source });
-	let formatReady = false;
 	try {
-		signal.throwIfAborted();
-		await input.getFormat();
-		formatReady = true;
-		signal.throwIfAborted();
-		const tracks = await input.getAudioTracks();
-		signal.throwIfAborted();
-		if (tracks.length !== 1)
-			throw new Error("Recording audio tracks are ambiguous");
-		const sink = new EncodedPacketSink(tracks[0]);
-		const packet = await sink.getPacket(Number.POSITIVE_INFINITY, {
-			skipLiveWait: true,
-		});
-		if (
-			!packet ||
-			(await sink.getNextPacket(packet, {
-				metadataOnly: true,
-				skipLiveWait: true,
-			}))
-		)
-			throw new Error("Recording audio tail is ambiguous");
-		const scale = await tracks[0].getTimeResolution();
-		const scaled = packet.duration * scale;
-		const ticks = Math.round(scaled);
-		const tolerance = Math.max(
-			0.0000001,
-			Math.abs(scaled) * Number.EPSILON * 4,
+		if (!isAbsolute(path))
+			throw new RecordingTimingError(
+				"Recording audio timing is invalid",
+				false,
+			);
+		let output = "";
+		const result = await runInspector(
+			process.execPath,
+			[
+				fileURLToPath(new URL("./recording-audio-timing.ts", import.meta.url)),
+				path,
+				countPackets ? "count" : "tail",
+			],
+			signal,
+			(line) => {
+				output += line;
+				if (output.length > 65536)
+					throw new Error("Audio timing metadata exceeds its bound");
+			},
 		);
+		const decoded: unknown = JSON.parse(output);
 		if (
-			!Number.isSafeInteger(scale) ||
-			scale <= 0 ||
-			!Number.isSafeInteger(ticks) ||
-			ticks <= 0 ||
-			tolerance >= 0.25 ||
-			Math.abs(scaled - ticks) > tolerance ||
-			!Number.isSafeInteger(packet.sequenceNumber) ||
-			packet.sequenceNumber < 0
+			result.code === 1 &&
+			typeof decoded === "object" &&
+			decoded !== null &&
+			"error" in decoded &&
+			decoded.error === "invalid"
 		)
-			throw new Error("Recording audio duration is not exact");
-		let packetCount: number | undefined;
-		if (countPackets) {
-			packetCount = 0;
-			for await (const _packet of sink.packets(undefined, undefined, {
-				metadataOnly: true,
-				skipLiveWait: true,
-			})) {
-				signal.throwIfAborted();
-				packetCount++;
-				if (packetCount % 1024 === 0)
-					await yieldToEvents(0, undefined, { signal });
-			}
-		}
+			throw new RecordingTimingError(
+				"Recording audio timing is invalid",
+				false,
+			);
+		const parsed = audioTailSchema.safeParse(decoded);
 		if (
-			packetCount !== undefined &&
-			(!Number.isSafeInteger(packetCount) || packetCount <= 0)
+			result.code !== 0 ||
+			result.hasDiagnostics ||
+			!parsed.success ||
+			(countPackets && parsed.data.packetCount === undefined)
 		)
-			throw new Error("Recording audio packet count is invalid");
-		signal.throwIfAborted();
+			throw new Error("Recording audio timing response is invalid");
 		return {
-			packetCount,
-			durationTicks: ticks,
-			timeScale: scale,
-			size: packet.byteLength,
-			duration: time(String(ticks), `1/${scale}`),
-			hash: `SHA256:${createHash("sha256").update(packet.data).digest("hex")}`,
+			...parsed.data,
+			duration: time(
+				String(parsed.data.durationTicks),
+				`1/${parsed.data.timeScale}`,
+			),
 		};
 	} catch (error) {
-		const retryable =
-			signal.aborted ||
-			(typeof error === "object" &&
-				error !== null &&
-				"code" in error &&
-				typeof error.code === "string");
+		if (error instanceof RecordingTimingError) throw error;
 		const failure = new RecordingTimingError(
-			retryable
-				? "Recording audio timing inspection was interrupted"
-				: "Recording audio timing is invalid",
-			retryable,
+			"Recording audio timing inspection was interrupted",
+			true,
 		);
 		failure.cause = error;
 		throw failure;
-	} finally {
-		// Mediabunny 1.45 disposal leaks rejections after failed format detection and can strand pending reads.
-		if (formatReady) input.dispose();
-		else source.free();
 	}
 }
 

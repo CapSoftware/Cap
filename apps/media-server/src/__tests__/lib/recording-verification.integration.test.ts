@@ -492,6 +492,55 @@ afterAll(async () => {
 });
 
 describe("encoded recording preservation", () => {
+	test.skipIf(process.platform === "win32")(
+		"kills and joins a stalled audio inspector on cancellation and timeout",
+		async () => {
+			for (const mode of ["cancel", "timeout"]) {
+				const path = join(directory, `stalled-audio-${mode}`);
+				await run(["mkfifo", path]);
+				const controller = new AbortController();
+				const pending = readRecordingAudioTail(path, controller.signal);
+				pending.catch(() => {});
+				let pids: number[] = [];
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				try {
+					for (let attempt = 0; attempt < 100 && !pids.length; attempt++) {
+						pids = await decoderPids(path);
+						if (!pids.length) await Bun.sleep(10);
+					}
+					expect(pids).toHaveLength(1);
+					await Bun.sleep(100);
+					const started = performance.now();
+					if (mode === "timeout")
+						timer = setTimeout(
+							() =>
+								controller.abort(new DOMException("Timed out", "TimeoutError")),
+							50,
+						);
+					else controller.abort();
+					await expect(
+						Promise.race([
+							pending,
+							Bun.sleep(2000).then(() => {
+								throw new Error("Audio inspection ignored cancellation");
+							}),
+						]),
+					).rejects.toMatchObject({ retryable: true });
+					expect(performance.now() - started).toBeLessThan(2000);
+					expect(await decoderPids(path)).toEqual([]);
+				} finally {
+					if (timer) clearTimeout(timer);
+					controller.abort();
+					for (const pid of pids) {
+						try {
+							process.kill(pid, "SIGKILL");
+						} catch {}
+					}
+					await pending.catch(() => {});
+				}
+			}
+		},
+	);
 	test("retains the processing deadline reason when muxing is already cancelled", async () => {
 		const reason = new Error("Recording processing timed out");
 		await expect(
@@ -1859,7 +1908,10 @@ async function decoderPids(input: string): Promise<number[]> {
 			processes.map(async (pid) => {
 				try {
 					const command = await readFile(`/proc/${pid}/cmdline`, "utf8");
-					return command.includes("ffmpeg") && command.includes(input)
+					return (command.includes("ffmpeg") ||
+						command.includes("ffprobe") ||
+						command.includes("recording-audio-timing.ts")) &&
+						command.includes(input)
 						? Number(pid)
 						: null;
 				} catch (error) {
@@ -1878,7 +1930,13 @@ async function decoderPids(input: string): Promise<number[]> {
 	const output = await run(["ps", "-axo", "pid=,command="]);
 	return output
 		.split("\n")
-		.filter((line) => line.includes("ffmpeg") && line.includes(input))
+		.filter(
+			(line) =>
+				(line.includes("ffmpeg") ||
+					line.includes("ffprobe") ||
+					line.includes("recording-audio-timing.ts")) &&
+				line.includes(input),
+		)
 		.map((line) => Number.parseInt(line.trim(), 10));
 }
 
