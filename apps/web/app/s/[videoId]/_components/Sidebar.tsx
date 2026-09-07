@@ -9,6 +9,7 @@ import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data"
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { VideoData } from "../types";
 import { Activity } from "./tabs/Activity";
+import type { SummaryEditingState } from "./tabs/SummaryEditor";
 
 // Activity is the default tab, so it stays in the entry chunk; the other tabs
 // (and their deps — react-markdown for Summary, the 1000-line transcript view)
@@ -143,6 +144,13 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 							? "transcript"
 							: "activity";
 
+		const [summaryEditingState, setSummaryEditingState] =
+			useState<SummaryEditingState>("clean");
+		const canLeaveSummary = () =>
+			summaryEditingState !== "saving" &&
+			(summaryEditingState !== "dirty" ||
+				window.confirm("Discard your unsaved summary and chapter changes?"));
+
 		const [activeTab, setActiveTab] = useState<TabType>(defaultTab);
 		const [[page, direction], setPage] = useState([0, 0]);
 
@@ -174,6 +182,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 		];
 
 		const paginate = (tabId: TabType) => {
+			if (tabId === activeTab || !canLeaveSummary()) return;
 			const currentIndex = tabs.findIndex((tab) => tab.id === activeTab);
 			const newIndex = tabs.findIndex((tab) => tab.id === tabId);
 			const direction = newIndex > currentIndex ? 1 : -1;
@@ -216,6 +225,10 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 						<Summary
 							videoId={data.id}
 							ownerIsPro={data.owner.isPro}
+							isOwner={isOwner}
+							transcriptionStatus={data.transcriptionStatus}
+							duration={data.duration}
+							onEditingStateChange={setSummaryEditingState}
 							onSeek={onSeek}
 							isSummaryDisabled={videoSettings?.disableSummary}
 							initialAiData={aiData || undefined}
@@ -284,7 +297,9 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 						{onCollapse && (
 							<button
 								type="button"
-								onClick={onCollapse}
+								onClick={() => {
+									if (canLeaveSummary()) onCollapse();
+								}}
 								aria-label="Hide comments"
 								title="Hide comments"
 								className="hidden shrink-0 items-center justify-center px-3 text-gray-9 transition-colors hover:bg-gray-1 hover:text-gray-12 lg:flex"
