@@ -489,7 +489,18 @@ afterAll(async () => {
 });
 
 describe("encoded recording preservation", () => {
-	test("verifies looped AAC through decoded evidence when edit-list rounding changes the tail", async () => {
+	test("uses decoded source evidence for tied terminal video samples", async () => {
+		const input = await tiedTimestampSource("packet-tied-terminal.mp4", 2);
+		const output = join(directory, "packet-tied-terminal-output.mp4");
+		await muxMediaTracksToMp4(input, silent, output);
+		const verified = await verifyRemuxedRecording(input, silent, output, {
+			requireAudio: true,
+		});
+		expect(verified.sourcePreserved).toBe(true);
+		expect(verified.integrity).toBeDefined();
+		expect(verified.video.frameCount).toBe(40);
+	});
+	test("preserves the stored looped AAC tail for one complete output decode", async () => {
 		const input = join(directory, "looped-audio.mp4");
 		const output = join(directory, "looped-audio-remux.mp4");
 		await run([
@@ -510,6 +521,7 @@ describe("encoded recording preservation", () => {
 		});
 		expect(verified.fullDecode).toBe(true);
 		expect(verified.sourcePreserved).toBe(true);
+		expect(verified.integrity).toBeUndefined();
 		const source = await inspectRecordingSources(input, input);
 		expect(verified.audio).toEqual(source.audio);
 		expect(verified.video).toEqual(source.video);
@@ -593,7 +605,7 @@ describe("encoded recording preservation", () => {
 			}),
 		).rejects.toThrow();
 	});
-	test("retains the strict fallback for packet transformations", async () => {
+	test("preserves a shorter audio track independently of the video", async () => {
 		const output = join(directory, "proof-short-audio.mp4");
 		await muxMediaTracksToMp4(silent, shortAudio, output);
 		const verified = await verifyRemuxedRecording(silent, shortAudio, output, {
@@ -803,8 +815,10 @@ describe("complete recording decode", () => {
 				);
 				expect(source.video).toEqual(stock.video);
 				expect(source.audio).toEqual(stock.audio);
+				const output = join(directory, "long-recording-remux.mp4");
+				await muxMediaTracksToMp4(input, input, output);
 				const efficientStarted = performance.now();
-				const efficient = await verifyRemuxedRecording(input, input, input, {
+				const efficient = await verifyRemuxedRecording(input, input, output, {
 					requireAudio: true,
 					timeoutMs: 30_000,
 				});

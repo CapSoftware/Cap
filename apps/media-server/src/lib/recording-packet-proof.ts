@@ -116,7 +116,11 @@ function time(value: string | undefined, base: string) {
 	return `${numerator / a}/${BigInt(match[2]) / a}`;
 }
 
-async function readAudioTail(path: string, signal: AbortSignal) {
+export async function readRecordingAudioTail(
+	path: string,
+	signal: AbortSignal,
+	countPackets = false,
+) {
 	const input = new Input({ formats: [MP4], source: new FilePathSource(path) });
 	const dispose = () => input.dispose();
 	signal.addEventListener("abort", dispose, { once: true });
@@ -155,8 +159,24 @@ async function readAudioTail(path: string, signal: AbortSignal) {
 			packet.sequenceNumber < 0
 		)
 			throw new Error("Recording audio duration is not exact");
+		const packetCount = countPackets
+			? (
+					await tracks[0].computePacketStats(Number.POSITIVE_INFINITY, {
+						metadataOnly: true,
+						skipLiveWait: true,
+					})
+				).packetCount
+			: undefined;
+		if (
+			packetCount !== undefined &&
+			(!Number.isSafeInteger(packetCount) || packetCount <= 0)
+		)
+			throw new Error("Recording audio packet count is invalid");
 		signal.throwIfAborted();
 		return {
+			packetCount,
+			durationTicks: ticks,
+			timeScale: scale,
 			size: packet.byteLength,
 			duration: time(String(ticks), `1/${scale}`),
 			hash: `SHA256:${createHash("sha256").update(packet.data).digest("hex")}`,
@@ -221,7 +241,8 @@ async function readTrack(
 	const startTime = startNumerator / startDenominator;
 	if (!Number.isFinite(startTime))
 		throw new Error("Recording start time is invalid");
-	const tail = kind === "audio" ? await readAudioTail(path, signal) : undefined;
+	const tail =
+		kind === "audio" ? await readRecordingAudioTail(path, signal) : undefined;
 	const hash = createHash("sha256");
 	let count = 0;
 	let pendingPacket: Record<string, string> | undefined;
