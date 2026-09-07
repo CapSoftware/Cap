@@ -2474,7 +2474,7 @@ export async function muxMediaTracksToMp4(
 	outputPath: string,
 	abortSignal?: AbortSignal,
 ): Promise<void> {
-	if (abortSignal?.aborted) throw new Error("Recording mux was cancelled");
+	abortSignal?.throwIfAborted();
 	abortSignal = AbortSignal.any([
 		...(abortSignal ? [abortSignal] : []),
 		AbortSignal.timeout(PROCESS_TIMEOUT_MS),
@@ -2484,7 +2484,7 @@ export async function muxMediaTracksToMp4(
 		abortSignal,
 		timeoutMs: PROCESS_TIMEOUT_MS,
 	});
-	if (abortSignal?.aborted) throw new Error("Recording mux was cancelled");
+	abortSignal?.throwIfAborted();
 	const lastTimestamp = timing.lastTimestampTicks - timing.firstTimestampTicks;
 	// FFmpeg 7 can discard a fragmented MP4's stored final sample duration.
 	const videoTimingFilter = `setts=pts=PTS:dts=DTS:duration=if(eq(PTS-STARTPTS\\,${lastTimestamp})\\,${timing.lastDurationTicks}\\,DURATION)`;

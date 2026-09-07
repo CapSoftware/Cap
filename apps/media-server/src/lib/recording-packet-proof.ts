@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
+import { setTimeout as yieldToEvents } from "node:timers/promises";
 import { EncodedPacketSink, FilePathSource, Input, MP4 } from "mediabunny";
 import {
 	RecordingTimingError,
@@ -121,12 +122,16 @@ export async function readRecordingAudioTail(
 	signal: AbortSignal,
 	countPackets = false,
 ) {
-	const input = new Input({ formats: [MP4], source: new FilePathSource(path) });
-	const dispose = () => input.dispose();
-	signal.addEventListener("abort", dispose, { once: true });
+	const source = new FilePathSource(path).ref();
+	const input = new Input({ formats: [MP4], source });
+	let formatReady = false;
 	try {
 		signal.throwIfAborted();
+		await input.getFormat();
+		formatReady = true;
+		signal.throwIfAborted();
 		const tracks = await input.getAudioTracks();
+		signal.throwIfAborted();
 		if (tracks.length !== 1)
 			throw new Error("Recording audio tracks are ambiguous");
 		const sink = new EncodedPacketSink(tracks[0]);
@@ -159,14 +164,19 @@ export async function readRecordingAudioTail(
 			packet.sequenceNumber < 0
 		)
 			throw new Error("Recording audio duration is not exact");
-		const packetCount = countPackets
-			? (
-					await tracks[0].computePacketStats(Number.POSITIVE_INFINITY, {
-						metadataOnly: true,
-						skipLiveWait: true,
-					})
-				).packetCount
-			: undefined;
+		let packetCount: number | undefined;
+		if (countPackets) {
+			packetCount = 0;
+			for await (const _packet of sink.packets(undefined, undefined, {
+				metadataOnly: true,
+				skipLiveWait: true,
+			})) {
+				signal.throwIfAborted();
+				packetCount++;
+				if (packetCount % 1024 === 0)
+					await yieldToEvents(0, undefined, { signal });
+			}
+		}
 		if (
 			packetCount !== undefined &&
 			(!Number.isSafeInteger(packetCount) || packetCount <= 0)
@@ -181,9 +191,25 @@ export async function readRecordingAudioTail(
 			duration: time(String(ticks), `1/${scale}`),
 			hash: `SHA256:${createHash("sha256").update(packet.data).digest("hex")}`,
 		};
+	} catch (error) {
+		const retryable =
+			signal.aborted ||
+			(typeof error === "object" &&
+				error !== null &&
+				"code" in error &&
+				typeof error.code === "string");
+		const failure = new RecordingTimingError(
+			retryable
+				? "Recording audio timing inspection was interrupted"
+				: "Recording audio timing is invalid",
+			retryable,
+		);
+		failure.cause = error;
+		throw failure;
 	} finally {
-		signal.removeEventListener("abort", dispose);
-		dispose();
+		// Mediabunny 1.45 disposal leaks rejections after failed format detection and can strand pending reads.
+		if (formatReady) input.dispose();
+		else source.free();
 	}
 }
 

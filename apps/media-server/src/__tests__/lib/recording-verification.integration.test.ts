@@ -14,7 +14,10 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { EncodedPacketSink, FilePathSource, Input, MP4 } from "mediabunny";
 import { muxMediaTracksToMp4 } from "../../lib/media-video";
-import { proveRecordingPackets } from "../../lib/recording-packet-proof";
+import {
+	proveRecordingPackets,
+	readRecordingAudioTail,
+} from "../../lib/recording-packet-proof";
 import {
 	RecordingTimingError,
 	readRecordingVideoTiming,
@@ -489,6 +492,33 @@ afterAll(async () => {
 });
 
 describe("encoded recording preservation", () => {
+	test("retains the processing deadline reason when muxing is already cancelled", async () => {
+		const reason = new Error("Recording processing timed out");
+		await expect(
+			muxMediaTracksToMp4(
+				silent,
+				silent,
+				join(directory, "cancelled-mux.mp4"),
+				AbortSignal.abort(reason),
+			),
+		).rejects.toBe(reason);
+	});
+	test("distinguishes malformed audio from unavailable local timing reads", async () => {
+		await expect(
+			readRecordingAudioTail(
+				join(directory, "absent-audio.mp4"),
+				AbortSignal.timeout(5000),
+			),
+		).rejects.toMatchObject({ retryable: true });
+		await expect(
+			readRecordingAudioTail(silent, AbortSignal.abort()),
+		).rejects.toMatchObject({ retryable: true });
+		const malformed = join(directory, "malformed-audio.mp4");
+		await writeFile(malformed, Buffer.alloc(32));
+		await expect(
+			readRecordingAudioTail(malformed, AbortSignal.timeout(5000)),
+		).rejects.toMatchObject({ retryable: false });
+	});
 	test("uses decoded source evidence for tied terminal video samples", async () => {
 		const input = await tiedTimestampSource("packet-tied-terminal.mp4", 2);
 		const output = join(directory, "packet-tied-terminal-output.mp4");

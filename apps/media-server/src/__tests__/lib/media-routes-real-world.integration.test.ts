@@ -49,7 +49,12 @@ const sourceReads: {
 const uploadConditions: (string | null)[] = [];
 const multipartCallbacks: { action: string; payload: unknown }[] = [];
 let rejectMultipartSigning = false;
-let sourceFault: "changed" | "missing" | "corrupt" | undefined;
+let sourceFault:
+	| "changed"
+	| "missing"
+	| "corrupt"
+	| "corrupt-audio"
+	| undefined;
 let corruptRecordingReadback = false;
 let transientFixtureFailures = 0;
 let permanentFixtureFailures = 0;
@@ -295,7 +300,11 @@ beforeAll(async () => {
 					ifMatch: request.headers.get("if-match"),
 					verification: request.headers.get("x-cap-recording-verification"),
 				});
-				const affected = url.pathname.endsWith("video-segment.m4s");
+				const affected = url.pathname.endsWith(
+					sourceFault === "corrupt-audio"
+						? "audio-segment.m4s"
+						: "video-segment.m4s",
+				);
 				if (affected && sourceFault === "missing")
 					return new Response(null, { status: 404 });
 				if (
@@ -306,7 +315,8 @@ beforeAll(async () => {
 					return new Response(null, { status: 412 });
 				return new Response(
 					Uint8Array.from(
-						affected && sourceFault === "corrupt"
+						affected &&
+							(sourceFault === "corrupt" || sourceFault === "corrupt-audio")
 							? new Uint8Array(source.byteLength)
 							: source,
 					).buffer,
@@ -707,7 +717,7 @@ describe("media routes real-world integration tests", () => {
 		30_000,
 	);
 
-	test.each(["changed", "missing", "corrupt"] as const)(
+	test.each(["changed", "missing", "corrupt", "corrupt-audio"] as const)(
 		"withholds upload and proof after a pinned source is %s",
 		async (fault) => {
 			sourceFault = fault;
@@ -721,7 +731,7 @@ describe("media routes real-world integration tests", () => {
 				const job = await waitForTerminalJob(jobId);
 				expect(job.phase).toBe("error");
 				expect(job.errorCode).toBe(
-					fault === "corrupt" ? "source-invalid" : `source-${fault}`,
+					fault.startsWith("corrupt") ? "source-invalid" : `source-${fault}`,
 				);
 				expect(job.recordingVerification).toBeUndefined();
 				expect(uploadConditions).toHaveLength(0);

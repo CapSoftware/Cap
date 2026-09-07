@@ -1722,7 +1722,7 @@ function classifySourceError(error: unknown): RecordingErrorCode {
 	if (/HTTP error 404|Server returned 404/.test(error.message))
 		return "source-missing";
 	if (
-		/Decoded recording|Invalid decoded recording|Recording has no decoded|Recording video packets are missing|Recording timing has no video track|does not match the completed local file|Verified recording size/.test(
+		/Decoded recording|Invalid decoded recording|Recording has no decoded|Recording video packets are missing|Recording audio timing is invalid|Recording timing has no video track|does not match the completed local file|Verified recording size/.test(
 			error.message,
 		)
 	)
