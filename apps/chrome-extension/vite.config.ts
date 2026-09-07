@@ -12,6 +12,8 @@ export default defineConfig({
 				popup: resolve(__dirname, "popup.html"),
 				"popup-window": resolve(__dirname, "popup-window.html"),
 				options: resolve(__dirname, "options.html"),
+				import: resolve(__dirname, "import.html"),
+				migrate: resolve(__dirname, "migrate.html"),
 				welcome: resolve(__dirname, "welcome.html"),
 				"how-it-works": resolve(__dirname, "how-it-works.html"),
 				uploading: resolve(__dirname, "uploading.html"),
