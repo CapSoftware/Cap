@@ -44,7 +44,7 @@ export const CARDS_B: StudioCard[] = [
 		key: "three-d",
 		title: "3D camera moves",
 		body: "Tilt the frame into perspective and glide, sweep, or pull back across it with focus blur.",
-		Visual: visual(() => import("./cards/threeD")),
+		Visual: visual(() => import("./cards/three-d")),
 	},
 	{
 		key: "canvas",
