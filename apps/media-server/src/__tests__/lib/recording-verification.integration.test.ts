@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { EncodedPacketSink, FilePathSource, Input, MP4 } from "mediabunny";
 import { muxMediaTracksToMp4 } from "../../lib/media-video";
+import { proveRecordingPackets } from "../../lib/recording-packet-proof";
 import {
 	RecordingTimingError,
 	readRecordingVideoTiming,
@@ -24,6 +25,7 @@ import {
 	verifyRecording,
 	verifyRemoteRecording,
 	verifyRemoteRecordingBytes,
+	verifyRemuxedRecording,
 } from "../../lib/recording-verification";
 
 const FIXTURES = join(import.meta.dir, "..", "fixtures");
@@ -486,6 +488,158 @@ afterAll(async () => {
 	if (directory) await rm(directory, { recursive: true, force: true });
 });
 
+describe("encoded recording preservation", () => {
+	test("verifies looped AAC through decoded evidence when edit-list rounding changes the tail", async () => {
+		const input = join(directory, "looped-audio.mp4");
+		const output = join(directory, "looped-audio-remux.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-stream_loop",
+			"2",
+			"-i",
+			silent,
+			"-c",
+			"copy",
+			input,
+		]);
+		await muxMediaTracksToMp4(input, input, output);
+		const verified = await verifyRemuxedRecording(input, input, output, {
+			requireAudio: true,
+		});
+		expect(verified.fullDecode).toBe(true);
+		expect(verified.sourcePreserved).toBe(true);
+		const source = await inspectRecordingSources(input, input);
+		expect(verified.audio).toEqual(source.audio);
+		expect(verified.video).toEqual(source.video);
+	});
+	test("refuses identical corrupt packets rather than treating preservation as decodability", async () => {
+		await expect(
+			verifyRemuxedRecording(corruptTail, corruptTail, corruptTail, {
+				requireAudio: true,
+			}),
+		).rejects.toThrow();
+	});
+	test("binds backward presentation timestamps without changing the recording", async () => {
+		const samples = bFrameSamples.map((sample) => ({ ...sample }));
+		samples[13].pts -= 6000;
+		const input = join(directory, "packet-backward-pts.mp4");
+		await writeFile(
+			input,
+			Buffer.concat([
+				bFrameInit,
+				...samples.map((sample, index) => sampleFragment([sample], index + 1)),
+			]),
+		);
+		const output = join(directory, "packet-backward-output.mp4");
+		await muxMediaTracksToMp4(input, null, output);
+		const result = await verifyRemuxedRecording(input, null, output, {
+			requireAudio: false,
+		});
+		expect(result.sourcePreserved).toBe(true);
+		expect(result.video.frameCount).toBe(samples.length);
+		expect(result.integrity).toBeUndefined();
+	});
+	test("applies one deadline to packet inspection and decode", async () => {
+		await expect(
+			verifyRemuxedRecording(silent, silent, silent, {
+				requireAudio: true,
+				timeoutMs: 1,
+			}),
+		).rejects.toThrow();
+		expect(await decoderPids(silent)).toEqual([]);
+	});
+
+	test.each([true, false])(
+		"decodes preserved packets once with audio=%s",
+		async (audio) => {
+			const input = join(
+				FIXTURES,
+				audio ? "test-with-audio.mp4" : "test-no-audio.mp4",
+			);
+			const output = join(directory, `packet-proof-${audio}.mp4`);
+			await muxMediaTracksToMp4(input, audio ? input : null, output);
+			await proveRecordingPackets(
+				input,
+				audio ? input : null,
+				output,
+				AbortSignal.timeout(5000),
+			);
+			const verified = await verifyRemuxedRecording(
+				input,
+				audio ? input : null,
+				output,
+				{ requireAudio: audio },
+			);
+			expect(verified.fullDecode).toBe(true);
+			expect(verified.sourcePreserved).toBe(true);
+			expect(Boolean(verified.audio)).toBe(audio);
+			expect(verified.integrity).toBeUndefined();
+		},
+	);
+	test("rejects changed source bytes", async () => {
+		await expect(
+			proveRecordingPackets(
+				silent,
+				silent,
+				corruptTail,
+				AbortSignal.timeout(5000),
+			),
+		).rejects.toThrow();
+		await expect(
+			verifyRemuxedRecording(silent, silent, corruptTail, {
+				requireAudio: true,
+			}),
+		).rejects.toThrow();
+	});
+	test("retains the strict fallback for packet transformations", async () => {
+		const output = join(directory, "proof-short-audio.mp4");
+		await muxMediaTracksToMp4(silent, shortAudio, output);
+		const verified = await verifyRemuxedRecording(silent, shortAudio, output, {
+			requireAudio: true,
+		});
+		expect(verified.sourcePreserved).toBe(true);
+	});
+	test("rejects shifted audio despite identical encoded content", async () => {
+		const output = join(directory, "proof-shifted-audio.mp4");
+		await run([
+			"ffmpeg",
+			"-v",
+			"error",
+			"-i",
+			silent,
+			"-itsoffset",
+			"0.5",
+			"-i",
+			silent,
+			"-map",
+			"0:v:0",
+			"-map",
+			"1:a:0",
+			"-c",
+			"copy",
+			output,
+		]);
+		await expect(
+			proveRecordingPackets(silent, silent, output, AbortSignal.timeout(5000)),
+		).rejects.toThrow();
+		await expect(
+			verifyRemuxedRecording(silent, silent, output, { requireAudio: true }),
+		).rejects.toThrow();
+	});
+	test("does not start cancelled packet verification", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		await expect(
+			verifyRemuxedRecording(silent, silent, silent, {
+				requireAudio: true,
+				abortSignal: controller.signal,
+			}),
+		).rejects.toThrow();
+	});
+});
+
 describe("complete recording decode", () => {
 	test.each([
 		{ audio: true, hasAudio: true },
@@ -640,6 +794,7 @@ describe("complete recording decode", () => {
 					requireAudio: false,
 					timeoutMs: 110_000,
 				});
+				const stockElapsed = performance.now() - stockStarted;
 				expect(stock.integrity?.video.contentSha256).toBe(
 					source.integrity.video.contentSha256,
 				);
@@ -648,8 +803,23 @@ describe("complete recording decode", () => {
 				);
 				expect(source.video).toEqual(stock.video);
 				expect(source.audio).toEqual(stock.audio);
+				const efficientStarted = performance.now();
+				const efficient = await verifyRemuxedRecording(input, input, input, {
+					requireAudio: true,
+					timeoutMs: 30_000,
+				});
+				const efficientElapsed = performance.now() - efficientStarted;
+				expect(efficient.sourcePreserved).toBe(true);
+				expect(efficient.integrity).toBeUndefined();
+				expect(efficient.video).toEqual(source.video);
+				expect(efficient.audio).toEqual(source.audio);
+				expect(efficientElapsed).toBeLessThan(30_000);
 				console.info(
-					`Recording decode: ${elapsed.toFixed(0)} ms, stock ${(performance.now() - stockStarted).toFixed(0)} ms, ${((sourcePeak - baseline) / 1_024 / 1_024).toFixed(1)} MiB peak RSS increase`,
+					`Packet-bound full verification: ${efficientElapsed.toFixed(0)} ms`,
+				);
+
+				console.info(
+					`Recording decode: ${elapsed.toFixed(0)} ms, stock ${stockElapsed.toFixed(0)} ms, ${((sourcePeak - baseline) / 1_024 / 1_024).toFixed(1)} MiB peak RSS increase`,
 				);
 			} finally {
 				clearInterval(memory);
@@ -2153,6 +2323,68 @@ function objectResponse(
 }
 
 describe("remote recording object identity", () => {
+	test("resumes interrupted byte verification without rereading the verified prefix", async () => {
+		const identity = '"resume-object"';
+		let reads = 0;
+		let sent = 0;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request) {
+				if (request.method === "HEAD")
+					return new Response(null, {
+						headers: {
+							ETag: identity,
+							"Content-Length": String(silentBytes.length),
+						},
+					});
+				const range = request.headers.get("range");
+				if (range === "bytes=0-0")
+					return new Response(silentBytes.slice(0, 1), {
+						status: 206,
+						headers: {
+							ETag: identity,
+							"Content-Range": `bytes 0-0/${silentBytes.length}`,
+						},
+					});
+				expect(request.headers.get("if-match")).toBe(identity);
+				reads++;
+				if (reads === 1) {
+					sent += 128;
+					return new Response(silentBytes.slice(0, 128), {
+						headers: { ETag: identity },
+					});
+				}
+				expect(range).toBe(`bytes=128-${silentBytes.length - 1}`);
+				sent += silentBytes.length - 128;
+				return new Response(silentBytes.slice(128), {
+					status: 206,
+					headers: {
+						ETag: identity,
+						"Content-Range": `bytes 128-${silentBytes.length - 1}/${silentBytes.length}`,
+					},
+				});
+			},
+		});
+		try {
+			const result = await verifyRemoteRecordingBytes(
+				`http://127.0.0.1:${server.port}/recording.mp4`,
+				{
+					expectedObjectIdentity: identity,
+					expectedSha256: createHash("sha256")
+						.update(silentBytes)
+						.digest("hex"),
+					expectedFileSize: silentBytes.length,
+				},
+			);
+			expect(result.fileSize).toBe(silentBytes.length);
+			expect(reads).toBe(2);
+			expect(sent).toBe(silentBytes.length);
+		} finally {
+			await server.stop(true);
+		}
+	});
+
 	test("binds remote bytes without manufacturing decoded evidence", async () => {
 		const identity = '"byte-bound-output"';
 		const sha256 = createHash("sha256").update(silentBytes).digest("hex");

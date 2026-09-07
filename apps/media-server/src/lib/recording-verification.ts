@@ -4,14 +4,26 @@ import { createReadStream } from "node:fs";
 import { lstat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { Readable } from "node:stream";
+import { setTimeout as sleep } from "node:timers/promises";
 import { PROCESS_TIMEOUT_MS } from "./media-common";
-import { fetchMedia, materializeMedia } from "./media-transfer";
+import {
+	fetchMedia,
+	MediaTransferBudgetError,
+	materializeMedia,
+} from "./media-transfer";
+import {
+	proveRecordingPackets,
+	RecordingPacketMismatchError,
+} from "./recording-packet-proof";
 import {
 	RecordingTimingError,
 	type RecordingVideoTiming,
 	readRecordingVideoTiming,
 } from "./recording-timing";
 import { registerSubprocess, unregisterSubprocess } from "./subprocess";
+
+const MAX_LOCAL_VERIFICATION_MS = 2 * 60 * 60_000;
+const DECODER_STALL_MS = 5 * 60_000;
 
 const MAX_OUTPUT_LINE_LENGTH = 16_384;
 const MAX_ERROR_LENGTH = 2_048;
@@ -43,6 +55,7 @@ export interface RecordingVerificationOptions {
 	allowObservedDuration?: boolean;
 	abortSignal?: AbortSignal;
 	timeoutMs?: number;
+	onProgress?: (progress: { frames: number; totalFrames?: number }) => void;
 }
 
 export interface DecodedVideoEvidence {
@@ -359,6 +372,7 @@ async function readFrameEvidence(
 	stream: AsyncIterable<Uint8Array>,
 	streams: Map<number, DecodedStream>,
 	allowVideoTies: boolean,
+	onProgress?: () => void,
 ): Promise<void> {
 	const decoder = new TextDecoder();
 	let pending = "";
@@ -373,6 +387,7 @@ async function readFrameEvidence(
 			pending = pending.slice(newline + 1);
 			newline = pending.indexOf("\n");
 		}
+		onProgress?.();
 		if (pending.length > MAX_OUTPUT_LINE_LENGTH) {
 			throw new Error("Recording decoder output exceeded its limit");
 		}
@@ -474,7 +489,8 @@ function validateEvidence(
 	options: RecordingVerificationOptions,
 	inspectingSource: boolean,
 	videoTiming: RecordingVideoTiming | undefined,
-): RecordingSourceEvidence {
+	includeContentHashes = true,
+): RecordingVerificationResult {
 	const video = streams.get(0);
 	const audio = streams.get(1);
 	if (video?.kind !== "video" || video.frameCount === 0) {
@@ -530,14 +546,18 @@ function validateEvidence(
 			format: stream.format.join(";"),
 		};
 	};
-	const result: RecordingSourceEvidence = {
+	const result: RecordingVerificationResult = {
 		fullDecode: true,
 		video: videoEvidence,
 		audio: audioEvidence,
-		integrity: {
-			video: integrity(video),
-			audio: audioEvidence && audio ? integrity(audio) : null,
-		},
+		...(includeContentHashes
+			? {
+					integrity: {
+						video: integrity(video),
+						audio: audioEvidence && audio ? integrity(audio) : null,
+					},
+				}
+			: {}),
 	};
 	if (videoTiming?.terminalPacketCount === 1) {
 		const duration =
@@ -553,7 +573,12 @@ function validateEvidence(
 		};
 	}
 	if (options.sourceEvidence) {
-		assertSourcePreserved(options.sourceEvidence, result);
+		if (!result.integrity)
+			throw new Error("Recording decoded integrity is missing");
+		assertSourcePreserved(options.sourceEvidence, {
+			...result,
+			integrity: result.integrity,
+		});
 		result.sourcePreserved = true;
 	}
 	return result;
@@ -629,12 +654,80 @@ export async function inspectRecordingSources(
 	) {
 		throw new Error("Recording sources must be local regular MP4 files");
 	}
-	return decodeRecording(
+	const result = await decodeRecording(
 		videoInputPath,
 		{ ...options, requireAudio: audioInputPath !== null },
 		undefined,
 		audioInputPath,
 	);
+	if (!result.integrity)
+		throw new Error("Recording decoded integrity is missing");
+	return { ...result, integrity: result.integrity };
+}
+
+export async function verifyRemuxedRecording(
+	videoPath: string,
+	audioPath: string | null,
+	outputPath: string,
+	options: Pick<
+		RecordingVerificationOptions,
+		"requireAudio" | "abortSignal" | "timeoutMs" | "onProgress"
+	>,
+): Promise<RecordingVerificationResult & { sourcePreserved: true }> {
+	const signal = AbortSignal.any([
+		...(options.abortSignal ? [options.abortSignal] : []),
+		AbortSignal.timeout(options.timeoutMs ?? MAX_LOCAL_VERIFICATION_MS),
+	]);
+	options = { ...options, abortSignal: signal };
+	let proof: Awaited<ReturnType<typeof proveRecordingPackets>>;
+	try {
+		proof = await proveRecordingPackets(
+			videoPath,
+			audioPath,
+			outputPath,
+			signal,
+		);
+		if (proof.outputTiming.terminalPacketCount !== 1)
+			throw new Error("Tied terminal samples require decoded source evidence");
+	} catch (error) {
+		signal.throwIfAborted();
+		if (error instanceof RecordingPacketMismatchError) throw error;
+		const sourceEvidence = await inspectRecordingSources(
+			videoPath,
+			audioPath,
+			options,
+		);
+		const result = await verifyRecording(outputPath, {
+			...options,
+			sourceEvidence,
+		});
+		if (!result.sourcePreserved)
+			throw new Error("Recording source preservation was not verified");
+		return { ...result, sourcePreserved: true };
+	}
+	const result = await decodeRecording(
+		outputPath,
+		{ ...options, timeoutMs: options.timeoutMs ?? MAX_LOCAL_VERIFICATION_MS },
+		undefined,
+		undefined,
+		proof,
+	);
+	await proof.assertUnchanged();
+	if (
+		result.video.frameCount !== proof.videoPackets ||
+		Boolean(result.audio) !== proof.hasAudio
+	) {
+		throw new Error("Recording decoded tracks do not match the encoded source");
+	}
+	return {
+		...result,
+		video: {
+			...result.video,
+			startTime: proof.videoStartTime,
+			endTime: proof.videoStartTime + result.video.duration,
+		},
+		sourcePreserved: true,
+	};
 }
 
 export async function verifyRecording(
@@ -649,7 +742,8 @@ async function decodeRecording(
 	options: RecordingVerificationOptions,
 	objectIdentity?: string,
 	sourceAudioInput?: string | null,
-): Promise<RecordingSourceEvidence> {
+	packetProof?: Awaited<ReturnType<typeof proveRecordingPackets>>,
+): Promise<RecordingVerificationResult> {
 	const startedAt = performance.now();
 	const timeoutMs = options.timeoutMs ?? PROCESS_TIMEOUT_MS;
 	if (
@@ -658,9 +752,10 @@ async function decodeRecording(
 		(options.expectedDuration === undefined &&
 			!options.sourceEvidence &&
 			!options.allowObservedDuration &&
+			!packetProof &&
 			sourceAudioInput === undefined) ||
 		!positiveNumber(timeoutMs) ||
-		timeoutMs > PROCESS_TIMEOUT_MS
+		timeoutMs > (packetProof ? MAX_LOCAL_VERIFICATION_MS : PROCESS_TIMEOUT_MS)
 	) {
 		throw new Error("Invalid recording verification budget or duration");
 	}
@@ -690,7 +785,7 @@ async function decodeRecording(
 	if (options.abortSignal?.aborted) {
 		throw new Error("Recording verification was cancelled");
 	}
-	let videoTiming: RecordingVideoTiming | undefined;
+	let videoTiming: RecordingVideoTiming | undefined = packetProof?.outputTiming;
 	if (sourceAudioInput !== undefined || options.sourceEvidence) {
 		const deadline = new AbortController();
 		const remainingMs = timeoutMs - (performance.now() - startedAt);
@@ -744,14 +839,15 @@ async function decodeRecording(
 			true,
 		);
 	}
-	const knownAudio =
-		sourceAudioInput === undefined
+	const knownAudio = packetProof
+		? packetProof.hasAudio
+		: sourceAudioInput === undefined
 			? options.sourceEvidence
 				? Boolean(options.sourceEvidence.audio)
 				: options.hasAudio
 			: sourceAudioInput !== null;
 	const streamDecodedContent =
-		process.platform !== "win32" && knownAudio !== undefined;
+		!packetProof && process.platform !== "win32" && knownAudio !== undefined;
 	if (streamDecodedContent && !Bun.semver.satisfies(Bun.version, ">=1.4.0")) {
 		throw new Error(
 			"Recording content verification requires Bun 1.4.0 or newer; upgrade the media-server runtime to avoid double-closing decoded-content pipes",
@@ -770,6 +866,8 @@ async function decodeRecording(
 		"-1",
 		"-c:v",
 		"rawvideo",
+		// Encoded packet proof binds the real timeline; diagnostic frames need monotonic mux timestamps.
+		...(packetProof ? ["-bsf:v", "setts=pts=N:dts=N:duration=1"] : []),
 		"-c:a",
 		"pcm_f64le",
 		"-threads",
@@ -860,14 +958,16 @@ async function decodeRecording(
 									]
 								: []),
 						]
-					: [
-							...outputOptions,
-							"-f",
-							"streamhash",
-							"-hash",
-							"sha256",
-							"pipe:2",
-						]),
+					: packetProof
+						? []
+						: [
+								...outputOptions,
+								"-f",
+								"streamhash",
+								"-hash",
+								"sha256",
+								"pipe:2",
+							]),
 			],
 			streamDecodedContent ? (hashAudio ? 2 : 1) : 0,
 		),
@@ -895,17 +995,50 @@ async function decodeRecording(
 		stop();
 	}, decodeBudgetMs);
 	const streams = new Map<number, DecodedStream>();
+	let lastDecodedFrames = 0;
+	let lastAdvance = performance.now();
+	let lastReport = 0;
+	const progress = () => {
+		const count = streams.get(0)?.frameCount ?? 0;
+		const decodedFrames = [...streams.values()].reduce(
+			(total, stream) => total + stream.frameCount,
+			0,
+		);
+		if (decodedFrames > lastDecodedFrames) {
+			lastDecodedFrames = decodedFrames;
+			lastAdvance = performance.now();
+		}
+		if (performance.now() - lastReport >= 1000) {
+			lastReport = performance.now();
+			options.onProgress?.({
+				frames: count,
+				totalFrames: packetProof?.videoPackets,
+			});
+		}
+	};
+	const stall = packetProof
+		? setInterval(() => {
+				if (performance.now() - lastAdvance > DECODER_STALL_MS) {
+					failure ??= new RecordingVerificationError(
+						"Recording decoder stopped making progress",
+						true,
+					);
+					stop();
+				}
+			}, 1000)
+		: undefined;
 	const frames = readFrameEvidence(
 		proc.stdout,
 		streams,
 		videoTiming !== undefined,
+		progress,
 	);
 	const errors = readDecoderErrors(proc.stderr, input);
 	frames.catch(stop);
 	errors.catch(stop);
 	const pipes: Readable[] = [];
 	const hashes: ReturnType<typeof hashDecodedStream>[] = [];
-	let result: RecordingSourceEvidence;
+	let result: RecordingVerificationResult;
 	try {
 		if (streamDecodedContent) {
 			for (const stream of proc.stdio.slice(3)) {
@@ -956,19 +1089,21 @@ async function decodeRecording(
 				}
 				stream.contentSha256 = digest.sha256;
 			}
-		} else {
+		} else if (!packetProof) {
 			for (const digest of diagnostics.digests) decodeLine(digest, streams);
 		}
 		result = validateEvidence(
 			streams,
 			options,
-			sourceAudioInput !== undefined,
+			sourceAudioInput !== undefined || packetProof !== undefined,
 			videoTiming,
+			!packetProof,
 		);
 	} catch (error) {
 		throw failure ?? error;
 	} finally {
 		clearTimeout(timeout);
+		if (stall) clearInterval(stall);
 		options.abortSignal?.removeEventListener("abort", cancel);
 		stop();
 		await Promise.allSettled([proc.exited, frames, errors, ...hashes]);
@@ -1052,59 +1187,88 @@ async function hashRemoteRecording(
 	fileSize: number,
 	abortSignal: AbortSignal,
 ): Promise<string> {
-	let response: Response;
-	try {
-		response = await fetchMedia(input, {
-			headers: {
-				"If-Match": objectIdentity,
-				"X-Cap-Recording-Verification": "1",
-			},
-			signal: abortSignal,
-		});
-	} catch {
-		throw new RecordingVerificationError(
-			"Recording bytes could not be read",
-			true,
-		);
-	}
-	try {
-		if (response.status !== 200) {
-			throw new RecordingVerificationError(
-				`Recording byte verification failed: ${response.status}`,
-				response.status === 408 ||
-					response.status === 429 ||
-					response.status >= 500,
-			);
-		}
-		if (response.headers.get("etag") !== objectIdentity || !response.body) {
-			throw new Error("Recording object changed during byte verification");
-		}
-		const hash = createHash("sha256");
-		let bytesRead = 0;
+	const hash = createHash("sha256");
+	let bytesRead = 0;
+	for (let attempt = 0; ; attempt++) {
+		abortSignal.throwIfAborted();
+		let response: Response | undefined;
 		try {
-			for await (const chunk of response.body) {
-				bytesRead += chunk.byteLength;
-				if (bytesRead > fileSize) {
-					throw new RecordingVerificationError(
-						"Recording object size changed during byte verification",
-						false,
-					);
-				}
-				hash.update(chunk);
+			const offset = bytesRead;
+			try {
+				response = await fetchMedia(input, {
+					headers: {
+						"If-Match": objectIdentity,
+						"X-Cap-Recording-Verification": "1",
+						...(offset > 0 ? { Range: `bytes=${offset}-${fileSize - 1}` } : {}),
+					},
+					signal: abortSignal,
+				});
+			} catch (error) {
+				if (error instanceof MediaTransferBudgetError) throw error;
+				throw new RecordingVerificationError(
+					"Recording bytes could not be read",
+					true,
+				);
 			}
+			if (offset > 0 && response.status === 200)
+				throw new Error(
+					"Recording object size changed during byte verification: resume range ignored",
+				);
+			if (response.status !== (offset > 0 ? 206 : 200)) {
+				throw new RecordingVerificationError(
+					`Recording byte verification failed: ${response.status}`,
+					response.status === 408 ||
+						response.status === 429 ||
+						response.status >= 500,
+				);
+			}
+			if (response.headers.get("etag") !== objectIdentity || !response.body)
+				throw new Error("Recording object changed during byte verification");
+			if (
+				offset > 0 &&
+				response.headers.get("content-range") !==
+					`bytes ${offset}-${fileSize - 1}/${fileSize}`
+			)
+				throw new Error(
+					"Recording byte resume range does not match the verified object",
+				);
+			try {
+				for await (const chunk of response.body) {
+					if (bytesRead + chunk.byteLength > fileSize)
+						throw new RecordingVerificationError(
+							"Recording object size changed during byte verification",
+							false,
+						);
+					hash.update(chunk);
+					bytesRead += chunk.byteLength;
+				}
+			} catch (error) {
+				if (error instanceof RecordingVerificationError) throw error;
+				throw new RecordingVerificationError(
+					"Recording bytes could not be read completely",
+					true,
+				);
+			}
+			if (bytesRead !== fileSize)
+				throw new RecordingVerificationError(
+					"Recording object size changed during byte verification",
+					true,
+				);
+			return hash.digest("hex");
 		} catch (error) {
-			if (error instanceof RecordingVerificationError) throw error;
-			throw new RecordingVerificationError(
-				"Recording bytes could not be read completely",
-				true,
-			);
+			abortSignal.throwIfAborted();
+			if (
+				!(error instanceof RecordingVerificationError) ||
+				!error.retryable ||
+				attempt >= 3 ||
+				bytesRead >= fileSize
+			)
+				throw error;
+		} finally {
+			if (!response?.body?.locked)
+				await response?.body?.cancel().catch(() => {});
 		}
-		if (bytesRead !== fileSize) {
-			throw new Error("Recording object size changed during byte verification");
-		}
-		return hash.digest("hex");
-	} finally {
-		if (!response.body?.locked) await response.body?.cancel().catch(() => {});
+		await sleep(250 * 2 ** attempt, undefined, { signal: abortSignal });
 	}
 }
 

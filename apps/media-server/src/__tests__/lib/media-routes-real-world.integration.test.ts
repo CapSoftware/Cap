@@ -550,7 +550,7 @@ describe("media routes real-world integration tests", () => {
 			recordingVerification,
 			"inspectRecordingSources",
 		);
-		const localDecode = spyOn(recordingVerification, "verifyRecording");
+		const localDecode = spyOn(recordingVerification, "verifyRemuxedRecording");
 		const remoteDecode = spyOn(recordingVerification, "verifyRemoteRecording");
 		const bytesOnly = spyOn(
 			recordingVerification,
@@ -574,7 +574,7 @@ describe("media routes real-world integration tests", () => {
 			expect(job.attemptId).toBe(body.attemptId);
 			expect(job.inventorySha256).toBe(body.inventorySha256);
 			expect(job.metadata?.duration).toBeCloseTo(1, 3);
-			expect(sourceDecode).toHaveBeenCalledTimes(1);
+			expect(sourceDecode).not.toHaveBeenCalled();
 			expect(localDecode).toHaveBeenCalledTimes(1);
 			expect(remoteDecode).not.toHaveBeenCalled();
 			expect(bytesOnly).toHaveBeenCalledTimes(1);

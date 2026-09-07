@@ -62,11 +62,10 @@ import {
 } from "../lib/media-video";
 import {
 	hashRecordingFile,
-	inspectRecordingSources,
 	isRetryableRecordingVerificationError,
-	verifyRecording,
 	verifyRemoteRecording,
 	verifyRemoteRecordingBytes,
+	verifyRemuxedRecording,
 } from "../lib/recording-verification";
 import type { TempFileHandle } from "../lib/temp-files";
 import { cleanupStaleTempFiles } from "../lib/temp-files";
@@ -2620,21 +2619,9 @@ async function muxSegmentsAsync(
 			resources: getSystemResources(),
 		});
 
-		updateJob(jobId, { message: "Checking the original recording..." });
-		sendCurrentJobWebhook(jobId);
-		const sourceEvidence = await withJobHeartbeat(jobId, () =>
-			withMuxMemoryGuard(abortController, () =>
-				inspectRecordingSources(combinedVideoPath, combinedAudioPath, {
-					abortSignal: abortController.signal,
-				}),
-			),
-		).catch((error: unknown) => {
-			errorCode = classifySourceError(error);
-			throw error;
-		});
 		const requiredAudio = context.requiredAudio ?? Boolean(audioInput);
 		const resultPath = join(workDir, "result.mp4");
-		errorCode = "output-invalid";
+		errorCode = "source-invalid";
 		updateJob(jobId, { progress: 65, message: "Combining video and audio..." });
 		sendCurrentJobWebhook(jobId);
 		await withJobHeartbeat(jobId, () =>
@@ -2647,6 +2634,7 @@ async function muxSegmentsAsync(
 				),
 			),
 		);
+		errorCode = "output-invalid";
 		const beforeDecode = await lstat(resultPath, { bigint: true });
 		if (!beforeDecode.isFile())
 			throw new Error("Recording verification requires a local regular file");
@@ -2655,15 +2643,37 @@ async function muxSegmentsAsync(
 			message: "Checking the processed recording...",
 		});
 		sendCurrentJobWebhook(jobId);
+		const verificationStartedAt = Date.now();
 		const localVerified = await withJobHeartbeat(jobId, () =>
 			withMuxMemoryGuard(abortController, () =>
-				verifyRecording(resultPath, {
-					requireAudio: requiredAudio,
-					sourceEvidence,
-					abortSignal: abortController.signal,
-				}),
+				verifyRemuxedRecording(
+					combinedVideoPath,
+					combinedAudioPath,
+					resultPath,
+					{
+						requireAudio: requiredAudio,
+						abortSignal: abortController.signal,
+						onProgress: ({ frames, totalFrames }) => {
+							updateJob(jobId, {
+								progress: totalFrames
+									? 70 + Math.min(4, Math.floor((5 * frames) / totalFrames))
+									: 70,
+								message: `Checking recording: ${frames.toLocaleString("en-US")} frames verified...`,
+							});
+						},
+					},
+				),
 			),
 		);
+		logVideoEvent("video_mux_verification_complete", {
+			jobId,
+			videoId,
+			durationMs: Date.now() - verificationStartedAt,
+			method: localVerified.integrity ? "decoded-source" : "encoded-packets",
+			frames: localVerified.video.frameCount,
+			recordingDuration: localVerified.video.duration,
+			resources: getSystemResources(),
+		});
 		if (!localVerified.sourcePreserved)
 			throw new Error("Recording source preservation was not verified");
 		updateJob(jobId, {
@@ -2791,9 +2801,9 @@ async function muxSegmentsAsync(
 										manifestSha256,
 										inventorySha256: context.inventorySha256,
 										sourcePreserved: true as const,
-										videoDuration: sourceEvidence.video.duration,
-										hasAudio: Boolean(sourceEvidence.audio),
-										audioVerified: Boolean(sourceEvidence.audio),
+										videoDuration: localVerified.video.duration,
+										hasAudio: Boolean(localVerified.audio),
+										audioVerified: Boolean(localVerified.audio),
 									},
 								}
 							: {}),
