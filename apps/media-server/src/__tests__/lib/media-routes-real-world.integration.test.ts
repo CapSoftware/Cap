@@ -44,6 +44,7 @@ const uploadedArtifacts = new Map<string, Uint8Array>();
 const uploadFailures = new Map<string, number>();
 const uploadRequests: string[] = [];
 const fixtureReads: string[] = [];
+const webhookPhases: JobProgress["phase"][] = [];
 const recordingSources = new Map<string, Uint8Array>();
 const sourceReads: {
 	path: string;
@@ -260,6 +261,7 @@ beforeAll(async () => {
 			const url = new URL(request.url);
 			if (request.method === "POST" && url.pathname === "/ignored-webhook") {
 				const payload = (await request.json()) as JobProgress;
+				webhookPhases.push(payload.phase);
 				if (!payload.recordingWorker)
 					return new Response(null, { status: 200 });
 				if (
@@ -464,6 +466,7 @@ beforeEach(() => {
 	uploadFailures.clear();
 	uploadRequests.length = 0;
 	fixtureReads.length = 0;
+	webhookPhases.length = 0;
 	transientFixtureFailures = 0;
 	permanentFixtureFailures = 0;
 	slowFixtureCancellations = 0;
@@ -1040,48 +1043,105 @@ describe("media routes real-world integration tests", () => {
 		}
 	}, 30_000);
 
-	test("does not complete a cancelled job during thumbnail upload", async () => {
-		let started: (() => void) | undefined;
-		const ready = new Promise<void>((resolve) => {
-			started = resolve;
-		});
-		const upload = spyOn(mediaVideo, "uploadToS3").mockImplementation(
-			async (_data, _url, _contentType, signal) => {
-				if (!signal) throw new Error("Missing thumbnail upload signal");
-				await new Promise<void>((_resolve, reject) => {
-					signal.addEventListener("abort", () => reject(signal.reason), {
-						once: true,
+	test.each(["output", "thumbnail"] as const)(
+		"preserves cancellation during %s upload with one terminal webhook",
+		async (stage) => {
+			let started: (() => void) | undefined;
+			const ready = new Promise<void>((resolve) => {
+				started = resolve;
+			});
+			const upload = spyOn(
+				mediaVideo,
+				stage === "output" ? "uploadFileToS3" : "uploadToS3",
+			).mockImplementation(
+				(
+					_data: unknown,
+					_url: string,
+					_contentType: string,
+					signal?: AbortSignal,
+				) => {
+					if (!signal) throw new Error("Missing upload signal");
+					return new Promise<never>((_resolve, reject) => {
+						signal.addEventListener("abort", () => reject(signal.reason), {
+							once: true,
+						});
+						started?.();
 					});
-					started?.();
-				});
-			},
+				},
+			);
+			let jobId: string | undefined;
+			try {
+				const response = await app.fetch(
+					mediaPostRequest("/video/process", {
+						videoId: "cancelled-thumbnail",
+						userId: "real-process-user",
+						webhookUrl: `${baseUrl}/ignored-webhook`,
+						videoUrl: fixtureUrl(),
+						outputPresignedUrl: uploadUrl("cancelled-thumbnail.mp4"),
+						thumbnailPresignedUrl: uploadUrl("cancelled-thumbnail.jpg"),
+						inputExtension: ".mp4",
+					}),
+				);
+				expect(response.status).toBe(200);
+				jobId = ((await response.json()) as { jobId: string }).jobId;
+				await withTimeout(ready, 10_000);
+				const inputPath = getJob(jobId)?.inputTempFile?.path;
+				if (!inputPath) throw new Error("Missing downloaded input");
+				const cancelled = await app.fetch(
+					mediaPostRequest(`/video/process/${jobId}/cancel`, {}),
+				);
+				expect(cancelled.status).toBe(200);
+				await withTimeout(
+					(async () => {
+						while (await Bun.file(inputPath).exists()) await Bun.sleep(10);
+					})(),
+					5_000,
+				);
+				const job = await waitForTerminalJob(jobId);
+				expect(job.phase).toBe("cancelled");
+				expect(job.error).toBeUndefined();
+				expect(
+					webhookPhases.filter((phase) =>
+						["complete", "cancelled", "error"].includes(phase),
+					),
+				).toEqual(["cancelled"]);
+				expect(upload).toHaveBeenCalledTimes(1);
+			} finally {
+				if (jobId) {
+					getJob(jobId)?.abortController?.abort();
+					deleteJob(jobId);
+				}
+				upload.mockRestore();
+			}
+		},
+		15_000,
+	);
+
+	test("keeps thumbnail decode failures fatal when the uploaded output is unverified", async () => {
+		const thumbnail = spyOn(mediaVideo, "generateThumbnail").mockRejectedValue(
+			new Error("FFmpeg produced empty thumbnail"),
 		);
 		let jobId: string | undefined;
 		try {
 			const response = await app.fetch(
 				mediaPostRequest("/video/process", {
-					videoId: "cancelled-thumbnail",
+					videoId: "failed-thumbnail-decode",
 					userId: "real-process-user",
 					videoUrl: fixtureUrl(),
-					outputPresignedUrl: uploadUrl("cancelled-thumbnail.mp4"),
-					thumbnailPresignedUrl: uploadUrl("cancelled-thumbnail.jpg"),
+					outputPresignedUrl: uploadUrl("failed-thumbnail-decode.mp4"),
+					thumbnailPresignedUrl: uploadUrl("failed-thumbnail-decode.jpg"),
 					inputExtension: ".mp4",
 				}),
 			);
 			expect(response.status).toBe(200);
 			jobId = ((await response.json()) as { jobId: string }).jobId;
-			await withTimeout(ready, 10_000);
-			getJob(jobId)?.abortController?.abort(new Error("Worker cancelled"));
 			const job = await waitForTerminalJob(jobId);
 			expect(job.phase).toBe("error");
-			expect(job.error).toBe("Worker cancelled");
-			expect(upload).toHaveBeenCalledTimes(1);
+			expect(job.error).toBe("FFmpeg produced empty thumbnail");
+			expect(uploadRequests).toEqual(["/uploads/failed-thumbnail-decode.mp4"]);
 		} finally {
-			if (jobId) {
-				getJob(jobId)?.abortController?.abort();
-				deleteJob(jobId);
-			}
-			upload.mockRestore();
+			if (jobId) deleteJob(jobId);
+			thumbnail.mockRestore();
 		}
 	}, 15_000);
 

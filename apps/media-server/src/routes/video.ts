@@ -1369,6 +1369,7 @@ async function processVideoAsync(
 		}
 
 		if (thumbnailPresignedUrl) {
+			// The uploaded MP4 has not been independently verified, so decode failures must still fail the job.
 			const thumbnailData = await generateThumbnail(
 				outputTempFile.path,
 				metadata.duration,
@@ -1398,6 +1399,7 @@ async function processVideoAsync(
 			abortController.signal,
 			"video/process",
 		);
+		abortController.signal.throwIfAborted();
 
 		updateJob(jobId, {
 			phase: "complete",
@@ -1416,16 +1418,29 @@ async function processVideoAsync(
 
 		setTimeout(() => deleteJob(jobId), 5 * 60 * 1000);
 	} catch (err) {
-		console.error(`[video/process] Error processing job ${jobId}:`, err);
-
-		const updatedJob = updateJob(jobId, {
-			phase: "error",
-			error: err instanceof Error ? err.message : String(err),
-			message: "Processing failed",
-		});
-
-		if (updatedJob) {
-			await sendWebhook(updatedJob);
+		if (!abortController.signal.aborted) {
+			console.error(`[video/process] Error processing job ${jobId}:`, err);
+		}
+		const failedJob = getJob(jobId);
+		if (
+			failedJob &&
+			failedJob.phase !== "complete" &&
+			failedJob.phase !== "cancelled" &&
+			failedJob.phase !== "error"
+		) {
+			const cancelled = abortController.signal.aborted;
+			const updatedJob = updateJob(jobId, {
+				phase: cancelled ? "cancelled" : "error",
+				error: cancelled
+					? undefined
+					: err instanceof Error
+						? err.message
+						: String(err),
+				message: cancelled ? "Processing cancelled" : "Processing failed",
+			});
+			if (updatedJob) {
+				await sendWebhook(updatedJob);
+			}
 		}
 
 		const currentJob = getJob(jobId);
