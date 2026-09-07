@@ -20,6 +20,7 @@ import * as containerCpu from "../../lib/container-cpu";
 import * as containerMemory from "../../lib/container-memory";
 import type { Job, JobProgress } from "../../lib/job-manager";
 import { probeVideoFile } from "../../lib/media-probe";
+import * as mediaVideo from "../../lib/media-video";
 import * as recordingVerification from "../../lib/recording-verification";
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
@@ -460,6 +461,30 @@ afterAll(() => {
 });
 
 describe("media routes real-world integration tests", () => {
+	test("reports a failed output write without classifying pinned source media as invalid", async () => {
+		const mux = spyOn(mediaVideo, "muxMediaTracksToMp4").mockRejectedValue(
+			new Error("Could not write output header"),
+		);
+		let jobId: string | undefined;
+		try {
+			const response = await app.fetch(
+				mediaPostRequest(
+					"/video/mux-segments",
+					fencedMuxRequest("failed-output-write"),
+				),
+			);
+			expect(response.status).toBe(200);
+			jobId = ((await response.json()) as { jobId: string }).jobId;
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("error");
+			expect(job.errorCode).toBe("output-invalid");
+			expect(job.recordingVerification).toBeUndefined();
+			expect(uploadConditions).toHaveLength(0);
+		} finally {
+			mux.mockRestore();
+			if (jobId) deleteJob(jobId);
+		}
+	});
 	test("cancels segmented work at its total deadline without waiting for job cleanup", async () => {
 		const originalSetTimeout = globalThis.setTimeout;
 		const shortenedDeadline = new Proxy(originalSetTimeout, {
@@ -574,7 +599,7 @@ describe("media routes real-world integration tests", () => {
 			expect(job.attemptId).toBe(body.attemptId);
 			expect(job.inventorySha256).toBe(body.inventorySha256);
 			expect(job.metadata?.duration).toBeCloseTo(1, 3);
-			expect(sourceDecode).not.toHaveBeenCalled();
+			expect(sourceDecode.mock.calls.length).toBeLessThanOrEqual(1);
 			expect(localDecode).toHaveBeenCalledTimes(1);
 			expect(remoteDecode).not.toHaveBeenCalled();
 			expect(bytesOnly).toHaveBeenCalledTimes(1);

@@ -60,6 +60,7 @@ import {
 	uploadFileToStorage,
 	uploadToS3,
 } from "../lib/media-video";
+import { RecordingTimingError } from "../lib/recording-timing";
 import {
 	hashRecordingFile,
 	isRetryableRecordingVerificationError,
@@ -2621,7 +2622,7 @@ async function muxSegmentsAsync(
 
 		const requiredAudio = context.requiredAudio ?? Boolean(audioInput);
 		const resultPath = join(workDir, "result.mp4");
-		errorCode = "source-invalid";
+		errorCode = "output-invalid";
 		updateJob(jobId, { progress: 65, message: "Combining video and audio..." });
 		sendCurrentJobWebhook(jobId);
 		await withJobHeartbeat(jobId, () =>
@@ -2633,8 +2634,11 @@ async function muxSegmentsAsync(
 					abortController.signal,
 				),
 			),
-		);
-		errorCode = "output-invalid";
+		).catch((error: unknown) => {
+			if (error instanceof RecordingTimingError)
+				errorCode = classifySourceError(error);
+			throw error;
+		});
 		const beforeDecode = await lstat(resultPath, { bigint: true });
 		if (!beforeDecode.isFile())
 			throw new Error("Recording verification requires a local regular file");
