@@ -31,10 +31,6 @@ import {
 	Waveform,
 } from "../shared";
 
-/* Clips, speed, and music: the timeline card, nothing else. Trim a clip,
- * flip the second one to 2x, add a crossfade, then lay a library track
- * underneath. Sizes are the editor's own, scaled up to read at card size. */
-
 const S = 1.5;
 const LOGICAL = { w: CANVAS.w / S, h: CANVAS.h / S };
 const INSET = 14;

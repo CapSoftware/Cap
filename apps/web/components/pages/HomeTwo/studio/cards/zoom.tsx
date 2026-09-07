@@ -27,10 +27,6 @@ import {
 	useLoop,
 } from "../shared";
 
-/* Automatic zoom: a recorded click becomes a zoom segment. The frame zooms
- * into the click point, the Zoom lane fills with the generated segment and
- * the segment's own panel shows the real amount and mode. */
-
 const WIN = { left: 196, top: 18, scale: 1.05 };
 const FOCUS = { x: WIN.left + 300 * WIN.scale, y: WIN.top + 74 * WIN.scale };
 const FRAME_H = 292;

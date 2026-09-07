@@ -16,11 +16,6 @@ import {
 	useLoop,
 } from "../shared";
 
-/* Any canvas, one recording: the editor's real Background section along
- * the bottom (source pill, wallpaper categories, the Cities row, Padding
- * and Corners) and the canvas result above it. The wallpaper appears only
- * as a swatch and as the picked background, never as scenery. */
-
 const SOURCES = [
 	"Desktop",
 	"Wallpaper",

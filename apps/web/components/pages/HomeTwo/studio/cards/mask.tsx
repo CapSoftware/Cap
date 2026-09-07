@@ -11,10 +11,6 @@ import {
 } from "../../scenes/engine";
 import { ED, Ground, RecordedWindow, Segmented, useLoop } from "../shared";
 
-/* Blur what is private: the mask is drawn on the canvas exactly as the
- * editor draws it (2px #202020 box, black handles), and the real choices
- * follow: Sensitive or Highlight, then the Effect, Blur or Pixelate. */
-
 const WIN = { left: 40, top: 44, scale: 1.45 };
 const MASK = {
 	x: WIN.left + Math.round(72 * WIN.scale),

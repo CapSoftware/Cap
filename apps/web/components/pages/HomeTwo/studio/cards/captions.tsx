@@ -15,10 +15,6 @@ import {
 	useLoop,
 } from "../shared";
 
-/* Captions, generated locally: the caption itself is the hero, with the
- * active word highlighted the way the Karaoke style does it. The Captions
- * tab beside it is the real one: a local model, a language, Generate. */
-
 const WIN = { left: 10, top: 38, scale: 1.12 };
 const PANEL = { left: 368, top: 12, w: 196, scale: 1.1 };
 const LINES = [

@@ -5,10 +5,6 @@ import { useRef } from "react";
 import { easeOut, lerp, span, typed, useSceneState } from "../../scenes/engine";
 import { Chip, ED, Ground, RecordedWindow, useLoop } from "../shared";
 
-/* Text that animates: three of the editor's text templates play over the
- * recording with their real In animation, and the Templates grid along the
- * bottom shows which one is on. */
-
 const WIN = { left: 120, top: 12, scale: 1 };
 const DURATION = 10000;
 const LOWER = { enter: 400, exit: 2900 };

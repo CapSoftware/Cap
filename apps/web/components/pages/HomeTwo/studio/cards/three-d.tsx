@@ -4,10 +4,6 @@ import { useRef } from "react";
 import { easeInOut, lerp, span, useSceneState } from "../../scenes/engine";
 import { CANVAS, Ground, HUE, mix, RecordedWindow, useLoop } from "../shared";
 
-/* 3D camera moves: the recording tilted into perspective, playing the
- * editor's three starter moves in a row. The starter cards along the
- * bottom are the real "Add a 3D scene" picker, in the editor's dark theme. */
-
 const DARK = {
 	card: "#1b1b1e",
 	line: "rgba(255,255,255,0.08)",

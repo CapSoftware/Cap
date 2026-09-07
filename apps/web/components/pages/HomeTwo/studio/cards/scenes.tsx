@@ -27,10 +27,6 @@ import {
 	useLoop,
 } from "../shared";
 
-/* Scenes for screen and camera: the editor's Camera Layout tiles, clicked
- * one by one, re-arrange the screen and the camera inside the frame. The
- * camera is the subject here, so this is the one card with the webcam. */
-
 const MODES = [
 	"Default",
 	"Camera Only",

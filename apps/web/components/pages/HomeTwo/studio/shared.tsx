@@ -23,7 +23,8 @@ export type StudioCard = {
 
 export const CANVAS = { w: 600, h: 375 } as const;
 
-/** The desktop editor's light theme (apps/desktop/src/styles/theme.css, ed-* tokens). */
+// Mirrors the desktop editor's ed-* light tokens (apps/desktop/src/styles/theme.css) and
+// Timeline/styles.css; keep in sync when the editor theme changes.
 export const ED = {
 	window: "#f1f1f3",
 	card: "#ffffff",
@@ -43,7 +44,6 @@ export const ED = {
 	popShadow: "0 12px 32px -12px rgba(0,0,0,0.25), 0 0 0 1px rgba(0,0,0,0.075)",
 } as const;
 
-/** Timeline track hues (the editor's single source of truth). */
 export const HUE = {
 	clip: "#3b82f6",
 	zoom: "#64748b",
@@ -107,11 +107,6 @@ const GROUND_BG: Record<Tone, string> = {
 	gradient: "linear-gradient(135deg, #C3DCF8 0%, #DACBF9 55%, #F6D9EC 100%)",
 };
 
-/**
- * The card canvas: a flat, quiet ground with nothing on it. Every card
- * decides what earns the eye; nothing shares a wallpaper or a webcam by
- * default.
- */
 export const Ground = ({
 	tone = "light",
 	className,
@@ -181,7 +176,6 @@ export const RecordedWindow = ({
 	);
 };
 
-/** Only for the card whose subject is the camera itself. */
 export const CameraBubble = ({
 	playing,
 	size = 96,
@@ -253,9 +247,6 @@ export const Chip = ({
 	</span>
 );
 
-/* ---- Editor sidebar primitives (1:1 with apps/desktop/src/routes/editor/ui.tsx) ---- */
-
-/** A floating editor card: white, rounded-xl, the editor's pop shadow. */
 export const Panel = ({
 	className,
 	style,
@@ -276,7 +267,6 @@ export const Panel = ({
 	</div>
 );
 
-/** Section title: 12px/500 text-2, min height 22. */
 export const SectionTitle = ({
 	children,
 	right,
@@ -292,7 +282,6 @@ export const SectionTitle = ({
 	</div>
 );
 
-/** Stacked field: 13px/400 text-1 label, gap 8. */
 export const Field = ({
 	label,
 	value,
@@ -335,7 +324,6 @@ export const Field = ({
 	</div>
 );
 
-/** Inline field: 34px row, label left, control right. */
 export const InlineField = ({
 	label,
 	value,
@@ -439,7 +427,6 @@ export const Segmented = ({
 	</div>
 );
 
-/** The editor's `Toggle` (md): 44x24, accent when on. */
 export const Toggle = ({ on }: { on: boolean }) => (
 	<span
 		className="relative inline-flex h-6 w-11 shrink-0 rounded-full p-0.5 transition-colors duration-200"
@@ -455,7 +442,6 @@ export const Toggle = ({ on }: { on: boolean }) => (
 	</span>
 );
 
-/** Small editor button: 22px, 12px/500, rounded 7. */
 export const EditorButton = ({
 	children,
 	primary,
@@ -482,7 +468,6 @@ export const EditorButton = ({
 	</span>
 );
 
-/** Selectable tile like the Camera Layout / preset grids: 30px, ctl bg, hover-ish when selected. */
 export const Tile = ({
 	selected,
 	children,
@@ -509,14 +494,11 @@ export const Tile = ({
 	</span>
 );
 
-/* ---- Editor timeline primitives (1:1 with Timeline/styles.css) ---- */
-
 export const TRACK_H = 44;
 export const TRACK_GAP = 6;
 export const TRACK_GUTTER = 96;
 export const RULER_H = 26;
 
-/** The 96px row gutter: a 22px hue tile + an 11px label. */
 export const TrackLabel = ({
 	hue,
 	icon,
@@ -577,7 +559,6 @@ export const Lane = ({
 	</div>
 );
 
-/** A timeline segment: 13% tint, 1px ring, 3px hue bar on the left, dark tinted labels. */
 export const Segment = ({
 	hue,
 	label,
@@ -640,7 +621,6 @@ export const Segment = ({
 	</div>
 );
 
-/** The ruler header: 26px, 11px tabular labels in text-3. */
 export const Ruler = ({
 	labels,
 	span: total,
@@ -675,7 +655,6 @@ export const Ruler = ({
 	</div>
 );
 
-/** The playhead: a 1px line with a 12px dot ringed in card white. */
 export const Playhead = ({
 	playheadRef,
 	top = 0,
@@ -709,7 +688,6 @@ export const WAVES = Array.from({ length: 64 }, (_, i) => {
 	return { key: `w${i}`, h: 0.25 + 0.7 * (0.5 * a + 0.5 * b) };
 });
 
-/** The 18px waveform strip drawn along the bottom of a clip, in the track hue. */
 export const Waveform = ({
 	from = 0,
 	to = WAVES.length,
@@ -740,7 +718,6 @@ export const Waveform = ({
 	</span>
 );
 
-/** The speed chip inside a clip segment. */
 export const SpeedChip = ({
 	children,
 	active,

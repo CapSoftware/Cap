@@ -21,10 +21,6 @@ import {
 	useLoop,
 } from "../shared";
 
-/* Color grades: a before/after wipe across the whole frame (background
- * included) each time a preset is picked in the editor's real
- * "Color correction" section. */
-
 type Grade = { name: string; filter: string; tint: string };
 
 const GRADES: Grade[] = [
