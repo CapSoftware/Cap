@@ -14,6 +14,7 @@ import {
 	MAX_CHAPTER_TITLE_LENGTH,
 	MAX_CHAPTERS,
 	MAX_SUMMARY_LENGTH,
+	normalizeAiContent,
 	parseChapterTime,
 	validateAiContent,
 } from "@/lib/ai-content";
@@ -36,6 +37,9 @@ export function SummaryEditor({
 	const queryClient = useQueryClient();
 	const id = useId();
 	const [expected] = useState(initialContent);
+	const [normalizedExpected] = useState(() =>
+		normalizeAiContent(initialContent),
+	);
 	const [summary, setSummary] = useState(initialContent.summary);
 	const nextId = useRef(initialContent.chapters.length);
 	const [chapters, setChapters] = useState<
@@ -60,8 +64,8 @@ export function SummaryEditor({
 		})),
 	};
 	const dirty =
-		value.summary !== expected.summary ||
-		!chaptersEqual(value.chapters, expected.chapters);
+		value.summary !== normalizedExpected.summary ||
+		!chaptersEqual(value.chapters, normalizedExpected.chapters);
 	const validationError = validateAiContent(value, duration);
 
 	useEffect(() => {

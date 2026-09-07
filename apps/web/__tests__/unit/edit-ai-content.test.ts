@@ -72,6 +72,22 @@ beforeEach(() => {
 });
 
 describe("editing AI content", () => {
+	it("does not treat existing surrounding whitespace as a manual edit", async () => {
+		const original = {
+			summary: " Original ",
+			chapters: [{ title: " Intro ", start: 0 }],
+		};
+		metadata = { ...original, aiGenerationStatus: "COMPLETE" };
+		expect(
+			await editAiContent(videoId, { expected: original, value: original }),
+		).toEqual({ success: true, data: original });
+		expect(mocks.write).not.toHaveBeenCalled();
+		await editAiContent(videoId, {
+			expected: original,
+			value: { ...original, summary: "Changed" },
+		});
+		expect(writeSql).not.toContain("chaptersManuallyEdited");
+	});
 	it("compares chapters independently of MySQL JSON key ordering", async () => {
 		metadata.chapters = [{ start: 0, title: "Intro" }];
 		expect(

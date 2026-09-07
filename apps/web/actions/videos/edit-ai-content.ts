@@ -13,6 +13,7 @@ import {
 	MAX_CHAPTER_TITLE_LENGTH,
 	MAX_CHAPTERS,
 	MAX_SUMMARY_LENGTH,
+	normalizeAiContent,
 	validateAiContent,
 } from "@/lib/ai-content";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
@@ -52,14 +53,14 @@ export async function editAiContent(
 	if (typeof videoId !== "string" || !videoId || !parsed.success) {
 		return { success: false, message: "Invalid summary or chapter data." };
 	}
-	const { value, expected } = parsed.data;
-	value.summary = value.summary.trim();
-	value.chapters = value.chapters.map((chapter) => ({
-		...chapter,
-		title: chapter.title.trim(),
-	}));
-	const summaryChanged = value.summary !== expected.summary;
-	const chaptersChanged = !chaptersEqual(value.chapters, expected.chapters);
+	const { expected } = parsed.data;
+	const value = normalizeAiContent(parsed.data.value);
+	const normalizedExpected = normalizeAiContent(expected);
+	const summaryChanged = value.summary !== normalizedExpected.summary;
+	const chaptersChanged = !chaptersEqual(
+		value.chapters,
+		normalizedExpected.chapters,
+	);
 
 	try {
 		const result = await db().transaction(async (tx): Promise<EditResult> => {

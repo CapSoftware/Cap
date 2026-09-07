@@ -92,6 +92,24 @@ const summary = () => {
 };
 
 describe("summary and chapter editor", () => {
+	it("opens whitespace-padded AI output without a dirty draft", async () => {
+		await render(
+			createElement(SummaryEditor, {
+				videoId,
+				initialContent: {
+					summary: " Original ",
+					chapters: [{ title: " Intro ", start: 0 }],
+				},
+				duration: 120,
+				onClose,
+			}),
+		);
+		expect(button("Save changes").disabled).toBe(true);
+		await change(summary(), " Original  ");
+		expect(button("Save changes").disabled).toBe(true);
+		await change(summary(), "Changed");
+		expect(button("Save changes").disabled).toBe(false);
+	});
 	it("starts clean with MySQL chapter key ordering", async () => {
 		await render(
 			createElement(SummaryEditor, {

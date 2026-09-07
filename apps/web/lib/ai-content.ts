@@ -68,3 +68,13 @@ export function chaptersEqual(
 		)
 	);
 }
+
+export function normalizeAiContent(content: AiContent): AiContent {
+	return {
+		summary: content.summary.trim(),
+		chapters: content.chapters.map((chapter) => ({
+			...chapter,
+			title: chapter.title.trim(),
+		})),
+	};
+}
