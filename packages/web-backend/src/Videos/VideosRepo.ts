@@ -109,10 +109,16 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 
 				yield* db.use((db) =>
 					db.transaction(async (db) => {
+						const {
+							createdAt: _createdAt,
+							updatedAt: _updatedAt,
+							id: _id,
+							...insertData
+						} = data as Record<string, unknown>;
 						const promises: MySqlInsertBase<any, any, any>[] = [
 							db.insert(Db.videos).values([
 								{
-									...data,
+									...insertData,
 									id,
 									orgId: data.orgId,
 									bucket: Option.getOrNull(data.bucketId ?? Option.none()),
