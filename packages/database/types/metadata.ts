@@ -53,10 +53,12 @@ export interface VideoMetadata {
 	 * AI generated summary of the content
 	 */
 	summary?: string;
+	summaryManuallyEdited?: boolean;
 	/**
 	 * Chapter markers generated from the transcript
 	 */
 	chapters?: { title: string; start: number }[];
+	chaptersManuallyEdited?: boolean;
 	aiGenerationStatus?:
 		| "QUEUED"
 		| "PROCESSING"
