@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type BunFile, file, spawn } from "bun";
 import { uploadDriveResumable } from "./drive-resumable-upload";
 import type { VideoMetadata } from "./job-manager";
 import {
 	DOWNLOAD_TIMEOUT_MS,
+	normalizeLocalPath,
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
 	UPLOAD_TIMEOUT_MS,
@@ -1670,6 +1671,8 @@ function getThumbnailTimestamp(
 	return Math.min(Math.max(0, timestamp), Math.max(0, duration - 0.1));
 }
 
+class EmptyThumbnailError extends Error {}
+
 export async function generateThumbnail(
 	inputPath: string,
 	duration: number,
@@ -1679,12 +1682,53 @@ export async function generateThumbnail(
 	abortSignal?.throwIfAborted();
 	const opts = { ...DEFAULT_THUMBNAIL_OPTIONS, ...options };
 	const timestamp = getThumbnailTimestamp(duration, opts.timestamp);
+	const deadline = performance.now() + THUMBNAIL_TIMEOUT_MS;
+	try {
+		return await generateThumbnailFrame(
+			inputPath,
+			opts,
+			timestamp,
+			THUMBNAIL_TIMEOUT_MS,
+			abortSignal,
+		);
+	} catch (error) {
+		abortSignal?.throwIfAborted();
+		const remainingMs = deadline - performance.now();
+		if (
+			!(error instanceof EmptyThumbnailError) ||
+			!isAbsolute(normalizeLocalPath(inputPath)) ||
+			timestamp <= 0 ||
+			remainingMs <= 0
+		) {
+			throw error;
+		}
+		return await generateThumbnailFrame(
+			inputPath,
+			opts,
+			0,
+			remainingMs,
+			abortSignal,
+			true,
+		);
+	}
+}
+
+async function generateThumbnailFrame(
+	inputPath: string,
+	opts: Required<ThumbnailOptions>,
+	timestamp: number,
+	timeoutMs: number,
+	abortSignal?: AbortSignal,
+	localOnly = false,
+): Promise<Uint8Array> {
+	abortSignal?.throwIfAborted();
 	const qualityValue = Math.max(
 		2,
 		Math.min(31, Math.round(31 - (opts.quality / 100) * 29)),
 	);
 	const ffmpegArgs = [
 		"ffmpeg",
+		...(localOnly ? ["-protocol_whitelist", "file,pipe"] : []),
 		"-ss",
 		timestamp.toString(),
 		"-i",
@@ -1746,11 +1790,15 @@ export async function generateThumbnail(
 				]);
 				abortSignal?.throwIfAborted();
 
+				if (totalBytes === 0) {
+					throw new EmptyThumbnailError(
+						exitCode === 0
+							? "FFmpeg produced empty thumbnail"
+							: `FFmpeg thumbnail exited with code ${exitCode}`,
+					);
+				}
 				if (exitCode !== 0) {
 					throw new Error(`FFmpeg thumbnail exited with code ${exitCode}`);
-				}
-				if (totalBytes === 0) {
-					throw new Error("FFmpeg produced empty thumbnail");
 				}
 
 				const output = new Uint8Array(totalBytes);
@@ -1762,7 +1810,7 @@ export async function generateThumbnail(
 
 				return output;
 			})(),
-			THUMBNAIL_TIMEOUT_MS,
+			timeoutMs,
 			stop,
 		);
 	} catch (error) {

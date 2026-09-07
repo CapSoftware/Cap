@@ -64,6 +64,7 @@ async function probePlaybackSource(
 		const response = await fetchImpl(requestUrl, {
 			headers: { range: "bytes=0-0" },
 		});
+		void response.body?.cancel().catch(() => {});
 
 		if (!isPlayableProbeResponse(response)) {
 			return {
@@ -166,7 +167,8 @@ export async function resolvePlaybackSource({
 	};
 
 	if (preferredSource === "raw") {
-		return await resolveRaw();
+		const rawSource = await resolveRaw();
+		if (rawSource) return rawSource;
 	}
 
 	const mp4Result = await probePlaybackSource(videoSrc, fetchImpl, now);
@@ -189,5 +191,5 @@ export async function resolvePlaybackSource({
 		};
 	}
 
-	return await resolveRaw();
+	return preferredSource === "raw" ? null : await resolveRaw();
 }

@@ -19,6 +19,7 @@ import type appType from "../../app";
 import * as containerCpu from "../../lib/container-cpu";
 import * as containerMemory from "../../lib/container-memory";
 import type { Job, JobProgress } from "../../lib/job-manager";
+import { withTimeout } from "../../lib/media-common";
 import { probeVideoFile } from "../../lib/media-probe";
 import * as mediaVideo from "../../lib/media-video";
 import * as recordingVerification from "../../lib/recording-verification";
@@ -40,6 +41,9 @@ let baseUrl = "";
 let tempDir = "";
 
 const uploadedArtifacts = new Map<string, Uint8Array>();
+const uploadFailures = new Map<string, number>();
+const uploadRequests: string[] = [];
+const fixtureReads: string[] = [];
 const recordingSources = new Map<string, Uint8Array>();
 const sourceReads: {
 	path: string;
@@ -364,6 +368,7 @@ beforeAll(async () => {
 								: null;
 
 				if (fixturePath) {
+					if (request.method === "GET") fixtureReads.push(url.pathname);
 					const fixture = Bun.file(fixturePath);
 					const headers = {
 						"Content-Type": "video/mp4",
@@ -408,6 +413,11 @@ beforeAll(async () => {
 			}
 
 			if (request.method === "PUT" && url.pathname.startsWith("/uploads/")) {
+				uploadRequests.push(url.pathname);
+				const failureStatus = uploadFailures.get(url.pathname);
+				if (failureStatus) {
+					return new Response("Storage unavailable", { status: failureStatus });
+				}
 				uploadConditions.push(request.headers.get("if-none-match"));
 				if (
 					request.headers.get("if-none-match") === "*" &&
@@ -451,6 +461,9 @@ beforeEach(() => {
 		pressure: 0.0625,
 	});
 	uploadedArtifacts.clear();
+	uploadFailures.clear();
+	uploadRequests.length = 0;
+	fixtureReads.length = 0;
 	transientFixtureFailures = 0;
 	permanentFixtureFailures = 0;
 	slowFixtureCancellations = 0;
@@ -949,6 +962,128 @@ describe("media routes real-world integration tests", () => {
 			deleteJob(data.jobId);
 		}
 	}, 90000);
+
+	test.each([403, 503])(
+		"keeps a playable processed video when thumbnail storage returns %s",
+		async (status) => {
+			uploadFailures.set("/uploads/optional-thumbnail.jpg", status);
+			const response = await app.fetch(
+				mediaPostRequest("/video/process", {
+					videoId: "optional-thumbnail",
+					userId: "real-process-user",
+					videoUrl: fixtureUrl(),
+					outputPresignedUrl: uploadUrl("optional-thumbnail.mp4"),
+					thumbnailPresignedUrl: uploadUrl("optional-thumbnail.jpg"),
+					inputExtension: ".mp4",
+				}),
+			);
+			expect(response.status).toBe(200);
+			const { jobId } = (await response.json()) as { jobId: string };
+			try {
+				const job = await waitForTerminalJob(jobId);
+				expect(job.phase).toBe("complete");
+				expect(job.error).toBeUndefined();
+				expect(fixtureReads).toEqual(["/fixtures/test-with-audio.mp4"]);
+				expect(uploadRequests.filter((path) => path.endsWith(".mp4"))).toEqual([
+					"/uploads/optional-thumbnail.mp4",
+				]);
+				expect(
+					uploadRequests.filter((path) => path.endsWith(".jpg")),
+				).toHaveLength(status === 403 ? 1 : 5);
+				const output = join(tempDir, `optional-thumbnail-${status}.mp4`);
+				await writeFile(
+					output,
+					uploadedBytes("/uploads/optional-thumbnail.mp4"),
+				);
+				execFileSync("ffmpeg", [
+					"-v",
+					"error",
+					"-xerror",
+					"-i",
+					output,
+					"-f",
+					"null",
+					"-",
+				]);
+				const metadata = await probeVideoFile(output);
+				expect(metadata.videoCodec).toBe("h264");
+				expect(metadata.audioCodec).toBe("aac");
+			} finally {
+				deleteJob(jobId);
+			}
+		},
+		30_000,
+	);
+
+	test("still fails processing when the video output cannot be uploaded", async () => {
+		uploadFailures.set("/uploads/failed-output.mp4", 403);
+		const response = await app.fetch(
+			mediaPostRequest("/video/process", {
+				videoId: "failed-output",
+				userId: "real-process-user",
+				videoUrl: fixtureUrl(),
+				outputPresignedUrl: uploadUrl("failed-output.mp4"),
+				thumbnailPresignedUrl: uploadUrl("failed-output.jpg"),
+				inputExtension: ".mp4",
+			}),
+		);
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		try {
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("error");
+			expect(job.error).toContain("403");
+			expect(uploadRequests).toEqual(["/uploads/failed-output.mp4"]);
+			expect(uploadedArtifacts.size).toBe(0);
+		} finally {
+			deleteJob(jobId);
+		}
+	}, 30_000);
+
+	test("does not complete a cancelled job during thumbnail upload", async () => {
+		let started: (() => void) | undefined;
+		const ready = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const upload = spyOn(mediaVideo, "uploadToS3").mockImplementation(
+			async (_data, _url, _contentType, signal) => {
+				if (!signal) throw new Error("Missing thumbnail upload signal");
+				await new Promise<void>((_resolve, reject) => {
+					signal.addEventListener("abort", () => reject(signal.reason), {
+						once: true,
+					});
+					started?.();
+				});
+			},
+		);
+		let jobId: string | undefined;
+		try {
+			const response = await app.fetch(
+				mediaPostRequest("/video/process", {
+					videoId: "cancelled-thumbnail",
+					userId: "real-process-user",
+					videoUrl: fixtureUrl(),
+					outputPresignedUrl: uploadUrl("cancelled-thumbnail.mp4"),
+					thumbnailPresignedUrl: uploadUrl("cancelled-thumbnail.jpg"),
+					inputExtension: ".mp4",
+				}),
+			);
+			expect(response.status).toBe(200);
+			jobId = ((await response.json()) as { jobId: string }).jobId;
+			await withTimeout(ready, 10_000);
+			getJob(jobId)?.abortController?.abort(new Error("Worker cancelled"));
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("error");
+			expect(job.error).toBe("Worker cancelled");
+			expect(upload).toHaveBeenCalledTimes(1);
+		} finally {
+			if (jobId) {
+				getJob(jobId)?.abortController?.abort();
+				deleteJob(jobId);
+			}
+			upload.mockRestore();
+		}
+	}, 15_000);
 
 	test("retries transient segment downloads and completes a real mux job", async () => {
 		const response = await app.fetch(

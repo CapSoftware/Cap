@@ -1352,7 +1352,12 @@ async function processVideoAsync(
 		});
 		await sendWebhook(job);
 
-		await uploadFileToS3(outputTempFile.path, outputPresignedUrl, "video/mp4");
+		await uploadFileToS3(
+			outputTempFile.path,
+			outputPresignedUrl,
+			"video/mp4",
+			abortController.signal,
+		);
 
 		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
 			updateJob(jobId, {
@@ -1367,8 +1372,23 @@ async function processVideoAsync(
 			const thumbnailData = await generateThumbnail(
 				outputTempFile.path,
 				metadata.duration,
+				{},
+				abortController.signal,
 			);
-			await uploadToS3(thumbnailData, thumbnailPresignedUrl, "image/jpeg");
+			try {
+				await uploadToS3(
+					thumbnailData,
+					thumbnailPresignedUrl,
+					"image/jpeg",
+					abortController.signal,
+				);
+			} catch (error) {
+				abortController.signal.throwIfAborted();
+				console.warn(
+					`[video/process] Thumbnail upload failed for ${jobId}:`,
+					error,
+				);
+			}
 		}
 
 		await generateAndUploadPreviewGif(

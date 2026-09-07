@@ -302,6 +302,33 @@ describe("recording upload cancellation", () => {
 });
 
 describe("generateThumbnail integration tests", () => {
+	test("uses the first frame when a sparse video has no frame after the thumbnail seek", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "cap-sparse-thumbnail-"));
+		const input = join(directory, "single-frame.mp4");
+		try {
+			execFileSync("ffmpeg", [
+				"-v",
+				"error",
+				"-f",
+				"lavfi",
+				"-i",
+				"color=c=blue:s=160x120:r=1/2",
+				"-frames:v",
+				"1",
+				"-c:v",
+				"libx264",
+				"-pix_fmt",
+				"yuv420p",
+				input,
+			]);
+			const thumbnail = await generateThumbnail(input, 2);
+			expect(thumbnail.length).toBeGreaterThan(0);
+			expect([...thumbnail.subarray(0, 2)]).toEqual([0xff, 0xd8]);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("joins an in-flight thumbnail decoder when its worker is cancelled", async () => {
 		let ready: (() => void) | undefined;
 		const started = new Promise<void>((resolve) => {
