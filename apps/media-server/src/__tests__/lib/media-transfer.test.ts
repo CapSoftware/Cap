@@ -115,6 +115,42 @@ describe("bounded revision downloads", () => {
 		expect(received).toBe(content.length);
 		expect(calls).toBe(2);
 	});
+	test.each(["connection", "unavailable"])(
+		"retains downloaded bytes across a %s failure before response headers",
+		async (fault) => {
+			const path = await destination();
+			let calls = 0;
+			let received = 0;
+			await downloadDriveRevision(target(), path, {
+				fetcher: fetcher((_input, init) => {
+					calls++;
+					if (calls === 1)
+						return new Response(content.subarray(0, 12), {
+							headers: { "Content-Length": String(content.length) },
+						});
+					expect(new Headers(init?.headers).get("range")).toBe("bytes=12-");
+					if (calls === 2) {
+						if (fault === "connection")
+							throw new TypeError("Connection failed");
+						return new Response(null, { status: 503 });
+					}
+					return new Response(content.subarray(12), {
+						status: 206,
+						headers: {
+							"Content-Length": String(content.length - 12),
+							"Content-Range": `bytes 12-${content.length - 1}/${content.length}`,
+						},
+					});
+				}),
+				onBytes: (bytes) => {
+					received += bytes;
+				},
+			});
+			expect(await readFile(path)).toEqual(content);
+			expect(received).toBe(content.length);
+			expect(calls).toBe(3);
+		},
+	);
 	test("rejects corruption and removes the incomplete file", async () => {
 		const path = await destination();
 		await expect(

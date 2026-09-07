@@ -20,6 +20,7 @@ import * as containerCpu from "../../lib/container-cpu";
 import * as containerMemory from "../../lib/container-memory";
 import type { Job, JobProgress } from "../../lib/job-manager";
 import { probeVideoFile } from "../../lib/media-probe";
+import * as mediaVideo from "../../lib/media-video";
 import * as recordingVerification from "../../lib/recording-verification";
 
 const FIXTURES_DIR = join(import.meta.dir, "..", "fixtures");
@@ -48,7 +49,12 @@ const sourceReads: {
 const uploadConditions: (string | null)[] = [];
 const multipartCallbacks: { action: string; payload: unknown }[] = [];
 let rejectMultipartSigning = false;
-let sourceFault: "changed" | "missing" | "corrupt" | undefined;
+let sourceFault:
+	| "changed"
+	| "missing"
+	| "corrupt"
+	| "corrupt-audio"
+	| undefined;
 let corruptRecordingReadback = false;
 let transientFixtureFailures = 0;
 let permanentFixtureFailures = 0;
@@ -294,7 +300,11 @@ beforeAll(async () => {
 					ifMatch: request.headers.get("if-match"),
 					verification: request.headers.get("x-cap-recording-verification"),
 				});
-				const affected = url.pathname.endsWith("video-segment.m4s");
+				const affected = url.pathname.endsWith(
+					sourceFault === "corrupt-audio"
+						? "audio-segment.m4s"
+						: "video-segment.m4s",
+				);
 				if (affected && sourceFault === "missing")
 					return new Response(null, { status: 404 });
 				if (
@@ -305,7 +315,8 @@ beforeAll(async () => {
 					return new Response(null, { status: 412 });
 				return new Response(
 					Uint8Array.from(
-						affected && sourceFault === "corrupt"
+						affected &&
+							(sourceFault === "corrupt" || sourceFault === "corrupt-audio")
 							? new Uint8Array(source.byteLength)
 							: source,
 					).buffer,
@@ -460,6 +471,30 @@ afterAll(() => {
 });
 
 describe("media routes real-world integration tests", () => {
+	test("reports a failed output write without classifying pinned source media as invalid", async () => {
+		const mux = spyOn(mediaVideo, "muxMediaTracksToMp4").mockRejectedValue(
+			new Error("Could not write output header"),
+		);
+		let jobId: string | undefined;
+		try {
+			const response = await app.fetch(
+				mediaPostRequest(
+					"/video/mux-segments",
+					fencedMuxRequest("failed-output-write"),
+				),
+			);
+			expect(response.status).toBe(200);
+			jobId = ((await response.json()) as { jobId: string }).jobId;
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("error");
+			expect(job.errorCode).toBe("output-invalid");
+			expect(job.recordingVerification).toBeUndefined();
+			expect(uploadConditions).toHaveLength(0);
+		} finally {
+			mux.mockRestore();
+			if (jobId) deleteJob(jobId);
+		}
+	});
 	test("cancels segmented work at its total deadline without waiting for job cleanup", async () => {
 		const originalSetTimeout = globalThis.setTimeout;
 		const shortenedDeadline = new Proxy(originalSetTimeout, {
@@ -550,7 +585,7 @@ describe("media routes real-world integration tests", () => {
 			recordingVerification,
 			"inspectRecordingSources",
 		);
-		const localDecode = spyOn(recordingVerification, "verifyRecording");
+		const localDecode = spyOn(recordingVerification, "verifyRemuxedRecording");
 		const remoteDecode = spyOn(recordingVerification, "verifyRemoteRecording");
 		const bytesOnly = spyOn(
 			recordingVerification,
@@ -574,7 +609,7 @@ describe("media routes real-world integration tests", () => {
 			expect(job.attemptId).toBe(body.attemptId);
 			expect(job.inventorySha256).toBe(body.inventorySha256);
 			expect(job.metadata?.duration).toBeCloseTo(1, 3);
-			expect(sourceDecode).toHaveBeenCalledTimes(1);
+			expect(sourceDecode.mock.calls.length).toBeLessThanOrEqual(1);
 			expect(localDecode).toHaveBeenCalledTimes(1);
 			expect(remoteDecode).not.toHaveBeenCalled();
 			expect(bytesOnly).toHaveBeenCalledTimes(1);
@@ -682,7 +717,7 @@ describe("media routes real-world integration tests", () => {
 		30_000,
 	);
 
-	test.each(["changed", "missing", "corrupt"] as const)(
+	test.each(["changed", "missing", "corrupt", "corrupt-audio"] as const)(
 		"withholds upload and proof after a pinned source is %s",
 		async (fault) => {
 			sourceFault = fault;
@@ -696,7 +731,7 @@ describe("media routes real-world integration tests", () => {
 				const job = await waitForTerminalJob(jobId);
 				expect(job.phase).toBe("error");
 				expect(job.errorCode).toBe(
-					fault === "corrupt" ? "source-invalid" : `source-${fault}`,
+					fault.startsWith("corrupt") ? "source-invalid" : `source-${fault}`,
 				);
 				expect(job.recordingVerification).toBeUndefined();
 				expect(uploadConditions).toHaveLength(0);

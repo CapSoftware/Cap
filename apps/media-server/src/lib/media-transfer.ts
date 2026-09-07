@@ -219,15 +219,32 @@ export async function downloadDriveRevision(
 		for (let attempt = 0; attempt < 3 && bytes < target.size; attempt++) {
 			options.signal?.throwIfAborted();
 			const start = bytes;
-			const response = await fetcher(target.url, {
-				headers: {
-					Authorization: target.authorization,
-					"Accept-Encoding": "identity",
-					...(start ? { Range: `bytes=${start}-` } : {}),
-				},
-				signal: options.signal,
-				redirect: "error",
-			});
+			let response: Response;
+			try {
+				response = await fetcher(target.url, {
+					headers: {
+						Authorization: target.authorization,
+						"Accept-Encoding": "identity",
+						...(start ? { Range: `bytes=${start}-` } : {}),
+					},
+					signal: options.signal,
+					redirect: "error",
+				});
+			} catch (error) {
+				options.signal?.throwIfAborted();
+				if (error instanceof MediaTransferBudgetError || attempt === 2)
+					throw error;
+				await Bun.sleep(250 * 2 ** attempt);
+				continue;
+			}
+			if (
+				[408, 429, 500, 502, 503, 504].includes(response.status) &&
+				attempt < 2
+			) {
+				await response.body?.cancel();
+				await Bun.sleep(250 * 2 ** attempt);
+				continue;
+			}
 			const valid = start
 				? response.status === 206 &&
 					response.headers.get("content-range") ===

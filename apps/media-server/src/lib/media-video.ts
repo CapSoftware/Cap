@@ -14,6 +14,7 @@ import {
 } from "./media-common";
 import { probeVideoFile } from "./media-probe";
 import { fetchMedia, materializeMedia } from "./media-transfer";
+import { readRecordingAudioTail } from "./recording-packet-proof";
 import {
 	RecordingTimingError,
 	readRecordingVideoTiming,
@@ -2473,16 +2474,29 @@ export async function muxMediaTracksToMp4(
 	outputPath: string,
 	abortSignal?: AbortSignal,
 ): Promise<void> {
-	if (abortSignal?.aborted) throw new Error("Recording mux was cancelled");
+	abortSignal?.throwIfAborted();
+	abortSignal = AbortSignal.any([
+		...(abortSignal ? [abortSignal] : []),
+		AbortSignal.timeout(PROCESS_TIMEOUT_MS),
+	]);
 	const startedAt = performance.now();
 	const timing = await readRecordingVideoTiming(videoInputPath, {
 		abortSignal,
 		timeoutMs: PROCESS_TIMEOUT_MS,
 	});
-	if (abortSignal?.aborted) throw new Error("Recording mux was cancelled");
+	abortSignal?.throwIfAborted();
 	const lastTimestamp = timing.lastTimestampTicks - timing.firstTimestampTicks;
 	// FFmpeg 7 can discard a fragmented MP4's stored final sample duration.
 	const videoTimingFilter = `setts=pts=PTS:dts=DTS:duration=if(eq(PTS-STARTPTS\\,${lastTimestamp})\\,${timing.lastDurationTicks}\\,DURATION)`;
+	const audioTiming = audioInputPath
+		? await readRecordingAudioTail(audioInputPath, abortSignal, true)
+		: undefined;
+	if (audioTiming && audioTiming.packetCount === undefined)
+		throw new Error("Recording audio packet count is missing");
+	// FFmpeg synthesizes nominal AAC durations, so bind the final duration to the stored source sample.
+	const audioTimingFilter = audioTiming?.packetCount
+		? `setts=duration=if(eq(N\\,${audioTiming.packetCount - 1})\\,${audioTiming.durationTicks}\\,DURATION)`
+		: undefined;
 	const args = audioInputPath
 		? [
 				"ffmpeg",
@@ -2501,6 +2515,7 @@ export async function muxMediaTracksToMp4(
 				"copy",
 				"-bsf:v",
 				videoTimingFilter,
+				...(audioTimingFilter ? ["-bsf:a", audioTimingFilter] : []),
 				"-avoid_negative_ts",
 				"disabled",
 				"-movie_timescale",
