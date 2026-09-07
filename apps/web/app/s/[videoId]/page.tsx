@@ -183,12 +183,19 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	return sharedSpaces;
 }
 
-function PolicyDeniedView({ reason }: { reason?: string }) {
+function PolicyDeniedView({
+	reason,
+	videoId,
+}: {
+	reason?: string;
+	videoId: string;
+}) {
+	const loginHref = `/login?next=/s/${videoId}`;
 	let title = "This video is private";
 	let description: React.ReactNode = (
 		<>
-			If you own this video, please <Link href="/login">sign in</Link> to manage
-			sharing.
+			If you own this video, please <Link href={loginHref}>sign in</Link> to
+			manage sharing.
 		</>
 	);
 
@@ -197,7 +204,7 @@ function PolicyDeniedView({ reason }: { reason?: string }) {
 		description = (
 			<>
 				The owner of this video has restricted access. Please{" "}
-				<Link href="/login">sign in</Link> with an authorized email address to
+				<Link href={loginHref}>sign in</Link> with an authorized email address to
 				view.
 			</>
 		);
@@ -212,12 +219,22 @@ function PolicyDeniedView({ reason }: { reason?: string }) {
 			<Logo className="size-32" />
 			<h1 className="mb-2 text-2xl font-semibold">{title}</h1>
 			<p className="text-gray-400">{description}</p>
+			{reason !== "email_restriction_denied" ? (
+				<Link
+					href={loginHref}
+					className="mt-4 inline-flex items-center rounded-full bg-gray-12 px-4 py-2 text-sm font-semibold text-gray-1"
+				>
+					Sign in
+				</Link>
+			) : null}
 		</div>
 	);
 }
 
 const renderPolicyDenied = (videoId: Video.VideoId, reason?: string) =>
-	Effect.succeed(<PolicyDeniedView key={videoId} reason={reason} />);
+	Effect.succeed(
+		<PolicyDeniedView key={videoId} videoId={videoId} reason={reason} />,
+	);
 
 const renderNoSuchElement = (awaitRecording: boolean) =>
 	awaitRecording
