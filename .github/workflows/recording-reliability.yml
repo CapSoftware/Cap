@@ -45,4 +45,7 @@ jobs:
             __tests__/unit/desktop-segments-*.test.ts \
             __tests__/unit/finalize-desktop-recording.test.ts \
             __tests__/unit/media-server-progress.test.ts \
+            __tests__/unit/media-processing-budget.test.ts \
+            __tests__/unit/playback-source.test.ts \
+            __tests__/unit/upload-progress-playback.test.ts \
             __tests__/unit/recording-prepare.test.ts
