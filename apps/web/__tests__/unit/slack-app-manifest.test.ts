@@ -32,7 +32,7 @@ describe("Slack app manifest", () => {
 
 		expect(manifest.display_information).toMatchObject({
 			description: "Use Cap directly inside Slack.",
-			background_color: "#4785FF",
+			background_color: "#1e60e6",
 		});
 		expect(manifest.features.unfurl_domains).toEqual(["cap.so", "cap.link"]);
 		expect(manifest.oauth_config.scopes.bot).toEqual([

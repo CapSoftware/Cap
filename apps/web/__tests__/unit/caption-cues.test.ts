@@ -20,9 +20,11 @@ describe("getActiveCaptionText", () => {
 	it("uses the latest active cue when cues overlap", () => {
 		const activeCues = createCueList([
 			{ startTime: 0, text: "First caption" },
-			{ startTime: 3.199, text: "<v Speaker>Second caption</v>" },
+			{ startTime: 3.199, text: "<v Speaker B>Second &amp; final caption</v>" },
 		]);
 
-		expect(getActiveCaptionText(activeCues)).toBe("Second caption");
+		expect(getActiveCaptionText(activeCues)).toBe(
+			"Speaker B: Second & final caption",
+		);
 	});
 });
