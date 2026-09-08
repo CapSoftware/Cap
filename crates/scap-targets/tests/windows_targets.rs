@@ -10,10 +10,13 @@ use std::{
 use windows::{
     Win32::{
         Foundation::HWND,
-        UI::WindowsAndMessaging::{
-            CreateWindowExW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE, PeekMessageW,
-            SW_MINIMIZE, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
-            WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
+        UI::{
+            HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness},
+            WindowsAndMessaging::{
+                CreateWindowExW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE, PeekMessageW,
+                SW_MINIMIZE, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
+                WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
+            },
         },
     },
     core::w,
@@ -68,6 +71,9 @@ fn window_fixture_process() {
         return;
     }
 
+    unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) }
+        .expect("match CLI per-monitor DPI awareness");
+
     let normal = TestWindow::new(WS_OVERLAPPEDWINDOW | WS_VISIBLE, WINDOW_EX_STYLE(0), None);
     let popup = TestWindow::new(WS_POPUP | WS_VISIBLE, WINDOW_EX_STYLE(0), Some(normal.0));
     let hidden = TestWindow::new(WS_OVERLAPPEDWINDOW, WINDOW_EX_STYLE(0), None);
@@ -105,6 +111,8 @@ fn window_fixture_process() {
 
 #[test]
 fn discovers_foreign_top_level_windows_and_preserves_target_filters() {
+    unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE) }
+        .expect("match CLI per-monitor DPI awareness");
     let mut fixture = FixtureProcess(
         Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "window_fixture_process", "--nocapture"])
