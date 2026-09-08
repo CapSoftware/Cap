@@ -12,6 +12,7 @@ import { runWithAiProviders } from "@/lib/ai/run";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
+import { isValidTranscriptTranslation } from "@/lib/transcript-vtt";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import {
 	type LanguageCode,
@@ -73,27 +74,6 @@ export async function translateTranscript(
 
 	const { video } = query[0];
 
-	const translatedKey = `${video.ownerId}/${videoId}/transcription.${targetLanguage}.vtt`;
-
-	try {
-		const existingTranslation = await Effect.gen(function* () {
-			const [bucket] = yield* Storage.getAccessForVideo(
-				decodeStorageVideo(video),
-			);
-			return yield* bucket.getObject(translatedKey);
-		}).pipe(runPromise);
-
-		if (Option.isSome(existingTranslation)) {
-			return {
-				success: true,
-				translatedVtt: existingTranslation.value,
-				message: "Retrieved cached translation",
-			};
-		}
-	} catch (e) {
-		console.debug("[translateTranscript] No cached translation found:", e);
-	}
-
 	const originalVtt = await Effect.gen(function* () {
 		const [bucket] = yield* Storage.getAccessForVideo(
 			decodeStorageVideo(video),
@@ -105,6 +85,30 @@ export async function translateTranscript(
 
 	if (Option.isNone(originalVtt)) {
 		return { success: false, message: "Original transcript not found" };
+	}
+
+	const translatedKey = `${video.ownerId}/${videoId}/transcription.${targetLanguage}.vtt`;
+
+	try {
+		const existingTranslation = await Effect.gen(function* () {
+			const [bucket] = yield* Storage.getAccessForVideo(
+				decodeStorageVideo(video),
+			);
+			return yield* bucket.getObject(translatedKey);
+		}).pipe(runPromise);
+
+		if (
+			Option.isSome(existingTranslation) &&
+			isValidTranscriptTranslation(originalVtt.value, existingTranslation.value)
+		) {
+			return {
+				success: true,
+				translatedVtt: existingTranslation.value,
+				message: "Retrieved cached translation",
+			};
+		}
+	} catch (e) {
+		console.debug("[translateTranscript] No cached translation found:", e);
 	}
 
 	const translatedVtt = await translateVttContent(
@@ -167,10 +171,12 @@ ${vttContent}`;
 				...(selection.supportsTemperature ? { temperature: 0.3 } : {}),
 			});
 
-			// Validate inside the provider loop so a fulfilled response that
-			// dropped the WEBVTT header falls through to the next provider.
-			if (!response.text.includes("WEBVTT")) {
-				throw new Error("translation response did not contain WEBVTT");
+			// Validate inside the provider loop so malformed translations try the
+			// next provider without poisoning the cached captions.
+			if (!isValidTranscriptTranslation(vttContent, response.text)) {
+				throw new Error(
+					"translation changed cue structure or speaker annotations",
+				);
 			}
 
 			return response.text.trim();
