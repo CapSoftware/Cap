@@ -24,7 +24,8 @@ use cap_project::CaptionsData;
 use cap_project::{
     BackgroundBlurConfig, BackgroundBlurMode, CameraShape, CameraXPosition, CameraYPosition,
     CaptionSegment, CaptionSettings, CornerStyle, CursorAnimationStyle, CursorRippleConfig,
-    KeyboardData, KeyboardSettings, ProjectConfiguration, ShadowConfiguration, StereoMode,
+    KeyboardData, KeyboardSettings, ProjectConfiguration, RecordingMeta, ShadowConfiguration,
+    StereoMode,
 };
 use gpui::{
     AnyElement, Bounds, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -528,6 +529,15 @@ pub fn keyboard_settings(project: &ProjectConfiguration) -> KeyboardSettings {
         .unwrap_or_default()
 }
 
+fn keyboard_generation_settings_fingerprint(settings: &KeyboardSettings) -> (u64, u32, bool, bool) {
+    (
+        settings.grouping_threshold_ms.to_bits(),
+        settings.linger_duration.to_bits(),
+        settings.show_modifiers,
+        settings.show_special_keys,
+    )
+}
+
 /// `updateCaptionSetting` (`CaptionsTab.tsx:321-338`): a settings write is a
 /// no-op when the project has no captions block at all, which is what the
 /// source's `if (!project?.captions) return` says.
@@ -754,7 +764,7 @@ impl EditorWindow {
         let kind = menu.kind;
         let items = self.sidebar_menu_items(kind);
         Some(
-            ui::Menu::plain(&self.theme, "sidebar-menu", items, &menu.state)
+            ui::Menu::editor(&self.theme, "sidebar-menu", items, &menu.state)
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
                     this.choose_sidebar_menu(kind, *index, window, cx);
                 }))
@@ -1135,17 +1145,15 @@ impl EditorWindow {
     /// `flex flex-col gap-2` pair the caption and keyboard tabs stack every
     /// row in.
     fn labelled(&self, label: &'static str, control: AnyElement) -> AnyElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .child(
-                div()
-                    .text_size(px(14.))
-                    .text_color(Hsla::from(self.theme.gray_11))
-                    .child(label),
-            )
+        ui::Field::stacked(&self.theme, label)
             .child(control)
+            .into_any_element()
+    }
+
+    /// The same pair on one row, for a control that fits beside its label.
+    fn labelled_inline(&self, label: &'static str, control: AnyElement) -> AnyElement {
+        ui::Field::inline(&self.theme, label)
+            .child(div().w(px(180.)).child(control))
             .into_any_element()
     }
 
@@ -1159,7 +1167,7 @@ impl EditorWindow {
             .child(
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(self.theme.gray_11))
+                    .text_color(Hsla::from(self.theme.editor.text_2))
                     .child(label),
             )
             .child(control)
@@ -1228,68 +1236,63 @@ impl EditorWindow {
         div()
             .flex()
             .flex_col()
-            .gap(px(24.))
+            .gap(px(14.))
             .child(
-                ui::Field::plain(&theme, "Camera")
-                    .icon("icons/camera.svg")
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(24.))
-                            .child(self.render_camera_position(cx))
-                            .child(ui::Subfield::plain(&theme, "Hide Camera").child(
-                                ui::Toggle::plain(&theme, "camera-hide", camera.hide).on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        let next = !this.style_control_project().camera.hide;
-                                        this.edit_project("camera-hide", window, cx, move |p| {
-                                            p.camera.hide = next;
-                                            true
-                                        });
-                                    }),
-                                ),
-                            ))
-                            .child(ui::Subfield::plain(&theme, "Mirror Camera").child(
-                                ui::Toggle::plain(&theme, "camera-mirror", camera.mirror).on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        let next = !this.style_control_project().camera.mirror;
-                                        this.edit_project("camera-mirror", window, cx, move |p| {
-                                            p.camera.mirror = next;
-                                            true
-                                        });
-                                    }),
-                                ),
-                            ))
-                            .child(ui::Subfield::plain(&theme, "Background Blur").child(
-                                div().w(px(160.)).child(self.menu_select(
-                                    SidebarMenu::CameraBlur,
-                                    "camera-blur",
-                                    blur_label,
-                                    cx,
-                                )),
-                            ))
-                            .child(ui::Subfield::plain(&theme, "Shape").child(
-                                div().w(px(160.)).child(self.menu_select(
-                                    SidebarMenu::CameraShape,
-                                    "camera-shape",
-                                    shape_label,
-                                    cx,
-                                )),
+                ui::Field::section(&theme, "Camera").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(14.))
+                        .child(self.render_camera_position(cx))
+                        .child(ui::Subfield::plain(&theme, "Hide Camera").child(
+                            ui::Toggle::plain(&theme, "camera-hide", camera.hide).on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    let next = !this.style_control_project().camera.hide;
+                                    this.edit_project("camera-hide", window, cx, move |p| {
+                                        p.camera.hide = next;
+                                        true
+                                    });
+                                }),
+                            ),
+                        ))
+                        .child(ui::Subfield::plain(&theme, "Mirror Camera").child(
+                            ui::Toggle::plain(&theme, "camera-mirror", camera.mirror).on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    let next = !this.style_control_project().camera.mirror;
+                                    this.edit_project("camera-mirror", window, cx, move |p| {
+                                        p.camera.mirror = next;
+                                        true
+                                    });
+                                }),
+                            ),
+                        ))
+                        .child(ui::Subfield::plain(&theme, "Background Blur").child(
+                            div().w(px(160.)).child(self.menu_select(
+                                SidebarMenu::CameraBlur,
+                                "camera-blur",
+                                blur_label,
+                                cx,
                             )),
-                    ),
+                        ))
+                        .child(ui::Subfield::plain(&theme, "Shape").child(
+                            div().w(px(160.)).child(self.menu_select(
+                                SidebarMenu::CameraShape,
+                                "camera-shape",
+                                shape_label,
+                                cx,
+                            )),
+                        )),
+                ),
             )
             // `<div class="w-full border-t border-dashed border-gray-5" />`
-            .child(dashed_divider(Hsla::from(theme.gray_5)))
-            .child(
-                ui::Field::plain(&theme, "Size")
-                    .icon("icons/enlarge.svg")
-                    .child(self.slider(SliderKey::Camera(CameraSlider::Size), "%", cx)),
-            )
-            .child(
-                ui::Field::plain(&theme, "Size During Zoom")
-                    .icon("icons/enlarge.svg")
-                    .child(self.slider(SliderKey::Camera(CameraSlider::ZoomSize), "%", cx)),
-            )
+            .child(dashed_divider(Hsla::from(theme.editor.line)))
+            .child(self.slider_field("Size", SliderKey::Camera(CameraSlider::Size), "%", cx))
+            .child(self.slider_field(
+                "Size During Zoom",
+                SliderKey::Camera(CameraSlider::ZoomSize),
+                "%",
+                cx,
+            ))
             .child(
                 ui::Subfield::plain(&theme, "Keep original size during zoom").child(
                     ui::Toggle::plain(&theme, "camera-keep-size", camera.scale_during_zoom >= 1.)
@@ -1309,26 +1312,32 @@ impl EditorWindow {
                 ),
             )
             .child(
-                ui::Field::plain(&theme, "Rounded Corners")
-                    .icon("icons/corners.svg")
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .child(self.slider(SliderKey::Camera(CameraSlider::Rounding), "%", cx))
-                            .child(self.corner_style_select(
-                                SidebarMenu::CameraCornerStyle,
-                                "camera-corner-style",
-                                corner_label,
-                                cx,
-                            )),
-                    ),
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(self.slider_field(
+                        "Rounded Corners",
+                        SliderKey::Camera(CameraSlider::Rounding),
+                        "%",
+                        cx,
+                    ))
+                    .child(self.corner_style_select(
+                        SidebarMenu::CameraCornerStyle,
+                        "camera-corner-style",
+                        corner_label,
+                        cx,
+                    )),
             )
             .child(
-                ui::Field::plain(&theme, "Shadow")
-                    .icon("icons/shadow.svg")
-                    .child(self.slider(SliderKey::Camera(CameraSlider::Shadow), "%", cx))
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(self.slider_field(
+                        "Shadow",
+                        SliderKey::Camera(CameraSlider::Shadow),
+                        "%",
+                        cx,
+                    ))
                     .child(self.render_camera_shadow_settings(cx)),
             )
             // `<ColorCorrectionSection target="camera" />` (`:3324`).
@@ -1367,8 +1376,7 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// `CornerStyleSelect` (`:3331-3396`): a `text-[0.65rem] uppercase` label
-    /// over the trigger.
+    /// `CornerStyleSelect` (`:3331-3396`), now an inline row.
     fn corner_style_select(
         &self,
         kind: SidebarMenu,
@@ -1376,17 +1384,12 @@ impl EditorWindow {
         label: &'static str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(6.))
+        ui::Field::inline(&self.theme, "Corner Style")
             .child(
                 div()
-                    .text_size(px(10.4))
-                    .text_color(Hsla::from(self.theme.gray_11))
-                    .child("CORNER STYLE"),
+                    .w(px(150.))
+                    .child(self.menu_select(kind, id, label, cx)),
             )
-            .child(self.menu_select(kind, id, label, cx))
             .into_any_element()
     }
 
@@ -1419,7 +1422,7 @@ impl EditorWindow {
             .h(px(120.))
             .rounded(px(8.))
             .border_1()
-            .border_color(Hsla::from(theme.gray_3))
+            .border_color(Hsla::from(theme.editor.line))
             .bg(Hsla::from(theme.gray_2));
 
         for (item_x, item_y) in dots {
@@ -1493,54 +1496,40 @@ impl EditorWindow {
         div()
             .flex()
             .flex_col()
-            .child(
-                div()
-                    .id("camera-shadow-advanced")
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(4.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.gray_12))
-                    .cursor_pointer()
-                    .child(div().text_size(px(14.)).child("Advanced shadow settings"))
-                    .child(
-                        svg()
-                            .path(if open {
-                                "icons/chevron-down.svg"
-                            } else {
-                                "icons/chevron-right.svg"
-                            })
-                            .size(px(20.))
-                            .text_color(Hsla::from(theme.gray_12)),
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.sidebar.camera_shadow_open.toggle();
-                        this.animate_collapsibles(window, cx);
-                    })),
-            )
+            .child(crate::editor_sidebar::disclosure_row(
+                &theme,
+                "camera-shadow-advanced",
+                "Advanced shadow settings",
+                open,
+                cx.listener(|this, _, window, cx| {
+                    this.sidebar.camera_shadow_open.toggle();
+                    this.animate_collapsibles(window, cx);
+                }),
+            ))
             .child(collapsible(
                 &self.sidebar.camera_shadow_open,
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(24.))
-                    .mt(px(16.))
-                    .child(ui::Field::plain(&theme, "Size").child(self.slider(
+                    .pt(px(4.))
+                    .child(self.slider_field(
+                        "Size",
                         SliderKey::Camera(CameraSlider::ShadowSize),
                         "",
                         cx,
-                    )))
-                    .child(ui::Field::plain(&theme, "Opacity").child(self.slider(
+                    ))
+                    .child(self.slider_field(
+                        "Opacity",
                         SliderKey::Camera(CameraSlider::ShadowOpacity),
                         "",
                         cx,
-                    )))
-                    .child(ui::Field::plain(&theme, "Blur").child(self.slider(
+                    ))
+                    .child(self.slider_field(
+                        "Blur",
                         SliderKey::Camera(CameraSlider::ShadowBlur),
                         "",
                         cx,
-                    )))
+                    ))
                     .into_any_element(),
             ))
             .into_any_element()
@@ -1565,63 +1554,57 @@ impl EditorWindow {
         div()
             .flex()
             .flex_col()
-            .gap(px(24.))
+            .gap(px(14.))
             .child(
-                ui::Field::plain(&theme, "Audio Controls")
-                    .icon("icons/volume-2.svg")
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(16.))
-                            .child(ui::Subfield::plain(&theme, "Mute Audio").child(
-                                ui::Toggle::plain(&theme, "audio-mute", audio.mute).on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        let next = !this.project.audio.mute;
-                                        this.edit_project("audio-mute", window, cx, move |p| {
-                                            p.audio.mute = next;
-                                            true
-                                        });
-                                    }),
-                                ),
-                            ))
-                            // Only a two-channel microphone gets the stereo row
-                            // (`:709-711`).
-                            .children(stereo_mic.then(|| {
-                                ui::Subfield::plain(&theme, "Microphone Stereo Mode")
-                                    .child(div().w(px(160.)).child(self.menu_select(
-                                        SidebarMenu::AudioStereo,
-                                        "audio-stereo",
-                                        stereo_label,
-                                        cx,
-                                    )))
-                                    .into_any_element()
-                            })),
-                    ),
+                ui::Field::section(&theme, "Audio Controls").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(16.))
+                        .child(ui::Subfield::plain(&theme, "Mute Audio").child(
+                            ui::Toggle::plain(&theme, "audio-mute", audio.mute).on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    let next = !this.project.audio.mute;
+                                    this.edit_project("audio-mute", window, cx, move |p| {
+                                        p.audio.mute = next;
+                                        true
+                                    });
+                                }),
+                            ),
+                        ))
+                        // Only a two-channel microphone gets the stereo row
+                        // (`:709-711`).
+                        .children(stereo_mic.then(|| {
+                            ui::Subfield::plain(&theme, "Microphone Stereo Mode")
+                                .child(div().w(px(160.)).child(self.menu_select(
+                                    SidebarMenu::AudioStereo,
+                                    "audio-stereo",
+                                    stereo_label,
+                                    cx,
+                                )))
+                                .into_any_element()
+                        })),
+                ),
             )
             .children(has_microphone.then(|| {
-                ui::Field::plain(&theme, "Microphone Volume")
-                    .icon("icons/microphone.svg")
-                    // `disabled={project.audio.mute}` (`:786`).
-                    .child(self.slider_disabled(
-                        SliderKey::Audio(AudioSlider::MicVolume),
-                        "db",
-                        muted,
-                        cx,
-                    ))
-                    .into_any_element()
+                self.slider_field_disabled(
+                    "Microphone Volume",
+                    SliderKey::Audio(AudioSlider::MicVolume),
+                    "db",
+                    muted,
+                    cx,
+                )
+                .into_any_element()
             }))
             .children(has_system_audio.then(|| {
-                ui::Field::plain(&theme, "System Audio Volume")
-                    .icon("icons/monitor-outline.svg")
-                    // `disabled={project.audio.mute}` (`:804`).
-                    .child(self.slider_disabled(
-                        SliderKey::Audio(AudioSlider::SystemVolume),
-                        "db",
-                        muted,
-                        cx,
-                    ))
-                    .into_any_element()
+                self.slider_field_disabled(
+                    "System Audio Volume",
+                    SliderKey::Audio(AudioSlider::SystemVolume),
+                    "db",
+                    muted,
+                    cx,
+                )
+                .into_any_element()
             }))
             .children(self.render_sync_offsets(cx))
             .into_any_element()
@@ -1635,8 +1618,8 @@ impl EditorWindow {
         let cursor = &self.project.cursor;
         let hidden = cursor.hide;
 
-        let mut body = div().flex().flex_col().gap(px(24.)).child(
-            ui::Field::plain(&theme, "Show cursor").value(
+        let mut body = div().flex().flex_col().gap(px(14.)).child(
+            ui::Field::inline(&theme, "Show cursor").value(
                 ui::Toggle::plain(&theme, "cursor-show", !hidden)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.edit_project("cursor-hide", window, cx, move |p| {
@@ -1660,34 +1643,23 @@ impl EditorWindow {
 
         body = body
             .child(
-                ui::Field::plain(&theme, "Cursor Style")
-                    .icon("icons/cursor.svg")
+                ui::Field::stacked(&theme, "Cursor Style")
                     .child(self.render_cursor_style_picker(cx)),
             )
-            .child(
-                ui::Field::plain(&theme, "Size")
-                    .icon("icons/enlarge.svg")
-                    .child(self.slider(SliderKey::Cursor(CursorSlider::Size), "", cx)),
-            )
-            .child(
-                ui::Field::plain(&theme, "Tilt")
-                    .icon("icons/rotate-3d.svg")
-                    .child(self.slider(SliderKey::Cursor(CursorSlider::Tilt), "x100%", cx)),
-            )
+            .child(self.slider_field("Size", SliderKey::Cursor(CursorSlider::Size), "", cx))
+            .child(self.slider_field("Tilt", SliderKey::Cursor(CursorSlider::Tilt), "x100%", cx))
             .child(self.render_cursor_ripple(cx))
             .child(
-                ui::Field::plain(&theme, "Hide When Idle")
-                    .icon("icons/timer.svg")
-                    .value(
-                        ui::Toggle::plain(&theme, "cursor-idle", idle)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.edit_project("cursor-idle", window, cx, move |p| {
-                                    p.cursor.hide_when_idle = !idle;
-                                    true
-                                });
-                            }))
-                            .into_any_element(),
-                    ),
+                ui::Field::inline(&theme, "Hide When Idle").value(
+                    ui::Toggle::plain(&theme, "cursor-idle", idle)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.edit_project("cursor-idle", window, cx, move |p| {
+                                p.cursor.hide_when_idle = !idle;
+                                true
+                            });
+                        }))
+                        .into_any_element(),
+                ),
             );
 
         if idle {
@@ -1723,85 +1695,83 @@ impl EditorWindow {
         let smooth = !cursor.raw;
         let mut body = body
             .child(
-                ui::Field::plain(&theme, "Cursor Movement Style")
-                    .icon("icons/rabbit.svg")
-                    .child(
-                        ui::RadioCards::plain(
-                            &theme,
-                            "cursor-style",
-                            CURSOR_STYLES
-                                .iter()
-                                .map(|(_, label, description)| {
-                                    ui::RadioCard::new(*label, Some(description))
-                                })
-                                .collect(),
-                            style_index,
-                        )
-                        .on_select(cx.listener(
-                            |this, index: &usize, window, cx| {
-                                let Some((style, _, _)) = CURSOR_STYLES.get(*index) else {
-                                    return;
-                                };
-                                let style = *style;
-                                // `applyCursorStylePreset` (`:551-561`): the style and
-                                // its three physics values, in one batch.
-                                this.edit_project("cursor-style", window, cx, move |project| {
-                                    project.cursor.animation_style = style;
-                                    if let Some(preset) = style.preset() {
-                                        project.cursor.tension = preset.tension;
-                                        project.cursor.mass = preset.mass;
-                                        project.cursor.friction = preset.friction;
-                                    }
-                                    true
-                                });
-                            },
-                        )),
-                    ),
+                ui::Field::section(&theme, "Cursor Movement Style").child(
+                    ui::RadioCards::plain(
+                        &theme,
+                        "cursor-style",
+                        CURSOR_STYLES
+                            .iter()
+                            .map(|(_, label, description)| {
+                                ui::RadioCard::new(*label, Some(description))
+                            })
+                            .collect(),
+                        style_index,
+                    )
+                    .on_select(cx.listener(
+                        |this, index: &usize, window, cx| {
+                            let Some((style, _, _)) = CURSOR_STYLES.get(*index) else {
+                                return;
+                            };
+                            let style = *style;
+                            // `applyCursorStylePreset` (`:551-561`): the style and
+                            // its three physics values, in one batch.
+                            this.edit_project("cursor-style", window, cx, move |project| {
+                                project.cursor.animation_style = style;
+                                if let Some(preset) = style.preset() {
+                                    project.cursor.tension = preset.tension;
+                                    project.cursor.mass = preset.mass;
+                                    project.cursor.friction = preset.friction;
+                                }
+                                true
+                            });
+                        },
+                    )),
+                ),
             )
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .child(
-                        ui::Field::plain(&theme, "Smooth Movement")
-                            .icon("icons/ease-curve.svg")
-                            .value(
-                                ui::Toggle::plain(&theme, "cursor-smooth", smooth)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.sidebar.cursor_physics_open.set_open(!smooth);
-                                        this.animate_collapsibles(window, cx);
-                                        this.edit_project("cursor-raw", window, cx, move |p| {
-                                            p.cursor.raw = smooth;
-                                            true
-                                        });
-                                    }))
-                                    .into_any_element(),
-                            ),
+                        ui::Field::inline(&theme, "Smooth Movement").value(
+                            ui::Toggle::plain(&theme, "cursor-smooth", smooth)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.sidebar.cursor_physics_open.set_open(!smooth);
+                                    this.animate_collapsibles(window, cx);
+                                    this.edit_project("cursor-raw", window, cx, move |p| {
+                                        p.cursor.raw = smooth;
+                                        true
+                                    });
+                                }))
+                                .into_any_element(),
+                        ),
                     )
                     .child(collapsible(
                         &self.sidebar.cursor_physics_open,
                         div()
                             .flex()
                             .flex_col()
-                            .gap(px(16.))
                             // `pt-4 pb-6`
-                            .pt(px(16.))
-                            .pb(px(24.))
-                            .child(ui::Field::plain(&theme, "Tension").child(self.slider(
+                            .pt(px(4.))
+                            .pb(px(8.))
+                            .child(self.slider_field(
+                                "Tension",
                                 SliderKey::Cursor(CursorSlider::Tension),
                                 "",
                                 cx,
-                            )))
-                            .child(ui::Field::plain(&theme, "Friction").child(self.slider(
+                            ))
+                            .child(self.slider_field(
+                                "Friction",
                                 SliderKey::Cursor(CursorSlider::Friction),
                                 "",
                                 cx,
-                            )))
-                            .child(ui::Field::plain(&theme, "Mass").child(self.slider(
+                            ))
+                            .child(self.slider_field(
+                                "Mass",
                                 SliderKey::Cursor(CursorSlider::Mass),
                                 "",
                                 cx,
-                            )))
+                            ))
                             .into_any_element(),
                     )),
             );
@@ -1810,19 +1780,17 @@ impl EditorWindow {
         // showing a setting the renderer is already overriding.
         if cursor.cursor_type().family().is_none() {
             body = body.child(
-                ui::Field::plain(&theme, "High Quality SVG Cursors")
-                    .icon("icons/sparkles.svg")
-                    .value(
-                        ui::Toggle::plain(&theme, "cursor-svg", cursor.use_svg)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                let next = !this.style_control_project().cursor.use_svg;
-                                this.edit_project("cursor-svg", window, cx, move |p| {
-                                    p.cursor.use_svg = next;
-                                    true
-                                });
-                            }))
-                            .into_any_element(),
-                    ),
+                ui::Field::inline(&theme, "High Quality SVG Cursors").value(
+                    ui::Toggle::plain(&theme, "cursor-svg", cursor.use_svg)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let next = !this.style_control_project().cursor.use_svg;
+                            this.edit_project("cursor-svg", window, cx, move |p| {
+                                p.cursor.use_svg = next;
+                                true
+                            });
+                        }))
+                        .into_any_element(),
+                ),
             );
         }
 
@@ -1830,6 +1798,116 @@ impl EditorWindow {
     }
 
     // -- Keyboard ------------------------------------------------------------
+
+    fn generate_keyboard_segments_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.generating_keyboard {
+            return;
+        }
+        let Some(timeline) = self.project.timeline.clone() else {
+            self.keyboard_generation_message = Some("The project timeline is unavailable.".into());
+            cx.notify();
+            return;
+        };
+        let Ok(timeline_fingerprint) = serde_json::to_vec(&timeline) else {
+            self.keyboard_generation_message =
+                Some("The project timeline could not be read.".into());
+            cx.notify();
+            return;
+        };
+        let settings = keyboard_settings(&self.project);
+        let settings_fingerprint = keyboard_generation_settings_fingerprint(&settings);
+        let path = self.project_path.clone();
+        self.generating_keyboard = true;
+        self.keyboard_generation_message = None;
+        cx.notify();
+        window.refresh();
+
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let meta = RecordingMeta::load_for_project(&path)
+                        .map_err(|error| format!("Failed to load recording data: {error}"))?;
+                    cap_project::generate_project_keyboard_segments(&meta, &timeline, &settings)
+                })
+                .await;
+
+            this.update_in(cx, |this, window, cx| {
+                this.generating_keyboard = false;
+                let segments = match result {
+                    Ok(segments) => segments,
+                    Err(error) => {
+                        tracing::error!("keyboard generation failed: {error}");
+                        this.keyboard_generation_message = Some(error);
+                        cx.notify();
+                        window.refresh();
+                        return;
+                    }
+                };
+                let timeline_unchanged = this
+                    .project
+                    .timeline
+                    .as_ref()
+                    .and_then(|timeline| serde_json::to_vec(timeline).ok())
+                    .is_some_and(|fingerprint| fingerprint == timeline_fingerprint);
+                let settings_unchanged =
+                    keyboard_generation_settings_fingerprint(&keyboard_settings(&this.project))
+                        == settings_fingerprint;
+                if !timeline_unchanged || !settings_unchanged {
+                    this.keyboard_generation_message = Some(
+                        "The timeline or keyboard settings changed during generation. Try again."
+                            .into(),
+                    );
+                    cx.notify();
+                    window.refresh();
+                    return;
+                }
+                let has_segments = !segments.is_empty();
+                let already_empty = this
+                    .project
+                    .timeline
+                    .as_ref()
+                    .is_none_or(|timeline| timeline.keyboard_segments.is_empty());
+                if !has_segments && already_empty {
+                    this.keyboard_generation_message =
+                        Some("No recorded keyboard presses were found.".into());
+                    cx.notify();
+                    window.refresh();
+                    return;
+                }
+
+                if has_segments {
+                    this.tracks.keyboard = true;
+                }
+                this.edit_project("keyboard-generate", window, cx, move |project| {
+                    if has_segments {
+                        let keyboard = project.keyboard.get_or_insert_with(KeyboardData::default);
+                        keyboard.settings.enabled = true;
+                    }
+                    let Some(timeline) = project.timeline.as_mut() else {
+                        return false;
+                    };
+                    timeline.keyboard_segments = segments;
+                    true
+                });
+                if has_segments {
+                    this.keyboard_generation_message = None;
+                } else {
+                    if this.selection.as_ref().is_some_and(|selection| {
+                        selection.track == crate::editor_timeline::TrackKind::Keyboard
+                    }) {
+                        this.set_selection(None, cx);
+                    }
+                    this.keyboard_generation_message =
+                        Some("No recorded keyboard presses were found.".into());
+                    cx.notify();
+                    window.refresh();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
 
     /// `KeyboardTab` (`KeyboardTab.tsx:128-553`).
     pub(crate) fn render_keyboard_tab(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1858,191 +1936,169 @@ impl EditorWindow {
             .gap(px(16.))
             .when(!enabled, |this| this.opacity(0.5))
             .child(
-                ui::Field::plain(&theme, "Font Settings")
-                    .icon("icons/keyboard.svg")
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .child(self.labelled(
-                                "Font Family",
-                                self.menu_select(
-                                    SidebarMenu::KeyboardFont,
-                                    "keyboard-font",
-                                    font_label,
-                                    cx,
-                                ),
-                            ))
-                            .child(
-                                self.labelled(
-                                    "Size",
-                                    self.slider(SliderKey::Keyboard(KeyboardSlider::Size), "", cx)
-                                        .into_any_element(),
-                                ),
-                            )
-                            .child(self.labelled(
-                                "Text Color",
-                                self.render_hex_field(
-                                    crate::editor_panels::FieldKey::KeyboardColor,
-                                    &settings.color,
-                                    cx,
-                                ),
-                            )),
-                    ),
-            )
-            .child(
-                ui::Field::plain(&theme, "Background Settings")
-                    .icon("icons/keyboard.svg")
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .child(self.labelled(
-                                "Background Color",
-                                self.render_hex_field(
-                                    crate::editor_panels::FieldKey::KeyboardBackground,
-                                    &settings.background_color,
-                                    cx,
-                                ),
-                            ))
-                            .child(
-                                self.labelled(
-                                    "Background Opacity",
-                                    self.slider(
-                                        SliderKey::Keyboard(KeyboardSlider::BackgroundOpacity),
-                                        "",
-                                        cx,
-                                    )
-                                    .into_any_element(),
-                                ),
+                ui::Field::section(&theme, "Font Settings").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .child(self.labelled_inline(
+                            "Font Family",
+                            self.menu_select(
+                                SidebarMenu::KeyboardFont,
+                                "keyboard-font",
+                                font_label,
+                                cx,
                             ),
-                    ),
-            )
-            .child(
-                ui::Field::plain(&theme, "Position")
-                    .icon("icons/keyboard.svg")
-                    .child(self.menu_select(
-                        SidebarMenu::KeyboardPosition,
-                        "keyboard-position",
-                        position_label,
-                        cx,
-                    )),
-            )
-            .child(
-                ui::Field::plain(&theme, "Font Weight")
-                    .icon("icons/keyboard.svg")
-                    .child(self.menu_select(
-                        SidebarMenu::KeyboardWeight,
-                        "keyboard-weight",
-                        weight_label,
-                        cx,
-                    )),
-            )
-            .child(
-                ui::Field::plain(&theme, "Animation")
-                    .icon("icons/keyboard.svg")
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .child(self.labelled_readout(
-                                "Fade Duration",
-                                SliderKey::Keyboard(KeyboardSlider::FadeDuration),
-                                format!("{:.0}ms", settings.fade_duration * 1000.),
+                        ))
+                        .child(
+                            self.slider_field(
+                                "Size",
+                                SliderKey::Keyboard(KeyboardSlider::Size),
+                                "",
                                 cx,
-                            ))
-                            .child(self.labelled_readout(
-                                "Linger Duration",
-                                SliderKey::Keyboard(KeyboardSlider::LingerDuration),
-                                format!("{:.1}s", settings.linger_duration),
-                                cx,
-                            ))
-                            .child(self.labelled_readout(
-                                "Grouping Threshold",
-                                SliderKey::Keyboard(KeyboardSlider::GroupingThreshold),
-                                format!("{:.0}ms", settings.grouping_threshold_ms),
-                                cx,
-                            )),
-                    ),
-            )
-            .child(
-                ui::Field::plain(&theme, "Behavior")
-                    .icon("icons/keyboard.svg")
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .child(
-                                ui::Subfield::plain(&theme, "Show Modifiers").child(
-                                    ui::Toggle::plain(
-                                        &theme,
-                                        "keyboard-modifiers",
-                                        settings.show_modifiers,
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _, window, cx| {
-                                            let next =
-                                                !keyboard_settings(&this.project).show_modifiers;
-                                            this.set_keyboard_setting(
-                                                "keyboard-modifiers",
-                                                window,
-                                                cx,
-                                                move |settings| settings.show_modifiers = next,
-                                            );
-                                        },
-                                    )),
-                                ),
                             )
-                            .child(
-                                ui::Subfield::plain(&theme, "Show Special Keys").child(
-                                    ui::Toggle::plain(
-                                        &theme,
-                                        "keyboard-special",
-                                        settings.show_special_keys,
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _, window, cx| {
-                                            let next =
-                                                !keyboard_settings(&this.project).show_special_keys;
-                                            this.set_keyboard_setting(
-                                                "keyboard-special",
-                                                window,
-                                                cx,
-                                                move |settings| settings.show_special_keys = next,
-                                            );
-                                        },
-                                    )),
-                                ),
-                            )
-                            .child(
-                                ui::Subfield::plain(&theme, "Uppercase").child(
-                                    ui::Toggle::plain(
-                                        &theme,
-                                        "keyboard-uppercase",
-                                        settings.uppercase,
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _, window, cx| {
-                                            let next = !keyboard_settings(&this.project).uppercase;
-                                            this.set_keyboard_setting(
-                                                "keyboard-uppercase",
-                                                window,
-                                                cx,
-                                                move |settings| settings.uppercase = next,
-                                            );
-                                        },
-                                    )),
-                                ),
+                            .into_any_element(),
+                        )
+                        .child(self.labelled(
+                            "Text Color",
+                            self.render_hex_field(
+                                crate::editor_panels::FieldKey::KeyboardColor,
+                                &settings.color,
+                                cx,
                             ),
-                    ),
+                        )),
+                ),
             )
-            // `Generate Keyboard Segments` -- `commands.generateKeyboardSegments`
-            // reads the recording's own key log through a Tauri command this
-            // app does not have, so the button renders and says so.
+            .child(
+                ui::Field::section(&theme, "Background Settings").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .child(self.labelled(
+                            "Background Color",
+                            self.render_hex_field(
+                                crate::editor_panels::FieldKey::KeyboardBackground,
+                                &settings.background_color,
+                                cx,
+                            ),
+                        ))
+                        .child(
+                            self.slider_field(
+                                "Background Opacity",
+                                SliderKey::Keyboard(KeyboardSlider::BackgroundOpacity),
+                                "",
+                                cx,
+                            )
+                            .into_any_element(),
+                        ),
+                ),
+            )
+            .child(
+                ui::Field::inline(&theme, "Position").child(self.menu_select(
+                    SidebarMenu::KeyboardPosition,
+                    "keyboard-position",
+                    position_label,
+                    cx,
+                )),
+            )
+            .child(
+                ui::Field::inline(&theme, "Font Weight").child(self.menu_select(
+                    SidebarMenu::KeyboardWeight,
+                    "keyboard-weight",
+                    weight_label,
+                    cx,
+                )),
+            )
+            .child(
+                ui::Field::section(&theme, "Animation").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .child(self.labelled_readout(
+                            "Fade Duration",
+                            SliderKey::Keyboard(KeyboardSlider::FadeDuration),
+                            format!("{:.0}ms", settings.fade_duration * 1000.),
+                            cx,
+                        ))
+                        .child(self.labelled_readout(
+                            "Linger Duration",
+                            SliderKey::Keyboard(KeyboardSlider::LingerDuration),
+                            format!("{:.1}s", settings.linger_duration),
+                            cx,
+                        ))
+                        .child(self.labelled_readout(
+                            "Grouping Threshold",
+                            SliderKey::Keyboard(KeyboardSlider::GroupingThreshold),
+                            format!("{:.0}ms", settings.grouping_threshold_ms),
+                            cx,
+                        )),
+                ),
+            )
+            .child(
+                ui::Field::section(&theme, "Behavior").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .child(
+                            ui::Subfield::plain(&theme, "Show Modifiers").child(
+                                ui::Toggle::plain(
+                                    &theme,
+                                    "keyboard-modifiers",
+                                    settings.show_modifiers,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        let next = !keyboard_settings(&this.project).show_modifiers;
+                                        this.set_keyboard_setting(
+                                            "keyboard-modifiers",
+                                            window,
+                                            cx,
+                                            move |settings| settings.show_modifiers = next,
+                                        );
+                                    },
+                                )),
+                            ),
+                        )
+                        .child(
+                            ui::Subfield::plain(&theme, "Show Special Keys").child(
+                                ui::Toggle::plain(
+                                    &theme,
+                                    "keyboard-special",
+                                    settings.show_special_keys,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        let next =
+                                            !keyboard_settings(&this.project).show_special_keys;
+                                        this.set_keyboard_setting(
+                                            "keyboard-special",
+                                            window,
+                                            cx,
+                                            move |settings| settings.show_special_keys = next,
+                                        );
+                                    },
+                                )),
+                            ),
+                        )
+                        .child(
+                            ui::Subfield::plain(&theme, "Uppercase").child(
+                                ui::Toggle::plain(&theme, "keyboard-uppercase", settings.uppercase)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        let next = !keyboard_settings(&this.project).uppercase;
+                                        this.set_keyboard_setting(
+                                            "keyboard-uppercase",
+                                            window,
+                                            cx,
+                                            move |settings| settings.uppercase = next,
+                                        );
+                                    })),
+                            ),
+                        ),
+                ),
+            )
             .child(
                 div().pt(px(8.)).child(
                     ui::Button::plain(
@@ -2051,15 +2107,27 @@ impl EditorWindow {
                         ui::ButtonVariant::Primary,
                         ui::ButtonSize::Md,
                     )
-                    .label(if has_segments {
+                    .label(if self.generating_keyboard {
+                        "Generating Keyboard Segments..."
+                    } else if has_segments {
                         "Regenerate Keyboard Segments"
                     } else {
                         "Generate Keyboard Segments"
                     })
                     .full_width()
-                    .disabled(true),
+                    .disabled(self.generating_keyboard || self.project.timeline.is_none())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.generate_keyboard_segments_clicked(window, cx);
+                    })),
                 ),
             )
+            .children(self.keyboard_generation_message.as_ref().map(|message| {
+                div()
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.gray_10))
+                    .child(message.clone())
+                    .into_any_element()
+            }))
             .children((!has_segments).then(|| {
                 div()
                     .py(px(16.))
@@ -2087,7 +2155,7 @@ impl EditorWindow {
 
         // The whole tab is one `Field` with the master toggle in its header and
         // a `Beta` badge (`KeyboardTab.tsx:128-135`).
-        ui::Field::plain(&theme, "Show keyboard")
+        ui::Field::section(&theme, "Show keyboard")
             .badge("Beta")
             .value(
                 ui::Toggle::plain(&theme, "keyboard-enabled", enabled)
@@ -2123,25 +2191,9 @@ impl EditorWindow {
         readout: String,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .child(
-                div()
-                    .text_size(px(14.))
-                    .text_color(Hsla::from(self.theme.gray_11))
-                    .child(label),
-            )
-            .child(self.slider(slider, "", cx))
-            .child(
-                div()
-                    .w_full()
-                    .text_size(px(12.))
-                    .text_color(Hsla::from(self.theme.gray_11))
-                    .text_right()
-                    .child(readout),
-            )
+        ui::Field::inline(&self.theme, label)
+            .value_text(readout)
+            .child(self.slider_flex(slider, "", cx))
             .into_any_element()
     }
 
@@ -2236,7 +2288,7 @@ impl EditorWindow {
             .rounded(px(8.))
             .bg(self.panel_bg())
             .border_1()
-            .border_color(Hsla::from(theme.gray_3))
+            .border_color(Hsla::from(theme.editor.line))
             .child(
                 div()
                     .flex_1()
@@ -2467,226 +2519,199 @@ impl EditorWindow {
             .gap(px(16.))
             .when(!has_captions, |this| this.opacity(0.5))
             .child(
-                ui::Field::plain(&theme, "Style")
-                    .icon("icons/message-bubble.svg")
+                ui::Field::section(&theme, "Style")
                     .child(self.render_caption_presets(&settings, cx)),
             )
             .child(
-                ui::Field::plain(&theme, "Font Settings")
-                    .icon("icons/message-bubble.svg")
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .child(self.labelled(
-                                "Font Family",
-                                self.menu_select(
-                                    SidebarMenu::CaptionFont,
-                                    "caption-font",
-                                    font_label,
-                                    cx,
-                                ),
-                            ))
-                            .child(
-                                self.labelled(
-                                    "Size",
-                                    self.slider(SliderKey::Caption(CaptionSlider::Size), "", cx)
-                                        .into_any_element(),
-                                ),
+                ui::Field::section(&theme, "Font Settings").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .child(self.labelled_inline(
+                            "Font Family",
+                            self.menu_select(
+                                SidebarMenu::CaptionFont,
+                                "caption-font",
+                                font_label,
+                                cx,
+                            ),
+                        ))
+                        .child(
+                            self.slider_field(
+                                "Size",
+                                SliderKey::Caption(CaptionSlider::Size),
+                                "",
+                                cx,
                             )
-                            .child(
-                                ui::Subfield::plain(&theme, "Uppercase").child(
-                                    ui::Toggle::plain(
-                                        &theme,
-                                        "caption-uppercase",
-                                        settings.uppercase,
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _, window, cx| {
-                                            let next = !caption_settings(&this.project).uppercase;
-                                            this.set_caption_setting(
-                                                "caption-uppercase",
-                                                window,
-                                                cx,
-                                                move |settings| settings.uppercase = next,
-                                            );
-                                        },
-                                    )),
-                                ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(8.))
-                                    .child(
-                                        ui::Subfield::plain(&theme, "Active Word Highlight").child(
-                                            ui::Toggle::plain(
-                                                &theme,
-                                                "caption-active-word",
-                                                settings.active_word_highlight,
-                                            )
-                                            .on_click(
-                                                cx.listener(|this, _, window, cx| {
-                                                    let next = !caption_settings(&this.project)
-                                                        .active_word_highlight;
-                                                    this.set_caption_setting(
-                                                        "caption-active-word",
-                                                        window,
-                                                        cx,
-                                                        move |settings| {
-                                                            settings.active_word_highlight = next
-                                                        },
-                                                    );
-                                                }),
-                                            ),
+                            .into_any_element(),
+                        )
+                        .child(
+                            ui::Subfield::plain(&theme, "Uppercase").child(
+                                ui::Toggle::plain(&theme, "caption-uppercase", settings.uppercase)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        let next = !caption_settings(&this.project).uppercase;
+                                        this.set_caption_setting(
+                                            "caption-uppercase",
+                                            window,
+                                            cx,
+                                            move |settings| settings.uppercase = next,
+                                        );
+                                    })),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(8.))
+                                .child(
+                                    ui::Subfield::plain(&theme, "Active Word Highlight").child(
+                                        ui::Toggle::plain(
+                                            &theme,
+                                            "caption-active-word",
+                                            settings.active_word_highlight,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                let next = !caption_settings(&this.project)
+                                                    .active_word_highlight;
+                                                this.set_caption_setting(
+                                                    "caption-active-word",
+                                                    window,
+                                                    cx,
+                                                    move |settings| {
+                                                        settings.active_word_highlight = next
+                                                    },
+                                                );
+                                            }),
                                         ),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(Hsla::from(theme.gray_10))
-                                            .child(
-                                                "This is the first version of captions in Cap. \
+                                    ),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(Hsla::from(theme.gray_10))
+                                        .child(
+                                            "This is the first version of captions in Cap. \
                                                  Active word highlighting may be inaccurate in \
                                                  some situations. We're working on a fix for this \
                                                  and it will be released in upcoming versions.",
-                                            ),
-                                    ),
-                            )
-                            .children(settings.active_word_highlight.then(|| {
-                                self.labelled(
-                                    "Highlight Style",
-                                    self.menu_select(
-                                        SidebarMenu::CaptionHighlightStyle,
-                                        "caption-highlight-style",
-                                        highlight_label,
-                                        cx,
-                                    ),
-                                )
-                            }))
-                            .child(self.labelled(
-                                "Text Color",
-                                self.render_hex_field(
-                                    crate::editor_panels::FieldKey::CaptionColor,
-                                    &settings.color,
-                                    cx,
+                                        ),
                                 ),
-                            )),
-                    ),
-            )
-            .child(
-                ui::Field::plain(&theme, "Background Settings")
-                    .icon("icons/message-bubble.svg")
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .child(self.labelled(
-                                "Background Color",
-                                self.render_hex_field(
-                                    crate::editor_panels::FieldKey::CaptionBackground,
-                                    &settings.background_color,
-                                    cx,
-                                ),
-                            ))
-                            .child(
-                                self.labelled(
-                                    "Background Opacity",
-                                    self.slider(
-                                        SliderKey::Caption(CaptionSlider::BackgroundOpacity),
-                                        "",
-                                        cx,
-                                    )
-                                    .into_any_element(),
-                                ),
-                            ),
-                    ),
-            )
-            .child(
-                ui::Field::plain(&theme, "Position")
-                    .icon("icons/message-bubble.svg")
-                    .child(self.menu_select(
-                        SidebarMenu::CaptionPosition,
-                        "caption-position",
-                        position_label,
-                        cx,
-                    )),
-            )
-            .child(
-                ui::Field::plain(&theme, "Animation")
-                    .icon("icons/message-bubble.svg")
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .child(self.labelled(
-                                "Animation Style",
+                        )
+                        .children(settings.active_word_highlight.then(|| {
+                            self.labelled_inline(
+                                "Highlight Style",
                                 self.menu_select(
-                                    SidebarMenu::CaptionAnimation,
-                                    "caption-animation",
-                                    animation_label,
+                                    SidebarMenu::CaptionHighlightStyle,
+                                    "caption-highlight-style",
+                                    highlight_label,
                                     cx,
                                 ),
-                            ))
-                            .child(self.labelled(
-                                "Highlight Color",
-                                self.render_hex_field(
-                                    crate::editor_panels::FieldKey::CaptionHighlight,
-                                    &settings.highlight_color,
-                                    cx,
-                                ),
-                            ))
-                            .child(self.labelled_readout(
-                                "Fade Duration",
-                                SliderKey::Caption(CaptionSlider::FadeDuration),
-                                format!("{:.0}ms", settings.fade_duration * 1000.),
-                                cx,
-                            )),
-                    ),
-            )
-            .child(
-                ui::Field::plain(&theme, "Font Weight")
-                    .icon("icons/message-bubble.svg")
-                    .child(self.menu_select(
-                        SidebarMenu::CaptionWeight,
-                        "caption-weight",
-                        weight_label,
-                        cx,
-                    )),
-            )
-            .child(
-                ui::Field::plain(&theme, "Export Options")
-                    .icon("icons/message-bubble.svg")
-                    .child(
-                        ui::Subfield::plain(&theme, "Export with Subtitles").child(
-                            ui::Toggle::plain(
-                                &theme,
-                                "caption-export",
-                                settings.export_with_subtitles,
                             )
-                            .on_click(cx.listener(
-                                |this, _, window, cx| {
-                                    let next =
-                                        !caption_settings(&this.project).export_with_subtitles;
-                                    this.set_caption_setting(
-                                        "caption-export",
-                                        window,
-                                        cx,
-                                        move |settings| settings.export_with_subtitles = next,
-                                    );
-                                },
-                            )),
+                        }))
+                        .child(self.labelled(
+                            "Text Color",
+                            self.render_hex_field(
+                                crate::editor_panels::FieldKey::CaptionColor,
+                                &settings.color,
+                                cx,
+                            ),
+                        )),
+                ),
+            )
+            .child(
+                ui::Field::section(&theme, "Background Settings").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .child(self.labelled(
+                            "Background Color",
+                            self.render_hex_field(
+                                crate::editor_panels::FieldKey::CaptionBackground,
+                                &settings.background_color,
+                                cx,
+                            ),
+                        ))
+                        .child(
+                            self.slider_field(
+                                "Background Opacity",
+                                SliderKey::Caption(CaptionSlider::BackgroundOpacity),
+                                "",
+                                cx,
+                            )
+                            .into_any_element(),
                         ),
+                ),
+            )
+            .child(
+                ui::Field::inline(&theme, "Position").child(self.menu_select(
+                    SidebarMenu::CaptionPosition,
+                    "caption-position",
+                    position_label,
+                    cx,
+                )),
+            )
+            .child(
+                ui::Field::section(&theme, "Animation").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .child(self.labelled_inline(
+                            "Animation Style",
+                            self.menu_select(
+                                SidebarMenu::CaptionAnimation,
+                                "caption-animation",
+                                animation_label,
+                                cx,
+                            ),
+                        ))
+                        .child(self.labelled(
+                            "Highlight Color",
+                            self.render_hex_field(
+                                crate::editor_panels::FieldKey::CaptionHighlight,
+                                &settings.highlight_color,
+                                cx,
+                            ),
+                        ))
+                        .child(self.labelled_readout(
+                            "Fade Duration",
+                            SliderKey::Caption(CaptionSlider::FadeDuration),
+                            format!("{:.0}ms", settings.fade_duration * 1000.),
+                            cx,
+                        )),
+                ),
+            )
+            .child(
+                ui::Field::inline(&theme, "Font Weight").child(self.menu_select(
+                    SidebarMenu::CaptionWeight,
+                    "caption-weight",
+                    weight_label,
+                    cx,
+                )),
+            )
+            .child(
+                ui::Field::section(&theme, "Export Options").child(
+                    ui::Subfield::plain(&theme, "Export with Subtitles").child(
+                        ui::Toggle::plain(&theme, "caption-export", settings.export_with_subtitles)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                let next = !caption_settings(&this.project).export_with_subtitles;
+                                this.set_caption_setting(
+                                    "caption-export",
+                                    window,
+                                    cx,
+                                    move |settings| settings.export_with_subtitles = next,
+                                );
+                            })),
                     ),
+                ),
             );
 
         // An extra flex ancestor here repeats intrinsic layout while scrolling.
-        ui::Field::plain(&theme, "Captions")
-            .icon("icons/message-bubble.svg")
+        ui::Field::section(&theme, "Captions")
             .badge("Beta")
             .child(transcription)
             .child(style.mt(px(8.)))
@@ -3067,7 +3092,7 @@ impl EditorWindow {
             div()
                 .flex()
                 .flex_col()
-                .gap(px(24.))
+                .gap(px(14.))
                 .child(
                     div()
                         .flex()
@@ -3075,14 +3100,20 @@ impl EditorWindow {
                         .gap(px(2.))
                         .child(
                             div()
+                                .text_size(px(12.))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(Hsla::from(theme.gray_12))
+                                .text_color(Hsla::from(theme.editor.text_2))
                                 .child("Sync"),
                         )
-                        .child(div().text_color(Hsla::from(theme.gray_11)).child(
-                            "Fine-tune source offsets if audio or camera drifts out of \
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.editor.text_3))
+                                .child(
+                                    "Fine-tune source offsets if audio or camera drifts out of \
                                      sync with the screen recording.",
-                        )),
+                                ),
+                        ),
                 )
                 .children((0..clips).map(|clip| {
                     let auto = self
@@ -3094,17 +3125,19 @@ impl EditorWindow {
                     div()
                         .flex()
                         .flex_col()
-                        .gap(px(24.))
+                        .gap(px(14.))
                         .children((clips > 1).then(|| {
                             div()
+                                .text_size(px(12.))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(Hsla::from(theme.gray_12))
+                                .text_color(Hsla::from(theme.editor.text_2))
                                 .child(SharedString::from(format!("Clip {clip}")))
                                 .into_any_element()
                         }))
                         .children(auto.then(|| {
                             div()
-                                .text_color(Hsla::from(theme.gray_11))
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.editor.text_3))
                                 .child(
                                     "Cap calculated these offsets automatically to keep audio in \
                                      sync with the video. Adjust them if anything still sounds \
@@ -3200,7 +3233,7 @@ impl EditorWindow {
             .find(|item| item.index as usize == clip)
             .map_or(0., |item| f64::from(kind.read(&item.offsets)));
 
-        let mut field = ui::Field::plain(&theme, name);
+        let mut field = ui::Field::section(&theme, name);
         if auto {
             field = field.badge("Auto-synced");
         }
@@ -3233,7 +3266,7 @@ impl EditorWindow {
                                 .py(px(2.))
                                 .rounded(px(2.))
                                 .border_1()
-                                .border_color(Hsla::from(theme.gray_3))
+                                .border_color(Hsla::from(theme.editor.line))
                                 .bg(Hsla::from(theme.gray_1))
                                 .text_size(px(12.))
                                 .text_color(Hsla::from(theme.gray_11))

@@ -1627,13 +1627,26 @@ mod mac {
     }
 
     pub fn save_file_panel(suggested: &str, extensions: &[&str]) -> Option<std::path::PathBuf> {
+        match try_save_file_panel(suggested, extensions) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::error!(error, "Save dialog failed");
+                None
+            }
+        }
+    }
+
+    pub fn try_save_file_panel(
+        suggested: &str,
+        extensions: &[&str],
+    ) -> Result<Option<std::path::PathBuf>, String> {
         use objc2::{class, msg_send};
         use objc2_foundation::{NSArray, NSString};
 
         unsafe {
             let panel: *mut AnyObject = msg_send![class!(NSSavePanel), savePanel];
             if panel.is_null() {
-                return None;
+                return Err("The save dialog is unavailable".to_string());
             }
             let _: () = msg_send![panel, setCanCreateDirectories: true];
             let _: () = msg_send![panel, setNameFieldStringValue: &*NSString::from_str(suggested)];
@@ -1646,18 +1659,21 @@ mod mac {
                 let _: () = msg_send![panel, setAllowedFileTypes: &*types];
             }
             let response: isize = msg_send![panel, runModal];
+            if response == 0 {
+                return Ok(None);
+            }
             if response != 1 {
-                return None;
+                return Err("The save dialog could not be displayed".to_string());
             }
             let url: *mut AnyObject = msg_send![panel, URL];
             if url.is_null() {
-                return None;
+                return Err("The save dialog did not return a file path".to_string());
             }
             let path: *mut NSString = msg_send![url, path];
             if path.is_null() {
-                return None;
+                return Err("The save dialog did not return a file path".to_string());
             }
-            Some(std::path::PathBuf::from((*path).to_string()))
+            Ok(Some(std::path::PathBuf::from((*path).to_string())))
         }
     }
 

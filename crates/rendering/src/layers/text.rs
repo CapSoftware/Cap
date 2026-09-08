@@ -17,6 +17,7 @@ pub struct TextLayer {
     text_renderer: TextRenderer,
     viewport: Viewport,
     buffers: Vec<Buffer>,
+    tracks: Vec<u32>,
     segment_renderers: Vec<TextRenderer>,
     background: Option<TextBackgroundResources>,
     segmented_render: bool,
@@ -207,6 +208,7 @@ impl TextLayer {
             text_renderer,
             viewport,
             buffers: Vec::new(),
+            tracks: Vec::new(),
             segment_renderers: Vec::new(),
             background: None,
             segmented_render: false,
@@ -221,8 +223,31 @@ impl TextLayer {
         output_size: (u32, u32),
         texts: &[PreparedText],
     ) {
+        self.prepare_with_mode(device, queue, output_size, texts, false);
+    }
+
+    pub fn prepare_mixed(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        output_size: (u32, u32),
+        texts: &[PreparedText],
+    ) {
+        self.prepare_with_mode(device, queue, output_size, texts, true);
+    }
+
+    fn prepare_with_mode(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        output_size: (u32, u32),
+        texts: &[PreparedText],
+        force_segmented: bool,
+    ) {
         self.buffers.clear();
+        self.tracks.clear();
         self.buffers.reserve(texts.len());
+        self.tracks.reserve(texts.len());
         let mut specs = Vec::with_capacity(texts.len());
 
         for text in texts {
@@ -371,6 +396,7 @@ impl TextLayer {
             });
 
             self.buffers.push(buffer);
+            self.tracks.push(text.track);
             specs.push(AreaSpec {
                 bounds,
                 left: origin_left,
@@ -390,7 +416,8 @@ impl TextLayer {
             },
         );
 
-        self.segmented_render = specs.iter().any(|spec| spec.background.is_some());
+        self.segmented_render =
+            force_segmented || specs.iter().any(|spec| spec.background.is_some());
         if self.segmented_render {
             self.segment_backgrounds = specs.iter().map(|spec| spec.background.is_some()).collect();
             let background = self
@@ -464,6 +491,35 @@ impl TextLayer {
             warn!("Failed to render text: {error:?}");
         }
     }
+
+    pub fn render_track<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, track: u32) {
+        if !self.segmented_render {
+            return;
+        }
+        let Some(background) = &self.background else {
+            return;
+        };
+        for (index, (renderer, has_background)) in self
+            .segment_renderers
+            .iter()
+            .zip(&self.segment_backgrounds)
+            .enumerate()
+        {
+            if self.tracks.get(index) != Some(&track) {
+                continue;
+            }
+            if *has_background {
+                background.render(pass, index);
+            }
+            if let Err(error) = renderer.render(&self.text_atlas, &self.viewport, pass) {
+                warn!("Failed to render text: {error:?}");
+            }
+        }
+    }
+
+    pub fn has_track(&self, track: u32) -> bool {
+        self.segmented_render && self.tracks.contains(&track)
+    }
 }
 
 #[cfg(test)]
@@ -487,6 +543,7 @@ mod gpu_tests {
 
     fn text(bounds: [f32; 4], color: [f32; 4]) -> PreparedText {
         PreparedText {
+            track: 0,
             content: " ".to_string(),
             bounds,
             color: [1.0; 4],

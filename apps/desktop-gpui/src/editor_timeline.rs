@@ -34,8 +34,8 @@
 use std::sync::Arc;
 
 use cap_project::{
-    Camera3DSegment, CaptionTrackSegment, MaskKind, ProjectConfiguration, SceneMode, TextLayout,
-    TimelineConfiguration, ZoomMode,
+    Camera3DSegment, CaptionTrackSegment, MaskKind, OverlayTrack, OverlayTrackKind,
+    ProjectConfiguration, SceneMode, TextLayout, TimelineConfiguration, ZoomMode,
 };
 use gpui::{
     AnyElement, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
@@ -51,31 +51,73 @@ use crate::{
 // Layout constants (`TL/index.tsx:62-68`)
 // ---------------------------------------------------------------------------
 
-pub const TIMELINE_PADDING: f32 = 16.;
+/// The hairline the root shell's timeline card draws, and the padding the
+/// timeline lays out inside it: the brief's `10px 12px 12px` less that
+/// hairline, which every geometry helper below counts as part of the inset.
+pub const TIMELINE_CARD_BORDER: f32 = 1.;
+pub const TIMELINE_PADDING: f32 = 11.;
+pub const TIMELINE_TOP_PADDING: f32 = 9.;
+pub const TIMELINE_BOTTOM_PADDING: f32 = 11.;
 pub const TRACK_GUTTER_GAP: f32 = 8.;
-pub const TRACK_GUTTER: f32 = 112.;
+pub const TRACK_GUTTER: f32 = 104.;
 pub const TRACK_ICON_WIDTH: f32 = TRACK_GUTTER - TRACK_GUTTER_GAP;
-pub const TIMELINE_HEADER_HEIGHT: f32 = 32.;
-pub const PLAYHEAD_TOP_OFFSET: f32 = 24.;
+pub const TIMELINE_HEADER_HEIGHT: f32 = 26.;
+/// The playhead hangs from the ruler's baseline, which is the header's bottom
+/// edge measured from the card's padding box.
+pub const PLAYHEAD_TOP_OFFSET: f32 = TIMELINE_TOP_PADDING + TIMELINE_HEADER_HEIGHT;
 /// The snap-to-zero zone at the timeline's origin (`TL/index.tsx:68, 826`).
 pub const START_SNAP_PX: f64 = 10.;
 
-/// `px-2` on the timeline slot (`Editor.tsx:781`) -- the container's own left
-/// edge in window coordinates.
+/// `px-2` on the timeline slot (`Editor.tsx:781`) -- the card's own left edge
+/// in window coordinates.
 pub const TIMELINE_SLOT_PADDING: f32 = 8.;
-/// `pt-8` on the timeline container (`TL/index.tsx:1149`).
-pub const TIMELINE_TOP_PADDING: f32 = 32.;
 /// `pr-1` on the scroll body (`TL/index.tsx:1326`). The clip track -- which is
 /// what `timelineBounds` measures -- sits inside it, so every `secsPerPixel` in
 /// the timeline is computed over a column four pixels narrower than the ruler's.
 pub const SCROLL_BODY_PADDING_RIGHT: f32 = 4.;
 
-/// `visibleTrackCount() > 2 ? "3rem" : "3.25rem"` (`TL/index.tsx:268-270`).
-pub const TRACK_HEIGHT_COMPACT: f32 = 48.;
-pub const TRACK_HEIGHT_ROOMY: f32 = 52.;
-/// `gap-2` between rows (`TL/index.tsx:1333`) and between gutter and content
-/// (`TL/index.tsx:1516`).
-pub const TRACK_ROW_GAP: f32 = 8.;
+pub const TRACK_HEIGHT: f32 = 44.;
+pub const TRACK_ROW_GAP: f32 = 6.;
+/// The radius of the band a row draws across its gutter and lane.
+pub const TRACK_BAND_RADIUS: f32 = 8.;
+/// The gap between the ruler's baseline and the first track row. It is not the
+/// row gap: the ruler's ticks already hang into their own strip.
+pub const TIMELINE_HEADER_GAP: f32 = 4.;
+
+/// Everything the card spends before the first track row: its hairline, the
+/// padding inside it, the ruler and the gap under the ruler.
+pub const TIMELINE_CHROME_HEIGHT: f32 = TIMELINE_CARD_BORDER * 2.
+    + TIMELINE_TOP_PADDING
+    + TIMELINE_BOTTOM_PADDING
+    + TIMELINE_HEADER_HEIGHT
+    + TIMELINE_HEADER_GAP;
+
+/// The card height that leaves exactly one row visible -- the floor a resize
+/// drag (and the auto height) is allowed to reach.
+pub const MIN_HUG_HEIGHT: f32 = TIMELINE_CHROME_HEIGHT + TRACK_HEIGHT;
+
+/// The card height that exactly hugs `rows` visible track rows, [`build_rows`]
+/// being what decides how many there are.
+pub fn hug_height(rows: usize) -> f32 {
+    let rows = rows.max(1) as f32;
+    TIMELINE_CHROME_HEIGHT + rows * TRACK_HEIGHT + (rows - 1.) * TRACK_ROW_GAP
+}
+
+/// The ruler's ticks hang from the baseline: whole seconds are labelled and
+/// long, half seconds are short.
+const RULER_MAJOR_TICK: f32 = 8.;
+const RULER_MINOR_TICK: f32 = 5.;
+/// The gutter cell: a 22px tile at 4px of left padding, then the label.
+const TRACK_TILE_SIZE: f32 = 22.;
+const TRACK_TILE_INSET: f32 = 4.;
+/// The segment's radius, its left accent bar and the content inset that clears
+/// it (`0 10px 0 13px`).
+const SEGMENT_RADIUS: f32 = 8.;
+const SEGMENT_ACCENT_BAR: f32 = 3.;
+const SEGMENT_PADDING_LEFT: f32 = 13.;
+const SEGMENT_PADDING_RIGHT: f32 = 10.;
+/// The waveform's ceiling inside a row, so it never climbs into the labels.
+const WAVEFORM_MAX_HEIGHT: f32 = 18.;
 
 /// `SEGMENT_RENDER_PADDING` (`TL/context.ts:14`) -- seconds of slack either
 /// side of the viewport before a segment stops being rendered at all.
@@ -106,92 +148,91 @@ pub fn new_segment_min_duration(secs_per_pixel: f64) -> f64 {
     (MIN_NEW_SEGMENT_PIXEL_WIDTH * secs_per_pixel).max(MIN_NEW_SEGMENT_SECS_WIDTH)
 }
 
-/// The minimap's floor and its 12px strip (`TL/Minimap.tsx:9`, `TL/index.tsx:1209-1216`).
+/// The minimap's chip floor (`TL/Minimap.tsx:9`), the height of its hit strip
+/// and the 4px indicator drawn inside that strip, and the width it is allowed
+/// to take in the card's bottom-right corner.
 const MINIMAP_MIN_CHIP_WIDTH: f32 = 20.;
-pub const MINIMAP_HEIGHT: f32 = 12.;
-pub const MINIMAP_TOP: f32 = 2.;
+pub const MINIMAP_HEIGHT: f32 = 10.;
+pub const MINIMAP_BAR_HEIGHT: f32 = 4.;
+pub const MINIMAP_MAX_WIDTH: f32 = 78.;
 
 /// The edge fade (`TL/index.tsx:1103-1106`).
-const FADE_WIDTH: f32 = 32.;
-const FADE_RAMP_PX: f64 = 50.;
 
 // ---------------------------------------------------------------------------
 // Colours
 // ---------------------------------------------------------------------------
 
-/// The single source of truth for track colour is nine CSS custom properties
+/// The single source of truth for track colour is eleven CSS custom properties
 /// with one definition each -- not per-appearance values -- so they are literal
 /// in both themes exactly as they are there
-/// (`apps/desktop/src/styles/theme.css:24-34`):
-///
-/// ```css
-/// --track-clip:     #3f8ae0;   --track-zoom:     #4a4f5c;   --track-caption:  #6f747d;
-/// --track-keyboard: #d4742c;   --track-text:     #2898ac;   --track-mask:     #d2444b;
-/// --track-scene:    #975cfa;   --track-audio:    var(--jade-9);  --track-3d:   #7c6ff0;
-/// ```
-///
-/// `--jade-9` is `#29a383` in both `jade.css` and `jade-dark.css` (Radix keeps
-/// step 9 constant across the two), so it is a literal here too.
+/// (`apps/desktop/src/styles/theme.css`).
 pub mod track_color {
-    pub const CLIP: u32 = 0x3f8ae0;
-    pub const MUTED_CLIP: u32 = 0x5b6c80;
-    pub const ZOOM: u32 = 0x4a4f5c;
-    pub const CAPTION: u32 = 0x6f747d;
-    pub const KEYBOARD: u32 = 0xd4742c;
-    pub const TEXT: u32 = 0x2898ac;
-    pub const MASK: u32 = 0xd2444b;
-    pub const SCENE: u32 = 0x975cfa;
-    /// `var(--jade-9)`.
-    pub const AUDIO: u32 = 0x29a383;
-    pub const THREE_D: u32 = 0x7c6ff0;
+    pub const CLIP: u32 = 0x3b82f6;
+    pub const ZOOM: u32 = 0x64748b;
+    pub const CAPTION: u32 = 0x0ea5e9;
+    pub const KEYBOARD: u32 = 0xf97316;
+    pub const STYLE: u32 = 0xec4899;
+    pub const IMAGE: u32 = 0xf59e0b;
+    pub const TEXT: u32 = 0x14b8a6;
+    pub const MASK: u32 = 0xef4444;
+    pub const SCENE: u32 = 0x8b5cf6;
+    pub const AUDIO: u32 = 0x22c55e;
+    pub const THREE_D: u32 = 0x6366f1;
 }
 
-/// `.cap-track-fill { background: var(--seg-color); border: 1px solid
-/// color-mix(in srgb, var(--seg-color) 58%, black) }` (`TL/styles.css:23-26`).
-pub fn track_fill_border(color: Hsla) -> Hsla {
-    let rgba = gpui::Rgba::from(color);
-    gpui::Rgba {
-        r: rgba.r * 0.58,
-        g: rgba.g * 0.58,
-        b: rgba.b * 0.58,
-        a: rgba.a,
+/// A muted clip keeps the clip lane's shape but drops its hue, so it reads as
+/// the row's own disabled state rather than as a different track.
+fn muted_clip_color(theme: &Theme) -> Hsla {
+    Hsla::from(theme.editor.text_3)
+}
+
+/// The `EditorPalette` mixers work in `Rgba`, which is what the `--ed-*`
+/// tokens are; every track colour in this file is an `Hsla`.
+fn seg_fill(theme: &Theme, color: Hsla, selected: bool) -> Hsla {
+    let color = gpui::Rgba::from(color);
+    if selected {
+        theme.editor.seg_fill_selected(color).into()
+    } else {
+        theme.editor.seg_fill(color).into()
     }
-    .into()
 }
 
-/// The playhead's `from-[rgb(226,64,64)]` (`TL/index.tsx:1281`).
-pub fn playhead_color() -> Hsla {
-    gpui::rgb(0xe24040).into()
+fn seg_border(theme: &Theme, color: Hsla, extra_alpha: f32) -> Hsla {
+    let border = theme.editor.seg_border(gpui::Rgba::from(color));
+    Hsla::from(crate::theme::rgba_alpha(
+        border,
+        (border.a + extra_alpha).clamp(0., 1.),
+    ))
 }
 
-/// `bg-linear-to-b to-120% from-<color>`: the gradient runs from the colour at
-/// 0 % to fully transparent at **120 %** of the box, so at the bottom edge it
-/// still carries 1 - 1/1.2 = 1/6 of its alpha. gpui takes two stops, which is
-/// exactly what this needs once the 120 % is folded into the end alpha.
-fn playhead_gradient(color: Hsla) -> gpui::Background {
-    let mut faded = color;
-    faded.a = color.a / 6.;
-    gpui::linear_gradient(
-        180.,
-        gpui::linear_color_stop(color, 0.),
-        gpui::linear_color_stop(faded, 1.),
-    )
+fn seg_label(theme: &Theme, color: Hsla) -> Hsla {
+    theme.editor.seg_label(gpui::Rgba::from(color)).into()
+}
+
+fn seg_muted(theme: &Theme, color: Hsla) -> Hsla {
+    theme.editor.seg_muted(gpui::Rgba::from(color)).into()
+}
+
+fn seg_handle(theme: &Theme, color: Hsla) -> Hsla {
+    theme.editor.seg_handle(gpui::Rgba::from(color)).into()
+}
+
+pub(crate) fn tile_bg(theme: &Theme, color: Hsla) -> Hsla {
+    theme.editor.tile_bg(gpui::Rgba::from(color)).into()
+}
+
+pub(crate) fn tile_fg(theme: &Theme, color: Hsla) -> Hsla {
+    theme.editor.tile_fg(gpui::Rgba::from(color)).into()
 }
 
 fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
     Hsla { a: alpha, ..color }
 }
 
-/// `--text-tertiary` (`theme.css:58, 122`), the three empty tracks' copy
-/// colour: `rgba(18, 22, 31, 0.65)` in light, `rgba(255, 255, 255, 0.65)` in
-/// dark. `Theme` carries `--text-primary` but not this one, so it is spelled
-/// out where it is used rather than growing the token set for one caller.
-fn text_tertiary(theme: &Theme) -> Hsla {
-    if theme.is_dark() {
-        with_alpha(gpui::white(), 0.65)
-    } else {
-        with_alpha(gpui::rgb(0x12161f).into(), 0.65)
-    }
+/// Times read as columns of digits, so every one of them is set in the font's
+/// tabular figures.
+fn tabular_numerals() -> gpui::FontFeatures {
+    gpui::FontFeatures(Arc::new(vec![("tnum".to_string(), 1)]))
 }
 
 // ---------------------------------------------------------------------------
@@ -327,11 +368,11 @@ impl Transform {
 
 /// `timelineBounds.width`, which every `secsPerPixel` divides by: the window,
 /// less the timeline slot's `px-2`, less the container's own 16px padding on
-/// each side, less the scroll body's `pr-1`, less the 112px icon gutter.
+/// each side, less the scroll body's `pr-1`, less the gutter.
 pub fn content_width(viewport_width: f32) -> f32 {
     (viewport_width
         - TIMELINE_SLOT_PADDING * 2.
-        - TIMELINE_PADDING * 2.
+        - (TIMELINE_CARD_BORDER + TIMELINE_PADDING) * 2.
         - SCROLL_BODY_PADDING_RIGHT
         - TRACK_GUTTER)
         .max(1.)
@@ -343,7 +384,11 @@ pub fn content_width(viewport_width: f32) -> f32 {
 /// scaled by the clip track's `secsPerPixel`. Ticks therefore line up with the
 /// tracks and the strip simply has four pixels of slack at its right edge.
 pub fn ruler_width(viewport_width: f32) -> f32 {
-    (viewport_width - TIMELINE_SLOT_PADDING * 2. - TIMELINE_PADDING * 2. - TRACK_GUTTER).max(1.)
+    (viewport_width
+        - TIMELINE_SLOT_PADDING * 2.
+        - (TIMELINE_CARD_BORDER + TIMELINE_PADDING) * 2.
+        - TRACK_GUTTER)
+        .max(1.)
 }
 
 /// The window x of the track content column's left edge --
@@ -351,7 +396,7 @@ pub fn ruler_width(viewport_width: f32) -> f32 {
 /// (`TL/index.tsx:803-816`), where `rect` is the timeline container, itself
 /// inset by the slot's `px-2`.
 pub fn content_left() -> f32 {
-    TIMELINE_SLOT_PADDING + TIMELINE_PADDING + TRACK_GUTTER
+    TIMELINE_SLOT_PADDING + TIMELINE_CARD_BORDER + TIMELINE_PADDING + TRACK_GUTTER
 }
 
 /// `timelineTimeFromClientX` (`TL/index.tsx:818-828`), verbatim including the
@@ -629,16 +674,10 @@ pub fn waveform_sample_count(canvas_width: f64) -> usize {
     ((canvas_width * WAVEFORM_SAMPLES_PER_PIXEL).ceil() as usize).min(MAX_WAVEFORM_SAMPLES)
 }
 
-/// `drawWaveform`'s two colours (`TL/ClipTrack.tsx:293-302`): the mic in white
-/// at 40 %, system audio in orange at 50 %.
-pub const WAVEFORM_MIC_COLOR: Hsla = Hsla {
-    h: 0.,
-    s: 0.,
-    l: 1.,
-    a: 0.4,
-};
-pub fn waveform_system_color() -> Hsla {
-    with_alpha(gpui::rgb(0xff9600).into(), 0.5)
+/// Both waveforms are the lane's own colour at 55 %: over a tinted segment a
+/// white or orange fill (`TL/ClipTrack.tsx:293-302`) has nothing to sit on.
+pub fn waveform_color(color: Hsla) -> Hsla {
+    with_alpha(color, 0.55)
 }
 
 // ---------------------------------------------------------------------------
@@ -700,8 +739,8 @@ impl TrackKind {
     pub fn color(self) -> Hsla {
         gpui::rgb(match self {
             Self::Clip => track_color::CLIP,
-            Self::Style => 0xa855f7,
-            Self::Image => 0xf59e0b,
+            Self::Style => track_color::STYLE,
+            Self::Image => track_color::IMAGE,
             Self::Caption => track_color::CAPTION,
             Self::Keyboard => track_color::KEYBOARD,
             Self::Text => track_color::TEXT,
@@ -749,6 +788,16 @@ impl TrackKind {
             self,
             Self::Text | Self::Mask | Self::Audio | Self::Style | Self::Image
         )
+    }
+
+    pub fn overlay_track(self, track: u32) -> Option<OverlayTrack> {
+        let kind = match self {
+            Self::Mask => OverlayTrackKind::Mask,
+            Self::Image => OverlayTrackKind::Image,
+            Self::Text => OverlayTrackKind::Text,
+            _ => return None,
+        };
+        Some(OverlayTrack { kind, track })
     }
 }
 
@@ -958,6 +1007,20 @@ pub struct TrackRow {
     pub lane: u32,
 }
 
+impl TrackRow {
+    pub fn from_overlay_track(track: OverlayTrack) -> Self {
+        let kind = match track.kind {
+            OverlayTrackKind::Mask => TrackKind::Mask,
+            OverlayTrackKind::Image => TrackKind::Image,
+            OverlayTrackKind::Text => TrackKind::Text,
+        };
+        Self {
+            kind,
+            lane: track.track,
+        }
+    }
+}
+
 /// Everything the timeline draws, derived once per project-config change.
 #[derive(Debug, Clone, Default)]
 pub struct TimelineModel {
@@ -992,14 +1055,8 @@ pub struct TimelineModel {
 }
 
 impl TimelineModel {
-    /// `visibleTrackCount()` (`TL/index.tsx:257-267`) -- `rows` already is that
-    /// list, so the count is its length; the two locked tracks are in it.
     pub fn track_height(&self) -> f32 {
-        if self.rows.len() > 2 {
-            TRACK_HEIGHT_COMPACT
-        } else {
-            TRACK_HEIGHT_ROOMY
-        }
+        TRACK_HEIGHT
     }
 
     fn segments_for(&self, row: TrackRow) -> &[Segment] {
@@ -1277,16 +1334,37 @@ fn build_rows(
             lane: 0,
         });
     }
+    for lane in (0..lane_count(&model.style).max(lanes.style)).rev() {
+        rows.push(TrackRow {
+            kind: TrackKind::Style,
+            lane,
+        });
+    }
+    let mut overlay_tracks = Vec::new();
     for (kind, segments, count) in [
         (TrackKind::Style, &model.style, lanes.style),
         (TrackKind::Image, &model.image, lanes.image),
         (TrackKind::Text, &model.text, lanes.text),
+        (TrackKind::Image, &model.image, lanes.image),
         (TrackKind::Mask, &model.mask, lanes.mask),
-        (TrackKind::Audio, &model.audio, lanes.audio),
     ] {
-        for lane in 0..lane_count(segments).max(count) {
-            rows.push(TrackRow { kind, lane });
-        }
+        overlay_tracks.extend(
+            (0..lane_count(segments).max(count))
+                .rev()
+                .filter_map(|lane| kind.overlay_track(lane)),
+        );
+    }
+    rows.extend(
+        config
+            .resolved_overlay_order(&overlay_tracks)
+            .into_iter()
+            .map(TrackRow::from_overlay_track),
+    );
+    for lane in (0..lane_count(&model.audio).max(lanes.audio)).rev() {
+        rows.push(TrackRow {
+            kind: TrackKind::Audio,
+            lane,
+        });
     }
     rows.push(TrackRow {
         kind: TrackKind::Zoom,
@@ -1524,45 +1602,62 @@ impl SegmentUi<'_> {
     fn is_hovered(&self, kind: TrackKind, lane: u32, index: usize) -> bool {
         self.hovered == Some((kind, lane, index))
     }
+
+    fn row_selected(&self, model: &TimelineModel, row: TrackRow) -> bool {
+        self.selection.is_some_and(|selection| {
+            selection.track == row.kind
+                && model
+                    .segments_for(row)
+                    .iter()
+                    .enumerate()
+                    .any(|(index, segment)| {
+                        segment.lane == row.lane && selection.indices.contains(&index)
+                    })
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
-/// The gutter chip: `cap-track-fill` + `relative z-10 w-full h-13 flex flex-col
-/// items-center justify-center gap-0.5 rounded-xl shadow-[...] text-white`
-/// (`TL/TrackManager.tsx:264-281`).
-///
-/// **`h-13` is 52px and deliberately does not follow `--track-height`**, so on
-/// a timeline with more than two rows (48px) the chip overhangs its row. That
-/// is the source's own behaviour, kept.
-pub fn track_chip(kind: TrackKind) -> impl IntoElement {
+/// The gutter cell: a tinted 22px tile carrying the track's glyph, then the
+/// track's name. The saturated pill the source draws
+/// (`TL/TrackManager.tsx:264-281`) is gone.
+pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
     let color = kind.color();
     div()
         .w_full()
-        .h(px(52.))
+        .h_full()
         .flex()
-        .flex_col()
+        .flex_row()
         .items_center()
-        .justify_center()
-        .gap(px(2.))
-        .rounded(px(12.))
-        .bg(color)
-        .border_1()
-        .border_color(track_fill_border(color))
-        .text_color(gpui::white())
+        .gap(px(8.))
+        .pl(px(TRACK_TILE_INSET))
+        .pr(px(6.))
         .child(
-            svg()
-                .path(kind.icon())
-                .size(px(16.))
+            div()
                 .flex_none()
-                .text_color(gpui::white()),
+                .size(px(TRACK_TILE_SIZE))
+                .rounded(px(6.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(tile_bg(theme, color))
+                .child(
+                    svg()
+                        .path(kind.icon())
+                        .size(px(12.))
+                        .flex_none()
+                        .text_color(tile_fg(theme, color)),
+                ),
         )
         .child(
             div()
-                .text_size(px(10.))
-                .line_height(px(10.))
+                .min_w_0()
+                .truncate()
+                .text_size(px(11.))
+                .line_height(px(14.))
                 .font_weight(FontWeight::MEDIUM)
                 .child(kind.label()),
         )
@@ -1585,14 +1680,10 @@ pub fn render_ruler(theme: &Theme, view: TimelineView, viewport_width: f32) -> A
 
     let count = (2. + (transform.zoom + 5.) / resolution).ceil().max(0.) as usize;
     let offset = transform.position % resolution;
+    let tick = Hsla::from(theme.editor.line_strong);
+    let label = Hsla::from(theme.editor.text_3);
 
-    let mut body = div()
-        .relative()
-        .flex_1()
-        .h(px(16.))
-        .ml(px(TRACK_GUTTER))
-        .text_size(px(12.))
-        .text_color(Hsla::from(theme.gray_9));
+    let mut body = div().relative().flex_1().h_full().ml(px(TRACK_GUTTER));
 
     // The source renders every mark and hides the negative ones with
     // `visibility`, which costs nothing there and would cost an element here.
@@ -1601,26 +1692,28 @@ pub fn render_ruler(theme: &Theme, view: TimelineView, viewport_width: f32) -> A
         if second < 0. {
             continue;
         }
-        let x = (second - transform.position) / secs_per_pixel - 1.;
+        let x = (second - transform.position) / secs_per_pixel;
         if x > strip_width {
             break;
         }
-        let show_label = second % 1. == 0.;
+        let major = second % 1. == 0.;
         body = body.child(
             div()
                 .absolute()
                 .left(px(x as f32))
-                .bottom(px(4.))
-                .size(px(4.))
-                .rounded_full()
-                .bg(Hsla::from(theme.gray_9))
-                .when(show_label, |this| {
+                .bottom_0()
+                .w(px(1.))
+                .h(px(if major {
+                    RULER_MAJOR_TICK
+                } else {
+                    RULER_MINOR_TICK
+                }))
+                .bg(tick)
+                .when(major, |this| {
                     this.child(
                         div()
                             .absolute()
-                            // `-top-4.5` = -18px, and the origin's label is
-                            // left-anchored (`TL/index.tsx:1591-1594`).
-                            .top(px(-18.))
+                            .bottom(px(10.))
                             // `-translate-x-1/2` on every label but the
                             // origin's, which is left-anchored so it does not
                             // overhang into the icon gutter
@@ -1632,9 +1725,10 @@ pub fn render_ruler(theme: &Theme, view: TimelineView, viewport_width: f32) -> A
                             .w(px(44.))
                             .flex()
                             .when(second != 0., |this| this.justify_center())
-                            .text_size(px(12.))
-                            .line_height(px(16.))
-                            .text_color(Hsla::from(theme.gray_9))
+                            .text_size(px(11.))
+                            .line_height(px(13.))
+                            .font_features(tabular_numerals())
+                            .text_color(label)
                             .child(format_time(second)),
                     )
                 }),
@@ -1648,6 +1742,15 @@ pub fn render_ruler(theme: &Theme, view: TimelineView, viewport_width: f32) -> A
         .items_end()
         .child(body)
         .into_any_element()
+}
+
+/// The minimap's strip: pinned to the card's inner right edge, at most
+/// [`MINIMAP_MAX_WIDTH`] wide. Returns its window x and its width, which the
+/// drag maths and the drawn bar have to agree on.
+pub fn minimap_bounds(viewport_width: f32) -> (f32, f32) {
+    let strip = ruler_width(viewport_width);
+    let width = MINIMAP_MAX_WIDTH.min(strip);
+    (content_left() + strip - width, width)
 }
 
 pub fn minimap_chip(transform: Transform, total_duration: f64, bar_width: f32) -> (f32, f32) {
@@ -1759,12 +1862,10 @@ pub fn render_minimap(
     let mut bar = div()
         .relative()
         .w_full()
-        .h_full()
+        .h(px(MINIMAP_BAR_HEIGHT))
         .overflow_hidden()
-        .rounded_full()
-        .border_1()
-        .border_color(Hsla::from(theme.gray_4))
-        .bg(with_alpha(Hsla::from(theme.gray_3), 0.8))
+        .rounded(px(2.))
+        .bg(Hsla::from(theme.editor.ctl_active))
         .when(!zoomed_in, |this| this.opacity(0.));
 
     for offset in &model.clip_boundaries {
@@ -1778,99 +1879,47 @@ pub fn render_minimap(
                 .bottom_0()
                 .left(gpui::relative((offset / total) as f32))
                 .w(px(1.))
-                .bg(with_alpha(Hsla::from(theme.gray_6), 0.5)),
+                .bg(with_alpha(TrackKind::Clip.color(), 0.5)),
         );
     }
 
-    bar.child(
-        div()
-            .id("timeline-minimap-chip")
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .left(px(chip_left))
-            .w(px(chip_width))
-            .rounded_full()
-            .border_1()
-            .border_color(with_alpha(Hsla::from(theme.gray_7), 0.8))
-            .bg(with_alpha(Hsla::from(theme.gray_6), 0.7))
-            .cursor(gpui::CursorStyle::OpenHand)
-            .hover(|style| style.bg(with_alpha(Hsla::from(theme.gray_7), 0.7)))
-            .children([true, false].map(|left| {
+    div()
+        .w_full()
+        .h_full()
+        .flex()
+        .items_center()
+        .child(
+            bar.child(
                 div()
+                    .id("timeline-minimap-chip")
                     .absolute()
                     .top_0()
                     .bottom_0()
-                    .w(px(8.))
-                    .when(left, |handle| handle.left_0())
-                    .when(!left, |handle| handle.right_0())
-                    .cursor(gpui::CursorStyle::ResizeLeftRight)
-            })),
-    )
-    .into_any_element()
-}
-
-/// The edge-fade strength either side of the viewport (`TL/index.tsx:1097-1139`).
-///
-/// The source expresses it as a `mask-image` with a stop whose alpha ramps over
-/// `FADE_RAMP_PX` of scroll; gpui has no mask-image, so [`render_edge_fade`]
-/// paints the same ramp as two gradient overlays in the container's own
-/// background colour. The strengths are the source's exactly.
-pub fn edge_fade_strengths(
-    model: &TimelineModel,
-    view: TimelineView,
-    viewport_width: f32,
-) -> (f32, f32) {
-    let secs_per_pixel = view.transform.secs_per_pixel(content_width(viewport_width));
-    let scroll_left_px = view.transform.position / secs_per_pixel;
-    let left = (scroll_left_px / FADE_RAMP_PX).clamp(0., 1.);
-    let scroll_right_px =
-        (model.total_duration - (view.transform.position + view.transform.zoom)) / secs_per_pixel;
-    let right = (scroll_right_px / FADE_RAMP_PX).clamp(0., 1.);
-    (left as f32, right as f32)
-}
-
-/// The two 32px gradients [`edge_fade_strengths`] describes, painted over the
-/// scroll body's left and right edges in `background`.
-pub fn render_edge_fade(background: Hsla, strengths: (f32, f32)) -> AnyElement {
-    let transparent = with_alpha(background, 0.);
-    div()
-        .absolute()
-        .inset_0()
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left(px(TRACK_GUTTER))
-                .w(px(FADE_WIDTH))
-                .opacity(strengths.0)
-                .bg(gpui::linear_gradient(
-                    90.,
-                    gpui::linear_color_stop(background, 0.),
-                    gpui::linear_color_stop(transparent, 1.),
-                )),
-        )
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .right_0()
-                .w(px(FADE_WIDTH))
-                .opacity(strengths.1)
-                .bg(gpui::linear_gradient(
-                    90.,
-                    gpui::linear_color_stop(transparent, 0.),
-                    gpui::linear_color_stop(background, 1.),
-                )),
+                    .left(px(chip_left))
+                    .w(px(chip_width))
+                    .rounded(px(2.))
+                    .bg(with_alpha(Hsla::from(theme.editor.text_3), 0.5))
+                    .cursor(gpui::CursorStyle::OpenHand)
+                    .hover(|style| style.bg(with_alpha(Hsla::from(theme.editor.text_3), 0.75)))
+                    .children([true, false].map(|left| {
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .w(px(8.))
+                            .when(left, |handle| handle.left_0())
+                            .when(!left, |handle| handle.right_0())
+                            .cursor(gpui::CursorStyle::ResizeLeftRight)
+                    })),
+            ),
         )
         .into_any_element()
 }
 
-/// One track row: `flex items-stretch gap-2`, a 104px gutter cell and a
-/// `flex-1 relative overflow-hidden min-w-0` content cell
-/// (`TL/index.tsx:1516-1550`).
+/// One track row, drawn as a single band across the gutter and the lane so a
+/// label always reads as belonging to the strip beside it: the gutter cell in
+/// the band's leading [`TRACK_GUTTER`] pixels, then a `flex-1 relative
+/// overflow-hidden min-w-0` content cell (`TL/index.tsx:1516-1550`).
 pub fn render_row(
     theme: &Theme,
     model: &TimelineModel,
@@ -1880,19 +1929,34 @@ pub fn render_row(
     ui: SegmentUi<'_>,
 ) -> AnyElement {
     let height = model.track_height();
+    let selected = ui.row_selected(model, row);
+    let active_bg = Hsla::from(theme.editor.ctl_hover);
+    let active_text = Hsla::from(theme.editor.text_1);
     div()
+        .relative()
         .flex()
         .flex_row()
         .items_stretch()
-        .gap(px(TRACK_ROW_GAP))
         .h(px(height))
         .flex_none()
+        .rounded(px(TRACK_BAND_RADIUS))
+        .bg(if selected {
+            active_bg
+        } else {
+            Hsla::from(theme.editor.ctl)
+        })
+        .text_color(if selected {
+            active_text
+        } else {
+            Hsla::from(theme.editor.text_2)
+        })
+        .hover(|style| style.bg(active_bg).text_color(active_text))
         .child(
             div()
-                .w(px(TRACK_ICON_WIDTH))
+                .w(px(TRACK_GUTTER))
                 .flex_none()
                 .relative()
-                .child(track_chip(row.kind)),
+                .child(track_chip(theme, row.kind)),
         )
         .child(
             div()
@@ -1900,6 +1964,7 @@ pub fn render_row(
                 .relative()
                 .overflow_hidden()
                 .min_w_0()
+                .rounded_r(px(TRACK_BAND_RADIUS))
                 .child(render_track_content(
                     theme,
                     model,
@@ -1980,6 +2045,7 @@ fn render_track_content(
         && let Some(ghost) = new_zoom_segment(model, preview, secs_per_pixel)
     {
         content = content.child(render_gap_ghost(
+            theme,
             TrackKind::Zoom,
             ghost,
             view,
@@ -1995,6 +2061,7 @@ fn render_track_content(
         && let Some(ghost) = new_scene_segment(model, preview)
     {
         content = content.child(render_gap_ghost(
+            theme,
             TrackKind::Scene,
             ghost,
             view,
@@ -2145,11 +2212,11 @@ fn render_camera3d_setup_ghost(
         .bottom_0()
         .left(px(x))
         .w(px(width))
-        .rounded(px(12.))
+        .rounded(px(SEGMENT_RADIUS))
         .border_1()
         .border_dashed()
-        .border_color(with_alpha(color, 0.7))
-        .bg(with_alpha(color, 0.14))
+        .border_color(seg_border(theme, color, 0.))
+        .bg(seg_fill(theme, color, false))
         .child(
             div()
                 .h(px(height))
@@ -2160,13 +2227,9 @@ fn render_camera3d_setup_ghost(
                 .px(px(8.))
                 .child(
                     div()
-                        .px(px(8.))
-                        .py(px(2.))
-                        .rounded(px(6.))
-                        .bg(with_alpha(Hsla::from(theme.gray_1), 0.82))
                         .text_size(px(12.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(Hsla::from(theme.gray_12))
+                        .text_color(seg_label(theme, color))
                         .child(SharedString::from(label.to_string())),
                 ),
         )
@@ -2174,6 +2237,7 @@ fn render_camera3d_setup_ghost(
 }
 
 fn render_gap_ghost(
+    theme: &Theme,
     kind: TrackKind,
     (start, end): (f64, f64),
     view: TimelineView,
@@ -2189,9 +2253,6 @@ fn render_gap_ghost(
         .bottom_0()
         .left(px(x))
         .w(px(width))
-        .rounded(px(12.))
-        .border_1()
-        .border_color(gpui::transparent_black())
         .child(
             div()
                 .relative()
@@ -2200,200 +2261,109 @@ fn render_gap_ghost(
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(12.))
+                .rounded(px(SEGMENT_RADIUS))
                 .overflow_hidden()
-                .bg(color)
+                .bg(seg_fill(theme, color, false))
                 .border_1()
-                .border_color(track_fill_border(color))
-                .text_color(gpui::white())
-                // Genuinely 16px, unlike the `text-md` label rows below: the
-                // ghost `<p class="... text-md text-primary">`
-                // (`TL/ZoomTrack.tsx:797`) has *no* sized ancestor anywhere up
-                // to `<body>`, and nothing in the stylesheet sets a body
-                // font-size, so it lands on the 16px UA default. Leave it.
-                .text_size(px(16.))
+                .border_dashed()
+                .border_color(seg_border(theme, color, 0.))
+                .text_size(px(14.))
+                .text_color(seg_label(theme, color))
                 .child("+"),
         )
         .into_any_element()
 }
 
-/// Radix emerald steps the empty audio button uses
-/// (`TL/AudioTrack.tsx:405-420`). Step 9 is constant across appearances.
-fn emerald_9() -> Hsla {
-    gpui::rgb(0x30a46c).into()
-}
-
-fn emerald_11(theme: &Theme) -> Hsla {
-    if theme.is_dark() {
-        gpui::rgb(0x6dcea4).into()
-    } else {
-        gpui::rgb(0x18794e).into()
-    }
-}
-
-fn render_add_track_empty(
+/// The in-lane empty prompt: the track's own copy centred on the lane's band
+/// and, where a click fills the lane, the action word that does it. The
+/// floating pills and buttons the source draws are gone.
+fn render_empty_prompt(
     theme: &Theme,
-    label: &'static str,
-    accent: Hsla,
-    accent_text: Hsla,
-    active: bool,
+    color: Hsla,
+    copy: &'static str,
+    action: Option<&'static str>,
     hovered: bool,
+    active: bool,
 ) -> AnyElement {
-    let emphasized = active || hovered;
-    let border = if active {
-        accent
-    } else if hovered {
-        with_alpha(accent, 0.6)
-    } else {
-        with_alpha(Hsla::from(theme.gray_4), 0.85)
-    };
-    let background = if active {
-        with_alpha(accent, 0.1)
-    } else if hovered {
-        with_alpha(accent, 0.05)
-    } else {
-        with_alpha(Hsla::from(theme.gray_3), 0.2)
-    };
-    let text = if active {
-        accent_text
-    } else if hovered {
-        Hsla::from(theme.gray_12)
-    } else {
-        Hsla::from(theme.gray_11)
-    };
-    let chip_bg = if emphasized {
-        accent
-    } else {
-        with_alpha(Hsla::from(theme.gray_4), 0.55)
-    };
-    let chip_fg = if emphasized {
-        gpui::white()
-    } else {
-        Hsla::from(theme.gray_12)
-    };
-
     div()
         .absolute()
         .inset_0()
         .flex()
         .flex_row()
-        .gap(px(8.))
         .items_center()
         .justify_center()
-        .w_full()
-        .rounded(px(12.))
-        .border_1()
-        .when(!active, |this| this.border_dashed())
-        .border_color(border)
-        .bg(background)
-        .text_size(px(14.))
-        .text_color(text)
-        .child(
+        .gap(px(5.))
+        .px(px(10.))
+        .rounded(px(SEGMENT_RADIUS))
+        .when(active, |this| this.bg(seg_fill(theme, color, false)))
+        .text_size(px(12.))
+        .line_height(px(16.))
+        .text_color(Hsla::from(if hovered {
+            theme.editor.text_2
+        } else {
+            theme.editor.text_3
+        }))
+        .child(div().min_w_0().truncate().child(copy))
+        .children(action.map(|action| {
             div()
                 .flex()
+                .flex_row()
+                .flex_none()
                 .items_center()
-                .justify_center()
-                .rounded_full()
-                .size(px(24.))
-                .bg(chip_bg)
+                .gap(px(5.))
+                .child("\u{b7}")
                 .child(
-                    svg()
-                        .path("icons/plus.svg")
-                        .size(px(14.))
-                        .text_color(chip_fg),
-                ),
-        )
-        .child(div().font_weight(FontWeight::MEDIUM).child(label))
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(Hsla::from(theme.editor.text_2))
+                        .child(action),
+                )
+        }))
         .into_any_element()
 }
 
-/// The empty-lane states. Only three tracks have one; the rest render nothing.
+/// The empty-lane states. The zoom lane's own prompt is interactive and lives
+/// on the window's row overlay instead.
 fn render_empty_track(
     theme: &Theme,
     kind: TrackKind,
     hovered: bool,
     active: bool,
 ) -> Option<AnyElement> {
-    match kind {
+    let (copy, action) = match kind {
         // `TL/CaptionsTrack.tsx:146-160`.
-        TrackKind::Caption => Some(
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .flex_col()
-                .gap(px(8.))
-                .items_center()
-                .justify_center()
-                .rounded(px(12.))
-                .bg(with_alpha(Hsla::from(theme.gray_3), 0.1))
-                .text_size(px(14.))
-                .text_color(text_tertiary(theme))
-                .child("No captions")
-                .into_any_element(),
-        ),
+        TrackKind::Caption => ("No captions", None),
         // `TL/KeyboardTrack.tsx:146-153`.
-        TrackKind::Keyboard => Some(
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .rounded(px(12.))
-                .bg(with_alpha(Hsla::from(theme.gray_3), 0.1))
-                .text_size(px(14.))
-                .text_color(text_tertiary(theme))
-                .child("No keyboard events")
-                .child(
-                    div()
-                        .mt(px(2.))
-                        .text_size(px(10.))
-                        .text_color(with_alpha(text_tertiary(theme), 0.4))
-                        .child("Record keyboard presses or generate from recording"),
-                )
-                .into_any_element(),
+        TrackKind::Keyboard => ("No keyboard events", None),
+        // `TL/AudioTrack.tsx:400-427`, `TL/ThreeDTrack.tsx:319-337`, and the
+        // scene lane, which had no empty state at all.
+        TrackKind::Audio => (
+            kind.picker_description().trim_end_matches('.'),
+            Some("Add audio"),
         ),
-        // `TL/AudioTrack.tsx:400-427` -- the dashed "Add audio" button.
-        TrackKind::Audio => Some(render_add_track_empty(
-            theme,
-            "Add audio",
-            emerald_9(),
-            emerald_11(theme),
-            active,
-            hovered,
-        )),
-        // `TL/ThreeDTrack.tsx:319-337`.
-        TrackKind::ThreeD => Some(render_add_track_empty(
-            theme,
-            "Add 3D scene",
-            TrackKind::ThreeD.color(),
-            Hsla::from(theme.gray_12),
-            active,
-            hovered,
-        )),
-        // The empty zoom track's tint (`TL/ZoomTrack.tsx:300`):
-        // `bg-gray-3/20 dark:bg-gray-3/10 rounded-xl`. The generate button is
-        // interactive and lives on the window's row overlay instead.
-        TrackKind::Zoom => Some(
-            div()
-                .absolute()
-                .inset_0()
-                .rounded(px(12.))
-                .bg(with_alpha(
-                    Hsla::from(theme.gray_3),
-                    if theme.is_dark() { 0.1 } else { 0.2 },
-                ))
-                .into_any_element(),
+        TrackKind::ThreeD => (
+            kind.picker_description().trim_end_matches('.'),
+            Some("Add 3D scene"),
         ),
-        _ => None,
-    }
+        TrackKind::Scene => (
+            kind.picker_description().trim_end_matches('.'),
+            Some("Add scene"),
+        ),
+        _ => return None,
+    };
+    Some(render_empty_prompt(
+        theme,
+        kind.color(),
+        copy,
+        action,
+        hovered,
+        active,
+    ))
 }
 
-/// `SegmentRoot` (`TL/Track.tsx:100-137`): the positioned outer box with its
-/// selection border, the `cap-track-fill` inner box, the label at whatever tier
-/// its visible width allows, and the two trim handles.
+/// `SegmentRoot` (`TL/Track.tsx:100-137`): the positioned box, its tinted fill
+/// and inset ring, the accent bar flush against its left edge, the label at
+/// whatever tier its visible width allows, and the two trim handles.
 #[allow(clippy::too_many_arguments)]
 fn render_segment(
     theme: &Theme,
@@ -2408,7 +2378,7 @@ fn render_segment(
     split_mode: bool,
 ) -> AnyElement {
     let color = if matches!(segment.detail, SegmentDetail::Clip { muted: true, .. }) {
-        gpui::rgb(track_color::MUTED_CLIP).into()
+        muted_clip_color(theme)
     } else {
         kind.color()
     };
@@ -2437,11 +2407,18 @@ fn render_segment(
         .w_full()
         .flex()
         .flex_row()
-        .rounded(px(12.))
+        .rounded(px(SEGMENT_RADIUS))
         .overflow_hidden()
-        .bg(color)
-        .border_1()
-        .border_color(track_fill_border(color));
+        .bg(seg_fill(theme, color, selected))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .w(px(SEGMENT_ACCENT_BAR))
+                .bg(color),
+        );
 
     // The clip track's waveform and its per-second markings, both under the
     // label (`TL/ClipTrack.tsx:943-957`).
@@ -2460,10 +2437,11 @@ fn render_segment(
                 view,
                 width,
                 height,
+                color,
             ));
         }
         fill = fill.child(render_clip_markings(
-            theme,
+            color,
             segment,
             holds,
             view,
@@ -2473,11 +2451,18 @@ fn render_segment(
         for (hold_start, hold_end) in holds.iter() {
             let hold_x = ((hold_start - segment.start) / secs_per_pixel) as f32;
             let hold_width = ((hold_end - hold_start) / secs_per_pixel) as f32;
-            fill = fill.child(render_hold(hold_x, hold_width));
+            fill = fill.child(render_hold(theme, color, hold_x, hold_width));
         }
     }
 
-    fill = fill.child(render_label(theme, kind, segment, visible_width, center_x));
+    fill = fill.child(render_label(
+        theme,
+        color,
+        segment,
+        visible_width,
+        center_x,
+        kind,
+    ));
 
     // The audio track's fade envelopes (`FadeControl`,
     // `TL/AudioTrack.tsx:118-201`). The fade *handles* -- dragging the envelope
@@ -2493,25 +2478,28 @@ fn render_segment(
             if fraction <= 0.001 {
                 continue;
             }
-            fill = fill.child(render_fade(edge_in, fraction as f32, width, height));
+            fill = fill.child(render_fade(
+                theme,
+                color,
+                edge_in,
+                fraction as f32,
+                width,
+                height,
+            ));
         }
     }
 
     // `SegmentHandle` (`TL/Track.tsx:236-258`): a 20px hit target with a 3px
-    // visible bar, half-overhanging each edge. `compact() ? "opacity-55" :
-    // "opacity-35 group-hover:opacity-100"`, and the clip track's own handles
-    // add `opacity-0 group-hover:opacity-100` (`TL/ClipTrack.tsx:1137, 1286`).
-    // A *compact* handle carries no `group-hover` class, so it stays at 0.55
-    // with the pointer on it.
+    // visible bar, half-overhanging each edge. A *compact* handle carries no
+    // `group-hover` class over there, so it stays visible with the pointer on
+    // it (`TL/Track.tsx:250`).
     let compact = (width as f64) < 40.;
     let handle_opacity = if compact {
         0.55
     } else if hovered {
-        1.
-    } else if kind == TrackKind::Clip {
-        0.
+        0.9
     } else {
-        0.35
+        0.
     };
 
     div()
@@ -2520,28 +2508,25 @@ fn render_segment(
         .bottom_0()
         .left(px(x))
         .w(px(width))
-        .rounded(px(12.))
-        .border_1()
-        // `isSelected() ? <segColor> : "border-transparent"`, one line per
-        // track; the nine colours are enumerated on `selected_border_color`,
-        // two of which are dead classes in the shipping app and paint nothing.
-        .border_color(if selected {
-            selected_border_color(theme, kind)
-        } else {
-            gpui::transparent_black()
-        })
+        .rounded(px(SEGMENT_RADIUS))
         .when_some(dim, |this, opacity| this.opacity(opacity))
         // `interactMode === "split" && "timeline-scissors-cursor"`
         // (`TL/Track.tsx:107-108`). That cursor is an inline SVG data-URI;
         // this rev has the standard set only, so a crosshair stands in.
         .when(split_mode, |this| this.cursor(gpui::CursorStyle::Crosshair))
-        .child(fill)
-        .child(render_handle(true, handle_opacity))
-        .child(render_handle(false, handle_opacity))
+        .child(if selected {
+            fill.border(px(1.5))
+                .border_color(Hsla::from(theme.editor.accent))
+        } else {
+            fill.border_1()
+                .border_color(seg_border(theme, color, if hovered { 0.10 } else { 0. }))
+        })
+        .child(render_handle(theme, color, true, handle_opacity))
+        .child(render_handle(theme, color, false, handle_opacity))
         .into_any_element()
 }
 
-fn render_handle(start: bool, opacity: f32) -> impl IntoElement {
+fn render_handle(theme: &Theme, color: Hsla, start: bool, opacity: f32) -> impl IntoElement {
     div()
         .absolute()
         .top_0()
@@ -2560,23 +2545,31 @@ fn render_handle(start: bool, opacity: f32) -> impl IntoElement {
         })
         .flex()
         .items_center()
-        .justify_center()
         .opacity(opacity)
         .child(
-            // `w-[3px] h-8 bg-solid-white rounded-full` -- `--solid-white` is
-            // `#ffffff` in both themes (`theme.css:74, 140`).
-            div().w(px(3.)).h(px(32.)).rounded_full().bg(gpui::white()),
+            div()
+                .absolute()
+                .w(px(3.))
+                .h(px(16.))
+                .rounded(px(2.))
+                .bg(seg_handle(theme, color))
+                .map(|this| {
+                    if start {
+                        this.left(px(15.))
+                    } else {
+                        this.right(px(15.))
+                    }
+                }),
         )
 }
 
 /// `Markings` (`TL/ClipTrack.tsx:1425-1476`): one hairline per ruler tick,
 /// drawn *inside* each clip box in recording time and pushed past the holds the
-/// stretched box inserts before it. The gradient is
-/// `from-transparent to-transparent via-white-transparent-40
-/// dark:via-black-transparent-60`, i.e. a three-stop fade with the mid colour at
-/// the centre -- gpui takes two stops, so it is drawn as two stacked halves.
+/// stretched box inserts before it. The gradient is a three-stop fade with the
+/// mid colour at the centre -- gpui takes two stops, so it is drawn as two
+/// stacked halves.
 fn render_clip_markings(
-    theme: &Theme,
+    color: Hsla,
     segment: &Segment,
     holds: &[(f64, f64)],
     view: TimelineView,
@@ -2596,16 +2589,8 @@ fn render_clip_markings(
     let first = (visible_min / resolution).floor();
     let count = ((visible_max / resolution).ceil() - first).max(0.) as usize;
 
-    // `--white-transparent-40: rgba(255,255,255,0.4)` in light and
-    // `--black-transparent-60: rgba(255,255,255,0.6)` in dark
-    // (`theme.css:64, 70, 129, 136`) -- the dark override of *both* names is
-    // white, so the hairline is white in either theme, only its alpha changes.
-    let via = if theme.is_dark() {
-        with_alpha(gpui::white(), 0.6)
-    } else {
-        with_alpha(gpui::white(), 0.4)
-    };
-    let transparent = with_alpha(gpui::white(), 0.);
+    let via = with_alpha(color, 0.14);
+    let transparent = with_alpha(color, 0.);
 
     let mut root = div();
     let holds_relative: Vec<(f64, f64)> = holds
@@ -2645,16 +2630,26 @@ fn render_clip_markings(
 }
 
 /// One audio fade envelope (`fadeGeometry` / `fadeEnvelopeCurve` /
-/// `FadeControl`, `TL/AudioTrack.tsx:63-201`): a 34 %-black shade over the
-/// faded span with a white curve along its top, plus the 10px corner triangle
-/// at the segment's edge.
+/// `FadeControl`, `TL/AudioTrack.tsx:63-201`): the faded span washed back
+/// towards the card with the envelope curve along its top, plus the 10px
+/// corner triangle at the segment's edge.
 ///
 /// The source draws the curve in a `viewBox="0 0 100 100"` with
 /// `preserveAspectRatio="none"`, so the two cubic control points are in
 /// percent of the span; they are scaled into pixels here.
-fn render_fade(edge_in: bool, fraction: f32, width: f32, height: f32) -> impl IntoElement {
+fn render_fade(
+    theme: &Theme,
+    color: Hsla,
+    edge_in: bool,
+    fraction: f32,
+    width: f32,
+    height: f32,
+) -> impl IntoElement {
     let span = (fraction * width).max(0.);
     let shade_x = if edge_in { 0. } else { width - span };
+    let shade = with_alpha(Hsla::from(theme.editor.card), 0.55);
+    let curve = with_alpha(seg_label(theme, color), 0.85);
+    let corner = with_alpha(seg_handle(theme, color), 0.8);
 
     div()
         .absolute()
@@ -2666,7 +2661,7 @@ fn render_fade(edge_in: bool, fraction: f32, width: f32, height: f32) -> impl In
                 .bottom_0()
                 .left(px(shade_x))
                 .w(px(span))
-                .bg(with_alpha(gpui::black(), 0.34)),
+                .bg(shade),
         )
         .child(
             // `M 0,100 C 0,68 span*0.55,10 span,0` in, and
@@ -2698,7 +2693,7 @@ fn render_fade(edge_in: bool, fraction: f32, width: f32, height: f32) -> impl In
                         );
                     }
                     if let Ok(path) = builder.build() {
-                        window.paint_path(path, with_alpha(gpui::white(), 0.94));
+                        window.paint_path(path, curve);
                     }
                 },
             )
@@ -2737,7 +2732,7 @@ fn render_fade(edge_in: bool, fraction: f32, width: f32, height: f32) -> impl In
                             }
                             builder.close();
                             if let Ok(path) = builder.build() {
-                                window.paint_path(path, with_alpha(gpui::white(), 0.9));
+                                window.paint_path(path, corner);
                             }
                         },
                     )
@@ -2748,9 +2743,10 @@ fn render_fade(edge_in: bool, fraction: f32, width: f32, height: f32) -> impl In
 }
 
 /// The paused window a fullscreen text segment inserts inside a clip
-/// (`TL/ClipTrack.tsx:959-1002`): a 45 % black wash with a 45-degree hatch and
-/// a pause glyph.
-fn render_hold(x: f32, width: f32) -> impl IntoElement {
+/// (`TL/ClipTrack.tsx:959-1002`): the clip's tint washed back to the card,
+/// ruled off at both edges, with a pause glyph.
+fn render_hold(theme: &Theme, color: Hsla, x: f32, width: f32) -> impl IntoElement {
+    let ink = with_alpha(seg_label(theme, color), 0.75);
     div()
         .absolute()
         .top_0()
@@ -2763,23 +2759,23 @@ fn render_hold(x: f32, width: f32) -> impl IntoElement {
         .justify_center()
         .gap(px(4.))
         .overflow_hidden()
-        .bg(with_alpha(gpui::black(), 0.45))
+        .bg(with_alpha(Hsla::from(theme.editor.card), 0.6))
         .border_l_1()
         .border_r_1()
-        .border_color(with_alpha(gpui::white(), 0.25))
+        .border_color(seg_border(theme, color, 0.))
         .child(
             svg()
                 .path("icons/pause.svg")
                 .size(px(12.))
                 .flex_none()
-                .text_color(with_alpha(gpui::white(), 0.7)),
+                .text_color(ink),
         )
         .when(width >= 64., |this| {
             this.child(
                 div()
                     .text_size(px(10.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(with_alpha(gpui::white(), 0.7))
+                    .text_color(ink)
                     .child("Paused"),
             )
         })
@@ -2800,6 +2796,7 @@ fn render_waveform(
     view: TimelineView,
     width: f32,
     height: f32,
+    color: Hsla,
 ) -> impl IntoElement {
     // `micWaveform()` / `systemAudioWaveform()` (`TL/ClipTrack.tsx:713-730`):
     // a track muted below -30 dB draws nothing at all.
@@ -2826,6 +2823,8 @@ fn render_waveform(
     let transform = view.transform;
     let segment_start = segment.start;
     let full_width = width.max(1.) as f64;
+    let wave_height = height.min(WAVEFORM_MAX_HEIGHT);
+    let wave_color = waveform_color(color);
 
     gpui::canvas(
         |bounds, _window, _cx| bounds,
@@ -2845,13 +2844,10 @@ fn render_waveform(
                 bounds.origin.y,
             );
             let slice_width = ((visible_end - visible_start) * px_per_sec) as f32;
-            let size = gpui::size(px(slice_width), px(height));
+            let size = gpui::size(px(slice_width), px(wave_height));
             let samples = waveform_sample_count(slice_width as f64);
 
-            for (peaks, color, scale) in [
-                (&mic, WAVEFORM_MIC_COLOR, mic_scale),
-                (&system, waveform_system_color(), system_scale),
-            ] {
+            for (peaks, scale) in [(&mic, mic_scale), (&system, system_scale)] {
                 if let Some(path) = waveform_path(
                     peaks,
                     (visible_start, visible_end),
@@ -2862,27 +2858,29 @@ fn render_waveform(
                     size,
                     scale,
                 ) {
-                    window.paint_path(path, color);
+                    window.paint_path(path, wave_color);
                 }
             }
         },
     )
     .absolute()
-    .top_0()
+    .bottom_0()
     .left_0()
     .w(px(width))
-    .h(px(height))
+    .h(px(wave_height))
     .into_any_element()
 }
 
 /// `SegmentLabel` (`TL/Track.tsx:186-220`): full, compact and glyph tiers,
-/// anchored to the visible box's clamped centre and clipped to its width.
+/// anchored to the visible box and left-aligned inside the segment's own
+/// `0 10px 0 13px` content padding.
 fn render_label(
     theme: &Theme,
-    kind: TrackKind,
+    color: Hsla,
     segment: &Segment,
     visible_width: f64,
     center_x: f64,
+    kind: TrackKind,
 ) -> impl IntoElement {
     let compact_at = match kind {
         TrackKind::Caption | TrackKind::Keyboard | TrackKind::Audio => {
@@ -2890,7 +2888,6 @@ fn render_label(
         }
         _ => SEGMENT_LABEL_COMPACT_PX,
     };
-    let max_width = (visible_width - 8.).max(0.);
     let tier = if visible_width >= SEGMENT_LABEL_FULL_PX {
         LabelTier::Full
     } else if visible_width >= compact_at {
@@ -2901,20 +2898,32 @@ fn render_label(
         return div();
     };
 
-    let Some(body) = label_body(theme, segment, tier, visible_width) else {
+    let Some(body) = label_body(theme, color, segment, tier, visible_width) else {
         return div();
     };
+
+    // A narrow box cannot pay for the accent bar's clearance and still show
+    // anything, so it falls back to a symmetric inset.
+    let (pad_left, pad_right) = if tier == LabelTier::Glyph {
+        (4., 4.)
+    } else if visible_width >= 60. {
+        (SEGMENT_PADDING_LEFT as f64, SEGMENT_PADDING_RIGHT as f64)
+    } else {
+        (6., 4.)
+    };
+    let max_width = (visible_width - pad_left - pad_right).max(0.);
+    let left = center_x - visible_width / 2. + pad_left;
 
     div().child(
         div()
             .absolute()
             .top_0()
             .bottom_0()
-            .left(px((center_x - max_width / 2.) as f32))
+            .left(px(left as f32))
             .w(px(max_width as f32))
             .flex()
             .items_center()
-            .justify_center()
+            .when(tier == LabelTier::Glyph, |this| this.justify_center())
             .overflow_hidden()
             .child(body),
     )
@@ -2927,44 +2936,67 @@ enum LabelTier {
     Glyph,
 }
 
-/// The nine tracks' label bodies. Every one is a straight transcription of its
-/// `SegmentLabel`'s `full` / `compact` / `glyph` props; a track with no `glyph`
-/// prop renders nothing at that tier, which is why this returns an `Option`.
+fn label_row() -> gpui::Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(8.))
+        .min_w_0()
+        .max_w_full()
+}
+
+fn label_primary(theme: &Theme, color: Hsla) -> gpui::Div {
+    div()
+        .min_w_0()
+        .truncate()
+        .text_size(px(12.))
+        .line_height(px(15.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(seg_label(theme, color))
+}
+
+fn label_secondary(theme: &Theme, color: Hsla) -> gpui::Div {
+    div()
+        .flex_none()
+        .text_size(px(11.))
+        .line_height(px(15.))
+        .font_features(tabular_numerals())
+        .text_color(seg_muted(theme, color))
+}
+
+fn label_glyph(theme: &Theme, color: Hsla, path: &'static str, size: f32) -> AnyElement {
+    svg()
+        .path(path)
+        .size(px(size))
+        .flex_none()
+        .text_color(seg_label(theme, color))
+        .into_any_element()
+}
+
+/// The eleven tracks' label bodies: a primary name and, where the track has
+/// one, the value that qualifies it.
 fn label_body(
     theme: &Theme,
+    color: Hsla,
     segment: &Segment,
     tier: LabelTier,
     visible_width: f64,
 ) -> Option<AnyElement> {
-    // `text-gray-1 dark:text-gray-12` is the label colour on every track but
-    // the clip's, which uses `text-white/70` over `dark:text-gray-12
-    // text-gray-1`.
-    let on_fill = if theme.is_dark() {
-        Hsla::from(theme.gray_12)
-    } else {
-        Hsla::from(theme.gray_1)
-    };
-
     Some(match (&segment.detail, tier) {
         (
             SegmentDetail::Style { name, .. } | SegmentDetail::Image { name, .. },
             LabelTier::Full | LabelTier::Compact,
-        ) => div()
-            .text_color(on_fill)
-            .overflow_hidden()
-            .text_ellipsis()
-            .child(name.clone())
+        ) => label_row()
+            .child(label_primary(theme, color).child(name.clone()))
             .into_any_element(),
-        (SegmentDetail::Style { .. }, LabelTier::Glyph) => svg()
-            .path("icons/palette.svg")
-            .size(px(12.))
-            .text_color(on_fill)
-            .into_any_element(),
-        (SegmentDetail::Image { .. }, LabelTier::Glyph) => svg()
-            .path("icons/image.svg")
-            .size(px(12.))
-            .text_color(on_fill)
-            .into_any_element(),
+        (SegmentDetail::Style { .. }, LabelTier::Glyph) => {
+            label_glyph(theme, color, "icons/palette.svg", 12.)
+        }
+        (SegmentDetail::Image { .. }, LabelTier::Glyph) => {
+            label_glyph(theme, color, "icons/image.svg", 12.)
+        }
+
         // -- Clip (`TL/ClipTrack.tsx:1255-1279`) --------------------------
         (
             SegmentDetail::Clip {
@@ -2974,70 +3006,10 @@ fn label_body(
                 ..
             },
             LabelTier::Full,
-        ) => div()
-            .flex()
-            .flex_col()
-            .max_w_full()
-            .min_w_0()
-            .gap(px(4.))
-            .items_center()
-            .justify_center()
-            .text_size(px(12.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .max_w_full()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(with_alpha(gpui::white(), 0.7))
-                            .child(name.clone()),
-                    )
-                    .when(*muted, |this| {
-                        this.child(
-                            div()
-                                .flex()
-                                .flex_none()
-                                .items_center()
-                                .gap(px(4.))
-                                .px(px(4.))
-                                .rounded(px(4.))
-                                .bg(with_alpha(gpui::black(), 0.2))
-                                .text_color(gpui::white())
-                                .text_size(px(10.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(svg().path("icons/volume-x.svg").size(px(12.)).flex_none())
-                                .child("Muted"),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap(px(4.))
-                    .items_center()
-                    // `text-md` (`TL/ClipTrack.tsx:1259`) is *not* a defined
-                    // class in this Tailwind v4 setup -- there is no
-                    // `--text-md` token and it emits nothing into the built
-                    // CSS -- so the row keeps the `text-xs` it inherits from
-                    // the label wrapper (`ClipTrack.tsx:1257`): 12px, not 16.
-                    // The clock stays `size-3.5` = 14px regardless.
-                    .text_size(px(12.))
-                    .text_color(on_fill)
-                    .child(
-                        svg()
-                            .path("icons/clock.svg")
-                            .size(px(14.))
-                            .flex_none()
-                            .text_color(on_fill),
-                    )
-                    .child(format_clip_time(*source_duration)),
-            )
+        ) => label_row()
+            .child(label_primary(theme, color).child(name.clone()))
+            .when(*muted, |this| this.child(muted_badge(theme, color)))
+            .child(label_secondary(theme, color).child(format_clip_time(*source_duration)))
             .into_any_element(),
         (
             SegmentDetail::Clip {
@@ -3046,45 +3018,32 @@ fn label_body(
                 ..
             },
             LabelTier::Compact,
-        ) => div()
-            .flex()
-            .flex_row()
-            .max_w_full()
-            .min_w_0()
+        ) => label_row()
             .gap(px(4.))
-            .items_center()
-            .text_size(px(10.))
-            .text_color(on_fill)
             .when(*muted, |this| {
-                this.child(svg().path("icons/volume-x.svg").size(px(12.)).flex_none())
+                this.child(
+                    svg()
+                        .path("icons/volume-x.svg")
+                        .size(px(12.))
+                        .flex_none()
+                        .text_color(seg_label(theme, color)),
+                )
             })
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .child(format_clip_time(*source_duration)),
-            )
+            .child(label_primary(theme, color).child(format_clip_time(*source_duration)))
             .into_any_element(),
-        (SegmentDetail::Clip { muted: true, .. }, LabelTier::Glyph) => svg()
-            .path("icons/volume-x.svg")
-            .size(px((visible_width - 8.).clamp(8., 14.) as f32))
-            .flex_none()
-            .text_color(gpui::white())
-            .into_any_element(),
+        (SegmentDetail::Clip { muted: true, .. }, LabelTier::Glyph) => label_glyph(
+            theme,
+            color,
+            "icons/volume-x.svg",
+            (visible_width - 8.).clamp(8., 14.) as f32,
+        ),
         (SegmentDetail::Clip { .. }, LabelTier::Glyph) => {
             return None;
         }
 
         // -- Zoom (`TL/ZoomTrack.tsx:696-723`) ----------------------------
-        (SegmentDetail::Zoom { amount, automatic }, LabelTier::Full) => div()
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .items_center()
-            .justify_center()
-            .text_size(px(12.))
-            .text_color(on_fill)
-            .child(div().opacity(0.7).child(SharedString::from(
+        (SegmentDetail::Zoom { amount, automatic }, LabelTier::Full) => label_row()
+            .child(label_primary(theme, color).child(SharedString::from(
                 // The mode label only appears once the visible box is at
                 // least 140px wide (`TL/ZoomTrack.tsx:700-704`).
                 if visible_width >= 140. {
@@ -3097,357 +3056,157 @@ fn label_body(
                     "Zoom"
                 },
             )))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap(px(4.))
-                    .items_center()
-                    // `text-md` (`TL/ZoomTrack.tsx:705`) is undefined over
-                    // there, so this inherits the `text-xs` wrapper at
-                    // `ZoomTrack.tsx:699`: 12px, not 16.
-                    .text_size(px(12.))
-                    .child(
-                        svg()
-                            .path("icons/search.svg")
-                            .size(px(14.))
-                            .flex_none()
-                            .text_color(on_fill),
-                    )
-                    .child(format!("{amount:.1}x")),
-            )
+            .child(label_secondary(theme, color).child(format!("{amount:.1}x")))
             .into_any_element(),
-        (SegmentDetail::Zoom { amount, .. }, LabelTier::Compact) => div()
-            .flex()
-            .flex_row()
-            .gap(px(4.))
-            .items_center()
-            .text_size(px(12.))
-            .text_color(on_fill)
-            .child(
-                svg()
-                    .path("icons/search.svg")
-                    .size(px(12.))
-                    .flex_none()
-                    .text_color(on_fill),
-            )
-            .child(format!("{amount:.1}x"))
+        (SegmentDetail::Zoom { amount, .. }, LabelTier::Compact) => label_row()
+            .child(label_primary(theme, color).child(format!("{amount:.1}x")))
             .into_any_element(),
-        (SegmentDetail::Zoom { .. }, LabelTier::Glyph) => svg()
-            .path("icons/search.svg")
-            .size(px(14.))
-            .text_color(on_fill)
-            .into_any_element(),
+        (SegmentDetail::Zoom { .. }, LabelTier::Glyph) => {
+            label_glyph(theme, color, "icons/search.svg", 12.)
+        }
 
         // -- Scene (`TL/SceneTrack.tsx:543-566`) --------------------------
-        (SegmentDetail::Scene { mode }, LabelTier::Full) => div()
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .items_center()
-            .justify_center()
-            .text_size(px(12.))
-            .text_color(on_fill)
-            .child(div().opacity(0.7).child("Scene"))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap(px(4.))
-                    .items_center()
-                    .child(
-                        svg()
-                            .path(scene_icon(*mode))
-                            .size(px(14.))
-                            .flex_none()
-                            .text_color(on_fill),
-                    )
-                    .child(scene_label(*mode)),
-            )
+        (SegmentDetail::Scene { mode }, LabelTier::Full) => label_row()
+            .child(label_primary(theme, color).child("Scene"))
+            .child(label_secondary(theme, color).child(scene_label(*mode)))
             .into_any_element(),
-        (SegmentDetail::Scene { mode }, LabelTier::Compact) => div()
-            .flex()
-            .flex_row()
-            .gap(px(4.))
-            .items_center()
-            .text_size(px(12.))
-            .text_color(on_fill)
-            .child(
-                svg()
-                    .path(scene_icon(*mode))
-                    .size(px(14.))
-                    .flex_none()
-                    .text_color(on_fill),
-            )
-            .child(scene_label(*mode))
+        (SegmentDetail::Scene { mode }, LabelTier::Compact) => label_row()
+            .child(label_primary(theme, color).child(scene_label(*mode)))
             .into_any_element(),
-        (SegmentDetail::Scene { mode }, LabelTier::Glyph) => svg()
-            .path(scene_icon(*mode))
-            .size(px(14.))
-            .text_color(on_fill)
-            .into_any_element(),
+        (SegmentDetail::Scene { mode }, LabelTier::Glyph) => {
+            label_glyph(theme, color, scene_icon(*mode), 12.)
+        }
 
         // -- 3D (`TL/ThreeDTrack.tsx:655-687`) ----------------------------
-        (SegmentDetail::ThreeD { motion }, LabelTier::Full) => div()
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .items_center()
-            .justify_center()
-            .text_size(px(12.))
-            .text_color(on_fill)
-            .child(div().opacity(0.7).child(if visible_width >= 140. {
+        (SegmentDetail::ThreeD { motion }, LabelTier::Full) => label_row()
+            .child(label_primary(theme, color).child(if visible_width >= 140. {
                 "3D Perspective"
             } else {
                 "3D"
             }))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap(px(4.))
-                    .items_center()
-                    // `text-md` (`TL/ThreeDTrack.tsx:663`) is undefined over
-                    // there, so this inherits the `text-xs` wrapper at
-                    // `ThreeDTrack.tsx:657`: 12px, not 16.
-                    .text_size(px(12.))
-                    .child(
-                        svg()
-                            .path("icons/rotate-3d.svg")
-                            .size(px(14.))
-                            .flex_none()
-                            .text_color(on_fill),
-                    )
-                    .child(if *motion { "Motion" } else { "Still" })
-                    .when(*motion, |this| {
-                        this.child(
-                            svg()
-                                .path("icons/chevron-right.svg")
-                                .size(px(12.))
-                                .flex_none()
-                                .opacity(0.7)
-                                .text_color(on_fill),
-                        )
-                    }),
-            )
+            .child(label_secondary(theme, color).child(if *motion { "Motion" } else { "Still" }))
             .into_any_element(),
-        (SegmentDetail::ThreeD { .. }, LabelTier::Compact) => div()
-            .flex()
-            .flex_row()
-            .gap(px(4.))
-            .items_center()
-            .text_size(px(12.))
-            .text_color(on_fill)
-            .child(
-                svg()
-                    .path("icons/rotate-3d.svg")
-                    .size(px(12.))
-                    .flex_none()
-                    .text_color(on_fill),
-            )
-            .child("3D")
+        (SegmentDetail::ThreeD { .. }, LabelTier::Compact) => label_row()
+            .child(label_primary(theme, color).child("3D"))
             .into_any_element(),
-        (SegmentDetail::ThreeD { .. }, LabelTier::Glyph) => svg()
-            .path("icons/rotate-3d.svg")
-            .size(px(14.))
-            .text_color(on_fill)
-            .into_any_element(),
+        (SegmentDetail::ThreeD { .. }, LabelTier::Glyph) => {
+            label_glyph(theme, color, "icons/rotate-3d.svg", 12.)
+        }
 
         // -- Text (`TL/TextTrack.tsx:428-481`) ----------------------------
         (
             SegmentDetail::Text {
                 content,
-                color,
+                color: text_color,
                 italic,
                 bold,
                 fullscreen,
                 ..
             },
-            LabelTier::Full,
-        ) => div()
-            .flex()
-            .flex_col()
-            .gap(px(2.))
-            .items_center()
-            .justify_center()
-            .text_size(px(12.))
-            .text_color(on_fill)
+            LabelTier::Full | LabelTier::Compact,
+        ) => label_row()
+            .gap(px(6.))
             .child(
                 div()
-                    .flex()
-                    .flex_row()
-                    .gap(px(4.))
-                    .items_center()
-                    .opacity(0.7)
-                    .child("Text")
-                    .when(*fullscreen, |this| {
-                        this.child(
-                            svg()
-                                .path("icons/pause.svg")
-                                .size(px(10.))
-                                .flex_none()
-                                .text_color(on_fill),
-                        )
-                    }),
+                    .size(px(8.))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(*text_color),
             )
-            .child(text_content_row(content, *color, *italic, *bold, on_fill))
+            .child(
+                label_primary(theme, color)
+                    .when(*bold, |this| this.font_weight(FontWeight::BOLD))
+                    .when(*italic, |this| this.italic())
+                    .child(content.clone()),
+            )
+            .when(*fullscreen, |this| {
+                this.child(
+                    svg()
+                        .path("icons/pause.svg")
+                        .size(px(10.))
+                        .flex_none()
+                        .text_color(seg_muted(theme, color)),
+                )
+            })
             .into_any_element(),
-        (
-            SegmentDetail::Text {
-                content,
-                color,
-                italic,
-                bold,
-                ..
-            },
-            LabelTier::Compact,
-        ) => text_content_row(content, *color, *italic, *bold, on_fill).into_any_element(),
         (SegmentDetail::Text { fullscreen, .. }, LabelTier::Glyph) => {
             if !*fullscreen {
                 return None;
             }
-            svg()
-                .path("icons/pause.svg")
-                .size(px(10.))
-                .opacity(0.7)
-                .text_color(on_fill)
-                .into_any_element()
+            label_glyph(theme, color, "icons/pause.svg", 10.)
         }
 
         // -- Mask (`TL/MaskTrack.tsx:481-495`) ----------------------------
-        (SegmentDetail::Mask { label }, LabelTier::Full) => div()
-            .flex()
-            .flex_col()
-            .gap(px(2.))
-            .items_center()
-            .justify_center()
-            .text_size(px(12.))
-            .text_color(on_fill)
-            .child(div().opacity(0.7).child("Mask"))
-            // `text-md` (`TL/MaskTrack.tsx:485`) is undefined over there, so
-            // this inherits the `text-xs` wrapper at `MaskTrack.tsx:483`:
-            // 12px, not 16.
-            .child(div().text_size(px(12.)).child(*label))
+        (SegmentDetail::Mask { label }, LabelTier::Full) => label_row()
+            .child(label_primary(theme, color).child("Mask"))
+            .child(label_secondary(theme, color).child(*label))
             .into_any_element(),
-        (SegmentDetail::Mask { label }, LabelTier::Compact) => div()
-            .text_size(px(12.))
-            .text_color(on_fill)
-            .truncate()
-            .child(*label)
+        (SegmentDetail::Mask { label }, LabelTier::Compact) => label_row()
+            .child(label_primary(theme, color).child(*label))
             .into_any_element(),
         // The mask track passes no `glyph`.
         (SegmentDetail::Mask { .. }, LabelTier::Glyph) => return None,
 
         // -- Audio (`TL/AudioTrack.tsx:532-549`) --------------------------
-        (SegmentDetail::Audio { name, .. }, LabelTier::Full) => div()
-            .flex()
-            .flex_row()
-            .gap(px(6.))
-            .items_center()
-            .text_size(px(12.))
-            .text_color(with_alpha(gpui::white(), 0.95))
+        (SegmentDetail::Audio { name, .. }, LabelTier::Full) => label_row()
+            .child(label_primary(theme, color).child(name.clone()))
             .child(
-                svg()
-                    .path("icons/music.svg")
-                    .size(px(12.))
-                    .flex_none()
-                    .opacity(0.9)
-                    .text_color(with_alpha(gpui::white(), 0.95)),
-            )
-            .child(
-                div()
-                    .font_weight(FontWeight::MEDIUM)
-                    .truncate()
-                    .child(name.clone()),
+                label_secondary(theme, color).child(format_clip_time(segment.end - segment.start)),
             )
             .into_any_element(),
-        (SegmentDetail::Audio { name, .. }, LabelTier::Compact) => div()
-            .text_size(px(12.))
-            .font_weight(FontWeight::MEDIUM)
-            .truncate()
-            .text_color(with_alpha(gpui::white(), 0.95))
-            .child(name.clone())
+        (SegmentDetail::Audio { name, .. }, LabelTier::Compact) => label_row()
+            .child(label_primary(theme, color).child(name.clone()))
             .into_any_element(),
         (SegmentDetail::Audio { .. }, LabelTier::Glyph) => return None,
 
         // -- Captions (`TL/CaptionsTrack.tsx:174-181, 268-272`) -----------
         // One row serves both tiers; it just clips against a smaller box.
-        (SegmentDetail::Caption { text }, LabelTier::Full | LabelTier::Compact) => div()
-            .text_size(px(10.))
-            .opacity(0.8)
-            .truncate()
-            .text_color(on_fill)
-            .child(text.clone())
+        (SegmentDetail::Caption { text }, LabelTier::Full | LabelTier::Compact) => label_row()
+            .child(label_primary(theme, color).child(text.clone()))
             .into_any_element(),
         (SegmentDetail::Caption { .. }, LabelTier::Glyph) => return None,
 
         // -- Keyboard (`TL/KeyboardTrack.tsx:166-173, 260-268`) -----------
-        (SegmentDetail::Keyboard { text }, LabelTier::Full | LabelTier::Compact) => div()
-            .font_family("monospace")
-            .text_size(px(10.))
-            .opacity(0.8)
-            .truncate()
-            .text_color(on_fill)
-            .child(text.clone())
+        (SegmentDetail::Keyboard { text }, LabelTier::Full | LabelTier::Compact) => label_row()
+            .child(
+                label_primary(theme, color)
+                    .font_family("monospace")
+                    .child(text.clone()),
+            )
             .into_any_element(),
-        (SegmentDetail::Keyboard { .. }, LabelTier::Glyph) => div()
+        (SegmentDetail::Keyboard { .. }, LabelTier::Glyph) => label_primary(theme, color)
             .font_family("monospace")
-            .text_size(px(10.))
-            .opacity(0.8)
-            .text_color(on_fill)
             .child("\u{2328}")
             .into_any_element(),
     })
 }
 
-/// `textContentRow` (`TL/TextTrack.tsx:428-450`): the segment's own colour as a
-/// 8px swatch, then its content in the segment's weight and slant.
-fn text_content_row(
-    content: &SharedString,
-    color: Hsla,
-    italic: bool,
-    bold: bool,
-    on_fill: Hsla,
-) -> impl IntoElement {
+/// The muted clip's badge (`TL/ClipTrack.tsx:1265-1276`).
+fn muted_badge(theme: &Theme, color: Hsla) -> impl IntoElement {
     div()
         .flex()
-        .flex_row()
-        .gap(px(6.))
+        .flex_none()
         .items_center()
-        .justify_center()
-        .max_w_full()
-        // `text-md` (`TL/TextTrack.tsx:328`) is undefined over there. Both
-        // call sites wrap this row in `text-xs` (`TextTrack.tsx:461` for the
-        // full tier, `:472` for the compact one), so it is 12px, not 16 --
-        // set explicitly because the compact tier calls this helper with no
-        // sized parent of its own.
-        .text_size(px(12.))
-        .text_color(on_fill)
+        .gap(px(3.))
+        .px(px(5.))
+        .rounded(px(4.))
+        .bg(seg_border(theme, color, 0.))
+        .text_size(px(10.))
+        .line_height(px(14.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(seg_label(theme, color))
         .child(
-            div()
-                .size(px(8.))
+            svg()
+                .path("icons/volume-x.svg")
+                .size(px(10.))
                 .flex_none()
-                .rounded_full()
-                .border_1()
-                .border_color(with_alpha(gpui::white(), 0.4))
-                .bg(color),
+                .text_color(seg_label(theme, color)),
         )
-        .child(
-            div()
-                .truncate()
-                .max_w_full()
-                .when(bold, |this| this.font_weight(FontWeight::BOLD))
-                .when(italic, |this| this.italic())
-                .child(content.clone()),
-        )
+        .child("Muted")
 }
 
-/// The playhead (`TL/index.tsx:1279-1295`) and the hover ghost (`:1255-1277`).
-///
-/// Both are a 1px column from `PLAYHEAD_TOP_OFFSET` to the container's bottom
-/// with a 12px knob at the top; the ghost is grey and the playhead red, and the
-/// playhead's own x is additionally clamped to the timeline width so it parks
-/// at the right edge instead of running off it.
+/// The playhead's own x is clamped to the timeline width so it parks at the
+/// right edge instead of running off it:
 /// `translateX(min((playbackTime - position) / secsPerPixel, timelineWidth))`
 /// (`TL/index.tsx:1287-1291`). Only the **upper** bound is clamped, so a
 /// playhead left of the viewport really does run off the left edge and the
@@ -3469,82 +3228,53 @@ pub fn ghost_offset(view: TimelineView, content_width: f32) -> Option<f32> {
         .map(|time| ((time - view.transform.position) / secs_per_pixel) as f32)
 }
 
-pub fn render_playhead(color: Hsla, x: f32, knob_color: Hsla) -> AnyElement {
-    render_playhead_with_opacity(color, x, knob_color, 1.)
+/// The playhead: a 1px column from the ruler's baseline to the bottom of the
+/// card, with a 12px head ringed in the card's own colour so it reads as a
+/// knob rather than a dot on the line. gpui has no outline, so the ring is a
+/// wider circle of card painted under the head.
+pub fn render_playhead(theme: &Theme, x: f32, opacity: f32) -> AnyElement {
+    let color = Hsla::from(theme.editor.playhead);
+    render_line(
+        color,
+        x,
+        opacity,
+        Some((12., color, theme.editor.card.into())),
+    )
 }
 
-pub fn render_playhead_with_opacity(
-    color: Hsla,
-    x: f32,
-    knob_color: Hsla,
-    opacity: f32,
-) -> AnyElement {
+/// The hover preview line (`TL/index.tsx:1255-1277`).
+pub fn render_preview_line(theme: &Theme, x: f32) -> AnyElement {
+    let color = with_alpha(Hsla::from(theme.editor.text_3), 0.5);
+    render_line(color, x, 1., Some((10., color, theme.editor.card.into())))
+}
+
+fn render_line(color: Hsla, x: f32, opacity: f32, head: Option<(f32, Hsla, Hsla)>) -> AnyElement {
     div()
         .absolute()
         // `left: ${TIMELINE_PADDING + TRACK_GUTTER}px` (`TL/index.tsx:1285`),
-        // i.e. 128 from the container's own left edge -- which is where gpui
-        // resolves an absolutely positioned child from too.
+        // measured from the card's padding box -- which is where gpui resolves
+        // an absolutely positioned child from too.
         .left(px(TIMELINE_PADDING + TRACK_GUTTER + x))
         .top(px(PLAYHEAD_TOP_OFFSET))
         .bottom_0()
         .w(px(1.))
-        .rounded_full()
         .opacity(opacity)
-        .bg(playhead_gradient(color))
-        .child(
-            // `size-3 rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]`: a 12px dot
-            // 8px above the top of the column and half a pixel left of centre.
+        .bg(color)
+        .children(head.map(|(size, fill, ring)| {
+            let ring_size = size + 4.;
             div()
                 .absolute()
-                .top(px(-8.))
-                .left(px(-5.42))
-                .size(px(12.))
+                .top(px(-ring_size / 2.))
+                .left(px(-(ring_size - 1.) / 2.))
+                .size(px(ring_size))
                 .rounded_full()
-                .bg(knob_color),
-        )
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(ring)
+                .child(div().size(px(size)).rounded_full().bg(fill))
+        }))
         .into_any_element()
-}
-
-/// The per-track selected border (`TL/index.tsx` per-track `segColor` blocks,
-/// enumerated in the digest's 4.3).
-///
-/// **`border-green-7` (captions) and `border-sky-7` (keyboard) are dead
-/// classes in the shipping app.** `theme.css` imports Radix
-/// red/gray/blue/indigo/yellow/jade only, and `packages/ui-solid/src/main.css`
-/// maps `--color-emerald-*` to jade and `--color-blue-*` to blue but declares
-/// no `--color-green-*` or `--color-sky-*`, so Tailwind v4 generates no rule
-/// for either. Selecting a caption or keyboard segment changes nothing on
-/// screen today.
-pub fn selected_border_color(theme: &Theme, kind: TrackKind) -> Hsla {
-    match kind {
-        // `border-gray-12`.
-        TrackKind::Clip
-        | TrackKind::Zoom
-        | TrackKind::Scene
-        | TrackKind::ThreeD
-        | TrackKind::Mask
-        | TrackKind::Style
-        | TrackKind::Image => Hsla::from(theme.gray_12),
-        // `border-blue-7`: Radix blue-7 is `#205d9e` light / `#8ec8f6` dark.
-        TrackKind::Text => {
-            if theme.is_dark() {
-                gpui::rgb(0x8ec8f6).into()
-            } else {
-                gpui::rgb(0x205d9e).into()
-            }
-        }
-        // `border-emerald-11` -> `var(--jade-11)`: `#208368` light,
-        // `#1fd8a4` dark.
-        TrackKind::Audio => {
-            if theme.is_dark() {
-                gpui::rgb(0x1fd8a4).into()
-            } else {
-                gpui::rgb(0x208368).into()
-            }
-        }
-        // The two dead ones; drawn as transparent so nothing is invented.
-        TrackKind::Caption | TrackKind::Keyboard => gpui::transparent_black(),
-    }
 }
 
 /// `zoomDelta = (e.deltaY * Math.sqrt(transform().zoom)) / 30`
@@ -3757,14 +3487,15 @@ mod tests {
 
     // -- Geometry -----------------------------------------------------------
 
-    /// The editor's default width: 1275 minus 16 (slot), 32 (padding), 4
-    /// (`pr-1`) and 112 (gutter) = 1111px of track content starting at
-    /// x = 136, with the ruler's own strip four pixels wider.
+    /// The editor's default width: 1275 minus 16 (slot), 24 (the card's
+    /// hairline and padding), 4 (`pr-1`) and 104 (gutter) = 1127px of track
+    /// content starting at x = 124, with the ruler's own strip four pixels
+    /// wider.
     #[test]
     fn the_content_column_carries_the_scroll_bodys_padding() {
-        assert_eq!(content_width(1275.), 1111.);
-        assert_eq!(ruler_width(1275.), 1115.);
-        assert_eq!(content_left(), 136.);
+        assert_eq!(content_width(1275.), 1127.);
+        assert_eq!(ruler_width(1275.), 1131.);
+        assert_eq!(content_left(), 124.);
     }
 
     #[test]
@@ -3774,10 +3505,10 @@ mod tests {
         let transform = Transform::initial(total);
         let content = content_width(width);
 
-        assert!(time_from_x(136., width, transform, total).abs() < 1e-9);
-        let end = time_from_x(136. + content, width, transform, total);
+        assert!(time_from_x(124., width, transform, total).abs() < 1e-9);
+        let end = time_from_x(124. + content, width, transform, total);
         assert!((end - total).abs() < 1e-6, "{end}");
-        let middle = time_from_x(136. + content / 2., width, transform, total);
+        let middle = time_from_x(124. + content / 2., width, transform, total);
         assert!((middle - total / 2.).abs() < 1e-6, "{middle}");
     }
 
@@ -3786,8 +3517,8 @@ mod tests {
         let width = 1275.;
         let total = 60.0;
         let transform = Transform::initial(total);
-        assert_eq!(time_from_x(136. + 9., width, transform, total), 0.0);
-        assert!(time_from_x(136. + 11., width, transform, total) > 0.0);
+        assert_eq!(time_from_x(124. + 9., width, transform, total), 0.0);
+        assert!(time_from_x(124. + 11., width, transform, total) > 0.0);
         assert_eq!(time_from_x(0., width, transform, total), 0.0);
         assert_eq!(time_from_x(9_000., width, transform, total), total);
     }
@@ -3801,7 +3532,7 @@ mod tests {
             zoom: 10.,
             position: 20.,
         };
-        let time = time_from_x(136. + content_width(width) / 2., width, transform, 600.);
+        let time = time_from_x(124. + content_width(width) / 2., width, transform, 600.);
         assert!((time - 25.0).abs() < 1e-6, "{time}");
     }
 
@@ -3811,13 +3542,13 @@ mod tests {
     fn the_hover_preview_clears_outside_the_content_column() {
         let width = 1275.;
         let transform = Transform::initial(60.);
-        assert_eq!(preview_time_from_x(135., width, transform), None);
+        assert_eq!(preview_time_from_x(123., width, transform), None);
         assert_eq!(
-            preview_time_from_x(136. + content_width(width) + 1., width, transform),
+            preview_time_from_x(124. + content_width(width) + 1., width, transform),
             None
         );
-        assert_eq!(preview_time_from_x(136. + 5., width, transform), Some(0.));
-        let middle = preview_time_from_x(136. + content_width(width) / 2., width, transform);
+        assert_eq!(preview_time_from_x(124. + 5., width, transform), Some(0.));
+        let middle = preview_time_from_x(124. + content_width(width) / 2., width, transform);
         assert!((middle.unwrap() - 30.).abs() < 1e-6);
     }
 
@@ -3895,8 +3626,8 @@ mod tests {
 
     /// The whole model, built from JSON the way a real `project-config.json`
     /// arrives: the row order is the source's mount order, multi-lane tracks
-    /// contribute one row per used lane, and the two locked tracks are always
-    /// there.
+    /// contribute one row per used lane with the highest-priority lane first,
+    /// and the two locked tracks are always there.
     #[test]
     fn the_row_order_is_the_sources_mount_order() {
         let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
@@ -3934,10 +3665,9 @@ mod tests {
                 // segment, which is the fallback (`ED/context.ts:1414-1416`).
                 (TrackKind::Caption, 0),
                 (TrackKind::Keyboard, 0),
-                // Lane 1 exists because lane 2 is used.
-                (TrackKind::Text, 0),
-                (TrackKind::Text, 1),
                 (TrackKind::Text, 2),
+                (TrackKind::Text, 1),
+                (TrackKind::Text, 0),
                 (TrackKind::Mask, 0),
                 (TrackKind::Audio, 0),
                 (TrackKind::Zoom, 0),
@@ -3945,8 +3675,7 @@ mod tests {
                 (TrackKind::Scene, 0),
             ]
         );
-        // 11 rows > 2, so the compact height.
-        assert_eq!(model.track_height(), TRACK_HEIGHT_COMPACT);
+        assert_eq!(model.track_height(), TRACK_HEIGHT);
         assert_eq!(model.clips.len(), 1);
         assert!((model.total_duration - 20.0).abs() < 1e-9);
     }
@@ -3973,7 +3702,7 @@ mod tests {
         // Two rows means the roomier track height.
         let without_camera = TimelineModel::build(&config, false, false);
         assert_eq!(without_camera.rows.len(), 2);
-        assert_eq!(without_camera.track_height(), TRACK_HEIGHT_ROOMY);
+        assert_eq!(without_camera.track_height(), TRACK_HEIGHT);
 
         // `project.camera.hide` takes the row away again.
         let mut hidden = base;
@@ -4076,11 +3805,12 @@ mod tests {
             ));
 
             for theme in [Theme::light(), Theme::dark()] {
+                let color = TrackKind::Clip.color();
                 for (tier, width) in [(LabelTier::Full, 140.0), (LabelTier::Compact, 64.0)] {
-                    assert!(label_body(&theme, &model.clips[1], tier, width).is_some());
+                    assert!(label_body(&theme, color, &model.clips[1], tier, width).is_some());
                 }
                 assert_eq!(
-                    label_body(&theme, &model.clips[1], LabelTier::Glyph, 24.0).is_some(),
+                    label_body(&theme, color, &model.clips[1], LabelTier::Glyph, 24.0).is_some(),
                     muted,
                 );
             }
@@ -4368,42 +4098,61 @@ mod tests {
         assert!(MinimapDrag::begin(10., 0., 0., 3600., &mut transform).is_none());
         assert!(MinimapDrag::begin(10., 0., 1000., 3., &mut transform).is_none());
     }
-
-    // -- The edge fade ------------------------------------------------------
-
-    #[test]
-    fn the_edge_fade_ramps_over_fifty_pixels_of_scroll() {
-        let model = TimelineModel {
-            total_duration: 60.,
-            ..TimelineModel::default()
-        };
-        let at_start = TimelineView {
-            transform: Transform {
-                zoom: 10.,
-                position: 0.,
-            },
-            ..TimelineView::default()
-        };
-        let (left, right) = edge_fade_strengths(&model, at_start, 1275.);
-        assert_eq!(left, 0., "no fade at the very start");
-        assert_eq!(right, 1., "fully faded on the right with 50s off screen");
-
-        let at_end = TimelineView {
-            transform: Transform {
-                zoom: 10.,
-                position: 50.,
-            },
-            ..TimelineView::default()
-        };
-        let (left, right) = edge_fade_strengths(&model, at_end, 1275.);
-        assert_eq!(left, 1.);
-        assert_eq!(right, 0.);
-    }
 }
 
 #[cfg(test)]
 mod style_image_tests {
     use super::*;
+
+    #[test]
+    fn timeline_rows_follow_the_saved_overlay_order() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "overlayOrder": [
+                {"kind": "mask", "track": 0},
+                {"kind": "image", "track": 0},
+                {"kind": "text", "track": 0}
+            ],
+            "timeline": {
+                "segments": [{"start": 0, "end": 20, "timescale": 1}],
+                "zoomSegments": [],
+                "textSegments": [{"start": 1, "end": 5, "track": 0, "content": "Text"}],
+                "imageSegments": [{"start": 1, "end": 5, "track": 0, "path": "image.png"}],
+                "maskSegments": [{
+                    "start": 1,
+                    "end": 5,
+                    "track": 0,
+                    "maskType": "sensitive",
+                    "center": {"x": 0.5, "y": 0.5},
+                    "size": {"x": 0.2, "y": 0.2}
+                }]
+            }
+        }))
+        .unwrap();
+        let model = TimelineModel::build(&project, false, false);
+        let overlays = model
+            .rows
+            .iter()
+            .filter(|row| row.kind.overlay_track(row.lane).is_some())
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            overlays,
+            [
+                TrackRow {
+                    kind: TrackKind::Mask,
+                    lane: 0
+                },
+                TrackRow {
+                    kind: TrackKind::Image,
+                    lane: 0
+                },
+                TrackRow {
+                    kind: TrackKind::Text,
+                    lane: 0
+                }
+            ]
+        );
+    }
 
     #[test]
     fn style_image_scene_availability_uses_source_camera_and_stable_style_requirement() {

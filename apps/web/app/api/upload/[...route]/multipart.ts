@@ -246,12 +246,30 @@ app.post(
 
 					return { presignedUrl, provider: bucket.provider };
 				}).pipe(
+					Effect.catchTag("VideoNotFoundError", () =>
+						Effect.succeed(
+							c.json(
+								{ error: "Video not found", code: "VIDEO_NOT_FOUND" },
+								404,
+							),
+						),
+					),
+					Effect.catchTag("PolicyDenied", () =>
+						Effect.succeed(
+							c.json(
+								{ error: "Video not found", code: "VIDEO_NOT_FOUND" },
+								404,
+							),
+						),
+					),
 					Effect.provide(makeCurrentUserLayer(user)),
 					provideOptionalAuth,
 					runPromiseAnyEnv,
 				);
 
-				return c.json(presignedUrl);
+				return presignedUrl instanceof Response
+					? presignedUrl
+					: c.json(presignedUrl);
 			} catch (s3Error) {
 				console.error("S3 operation failed:", s3Error);
 				throw new Error(

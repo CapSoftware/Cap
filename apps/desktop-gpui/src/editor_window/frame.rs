@@ -236,7 +236,11 @@ impl EditorWindow {
         FrameConfiguration::active_style(self.frame_background().frame.as_ref())
     }
 
-    pub(super) fn render_frame_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_frame_button(
+        &self,
+        narrow: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let (label, icon) = button_content(self.frame_style());
         let bounds = self.frame_controls.trigger_bounds.clone();
         div()
@@ -244,9 +248,10 @@ impl EditorWindow {
             .flex_none()
             .child(
                 ui::EditorButton::plain(&self.theme, "frame-settings")
+                    .text(&self.theme)
                     .left_icon(icon)
                     .right_icon("icons/chevron-down.svg")
-                    .label(label)
+                    .when(!narrow, |button| button.label(label))
                     .tooltip(&self.theme, "Add a frame")
                     .pressed(self.frame_controls.open)
                     .disabled(self.instance.is_none())
@@ -384,13 +389,16 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .w(px(304.).min(window.viewport_size().width - px(24.)))
-            .max_h(window.viewport_size().height - px(24.))
+            .max_h(
+                (window.viewport_size().height - bounds.bottom() - px(20.))
+                    .min(window.viewport_size().height - px(24.)),
+            )
             .overflow_y_scroll()
-            .rounded(px(16.))
+            .rounded(px(12.))
             .border_1()
-            .border_color(theme.gray(3))
-            .bg(theme.gray(1))
-            .shadow_lg()
+            .border_color(gpui::Hsla::from(theme.editor.line))
+            .bg(gpui::Hsla::from(theme.editor.card))
+            .shadow(theme.editor.pop_shadow())
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 div()
@@ -645,6 +653,7 @@ impl EditorWindow {
                 )
                 .child(
                     gpui::anchored()
+                        .anchor(gpui::Anchor::TopLeft)
                         .position(point(bounds.left(), bounds.bottom() + px(8.)))
                         .snap_to_window_with_margin(px(12.))
                         .child(panel),

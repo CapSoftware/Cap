@@ -187,6 +187,19 @@ fn ripple_track<T: TrackSegmentOps>(track: &mut [T], boundary: f64, shift: f64) 
     }
 }
 
+fn ripple_keyboard_track(
+    track: &mut [cap_project::KeyboardTrackSegment],
+    boundary: f64,
+    shift: f64,
+) {
+    for segment in track {
+        if segment.end <= boundary {
+            continue;
+        }
+        segment.remap_times(|time| if time >= boundary { time + shift } else { time });
+    }
+}
+
 /// `moveClip` (`ClipsSidebar.tsx:639-690`): reorder `timeline.segments`,
 /// remapping the transitions that survive and -- for each one that does not --
 /// rippling every other track across the boundary the removed overlap used to
@@ -225,10 +238,10 @@ pub(crate) fn move_clip(
             .copied()
             .unwrap_or(0.)
             + effective.duration;
+        let boundary = edits::effective_to_output(&timeline.hold_windows(), boundary);
         timeline
             .transitions
             .retain(|candidate| candidate.segment_index != transition.segment_index);
-        // The source ripples these seven tracks and no others (`:672-682`).
         ripple_track(&mut timeline.style_segments, boundary, effective.duration);
         ripple_track(&mut timeline.image_segments, boundary, effective.duration);
         ripple_track(&mut timeline.zoom_segments, boundary, effective.duration);
@@ -236,7 +249,7 @@ pub(crate) fn move_clip(
         ripple_track(&mut timeline.mask_segments, boundary, effective.duration);
         ripple_track(&mut timeline.text_segments, boundary, effective.duration);
         ripple_track(&mut timeline.caption_segments, boundary, effective.duration);
-        ripple_track(
+        ripple_keyboard_track(
             &mut timeline.keyboard_segments,
             boundary,
             effective.duration,
@@ -401,19 +414,17 @@ impl EditorWindow {
     /// The Clips toggle (`Header.tsx:173-187`): `Button variant={open ?
     /// "white" : "gray"}` at `flex gap-1.5 justify-center h-[40px]`, clearing
     /// the timeline selection on every press.
-    pub(crate) fn render_clips_pill(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let variant = if self.clips.open {
-            ui::ButtonVariant::White
-        } else {
-            ui::ButtonVariant::Gray
-        };
-        ui::Button::plain(&self.theme, "clips-pill", variant, ui::ButtonSize::Md)
-            .icon("icons/clapperboard.svg")
-            .label("Clips")
+    pub(crate) fn render_clips_pill(
+        &self,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        ui::EditorButton::plain(&self.theme, "clips-pill")
+            .left_icon("icons/clapperboard.svg")
+            .when(!compact, |button| button.label("Clips"))
+            .tooltip(&self.theme, "Clips")
+            .pressed(self.clips.open)
             .disabled(!self.project_ready())
-            .height(px(40.))
-            .radius(px(12.))
-            .font_weight(FontWeight::MEDIUM)
             .on_click(cx.listener(|this, _, window, cx| this.toggle_clips(window, cx)))
     }
 
@@ -716,21 +727,16 @@ impl EditorWindow {
     // -- The sidebar ------------------------------------------------------------
 
     /// The whole clips column, drawn in the config sidebar's slot while the
-    /// mode is open. Same `ml-2 w-104` wrapper the config sidebar carries
-    /// (`Editor.tsx:728`); the card itself is `flex flex-col flex-1 min-h-0
-    /// rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3
-    /// overflow-hidden` (`ClipsSidebar.tsx:791-797`).
+    /// mode is open. Same `ml-2 w-104` wrapper the config sidebar carries, and
+    /// the same card.
     pub(crate) fn render_clips_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         self.request_clip_thumbnails(cx);
-        let theme = self.theme;
 
         div()
-            .ml(px(8.))
             .w(px(crate::editor_window::SIDEBAR_WIDTH))
             .flex_none()
             .flex()
             .min_h_0()
-            .overflow_hidden()
             .child(
                 div()
                     .flex()
@@ -740,8 +746,9 @@ impl EditorWindow {
                     .overflow_hidden()
                     .rounded(px(12.))
                     .border_1()
-                    .border_color(Hsla::from(theme.gray_3))
+                    .border_color(self.card_line())
                     .bg(self.panel_bg())
+                    .shadow(self.theme.editor.card_shadow())
                     .child(self.render_clips_back_header(cx))
                     .child(self.render_clips_body(cx)),
             )
@@ -758,22 +765,23 @@ impl EditorWindow {
             .flex_row()
             .items_center()
             .gap(px(8.))
-            .px(px(16.))
+            .px(px(12.))
             .w_full()
-            .h(px(64.))
+            .h(px(crate::editor_window::SIDEBAR_TAB_BAR_HEIGHT))
             .rounded_t(px(11.))
             .border_b_1()
-            .border_color(Hsla::from(theme.gray_3))
-            .text_size(px(14.))
+            .border_color(Hsla::from(theme.editor.line))
+            .text_size(px(13.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(Hsla::from(theme.gray_12))
-            .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
+            .text_color(Hsla::from(theme.editor.text_1))
+            .cursor_pointer()
+            .hover(move |style| style.bg(Hsla::from(theme.editor.ctl)))
             .child(
                 svg()
                     .path("icons/move-left.svg")
                     .size(px(16.))
                     .flex_shrink_0()
-                    .text_color(Hsla::from(theme.gray_11)),
+                    .text_color(Hsla::from(theme.editor.text_2)),
             )
             .child("Back to editor")
             .on_click(cx.listener(|this, _, window, cx| this.close_clips(window, cx)))
@@ -3818,6 +3826,34 @@ mod tests {
             path: "content/images/retained.png".into(),
             ..Default::default()
         });
+        config.text_segments = serde_json::from_value(serde_json::json!([{
+            "start": 10.0,
+            "end": 12.0,
+            "track": 0,
+            "content": "Hold",
+            "layout": "fullscreen"
+        }]))
+        .unwrap();
+        config.keyboard_segments = serde_json::from_value(serde_json::json!([
+            {
+                "id": "before-boundary",
+                "start": 11.0,
+                "end": 12.0,
+                "displayText": "a",
+                "keys": [{ "key": "a", "timeOffset": 500.0 }]
+            },
+            {
+                "id": "spanning-boundary",
+                "start": 11.0,
+                "end": 13.0,
+                "displayText": "bc",
+                "keys": [
+                    { "key": "b", "timeOffset": 500.0 },
+                    { "key": "c", "timeOffset": 1500.0 }
+                ]
+            }
+        ]))
+        .unwrap();
         // Moving clip 0 to the end separates the 0|1 pair, dropping the 1s
         // transition whose boundary sat at offset(1) + 1.0 = 10.0.
         assert!(move_clip(&mut config, 0, 3));
@@ -3832,6 +3868,23 @@ mod tests {
             (config.image_segments[0].start, config.image_segments[0].end),
             (16., 19.)
         );
+        assert_eq!(
+            (
+                config.keyboard_segments[0].start,
+                config.keyboard_segments[0].end,
+                config.keyboard_segments[0].keys[0].time_offset,
+            ),
+            (11.0, 12.0, 500.0)
+        );
+        assert_eq!(
+            (
+                config.keyboard_segments[1].start,
+                config.keyboard_segments[1].end,
+            ),
+            (11.0, 14.0)
+        );
+        assert_eq!(config.keyboard_segments[1].keys[0].time_offset, 500.0);
+        assert_eq!(config.keyboard_segments[1].keys[1].time_offset, 2500.0);
     }
 
     /// `computeDropIndex` (`:692-703`): the insertion point is after every

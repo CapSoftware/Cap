@@ -28,8 +28,8 @@
 use cap_project::{
     AudioTrackSegment, Camera3DProperties, Camera3DSegment, CaptionTrackSegment,
     ClipSpeedAudioMode, CursorClickEvent, GlideDirection, KeyboardTrackSegment, MaskKind,
-    MaskSegment, ProjectConfiguration, SceneMode, SceneSegment, TextSegment, TimelineConfiguration,
-    TimelineSegment, XY, ZoomMode, ZoomSegment, mask_effect_contract,
+    MaskSegment, OverlayTrack, ProjectConfiguration, SceneMode, SceneSegment, TextSegment,
+    TimelineConfiguration, TimelineSegment, XY, ZoomMode, ZoomSegment, mask_effect_contract,
 };
 
 use crate::editor_timeline::{self, Segment, TrackKind};
@@ -550,11 +550,10 @@ impl TrackSegmentOps for KeyboardTrackSegment {
     fn set_end(&mut self, value: f64) {
         self.end = value;
     }
-    /// `id: \`kb-split-${Date.now()}-${random}\`` (`ED/context.ts:983`).
     fn split_tail(&self, at: f64) -> Self {
         let mut tail = self.clone();
         tail.start = self.start + at;
-        tail.id = split_id("kb");
+        tail.id = split_id("kb-edit");
         tail
     }
 }
@@ -829,8 +828,8 @@ pub fn move_segment(
     })
 }
 
-/// `delete*Segments(indices)` for the eight non-clip tracks. The three
-/// multi-lane ones renormalise their lanes afterwards; the others do not
+/// `delete*Segments(indices)` for the eight non-clip tracks. Style and audio
+/// renormalise their lanes afterwards; the others do not
 /// (`ED/context.ts:781-799` vs `:623-639`).
 pub fn delete_segments(
     timeline: &mut TimelineConfiguration,
@@ -838,13 +837,7 @@ pub fn delete_segments(
     indices: &[usize],
 ) -> bool {
     match kind {
-        TrackKind::Image => {
-            let deleted = delete_indices(&mut timeline.image_segments, indices);
-            normalize_track(&mut timeline.image_segments, |segment, lane| {
-                segment.track = lane
-            });
-            deleted
-        }
+        TrackKind::Image => delete_indices(&mut timeline.image_segments, indices),
         TrackKind::Style => {
             let deleted = delete_indices(&mut timeline.style_segments, indices);
             normalize_track(&mut timeline.style_segments, |segment, lane| {
@@ -852,20 +845,8 @@ pub fn delete_segments(
             });
             deleted
         }
-        TrackKind::Mask => {
-            let deleted = delete_indices(&mut timeline.mask_segments, indices);
-            normalize_track(&mut timeline.mask_segments, |segment, lane| {
-                segment.track = lane
-            });
-            deleted
-        }
-        TrackKind::Text => {
-            let deleted = delete_indices(&mut timeline.text_segments, indices);
-            normalize_track(&mut timeline.text_segments, |segment, lane| {
-                segment.track = lane
-            });
-            deleted
-        }
+        TrackKind::Mask => delete_indices(&mut timeline.mask_segments, indices),
+        TrackKind::Text => delete_indices(&mut timeline.text_segments, indices),
         TrackKind::Audio => {
             let deleted = delete_indices(&mut timeline.audio_segments, indices);
             normalize_track(&mut timeline.audio_segments, |segment, lane| {
@@ -938,6 +919,107 @@ pub fn delete_track_lane(timeline: &mut TimelineConfiguration, kind: TrackKind, 
     }
 }
 
+pub fn delete_track_lane_and_order(
+    project: &mut ProjectConfiguration,
+    available: &[OverlayTrack],
+    kind: TrackKind,
+    lane: u32,
+) -> bool {
+    let next_order = kind.overlay_track(lane).map(|deleted| {
+        project
+            .resolved_overlay_order(available)
+            .into_iter()
+            .filter(|track| *track != deleted)
+            .map(|mut track| {
+                if track.kind == deleted.kind && track.track > deleted.track {
+                    track.track -= 1;
+                }
+                track
+            })
+            .collect::<Vec<_>>()
+    });
+    let timeline_changed = project
+        .timeline
+        .as_mut()
+        .is_some_and(|timeline| delete_track_lane(timeline, kind, lane));
+    let order_changed = next_order.is_some_and(|order| {
+        if project.overlay_order == order {
+            false
+        } else {
+            project.overlay_order = order;
+            true
+        }
+    });
+    timeline_changed || order_changed
+}
+
+pub fn reorder_overlay_track(
+    project: &mut ProjectConfiguration,
+    available: &[OverlayTrack],
+    from: OverlayTrack,
+    target_index: usize,
+) -> bool {
+    let mut order = project.resolved_overlay_order(available);
+    let Some(from_index) = order.iter().position(|track| *track == from) else {
+        return false;
+    };
+    let moved = order.remove(from_index);
+    let target_index = target_index.min(order.len());
+    order.insert(target_index, moved);
+    if order == project.resolved_overlay_order(available) {
+        return false;
+    }
+    project.overlay_order = order;
+    true
+}
+
+pub fn reorder_track_lane(
+    timeline: &mut TimelineConfiguration,
+    kind: TrackKind,
+    from: u32,
+    to: u32,
+) -> bool {
+    if from == to {
+        return false;
+    }
+
+    fn apply<T: TrackSegmentOps>(
+        segments: &mut [T],
+        from: u32,
+        to: u32,
+        set: impl Fn(&mut T, u32),
+    ) -> bool {
+        let mut changed = false;
+        for segment in segments {
+            let lane = segment.lane();
+            let next = if lane == from {
+                to
+            } else if from < to && lane > from && lane <= to {
+                lane - 1
+            } else if from > to && lane >= to && lane < from {
+                lane + 1
+            } else {
+                lane
+            };
+            if next != lane {
+                set(segment, next);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    match kind {
+        TrackKind::Style => apply(&mut timeline.style_segments, from, to, |segment, lane| {
+            segment.track = lane
+        }),
+        TrackKind::Audio => apply(&mut timeline.audio_segments, from, to, |segment, lane| {
+            segment.track = lane
+        }),
+        _ => false,
+    }
+}
+
 /// `deleteClipSegment` (`ED/context.ts:581-600`), including the guard that
 /// makes it the one track a selection cannot empty: **the last clip cannot be
 /// deleted**. The Delete binding sorts descending and deletes one at a time
@@ -949,6 +1031,24 @@ pub fn delete_clip_segments(timeline: &mut TimelineConfiguration, indices: &[usi
         if timeline.segments.len() < 2 {
             break;
         }
+        let offsets = editor_timeline::clip_timeline_offsets(timeline);
+        let Some(segment) = timeline.segments.get(index) else {
+            continue;
+        };
+        let clip_start = offsets.get(index).copied().unwrap_or(0.0);
+        let incoming_transition = timeline
+            .effective_transition(index)
+            .map_or(0.0, |transition| transition.duration);
+        let outgoing_transition = timeline
+            .effective_transition(index + 1)
+            .map_or(0.0, |transition| transition.duration);
+        let cut_start = clip_start + incoming_transition;
+        let cut_end = clip_start + segment.duration() - outgoing_transition;
+        let holds = timeline.hold_windows();
+        let output_cut_start = effective_to_output_end(&holds, cut_start);
+        let output_cut_end = effective_to_output_end(&holds, cut_end);
+        let duration_before = clip_timeline_duration(timeline);
+
         timeline.segments.remove(index);
         // `transitionsAfterClipDelete` (`ED/clip-transitions.ts:259-275`): the
         // transitions on both sides of the deleted clip go, and everything
@@ -962,9 +1062,342 @@ pub fn delete_clip_segments(timeline: &mut TimelineConfiguration, indices: &[usi
                 transition.segment_index -= 1;
             }
         }
+        let gapless_shift = (duration_before - clip_timeline_duration(timeline)).max(0.0);
+        let held_shift = (output_cut_end - output_cut_start - (cut_end - cut_start)).max(0.0);
+        ripple_delete_output_tracks(
+            timeline,
+            output_cut_start,
+            output_cut_end,
+            gapless_shift + held_shift,
+        );
         deleted = true;
     }
     deleted
+}
+
+pub(crate) fn effective_to_output_end(holds: &[(f64, f64)], effective: f64) -> f64 {
+    let mut output = effective;
+    for (start, finish) in holds {
+        if output > *start {
+            output += finish - start;
+        } else {
+            break;
+        }
+    }
+    output
+}
+
+pub(crate) fn effective_to_output(holds: &[(f64, f64)], effective: f64) -> f64 {
+    let mut output = effective;
+    for (start, finish) in holds {
+        if output >= *start {
+            output += finish - start;
+        } else {
+            break;
+        }
+    }
+    output
+}
+
+fn ripple_delete_track<T: TrackSegmentOps>(
+    segments: &mut Vec<T>,
+    cut_start: f64,
+    cut_end: f64,
+    shift: f64,
+) {
+    segments.retain_mut(|segment| {
+        let Some((start, end)) =
+            ripple_deleted_bounds(segment.start(), segment.end(), cut_start, cut_end, shift)
+        else {
+            return false;
+        };
+        segment.set_start(start);
+        segment.set_end(end);
+        true
+    });
+}
+
+fn ripple_deleted_bounds(
+    start: f64,
+    end: f64,
+    cut_start: f64,
+    cut_end: f64,
+    shift: f64,
+) -> Option<(f64, f64)> {
+    let (start, end) = if end <= cut_start {
+        (start, end)
+    } else if start >= cut_start && end <= cut_end {
+        return None;
+    } else if start >= cut_end {
+        (start - shift, end - shift)
+    } else if start < cut_start && end > cut_end {
+        (start, end - shift)
+    } else if start < cut_start {
+        (start, cut_start)
+    } else {
+        let start = cut_end - shift;
+        (start, (end - shift).max(start))
+    };
+    (end > start).then_some((start, end))
+}
+
+fn ripple_relative_keyframes<T>(
+    keyframes: &mut Vec<T>,
+    old_start: f64,
+    new_start: f64,
+    new_end: f64,
+    cut_start: f64,
+    cut_end: f64,
+    shift: f64,
+    time: impl for<'a> Fn(&'a mut T) -> &'a mut f64,
+) {
+    keyframes.retain_mut(|keyframe| {
+        let value = time(keyframe);
+        let absolute = old_start + *value;
+        if absolute >= cut_start && absolute < cut_end {
+            return false;
+        }
+        let mapped = if absolute >= cut_end {
+            absolute - shift
+        } else {
+            absolute
+        };
+        *value = (mapped - new_start).clamp(0.0, new_end - new_start);
+        true
+    });
+}
+
+fn ripple_delete_mask_track(
+    segments: &mut Vec<MaskSegment>,
+    cut_start: f64,
+    cut_end: f64,
+    shift: f64,
+) {
+    segments.retain_mut(|segment| {
+        let old_start = segment.start;
+        let Some((new_start, new_end)) =
+            ripple_deleted_bounds(old_start, segment.end, cut_start, cut_end, shift)
+        else {
+            return false;
+        };
+        ripple_relative_keyframes(
+            &mut segment.keyframes.position,
+            old_start,
+            new_start,
+            new_end,
+            cut_start,
+            cut_end,
+            shift,
+            |keyframe| &mut keyframe.time,
+        );
+        ripple_relative_keyframes(
+            &mut segment.keyframes.size,
+            old_start,
+            new_start,
+            new_end,
+            cut_start,
+            cut_end,
+            shift,
+            |keyframe| &mut keyframe.time,
+        );
+        ripple_relative_keyframes(
+            &mut segment.keyframes.intensity,
+            old_start,
+            new_start,
+            new_end,
+            cut_start,
+            cut_end,
+            shift,
+            |keyframe| &mut keyframe.time,
+        );
+        segment.start = new_start;
+        segment.end = new_end;
+        true
+    });
+}
+
+fn ripple_delete_camera3d_track(
+    segments: &mut Vec<Camera3DSegment>,
+    cut_start: f64,
+    cut_end: f64,
+    shift: f64,
+) {
+    segments.retain_mut(|segment| {
+        let old_start = segment.start;
+        let old_end = segment.end;
+        if old_end <= cut_start {
+            return true;
+        }
+        if old_start >= cut_end {
+            segment.start -= shift;
+            segment.end -= shift;
+            return true;
+        }
+        if old_start >= cut_start && old_end <= cut_end {
+            return false;
+        }
+        let Some((new_start, new_end)) =
+            ripple_deleted_bounds(old_start, old_end, cut_start, cut_end, shift)
+        else {
+            return false;
+        };
+        let retains_left = old_start < cut_start;
+        let retains_right = old_end > cut_end;
+        let ripple = Camera3DRipple {
+            old_start,
+            new_start,
+            cut_start,
+            cut_end,
+            shift,
+            retains_left,
+            retains_right,
+        };
+        for track in segment.tracks.all_tracks_mut() {
+            ripple_camera3d_keyframes(track, ripple);
+        }
+        if retains_left && !retains_right {
+            segment.transition_out = 0.0;
+        } else if !retains_left && retains_right {
+            segment.transition_in = 0.0;
+        }
+        segment.start = new_start;
+        segment.end = new_end;
+        true
+    });
+}
+
+#[derive(Clone, Copy)]
+struct Camera3DRipple {
+    old_start: f64,
+    new_start: f64,
+    cut_start: f64,
+    cut_end: f64,
+    shift: f64,
+    retains_left: bool,
+    retains_right: bool,
+}
+
+fn ripple_camera3d_keyframes(
+    keyframes: &mut Vec<cap_project::Camera3DKeyframe>,
+    ripple: Camera3DRipple,
+) {
+    if keyframes.is_empty() {
+        return;
+    }
+    let mut old = std::mem::take(keyframes);
+    old.sort_by(|left, right| left.time.total_cmp(&right.time));
+    let cut_start_local = ripple.cut_start - ripple.old_start;
+    let cut_end_local = ripple.cut_end - ripple.old_start;
+    let boundary = |time: f64, left: bool| {
+        let previous = old.iter().rev().find(|keyframe| keyframe.time <= time);
+        let next = old.iter().find(|keyframe| keyframe.time >= time);
+        cap_project::Camera3DKeyframe {
+            time,
+            value: cap_rendering::camera3d::sample_track(0.0, &old, time),
+            out_easing: if left {
+                None
+            } else {
+                previous.and_then(|keyframe| keyframe.out_easing)
+            },
+            in_easing: if left {
+                next.and_then(|keyframe| keyframe.in_easing)
+            } else {
+                None
+            },
+        }
+    };
+
+    keyframes.extend(
+        old.iter()
+            .filter(|keyframe| ripple.old_start + keyframe.time < ripple.cut_start)
+            .cloned(),
+    );
+    if ripple.retains_left {
+        let mut keyframe = boundary(cut_start_local, true);
+        keyframe.time = ripple.cut_start - ripple.new_start;
+        keyframes.push(keyframe);
+    }
+    if ripple.retains_right {
+        let mut keyframe = boundary(cut_end_local, false);
+        keyframe.time = ripple.cut_end - ripple.shift - ripple.new_start;
+        keyframes.push(keyframe);
+    }
+    keyframes.extend(
+        old.into_iter()
+            .filter(|keyframe| ripple.old_start + keyframe.time > ripple.cut_end)
+            .map(|mut keyframe| {
+                keyframe.time = ripple.old_start + keyframe.time - ripple.shift - ripple.new_start;
+                keyframe
+            }),
+    );
+    keyframes.sort_by(|left, right| left.time.total_cmp(&right.time));
+}
+
+fn ripple_delete_audio_track(
+    segments: &mut Vec<AudioTrackSegment>,
+    cut_start: f64,
+    cut_end: f64,
+    shift: f64,
+) {
+    let mut next = Vec::with_capacity(segments.len());
+    for mut segment in std::mem::take(segments) {
+        if segment.end <= cut_start {
+            next.push(segment);
+        } else if segment.start >= cut_start && segment.end <= cut_end {
+            continue;
+        } else if segment.start >= cut_end {
+            segment.start -= shift;
+            segment.end -= shift;
+            next.push(segment);
+        } else if segment.start < cut_start && segment.end > cut_end {
+            let mut tail = segment.clone();
+            let old_start = tail.start;
+            segment.end = cut_start;
+            segment.fade_out = 0.0;
+            tail.start = cut_end - shift;
+            tail.end -= shift;
+            tail.trim_start += cut_end - old_start;
+            tail.fade_in = 0.0;
+            next.push(segment);
+            if tail.end > tail.start {
+                next.push(tail);
+            }
+        } else if segment.start < cut_start {
+            segment.end = cut_start;
+            segment.fade_out = 0.0;
+            next.push(segment);
+        } else {
+            let old_start = segment.start;
+            segment.start = cut_end - shift;
+            segment.end = (segment.end - shift).max(segment.start);
+            segment.trim_start += cut_end - old_start;
+            segment.fade_in = 0.0;
+            if segment.end > segment.start {
+                next.push(segment);
+            }
+        }
+    }
+    *segments = next;
+}
+
+fn ripple_delete_output_tracks(
+    timeline: &mut TimelineConfiguration,
+    cut_start: f64,
+    cut_end: f64,
+    shift: f64,
+) {
+    ripple_delete_track(&mut timeline.style_segments, cut_start, cut_end, shift);
+    ripple_delete_track(&mut timeline.image_segments, cut_start, cut_end, shift);
+    ripple_delete_track(&mut timeline.zoom_segments, cut_start, cut_end, shift);
+    ripple_delete_track(&mut timeline.scene_segments, cut_start, cut_end, shift);
+    ripple_delete_camera3d_track(&mut timeline.camera3d_segments, cut_start, cut_end, shift);
+    ripple_delete_mask_track(&mut timeline.mask_segments, cut_start, cut_end, shift);
+    ripple_delete_track(&mut timeline.text_segments, cut_start, cut_end, shift);
+    ripple_delete_track(&mut timeline.caption_segments, cut_start, cut_end, shift);
+    timeline
+        .keyboard_segments
+        .retain_mut(|segment| segment.ripple_delete(cut_start, cut_end, shift));
+    ripple_delete_audio_track(&mut timeline.audio_segments, cut_start, cut_end, shift);
 }
 
 /// The seven plain splits. 3D is **not** among them: `splitCamera3DSegment`
@@ -981,6 +1414,22 @@ pub fn split_segment(
         return false;
     }
     let min = min_split_duration(kind);
+    if kind == TrackKind::Keyboard {
+        let Some(segment) = timeline.keyboard_segments.get(index) else {
+            return false;
+        };
+        let duration = segment.end - segment.start;
+        if at < min || duration - at < min {
+            return false;
+        }
+        let Some((head, mut tail)) = segment.split_at(segment.start + at) else {
+            return false;
+        };
+        tail.id = split_id("kb-edit");
+        timeline.keyboard_segments[index] = head;
+        timeline.keyboard_segments.insert(index + 1, tail);
+        return true;
+    }
     with_track!(timeline, kind, |segments| split_at(
         segments, index, at, min
     ))
@@ -1896,8 +2345,7 @@ pub fn set_clip_segment_timescale(
         segment.end += shift(segment.end);
     }
     for segment in &mut timeline.keyboard_segments {
-        segment.start += shift(segment.start);
-        segment.end += shift(segment.end);
+        segment.remap_times(|time| time + shift(time));
     }
     for segment in &mut timeline.camera3d_segments {
         let previous_duration = segment.end - segment.start;
@@ -2557,6 +3005,44 @@ mod tests {
     }
 
     #[test]
+    fn splitting_a_keyboard_segment_partitions_and_rebases_keys() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 }],
+                "zoomSegments": [],
+                "keyboardSegments": [{
+                    "id": "typed",
+                    "start": 0.0,
+                    "end": 4.0,
+                    "displayText": "ab",
+                    "keys": [
+                        { "key": "a", "timeOffset": 500.0 },
+                        { "key": "b", "timeOffset": 2500.0 }
+                    ]
+                }]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+
+        assert!(split_segment(timeline, TrackKind::Keyboard, 0, 2.0));
+        assert_eq!(timeline.keyboard_segments.len(), 2);
+        let left = &timeline.keyboard_segments[0];
+        let right = &timeline.keyboard_segments[1];
+        assert_eq!(
+            (left.start, left.end, left.display_text.as_str()),
+            (0.0, 2.0, "a")
+        );
+        assert_eq!(
+            (right.start, right.end, right.display_text.as_str()),
+            (2.0, 4.0, "b")
+        );
+        assert_eq!(left.keys[0].time_offset, 500.0);
+        assert_eq!(right.keys[0].time_offset, 500.0);
+        assert_ne!(left.id, right.id);
+        assert!(right.id.starts_with("kb-edit-split-"));
+    }
+
+    #[test]
     fn a_split_on_a_boundary_is_refused() {
         let mut config = two_clip_config();
         let timeline = config.timeline.as_mut().unwrap();
@@ -2739,6 +3225,254 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_clip_removes_its_hold_and_ripples_keyboard_keys() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 5.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 1.0 },
+                    { "recordingSegment": 2, "timescale": 1.0, "start": 0.0, "end": 4.0 }
+                ],
+                "zoomSegments": [{ "start": 8.0, "end": 9.0, "amount": 1.5, "mode": "auto" }],
+                "textSegments": [{
+                    "start": 5.25,
+                    "end": 6.25,
+                    "track": 0,
+                    "enabled": true,
+                    "layout": "fullscreen",
+                    "content": "Hold"
+                }],
+                "keyboardSegments": [{
+                    "id": "typed",
+                    "start": 4.5,
+                    "end": 8.5,
+                    "displayText": "abc",
+                    "keys": [
+                        { "key": "a", "timeOffset": 0.0 },
+                        { "key": "b", "timeOffset": 1000.0 },
+                        { "key": "c", "timeOffset": 3500.0 }
+                    ]
+                }]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+
+        assert!(delete_clip_segments(timeline, &[1]));
+        assert_eq!(timeline.segments.len(), 2);
+        assert!(timeline.text_segments.is_empty());
+        assert_eq!(
+            (
+                timeline.zoom_segments[0].start,
+                timeline.zoom_segments[0].end
+            ),
+            (6.0, 7.0)
+        );
+        let keyboard = &timeline.keyboard_segments[0];
+        assert_eq!((keyboard.start, keyboard.end), (4.5, 6.5));
+        assert_eq!(keyboard.display_text, "ac");
+        assert_eq!(keyboard.keys.len(), 2);
+        assert_eq!(keyboard.keys[0].time_offset, 0.0);
+        assert_eq!(keyboard.keys[1].time_offset, 1500.0);
+    }
+
+    #[test]
+    fn deleting_a_clip_preserves_transition_overlaps_and_boundary_holds() {
+        let mut project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 2, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "transitions": [
+                    { "segmentIndex": 1, "type": "cross-fade", "duration": 1.0 },
+                    { "segmentIndex": 2, "type": "cross-fade", "duration": 1.0 }
+                ],
+                "zoomSegments": [],
+                "textSegments": [
+                    { "start": 10.0, "end": 12.0, "track": 0, "content": "removed", "layout": "fullscreen" },
+                    { "start": 20.0, "end": 22.0, "track": 0, "content": "retained", "layout": "fullscreen" }
+                ],
+                "keyboardSegments": [
+                    {
+                        "id": "left-overlap", "start": 9.0, "end": 10.0,
+                        "displayText": "a", "keys": [{ "key": "a", "timeOffset": 500.0 }]
+                    },
+                    {
+                        "id": "right-overlap", "start": 20.0, "end": 21.0,
+                        "displayText": "b", "keys": [{ "key": "b", "timeOffset": 500.0 }]
+                    }
+                ],
+                "audioSegments": [{
+                    "start": 15.0, "end": 23.0, "track": 0, "path": "/tmp/a.mp3",
+                    "trimStart": 4.0
+                }]
+            }
+        }));
+        let timeline = project.timeline.as_mut().unwrap();
+
+        assert!(delete_clip_segments(timeline, &[1]));
+
+        assert!(timeline.transitions.is_empty());
+        assert_eq!(timeline.text_segments.len(), 1);
+        assert_eq!(
+            (
+                timeline.text_segments[0].start,
+                timeline.text_segments[0].end
+            ),
+            (10.0, 12.0)
+        );
+        assert_eq!(
+            (
+                timeline.keyboard_segments[0].start,
+                timeline.keyboard_segments[0].end,
+                timeline.keyboard_segments[0].keys[0].time_offset,
+            ),
+            (9.0, 10.0, 500.0)
+        );
+        assert_eq!(
+            (
+                timeline.keyboard_segments[1].start,
+                timeline.keyboard_segments[1].end,
+                timeline.keyboard_segments[1].keys[0].time_offset,
+            ),
+            (10.0, 11.0, 500.0)
+        );
+        let audio = &timeline.audio_segments[0];
+        assert_eq!(
+            (audio.start, audio.end, audio.trim_start),
+            (10.0, 13.0, 9.0)
+        );
+    }
+
+    #[test]
+    fn output_ripple_preserves_audio_and_keyframe_payload_alignment() {
+        let mut project = two_clip_config();
+        let timeline = project.timeline.as_mut().unwrap();
+        let mut mask = default_mask_segment(5.5, 9.0, 0);
+        mask.keyframes.position = vec![
+            cap_project::MaskVectorKeyframe {
+                time: 0.25,
+                x: 0.2,
+                y: 0.3,
+            },
+            cap_project::MaskVectorKeyframe {
+                time: 2.5,
+                x: 0.7,
+                y: 0.8,
+            },
+        ];
+        timeline.mask_segments.push(mask);
+        let mut removed_camera = default_camera3d_segment(5.2, 6.2);
+        removed_camera
+            .tracks
+            .tilt_x
+            .push(cap_project::Camera3DKeyframe {
+                time: 0.5,
+                value: 1.0,
+                out_easing: None,
+                in_easing: None,
+            });
+        let mut retained_camera = default_camera3d_segment(8.0, 12.0);
+        retained_camera
+            .tracks
+            .tilt_x
+            .push(cap_project::Camera3DKeyframe {
+                time: 2.0,
+                value: 2.0,
+                out_easing: None,
+                in_easing: None,
+            });
+        timeline.camera3d_segments = vec![removed_camera, retained_camera];
+        let mut audio = default_audio_segment(
+            5.5,
+            9.0,
+            0,
+            "content/audio/test.wav".into(),
+            "Test".into(),
+            Some(12.0),
+        );
+        audio.trim_start = 10.0;
+        timeline.audio_segments.push(audio);
+
+        ripple_delete_output_tracks(timeline, 5.0, 7.0, 2.0);
+
+        let mask = &timeline.mask_segments[0];
+        assert_eq!((mask.start, mask.end), (5.0, 7.0));
+        assert_eq!(mask.keyframes.position.len(), 1);
+        assert_eq!(mask.keyframes.position[0].time, 1.0);
+        assert_eq!(timeline.camera3d_segments.len(), 1);
+        let camera = &timeline.camera3d_segments[0];
+        assert_eq!((camera.start, camera.end), (6.0, 10.0));
+        assert_eq!(camera.tracks.tilt_x[0].time, 2.0);
+        let audio = &timeline.audio_segments[0];
+        assert_eq!((audio.start, audio.end), (5.0, 7.0));
+        assert_eq!(audio.trim_start, 11.5);
+    }
+
+    #[test]
+    fn camera3d_ripple_drops_cut_keys_and_preserves_both_boundary_poses() {
+        let mut camera = default_camera3d_segment(0.0, 10.0);
+        camera.tracks.tilt_x = [2.0, 5.0, 8.0]
+            .into_iter()
+            .map(|time| cap_project::Camera3DKeyframe {
+                time,
+                value: time,
+                out_easing: Some([0.0, 0.0]),
+                in_easing: Some([1.0, 1.0]),
+            })
+            .collect();
+        let old_track = camera.tracks.tilt_x.clone();
+        let mut segments = vec![camera];
+
+        ripple_delete_camera3d_track(&mut segments, 3.0, 6.0, 3.0);
+
+        let camera = &segments[0];
+        assert_eq!((camera.start, camera.end), (0.0, 7.0));
+        let track = &camera.tracks.tilt_x;
+        assert_eq!(
+            track
+                .iter()
+                .map(|keyframe| (keyframe.time, keyframe.value))
+                .collect::<Vec<_>>(),
+            vec![(2.0, 2.0), (3.0, 3.0), (3.0, 6.0), (5.0, 8.0)]
+        );
+        assert_eq!(track[1].in_easing, Some([1.0, 1.0]));
+        assert_eq!(track[1].out_easing, None);
+        assert_eq!(track[2].in_easing, None);
+        assert_eq!(track[2].out_easing, Some([0.0, 0.0]));
+        assert_eq!(
+            cap_rendering::camera3d::sample_track(0.0, track, 2.5),
+            cap_rendering::camera3d::sample_track(0.0, &old_track, 2.5)
+        );
+        let after_join = cap_rendering::camera3d::sample_track(0.0, track, 3.001);
+        let before_cut = cap_rendering::camera3d::sample_track(0.0, &old_track, 6.001);
+        assert!((after_join - before_cut).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ripple_right_tails_start_at_the_mapped_cut_end() {
+        assert_eq!(
+            ripple_deleted_bounds(4.0, 8.0, 3.0, 6.0, 2.0),
+            Some((4.0, 6.0))
+        );
+        let mut audio = vec![default_audio_segment(
+            4.0,
+            8.0,
+            0,
+            "content/audio/test.wav".into(),
+            "Test".into(),
+            Some(10.0),
+        )];
+        audio[0].trim_start = 1.0;
+
+        ripple_delete_audio_track(&mut audio, 3.0, 6.0, 2.0);
+
+        assert_eq!((audio[0].start, audio[0].end), (4.0, 6.0));
+        assert_eq!(audio[0].trim_start, 3.0);
+    }
+
+    #[test]
     fn deleting_a_masks_only_lane_renumbers_the_lanes_above_it() {
         let mut config = config(serde_json::json!({
             "timeline": {
@@ -2753,7 +3487,7 @@ mod tests {
             }
         }));
         let timeline = config.timeline.as_mut().unwrap();
-        assert!(delete_segments(timeline, TrackKind::Mask, &[0]));
+        assert!(delete_track_lane(timeline, TrackKind::Mask, 0));
         assert_eq!(timeline.mask_segments.len(), 1);
         assert_eq!(
             timeline.mask_segments[0].track, 0,
@@ -2831,11 +3565,26 @@ mod tests {
     fn setting_clip_timescale_ripples_later_tracks() {
         let mut project = zoom_fixture();
         let timeline = project.timeline.as_mut().unwrap();
+        timeline.keyboard_segments = serde_json::from_value(serde_json::json!([{
+            "id": "typed",
+            "start": 2.0,
+            "end": 8.0,
+            "displayText": "ab",
+            "keys": [
+                { "key": "a", "timeOffset": 1000.0 },
+                { "key": "b", "timeOffset": 5000.0 }
+            ]
+        }]))
+        .unwrap();
         assert!(set_clip_segment_timescale(timeline, 0, 2.0));
         assert_eq!(timeline.segments[0].timescale, 2.0);
         assert!((timeline.zoom_segments[0].start - 1.0).abs() < 1e-9);
         assert!((timeline.zoom_segments[0].end - 2.5).abs() < 1e-9);
         assert!((timeline.zoom_segments[1].start - 10.0).abs() < 1e-9);
+        let keyboard = &timeline.keyboard_segments[0];
+        assert_eq!((keyboard.start, keyboard.end), (1.0, 4.0));
+        assert_eq!(keyboard.keys[0].time_offset, 500.0);
+        assert_eq!(keyboard.keys[1].time_offset, 2500.0);
         assert!(!set_clip_segment_timescale(timeline, 0, 2.0));
     }
 
@@ -2983,6 +3732,111 @@ mod style_image_tests {
         assert!(delete_track_lane(timeline, TrackKind::Style, 0));
         assert_eq!(timeline.style_segments[0].track, 0);
         assert_eq!(timeline.style_segments[0].name, "Second");
+    }
+
+    #[test]
+    fn lane_reorder_moves_segments_without_changing_config_indices() {
+        let mut project = project();
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.style_segments.push(cap_project::StyleSegment {
+            start: 0.,
+            end: 10.,
+            track: 2,
+            ..Default::default()
+        });
+        let names = timeline
+            .style_segments
+            .iter()
+            .map(|segment| segment.name.clone())
+            .collect::<Vec<_>>();
+
+        assert!(reorder_track_lane(timeline, TrackKind::Style, 2, 0));
+        assert_eq!(
+            timeline
+                .style_segments
+                .iter()
+                .map(|segment| segment.track)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 0]
+        );
+        assert_eq!(
+            timeline
+                .style_segments
+                .iter()
+                .map(|segment| segment.name.clone())
+                .collect::<Vec<_>>(),
+            names
+        );
+    }
+
+    #[test]
+    fn lane_reorder_from_empty_lane_still_reports_sibling_shift() {
+        let mut project = project();
+        let timeline = project.timeline.as_mut().unwrap();
+
+        assert!(reorder_track_lane(timeline, TrackKind::Style, 2, 0));
+        assert_eq!(
+            timeline
+                .style_segments
+                .iter()
+                .map(|segment| segment.track)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    #[test]
+    fn visual_segment_delete_preserves_lane_identity() {
+        let mut project = project();
+        let timeline = project.timeline.as_mut().unwrap();
+        let mut second = timeline.image_segments[0].clone();
+        second.track = 2;
+        timeline.image_segments.push(second);
+        assert!(delete_segments(timeline, TrackKind::Image, &[0]));
+        assert_eq!(timeline.image_segments[0].track, 2);
+    }
+
+    #[test]
+    fn overlay_reorder_and_lane_delete_update_only_saved_order() {
+        let mut project = project();
+        let text = cap_project::OverlayTrack {
+            kind: cap_project::OverlayTrackKind::Text,
+            track: 0,
+        };
+        let image = cap_project::OverlayTrack {
+            kind: cap_project::OverlayTrackKind::Image,
+            track: 2,
+        };
+        let mask = cap_project::OverlayTrack {
+            kind: cap_project::OverlayTrackKind::Mask,
+            track: 0,
+        };
+        let available = [text, image, mask];
+        project.timeline.as_mut().unwrap().image_segments[0].track = 2;
+
+        assert!(reorder_overlay_track(&mut project, &available, image, 0));
+        assert_eq!(project.overlay_order, [image, text, mask]);
+        assert!(delete_track_lane_and_order(
+            &mut project,
+            &available,
+            TrackKind::Image,
+            1,
+        ));
+        assert_eq!(
+            project.timeline.as_ref().unwrap().image_segments[0].track,
+            1
+        );
+        assert_eq!(
+            project.overlay_order,
+            [
+                cap_project::OverlayTrack {
+                    kind: cap_project::OverlayTrackKind::Image,
+                    track: 1,
+                },
+                text,
+                mask
+            ]
+        );
     }
 
     #[test]

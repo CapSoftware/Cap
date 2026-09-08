@@ -33,6 +33,10 @@ export const DESKTOP_RECORDING_LEASE_MS = 5 * 60 * 1_000;
 export const DESKTOP_RECORDING_SOURCE_RETRY_MS = 60 * 60 * 1_000;
 export const DESKTOP_RECORDING_OUTPUT_REPLACED = "output-replaced";
 export const DESKTOP_RECORDING_DELETING = "video-deleting";
+export const DESKTOP_RECORDING_RETRY_EXHAUSTED = "processing-retry-exhausted";
+const MAX_AUTOMATIC_ATTEMPTS = 5;
+const RETRY_EXHAUSTED_MESSAGE =
+	"Processing paused after repeated failures. Your uploaded recording is retained. Please contact support.";
 
 const sourceSchema = z.object({
 	version: z.literal(1),
@@ -158,6 +162,7 @@ export function isDesktopRecordingJobRecoverable(
 	now: Date,
 ) {
 	if (job.state === "verified") return false;
+	if (job.errorCode === DESKTOP_RECORDING_RETRY_EXHAUSTED) return false;
 	if (job.errorCode === DESKTOP_RECORDING_OUTPUT_REPLACED) return false;
 	if (job.errorCode === DESKTOP_RECORDING_DELETING) return false;
 	if (job.state === "source-blocked" && job.source) return false;
@@ -333,7 +338,11 @@ export async function ensureSegmentProcessingJob({
 					.where(eq(videoProcessingJobs.videoId, videoId));
 			}
 		}
-		if (job.state === "source-blocked" && !job.source) {
+		if (
+			job.state === "source-blocked" &&
+			!job.source &&
+			job.errorCode !== DESKTOP_RECORDING_RETRY_EXHAUSTED
+		) {
 			job = {
 				...job,
 				state: "committing",
@@ -374,6 +383,33 @@ export async function getProcessingState({
 	return row ? parseDesktopRecordingJob(row) : null;
 }
 
+async function pauseExhaustedRecording(
+	tx: Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0],
+	videoId: Video.VideoId,
+	errorMessage: string,
+	now: Date,
+) {
+	await tx
+		.update(videoProcessingJobs)
+		.set({
+			state: "source-blocked",
+			leaseExpiresAt: null,
+			errorCode: DESKTOP_RECORDING_RETRY_EXHAUSTED,
+			errorMessage,
+			updatedAt: now,
+		})
+		.where(eq(videoProcessingJobs.videoId, videoId));
+	await tx
+		.update(videoUploads)
+		.set({
+			phase: "error",
+			processingMessage: RETRY_EXHAUSTED_MESSAGE,
+			processingError: RETRY_EXHAUSTED_MESSAGE,
+			updatedAt: now,
+		})
+		.where(eq(videoUploads.videoId, videoId));
+}
+
 export async function claimProcessingAttempt({
 	videoId,
 	generation,
@@ -397,6 +433,15 @@ export async function claimProcessingAttempt({
 		if (!row) return null;
 		const job = parseDesktopRecordingJob(row);
 		if (!isDesktopRecordingJobRecoverable(job, now)) return null;
+		if (job.attemptCount >= MAX_AUTOMATIC_ATTEMPTS) {
+			await pauseExhaustedRecording(
+				tx,
+				videoId,
+				job.errorMessage ?? "Automatic processing attempt limit reached.",
+				now,
+			);
+			return null;
+		}
 		const attempt: DesktopRecordingAttempt = {
 			...job,
 			state: job.source ? "processing" : "committing",
@@ -632,6 +677,66 @@ export async function heartbeatAttempt({
 	});
 }
 
+export async function waitForDesktopRecordingCapacity({
+	now = new Date(),
+	retryAfterMs,
+	...fence
+}: DesktopRecordingAttemptFence & {
+	now?: Date;
+	retryAfterMs: number;
+}): Promise<boolean> {
+	if (
+		!Number.isSafeInteger(retryAfterMs) ||
+		retryAfterMs <= 0 ||
+		retryAfterMs > 360_000
+	)
+		throw new Error("Invalid capacity retry delay");
+	return db().transaction(async (tx) => {
+		const condition = and(
+			attemptCondition(fence),
+			isNull(videoProcessingJobs.remoteJobId),
+			gt(videoProcessingJobs.leaseExpiresAt, now),
+		);
+		const [row] = await tx
+			.select()
+			.from(videoProcessingJobs)
+			.where(condition)
+			.for("update");
+		if (
+			!row ||
+			getDesktopRecordingWorkerCheckpoint(parseDesktopRecordingJob(row))
+		)
+			return false;
+		const nextRetryAt = new Date(now.getTime() + retryAfterMs);
+		await tx
+			.update(videoProcessingJobs)
+			.set({
+				leaseExpiresAt: new Date(
+					nextRetryAt.getTime() + DESKTOP_RECORDING_LEASE_MS,
+				),
+				nextRetryAt,
+				output: {
+					kind: "desktop-recording-capacity-wait",
+					version: 1,
+					retryAt: nextRetryAt.toISOString(),
+				},
+				updatedAt: now,
+			})
+			.where(condition);
+		await tx
+			.update(videoUploads)
+			.set({
+				phase: "processing",
+				processingMessage:
+					"Waiting for a processing slot. Your recording is safely stored.",
+				processingError: null,
+				updatedAt: now,
+			})
+			.where(eq(videoUploads.videoId, fence.videoId));
+		return true;
+	});
+}
+
 export async function scheduleRetry({
 	errorCode,
 	errorMessage,
@@ -651,6 +756,15 @@ export async function scheduleRetry({
 			.where(attemptCondition(fence))
 			.for("update");
 		if (!row) return false;
+		if (row.attemptCount >= MAX_AUTOMATIC_ATTEMPTS) {
+			await pauseExhaustedRecording(
+				tx,
+				fence.videoId,
+				`${errorCode}: ${errorMessage}`,
+				now,
+			);
+			return true;
+		}
 		await tx
 			.update(videoProcessingJobs)
 			.set({
@@ -834,60 +948,58 @@ export async function listRecoverableSegmentJobs({
 	limit?: number;
 } = {}): Promise<DesktopRecordingJob[]> {
 	const batchSize = Math.max(1, Math.min(limit, 100));
-	const pending = await db()
-		.select(getTableColumns(videoProcessingJobs))
-		.from(videoProcessingJobs)
-		.innerJoin(videos, eq(videos.id, videoProcessingJobs.videoId))
-		.where(
-			and(
-				inArray(videoProcessingJobs.state, [
-					"committing",
-					"queued",
-					"retry",
-					"source-blocked",
-				]),
-				or(
-					ne(videoProcessingJobs.state, "source-blocked"),
-					isNull(videoProcessingJobs.source),
-				),
-				or(
-					isNull(videoProcessingJobs.errorCode),
-					and(
-						ne(
-							videoProcessingJobs.errorCode,
-							DESKTOP_RECORDING_OUTPUT_REPLACED,
+	const candidates = async (
+		states: DesktopRecordingJob["state"][],
+		candidateLimit: number,
+		byLease = false,
+	) =>
+		db()
+			.select(getTableColumns(videoProcessingJobs))
+			.from(videoProcessingJobs)
+			.innerJoin(videos, eq(videos.id, videoProcessingJobs.videoId))
+			.where(
+				and(
+					inArray(videoProcessingJobs.state, states),
+					or(
+						ne(videoProcessingJobs.state, "source-blocked"),
+						isNull(videoProcessingJobs.source),
+					),
+					or(
+						isNull(videoProcessingJobs.errorCode),
+						and(
+							ne(
+								videoProcessingJobs.errorCode,
+								DESKTOP_RECORDING_OUTPUT_REPLACED,
+							),
+							ne(videoProcessingJobs.errorCode, DESKTOP_RECORDING_DELETING),
+							ne(
+								videoProcessingJobs.errorCode,
+								DESKTOP_RECORDING_RETRY_EXHAUSTED,
+							),
 						),
-						ne(videoProcessingJobs.errorCode, DESKTOP_RECORDING_DELETING),
+					),
+					lte(videoProcessingJobs.nextRetryAt, now),
+					or(
+						isNull(videoProcessingJobs.leaseExpiresAt),
+						lte(videoProcessingJobs.leaseExpiresAt, now),
 					),
 				),
-				lte(videoProcessingJobs.nextRetryAt, now),
-				or(
-					isNull(videoProcessingJobs.leaseExpiresAt),
-					lte(videoProcessingJobs.leaseExpiresAt, now),
+			)
+			.orderBy(
+				asc(
+					byLease
+						? videoProcessingJobs.leaseExpiresAt
+						: videoProcessingJobs.nextRetryAt,
 				),
-			),
-		)
-		.orderBy(
-			asc(videoProcessingJobs.nextRetryAt),
-			asc(videoProcessingJobs.videoId),
-		)
-		.limit(batchSize);
-	const expired = await db()
-		.select(getTableColumns(videoProcessingJobs))
-		.from(videoProcessingJobs)
-		.innerJoin(videos, eq(videos.id, videoProcessingJobs.videoId))
-		.where(
-			and(
-				eq(videoProcessingJobs.state, "processing"),
-				lte(videoProcessingJobs.leaseExpiresAt, now),
-			),
-		)
-		.orderBy(
-			asc(videoProcessingJobs.leaseExpiresAt),
-			asc(videoProcessingJobs.videoId),
-		)
-		.limit(batchSize);
-	return [...pending, ...expired]
+				asc(videoProcessingJobs.videoId),
+			)
+			.limit(candidateLimit);
+	const pending = await candidates(
+		["committing", "queued", "retry"],
+		batchSize,
+	);
+	const expired = await candidates(["processing"], batchSize, true);
+	const active = [...pending, ...expired]
 		.map(parseDesktopRecordingJob)
 		.filter((job) => isDesktopRecordingJobRecoverable(job, now))
 		.sort((left, right) => {
@@ -899,4 +1011,15 @@ export async function listRecoverableSegmentJobs({
 			);
 		})
 		.slice(0, batchSize);
+	if (active.length === batchSize) return active;
+	const blocked = await candidates(
+		["source-blocked"],
+		batchSize - active.length,
+	);
+	return [
+		...active,
+		...blocked
+			.map(parseDesktopRecordingJob)
+			.filter((job) => isDesktopRecordingJobRecoverable(job, now)),
+	];
 }

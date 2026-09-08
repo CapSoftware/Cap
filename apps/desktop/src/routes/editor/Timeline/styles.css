@@ -21,6 +21,154 @@
 }
 
 .cap-track-fill {
-	background: var(--seg-color);
-	border: 1px solid color-mix(in srgb, var(--seg-color) 58%, black);
+	--seg-color: var(--ed-text-3);
+	--ed-seg-tint-selected: calc(var(--ed-seg-tint) + 10%);
+	--ed-seg-line-hover: calc(var(--ed-seg-line) + 10%);
+	border-radius: 8px;
+	background-color: color-mix(
+		in srgb,
+		var(--seg-color) var(--ed-seg-tint),
+		var(--ed-card)
+	);
+	box-shadow: inset 0 0 0 1px
+		color-mix(in srgb, var(--seg-color) var(--ed-seg-line), transparent);
+	transition:
+		background-color 0.15s ease,
+		box-shadow 0.15s ease;
+}
+
+.cap-track-fill::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: 3px;
+	background-color: var(--seg-color);
+	pointer-events: none;
+	z-index: 1;
+}
+
+.cap-track-fill:hover {
+	box-shadow: inset 0 0 0 1px
+		color-mix(in srgb, var(--seg-color) var(--ed-seg-line-hover), transparent);
+}
+
+.cap-track-fill[data-selected] {
+	background-color: color-mix(
+		in srgb,
+		var(--seg-color) var(--ed-seg-tint-selected),
+		var(--ed-card)
+	);
+	box-shadow: inset 0 0 0 1.5px var(--ed-accent);
+}
+
+.cap-track-fill[data-muted] {
+	background-color: color-mix(
+		in srgb,
+		var(--seg-color) calc(var(--ed-seg-tint) / 2),
+		var(--ed-card)
+	);
+}
+
+.cap-track-fill[data-ghost] {
+	opacity: 0.55;
+}
+
+.cap-seg-labels {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.cap-seg-label {
+	font-size: 12px;
+	font-weight: 500;
+	line-height: 1.2;
+	white-space: nowrap;
+	color: color-mix(
+		in srgb,
+		var(--seg-color) var(--ed-seg-label-mix),
+		var(--ed-seg-label-base)
+	);
+}
+
+.cap-seg-sublabel {
+	font-size: 11px;
+	line-height: 1.2;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+	color: color-mix(in srgb, var(--seg-color) 45%, var(--ed-text-3));
+}
+
+.cap-track-fill[data-muted] .cap-seg-label,
+.cap-track-fill[data-muted] .cap-seg-sublabel {
+	color: var(--ed-text-3);
+}
+
+.cap-seg-handle {
+	width: 3px;
+	height: 16px;
+	border-radius: 2px;
+	background-color: color-mix(
+		in srgb,
+		var(--seg-color) 70%,
+		var(--ed-seg-label-base)
+	);
+}
+
+.cap-fade-shade {
+	fill: color-mix(in srgb, var(--ed-seg-label-base) 22%, transparent);
+}
+
+.cap-fade-curve,
+.cap-fade-corner {
+	stroke: color-mix(in srgb, var(--seg-color) 70%, var(--ed-seg-label-base));
+	fill: color-mix(in srgb, var(--seg-color) 70%, var(--ed-seg-label-base));
+}
+
+.cap-fade-curve {
+	fill: none;
+}
+
+.cap-fade-corner-line {
+	stroke: color-mix(in srgb, var(--ed-card) 65%, transparent);
+}
+
+.cap-track-tile {
+	background-color: color-mix(in srgb, var(--seg-color) 16%, transparent);
+	color: color-mix(in srgb, var(--seg-color) 62%, var(--ed-seg-label-base));
+}
+
+.cap-empty-lane {
+	display: flex;
+	width: 100%;
+	height: 100%;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	font-size: 12px;
+	line-height: 1.2;
+	color: var(--ed-text-3);
+	text-align: center;
+	transition: color 0.15s ease;
+}
+
+button.cap-empty-lane:hover:not(:disabled),
+.cap-empty-lane[data-active] {
+	color: var(--ed-text-2);
+}
+
+.cap-empty-lane-action {
+	font-weight: 500;
+	color: var(--ed-text-2);
+}
+
+button.cap-empty-lane-action:hover:not(:disabled) {
+	color: var(--ed-text-1);
+}
+
+.cap-empty-lane-action:disabled {
+	opacity: 0.6;
 }

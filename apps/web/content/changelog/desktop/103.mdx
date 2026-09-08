@@ -1,0 +1,70 @@
+---
+title: Native App Preview, 3D Scenes, Animated Text & Cursor Effects
+app: Cap Desktop
+publishedAt: "2026-08-31"
+version: 0.6.0
+image:
+---
+
+This release brings an optional native app preview and a major expansion of Studio Mode: 3D camera moves, color correction, animated text, moving gradient backgrounds, and new cursor styles and click effects. It also adds freehand screenshot drawing, faster timeline editing, and fixes across recording recovery, audio, exports, and all three desktop platforms.
+
+## Features
+
+- **Native app preview** - The new app is built with GPUI for a faster, more responsive recording and editing experience with a native feel. Enable **Cap GPUI** in Settings → Experimental to try it. It shares your recordings and settings with the existing app, and you can switch back from its Experimental settings. This is an optional preview with some features still missing.
+- **3D camera moves** - Give screen recordings depth with a new 3D camera track. Choose ready-made scenes and motion presets or build your own shots with start and end positions, rotation, perspective, easing, and focus blur, then combine multiple shots on the timeline.
+- **Color correction** - Adjust the screen and camera separately with presets and controls for exposure, contrast, saturation, temperature, tint, fade, vignette, and grain. Control the strength of each look and whether the cursor follows the screen's colors.
+- **Animated text** - Add styled titles and callouts with fonts installed on your computer, text presets, alignment, spacing, shadows, and entrance and exit animations.
+- **Full-screen title cards** - Turn a text segment into a full-screen card between parts of your recording. The recorded video and audio pause while the title is shown, background music continues, and the recording resumes where it left off.
+- **Animated gradient backgrounds** - Choose a gradient preset or build your own with editable colors and positions, then add motion to the background. Save favorites or randomize a gradient for a different look.
+- **Cursor styles** - Choose macOS, macOS Tahoe, Windows, or a simple circle. Replacement cursors follow pointer shape changes, including text selection, links, and resizing.
+- **Click ripples** - Make clicks easier to follow with animated ripples. Adjust their color, size, duration, and strength, including when the cursor is frozen in place.
+- **Draw on screenshots** - Use the new Draw tool, or press **D**, to circle, underline, and sketch freehand. Change stroke color, width, and opacity, keep drawing multiple strokes, and move or resize them afterward. Drawings are included when you copy, save, or share the image.
+- **Faster timeline editing** - Drag the time ruler to scrub, use the minimap to navigate long recordings, and snap cuts to the playhead or other segment boundaries. Select all segments on the current track with **Cmd/Ctrl+A**, edit multiple zoom segments together, and change clip speed and audio behavior directly from the timeline.
+- **Frames in the native editor** - Add a macOS, Windows, browser, or MacBook frame from the native editor, with light and dark appearances and editable browser URLs or macOS window titles.
+- **Default zoom amount** - Choose your preferred zoom strength in General settings for newly added zoom segments and automatically generated zooms.
+- **Product demos with agents** - The agent installer now includes a companion `cap-demo` skill that helps an agent turn a website into a recorded product demo with 3D shots, a matching background, cursor movement, and music. This workflow currently supports macOS on Apple Silicon and has additional setup requirements.
+- **Diagnostic reports** - Run Studio and Instant Mode audio/video sync tests from Settings → Feedback, with an optional microphone check. Inspect the saved report, including device details and recent recording diagnostics, before choosing to send it to Cap.
+- **Local-currency upgrade prices** - The classic desktop app's upgrade screen now displays Cap Pro and commercial-license prices in pounds, euros, or dollars based on your location.
+
+## Fixes
+
+- **Disconnected microphones and cameras** - Cap remembers a selected device when it is unplugged, shows that it is not connected, and selects it again when it returns. Missing devices no longer trap recording startup in a restore loop, and renamed Bluetooth microphones are matched more reliably.
+- **More reliable recording recovery** - Interrupted recordings can recover complete fragments that were left out of their saved manifest. Incomplete fragments are rejected, fragment paths are resolved correctly, and stopping a recording avoids a shutdown deadlock that could leave saving stuck.
+- **Safer low-storage recording in the native app** - The native app now leaves extra disk space to finish saving a recording, shows low-storage warnings, and makes it clear when saving is still in progress. This helps protect the footage already captured when space runs short.
+- **Audio starts with the picture** - Editor playback waits for audio to start before advancing the video, reducing the delay between what you see and hear at the beginning of playback.
+- **Muted clips stay muted** - Muting a normal-speed clip now carries through playback and export, including across split segments. The native timeline also makes muted clips easier to spot with a muted label and icon.
+- **Native playback shortcut** - The spacebar consistently starts and pauses playback after clicking editor controls, while text fields still accept spaces normally.
+- **Text, captions, and zooms stay aligned** - Captions, transcript seeking, and overlay tracks now account for pauses introduced by full-screen titles. Deleting a section keeps those tracks aligned, and zoom target previews use the correct point in the recording after cuts, speed changes, and title cards.
+- **Cleaner background blur** - Fixed visible grid and comb-like artifacts in blurred backgrounds.
+- **Static recordings finish correctly** - Recordings with little or no screen movement now retain the full duration up to when you stop. Instant Mode in the native app and on Linux uploads recording segments as they become available.
+- **Native Windows export previews** - Fixed black previews when preparing an export in the native Windows app.
+- **macOS recording startup** - Improved screen and window discovery, capture startup, camera-device handling, and permission refreshes, including returning from system permission settings.
+- **Native app crash recovery** - Fixed macOS crashes involving window visibility and graphics surfaces. After an unexpected native app exit, the next launch returns to the classic app.
+- **Safer updates and app switching** - Updating, restarting, or switching between the native and classic apps now checks for active recordings, exports, and other work before proceeding. Single-instance handling and app handoffs are more reliable.
+- **Native Windows window behavior** - Improved display scaling, window controls, snapping, taskbar and tray behavior, and restoring the native app after it has been hidden.
+- **Windows camera compatibility** - Improved support for capture cards and virtual cameras that need a fallback capture method. A camera that fails to initialize no longer hides the remaining devices in the picker.
+- **Windows window screenshots** - Added a fallback capture method for window screenshots when the usual capture API fails.
+- **Linux recording and audio** - Improved Wayland capture selection and X11 window recording, including following resized windows without capturing overlapping apps. CLI recordings gain camera compositing, while PipeWire system audio and microphone capture stay separate and use more compatible buffering.
+- **Linux screenshot privacy** - Wayland screenshots respect the selected target and avoid falling back to a capture that could include other windows. Screenshot and automation notifications are delivered more reliably.
+- **Linux installation and updates** - Added packaging support for DEB, RPM, AppImage, and Arch, with automatic updates for DEB and AppImage and package-manager guidance for RPM and Arch. AppImage CLI launchers also preserve your working directory and relative paths.
+- **Native account and app integration** - Improved account, profile, settings, and tray synchronization, along with clipboard actions, sign-in links, and opening Cap from other apps.
+- **Safer support logs** - Uploaded logs remove sensitive credentials from URLs, and caption text is kept out of normal release logs.
+
+## Performance
+
+- **Faster Windows editor startup** - The editor uses Microsoft's newer shader compiler to reduce the long graphics setup delay that affected some Windows GPUs.
+- **Lower Windows background usage** - Camera discovery no longer repeatedly opens capture devices and leaks their resources. Device polling also pauses while the app is hidden in the tray.
+- **Smoother playback and scrubbing** - The editor limits audio and video caches, cancels outdated frame requests, and keeps timeline work responsive during playback and rapid seeking, particularly in larger projects.
+- **Lighter recording and exports on macOS** - More of the capture, preview, and export pipeline reuses graphics surfaces directly, reducing repeated frame copies and temporary allocations.
+- **Faster media imports** - The classic and native editors reuse decoded frames when building imported clips and previews.
+- **More efficient camera blur** - Camera background effects reuse processing buffers and graphics resources to reduce repeated work.
+- **Hardware encoding on supported Linux systems** - Cap can use NVIDIA encoding when the local encoder passes its compatibility check, with a software fallback when it is unavailable.
+
+## Sharing
+
+- **Uploads recover more reliably** - Upload retries reuse the recording's reserved share link, and processing waits and retries when the server is busy. Stalled jobs have broader recovery coverage, and bulk imports leave capacity available for regular recordings.
+- **Better playback on phones** - Fixed encoding timing that could stop shared videos from playing on mobile after an online edit.
+- **Recordings without speech** - Cloud transcription recognizes recordings with no spoken audio and skips them instead of repeatedly reporting a transcription failure.
+- **More reliable AI results** - Titles, summaries, chapters, and transcript translations can retry with another configured AI provider when a request fails or returns unusable results.
+- **Custom-domain link previews** - Shared recordings on verified custom domains now show the correct preview images in Slack and other apps that display link previews.
+- **Monthly sharing allowance** - Accounts without Cap Pro now have an allowance of 25 video share links per calendar month. Local recordings, screenshots, and videos created before August 19 are unaffected. Each new month gives you a fresh allowance; links created over a previous month's limit stay locked unless you upgrade or delete earlier videos from that month to free up the allowance.

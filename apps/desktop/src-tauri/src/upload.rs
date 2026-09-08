@@ -1802,46 +1802,6 @@ impl SegmentUploader {
                 }
             }
 
-            {
-                let mut signal_ok = false;
-                for attempt in 0..3u32 {
-                    match api::signal_recording_complete(&app, &video_id).await {
-                        Ok(()) => {
-                            signal_ok = true;
-                            break;
-                        }
-                        Err(e) => {
-                            warn!(
-                                attempt = attempt + 1,
-                                "Failed to signal recording complete: {e}"
-                            );
-                            if attempt < 2 {
-                                tokio::time::sleep(Duration::from_millis(
-                                    1000 * (1 << attempt) as u64,
-                                ))
-                                .await;
-                            }
-                        }
-                    }
-                }
-                if !signal_ok {
-                    error!("All attempts to signal recording complete failed for {video_id}");
-
-                    session.persist_upload(UploadMeta::SegmentUpload {
-                        video_id: video_id.clone(),
-                        pre_created_video: pre_created_video.clone(),
-                        recording_dir: recording_dir.clone(),
-                    })?;
-
-                    emit_upload_complete(&app, &video_id);
-
-                    return Err(format!(
-                        "Failed to signal recording complete for {video_id} after 3 attempts"
-                    )
-                    .into());
-                }
-            }
-
             await_upload_verification(&app, &video_id, &verification, &session).await?;
             emit_upload_complete(&app, &video_id);
 

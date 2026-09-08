@@ -75,12 +75,23 @@ interface MultipartCompletePayload {
 class HttpRequestError extends Error {
 	readonly status: number;
 	readonly url: string;
+	readonly code?: string;
 
 	constructor(url: string, status: number, message: string) {
 		super(`Request to ${url} failed: ${status} ${message}`);
 		this.name = "HttpRequestError";
 		this.status = status;
 		this.url = url;
+		try {
+			const body: unknown = JSON.parse(message);
+			if (
+				body &&
+				typeof body === "object" &&
+				"code" in body &&
+				typeof body.code === "string"
+			)
+				this.code = body.code;
+		} catch {}
 	}
 }
 
@@ -666,7 +677,12 @@ export class InstantRecordingUploader {
 					throw new CancelledUploadError();
 				}
 
-				if (attempt >= MAX_PART_UPLOAD_ATTEMPTS) {
+				if (
+					attempt >= MAX_PART_UPLOAD_ATTEMPTS ||
+					(error instanceof HttpRequestError &&
+						error.status === 404 &&
+						error.code === "VIDEO_NOT_FOUND")
+				) {
 					this.updateChunkState(partNumber, { status: "error" });
 					this.pendingUploadBytes = Math.max(
 						0,

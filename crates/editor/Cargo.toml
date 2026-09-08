@@ -23,6 +23,7 @@ name = "editor-startup-benchmark"
 path = "examples/editor-startup-benchmark.rs"
 
 [dependencies]
+cap-utils = { path = "../utils" }
 cap-media = { path = "../media" }
 cap-project = { path = "../project" }
 cap-rendering = { path = "../rendering" }
@@ -49,5 +50,5 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 windows = { workspace = true, features = ["Win32_Media"] }
 
 [dev-dependencies]
-serde_json.workspace = true
+serde_json = "1.0"
 tempfile = "3"

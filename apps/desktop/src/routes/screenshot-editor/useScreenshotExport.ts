@@ -1,6 +1,4 @@
-import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import { createSignal, onCleanup } from "solid-js";
 import { unwrap } from "solid-js/store";
 import toast from "solid-toast";
@@ -207,16 +205,10 @@ export function useScreenshotExport() {
 				const buffer = await blob.arrayBuffer();
 				const uint8Array = new Uint8Array(buffer);
 				if (disposed || editorCtx.editorInstance() !== owner) return;
-				const savePath =
-					ostype() === "linux"
-						? await commands.saveFileDialog(
-								`${editorCtx.prettyName}.png`,
-								"png",
-							)
-						: await save({
-								filters: [{ name: "PNG Image", extensions: ["png"] }],
-								defaultPath: `${editorCtx.prettyName}.png`,
-							});
+				const savePath = await commands.saveFileDialog(
+					`${editorCtx.prettyName}.png`,
+					"png",
+				);
 				if (disposed || editorCtx.editorInstance() !== owner) return;
 				if (savePath) {
 					await writeFile(savePath, uint8Array);

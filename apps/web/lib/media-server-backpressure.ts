@@ -18,10 +18,30 @@ export function createMediaServerCapacityError({
 	videoId: string;
 	priority?: MediaServerJobPriority;
 }): RetryableError {
-	const retryAfterSeconds = Number(response.headers.get("Retry-After"));
+	return new RetryableError(message, {
+		retryAfter: getMediaServerCapacityDelay({ response, videoId, priority }),
+	});
+}
+
+export function getMediaServerCapacityDelay({
+	response,
+	videoId,
+	priority = "normal",
+}: {
+	response: Response;
+	videoId: string;
+	priority?: MediaServerJobPriority;
+}): number {
+	const header = response.headers.get("Retry-After");
+	const retryAfterSeconds =
+		header && /^\d+(?:\.\d+)?$/.test(header)
+			? Number(header)
+			: header
+				? (Date.parse(header) - Date.now()) / 1000
+				: NaN;
 	const minimumDelayMs =
 		Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
-			? Math.min(retryAfterSeconds, 300) * 1000
+			? Math.ceil(Math.min(retryAfterSeconds, 300) * 1000)
 			: 15_000;
 	const stableOffset = Array.from(videoId).reduce(
 		(total, character) => (total * 31 + character.charCodeAt(0)) % 20_000,
@@ -29,7 +49,5 @@ export function createMediaServerCapacityError({
 	);
 	const priorityDelayMs = priority === "bulk" ? 15_000 : 0;
 
-	return new RetryableError(message, {
-		retryAfter: minimumDelayMs + priorityDelayMs + stableOffset,
-	});
+	return minimumDelayMs + priorityDelayMs + stableOffset;
 }

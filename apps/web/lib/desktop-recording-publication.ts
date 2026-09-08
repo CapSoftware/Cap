@@ -224,9 +224,12 @@ async function applyActiveRecordingProgress(payload: RecordingProgress) {
 		const errorCode = payload.errorCode ?? "processing-unavailable";
 		const blocked =
 			failed &&
-			["source-invalid", "source-missing", "source-changed"].includes(
-				errorCode,
-			);
+			[
+				"source-invalid",
+				"source-missing",
+				"source-changed",
+				"processing-budget-exhausted",
+			].includes(errorCode);
 		await tx
 			.update(videoProcessingJobs)
 			.set({

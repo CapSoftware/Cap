@@ -2411,6 +2411,21 @@ impl Annotation {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum OverlayTrackKind {
+    Mask,
+    Image,
+    Text,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayTrack {
+    pub kind: OverlayTrackKind,
+    pub track: u32,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectConfiguration {
@@ -2421,6 +2436,8 @@ pub struct ProjectConfiguration {
     pub cursor: CursorConfiguration,
     pub hotkeys: HotkeysConfiguration,
     pub timeline: Option<TimelineConfiguration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlay_order: Vec<OverlayTrack>,
     pub captions: Option<CaptionsData>,
     pub keyboard: Option<KeyboardData>,
     pub clips: Vec<ClipConfiguration>,
@@ -2476,6 +2493,7 @@ impl Default for ProjectConfiguration {
             cursor: Default::default(),
             hotkeys: Default::default(),
             timeline: Default::default(),
+            overlay_order: Vec::new(),
             captions: Default::default(),
             keyboard: Default::default(),
             clips: Default::default(),
@@ -2491,6 +2509,64 @@ impl Default for ProjectConfiguration {
 }
 
 impl ProjectConfiguration {
+    pub fn resolved_overlay_order(&self, available: &[OverlayTrack]) -> Vec<OverlayTrack> {
+        let mut ordered = Vec::with_capacity(available.len());
+        for track in available {
+            if !self.overlay_order.contains(track) && !ordered.contains(track) {
+                ordered.push(*track);
+            }
+        }
+        for track in &self.overlay_order {
+            if available.contains(track) && !ordered.contains(track) {
+                ordered.push(*track);
+            }
+        }
+        ordered
+    }
+
+    pub fn overlay_tracks(&self) -> Vec<OverlayTrack> {
+        let Some(timeline) = &self.timeline else {
+            return Vec::new();
+        };
+        let mut available = Vec::new();
+        for (kind, mut tracks) in [
+            (
+                OverlayTrackKind::Text,
+                timeline
+                    .text_segments
+                    .iter()
+                    .map(|segment| segment.track)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                OverlayTrackKind::Image,
+                timeline
+                    .image_segments
+                    .iter()
+                    .map(|segment| segment.track)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                OverlayTrackKind::Mask,
+                timeline
+                    .mask_segments
+                    .iter()
+                    .map(|segment| segment.track)
+                    .collect::<Vec<_>>(),
+            ),
+        ] {
+            tracks.sort_unstable();
+            tracks.dedup();
+            available.extend(
+                tracks
+                    .into_iter()
+                    .rev()
+                    .map(|track| OverlayTrack { kind, track }),
+            );
+        }
+        self.resolved_overlay_order(&available)
+    }
+
     fn style_override_at<T>(
         &self,
         time: f64,
@@ -4215,6 +4291,57 @@ mod tests {
         assert_eq!(
             nonfinite.duration_clamped(),
             CursorRippleConfig::DEFAULT_DURATION
+        );
+    }
+}
+
+#[cfg(test)]
+mod overlay_order_tests {
+    use super::{OverlayTrack, OverlayTrackKind, ProjectConfiguration};
+
+    fn layer(kind: OverlayTrackKind, track: u32) -> OverlayTrack {
+        OverlayTrack { kind, track }
+    }
+
+    #[test]
+    fn old_projects_keep_the_default_stack() {
+        let project: ProjectConfiguration = serde_json::from_str("{}").unwrap();
+        let available = [
+            layer(OverlayTrackKind::Text, 0),
+            layer(OverlayTrackKind::Image, 0),
+            layer(OverlayTrackKind::Mask, 0),
+        ];
+        assert_eq!(project.resolved_overlay_order(&available), available);
+    }
+
+    #[test]
+    fn custom_stack_roundtrips_and_ignores_stale_duplicate_entries() {
+        let text = layer(OverlayTrackKind::Text, 0);
+        let image = layer(OverlayTrackKind::Image, 0);
+        let project = ProjectConfiguration {
+            overlay_order: vec![image, image, layer(OverlayTrackKind::Mask, 9), text],
+            ..Default::default()
+        };
+        let restored: ProjectConfiguration =
+            serde_json::from_str(&serde_json::to_string(&project).unwrap()).unwrap();
+        assert_eq!(
+            restored.resolved_overlay_order(&[text, image]),
+            [image, text]
+        );
+    }
+
+    #[test]
+    fn new_layers_appear_above_the_saved_stack() {
+        let text = layer(OverlayTrackKind::Text, 0);
+        let image = layer(OverlayTrackKind::Image, 0);
+        let new_image = layer(OverlayTrackKind::Image, 1);
+        let project = ProjectConfiguration {
+            overlay_order: vec![image, text],
+            ..Default::default()
+        };
+        assert_eq!(
+            project.resolved_overlay_order(&[text, new_image, image]),
+            [new_image, image, text]
         );
     }
 }

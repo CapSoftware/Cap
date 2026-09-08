@@ -30,6 +30,7 @@ import {
 } from "./RecordingInProgress";
 import { ShareableLinkLimitOverlay } from "./ShareableLinkLimitOverlay";
 import {
+	isRecordingUpload,
 	shouldDeferPlaybackSource,
 	shouldReloadPlaybackAfterUploadCompletes,
 	type UploadProgress,
@@ -332,9 +333,7 @@ export const ShareVideo = forwardRef<
 		const isActivelyRecording =
 			isSegmentsSource &&
 			(data.hasActiveUpload ?? false) &&
-			!userConfirmedStopped &&
-			(segmentUploadProgress?.status === "fetching" ||
-				segmentUploadProgress?.status === "uploading");
+			isRecordingUpload(segmentUploadProgress, userConfirmedStopped);
 
 		const isProcessingInProgress =
 			isSegmentsSource &&
@@ -356,10 +355,17 @@ export const ShareVideo = forwardRef<
 			setConfirmStoppedError(null);
 
 			try {
-				const result = await finalizeDesktopSegmentsRecording({
+				await finalizeDesktopSegmentsRecording({
 					videoId: data.id,
 				});
-				setUserConfirmedStopped(result.status !== "source-committing");
+				setUserConfirmedStopped(true);
+				const url = new URL(window.location.href);
+				url.searchParams.set("recordingStopped", "1");
+				window.history.replaceState(
+					window.history.state,
+					"",
+					`${url.pathname}${url.search}${url.hash}`,
+				);
 				router.refresh();
 			} catch (error) {
 				setConfirmStoppedError(

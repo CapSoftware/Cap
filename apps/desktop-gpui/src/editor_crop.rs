@@ -2711,7 +2711,7 @@ impl EditorWindow {
                 Some(frame) => Some(
                     gpui::canvas(
                         |bounds, _window, _cx| bounds,
-                        move |_, bounds, window, _cx| frame.paint(bounds, window),
+                        move |_, bounds, window, _cx| frame.paint(bounds, px(0.), window),
                     )
                     .w(px(fitted_w))
                     .h(px(fitted_h))
@@ -2759,7 +2759,7 @@ impl EditorWindow {
         let menu = state.menu.as_ref()?;
         let items = crop_menu_items(state.aspect, self.crop_snap_to_ratio);
         Some(
-            ui::Menu::plain(&self.theme, "crop-menu", items, menu)
+            ui::Menu::editor(&self.theme, "crop-menu", items, menu)
                 .on_select(cx.listener(|this, index: &usize, window, cx| {
                     this.choose_crop_menu(*index, window, cx);
                 }))

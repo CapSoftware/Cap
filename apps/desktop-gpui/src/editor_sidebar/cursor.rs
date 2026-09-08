@@ -304,30 +304,27 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .child(
-                ui::Field::plain(&theme, "Click Ripple")
-                    .icon("icons/mouse-pointer-click.svg")
-                    .value(
-                        ui::Toggle::plain(&theme, "cursor-ripple", enabled)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                let next = !this.style_control_project().cursor.ripple.enabled;
-                                this.sidebar.cursor_ripple_open.set_open(next);
-                                this.animate_collapsibles(window, cx);
-                                this.edit_project("cursor-ripple", window, cx, move |project| {
-                                    project.cursor.ripple.enabled = next;
-                                    true
-                                });
-                            }))
-                            .into_any_element(),
-                    ),
+                ui::Field::inline(&theme, "Click Ripple").value(
+                    ui::Toggle::plain(&theme, "cursor-ripple", enabled)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let next = !this.style_control_project().cursor.ripple.enabled;
+                            this.sidebar.cursor_ripple_open.set_open(next);
+                            this.animate_collapsibles(window, cx);
+                            this.edit_project("cursor-ripple", window, cx, move |project| {
+                                project.cursor.ripple.enabled = next;
+                                true
+                            });
+                        }))
+                        .into_any_element(),
+                ),
             )
             .child(collapsible(
                 &self.sidebar.cursor_ripple_open,
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(16.))
-                    .pt(px(16.))
-                    .pb(px(24.))
+                    .pt(px(4.))
+                    .pb(px(8.))
                     .child(
                         ui::Subfield::plain(&theme, "Color").child(self.render_rgb_input(
                             "cursor-ripple-color",
@@ -336,21 +333,24 @@ impl EditorWindow {
                             cx,
                         )),
                     )
-                    .child(ui::Field::plain(&theme, "Strength").child(self.slider(
+                    .child(self.slider_field(
+                        "Strength",
                         SliderKey::Cursor(CursorSlider::RippleStrength),
                         "%",
                         cx,
-                    )))
-                    .child(ui::Field::plain(&theme, "Size").child(self.slider(
+                    ))
+                    .child(self.slider_field(
+                        "Size",
                         SliderKey::Cursor(CursorSlider::RippleSize),
                         "%",
                         cx,
-                    )))
-                    .child(ui::Field::plain(&theme, "Duration").child(self.slider(
+                    ))
+                    .child(self.slider_field(
+                        "Duration",
                         SliderKey::Cursor(CursorSlider::RippleDuration),
                         "secs",
                         cx,
-                    )))
+                    ))
                     .into_any_element(),
             ))
             .into_any_element()

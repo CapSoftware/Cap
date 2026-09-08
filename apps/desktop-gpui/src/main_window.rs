@@ -235,7 +235,7 @@ impl gpui::RenderOnce for ModeHoverCard {
                 "No rendering required — uploads on the fly so you can share the link the moment you stop."
             }
             Mode::Studio => {
-                "Records at the highest quality for local rendering later. Opens the Cap editor when you're done."
+                "Saves to your computer and opens the editor when you stop. Choose recording quality in settings."
             }
             Mode::Screenshot => "Capture and annotate stills.",
         };
@@ -5735,11 +5735,6 @@ impl MainWindow {
     /// border-gray-5 px-1 py-0.5 bg-gray-3 hover:bg-gray-5`, a button; Pro and
     /// Commercial are a non-interactive span on `--blue-400`. Which one
     /// applies is [`PlanBadge::current`], the license query's resolution.
-    ///
-    /// Personal opens the pricing page -- the Tauri button opens the Upgrade
-    /// window (950x850), which has no gpui twin yet, and the integrations
-    /// page's upgrade affordance already goes to `/pricing` for the same
-    /// reason.
     fn render_plan_badge(&self) -> impl IntoElement {
         let theme = self.theme;
 
@@ -5763,8 +5758,7 @@ impl MainWindow {
                 .child("Personal")
                 .hover(|style| style.bg(theme.body_hover_fill(5)))
                 .on_click(|_, _, cx| {
-                    let url = format!("{}/pricing", crate::auth::server_url());
-                    cx.open_url(&url);
+                    cx.open_url(crate::auth::PRICING_URL);
                 }),
             PlanBadge::Pro | PlanBadge::Commercial => badge
                 .bg(theme.blue_9)

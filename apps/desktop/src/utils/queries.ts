@@ -332,7 +332,8 @@ export function createLicenseQuery() {
 			const settings = await generalSettingsStore.get();
 			const auth = await authStore.get();
 
-			if (auth?.plan?.upgraded) return { type: "pro" as const, ...auth.plan };
+			if (auth?.plan?.upgraded || auth?.plan?.manual)
+				return { type: "pro" as const, ...auth.plan };
 			if (settings?.commercialLicense)
 				return {
 					type: "commercial" as const,

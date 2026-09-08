@@ -1,5 +1,4 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
-import { cx } from "cva";
 import { createMemo, createRoot, For } from "solid-js";
 
 import { useEditorContext } from "../context";
@@ -144,11 +143,11 @@ export function KeyboardTrack(props: {
 			<For
 				each={keyboardSegments()}
 				fallback={
-					<div class="text-center text-sm text-(--text-tertiary) flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 rounded-xl pointer-events-none">
-						<div>No keyboard events</div>
-						<div class="text-[10px] text-(--text-tertiary)/40 mt-0.5">
-							Record keyboard presses or generate from recording
-						</div>
+					<div class="cap-empty-lane pointer-events-none">
+						<span>No keyboard events</span>
+						<span class="cap-empty-lane-action">
+							· Record keyboard presses or generate from recording
+						</span>
 					</div>
 				}
 			>
@@ -165,8 +164,8 @@ export function KeyboardTrack(props: {
 					// Truncation degrades gracefully, so the same row serves both the
 					// full and compact tiers; it just clips against a smaller box.
 					const keysLabel = () => (
-						<div class="flex gap-1 justify-center items-center font-mono text-[10px] text-gray-1 dark:text-gray-12">
-							<span class="truncate max-w-full opacity-80">
+						<div class="cap-seg-labels font-mono">
+							<span class="cap-seg-label truncate max-w-full">
 								{segment.displayText || "⌨"}
 							</span>
 						</div>
@@ -177,11 +176,8 @@ export function KeyboardTrack(props: {
 							data-keyboard-segment
 							data-index={i()}
 							segColor="var(--track-keyboard)"
-							class={cx(
-								"border duration-200 transition-colors group",
-								isSelected() ? "border-sky-7" : "border-transparent",
-							)}
-							innerClass="ring-sky-6"
+							class="group"
+							selected={isSelected()}
 							title={segment.displayText || "Keyboard"}
 							segment={{
 								start: segment.start,
@@ -231,7 +227,7 @@ export function KeyboardTrack(props: {
 								)}
 							/>
 							<SegmentContent
-								class="flex justify-center items-center cursor-grab px-2 overflow-hidden"
+								class="flex items-center cursor-grab overflow-hidden"
 								onMouseDown={createMouseDownDrag(
 									i,
 									() => {
@@ -261,11 +257,7 @@ export function KeyboardTrack(props: {
 									compactAt={24}
 									full={keysLabel}
 									compact={keysLabel}
-									glyph={() => (
-										<span class="font-mono text-[10px] text-gray-1 opacity-80 dark:text-gray-12">
-											⌨
-										</span>
-									)}
+									glyph={() => <span class="cap-seg-label font-mono">⌨</span>}
 								/>
 							</SegmentContent>
 							<SegmentHandle

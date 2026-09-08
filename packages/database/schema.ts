@@ -1484,6 +1484,22 @@ export const videoProcessingJobs = mysqlTable(
 	],
 );
 
+export const mediaProcessingBudgets = mysqlTable(
+	"media_processing_budgets",
+	{
+		id: varchar("id", { length: 64 }).primaryKey().notNull(),
+		reservedBytes: bigint("reserved_bytes", { mode: "number", unsigned: true })
+			.notNull()
+			.default(0),
+		limitBytes: bigint("limit_bytes", {
+			mode: "number",
+			unsigned: true,
+		}).notNull(),
+		expiresAt: datetime("expires_at", { fsp: 3 }).notNull(),
+	},
+	(table) => [index("media_budget_expiry_idx").on(table.expiresAt)],
+);
+
 export const importedVideos = mysqlTable(
 	"imported_videos",
 	{

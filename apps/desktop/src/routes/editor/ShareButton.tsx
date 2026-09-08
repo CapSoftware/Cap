@@ -1,4 +1,3 @@
-import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { createMutation } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
@@ -15,6 +14,7 @@ import { RESOLUTION_OPTIONS } from "./Header";
 import {
 	Dialog,
 	DialogContent,
+	EditorButton,
 	MenuItem,
 	MenuItemList,
 	PopperContent,
@@ -212,33 +212,29 @@ function ShareButton() {
 					};
 
 					return (
-						<div class="flex gap-3 items-center max-[1200px]:gap-1">
-							<Tooltip
-								content={
+						<div class="flex gap-1 items-center">
+							<EditorButton
+								disabled={upload.isPending}
+								tooltipText={
 									upload.isPending ? "Reuploading video" : "Reupload video"
 								}
-							>
-								<Button
-									disabled={upload.isPending}
-									onClick={() => {
-										if (editorState.timeline.selection) {
-											setEditorState("timeline", "selection", null);
-											return;
-										}
-										upload.mutate();
-									}}
-									variant="dark"
-									class="flex justify-center items-center size-[41px] max-[900px]:size-8 px-0! py-0! space-x-1"
-								>
-									{upload.isPending ? (
-										<IconLucideLoaderCircle class="animate-spin size-4" />
+								onClick={() => {
+									if (editorState.timeline.selection) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+									upload.mutate();
+								}}
+								leftIcon={
+									upload.isPending ? (
+										<IconLucideLoaderCircle class="animate-spin" />
 									) : (
-										<IconLucideRotateCcw class="size-4" />
-									)}
-								</Button>
-							</Tooltip>
+										<IconLucideRotateCcw />
+									)
+								}
+							/>
 							<Tooltip content="Open link">
-								<div class="rounded-xl px-3 py-2 flex flex-row items-center gap-1.5 bg-gray-3 hover:bg-gray-4 transition-colors duration-100 max-[900px]:py-1">
+								<div class="flex flex-row gap-1.5 items-center px-2.5 h-7 rounded-[7px] transition-colors duration-100 bg-ed-ctl hover:bg-ed-ctl-hover">
 									<a
 										href={
 											linkToDisplay() === customLink
@@ -251,10 +247,10 @@ function ShareButton() {
 										aria-label="Open recording link"
 										class="w-full truncate max-w-[200px] max-[1400px]:w-4 max-[1400px]:shrink-0"
 									>
-										<span class="text-xs text-gray-12 max-[1400px]:hidden">
+										<span class="text-xs text-ed-text-2 max-[1400px]:hidden">
 											{linkToDisplay()}
 										</span>
-										<IconLucideExternalLink class="hidden size-4 text-gray-12 max-[1400px]:block" />
+										<IconLucideExternalLink class="hidden size-4 text-ed-text-2 max-[1400px]:block" />
 									</a>
 									{/** Dropdown */}
 									<Show
@@ -284,7 +280,7 @@ function ShareButton() {
 												placement="bottom-end"
 												gutter={4}
 											>
-												<KSelect.Trigger class="flex justify-center items-center transition-colors duration-200 rounded-lg size-[22px] text-gray-12 bg-gray-6 hover:bg-gray-7 group focus:outline-hidden focus-visible:outline-hidden">
+												<KSelect.Trigger class="flex justify-center items-center transition-colors duration-200 rounded-md size-5 text-ed-text-2 bg-ed-ctl-hover hover:bg-ed-ctl-active group focus:outline-hidden focus-visible:outline-hidden">
 													<KSelect.Icon>
 														<IconCapChevronDown class="size-4 transition-transform duration-200 group-data-expanded:rotate-180" />
 													</KSelect.Icon>
@@ -306,7 +302,7 @@ function ShareButton() {
 									{/** Copy button */}
 									<Tooltip content="Copy link">
 										<div
-											class="flex justify-center items-center transition-colors duration-200 rounded-lg size-[22px] text-gray-12 bg-gray-6 hover:bg-gray-7"
+											class="flex justify-center items-center transition-colors duration-200 rounded-md size-5 text-ed-text-2 bg-ed-ctl-hover hover:bg-ed-ctl-active"
 											onClick={copyLink}
 										>
 											{!copyPressed() ? (

@@ -20,19 +20,48 @@
 @tailwind utilities;
 
 /* Single source of truth for timeline track colours. Both the timeline
- * segments and the "Add track" picker read these, so they always match. */
+ * segments and the "Add track" picker read these, so they always match.
+ * Segments paint these as tints (see --ed-seg-*), so every hue is a mid-tone
+ * that still reads when mixed into the card surface. */
 :root {
-	--track-clip: #3f8ae0; /* blue */
-	--track-zoom: #4a4f5c; /* slate */
-	--track-caption: #6f747d;
-	--track-keyboard: #d4742c; /* orange */
-	--track-style: #9361d7;
-	--track-image: #d68a32;
-	--track-text: #2898ac; /* teal */
-	--track-mask: #d2444b; /* red */
-	--track-scene: #975cfa; /* purple */
-	--track-audio: var(--jade-9); /* green */
-	--track-3d: #7c6ff0; /* violet */
+	--track-clip: #3b82f6;
+	--track-zoom: #64748b;
+	--track-caption: #0ea5e9;
+	--track-keyboard: #f97316;
+	--track-style: #ec4899;
+	--track-image: #f59e0b;
+	--track-text: #14b8a6;
+	--track-mask: #ef4444;
+	--track-scene: #8b5cf6;
+	--track-audio: #22c55e;
+	--track-3d: #6366f1;
+
+	/* Editor surfaces: a layered, low-contrast system (window < card < control)
+	 * with one accent. Mirrored 1:1 by EditorPalette in
+	 * apps/desktop-gpui/src/theme.rs; change both. */
+	--ed-window: #f1f1f3;
+	--ed-card: #ffffff;
+	--ed-card-2: #f6f6f7;
+	--ed-stage: #e9e9ec;
+	--ed-line: rgba(0, 0, 0, 0.075);
+	--ed-line-strong: rgba(0, 0, 0, 0.12);
+	--ed-text-1: #1c1c1e;
+	--ed-text-2: #6e6e75;
+	--ed-text-3: #a0a0a8;
+	--ed-ctl: rgba(0, 0, 0, 0.045);
+	--ed-ctl-hover: rgba(0, 0, 0, 0.075);
+	--ed-ctl-active: rgba(0, 0, 0, 0.11);
+	--ed-accent: #007aff;
+	--ed-accent-2: #2b8cff;
+	--ed-playhead: #ff3b30;
+	--ed-thumb: #ffffff;
+	--ed-seg-tint: 13%;
+	--ed-seg-line: 34%;
+	--ed-seg-label-base: #000000;
+	--ed-seg-label-mix: 58%;
+	--ed-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 0 0 1px var(--ed-line);
+	--ed-pop-shadow:
+		0 12px 32px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--ed-line);
 }
 
 :root {
@@ -169,6 +198,32 @@
 	--gray-5: #3a3a3a;
 	--gray-6: #444444;
 	--gray-11: #a1a1a1;
+
+	--ed-window: #131315;
+	--ed-card: #1b1b1e;
+	--ed-card-2: #202024;
+	--ed-stage: #121214;
+	--ed-line: rgba(255, 255, 255, 0.08);
+	--ed-line-strong: rgba(255, 255, 255, 0.13);
+	--ed-text-1: #f4f4f5;
+	--ed-text-2: #9a9aa3;
+	--ed-text-3: #62626a;
+	--ed-ctl: rgba(255, 255, 255, 0.06);
+	--ed-ctl-hover: rgba(255, 255, 255, 0.09);
+	--ed-ctl-active: rgba(255, 255, 255, 0.13);
+	--ed-accent: #0a84ff;
+	--ed-accent-2: #3d9bff;
+	--ed-playhead: #ff453a;
+	--ed-thumb: #e8e8ea;
+	--ed-seg-tint: 20%;
+	--ed-seg-line: 42%;
+	--ed-seg-label-base: #ffffff;
+	--ed-seg-label-mix: 55%;
+	--ed-card-shadow:
+		0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px var(--ed-line), inset 0 1px 0
+		rgba(255, 255, 255, 0.03);
+	--ed-pop-shadow:
+		0 16px 40px -12px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--ed-line);
 }
 
 .dark .dark-button-shadow {

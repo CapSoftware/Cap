@@ -334,6 +334,7 @@ pub struct ActorHandle {
 
 #[derive(kameo::Actor)]
 pub struct Actor {
+    diagnostic: Option<cap_utils::operation_diagnostics::Operation>,
     #[cfg(target_os = "linux")]
     lifetime: StudioLifetimeOwner,
     recording_dir: PathBuf,
@@ -515,6 +516,25 @@ impl Actor {
         discard: bool,
         ctx: &mut Context<Self, anyhow::Result<CompletedRecording>>,
     ) -> anyhow::Result<CompletedRecording> {
+        if let Some(diagnostic) = &mut self.diagnostic {
+            diagnostic.stage(if discard { "discarding" } else { "finalizing" });
+        }
+        let result = self.handle_stop_inner(discard, ctx).await;
+        if let Some(mut diagnostic) = self.diagnostic.take() {
+            diagnostic.field(cap_utils::operation_diagnostics::Field::number(
+                "segments",
+                self.segments.len() as u64,
+            ));
+            diagnostic.finish(result.is_ok());
+        }
+        result
+    }
+
+    async fn handle_stop_inner(
+        &mut self,
+        discard: bool,
+        ctx: &mut Context<Self, anyhow::Result<CompletedRecording>>,
+    ) -> anyhow::Result<CompletedRecording> {
         #[cfg(target_os = "linux")]
         self.cancel_resume().await?;
         if let Some(failure) = self.terminal_stop_failure.as_ref() {
@@ -663,6 +683,9 @@ impl Message<Pause> for Actor {
                 index,
                 ..
             }) => {
+                if let Some(diagnostic) = &mut self.diagnostic {
+                    diagnostic.stage("pausing");
+                }
                 let stopped = self
                     .stop_pipeline(pipeline, segment_start_time)
                     .await
@@ -674,6 +697,9 @@ impl Message<Pause> for Actor {
                             cursors,
                             next_cursor_id,
                         });
+                        if let Some(diagnostic) = &mut self.diagnostic {
+                            diagnostic.stage("paused");
+                        }
                     }
                     Ok(_) => {
                         let error = anyhow!(UNCONFIRMED_CAPTURE_CLEANUP);
@@ -846,6 +872,9 @@ impl Message<ResumeFinished> for Actor {
                         segment_start_time: current_time_f64(),
                         segment_start_instant: Instant::now(),
                     });
+                    if let Some(diagnostic) = &mut self.diagnostic {
+                        diagnostic.stage("recording");
+                    }
                     attempt.reply(Ok(()));
                 } else {
                     let cleanup =
@@ -944,6 +973,9 @@ impl Message<Resume> for Actor {
         };
         let ready = attempt.ready_future();
         self.resume_attempt = Some(attempt);
+        if let Some(diagnostic) = &mut self.diagnostic {
+            diagnostic.stage("resuming");
+        }
         let actor = ctx.actor_ref().clone();
         drop(tokio::spawn(async move {
             let prepared = std::panic::AssertUnwindSafe(prepare_resume_pipeline(
@@ -998,6 +1030,9 @@ impl Message<Resume> for Actor {
                 cursors,
                 next_cursor_id,
             }) => {
+                if let Some(diagnostic) = &mut self.diagnostic {
+                    diagnostic.stage("resuming");
+                }
                 let pipeline = self
                     .segment_factory
                     .create_next(cursors, next_cursor_id)
@@ -1006,6 +1041,9 @@ impl Message<Resume> for Actor {
                 let pipeline = pipeline.map_err(|error| self.preserve_windows_stop_failure(error));
                 let pipeline = pipeline?;
 
+                if let Some(diagnostic) = &mut self.diagnostic {
+                    diagnostic.stage("recording");
+                }
                 let new_segment_start_time = current_time_f64();
 
                 Some(ActorState::Recording {
@@ -1028,6 +1066,9 @@ impl Message<Cancel> for Actor {
     type Reply = anyhow::Result<()>;
 
     async fn handle(&mut self, _: Cancel, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        if let Some(diagnostic) = &mut self.diagnostic {
+            diagnostic.stage("cancelling");
+        }
         #[cfg(target_os = "linux")]
         self.cancel_resume().await?;
         if let Some(failure) = self.terminal_stop_failure.as_ref() {
@@ -1076,6 +1117,9 @@ impl Message<Cancel> for Actor {
         #[cfg(windows)]
         if let Some(error) = self.windows_failure() {
             return Err(self.preserve_windows_stop_failure(anyhow!(error)));
+        }
+        if let Some(diagnostic) = self.diagnostic.take() {
+            diagnostic.finish(true);
         }
         Ok(())
     }
@@ -2112,6 +2156,49 @@ async fn spawn_studio_recording_actor(
     max_fps: u32,
     quality: crate::StudioQuality,
 ) -> anyhow::Result<ActorHandle> {
+    use cap_utils::operation_diagnostics::{Field, Operation};
+    let mut diagnostic = Operation::start(
+        "studio_recording",
+        &[
+            Field::identifier(
+                "resource",
+                cap_utils::operation_diagnostics::resource_id(&recording_dir),
+            ),
+            Field::number("requested_fps", max_fps as u64),
+            Field::flag("system_audio", base_inputs.capture_system_audio),
+            Field::flag("microphone", base_inputs.mic_feed.is_some()),
+            Field::flag("camera", base_inputs.camera_feed.is_some()),
+            Field::flag("fragmented", fragmented),
+            Field::flag("out_of_process_muxer", use_oop_muxer),
+            Field::flag("custom_cursor", custom_cursor_capture),
+        ],
+    );
+    if let Some(microphone) = &base_inputs.mic_feed {
+        let info = microphone.audio_info();
+        diagnostic.field(Field::number(
+            "microphone_sample_rate",
+            info.sample_rate as u64,
+        ));
+        diagnostic.field(Field::number("microphone_channels", info.channels as u64));
+        diagnostic.field(Field::flag(
+            "microphone_wireless",
+            info.is_wireless_transport,
+        ));
+    }
+    if let Some(camera) = &base_inputs.camera_feed {
+        let info = camera.video_info();
+        diagnostic.field(Field::number("camera_width", info.width as u64));
+        diagnostic.field(Field::number("camera_height", info.height as u64));
+        diagnostic.field(Field::number(
+            "camera_fps_numerator",
+            info.frame_rate.0 as u64,
+        ));
+        diagnostic.field(Field::number(
+            "camera_fps_denominator",
+            info.frame_rate.1 as u64,
+        ));
+    }
+    diagnostic.stage("initializing_capture");
     ensure_dir(&recording_dir)?;
 
     trace!("creating recording actor");
@@ -2167,7 +2254,9 @@ async fn spawn_studio_recording_actor(
 
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     let actor_recording_dir = recording_dir.clone();
+    diagnostic.stage("recording");
     let actor_ref = Actor::spawn(Actor {
+        diagnostic: Some(diagnostic),
         #[cfg(target_os = "linux")]
         lifetime,
         #[cfg(windows)]
@@ -3436,6 +3525,7 @@ mod tests {
             completion_tx.clone(),
         );
         let mut actor = Actor {
+            diagnostic: None,
             recording_dir: path.to_path_buf(),
             state: None,
             all_tracks_stopped: true,
@@ -3531,6 +3621,7 @@ mod tests {
         );
         let timestamps = Timestamps::now();
         let actor_ref = Actor::spawn(Actor {
+            diagnostic: None,
             recording_dir: path.to_path_buf(),
             state: Some(ActorState::Paused {
                 next_index: 1,
@@ -3706,6 +3797,7 @@ mod tests {
                 lifecycle: lifecycle.clone(),
                 recording_dir: path.to_path_buf(),
                 actor_ref: Actor::spawn(Actor {
+                    diagnostic: None,
                     lifetime: StudioLifetimeOwner {
                         lifecycle,
                         armed: true,
@@ -5156,6 +5248,7 @@ mod tests {
         );
         (
             Actor {
+                diagnostic: None,
                 recording_dir: recording_dir.to_owned(),
                 cancel_error: None,
                 state: Some(ActorState::Recording {
@@ -5399,6 +5492,7 @@ mod windows_cancel_tests {
             completion_tx.clone(),
         );
         Actor {
+            diagnostic: None,
             recording_dir: PathBuf::new(),
             state: None,
             all_tracks_stopped: true,

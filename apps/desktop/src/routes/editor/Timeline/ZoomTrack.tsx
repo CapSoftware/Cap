@@ -1,7 +1,5 @@
-import { Button } from "@cap/ui-solid";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { Menu } from "@tauri-apps/api/menu";
-import { cx } from "cva";
 import { Array, Option } from "effect";
 import {
 	batch,
@@ -297,39 +295,38 @@ export function ZoomTrack(props: {
 			<Show
 				when={hasZoomSegments()}
 				fallback={
-					<div class="relative z-1 isolate text-center text-sm text-(--text-tertiary) flex flex-col gap-2 justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-auto px-2 py-1">
+					<div class="cap-empty-lane relative z-1 isolate pointer-events-auto">
 						<Show
 							when={
 								hasRecordedCursorData() && !sessionDismissedGenerateZoomPrompt()
 							}
+							fallback={<span>Drag across this lane to add a zoom</span>}
 						>
 							<div
-								class="relative z-10 flex items-center gap-1"
+								class="relative z-10 flex items-center gap-1.5"
 								onMouseEnter={() => setIsHoveringGenerateZoomButton(true)}
 								onMouseLeave={() => setIsHoveringGenerateZoomButton(false)}
 								onMouseDown={(e) => e.stopPropagation()}
 							>
-								<Button
-									variant="gray"
-									size="md"
-									class="shadow-md border-gray-7 dark:border-gray-8 font-medium"
+								<span>Generate zoom segments automatically</span>
+								<button
+									type="button"
+									class="cap-empty-lane-action outline-hidden"
 									disabled={isGeneratingAutoZoom()}
 									onClick={() => {
 										void handleGenerateZoomSegments();
 									}}
 								>
-									{isGeneratingAutoZoom()
-										? "Generating..."
-										: "Click to generate zoom segments"}
-								</Button>
+									· {isGeneratingAutoZoom() ? "Generating..." : "Generate"}
+								</button>
 								<button
 									type="button"
-									class="flex shrink-0 justify-center items-center rounded-full outline-hidden text-gray-11 hover:text-gray-12 hover:bg-gray-5 focus-visible:ring-2 focus-visible:ring-gray-8 size-8 transition-colors"
+									class="flex shrink-0 justify-center items-center rounded-md outline-hidden text-ed-text-3 hover:text-ed-text-1 hover:bg-ed-ctl-hover size-5 transition-colors"
 									disabled={isGeneratingAutoZoom()}
 									aria-label="Dismiss for this session"
 									onClick={() => setSessionDismissedGenerateZoomPrompt(true)}
 								>
-									<IconLucideX class="size-4" />
+									<IconLucideX class="size-3" />
 								</button>
 							</div>
 						</Show>
@@ -521,11 +518,8 @@ export function ZoomTrack(props: {
 						return (
 							<SegmentRoot
 								segColor="var(--track-zoom)"
-								class={cx(
-									"border duration-200 transition-colors group",
-									isSelected() ? "border-gray-12" : "border-transparent",
-								)}
-								innerClass="ring-red-5"
+								class="group"
+								selected={isSelected()}
 								title={`${zoomModeLabel()} · ${zoomPercentage()}`}
 								segment={segment()}
 								onMouseDown={(e) => {
@@ -652,7 +646,7 @@ export function ZoomTrack(props: {
 									)}
 								/>
 								<SegmentContent
-									class="flex justify-center items-center cursor-grab"
+									class="flex items-center cursor-grab"
 									onMouseDown={createMouseDownDrag(
 										() => {
 											const original = { ...segment() };
@@ -696,27 +690,28 @@ export function ZoomTrack(props: {
 										return (
 											<SegmentLabel
 												full={() => (
-													<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
-														<span class="opacity-70">
+													<div class="cap-seg-labels animate-in fade-in">
+														<span class="cap-seg-label truncate">
 															{visibleBox().width >= 140
 																? zoomModeLabel()
 																: "Zoom"}
 														</span>
-														<div class="flex gap-1 items-center text-md">
-															<IconLucideSearch class="size-3.5" />
+														<span class="cap-seg-sublabel">
 															{zoomPercentage()}
-														</div>
+														</span>
 													</div>
 												)}
 												compact={() => (
-													<div class="flex gap-1 items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
-														<IconLucideSearch class="size-3" />
-														<span>{zoomPercentage()}</span>
+													<div class="cap-seg-labels">
+														<span class="cap-seg-label">Zoom</span>
+														<span class="cap-seg-sublabel">
+															{zoomPercentage()}
+														</span>
 													</div>
 												)}
 												glyph={() => (
 													<div class="flex justify-center items-center">
-														<IconLucideSearch class="size-3.5 text-gray-1 dark:text-gray-12" />
+														<IconLucideSearch class="size-3.5 cap-seg-label" />
 													</div>
 												)}
 											/>
@@ -789,14 +784,12 @@ export function ZoomTrack(props: {
 				{(details) => (
 					<SegmentRoot
 						class="pointer-events-none z-0"
-						innerClass="ring-red-300"
+						ghost
 						segColor="var(--track-zoom)"
 						segment={details()}
 					>
-						<SegmentContent class="group">
-							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md text-primary">
-								+
-							</p>
+						<SegmentContent class="group justify-center">
+							<p class="cap-seg-label">+</p>
 						</SegmentContent>
 					</SegmentRoot>
 				)}

@@ -4910,16 +4910,6 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     };
 
     let recording_dir = current_recording.recording_dir().clone();
-    if let InProgressRecording::Instant {
-        video_upload_info, ..
-    } = &current_recording
-    {
-        let _ = open_external_link(
-            app.clone(),
-            recording_stopped_share_url(&video_upload_info.link),
-        );
-    }
-
     let recording_outcome = match current_recording.stop().await {
         Ok(completed) => Ok(completed),
         Err((e, ctx)) => {
@@ -6032,6 +6022,12 @@ async fn handle_recording_finish(
                 return Ok(false);
             }
 
+            AppSounds::StopRecording.play();
+            let _ = open_external_link(
+                app.clone(),
+                recording_stopped_share_url(&video_upload_info.link),
+            );
+
             let app = app.clone();
             let is_camera_only =
                 matches!(recording.display_source, ScreenCaptureTarget::CameraOnly);
@@ -6157,10 +6153,8 @@ async fn handle_recording_finish(
         );
         editor_took_foreground =
             apply_post_studio_editor_behaviour(app, recording_dir, duration).await;
+        AppSounds::StopRecording.play();
     }
-
-    // Play sound to indicate recording has stopped
-    AppSounds::StopRecording.play();
 
     Ok(editor_took_foreground)
 }
@@ -6603,6 +6597,24 @@ fn apply_screen_recording_presentation_defaults(
     {
         config.screen_movement_spring = ScreenMovementSpring::default();
     }
+}
+
+pub fn default_project_config() -> ProjectConfiguration {
+    let mut config = ProjectConfiguration::default();
+
+    apply_screen_recording_presentation_defaults(&mut config, None, false, None);
+
+    if config.background.rounding <= f64::EPSILON {
+        config.background.rounding = DEFAULT_SCREEN_RECORDING_BACKGROUND_ROUNDING_PERCENT;
+    }
+
+    config
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_default_project_config() -> ProjectConfiguration {
+    default_project_config()
 }
 
 pub fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) -> bool {
@@ -7249,6 +7261,21 @@ mod tests {
 
         assert_eq!(config.background.rounding, 7.5);
         assert!(config.background.border.is_none());
+    }
+
+    #[test]
+    fn default_project_config_matches_screen_recording_presentation() {
+        let config = default_project_config();
+        let spring = cap_project::ScreenMovementSpring::default();
+
+        assert_eq!(config.background.padding, 10.0);
+        assert_eq!(
+            config.background.rounding,
+            DEFAULT_SCREEN_RECORDING_BACKGROUND_ROUNDING_PERCENT
+        );
+        assert_eq!(config.screen_movement_spring.stiffness, spring.stiffness);
+        assert_eq!(config.screen_movement_spring.damping, spring.damping);
+        assert_eq!(config.screen_movement_spring.mass, spring.mass);
     }
 
     #[test]

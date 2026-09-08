@@ -1,17 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type BunFile, file, spawn } from "bun";
+import { uploadDriveResumable } from "./drive-resumable-upload";
 import type { VideoMetadata } from "./job-manager";
 import {
 	DOWNLOAD_TIMEOUT_MS,
+	normalizeLocalPath,
 	PROCESS_TIMEOUT_MS,
 	type ProgressCallback,
 	UPLOAD_TIMEOUT_MS,
 	withTimeout,
 } from "./media-common";
 import { probeVideoFile } from "./media-probe";
+import { fetchMedia, materializeMedia } from "./media-transfer";
+import { readRecordingAudioTail } from "./recording-packet-proof";
 import {
 	RecordingTimingError,
 	readRecordingVideoTiming,
@@ -1229,6 +1233,9 @@ export async function downloadVideoToTemp(
 		return await downloadStreamingVideoToTemp(videoUrl, abortSignal);
 	}
 
+	const local = await materializeMedia(videoUrl, abortSignal);
+	if (local) return { path: local.path, cleanup: async () => {} };
+
 	const tempFile = await createTempFile(
 		normalizeVideoInputExtension(inputExtension),
 	);
@@ -1239,7 +1246,7 @@ export async function downloadVideoToTemp(
 			? AbortSignal.any([abortSignal, timeoutSignal])
 			: timeoutSignal;
 
-		const response = await fetch(videoUrl, {
+		const response = await fetchMedia(videoUrl, {
 			signal: combinedSignal,
 		});
 
@@ -1664,6 +1671,8 @@ function getThumbnailTimestamp(
 	return Math.min(Math.max(0, timestamp), Math.max(0, duration - 0.1));
 }
 
+class EmptyThumbnailError extends Error {}
+
 export async function generateThumbnail(
 	inputPath: string,
 	duration: number,
@@ -1673,12 +1682,53 @@ export async function generateThumbnail(
 	abortSignal?.throwIfAborted();
 	const opts = { ...DEFAULT_THUMBNAIL_OPTIONS, ...options };
 	const timestamp = getThumbnailTimestamp(duration, opts.timestamp);
+	const deadline = performance.now() + THUMBNAIL_TIMEOUT_MS;
+	try {
+		return await generateThumbnailFrame(
+			inputPath,
+			opts,
+			timestamp,
+			THUMBNAIL_TIMEOUT_MS,
+			abortSignal,
+		);
+	} catch (error) {
+		abortSignal?.throwIfAborted();
+		const remainingMs = deadline - performance.now();
+		if (
+			!(error instanceof EmptyThumbnailError) ||
+			!isAbsolute(normalizeLocalPath(inputPath)) ||
+			timestamp <= 0 ||
+			remainingMs <= 0
+		) {
+			throw error;
+		}
+		return await generateThumbnailFrame(
+			inputPath,
+			opts,
+			0,
+			remainingMs,
+			abortSignal,
+			true,
+		);
+	}
+}
+
+async function generateThumbnailFrame(
+	inputPath: string,
+	opts: Required<ThumbnailOptions>,
+	timestamp: number,
+	timeoutMs: number,
+	abortSignal?: AbortSignal,
+	localOnly = false,
+): Promise<Uint8Array> {
+	abortSignal?.throwIfAborted();
 	const qualityValue = Math.max(
 		2,
 		Math.min(31, Math.round(31 - (opts.quality / 100) * 29)),
 	);
 	const ffmpegArgs = [
 		"ffmpeg",
+		...(localOnly ? ["-protocol_whitelist", "file,pipe"] : []),
 		"-ss",
 		timestamp.toString(),
 		"-i",
@@ -1740,11 +1790,15 @@ export async function generateThumbnail(
 				]);
 				abortSignal?.throwIfAborted();
 
+				if (totalBytes === 0) {
+					throw new EmptyThumbnailError(
+						exitCode === 0
+							? "FFmpeg produced empty thumbnail"
+							: `FFmpeg thumbnail exited with code ${exitCode}`,
+					);
+				}
 				if (exitCode !== 0) {
 					throw new Error(`FFmpeg thumbnail exited with code ${exitCode}`);
-				}
-				if (totalBytes === 0) {
-					throw new Error("FFmpeg produced empty thumbnail");
 				}
 
 				const output = new Uint8Array(totalBytes);
@@ -1756,7 +1810,7 @@ export async function generateThumbnail(
 
 				return output;
 			})(),
-			THUMBNAIL_TIMEOUT_MS,
+			timeoutMs,
 			stop,
 		);
 	} catch (error) {
@@ -2061,6 +2115,22 @@ async function uploadWithRetry(
 	ifNoneMatch?: "*",
 	abortSignal?: AbortSignal,
 ): Promise<StorageUploadReceipt> {
+	if (isGoogleDriveResumableUrl(presignedUrl) && contentLength > 0) {
+		const response = await uploadDriveResumable(
+			presignedUrl,
+			bodyFactory(),
+			contentType,
+			ifNoneMatch,
+			abortSignal,
+		);
+		const receipt = await readUploadReceipt(
+			response,
+			presignedUrl,
+			contentLength,
+		);
+		abortSignal?.throwIfAborted();
+		return receipt;
+	}
 	let lastError: Error | undefined;
 
 	for (let attempt = 0; attempt <= UPLOAD_MAX_RETRIES; attempt++) {
@@ -2073,10 +2143,6 @@ async function uploadWithRetry(
 				"Content-Length": contentLength.toString(),
 			};
 			if (ifNoneMatch) headers["If-None-Match"] = ifNoneMatch;
-			if (isGoogleDriveResumableUrl(presignedUrl) && contentLength > 0) {
-				headers["Content-Range"] =
-					`bytes 0-${contentLength - 1}/${contentLength}`;
-			}
 
 			response = await fetch(presignedUrl, {
 				method: "PUT",
@@ -2456,16 +2522,29 @@ export async function muxMediaTracksToMp4(
 	outputPath: string,
 	abortSignal?: AbortSignal,
 ): Promise<void> {
-	if (abortSignal?.aborted) throw new Error("Recording mux was cancelled");
+	abortSignal?.throwIfAborted();
+	abortSignal = AbortSignal.any([
+		...(abortSignal ? [abortSignal] : []),
+		AbortSignal.timeout(PROCESS_TIMEOUT_MS),
+	]);
 	const startedAt = performance.now();
 	const timing = await readRecordingVideoTiming(videoInputPath, {
 		abortSignal,
 		timeoutMs: PROCESS_TIMEOUT_MS,
 	});
-	if (abortSignal?.aborted) throw new Error("Recording mux was cancelled");
+	abortSignal?.throwIfAborted();
 	const lastTimestamp = timing.lastTimestampTicks - timing.firstTimestampTicks;
 	// FFmpeg 7 can discard a fragmented MP4's stored final sample duration.
 	const videoTimingFilter = `setts=pts=PTS:dts=DTS:duration=if(eq(PTS-STARTPTS\\,${lastTimestamp})\\,${timing.lastDurationTicks}\\,DURATION)`;
+	const audioTiming = audioInputPath
+		? await readRecordingAudioTail(audioInputPath, abortSignal, true)
+		: undefined;
+	if (audioTiming && audioTiming.packetCount === undefined)
+		throw new Error("Recording audio packet count is missing");
+	// FFmpeg synthesizes nominal AAC durations, so bind the final duration to the stored source sample.
+	const audioTimingFilter = audioTiming?.packetCount
+		? `setts=duration=if(eq(N\\,${audioTiming.packetCount - 1})\\,${audioTiming.durationTicks}\\,DURATION)`
+		: undefined;
 	const args = audioInputPath
 		? [
 				"ffmpeg",
@@ -2484,6 +2563,7 @@ export async function muxMediaTracksToMp4(
 				"copy",
 				"-bsf:v",
 				videoTimingFilter,
+				...(audioTimingFilter ? ["-bsf:a", audioTimingFilter] : []),
 				"-avoid_negative_ts",
 				"disabled",
 				"-movie_timescale",

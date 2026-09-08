@@ -9,11 +9,6 @@ import {
 	type RecordingMode,
 } from "./tauri";
 
-export function isRecordingStartCancelled(error: unknown): boolean {
-	const message = error instanceof Error ? error.message : error;
-	return message === "Recording cancelled before starting.";
-}
-
 export function isRecordingStorageError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : error;
 	return (
@@ -42,6 +37,11 @@ export function recordingOpenErrorMessage(
 		return `Not enough space to finish this recording. Your recording files have been kept at ${projectPath}. Free up space, then open the recording again.`;
 	}
 	return error instanceof Error ? error.message : String(error);
+}
+
+export function isRecordingStartCancelled(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : error;
+	return message === "Recording cancelled before starting.";
 }
 
 export function handleRecordingResult(

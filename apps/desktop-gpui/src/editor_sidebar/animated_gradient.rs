@@ -313,35 +313,37 @@ fn header_button(
 ) -> gpui::Stateful<gpui::Div> {
     let theme = *theme;
     let foreground = Hsla::from(if pressed {
-        theme.gray_12
+        theme.editor.text_1
     } else {
-        theme.gray_11
+        theme.editor.text_2
     });
     div()
         .id(id)
         .flex()
         .items_center()
         .gap(px(4.))
-        .h(px(28.))
-        .px(px(8.))
+        .h(px(22.))
+        .px(px(6.))
         .rounded(px(6.))
         .text_size(px(12.))
+        .font_weight(FontWeight::MEDIUM)
         .text_color(foreground)
-        .when(pressed, |this| this.bg(Hsla::from(theme.gray_3)))
+        .when(pressed, |this| this.bg(Hsla::from(theme.editor.ctl_hover)))
         .when(disabled, |this| this.opacity(0.4))
         .when(!disabled, |this| {
             this.cursor_pointer()
                 .hover(|this| {
-                    this.bg(Hsla::from(theme.gray_3))
-                        .text_color(Hsla::from(theme.gray_12))
+                    this.bg(Hsla::from(theme.editor.ctl_hover))
+                        .text_color(Hsla::from(theme.editor.text_1))
                 })
+                .active(|this| this.bg(Hsla::from(theme.editor.ctl_active)))
                 .on_click(on_click)
         })
         .tooltip(move |_window, cx| ui::Tooltip::new(&theme, tooltip).view(cx))
         .child(
             svg()
                 .path(icon)
-                .size(px(14.))
+                .size(px(12.))
                 .flex_shrink_0()
                 .text_color(foreground),
         )
@@ -362,15 +364,15 @@ fn icon_button(
         .flex()
         .items_center()
         .justify_center()
-        .size(px(26.))
+        .size(px(22.))
         .rounded(px(6.))
-        .text_color(Hsla::from(theme.gray_10))
+        .text_color(Hsla::from(theme.editor.text_2))
         .when(disabled, |this| this.opacity(0.3))
         .when(!disabled, |this| {
             this.cursor_pointer()
                 .hover(|this| {
-                    this.bg(Hsla::from(theme.gray_3))
-                        .text_color(Hsla::from(theme.gray_12))
+                    this.bg(Hsla::from(theme.editor.ctl_hover))
+                        .text_color(Hsla::from(theme.editor.text_1))
                 })
                 .on_click(on_click)
         })
@@ -378,8 +380,8 @@ fn icon_button(
         .child(
             svg()
                 .path(icon)
-                .size(px(14.))
-                .text_color(Hsla::from(theme.gray_10)),
+                .size(px(12.))
+                .text_color(Hsla::from(theme.editor.text_2)),
         )
 }
 
@@ -718,14 +720,6 @@ impl EditorWindow {
         cx.notify();
     }
 
-    pub(super) fn render_animated_gradient_icon(&self) -> AnyElement {
-        let config = self.animated_gradient_config().cloned().unwrap_or_default();
-        div()
-            .size(px(14.))
-            .child(palette(&config, px(3.)))
-            .into_any_element()
-    }
-
     pub(super) fn render_animated_gradient_pane(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(config) = self.animated_gradient_config() else {
             return div().into_any_element();
@@ -749,11 +743,11 @@ impl EditorWindow {
                     .child(error)
             }))
             .child(self.render_animated_gradient_presets(cx))
-            .child(dashed_divider(Hsla::from(theme.gray_5)))
+            .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(self.render_animated_gradient_colours(config, cx))
-            .child(dashed_divider(Hsla::from(theme.gray_5)))
+            .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(self.render_animated_gradient_motion(config, cx))
-            .child(dashed_divider(Hsla::from(theme.gray_5)))
+            .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(self.render_animated_gradient_fine_tune(config, cx))
             .into_any_element()
     }
@@ -772,18 +766,18 @@ impl EditorWindow {
             .justify_center()
             .size(px(cell))
             .rounded(px(8.))
-            .bg(Hsla::from(theme.gray_2))
+            .bg(Hsla::from(theme.editor.ctl))
             .border_1()
-            .border_color(Hsla::from(theme.gray_8))
-            .text_color(Hsla::from(theme.gray_10))
+            .border_color(Hsla::from(theme.editor.line_strong))
+            .text_color(Hsla::from(theme.editor.text_3))
             .cursor_pointer()
-            .hover(|this| this.opacity(0.8))
+            .hover(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
             .tooltip(move |_window, cx| ui::Tooltip::new(&theme, "Randomize").view(cx))
             .child(
                 svg()
                     .path("icons/shuffle.svg")
-                    .size(px(16.))
-                    .text_color(Hsla::from(theme.gray_10)),
+                    .size(px(14.))
+                    .text_color(Hsla::from(theme.editor.text_3)),
             )
             .on_click(cx.listener(|this, _, window, cx| {
                 this.select_animated_gradient(AnimatedGradientConfig::random(), window, cx);
@@ -855,7 +849,7 @@ impl EditorWindow {
                 .into_any_element()
         });
 
-        ui::Field::plain(&theme, "Presets")
+        ui::Field::section(&theme, "Presets")
             .value(
                 header_button(
                     &theme,
@@ -887,7 +881,7 @@ impl EditorWindow {
                         this.child(
                             div()
                                 .text_size(px(11.))
-                                .text_color(Hsla::from(theme.gray_10))
+                                .text_color(Hsla::from(theme.editor.text_3))
                                 .child("Saved"),
                         )
                         .child(swatch_rows(saved))
@@ -913,12 +907,9 @@ impl EditorWindow {
             .size_full()
             .rounded(px(8.))
             .cursor_pointer()
-            .when(selected, |this| {
-                this.border_2()
-                    .border_color(Hsla::from(theme.gray_500_legacy))
-            })
+            .selection_ring(Hsla::from(theme.editor.card), theme.editor.accent, selected)
             .when(!selected, |this| this.hover(|this| this.opacity(0.8)))
-            .child(palette(&config, px(if selected { 6. } else { 8. })))
+            .child(palette(&config, px(6.)))
             .tooltip(move |_window, cx| ui::Tooltip::new(&theme, name.clone()).view(cx))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.select_animated_gradient(config.clone(), window, cx);
@@ -1036,7 +1027,7 @@ impl EditorWindow {
                     .inset_0()
                     .rounded(px(8.))
                     .border_1()
-                    .border_color(Hsla::from(theme.gray_5))
+                    .border_color(Hsla::from(theme.editor.line))
                     .child(
                         canvas(
                             move |bounds, _window, _cx| {
@@ -1089,7 +1080,7 @@ impl EditorWindow {
                 ))
         });
 
-        ui::Field::plain(&theme, "Colours")
+        ui::Field::section(&theme, "Colours")
             .value(
                 header_button(
                     &theme,
@@ -1124,30 +1115,13 @@ impl EditorWindow {
         let theme = self.theme;
         let control = AnimatedGradientParameter::MotionSpeed.control();
         let value = AnimatedGradientParameter::MotionSpeed.get(config);
-        ui::Subfield::plain(&theme, "Motion")
-            .gap(px(16.))
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_w_0()
-                    .items_center()
-                    .gap(px(12.))
-                    .child(self.slider_flex(
-                        SliderKey::AnimatedGradient(AnimatedGradientParameter::MotionSpeed),
-                        slider_unit(AnimatedGradientParameter::MotionSpeed),
-                        cx,
-                    ))
-                    .child(
-                        div()
-                            .w(px(40.))
-                            .flex_shrink_0()
-                            .text_right()
-                            .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_11))
-                            .child(format_control_value(&control, value)),
-                    ),
-            )
+        ui::Field::inline(&theme, "Motion")
+            .value_text(format_control_value(&control, value))
+            .child(self.slider_flex(
+                SliderKey::AnimatedGradient(AnimatedGradientParameter::MotionSpeed),
+                slider_unit(AnimatedGradientParameter::MotionSpeed),
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -1184,33 +1158,13 @@ impl EditorWindow {
             .iter()
             .map(|control| {
                 let value = control.key.get(config);
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .child(
-                        div()
-                            .w(px(96.))
-                            .flex_shrink_0()
-                            .truncate()
-                            .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_11))
-                            .child(control.label.clone()),
-                    )
+                ui::Field::inline(&theme, control.label.clone())
+                    .value_text(format_control_value(control, value))
                     .child(self.slider_flex(
                         SliderKey::AnimatedGradient(control.key),
                         slider_unit(control.key),
                         cx,
                     ))
-                    .child(
-                        div()
-                            .w(px(40.))
-                            .flex_shrink_0()
-                            .text_right()
-                            .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_11))
-                            .child(format_control_value(control, value)),
-                    )
                     .into_any_element()
             })
             .collect::<Vec<_>>();
@@ -1222,33 +1176,16 @@ impl EditorWindow {
                 div()
                     .flex()
                     .items_center()
-                    .child(
-                        div()
-                            .id("animated-gradient-fine-tune")
-                            .flex()
-                            .flex_1()
-                            .items_center()
-                            .gap(px(6.))
-                            .text_size(px(14.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_12))
-                            .cursor_pointer()
-                            .child("Fine-tune")
-                            .child(
-                                svg()
-                                    .path(if open {
-                                        "icons/chevron-up.svg"
-                                    } else {
-                                        "icons/chevron-down.svg"
-                                    })
-                                    .size(px(14.))
-                                    .text_color(Hsla::from(theme.gray_10)),
-                            )
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.sidebar.animated_gradient.fine_tune_open.toggle();
-                                this.animate_collapsibles(window, cx);
-                            })),
-                    )
+                    .child(div().flex().flex_1().child(disclosure_row(
+                        &theme,
+                        "animated-gradient-fine-tune",
+                        "Fine-tune",
+                        open,
+                        cx.listener(|this, _, window, cx| {
+                            this.sidebar.animated_gradient.fine_tune_open.toggle();
+                            this.animate_collapsibles(window, cx);
+                        }),
+                    )))
                     .when(open, |this| {
                         this.child(header_button(
                             &theme,

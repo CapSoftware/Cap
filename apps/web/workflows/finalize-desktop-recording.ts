@@ -22,6 +22,7 @@ import {
 	persistCommittedSource,
 	persistSourceCommitCheckpoint,
 	scheduleRetry,
+	waitForDesktopRecordingCapacity,
 } from "@/lib/desktop-recording-jobs";
 import {
 	advanceDesktopRecordingSourceCommit,
@@ -30,6 +31,11 @@ import {
 } from "@/lib/desktop-recording-source";
 import type { RecordingVerification } from "@/lib/desktop-recording-verification";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota-cache";
+import {
+	MediaProcessingBudgetError,
+	reserveMediaProcessingBudget,
+} from "@/lib/media-processing-budget";
+import { getMediaServerCapacityDelay } from "@/lib/media-server-backpressure";
 import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -134,7 +140,16 @@ export async function finalizeDesktopRecordingWorkflow(
 				mediaServerUnavailable = true;
 				break;
 			}
-			const jobId = await startDesktopRecordingJob(attempt);
+			const started = await startDesktopRecordingJob(attempt);
+			if (typeof started === "object") {
+				if (started.status === "capacity") {
+					retainedAttempt = attempt;
+					await sleep(started.retryAfterMs);
+				}
+				continue;
+			}
+			const deadline = new Date(Date.now() + ATTEMPT_MAX_DURATION_MS);
+			const jobId = started;
 			for (;;) {
 				await sleep(COMPLETION_POLL_INTERVAL_MS);
 				const status = await pollDesktopRecordingAttempt({
@@ -142,9 +157,7 @@ export async function finalizeDesktopRecordingWorkflow(
 					generation: attempt.generation,
 					attemptId: attempt.attemptId,
 					jobId,
-					deadline: new Date(
-						attempt.updatedAt.getTime() + ATTEMPT_MAX_DURATION_MS,
-					),
+					deadline,
 				});
 				if (status === "verified") {
 					completedJobId = jobId;
@@ -402,7 +415,12 @@ async function buildDesktopSegmentsOutput({
 
 export async function startDesktopRecordingJob(
 	attempt: DesktopRecordingAttempt,
-): Promise<string | undefined> {
+): Promise<
+	| string
+	| undefined
+	| { status: "deferred" }
+	| { status: "capacity"; retryAfterMs: number }
+> {
 	"use step";
 
 	const current = await getProcessingState(attempt);
@@ -410,6 +428,17 @@ export async function startDesktopRecordingJob(
 		throw new Error("Recording processing attempt was superseded");
 	}
 	if (current.remoteJobId) return current.remoteJobId;
+	if (current.state === "retry") return { status: "deferred" };
+	const remainingCapacityWait = current.nextRetryAt.getTime() - Date.now();
+	if (
+		current.output &&
+		typeof current.output === "object" &&
+		"kind" in current.output &&
+		current.output.kind === "desktop-recording-capacity-wait" &&
+		remainingCapacityWait > 0
+	) {
+		return { status: "capacity", retryAfterMs: remainingCapacityWait };
+	}
 	const [video] = await db()
 		.select()
 		.from(videos)
@@ -435,8 +464,33 @@ export async function startDesktopRecordingJob(
 		}
 		throw error;
 	});
+	let downloadBudgetBytes: number;
+	try {
+		downloadBudgetBytes = await reserveMediaProcessingBudget({
+			videoId: current.videoId,
+			generation: current.generation,
+			attemptId: attempt.attemptId,
+			sourceBytes: urls.sourceObjects.reduce(
+				(total, object) => total + object.size,
+				0,
+			),
+		});
+	} catch (error) {
+		if (error instanceof MediaProcessingBudgetError) {
+			await markSourceBlocked({
+				videoId: current.videoId,
+				generation: current.generation,
+				attemptId: attempt.attemptId,
+				errorCode: "processing-budget-exhausted",
+				errorMessage: error.message,
+			});
+		}
+		throw error;
+	}
 	const webhookBaseUrl = env.MEDIA_SERVER_WEBHOOK_URL || env.WEB_URL;
 	const context = {
+		downloadBudgetBytes,
+		processingPriority: current.attemptCount > 1 ? "recovery" : "interactive",
 		videoId: current.videoId,
 		userId: current.ownerId,
 		generation: current.generation,
@@ -503,6 +557,22 @@ export async function startDesktopRecordingJob(
 				signal: AbortSignal.timeout(30_000),
 			},
 		);
+		if (response.status === 503) {
+			const result: unknown = await response.json();
+			const retryAfterMs = getMediaServerCapacityDelay({
+				response,
+				videoId: attempt.videoId,
+			});
+			if (
+				result &&
+				typeof result === "object" &&
+				"code" in result &&
+				result.code === "SERVER_BUSY" &&
+				(await waitForDesktopRecordingCapacity({ ...attempt, retryAfterMs }))
+			) {
+				return { status: "capacity", retryAfterMs };
+			}
+		}
 		if (response.ok) {
 			const result = z
 				.object({

@@ -116,6 +116,7 @@ export function OverlayTrack(
 		const segment = allSegments()[index];
 		if (!segment) return;
 		const initial = { start: segment.start, end: segment.end };
+		const initialPlaybackTime = editorState.playbackTime;
 		const lane = segments();
 		const position = lane.findIndex((item) => item.index === index);
 		const previousEnd = lane[position - 1]?.segment.end ?? 0;
@@ -144,21 +145,35 @@ export function OverlayTrack(
 				edge === "end" ? interval.end - 0.001 : interval.start,
 			);
 		};
-		const finish = (next?: MouseEvent) => {
+		const finish = (next?: MouseEvent, cancelled = false) => {
 			if (!endDrag) return;
 			if (next) move(next);
 			window.removeEventListener("mousemove", move);
 			window.removeEventListener("mouseup", finish);
 			window.removeEventListener("blur", cancel);
+			window.removeEventListener("keydown", keydown, true);
 			endDrag = undefined;
+			if (cancelled && moved && allSegments()[index] === segment) {
+				if (props.type === "style")
+					setProject("timeline", "styleSegments", index, initial);
+				else setProject("timeline", "imageSegments", index, initial);
+				setEditorState("playbackTime", initialPlaybackTime);
+			}
 			resume();
 			props.onDragStateChanged({ type: "idle" });
 		};
-		const cancel = () => finish();
+		const cancel = () => finish(undefined, true);
+		const keydown = (next: KeyboardEvent) => {
+			if (next.key !== "Escape") return;
+			next.preventDefault();
+			next.stopImmediatePropagation();
+			cancel();
+		};
 		endDrag = cancel;
 		window.addEventListener("mousemove", move);
 		window.addEventListener("mouseup", finish);
 		window.addEventListener("blur", cancel);
+		window.addEventListener("keydown", keydown, true);
 	}
 
 	return (
@@ -174,18 +189,31 @@ export function OverlayTrack(
 				<button
 					type="button"
 					disabled={props.type === "image" && editorState.importingImage}
-					class="sticky left-3 self-center mx-3 rounded-md border border-gray-5 bg-gray-2 px-3 py-1 text-xs text-gray-12 hover:bg-gray-3 disabled:opacity-50"
+					class="cap-empty-lane pointer-events-auto"
 					onMouseDown={(event) => event.stopPropagation()}
 					onClick={(event) => {
 						event.stopPropagation();
 						add(editorState.playbackTime);
 					}}
 				>
-					{props.type === "image"
-						? editorState.importingImage
-							? "Importing image…"
-							: "+ Add image"
-						: "+ Add style"}
+					<Show
+						when={props.type === "image"}
+						fallback={
+							<>
+								<span>
+									Change background, camera and cursor for part of your video
+								</span>
+								<span class="cap-empty-lane-action">· Add style</span>
+							</>
+						}
+					>
+						<span>Place images and logos on your video</span>
+						<span class="cap-empty-lane-action">
+							{editorState.importingImage
+								? "· Importing image…"
+								: "· Add image"}
+						</span>
+					</Show>
 				</button>
 			</Show>
 			<For each={segments()}>
@@ -195,8 +223,9 @@ export function OverlayTrack(
 						data-overlay-segment
 						data-index={index}
 						segColor={`var(--track-${props.type})`}
-						innerClass="ring-blue-6"
-						class={`border ${selected(index) ? "border-blue-7" : "border-transparent"} ${segment.enabled ? "" : "opacity-50"}`}
+						class="group"
+						selected={selected(index)}
+						muted={!segment.enabled}
 						title={`${segment.name} · ${(segment.end - segment.start).toFixed(2)}s`}
 					>
 						<SegmentHandle
@@ -204,19 +233,20 @@ export function OverlayTrack(
 							onMouseDown={(event) => drag(event, index, "start")}
 						/>
 						<SegmentContent
-							class="cursor-grab overflow-hidden px-3"
+							class="cursor-grab overflow-hidden"
 							onMouseDown={(event) => drag(event, index, "move")}
 						>
 							<SegmentLabel
 								full={() => (
-									<span class="truncate text-xs text-white">
-										{segment.name}
-									</span>
+									<div class="cap-seg-labels">
+										<span class="cap-seg-label truncate">{segment.name}</span>
+										<span class="cap-seg-sublabel">
+											{`${(segment.end - segment.start).toFixed(1)}s`}
+										</span>
+									</div>
 								)}
 								compact={() => (
-									<span class="truncate text-[10px] text-white">
-										{segment.name}
-									</span>
+									<span class="cap-seg-label truncate">{segment.name}</span>
 								)}
 							/>
 						</SegmentContent>

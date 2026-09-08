@@ -17,7 +17,6 @@ import {
 	createResource,
 	createSignal,
 	ErrorBoundary,
-	For,
 	lazy,
 	Match,
 	on,
@@ -76,13 +75,17 @@ const TranscriptPanel = lazy(() =>
 	import("./TranscriptPage").then((m) => ({ default: m.TranscriptPanel })),
 );
 
-const DEFAULT_TIMELINE_HEIGHT = 260;
-const MIN_PLAYER_CONTENT_HEIGHT = 320;
+// Preview stage minimum plus the 44px player toolbar and 48px transport bar.
+const MIN_PLAYER_HEIGHT = 320;
 const MIN_TIMELINE_HEIGHT = 240;
 const MIN_COMPACT_TIMELINE_HEIGHT = 144;
-const RESIZE_HANDLE_HEIGHT = 16;
-const MIN_PLAYER_HEIGHT = MIN_PLAYER_CONTENT_HEIGHT + RESIZE_HANDLE_HEIGHT;
-const TIMELINE_RESIZE_GRIP_MARKS = [0, 1, 2] as const;
+// The timeline card's own vertical padding (pt-2.5 + pb-3); the Timeline
+// reports the height its ruler and rows need inside that box.
+const TIMELINE_CARD_PADDING_Y = 22;
+const DEFAULT_TIMELINE_CONTENT_HEIGHT = 124;
+// Vertical gutter between the player row and the timeline card, plus the
+// gutter below the timeline card; both live inside the measured layout box.
+const LAYOUT_GUTTERS = 16;
 
 const scheduleIdleWork = (callback: () => void) => {
 	const win = window as Window & {
@@ -524,19 +527,28 @@ function Inner(props: {
 
 	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
 	const layoutBounds = createElementBounds(layoutRef);
-	const [storedTimelineHeight, setStoredTimelineHeight] = makePersisted(
-		createSignal(DEFAULT_TIMELINE_HEIGHT),
-		{ name: "editorTimelineHeight" },
+	const [userTimelineHeight, setUserTimelineHeight] = makePersisted(
+		createSignal<number | null>(null),
+		{ name: "editorTimelineHeightOverride" },
 	);
 	const [isResizingTimeline, setIsResizingTimeline] = createSignal(false);
+	const [timelineContentHeight, setTimelineContentHeight] = createSignal(
+		DEFAULT_TIMELINE_CONTENT_HEIGHT,
+	);
 	const [timelineViewportOverflow, setTimelineViewportOverflow] = createSignal<{
 		overflow: number;
 		visibleTrackCount: number;
 	} | null>(null);
 
+	const huggedTimelineHeight = () =>
+		timelineContentHeight() + TIMELINE_CARD_PADDING_Y;
+
 	const layoutLimits = createMemo(() => {
 		const fullHeight = MIN_PLAYER_HEIGHT + MIN_TIMELINE_HEIGHT;
-		const available = Math.max(layoutBounds.height ?? fullHeight, 0);
+		const available = Math.max(
+			(layoutBounds.height ?? fullHeight + LAYOUT_GUTTERS) - LAYOUT_GUTTERS,
+			0,
+		);
 		const minPlayerHeight =
 			MIN_PLAYER_HEIGHT * Math.min(1, available / fullHeight);
 		const maxTimelineHeight = Math.floor(
@@ -549,6 +561,7 @@ function Inner(props: {
 			minTimelineHeight: Math.min(
 				maxTimelineHeight,
 				MIN_TIMELINE_HEIGHT,
+				huggedTimelineHeight(),
 				Math.max(MIN_COMPACT_TIMELINE_HEIGHT, available - MIN_PLAYER_HEIGHT),
 			),
 			compactness: Math.min(
@@ -571,7 +584,9 @@ function Inner(props: {
 	};
 
 	const timelineHeight = createMemo(() =>
-		Math.round(clampTimelineHeight(storedTimelineHeight())),
+		Math.round(
+			clampTimelineHeight(userTimelineHeight() ?? huggedTimelineHeight()),
+		),
 	);
 
 	const handleTimelineResizeStart = (event: MouseEvent) => {
@@ -583,7 +598,7 @@ function Inner(props: {
 
 		const handleMove = (moveEvent: MouseEvent) => {
 			const delta = moveEvent.clientY - startY;
-			setStoredTimelineHeight(clampTimelineHeight(startHeight - delta));
+			setUserTimelineHeight(clampTimelineHeight(startHeight - delta));
 		};
 
 		const handleUp = () => {
@@ -599,6 +614,7 @@ function Inner(props: {
 	createEffect(
 		on(timelineViewportOverflow, (next, prev) => {
 			if (
+				userTimelineHeight() !== null &&
 				next &&
 				prev &&
 				next.visibleTrackCount > prev.visibleTrackCount &&
@@ -607,8 +623,8 @@ function Inner(props: {
 				const height = timelineHeight();
 				const expandedHeight = clampTimelineHeight(height + next.overflow);
 				if (expandedHeight > height) {
-					setStoredTimelineHeight((preferredHeight) =>
-						Math.max(preferredHeight, expandedHeight),
+					setUserTimelineHeight((preferredHeight) =>
+						Math.max(preferredHeight ?? 0, expandedHeight),
 					);
 				}
 			}
@@ -816,7 +832,7 @@ function Inner(props: {
 				>
 					<div
 						ref={setLayoutRef}
-						class="flex overflow-hidden flex-col flex-1 min-h-0"
+						class="flex overflow-hidden flex-col flex-1 gap-2 pb-2 min-h-0"
 					>
 						<div
 							ref={setSplitContainerRef}
@@ -826,7 +842,7 @@ function Inner(props: {
 							}}
 						>
 							<div
-								class="flex flex-col rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3 overflow-hidden"
+								class="flex overflow-hidden flex-col rounded-xl bg-ed-card shadow-ed-card"
 								style={{
 									flex: isTranscriptMode()
 										? `0 0 ${splitRatio() * 100}%`
@@ -835,32 +851,6 @@ function Inner(props: {
 								}}
 							>
 								<PlayerContent compactness={layoutLimits().compactness} />
-								<div
-									role="separator"
-									aria-orientation="horizontal"
-									class="flex-none shrink-0 border-t border-gray-4 dark:border-gray-5 bg-gray-2/95 dark:bg-gray-3/55 transition-colors hover:bg-gray-3/70 dark:hover:bg-gray-4/55"
-									style={{ height: `${RESIZE_HANDLE_HEIGHT}px` }}
-								>
-									<div
-										class="flex flex-col gap-0.5 justify-center items-center h-full w-full cursor-row-resize select-none group"
-										classList={{
-											"bg-gray-3/55 dark:bg-gray-4/50": isResizingTimeline(),
-										}}
-										onMouseDown={handleTimelineResizeStart}
-										aria-label="Resize timeline height"
-									>
-										<For each={TIMELINE_RESIZE_GRIP_MARKS}>
-											{() => (
-												<div
-													class="h-0.5 w-20 max-w-[85%] rounded-full bg-gray-6 dark:bg-gray-7 shadow-[0_1px_0_rgb(0_0_0_/0.06)] transition-colors group-hover:bg-gray-9 dark:group-hover:bg-gray-11"
-													classList={{
-														"bg-gray-9 dark:bg-gray-11": isResizingTimeline(),
-													}}
-												/>
-											)}
-										</For>
-									</div>
-								</div>
 							</div>
 							<Show when={!isTranscriptMode()}>
 								<div class="ml-2 flex min-h-0 w-104 min-w-104 flex-none overflow-hidden">
@@ -894,14 +884,14 @@ function Inner(props: {
 									aria-orientation="vertical"
 								>
 									<div
-										class="w-1 h-10 rounded-full bg-gray-6 dark:bg-gray-7 transition-colors group-hover:bg-gray-9 dark:group-hover:bg-gray-11"
+										class="w-1 h-10 rounded-full transition-colors bg-ed-line-strong group-hover:bg-ed-text-3"
 										classList={{
-											"bg-gray-9 dark:bg-gray-11": isResizingSplit(),
+											"bg-ed-text-3": isResizingSplit(),
 										}}
 									/>
 								</div>
 								<div
-									class="flex flex-col min-h-0 overflow-hidden rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3 animate-in fade-in duration-150"
+									class="flex overflow-hidden flex-col min-h-0 rounded-xl duration-150 bg-ed-card shadow-ed-card animate-in fade-in"
 									style={{
 										flex: isResizingSplit()
 											? `0 0 calc(${(1 - splitRatio()) * 100}% - 12px)`
@@ -916,13 +906,30 @@ function Inner(props: {
 							</Show>
 						</div>
 						<div
-							class="flex-none min-h-0 px-2 overflow-hidden relative"
+							class="relative flex-none px-2 min-h-0"
 							style={{ height: `${timelineHeight()}px` }}
 						>
-							<div class="h-full">
-								<Timeline
-									onViewportOverflowChange={setTimelineViewportOverflow}
+							<div
+								role="separator"
+								aria-orientation="horizontal"
+								aria-label="Resize timeline height"
+								class="group absolute left-2 right-2 h-[14px] -top-[11px] z-20 cursor-row-resize select-none"
+								onMouseDown={handleTimelineResizeStart}
+							>
+								<div
+									class="absolute left-1/2 top-[5px] w-9 h-1 rounded-full transition-colors -translate-x-1/2 bg-ed-line-strong group-hover:bg-ed-text-3"
+									classList={{
+										"bg-ed-text-3": isResizingTimeline(),
+									}}
 								/>
+							</div>
+							<div class="overflow-hidden relative px-3 pt-2.5 pb-3 h-full rounded-xl bg-ed-card shadow-ed-card">
+								<div class="h-full">
+									<Timeline
+										onViewportOverflowChange={setTimelineViewportOverflow}
+										onContentHeightChange={setTimelineContentHeight}
+									/>
+								</div>
 							</div>
 						</div>
 					</div>
@@ -1362,7 +1369,7 @@ function Dialogs() {
 											format={false}
 										>
 											<NumberField.Input
-												class="rounded-lg bg-gray-2 hover:ring-1 py-[18px] hover:ring-gray-5 h-8 font-normal placeholder:text-black-transparent-40 text-xs caret-gray-500 transition-shadow duration-200 focus:ring-offset-1 focus:bg-gray-3 focus:ring-offset-gray-100 focus:ring-1 focus:ring-gray-10 px-2 w-full text-[0.875rem] outline-hidden text-gray-12"
+												class="rounded-[7px] bg-ed-ctl border-0 py-[18px] h-8 font-normal placeholder:text-ed-text-3 text-xs caret-ed-accent transition-shadow duration-200 hover:bg-ed-ctl-hover focus:bg-ed-ctl-hover focus:ring-1 focus:ring-ed-accent px-2 w-full text-[13px] outline-hidden text-ed-text-1"
 												onKeyDown={composeEventHandlers<HTMLInputElement>([
 													(e) => e.stopPropagation(),
 												])}

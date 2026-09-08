@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	head: vi.fn(),
 	read: vi.fn(),
+	download: vi.fn(),
 	token: null as { videoId: string; key: string } | null,
 	video: {
 		id: "video",
@@ -27,7 +28,11 @@ vi.mock("@cap/web-backend", async () => {
 		Storage: {
 			getAccessForVideo: () =>
 				Effect.succeed([
-					{ headObject: mocks.head, getObjectResponse: mocks.read },
+					{
+						headObject: mocks.head,
+						getObjectResponse: mocks.read,
+						getInternalDownload: mocks.download,
+					},
 				]),
 		},
 		Videos: Effect.succeed({
@@ -39,6 +44,9 @@ vi.mock("@cap/web-backend", async () => {
 		verifyStorageObjectToken: () => mocks.token,
 	};
 });
+vi.mock("@cap/env", () => ({
+	serverEnv: () => ({ MEDIA_SERVER_WEBHOOK_SECRET: "test-media-secret" }),
+}));
 vi.mock("@/lib/server", async () => {
 	const { Effect } = await import("effect");
 	return { runPromise: Effect.runPromise };
@@ -76,10 +84,76 @@ describe("recording verification object reads", () => {
 		);
 	});
 
+	it("does not expose Drive credentials to ordinary clients", async () => {
+		expect((await request({ "x-cap-internal-download": "1" })).status).toBe(
+			401,
+		);
+		expect(
+			(
+				await request({
+					"x-cap-internal-download": "1",
+					"x-media-server-secret": "invalid",
+				})
+			).status,
+		).toBe(401);
+		expect(mocks.download).not.toHaveBeenCalled();
+	});
+
+	it.each(["if-match", "x-cap-recording-object-identity"])(
+		"authorizes an internal descriptor using %s without downloading media",
+		async (identityHeader) => {
+			mocks.download.mockReturnValue(
+				Effect.succeed({
+					version: 1,
+					url: "https://www.googleapis.com/drive/v3/files/file/revisions/revision?alt=media",
+				}),
+			);
+			const response = await request({
+				"x-cap-internal-download": "1",
+				"x-media-server-secret": "test-media-secret",
+				[identityHeader]: '"identity"',
+			});
+			expect(response.status).toBe(200);
+			expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+			expect(mocks.download).toHaveBeenCalledWith(
+				"owner/video/result.mp4",
+				expect.objectContaining({ objectIdentity: '"identity"' }),
+			);
+			expect(mocks.read).not.toHaveBeenCalled();
+		},
+	);
+
 	it("does not add metadata requests to ordinary playback", async () => {
 		const response = await request();
 		expect(response.status).toBe(206);
 		expect(mocks.head).not.toHaveBeenCalled();
+	});
+
+	it("cancels ordinary upstream downloads when the client disconnects", async () => {
+		const controller = new AbortController();
+		const req = new NextRequest(
+			"https://cap.test/api/storage/object?videoId=video&key=owner/video/result.mp4&token=test",
+			{ signal: controller.signal },
+		);
+		await GET(req);
+		expect(mocks.read).toHaveBeenCalledWith("owner/video/result.mp4", null, {
+			signal: req.signal,
+		});
+		controller.abort();
+		expect(mocks.read.mock.calls.at(-1)?.[2].signal.aborted).toBe(true);
+	});
+
+	it("answers ordinary HEAD requests without downloading the video", async () => {
+		const response = await HEAD(
+			new NextRequest(
+				"https://cap.test/api/storage/object?videoId=video&key=owner/video/result.mp4&token=test",
+				{ method: "HEAD" },
+			),
+		);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Content-Length")).toBe("100");
+		expect(await response.text()).toBe("");
+		expect(mocks.read).not.toHaveBeenCalled();
 	});
 
 	it("serves content-bound HEAD without downloading media", async () => {
@@ -261,7 +335,9 @@ describe("recording verification object reads", () => {
 			mocks.video.source = { type: "desktopMP4", [field]: key };
 			const response = await request({}, key);
 			expect(response.status).toBe(206);
-			expect(mocks.read).toHaveBeenCalledWith(key, null);
+			expect(mocks.read).toHaveBeenCalledWith(key, null, {
+				signal: expect.any(AbortSignal),
+			});
 		},
 	);
 });

@@ -2910,12 +2910,10 @@ function Page() {
 			try {
 				await commands.stopRecording();
 			} catch (error) {
-				if (stopRequest === request) {
-					stopErrorRequest = request;
-					setStopError(error instanceof Error ? error.message : String(error));
-				}
-			} finally {
-				if (stopRequest === request) resetStopRequest();
+				await dialog.message(
+					error instanceof Error ? error.message : String(error),
+					{ title: "Stop Recording", kind: "error" },
+				);
 			}
 		},
 	}));

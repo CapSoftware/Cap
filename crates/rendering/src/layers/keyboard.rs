@@ -278,7 +278,7 @@ impl KeyboardLayer {
     pub fn prepare(
         &mut self,
         uniforms: &ProjectUniforms,
-        segment_frames: &DecodedSegmentFrames,
+        _segment_frames: &DecodedSegmentFrames,
         output_size: XY<u32>,
         constants: &RenderVideoConstants,
         caption_layout: Option<CaptionOverlayLayout>,
@@ -304,12 +304,7 @@ impl KeyboardLayer {
             return;
         }
 
-        // Keyboard segments are authored on the recording clock. Use the same
-        // clock the cursor layer uses: recording_time travels with the decoded
-        // frame through the timeline mapping, so the overlay follows cuts and
-        // trims, and includes the recording→first-video-frame start offset
-        // that raw output time (frame_number / frame_rate) lacks.
-        let current_time = segment_frames.recording_time as f64;
+        let current_time = uniforms.frame_number as f64 / uniforms.frame_rate as f64;
         let settings = &keyboard_data.settings;
 
         let active_segment = find_active_keyboard_segment(
@@ -609,22 +604,22 @@ fn find_active_keyboard_segment<'a>(
     segments: &'a [cap_project::KeyboardTrackSegment],
     default_fade_duration: f32,
 ) -> Option<ActiveKeyboardSegment<'a>> {
-    for segment in segments {
-        if time >= segment.start && time < segment.end {
-            return Some(ActiveKeyboardSegment { segment });
-        }
-    }
-
-    for segment in segments {
-        let fade = segment
-            .fade_duration_override
-            .unwrap_or(default_fade_duration) as f64;
-        if time >= segment.end && time < segment.end + fade {
-            return Some(ActiveKeyboardSegment { segment });
-        }
-    }
-
-    None
+    segments
+        .iter()
+        .filter(|segment| time >= segment.start && time < segment.end)
+        .max_by(|a, b| a.start.total_cmp(&b.start))
+        .or_else(|| {
+            segments
+                .iter()
+                .filter(|segment| {
+                    let fade = segment
+                        .fade_duration_override
+                        .unwrap_or(default_fade_duration) as f64;
+                    time >= segment.end && time < segment.end + fade
+                })
+                .max_by(|a, b| a.end.total_cmp(&b.end))
+        })
+        .map(|segment| ActiveKeyboardSegment { segment })
 }
 
 fn build_visible_text(segment: &cap_project::KeyboardTrackSegment, current_time: f64) -> String {
@@ -710,9 +705,30 @@ fn calculate_keyboard_bounce(current_time: f64, start: f64, end: f64, fade_durat
 #[cfg(test)]
 mod tests {
     use super::{
-        KeyboardPosition, build_visible_text, resolve_background_top, resolve_keyboard_position,
+        KeyboardPosition, build_visible_text, find_active_keyboard_segment, resolve_background_top,
+        resolve_keyboard_position,
     };
     use crate::layers::{CaptionOverlayLayout, CaptionPosition};
+
+    #[test]
+    fn new_typing_is_not_hidden_by_the_previous_words_linger() {
+        let segment = |id: &str, start: f64, end: f64| -> cap_project::KeyboardTrackSegment {
+            serde_json::from_value(
+                serde_json::json!({"id":id,"start":start,"end":end,"displayText":id}),
+            )
+            .unwrap()
+        };
+        let segments = [segment("previous", 7.0, 7.8), segment("current", 7.2, 8.0)];
+        let active = find_active_keyboard_segment(7.5, &segments, 0.15).unwrap();
+        assert_eq!(build_visible_text(active.segment, 7.5), "current");
+        assert_eq!(
+            find_active_keyboard_segment(8.1, &segments, 0.15)
+                .unwrap()
+                .segment
+                .id,
+            "current"
+        );
+    }
 
     #[test]
     fn shortcut_segments_show_the_full_combo() {

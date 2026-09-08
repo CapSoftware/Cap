@@ -1610,6 +1610,7 @@ dependencies = [
  "cap-media-info",
  "cap-project",
  "cap-rendering",
+ "cap-utils",
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "ffmpeg-next",
  "flume 0.11.1",

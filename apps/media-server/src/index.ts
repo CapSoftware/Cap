@@ -1,6 +1,7 @@
 import app from "./app";
 import { abortAllJobs } from "./lib/job-manager";
 import { cancelAllMediaOperations } from "./lib/media-operations";
+import { cleanupMediaTransferCache } from "./lib/media-transfer";
 
 const port = Number(process.env.PORT) || 3456;
 
@@ -17,6 +18,7 @@ const shutdown = async () => {
 		console.log(`[media-server] Aborted ${abortedJobs} active jobs`);
 	}
 	await cancelAllMediaOperations();
+	await cleanupMediaTransferCache();
 	process.exit(0);
 };
 

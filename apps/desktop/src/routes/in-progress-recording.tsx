@@ -912,7 +912,11 @@ function InProgressRecordingInner() {
 									}
 								>
 									<RecordingControlButton
-										disabled={stopRequested() || isCountdown()}
+										disabled={
+											stopRequested() ||
+											stopRecording.isPending ||
+											isCountdown()
+										}
 										class="flex flex-row items-center gap-1 rounded-lg py-1 px-2 text-red-300 transition-colors duration-100 hover:bg-red-500/8 active:bg-red-500/12 disabled:opacity-60 disabled:hover:bg-transparent"
 										type="button"
 										onPointerDown={(event) => {

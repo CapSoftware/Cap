@@ -307,6 +307,7 @@ pub struct ImageLayer {
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     draws: Vec<wgpu::BindGroup>,
+    draw_tracks: Vec<u32>,
     cached_draws: Vec<CachedDraw>,
     cache: HashMap<PathBuf, CacheEntry>,
     active_textures: HashMap<PathBuf, ActiveTexture>,
@@ -353,6 +354,7 @@ impl ImageLayer {
                 ..Default::default()
             }),
             draws: Vec::new(),
+            draw_tracks: Vec::new(),
             cached_draws: Vec::new(),
             cache: HashMap::new(),
             active_textures: HashMap::new(),
@@ -468,11 +470,22 @@ impl ImageLayer {
         }
     }
 
+    #[cfg(test)]
     fn push_draw(
         &mut self,
         device: &wgpu::Device,
         texture: &wgpu::Texture,
         uniforms: ImageUniforms,
+    ) {
+        self.push_draw_with_track(device, texture, uniforms, u32::MAX);
+    }
+
+    fn push_draw_with_track(
+        &mut self,
+        device: &wgpu::Device,
+        texture: &wgpu::Texture,
+        uniforms: ImageUniforms,
+        track: u32,
     ) {
         let index = self.draws.len();
         if let Some(draw) = self.cached_draws.get(index)
@@ -480,6 +493,7 @@ impl ImageLayer {
             && draw.uniforms == uniforms
         {
             self.draws.push(draw.group.clone());
+            self.draw_tracks.push(track);
             return;
         }
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -518,10 +532,12 @@ impl ImageLayer {
             self.cached_draws.push(draw);
         }
         self.draws.push(group);
+        self.draw_tracks.push(track);
     }
 
     pub async fn prepare(&mut self, constants: &RenderVideoConstants, uniforms: &ProjectUniforms) {
         self.draws.clear();
+        self.draw_tracks.clear();
         let mut previous_textures = std::mem::take(&mut self.active_textures);
         let Some(timeline) = &uniforms.project.timeline else {
             self.cache.clear();
@@ -601,7 +617,12 @@ impl ImageLayer {
                         texture: texture.clone(),
                     },
                 );
-                self.push_draw(&constants.device, &texture, image_uniforms);
+                self.push_draw_with_track(
+                    &constants.device,
+                    &texture,
+                    image_uniforms,
+                    segment.track,
+                );
             }
         }
         self.cached_draws.truncate(self.draws.len());
@@ -609,6 +630,10 @@ impl ImageLayer {
 
     pub fn has_content(&self) -> bool {
         !self.draws.is_empty()
+    }
+
+    pub fn has_track(&self, track: u32) -> bool {
+        self.draw_tracks.contains(&track)
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -619,6 +644,19 @@ impl ImageLayer {
         for group in &self.draws {
             pass.set_bind_group(0, group, &[]);
             pass.draw(0..3, 0..1);
+        }
+    }
+
+    pub fn render_track(&self, pass: &mut wgpu::RenderPass<'_>, track: u32) {
+        if !self.has_content() {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        for (group, draw_track) in self.draws.iter().zip(&self.draw_tracks) {
+            if *draw_track == track {
+                pass.set_bind_group(0, group, &[]);
+                pass.draw(0..3, 0..1);
+            }
         }
     }
 }
@@ -764,6 +802,83 @@ mod tests {
         pixels
     }
 
+    fn render_tracks_pixels(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layer: &ImageLayer,
+        tracks: &[u32],
+    ) -> Vec<u8> {
+        let output = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Image overlay track-order test output"),
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Image overlay track-order test readback"),
+            size: 64 * 64 * 4,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let view = output.create_view(&Default::default());
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Image overlay track-order pixel test"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            for track in tracks {
+                layer.render_track(&mut pass, *track);
+            }
+        }
+        encoder.copy_texture_to_buffer(
+            output.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(256),
+                    rows_per_image: Some(64),
+                },
+            },
+            output.size(),
+        );
+        queue.submit([encoder.finish()]);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                sender
+                    .send(result)
+                    .expect("Image track-order readback receiver");
+            });
+        device
+            .poll(wgpu::PollType::Wait)
+            .expect("Poll image track-order GPU test");
+        receiver.recv().unwrap().unwrap();
+        let pixels = buffer.slice(..).get_mapped_range().to_vec();
+        buffer.unmap();
+        pixels
+    }
+
     fn pixel(pixels: &[u8], x: usize, y: usize) -> [u8; 4] {
         pixels[(y * 64 + x) * 4..(y * 64 + x + 1) * 4]
             .try_into()
@@ -893,6 +1008,45 @@ mod tests {
         let pixels = render_pixels(&device, &queue, &layer);
         assert_eq!(pixel(&pixels, 17, 17), [0; 4]);
         assert_pixel(pixel(&pixels, 32, 32), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn render_track_order_skips_missing_lane_metadata() {
+        let Some((device, queue)) = test_device() else {
+            return;
+        };
+        let mut layer = ImageLayer::new(&device);
+        let red = upload_texture(
+            &device,
+            &queue,
+            &[RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]))],
+        );
+        let blue = upload_texture(
+            &device,
+            &queue,
+            &[RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 255, 255]))],
+        );
+        let mut red_segment = segment("red");
+        red_segment.track = 0;
+        let mut blue_segment = segment("blue");
+        blue_segment.track = 2;
+        let mut inactive_segment = segment("inactive");
+        inactive_segment.track = 1;
+        inactive_segment.enabled = false;
+        assert!(visible_images(&[inactive_segment], 30, 30, (64, 64)).is_empty());
+
+        let red_uniforms = visible_images(&[red_segment], 30, 30, (64, 64))[0].1;
+        let blue_uniforms = visible_images(&[blue_segment], 30, 30, (64, 64))[0].1;
+        layer.push_draw_with_track(&device, &red, red_uniforms, 0);
+        layer.push_draw_with_track(&device, &blue, blue_uniforms, 2);
+        assert!(layer.has_track(0));
+        assert!(!layer.has_track(1));
+        assert!(layer.has_track(2));
+
+        let blue_front = render_tracks_pixels(&device, &queue, &layer, &[0, 1, 2]);
+        assert_pixel(pixel(&blue_front, 32, 32), [0, 0, 255, 255]);
+        let red_front = render_tracks_pixels(&device, &queue, &layer, &[2, 1, 0]);
+        assert_pixel(pixel(&red_front, 32, 32), [255, 0, 0, 255]);
     }
 
     struct ImageFixture(PathBuf);

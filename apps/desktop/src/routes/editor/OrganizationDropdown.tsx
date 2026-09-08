@@ -65,7 +65,7 @@ function OrganizationAvatar(props: {
 	return (
 		<span
 			class={cx(
-				"flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-3 text-[11px] font-medium text-gray-12",
+				"flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-ed-ctl text-[11px] font-medium text-ed-text-1",
 				props.class ?? "size-6",
 			)}
 		>
@@ -420,10 +420,10 @@ export function OrganizationDropdown() {
 									<div class="p-3">
 										<div class="flex flex-col gap-3">
 											<div class="flex flex-col gap-1">
-												<span class="text-sm font-medium text-gray-12">
+												<span class="text-sm font-medium text-ed-text-1">
 													{fallbackTitle()}
 												</span>
-												<span class="text-xs leading-5 text-gray-11">
+												<span class="text-xs leading-5 text-ed-text-2">
 													{fallbackDescription()}
 												</span>
 											</div>
@@ -462,7 +462,7 @@ export function OrganizationDropdown() {
 									<For
 										each={organizationSelection.organizations()}
 										fallback={
-											<div class="py-1 text-center text-sm text-gray-11">
+											<div class="py-1 text-center text-sm text-ed-text-3">
 												No organizations
 											</div>
 										}
@@ -479,7 +479,7 @@ export function OrganizationDropdown() {
 												<Show
 													when={selectedOrganization()?.id === organization.id}
 												>
-													<IconLucideCheck class="size-4 text-blue-500" />
+													<IconLucideCheck class="size-4 text-ed-accent" />
 												</Show>
 											</DropdownItem>
 										)}
@@ -488,7 +488,7 @@ export function OrganizationDropdown() {
 								<Show when={selectedOrganization()?.canEditBrand}>
 									<MenuItemList<typeof KDropdownMenu.Group>
 										as={KDropdownMenu.Group}
-										class="border-t"
+										class="border-t border-ed-line"
 									>
 										<DropdownItem
 											onSelect={() =>

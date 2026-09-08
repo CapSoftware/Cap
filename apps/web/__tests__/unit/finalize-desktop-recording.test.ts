@@ -5,6 +5,7 @@ import type {
 	DesktopRecordingAttempt,
 	DesktopRecordingJob,
 } from "@/lib/desktop-recording-jobs";
+import { MediaProcessingBudgetError } from "@/lib/media-processing-budget";
 
 const mocks = vi.hoisted(() => ({
 	state: vi.fn(),
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	ensure: vi.fn(),
 	persist: vi.fn(),
 	heartbeat: vi.fn(),
+	waitCapacity: vi.fn(),
 	blocked: vi.fn(),
 	retry: vi.fn(),
 	attach: vi.fn(),
@@ -27,6 +29,15 @@ const mocks = vi.hoisted(() => ({
 	fetch: vi.fn(),
 	put: vi.fn(),
 	databaseRows: vi.fn(),
+	reserveBudget: vi.fn(),
+}));
+vi.mock("@/lib/media-processing-budget", () => ({
+	reserveMediaProcessingBudget: mocks.reserveBudget,
+	MediaProcessingBudgetError: class extends Error {
+		constructor(readonly scope: "recording") {
+			super(scope);
+		}
+	},
 }));
 vi.mock("@cap/database", () => ({
 	db: () => ({
@@ -49,6 +60,7 @@ vi.mock("@/lib/desktop-recording-jobs", () => ({
 	initializeSourceCommitCheckpoint: mocks.checkpoint,
 	persistSourceCommitCheckpoint: mocks.saveCheckpoint,
 	heartbeatAttempt: mocks.heartbeat,
+	waitForDesktopRecordingCapacity: mocks.waitCapacity,
 	markSourceBlocked: mocks.blocked,
 	scheduleRetry: mocks.retry,
 	attachRemoteJob: mocks.attach,
@@ -141,6 +153,7 @@ function withCurrent(update: Partial<DesktopRecordingJob>) {
 }
 
 beforeEach(() => {
+	mocks.reserveBudget.mockResolvedValue(100_000_000);
 	mocks.databaseRows.mockResolvedValue([
 		{ id: "video", ownerId: "user", source: { type: "desktopSegments" } },
 	]);
@@ -168,6 +181,7 @@ beforeEach(() => {
 		withCurrent({ source: savedSource, state: "processing" });
 		return true;
 	});
+	mocks.waitCapacity.mockResolvedValue(true);
 	mocks.heartbeat.mockImplementation(async () => {
 		withCurrent({ leaseExpiresAt: new Date(Date.now() + 5 * 60_000) });
 		return true;
@@ -190,6 +204,7 @@ beforeEach(() => {
 		withCurrent({ remoteJobId });
 		return true;
 	});
+
 	mocks.defer.mockImplementation(async () => {
 		withCurrent({ state: "queued", leaseExpiresAt: null });
 		return true;
@@ -501,6 +516,71 @@ describe("source commitment and media request compatibility", () => {
 		expect(mocks.fetch).not.toHaveBeenCalled();
 	});
 
+	it("waits for capacity using the same attempt instead of exhausting processing retries", async () => {
+		withCurrent({ state: "retry", leaseExpiresAt: null, attemptCount: 4 });
+		for (let index = 0; index < 8; index++)
+			mocks.fetch.mockResolvedValueOnce(
+				Response.json(
+					{ code: "SERVER_BUSY" },
+					{ status: 503, headers: { "Retry-After": "60" } },
+				),
+			);
+		await expect(
+			finalizeDesktopRecordingWorkflow({
+				videoId,
+				userId,
+				generation: fixture.generation,
+			}),
+		).resolves.toMatchObject({ success: true });
+		expect(current?.attemptCount).toBe(5);
+		expect(mocks.fetch).toHaveBeenCalledTimes(9);
+		expect(mocks.waitCapacity).toHaveBeenCalledWith(
+			expect.objectContaining({ retryAfterMs: expect.any(Number) }),
+		);
+		expect(
+			mocks.sleep.mock.calls.filter(
+				([delay]) => typeof delay === "number" && delay >= 60_000,
+			),
+		).toHaveLength(8);
+		const attempts = mocks.reserveBudget.mock.calls.map(
+			([input]) => input.attemptId,
+		);
+		expect(new Set(attempts).size).toBe(1);
+		expect(mocks.retry).not.toHaveBeenCalled();
+		expect(mocks.blocked).not.toHaveBeenCalled();
+	});
+
+	it("respects a persisted capacity wait when a dispatch step is replayed", async () => {
+		withCurrent({
+			output: { kind: "desktop-recording-capacity-wait" },
+			nextRetryAt: new Date(Date.now() + 60_000),
+		});
+		await expect(startDesktopRecordingJob(fixture)).resolves.toMatchObject({
+			status: "capacity",
+		});
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.sourceUrls).not.toHaveBeenCalled();
+	});
+
+	it("does not treat an ambiguous dispatch failure as a capacity refusal", async () => {
+		mocks.fetch.mockResolvedValueOnce(
+			Response.json({ code: "UPSTREAM_FAILURE" }, { status: 503 }),
+		);
+		await expect(startDesktopRecordingJob(fixture)).resolves.toBeUndefined();
+		expect(mocks.heartbeat).not.toHaveBeenCalled();
+	});
+
+	it("blocks an exhausted transfer budget before dispatching media work", async () => {
+		const error = new MediaProcessingBudgetError("recording");
+		mocks.reserveBudget.mockRejectedValueOnce(error);
+		await expect(startDesktopRecordingJob(fixture)).rejects.toBe(error);
+		expect(mocks.blocked).toHaveBeenCalledWith(
+			expect.objectContaining({ errorCode: "processing-budget-exhausted" }),
+		);
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.put).not.toHaveBeenCalled();
+	});
+
 	it("preserves incomplete originals without calling the media server", async () => {
 		withCurrent({ source: null, state: "committing" });
 		mocks.commitSource.mockRejectedValue(
@@ -547,6 +627,13 @@ describe("source commitment and media request compatibility", () => {
 		});
 		mocks.sourceUrls.mockResolvedValue({
 			videoUrl: "https://source.test/recording.mp4",
+			sourceObjects: [
+				{
+					url: "https://source.test/recording.mp4",
+					size: 1000,
+					objectIdentity: '"snapshot"',
+				},
+			],
 			sourceObjectIdentity: '"snapshot"',
 			outputKey: "user/video/.recording/sources/generation/mp4/0.mp4",
 		});
@@ -584,6 +671,13 @@ describe("source commitment and media request compatibility", () => {
 		});
 		mocks.sourceUrls.mockResolvedValue({
 			videoUrl: "https://source.test/recording.mp4",
+			sourceObjects: [
+				{
+					url: "https://source.test/recording.mp4",
+					size: 1000,
+					objectIdentity: '"snapshot"',
+				},
+			],
 			sourceObjectIdentity: '"snapshot"',
 			outputKey: "user/video/.recording/sources/generation/mp4/0.mp4",
 		});

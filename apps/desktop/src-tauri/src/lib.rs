@@ -30,6 +30,8 @@ mod http_client;
 mod import;
 pub mod linux_instant_camera;
 mod logging;
+#[cfg(target_os = "macos")]
+mod macos_save_panel;
 mod notifications;
 mod panel_manager;
 mod permissions;
@@ -4895,39 +4897,23 @@ async fn generate_keyboard_segments(
     show_modifiers: bool,
     show_special_keys: bool,
 ) -> Result<Vec<cap_project::KeyboardTrackSegment>, String> {
-    let meta = editor_instance.meta();
-
-    let RecordingMetaInner::Studio(studio_meta) = &meta.inner else {
-        return Ok(vec![]);
+    let project = editor_instance.project_config.1.borrow().clone();
+    let Some(timeline) = project.timeline else {
+        return Ok(Vec::new());
     };
-
-    let segments = match studio_meta.as_ref() {
-        StudioRecordingMeta::MultipleSegments { inner, .. } => &inner.segments,
-        _ => return Ok(vec![]),
-    };
-
-    let mut all_events = cap_project::KeyboardEvents { presses: vec![] };
-
-    for segment in segments {
-        let events = segment.keyboard_events(meta);
-        all_events.presses.extend(events.presses);
-    }
-
-    all_events.presses.sort_by(|a, b| {
-        a.time_ms
-            .partial_cmp(&b.time_ms)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let grouped = cap_project::group_key_events(
-        &all_events,
+    let settings = cap_project::KeyboardSettings {
         grouping_threshold_ms,
-        linger_duration_ms,
+        linger_duration: (linger_duration_ms / 1000.0) as f32,
         show_modifiers,
         show_special_keys,
-    );
-
-    Ok(grouped)
+        ..Default::default()
+    };
+    let meta = editor_instance.meta().clone();
+    tokio::task::spawn_blocking(move || {
+        cap_project::generate_project_keyboard_segments(&meta, &timeline, &settings)
+    })
+    .await
+    .map_err(|error| format!("Keyboard generation failed: {error}"))?
 }
 
 #[tauri::command]
@@ -5172,7 +5158,9 @@ fn screenshot_share_link_for_hash(
 }
 
 async fn upgrade_required_result(app: &AppHandle) -> UploadResult {
-    let _ = ShowCapWindow::Upgrade.show(app).await;
+    if let Err(error) = open_pricing_page(app).await {
+        warn!(%error, "Failed to open pricing page");
+    }
     UploadResult::UpgradeRequired
 }
 
@@ -5322,6 +5310,8 @@ async fn save_file_dialog_inner(
         "gif" => ("GIF Image", "gif"),
         "mov" => ("MOV Video", "mov"),
         "screenshot" | "png" => ("PNG Image", "png"),
+        "srt" => ("SubRip Subtitle", "srt"),
+        "vtt" => ("WebVTT", "vtt"),
         _ => {
             warn!(file_type, "Invalid save file dialog type");
             return Err("Invalid file type".to_string());
@@ -5331,30 +5321,18 @@ async fn save_file_dialog_inner(
     info!(file_name, name, extension, "Showing save file dialog");
 
     #[cfg(target_os = "linux")]
-    {
-        use tauri_plugin_fs::FsExt;
-
-        let path = export::show_linux_save_dialog(
-            window.clone(),
-            tokio_util::sync::CancellationToken::new(),
-            file_name,
-            name,
-            extension,
-        )
-        .await?;
-        if let Some(path) = &path {
-            if let Some(scope) = window.try_fs_scope() {
-                scope.allow_file(path).map_err(|error| error.to_string())?;
-            }
-            window
-                .state::<tauri::scope::Scopes>()
-                .allow_file(path)
-                .map_err(|error| error.to_string())?;
-        }
-        Ok(path.map(|path| path.to_string_lossy().into_owned()))
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
+    let path = export::show_linux_save_dialog(
+        window.clone(),
+        tokio_util::sync::CancellationToken::new(),
+        file_name,
+        name,
+        extension,
+    )
+    .await?;
+    #[cfg(target_os = "macos")]
+    let path = export::show_macos_save_dialog(window.app_handle(), file_name, extension).await?;
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let path = {
         use tauri_plugin_dialog::DialogExt;
 
         let app = window.app_handle().clone();
@@ -5374,14 +5352,14 @@ async fn save_file_dialog_inner(
                 let _ = tx.send(
                     path.as_ref()
                         .and_then(|p| p.as_path())
-                        .map(|p| p.to_string_lossy().to_string()),
+                        .map(std::path::PathBuf::from),
                 );
             });
 
         match rx.await {
             Ok(result) => {
                 info!(path = ?result, "Save file dialog completed");
-                Ok(result)
+                result
             }
             Err(e) => {
                 warn!(error = %e, "Save file dialog failed");
@@ -5389,10 +5367,21 @@ async fn save_file_dialog_inner(
                     &app,
                     notifications::NotificationType::VideoSaveFailed,
                 );
-                Err(e.to_string())
+                return Err(e.to_string());
             }
         }
+    };
+    if let Some(path) = &path {
+        use tauri_plugin_fs::FsExt;
+        if let Some(scope) = window.try_fs_scope() {
+            scope.allow_file(path).map_err(|error| error.to_string())?;
+        }
+        window
+            .state::<tauri::scope::Scopes>()
+            .allow_file(path)
+            .map_err(|error| error.to_string())?;
     }
+    Ok(path.map(|path| path.to_string_lossy().into_owned()))
 }
 
 #[derive(Serialize, specta::Type)]
@@ -6005,11 +5994,21 @@ async fn editor_delete_project(
     Ok(())
 }
 
+async fn open_pricing_page(app: &AppHandle) -> Result<(), String> {
+    app.shell()
+        .open("https://cap.so/pricing?ref=desktop", None)
+        .map_err(|e| e.to_string())
+}
+
 // keep this async otherwise opening windows may hang on windows
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
 async fn show_window(app: AppHandle, window: ShowCapWindow) -> Result<(), String> {
+    if matches!(window, ShowCapWindow::Upgrade) {
+        return open_pricing_page(&app).await;
+    }
+
     if matches!(window, ShowCapWindow::Camera { .. }) {
         let operation_lock = app.state::<CameraWindowOperationLock>();
         let _operation_guard = operation_lock.lock().await;
@@ -6481,6 +6480,7 @@ fn specta_builder() -> tauri_specta::Builder {
             recording::delete_recording,
             recording::take_screenshot,
             recording::import_current_desktop_background,
+            recording::get_default_project_config,
             recording::list_cameras,
             recording::get_camera_formats,
             recording::get_microphone_info,
@@ -7097,6 +7097,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 let app = app.clone();
                 move |_| {
                     app.state::<MainWindowReadyState>().set_ready(true);
+                    tracing::info!("Main window frontend ready");
                     gpu_context::prewarm_gpu();
                     tokio::task::spawn_blocking(cap_rendering::prewarm_fonts);
                     tokio::spawn(screenshot_editor::prewarm_screenshot_renderer());
@@ -7135,16 +7136,20 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             tokio::spawn({
                 let app = app.clone();
                 async move {
-                    if should_show_onboarding(&app) {
-                        println!("Showing onboarding");
-                        let _ = ShowCapWindow::Onboarding.show(&app).await;
+                    let startup_window = if should_show_onboarding(&app) {
+                        ShowCapWindow::Onboarding
                     } else {
-                        println!("Showing main window");
-                        let _ = ShowCapWindow::Main {
+                        ShowCapWindow::Main {
                             init_target_mode: None,
                         }
-                        .show(&app)
-                        .await;
+                    };
+                    match startup_window.show(&app).await {
+                        Ok(window) => {
+                            tracing::info!(label = window.label(), "Startup window created");
+                        }
+                        Err(error) => {
+                            tracing::error!(%error, "Failed to open startup window");
+                        }
                     }
                 }
             });

@@ -1478,7 +1478,7 @@ impl OnboardingWindow {
                                                     .cursor_pointer()
                                                     .mt(px(8.))
                                                     .on_click(|_, _, cx| {
-                                                        cx.open_url("https://cap.so/pricing")
+                                                        cx.open_url(crate::auth::PRICING_URL)
                                                     }),
                                             )
                                         }),
@@ -1490,7 +1490,7 @@ impl OnboardingWindow {
                 copy("View pricing plans ↗", 13., theme.blue_10)
                     .id("onboarding-pricing")
                     .cursor_pointer()
-                    .on_click(|_, _, cx| cx.open_url("https://cap.so/pricing")),
+                    .on_click(|_, _, cx| cx.open_url(crate::auth::PRICING_URL)),
             )
             .into_any_element()
     }

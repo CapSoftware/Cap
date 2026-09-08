@@ -1032,7 +1032,7 @@ pub fn open_quality_settings(mode: Mode, cx: &mut App) {
     if defer_window_until_capture_safe(cx) {
         return;
     }
-    open_settings(Page::General, cx);
+    open_settings(Page::Quality, cx);
     if let Some(handle) = cx.global::<AppWindows>().settings {
         handle
             .update(cx, |view, window, cx| {

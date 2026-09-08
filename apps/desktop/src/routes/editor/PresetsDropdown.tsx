@@ -3,6 +3,7 @@ import { cx } from "cva";
 import { For, Show, Suspense } from "solid-js";
 import { reconcile } from "solid-js/store";
 import toast from "solid-toast";
+import { commands } from "~/utils/tauri";
 import { normalizeProject, useEditorContext } from "./context";
 import {
 	DropdownItem,
@@ -16,6 +17,20 @@ import {
 
 export function PresetsDropdown() {
 	const { setDialog, presets, setProject, project } = useEditorContext();
+
+	async function applyDefaultPreset() {
+		const stock = await commands.getDefaultProjectConfig();
+		setProject(
+			reconcile(
+				normalizeProject({
+					...stock,
+					timeline: project.timeline ?? null,
+					overlayOrder: project.overlayOrder ?? [],
+					clips: project.clips,
+				}),
+			),
+		);
+	}
 
 	return (
 		<KDropdownMenu gutter={8} placement="bottom">
@@ -38,11 +53,48 @@ export function PresetsDropdown() {
 							as={KDropdownMenu.Group}
 							class="overflow-y-auto flex-1 scrollbar-none"
 						>
+							<KDropdownMenu.Sub gutter={16}>
+								<MenuItem<typeof KDropdownMenu.SubTrigger>
+									as={KDropdownMenu.SubTrigger}
+									class="h-10"
+									onClick={() => {
+										applyDefaultPreset();
+									}}
+								>
+									<span class="mr-auto">Default</span>
+									<Show when={(presets.query.data?.default ?? null) === null}>
+										<span class="px-2 py-1 text-[11px] rounded-full bg-ed-ctl text-ed-text-2">
+											Default
+										</span>
+									</Show>
+									<IconCapSettings class="text-ed-text-3 group-hover:text-[currentColor] shrink-0" />
+								</MenuItem>
+								<KDropdownMenu.Portal>
+									<MenuItemList<typeof KDropdownMenu.SubContent>
+										as={KDropdownMenu.SubContent}
+										class={cx(
+											"w-52 animate-in fade-in slide-in-from-left-1",
+											dropdownContainerClasses,
+										)}
+									>
+										<DropdownItem
+											onSelect={() => {
+												applyDefaultPreset();
+											}}
+										>
+											Apply
+										</DropdownItem>
+										<DropdownItem onSelect={() => presets.setDefault(null)}>
+											Set as default
+										</DropdownItem>
+									</MenuItemList>
+								</KDropdownMenu.Portal>
+							</KDropdownMenu.Sub>
 							<For
 								each={presets.query.data?.presets ?? []}
 								fallback={
-									<div class="py-1 w-full text-sm text-center text-gray-11">
-										No Presets
+									<div class="py-1 w-full text-sm text-center text-ed-text-3">
+										No saved presets
 									</div>
 								}
 							>
@@ -51,6 +103,7 @@ export function PresetsDropdown() {
 										const normalizedConfig = normalizeProject({
 											...preset.config,
 											timeline: project.timeline ?? null,
+											overlayOrder: project.overlayOrder ?? [],
 											clips: project.clips,
 										});
 										setProject(reconcile(normalizedConfig));
@@ -67,11 +120,11 @@ export function PresetsDropdown() {
 											>
 												<span class="mr-auto">{preset.name}</span>
 												<Show when={presets.query.data?.default === i()}>
-													<span class="px-2 py-1 text-[11px] rounded-full bg-gray-2 text-gray-11">
+													<span class="px-2 py-1 text-[11px] rounded-full bg-ed-ctl text-ed-text-2">
 														Default
 													</span>
 												</Show>
-												<IconCapSettings class="text-gray-11 group-hover:text-[currentColor] shrink-0" />
+												<IconCapSettings class="text-ed-text-3 group-hover:text-[currentColor] shrink-0" />
 											</MenuItem>
 											<KDropdownMenu.Portal>
 												<MenuItemList<typeof KDropdownMenu.SubContent>
@@ -134,7 +187,7 @@ export function PresetsDropdown() {
 						</MenuItemList>
 						<MenuItemList<typeof KDropdownMenu.Group>
 							as={KDropdownMenu.Group}
-							class="border-t shrink-0"
+							class="border-t border-ed-line shrink-0"
 						>
 							<DropdownItem
 								onSelect={() => setDialog({ type: "createPreset", open: true })}

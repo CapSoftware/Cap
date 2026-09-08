@@ -61,12 +61,12 @@ const FRAME_STYLES: Array<{
 ];
 
 const THEME_TAB_TRIGGER_CLASS =
-	"z-10 flex-1 h-full text-xs text-gray-11 transition-colors duration-100 outline-hidden data-selected:text-gray-12 peer";
+	"z-10 flex-1 h-full text-xs text-ed-text-2 transition-colors duration-100 outline-hidden data-selected:text-ed-text-1 peer";
 
 function SettingRow(props: { name: string; children: JSX.Element }) {
 	return (
 		<div class="flex gap-3 justify-between items-center">
-			<span class="text-xs font-medium text-gray-11">{props.name}</span>
+			<span class="text-xs font-medium text-ed-text-2">{props.name}</span>
 			{props.children}
 		</div>
 	);
@@ -84,9 +84,9 @@ function FrameSettings() {
 
 	return (
 		<>
-			<div class="flex flex-col gap-0.5 px-4 pt-3.5 pb-3 border-b shrink-0 border-gray-3">
-				<span class="text-[0.8125rem] font-semibold text-gray-12">Frame</span>
-				<span class="text-[0.6875rem] leading-snug text-gray-10">
+			<div class="flex flex-col gap-0.5 px-4 pt-3.5 pb-3 border-b shrink-0 border-ed-line">
+				<span class="text-[13px] font-semibold text-ed-text-1">Frame</span>
+				<span class="text-[0.6875rem] leading-snug text-ed-text-3">
 					Wrap your recording in a window or device frame.
 				</span>
 			</div>
@@ -106,28 +106,28 @@ function FrameSettings() {
 								<button
 									type="button"
 									onClick={() => updateFrame({ style: option.value })}
-									class="flex items-center gap-3 rounded-xl p-2 text-left outline-hidden transition-colors duration-150 hover:bg-gray-3 focus-visible:bg-gray-3"
+									class="flex items-center gap-3 rounded-xl p-2 text-left outline-hidden transition-colors duration-150 hover:bg-ed-ctl-hover focus-visible:bg-ed-ctl-hover"
 								>
 									<span
 										class={cx(
 											"flex justify-center items-center rounded-[0.625rem] size-8 shrink-0 transition-colors duration-150",
 											selected()
-												? "bg-blue-9 text-white"
-												: "bg-gray-3 text-gray-11",
+												? "bg-ed-accent text-white"
+												: "bg-ed-ctl text-ed-text-2",
 										)}
 									>
 										<Dynamic component={option.icon} class="size-4" />
 									</span>
 									<span class="flex flex-col flex-1 min-w-0">
-										<span class="text-[0.8125rem] font-medium leading-tight text-gray-12">
+										<span class="text-[13px] font-medium leading-tight text-ed-text-1">
 											{option.label}
 										</span>
-										<span class="text-[0.6875rem] leading-snug text-gray-10">
+										<span class="text-[0.6875rem] leading-snug text-ed-text-3">
 											{option.description}
 										</span>
 									</span>
 									<Show when={selected()}>
-										<IconCapCircleCheck class="size-4 shrink-0 text-blue-9" />
+										<IconCapCircleCheck class="size-4 shrink-0 text-ed-accent" />
 									</Show>
 								</button>
 							);
@@ -136,7 +136,7 @@ function FrameSettings() {
 				</div>
 				<Show when={style() !== "none" && project.background.frame}>
 					{(frame) => (
-						<div class="flex flex-col gap-3 p-3 border-t border-gray-3">
+						<div class="flex flex-col gap-3 p-3 border-t border-ed-line">
 							<SettingRow name="Theme">
 								<KTabs
 									class="w-40"
@@ -145,7 +145,7 @@ function FrameSettings() {
 										updateFrame({ theme: v as FrameConfiguration["theme"] })
 									}
 								>
-									<KTabs.List class="flex relative flex-row items-center h-8 rounded-lg border border-gray-3">
+									<KTabs.List class="flex relative flex-row gap-0.5 items-center p-0.5 h-8 rounded-lg bg-ed-ctl">
 										<KTabs.Trigger
 											value="light"
 											class={THEME_TAB_TRIGGER_CLASS}
@@ -155,8 +155,8 @@ function FrameSettings() {
 										<KTabs.Trigger value="dark" class={THEME_TAB_TRIGGER_CLASS}>
 											Dark
 										</KTabs.Trigger>
-										<KTabs.Indicator class="overflow-hidden absolute inset-0 rounded-lg transition-transform flex p-px peer-focus-visible:outline-solid outline-2 outline-blue-9 outline-offset-2">
-											<div class="flex-1 bg-gray-3" />
+										<KTabs.Indicator class="overflow-hidden absolute inset-0 rounded-lg transition-transform flex p-0.5 peer-focus-visible:outline-solid outline-2 outline-ed-accent outline-offset-2">
+											<div class="flex-1 rounded-md bg-ed-card shadow-[0_1px_2px_rgba(0,0,0,0.12),0_0_0_0.5px_rgba(0,0,0,0.06)] dark:bg-white/12 dark:shadow-none" />
 										</KTabs.Indicator>
 									</KTabs.List>
 								</KTabs>
@@ -224,24 +224,26 @@ function ScopedFrameButton() {
 	const hasFrame = () => activeStyle().value !== "none";
 
 	return (
-		<KPopover placement="bottom-start" gutter={8} fitViewport>
+		<KPopover placement="bottom-start" gutter={8} flip fitViewport>
 			<EditorButton<typeof KPopover.Trigger>
 				as={KPopover.Trigger}
+				variant="text"
 				tooltipText="Add a frame"
 				leftIcon={
 					<Dynamic
 						component={hasFrame() ? activeStyle().icon : IconLucideAppWindowMac}
-						class="w-5 text-gray-12"
 					/>
 				}
 				rightIcon={<IconCapChevronDown />}
 			>
-				{hasFrame() ? activeStyle().label : "Frame"}
+				<span class="max-[1200px]:hidden">
+					{hasFrame() ? activeStyle().label : "Frame"}
+				</span>
 			</EditorButton>
 			<KPopover.Portal>
 				<KPopover.Content
 					class={cx(
-						"z-60 flex w-[min(19rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl border border-gray-3 bg-gray-1 shadow-[0_24px_48px_-20px_rgba(0,0,0,0.55)] outline-hidden",
+						"z-60 flex w-[min(19rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-2xl bg-ed-card shadow-ed-pop outline-hidden",
 						"origin-[var(--kb-popover-content-transform-origin)] data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 data-closed:animate-out data-closed:fade-out data-closed:zoom-out-95",
 					)}
 				>

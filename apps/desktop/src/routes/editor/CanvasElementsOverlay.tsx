@@ -291,7 +291,7 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 	const select = (type: "display" | "camera") =>
 		batch(() => {
 			setEditorState("canvasSelection", { type });
-			setEditorState("timeline", "selection", null);
+			if (!selectedStyle()) setEditorState("timeline", "selection", null);
 		});
 
 	// Selecting a timeline segment drops the canvas selection (and vice versa
@@ -667,14 +667,17 @@ export function CanvasElementsOverlay(props: { size: Size }) {
 	});
 
 	return (
-		<div class="absolute inset-0 pointer-events-none">
+		<div class="absolute inset-0 isolate pointer-events-none">
 			<Show when={overlayVisible()}>
-				<Show when={selection()}>
+				<Show when={selection() || editorState.timeline.selection}>
 					<div
 						class="absolute inset-0 pointer-events-auto"
 						onMouseDown={(e) => {
 							if (e.button !== 0) return;
-							setEditorState("canvasSelection", null);
+							batch(() => {
+								setEditorState("canvasSelection", null);
+								setEditorState("timeline", "selection", null);
+							});
 						}}
 					/>
 				</Show>

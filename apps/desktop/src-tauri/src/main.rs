@@ -106,7 +106,31 @@ fn main() {
     let (info_file_writer, _info_logger_guard) =
         match create_log_appender(&logs_dir, "cap-desktop.log") {
             Some(appender) => {
-                let (writer, guard) = tracing_appender::non_blocking(appender);
+                let (writer, guard) = tracing_appender::non_blocking(
+                    cap_utils::diagnostic_writer::DiagnosticWriter::new(
+                        appender,
+                        &logs_dir,
+                        "cap-desktop.log",
+                    ),
+                );
+                let queue_errors = writer.error_counter();
+                cap_utils::operation_diagnostics::install_queue_loss_counter(move || {
+                    queue_errors.dropped_lines()
+                });
+                let diagnostic_writer = writer.clone();
+                cap_utils::operation_diagnostics::install_sink(
+                    cap_utils::operation_diagnostics::AppInfo {
+                        flavor: "tauri",
+                        version: env!("CARGO_PKG_VERSION"),
+                        source_revision: option_env!("CAP_BUILD_REVISION"),
+                        debug_build: cfg!(debug_assertions),
+                        source_dirty: option_env!("CAP_BUILD_DIRTY").map(|value| value == "true"),
+                    },
+                    move |bytes| {
+                        use std::io::Write;
+                        let _ = diagnostic_writer.clone().write_all(bytes);
+                    },
+                );
                 (Some(writer), Some(guard))
             }
             None => (None, None),
@@ -191,7 +215,12 @@ fn main() {
         .thread_stack_size(TOKIO_WORKER_THREAD_STACK_SIZE)
         .build()
         .expect("Failed to build multi threaded tokio runtime")
-        .block_on(cap_desktop_lib::run(handle, logs_dir));
+        .block_on(async move {
+            drop(tokio::spawn(
+                cap_utils::operation_diagnostics::run_checkpoints(),
+            ));
+            cap_desktop_lib::run(handle, logs_dir).await;
+        });
 }
 
 fn create_log_appender(

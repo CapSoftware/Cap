@@ -24,7 +24,8 @@ export type RecordingErrorCode =
 	| "source-missing"
 	| "source-changed"
 	| "output-invalid"
-	| "processing-unavailable";
+	| "processing-unavailable"
+	| "processing-budget-exhausted";
 
 export interface RecordingVerificationRequest {
 	version: 1;
@@ -258,6 +259,8 @@ export interface SystemResources {
 	processHeapMB: number;
 	processRssLimitMB: number;
 	containerMemoryUsageMB: number;
+	containerMemoryWorkingSetMB: number;
+	containerMemoryReclaimableCacheMB: number;
 	containerMemoryLimitMB: number;
 	memoryPressure: number;
 	configuredMax: number;
@@ -273,7 +276,7 @@ export function getSystemResources(): SystemResources {
 	const processRssMB = Math.round(mem.rss / (1024 * 1024));
 	const processHeapMB = Math.round(mem.heapUsed / (1024 * 1024));
 	const containerMemory = getContainerMemoryMetrics();
-	const memoryUsageMB = containerMemory.usageMB || processRssMB;
+	const memoryUsageMB = Math.max(containerMemory.workingSetMB, processRssMB);
 	const memoryLimitMB = containerMemory.limitMB;
 	const memoryPressure = memoryLimitMB > 0 ? memoryUsageMB / memoryLimitMB : 0;
 	const max = getMaxConcurrentVideoProcesses();
@@ -312,6 +315,8 @@ export function getSystemResources(): SystemResources {
 		processHeapMB,
 		processRssLimitMB: memoryLimitMB,
 		containerMemoryUsageMB: containerMemory.usageMB,
+		containerMemoryWorkingSetMB: containerMemory.workingSetMB,
+		containerMemoryReclaimableCacheMB: containerMemory.reclaimableCacheMB,
 		containerMemoryLimitMB: containerMemory.limitMB,
 		memoryPressure,
 		configuredMax: configuredMaxProcesses,
@@ -324,10 +329,17 @@ export function hasCriticalMemoryPressure(): boolean {
 	return getSystemResources().memoryPressure >= MEMORY_REJECT_THRESHOLD;
 }
 
-export function canAcceptNewVideoProcess(): boolean {
+export function canAcceptNewVideoProcess(
+	priority: "interactive" | "recovery" = "interactive",
+): boolean {
 	const active = getActiveVideoProcessCount();
 	const resources = getSystemResources();
-	return active < resources.effectiveMax;
+	return (
+		active <
+		(priority === "recovery" && resources.effectiveMax > 1
+			? Math.max(1, Math.floor(resources.effectiveMax / 2))
+			: resources.effectiveMax)
+	);
 }
 
 export function generateJobId(): string {

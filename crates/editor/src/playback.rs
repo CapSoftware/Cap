@@ -6,6 +6,7 @@ use cap_rendering::{
     RecordingSegmentDecoders, RenderVideoConstants, ZoomTransformTimeline,
     spring_mass_damper::SpringMassDamperSimulationConfig,
 };
+use cap_utils::operation_diagnostics::{Field, Operation};
 use futures::stream::{FuturesUnordered, StreamExt};
 use lru::LruCache;
 use std::{
@@ -509,15 +510,40 @@ fn transition_decode_request(
 
 impl Playback {
     pub async fn start(
-        mut self,
+        self,
         fps: u32,
         resolution_base: XY<u32>,
     ) -> Result<PlaybackHandle, PlaybackStartError> {
+        self.start_with_diagnostics(fps, resolution_base, None)
+            .await
+    }
+
+    pub async fn start_with_diagnostics(
+        mut self,
+        fps: u32,
+        resolution_base: XY<u32>,
+        resource: Option<u64>,
+    ) -> Result<PlaybackHandle, PlaybackStartError> {
         let start_call = Instant::now();
+        let mut diagnostic = Operation::start(
+            "editor_playback",
+            &[
+                Field::number("requested_fps", fps as u64),
+                Field::number("requested_width", resolution_base.x as u64),
+                Field::number("requested_height", resolution_base.y as u64),
+                Field::number("start_frame", self.start_frame_number as u64),
+                Field::number("source_segments", self.segment_medias.len() as u64),
+                Field::flag("music", !self.music.is_empty()),
+            ],
+        );
+        if let Some(resource) = resource {
+            diagnostic.field(Field::identifier("resource", resource));
+        }
         let fps_f64 = fps as f64;
 
         if !(fps_f64.is_finite() && fps_f64 > 0.0) {
             warn!(fps, "Invalid FPS provided for playback start");
+            diagnostic.finish(false);
             return Err(PlaybackStartError::InvalidFps);
         }
 
@@ -795,6 +821,7 @@ impl Playback {
         // Resolve the background audio decodes before entering the sync
         // playback thread. This only waits when playback starts before the
         // decode kicked off at editor open has finished.
+        diagnostic.stage("waiting_for_audio_decode");
         let audio_wait_start = Instant::now();
         let audio_segments = get_audio_segments(&self.segment_medias).await;
         if let Some(telemetry) = &self.telemetry {
@@ -803,6 +830,11 @@ impl Playback {
             });
         }
 
+        diagnostic.field(Field::number(
+            "audio_decode_wait_ms",
+            audio_wait_start.elapsed().as_millis() as u64,
+        ));
+        diagnostic.stage("preparing_playback");
         let playback_body = move || {
             let duration = self
                 .project
@@ -811,6 +843,8 @@ impl Playback {
                 .as_ref()
                 .and_then(|timeline| valid_playback_duration(timeline.duration()));
             let Some(duration) = duration else {
+                diagnostic.stage("invalid_timeline");
+                diagnostic.finish(false);
                 warn!("Playback: No valid timeline duration found");
                 stop_tx.send(true).ok();
                 event_tx.send(PlaybackEvent::Stop).ok();
@@ -1165,6 +1199,11 @@ impl Playback {
             // Attach this playback's audio to the session's persistent output
             // stream. Blocks until the live callback is consuming the source,
             // so the clock below never runs ahead of audible audio.
+            diagnostic.field(Field::number(
+                "warmup_ms",
+                warmup_start.elapsed().as_millis() as u64,
+            ));
+            diagnostic.stage("initializing_audio_output");
             let audio_spawn_start = Instant::now();
             let _ = audio_playhead_tx.send(playback_start_frame as f64 / fps_f64);
             let audio_generation = if !has_playback_audio(&audio_segments, !self.music.is_empty()) {
@@ -1190,6 +1229,16 @@ impl Playback {
                     elapsed: start_call.elapsed(),
                 });
             }
+            diagnostic.field(Field::number(
+                "audio_output_init_ms",
+                audio_spawn_start.elapsed().as_millis() as u64,
+            ));
+            diagnostic.field(Field::number(
+                "clock_start_ms",
+                start_call.elapsed().as_millis() as u64,
+            ));
+            diagnostic.field(Field::flag("audio_output_started", has_audio));
+            diagnostic.stage("playing");
             let mut start = Instant::now();
             let mut clock_anchor_frame = playback_start_frame;
 
@@ -1724,6 +1773,9 @@ impl Playback {
                 }
             }
 
+            diagnostic.field(Field::number("frames_skipped", total_frames_skipped));
+            diagnostic.stage("loop_ended");
+            diagnostic.finish(true);
             if let Some(generation) = audio_generation {
                 self.audio_output.stop_playback(generation);
             }

@@ -591,11 +591,20 @@ impl EditorWindow {
                     "mp4"
                 };
                 let default = format!("{pretty_name}.{ext}");
-                let chosen = match std::env::var_os("CAP_GPUI_AUTO_EXPORT") {
-                    Some(path) => Some(PathBuf::from(path)),
-                    None => platform::save_file_panel_async(&default, &[ext], cx).await,
+                let chosen: Result<Option<PathBuf>, String> = match std::env::var_os("CAP_GPUI_AUTO_EXPORT") {
+                    Some(path) => Ok(Some(PathBuf::from(path))),
+                    None => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            platform::try_save_file_panel(&default, &[ext])
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            Ok(platform::save_file_panel_async(&default, &[ext], cx).await)
+                        }
+                    }
                 };
-                if chosen.is_none() {
+                if matches!(chosen, Ok(None)) {
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut()
                             && Arc::ptr_eq(&ui.cancel, &cancel)
@@ -609,7 +618,13 @@ impl EditorWindow {
                     });
                     return;
                 }
-                chosen
+                match chosen {
+                    Ok(path) => path,
+                    Err(error) => {
+                        tracing::warn!(error, "Save dialog unavailable; keeping the export in its project output folder");
+                        None
+                    }
+                }
             } else {
                 None
             };
@@ -827,7 +842,7 @@ impl EditorWindow {
 
         let upgraded = store::auth_snapshot().is_upgraded();
         if !upgraded && duration >= 300.0 {
-            cx.open_url(&format!("{}/pricing", crate::auth::server_url()));
+            cx.open_url(crate::auth::PRICING_URL);
             return;
         }
 
@@ -990,7 +1005,7 @@ impl EditorWindow {
                                 cx.notify();
                             });
                             let _ = this.update(cx, |_, cx| {
-                                cx.open_url(&format!("{}/pricing", crate::auth::server_url()));
+                                cx.open_url(crate::auth::PRICING_URL);
                             });
                             platform::alert_dialog(
                                 "Upgrade required",

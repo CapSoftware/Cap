@@ -146,7 +146,31 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
 
     let file = create_log_appender(&diagnostics::logs_dir(), diagnostics::LOG_FILE_PREFIX).map(
         |appender| {
-            let (writer, guard) = tracing_appender::non_blocking(appender);
+            let (writer, guard) = tracing_appender::non_blocking(
+                cap_utils::diagnostic_writer::DiagnosticWriter::new(
+                    appender,
+                    &diagnostics::logs_dir(),
+                    diagnostics::LOG_FILE_PREFIX,
+                ),
+            );
+            let queue_errors = writer.error_counter();
+            cap_utils::operation_diagnostics::install_queue_loss_counter(move || {
+                queue_errors.dropped_lines()
+            });
+            let diagnostic_writer = writer.clone();
+            cap_utils::operation_diagnostics::install_sink(
+                cap_utils::operation_diagnostics::AppInfo {
+                    flavor: "gpui",
+                    version: env!("CARGO_PKG_VERSION"),
+                    source_revision: option_env!("CAP_BUILD_REVISION"),
+                    debug_build: cfg!(debug_assertions),
+                    source_dirty: option_env!("CAP_BUILD_DIRTY").map(|value| value == "true"),
+                },
+                move |bytes| {
+                    use std::io::Write;
+                    let _ = diagnostic_writer.clone().write_all(bytes);
+                },
+            );
             (
                 tracing_subscriber::fmt::layer()
                     .with_ansi(false)
@@ -233,6 +257,7 @@ fn main() {
     });
     app.run(|cx: &mut App| {
         gpui_tokio::init(cx);
+        gpui_tokio::Tokio::spawn(cx, cap_utils::operation_diagnostics::run_checkpoints()).detach();
         // The dock icon: an unbundled dev binary shows the generic terminal
         // document without it. The bytes are the shipping app's icon.png.
         platform::set_dock_icon(include_bytes!("../assets/dock-icon.png"));
@@ -256,11 +281,12 @@ fn main() {
         crate::feeds::Feeds::init(cx);
         crate::target_overlay::TargetSelect::init(cx);
 
-        let bounds = Bounds::centered(
-            None,
-            size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT)),
-            cx,
-        );
+        let dev_restore = dev_restore::load();
+        let main_size = size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT));
+        let bounds = dev_restore
+            .as_ref()
+            .and_then(|restore| restore.main_window_bounds(main_size, cx))
+            .unwrap_or_else(|| Bounds::centered(None, main_size, cx));
         let window_handle = cx
             .open_window(
                 WindowOptions {
@@ -408,7 +434,9 @@ fn main() {
         // `CAP_GPUI_DEV_RESTORE=<state file>`: `dev.sh`'s relaunch loop.
         // Reopens the previous process's windows in place and keeps the
         // state file current for the next swap.
-        dev_restore::init(cx);
+        if let Some(dev_restore) = dev_restore {
+            dev_restore.init(cx);
+        }
 
         // Enumeration is started here rather than in `MainWindow::new`, which
         // runs before the window is fully built -- see `start_enumeration`.

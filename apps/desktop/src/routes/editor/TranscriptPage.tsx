@@ -1,6 +1,5 @@
 import { createEventListener } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
-import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { cx } from "cva";
 import {
@@ -245,15 +244,10 @@ export function TranscriptPanel() {
 
 		setExportingFormat(format);
 		try {
-			const path = await save({
-				defaultPath: captionExportDefaultPath(meta().prettyName, format),
-				filters: [
-					{
-						name: format === "srt" ? "SubRip Subtitle" : "WebVTT",
-						extensions: [format],
-					},
-				],
-			});
+			const path = await commands.saveFileDialog(
+				captionExportDefaultPath(meta().prettyName, format),
+				format,
+			);
 			if (!path) return;
 
 			await writeTextFile(path, formatCaptionCues(cues, format));
@@ -513,9 +507,9 @@ export function TranscriptPanel() {
 	});
 
 	return (
-		<div class="flex flex-col min-h-0 h-full">
-			<div class="px-3 py-2 border-b border-gray-3 flex items-center justify-between shrink-0">
-				<span class="text-xs font-medium text-gray-12">Captions</span>
+		<div class="flex overflow-hidden flex-col min-h-0 h-full rounded-xl">
+			<div class="px-3 py-2 border-b border-ed-line flex items-center justify-between shrink-0">
+				<span class="text-xs font-medium text-ed-text-1">Captions</span>
 				<div class="flex items-center gap-1">
 					<button
 						type="button"

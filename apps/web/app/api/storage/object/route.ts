@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto";
+import { serverEnv } from "@cap/env";
 import {
 	provideOptionalAuth,
 	Storage,
@@ -122,6 +124,21 @@ const getPolicyVideo = (videoId: Video.VideoId) =>
 	});
 
 export async function GET(request: NextRequest) {
+	const internalDownload =
+		request.headers.get("x-cap-internal-download") === "1";
+	if (internalDownload) {
+		const expected = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
+		const provided = request.headers.get("x-media-server-secret");
+		if (
+			!expected ||
+			!provided ||
+			Buffer.byteLength(expected) !== Buffer.byteLength(provided) ||
+			!timingSafeEqual(Buffer.from(expected), Buffer.from(provided))
+		) {
+			return new Response("Unauthorized", { status: 401 });
+		}
+	}
+
 	const videoIdParam = request.nextUrl.searchParams.get("videoId");
 	const key = request.nextUrl.searchParams.get("key");
 	const token = request.nextUrl.searchParams.get("token");
@@ -165,15 +182,36 @@ export async function GET(request: NextRequest) {
 			return Response.redirect(url);
 		}
 
+		if (internalDownload) {
+			if (!("getInternalDownload" in storage))
+				return new Response("Unsupported storage", { status: 400 });
+			const target = yield* storage.getInternalDownload(key, {
+				objectIdentity:
+					request.headers.get("x-cap-recording-object-identity") ??
+					request.headers.get("if-match") ??
+					undefined,
+				signal: request.signal,
+			});
+			return Response.json(target, {
+				headers: {
+					"Cache-Control": "private, no-store",
+					"Vercel-CDN-Cache-Control": "no-store",
+					Vary: "x-cap-internal-download, x-media-server-secret",
+				},
+			});
+		}
+
 		const verificationRequested =
 			request.headers.get("x-cap-recording-verification") === "1";
 		const expectedIdentity = request.headers.get("if-match");
-		const head = verificationRequested
-			? yield* storage.headObject(key)
-			: undefined;
-		const identity = head
-			? getRecordingObjectIdentity(head, expectedIdentity ?? undefined)
-			: undefined;
+		const head =
+			verificationRequested || request.method === "HEAD"
+				? yield* storage.headObject(key)
+				: undefined;
+		const identity =
+			verificationRequested && head
+				? getRecordingObjectIdentity(head, expectedIdentity ?? undefined)
+				: undefined;
 		if (verificationRequested && !identity) {
 			return new Response("Object identity is unavailable", { status: 503 });
 		}
@@ -184,14 +222,9 @@ export async function GET(request: NextRequest) {
 		) {
 			return new Response("Object changed", { status: 412 });
 		}
-		if (
-			verificationRequested &&
-			request.method === "HEAD" &&
-			head &&
-			identity
-		) {
+		if (request.method === "HEAD" && head) {
 			const headers = new Headers(CACHE_CONTROL_HEADERS);
-			headers.set("ETag", identity);
+			if (identity) headers.set("ETag", identity);
 			headers.set("Accept-Ranges", "bytes");
 			if (head.ContentLength !== undefined)
 				headers.set("Content-Length", String(head.ContentLength));
@@ -203,7 +236,9 @@ export async function GET(request: NextRequest) {
 					objectIdentity: identity,
 					signal: request.signal,
 				})
-			: yield* storage.getObjectResponse(key, request.headers.get("range"));
+			: yield* storage.getObjectResponse(key, request.headers.get("range"), {
+					signal: request.signal,
+				});
 		const headers = new Headers(CACHE_CONTROL_HEADERS);
 		if (identity) headers.set("ETag", identity);
 		copyHeader(upstream.headers, headers, "content-type", "Content-Type");

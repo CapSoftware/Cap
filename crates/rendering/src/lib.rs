@@ -2,8 +2,8 @@ use anyhow::Result;
 use cap_project::{
     AspectRatio, Camera, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets,
     ClipTransitionType, CornerStyle, Crop, CursorEvents, CursorType, FrameConfiguration,
-    FrameStyle, ProjectConfiguration, RecordingMeta, SceneMode, StudioRecordingMeta,
-    TimelineFrameMapping, TimelineSource, XY,
+    FrameStyle, OverlayTrackKind, ProjectConfiguration, RecordingMeta, SceneMode,
+    StudioRecordingMeta, TimelineFrameMapping, TimelineSource, XY,
 };
 use composite_frame::{ColorGradeUniformParams, CompositeVideoFrameUniforms};
 use core::f64;
@@ -315,6 +315,7 @@ pub enum MaskRenderMode {
 
 #[derive(Debug, Clone)]
 pub struct PreparedMask {
+    pub track: u32,
     pub center: XY<f32>,
     pub size: XY<f32>,
     pub feather: f32,
@@ -6732,12 +6733,21 @@ impl RendererLayers {
 
         self.images.prepare(constants, uniforms).await;
 
-        self.text.prepare(
-            &constants.device,
-            &constants.queue,
-            uniforms.output_size,
-            &uniforms.texts,
-        );
+        if uniforms.project.overlay_order.is_empty() {
+            self.text.prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.output_size,
+                &uniforms.texts,
+            );
+        } else {
+            self.text.prepare_mixed(
+                &constants.device,
+                &constants.queue,
+                uniforms.output_size,
+                &uniforms.texts,
+            );
+        }
 
         self.captions.prepare(
             uniforms,
@@ -6899,12 +6909,21 @@ impl RendererLayers {
         let start = Instant::now();
         self.images.prepare(constants, uniforms).await;
 
-        self.text.prepare(
-            &constants.device,
-            &constants.queue,
-            uniforms.output_size,
-            &uniforms.texts,
-        );
+        if uniforms.project.overlay_order.is_empty() {
+            self.text.prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.output_size,
+                &uniforms.texts,
+            );
+        } else {
+            self.text.prepare_mixed(
+                &constants.device,
+                &constants.queue,
+                uniforms.output_size,
+                &uniforms.texts,
+            );
+        }
         timings.text_prepare_duration = start.elapsed();
 
         let start = Instant::now();
@@ -7103,20 +7122,49 @@ impl RendererLayers {
             None => {}
         }
 
-        if !uniforms.masks.is_empty() {
-            for mask in &uniforms.masks {
-                self.mask.render(device, queue, session, encoder, mask);
+        if uniforms.project.overlay_order.is_empty() {
+            if !uniforms.masks.is_empty() {
+                for mask in &uniforms.masks {
+                    self.mask.render(device, queue, session, encoder, mask);
+                }
             }
-        }
 
-        if render_display && self.images.has_content() {
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-            self.images.render(&mut pass);
-        }
+            if render_display && self.images.has_content() {
+                let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                self.images.render(&mut pass);
+            }
 
-        if !uniforms.texts.is_empty() {
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-            self.text.render(&mut pass);
+            if !uniforms.texts.is_empty() {
+                let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                self.text.render(&mut pass);
+            }
+        } else {
+            for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
+                match overlay.kind {
+                    OverlayTrackKind::Mask => {
+                        for mask in uniforms
+                            .masks
+                            .iter()
+                            .filter(|mask| mask.track == overlay.track)
+                        {
+                            self.mask.render(device, queue, session, encoder, mask);
+                        }
+                    }
+                    OverlayTrackKind::Image
+                        if render_display && self.images.has_track(overlay.track) =>
+                    {
+                        let mut pass =
+                            render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                        self.images.render_track(&mut pass, overlay.track);
+                    }
+                    OverlayTrackKind::Text if self.text.has_track(overlay.track) => {
+                        let mut pass =
+                            render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                        self.text.render_track(&mut pass, overlay.track);
+                    }
+                    OverlayTrackKind::Text | OverlayTrackKind::Image => {}
+                }
+            }
         }
 
         if self.keyboard.has_content() {

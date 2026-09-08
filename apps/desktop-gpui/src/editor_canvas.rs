@@ -44,7 +44,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::{editor_timeline::TrackKind, editor_window::EditorWindow};
-use cap_project::{CameraXPosition, CameraYPosition, SceneMode, XY};
+use cap_project::{CameraXPosition, CameraYPosition, OverlayTrackKind, SceneMode, XY};
 use cap_rendering::FrameLayout;
 use gpui::{
     AnyElement, Bounds, Context, CursorStyle, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -1305,7 +1305,7 @@ impl EditorWindow {
             .h(player.frame.size.height)
             .overflow_hidden();
 
-        if self.canvas_selection.is_some() {
+        if self.canvas_selection.is_some() || self.selection.is_some() {
             layer = layer.child(
                 div()
                     .id("canvas-deselect")
@@ -1314,6 +1314,7 @@ impl EditorWindow {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, window, cx| {
+                            this.set_selection(None, cx);
                             this.canvas_selection = None;
                             cx.notify();
                             window.refresh();
@@ -1335,38 +1336,70 @@ impl EditorWindow {
                 layer.child(self.render_element_box(CanvasSelection::Camera, rect, (cw, ch), cx));
         }
         let time = self.preview_or_playhead();
+        let overlay_order = self.project.overlay_tracks();
         if let Some(timeline) = self.project.timeline.as_ref() {
-            for (index, segment) in timeline.mask_segments.iter().enumerate() {
-                if !(time >= segment.start && time < segment.end) {
-                    continue;
-                }
-                let element = CanvasSelection::Mask(index);
-                if let Some(rect) = self.element_rect(element) {
-                    layer = layer.child(self.render_element_box(element, rect, (cw, ch), cx));
-                }
-            }
-            for (index, segment) in timeline.text_segments.iter().enumerate() {
-                if !(time >= segment.start && time < segment.end && segment.enabled) {
-                    continue;
-                }
-                let element = CanvasSelection::Text(index);
-                if let Some(rect) = self.element_rect(element) {
-                    layer = layer.child(self.render_element_box(element, rect, (cw, ch), cx));
-                }
-            }
-        }
-
-        if let Some(timeline) = self.project.timeline.as_ref() {
-            let mut images: Vec<_> = timeline
-                .image_segments
-                .iter()
-                .enumerate()
-                .filter(|(_, segment)| segment.is_active_at(time) && segment.opacity > 0.)
-                .collect();
-            images.sort_by_key(|(index, segment)| (segment.track, *index));
-            for (index, _) in images {
-                if let Some(rect) = self.element_rect(CanvasSelection::Image(index)) {
-                    layer = layer.child(self.render_image_box(index, rect, (cw, ch), cx));
+            for track in overlay_order.iter().rev() {
+                match track.kind {
+                    OverlayTrackKind::Mask => {
+                        for (index, segment) in timeline
+                            .mask_segments
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, segment)| segment.track == track.track)
+                        {
+                            if !(segment.enabled && time >= segment.start && time < segment.end) {
+                                continue;
+                            }
+                            let element = CanvasSelection::Mask(index);
+                            if let Some(rect) = self.element_rect(element) {
+                                layer = layer.child(self.render_element_box(
+                                    element,
+                                    rect,
+                                    (cw, ch),
+                                    cx,
+                                ));
+                            }
+                        }
+                    }
+                    OverlayTrackKind::Image => {
+                        for (index, _) in
+                            timeline
+                                .image_segments
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, segment)| {
+                                    segment.track == track.track
+                                        && segment.is_active_at(time)
+                                        && segment.opacity > 0.
+                                })
+                        {
+                            if let Some(rect) = self.element_rect(CanvasSelection::Image(index)) {
+                                layer =
+                                    layer.child(self.render_image_box(index, rect, (cw, ch), cx));
+                            }
+                        }
+                    }
+                    OverlayTrackKind::Text => {
+                        for (index, segment) in timeline
+                            .text_segments
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, segment)| segment.track == track.track)
+                        {
+                            if !(time >= segment.start && time < segment.end && segment.enabled) {
+                                continue;
+                            }
+                            let element = CanvasSelection::Text(index);
+                            if let Some(rect) = self.element_rect(element) {
+                                layer = layer.child(self.render_element_box(
+                                    element,
+                                    rect,
+                                    (cw, ch),
+                                    cx,
+                                ));
+                            }
+                        }
+                    }
                 }
             }
         }

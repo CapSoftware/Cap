@@ -508,6 +508,16 @@ impl EditorInstance {
             )?),
         };
 
+        cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project);
+        cap_project::synchronize_captions(
+            &mut project,
+            &recordings
+                .segments
+                .iter()
+                .map(|segment| segment.display.duration)
+                .collect::<Vec<_>>(),
+        );
+
         let render_constants = if let Some(shared) = shared_device {
             let rc = RenderVideoConstants::new_with_device(
                 shared,
@@ -648,7 +658,13 @@ impl EditorInstance {
                 audio_output: self.audio_output.clone(),
                 telemetry: None,
             })
-            .start(fps, resolution_base)
+            .start_with_diagnostics(
+                fps,
+                resolution_base,
+                Some(cap_utils::operation_diagnostics::resource_id(
+                    &self.project_path,
+                )),
+            )
             .await
             {
                 Ok(handle) => handle,

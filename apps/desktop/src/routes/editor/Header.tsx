@@ -1,4 +1,3 @@
-import { Button } from "@cap/ui-solid";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
@@ -92,66 +91,66 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 	return (
 		<div
 			data-tauri-drag-region
-			class="flex relative shrink-0 flex-row items-center w-full h-14 max-[900px]:grid max-[900px]:grid-cols-[minmax(0,1fr)_auto] max-[900px]:grid-rows-[36px_36px] max-[900px]:h-[72px]"
+			class="flex relative shrink-0 flex-row items-center w-full h-13 pr-3 max-[900px]:grid max-[900px]:grid-cols-1 max-[900px]:grid-rows-[36px_36px] max-[900px]:h-[72px] max-[900px]:pr-2"
 		>
 			<div
 				data-tauri-drag-region
-				class="flex flex-row flex-1 min-w-0 gap-2 items-center px-4 h-full max-[1200px]:gap-1 max-[1200px]:px-2"
+				class={cx(
+					"flex flex-row flex-1 min-w-0 items-center h-full",
+					ostype() === "windows" && "max-[900px]:pr-[146px]",
+				)}
 			>
-				{ostype() === "macos" && <div class="h-full w-16 shrink-0" />}
-				{ostype() === "linux" && <CaptionControlsMacOS class="mr-1 shrink-0" />}
-				<EditorButton
-					onClick={async () => {
-						clearTimelineSelection();
+				{ostype() === "macos" && (
+					<div data-tauri-drag-region class="h-full w-[92px] shrink-0" />
+				)}
+				{ostype() === "linux" && (
+					<CaptionControlsMacOS class="mr-1 ml-3 shrink-0" />
+				)}
+				{ostype() === "windows" && <div class="w-3 shrink-0" />}
 
-						if (!(await ask("Are you sure you want to delete this recording?")))
-							return;
-
-						await commands.editorDeleteProject();
-					}}
-					tooltipText="Delete recording"
-					leftIcon={<IconCapTrash class="w-5" />}
-				/>
-				<EditorButton
-					onClick={() => {
-						clearTimelineSelection();
-
-						console.log({ path: `${editorInstance.path}/` });
-						revealItemInDir(`${editorInstance.path}/`);
-					}}
-					tooltipText="Open recording bundle"
-					leftIcon={<IconLucideFolder class="w-5" />}
-				/>
-
-				<div class="flex min-w-0 flex-row items-center">
+				<div class="flex gap-1.5 items-center min-w-0">
 					<NameEditor
 						name={meta().prettyName}
 						registerTitleSave={props.registerTitleSave}
 						readOnly={titleReadOnly()}
 						setReadOnly={setTitleReadOnly}
 					/>
-					<span class="shrink-0 text-sm text-gray-11">.cap</span>
+					<span class="shrink-0 text-[13px] text-ed-text-3">.cap</span>
 				</div>
-				<div data-tauri-drag-region class="flex-1 h-full" />
+
+				<div class="flex gap-0.5 items-center ml-1.5 shrink-0">
+					<EditorButton
+						onClick={() => {
+							clearTimelineSelection();
+
+							console.log({ path: `${editorInstance.path}/` });
+							revealItemInDir(`${editorInstance.path}/`);
+						}}
+						tooltipText="Open recording bundle"
+						leftIcon={<IconLucideFolder />}
+					/>
+					<EditorButton
+						onClick={async () => {
+							clearTimelineSelection();
+
+							if (
+								!(await ask("Are you sure you want to delete this recording?"))
+							)
+								return;
+
+							await commands.editorDeleteProject();
+						}}
+						tooltipText="Delete recording"
+						leftIcon={<IconCapTrash />}
+					/>
+				</div>
+
+				<div data-tauri-drag-region class="flex-1 h-full min-w-2" />
 			</div>
 
 			<div
 				data-tauri-drag-region
-				class={cx(
-					"flex shrink-0 flex-row items-center justify-center gap-2 px-4 border-x border-black-transparent-10 max-[1200px]:gap-1 max-[1200px]:px-2",
-					ostype() === "windows" && "max-[900px]:pr-[146px]",
-				)}
-			>
-				<PresetsDropdown />
-				<OrganizationDropdown />
-			</div>
-
-			<div
-				data-tauri-drag-region
-				class={cx(
-					"flex-1 min-w-max h-full flex flex-row items-center gap-2 pl-2 max-[1200px]:flex-none max-[1200px]:gap-1 max-[900px]:col-span-2 max-[900px]:justify-end",
-					ostype() !== "windows" && "pr-2",
-				)}
+				class="flex shrink-0 flex-row items-center gap-1 max-[900px]:justify-end"
 			>
 				<EditorButton
 					onClick={() => {
@@ -163,7 +162,7 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 						!projectHistory.canUndo() && !editorState.timeline.selection
 					}
 					tooltipText="Undo"
-					leftIcon={<IconCapUndo class="w-5" />}
+					leftIcon={<IconCapUndo />}
 				/>
 				<EditorButton
 					onClick={() => {
@@ -175,17 +174,16 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 						!projectHistory.canRedo() && !editorState.timeline.selection
 					}
 					tooltipText="Redo"
-					leftIcon={<IconCapRedo class="w-5" />}
+					leftIcon={<IconCapRedo />}
 				/>
-				<div data-tauri-drag-region class="flex-1 h-full" />
-				<Show when={customDomain.data}>
-					<ShareButton />
-				</Show>
-				<Button
-					variant={isClipsOpen() ? "white" : "gray"}
-					class="flex shrink-0 gap-1.5 justify-center h-[40px] max-[900px]:h-8"
+				<div class="mx-1.5 w-px h-4 shrink-0 bg-ed-line-strong" />
+				<OrganizationDropdown />
+				<PresetsDropdown />
+				<EditorButton
 					title="Clips"
 					aria-label="Clips"
+					class={cx(isClipsOpen() && "bg-ed-ctl-hover text-ed-text-1")}
+					leftIcon={<IconCapClapperboard />}
 					onClick={() => {
 						clearTimelineSelection();
 						if (isClipsOpen()) {
@@ -195,15 +193,18 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 						}
 					}}
 				>
-					<IconCapClapperboard class="size-4" />
 					<span class="max-[1200px]:hidden">Clips</span>
-				</Button>
+				</EditorButton>
 				<Show when={hasTranscript()}>
-					<Button
-						variant={isTranscriptOpen() ? "white" : "gray"}
-						class="flex shrink-0 gap-1.5 justify-center h-[40px] max-[900px]:h-8"
+					<EditorButton
 						title={isTranscriptOpen() ? "Back to editor" : "Captions"}
 						aria-label={isTranscriptOpen() ? "Back to editor" : "Captions"}
+						class={cx(isTranscriptOpen() && "bg-ed-ctl-hover text-ed-text-1")}
+						leftIcon={
+							<Show when={isTranscriptOpen()} fallback={<IconCapCaptions />}>
+								<IconLucideArrowLeft />
+							</Show>
+						}
 						onClick={() => {
 							clearTimelineSelection();
 							if (isTranscriptOpen()) {
@@ -213,26 +214,22 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 							}
 						}}
 					>
-						<Show
-							when={isTranscriptOpen()}
-							fallback={<IconCapCaptions class="size-4" />}
-						>
-							<IconLucideArrowLeft class="size-4" />
-						</Show>
 						<span class="max-[1200px]:hidden">
 							{isTranscriptOpen() ? "Back" : "Captions"}
 						</span>
-					</Button>
+					</EditorButton>
+				</Show>
+				<Show when={customDomain.data}>
+					<ShareButton />
 				</Show>
 				<button
 					type="button"
 					class={cx(
-						"flex shrink-0 gap-1.5 justify-center items-center px-4 w-[100px] h-[40px] max-[900px]:h-8 text-[0.8125rem] font-medium text-white rounded-xl outline-hidden",
-						"bg-linear-to-b from-[#3b82f6] to-[#2563eb]",
-						"shadow-[0_4px_14px_-6px_rgba(37,99,235,0.5),inset_0_1px_0_0_rgba(255,255,255,0.22)]",
-						"transition-[box-shadow,filter] duration-200 ease-out",
-						"hover:brightness-[1.08] hover:shadow-[0_8px_22px_-8px_rgba(37,99,235,0.6),inset_0_1px_0_0_rgba(255,255,255,0.28)]",
-						"active:brightness-95",
+						"flex shrink-0 gap-[7px] justify-center items-center pl-3 pr-3.5 ml-1.5 h-[30px] text-[13px] font-medium text-white rounded-lg outline-hidden",
+						"bg-linear-to-b from-ed-accent-2 to-ed-accent",
+						"shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_1px_2px_rgba(0,60,160,0.25)]",
+						"transition-[filter] duration-150 ease-out",
+						"hover:brightness-[1.06] active:brightness-[0.96]",
 					)}
 					onClick={() => {
 						clearTimelineSelection();
@@ -339,11 +336,11 @@ function NameEditor(props: {
 
 	return (
 		<Tooltip content={props.name} childClass="min-w-0">
-			<div class="flex min-w-0 relative flex-row items-center text-sm font-normal font-inherit tracking-inherit text-gray-12">
+			<div class="flex relative flex-row items-center min-w-0 text-[13px] font-medium tracking-[-0.01em] text-ed-text-1">
 				<input
 					ref={prettyNameRef}
 					class={cx(
-						"absolute inset-0 px-px m-0 opacity-0 overflow-hidden focus:opacity-100 bg-transparent border-b border-transparent focus:border-gray-7 focus:outline-hidden peer whitespace-pre select-text",
+						"absolute inset-0 px-px m-0 opacity-0 overflow-hidden focus:opacity-100 bg-transparent border-b border-transparent focus:border-ed-line-strong focus:outline-hidden peer whitespace-pre select-text",
 						truncated() && "truncate",
 						(prettyName().length < 5 || prettyName().length > 100) &&
 							"focus:border-red-500",

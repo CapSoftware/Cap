@@ -61,6 +61,9 @@ import {
 } from "./clip-transitions";
 import { type EditorTimelineSegment, useEditorContext } from "./context";
 import { getExistingRecordingPickerOptions } from "./existing-recording-picker";
+import { rippleKeyboardTrack } from "./keyboard-timing";
+import { scaleKeyframeTimes } from "./three-d";
+import { effectiveToOutput, holdWindows } from "./timeline-holds";
 import { Input } from "./ui";
 
 const findCamera = (cameras: CameraInfo[], id?: DeviceOrModelID | null) => {
@@ -659,12 +662,18 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 						transition.segmentIndex,
 					);
 					if (!effective) continue;
-					const boundary =
+					const boundary = effectiveToOutput(
+						holdWindows(timeline.textSegments),
 						clipTimelineOffsets(timeline.segments, timeline.transitions)[
 							transition.segmentIndex
-						] + effective.duration;
+						] + effective.duration,
+					);
 					timeline.transitions = timeline.transitions.filter(
 						(candidate) => candidate.segmentIndex !== transition.segmentIndex,
+					);
+					const camera3dSegments = timeline.camera3dSegments ?? [];
+					const previousCamera3dDurations = camera3dSegments.map(
+						(segment) => segment.end - segment.start,
 					);
 					for (const track of [
 						timeline.styleSegments,
@@ -674,10 +683,23 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 						timeline.maskSegments,
 						timeline.textSegments,
 						timeline.captionSegments ?? [],
-						timeline.keyboardSegments ?? [],
 						timeline.audioSegments ?? [],
+						camera3dSegments,
 					]) {
 						rippleTimelineTrack(track, boundary, effective.duration);
+					}
+					rippleKeyboardTrack(
+						timeline.keyboardSegments ?? [],
+						boundary,
+						effective.duration,
+					);
+					for (let index = 0; index < camera3dSegments.length; index++) {
+						const segment = camera3dSegments[index];
+						const previousDuration = previousCamera3dDurations[index];
+						const nextDuration = segment.end - segment.start;
+						if (previousDuration <= 0 || previousDuration === nextDuration)
+							continue;
+						scaleKeyframeTimes(segment.tracks, nextDuration / previousDuration);
 					}
 				}
 
@@ -790,16 +812,16 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 	return (
 		<div
 			class={cx(
-				"flex flex-col flex-1 min-h-0 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3 overflow-hidden",
+				"flex overflow-hidden flex-col flex-1 min-h-0 rounded-xl bg-ed-card shadow-ed-card",
 				props.class,
 			)}
 		>
 			<button
 				type="button"
 				onClick={backToEditor}
-				class="flex flex-none gap-2 items-center px-4 w-full h-16 text-sm font-medium border-b transition-colors text-gray-12 border-gray-3 hover:bg-gray-3"
+				class="flex flex-none gap-2 items-center px-4 w-full h-[46px] text-[13px] font-medium border-b transition-colors text-ed-text-1 border-ed-line hover:bg-ed-ctl"
 			>
-				<IconCapMoveLeft class="size-4 text-gray-11" />
+				<IconCapMoveLeft class="size-4 text-ed-text-2" />
 				Back to editor
 			</button>
 

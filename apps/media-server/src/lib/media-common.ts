@@ -198,17 +198,29 @@ export function normalizeLocalPath(path: string): string {
 }
 
 export async function getSourceSize(path: string): Promise<number> {
-	try {
-		const url = new URL(path);
-		if (url.protocol === "http:" || url.protocol === "https:") {
-			const response = await mediaFetch(path, {
-				method: "HEAD",
-				signal: AbortSignal.timeout(10_000),
-			});
-			const contentLength = response.headers.get("content-length");
-			return contentLength ? Number.parseInt(contentLength, 10) || 0 : 0;
+	if (/^https?:\/\//i.test(path)) {
+		const response = await mediaFetch(path, {
+			headers: { Range: "bytes=0-0" },
+			signal: AbortSignal.timeout(10_000),
+		});
+		try {
+			const length =
+				response.status === 206
+					? response.headers
+							.get("content-range")
+							?.match(/^bytes 0-0\/(\d+)$/)?.[1]
+					: response.status === 200
+						? response.headers.get("content-length")
+						: undefined;
+			const size = Number(length);
+			if (!Number.isSafeInteger(size) || size <= 0) {
+				throw new Error("Media input size is unavailable");
+			}
+			return size;
+		} finally {
+			await response.body?.cancel().catch(() => {});
 		}
-	} catch {}
+	}
 
 	try {
 		return (await stat(normalizeLocalPath(path))).size;

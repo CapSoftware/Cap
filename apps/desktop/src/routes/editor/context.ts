@@ -75,11 +75,17 @@ import {
 	normalizeClipTransitions,
 	rippleTimelineTrack,
 	timelineShiftAfterClipDurationChange,
-	transitionsAfterClipDelete,
 	transitionsAfterClipSplit,
 } from "./clip-transitions";
 import { normalizeColorCorrection } from "./colorCorrection";
 import { defaultImageSegment, type ImageSegment, pickImage } from "./images";
+import {
+	generateForStableKeyboardTimeline,
+	keyboardTimelineSignature,
+	mapKeyboardTrackTimes,
+	rippleKeyboardTrack,
+	splitKeyboardSegment,
+} from "./keyboard-timing";
 import type { MaskSegment } from "./masks";
 import { createProjectConfigSave } from "./project-config-save";
 import type { SnapGuide } from "./snapping";
@@ -95,21 +101,25 @@ import {
 	applySceneToRange,
 	CAMERA3D_SCENES,
 	type Camera3DSegment,
+	type Camera3DSetup,
+	camera3DSceneRange,
 	defaultCamera3DTracks,
 	evaluatePose,
+	findCamera3DScene,
 	getEndPose,
 	getMotionEasing,
 	getStartPose,
 	normalizeCamera3DSegments,
 	scaleKeyframeTimes,
-	sceneWithShotCount,
 	setMotion,
 } from "./three-d";
 import {
+	effectiveToOutput,
 	heldTimeBefore,
 	holdWindows,
 	totalHeldDuration,
 } from "./timeline-holds";
+import { deleteClipAndRippleAllTracks } from "./timeline-utils";
 import {
 	getUsedTrackCount,
 	normalizeTrackSegments,
@@ -286,9 +296,9 @@ export function normalizeProject(
 				styleSegments: normalizeTrackSegments(
 					config.timeline.styleSegments ?? [],
 				),
-				imageSegments: normalizeTrackSegments(
-					config.timeline.imageSegments ?? [],
-				),
+				imageSegments: (config.overlayOrder?.length
+					? sortTrackSegments
+					: normalizeTrackSegments)(config.timeline.imageSegments ?? []),
 				transitions:
 					(
 						config.timeline as TimelineConfiguration & {
@@ -298,14 +308,18 @@ export function normalizeProject(
 				sceneSegments: config.timeline.sceneSegments ?? [],
 				captionSegments: config.timeline.captionSegments ?? [],
 				keyboardSegments: config.timeline.keyboardSegments ?? [],
-				maskSegments: normalizeTrackSegments(
+				maskSegments: (config.overlayOrder?.length
+					? sortTrackSegments
+					: normalizeTrackSegments)(
 					(
 						config.timeline as TimelineConfiguration & {
 							maskSegments?: MaskSegment[];
 						}
 					).maskSegments ?? [],
 				),
-				textSegments: normalizeTrackSegments(
+				textSegments: (config.overlayOrder?.length
+					? sortTrackSegments
+					: normalizeTrackSegments)(
 					(
 						config.timeline as TimelineConfiguration & {
 							textSegments?: TextSegment[];
@@ -410,10 +424,12 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						const duration = transition
 							? clampTransitionDuration(transition.duration, previous, segment)
 							: 0;
-						const boundary =
+						const boundary = effectiveToOutput(
+							holdWindows(timeline.textSegments),
 							clipTimelineOffsets(timeline.segments, transitions)[
 								segmentIndex
-							] + oldDuration;
+							] + oldDuration,
+						);
 						const shift = oldDuration - duration;
 
 						timeline.transitions = transitions.filter(
@@ -443,13 +459,17 @@ export const [EditorContextProvider, useBaseEditorContext] =
 							timeline.maskSegments,
 							timeline.textSegments,
 							timeline.captionSegments ?? [],
-							timeline.keyboardSegments ?? [],
 							timeline.audioSegments ?? [],
 							camera3dSegments,
 						];
 						for (const track of tracks) {
 							rippleTimelineTrack(track, boundary, shift);
 						}
+						rippleKeyboardTrack(
+							timeline.keyboardSegments ?? [],
+							boundary,
+							shift,
+						);
 						for (let index = 0; index < camera3dSegments.length; index++) {
 							const camera3dSegment = camera3dSegments[index];
 							const previousDuration = previousCamera3dDurations[index];
@@ -490,21 +510,20 @@ export const [EditorContextProvider, useBaseEditorContext] =
 				return cuts;
 			};
 
-			/**
-			 * The chain a scene would lay over the whole timeline. The setup flow's
-			 * ghost placeholder and the action that commits it read this same
-			 * function, so the track previews exactly what lands.
-			 */
-			const camera3DScenePreview = (sceneId: string, shots: number) => {
-				const scene = CAMERA3D_SCENES.find((s) => s.id === sceneId);
-				if (!scene) return [];
-
-				const end = totalDuration();
+			const camera3DScenePreview = (setup: Camera3DSetup) => {
+				const scene = findCamera3DScene(setup.sceneId);
+				const range = camera3DSceneRange(
+					project.timeline?.camera3dSegments ?? [],
+					setup.start,
+					setup.duration,
+					totalDuration(),
+				);
+				if (!scene || !range) return [];
 				return applySceneToRange(
-					sceneWithShotCount(scene, shots),
-					0,
-					end,
-					camera3DClipCuts(0, end),
+					scene,
+					range.start,
+					range.end,
+					camera3DClipCuts(range.start, range.end),
 				);
 			};
 
@@ -669,19 +688,14 @@ export const [EditorContextProvider, useBaseEditorContext] =
 				},
 				deleteClipSegment: (segmentIndex: number) => {
 					if (!project.timeline) return;
-					const segment = project.timeline.segments[segmentIndex];
-					if (!segment || project.timeline.segments.length < 2) return;
+					if (project.timeline.segments.length < 2) return;
 
 					batch(() => {
 						setProject(
 							produce((project) => {
 								const timeline = project.timeline;
 								if (!timeline) return;
-								timeline.segments.splice(segmentIndex, 1);
-								timeline.transitions = transitionsAfterClipDelete(
-									timeline.transitions ?? [],
-									segmentIndex,
-								);
+								deleteClipAndRippleAllTracks(timeline, segmentIndex);
 							}),
 						);
 						setEditorState("timeline", "selection", null);
@@ -818,33 +832,41 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						setEditorState("previewTime", null);
 					});
 				},
-				addCamera3DScene: (sceneId: string, shots: number) => {
-					// Only ever an empty-track offer: the scene owns the whole timeline,
-					// so it must not land on top of shots someone has already authored.
-					if (!project.timeline) return;
-					if ((project.timeline.camera3dSegments?.length ?? 0) > 0) return;
-
-					const generated = camera3DScenePreview(sceneId, shots);
-					if (generated.length === 0) return;
-
+				startCamera3DSetup: (start = editorState.playbackTime) => {
 					batch(() => {
-						setProject("timeline", "camera3dSegments", (v) => v ?? []);
-						setProject(
-							"timeline",
-							"camera3dSegments",
-							produce((segments) => {
-								if (!segments) return;
-								segments.push(...generated);
-								sortTrackSegments(segments);
-							}),
+						setEditorState("timeline", "selection", null);
+						setEditorState("timeline", "audioPicker", null);
+						setEditorState("timeline", "audioReplace", null);
+						setEditorState("timeline", "camera3dSetup", {
+							sceneId: "glide-across",
+							start,
+							duration: 6,
+						});
+						setEditorState("timeline", "tracks", "3d", true);
+					});
+				},
+				addCamera3DScene: () => {
+					const setup = editorState.timeline.camera3dSetup;
+					if (!project.timeline || !setup) return;
+					const generated = camera3DScenePreview(setup);
+					if (generated.length === 0) return;
+					const start = generated[0].start;
+					const index = (project.timeline.camera3dSegments ?? []).filter(
+						(segment) => segment.start < start,
+					).length;
+					batch(() => {
+						setProject("timeline", "camera3dSegments", (segments) =>
+							[...(segments ?? []), ...generated].sort(
+								(a, b) => a.start - b.start,
+							),
 						);
 						setEditorState("timeline", "camera3dSetup", null);
 						setEditorState("timeline", "tracks", "3d", true);
 						setEditorState("timeline", "selection", {
 							type: "3d",
-							indices: [0],
+							indices: [index],
 						});
-						setEditorState("playbackTime", 0);
+						setEditorState("playbackTime", start);
 						setEditorState("previewTime", null);
 					});
 				},
@@ -1025,7 +1047,6 @@ export const [EditorContextProvider, useBaseEditorContext] =
 									)
 									.sort((a, b) => b - a);
 								for (const i of sorted) segments.splice(i, 1);
-								normalizeTrackSegments(segments);
 							}),
 						);
 						setEditorState("timeline", "selection", null);
@@ -1066,7 +1087,6 @@ export const [EditorContextProvider, useBaseEditorContext] =
 									)
 									.sort((a, b) => b - a);
 								for (const i of sorted) segments.splice(i, 1);
-								normalizeTrackSegments(segments);
 							}),
 						);
 						setEditorState("timeline", "selection", null);
@@ -1225,14 +1245,12 @@ export const [EditorContextProvider, useBaseEditorContext] =
 							const duration = segment.end - segment.start;
 							const remaining = duration - time;
 							if (time < 0.3 || remaining < 0.3) return;
-
-							segments.splice(index + 1, 0, {
-								...segment,
-								id: `kb-split-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-								start: segment.start + time,
-								end: segment.end,
-							});
-							segments[index].end = segment.start + time;
+							const parts = splitKeyboardSegment(
+								structuredClone(unwrap(segment)),
+								segment.start + time,
+								`kb-split-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+							);
+							if (parts) segments.splice(index, 1, ...parts);
 						}),
 					);
 				},
@@ -1345,6 +1363,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 								timeline.segments,
 								timeline.transitions ?? [],
 							);
+							const oldHolds = holdWindows(timeline.textSegments);
 							const incomingDuration =
 								getClipTransition(
 									timeline.segments,
@@ -1377,54 +1396,58 @@ export const [EditorContextProvider, useBaseEditorContext] =
 									oldNextBoundary,
 									newNextBoundary,
 								);
+							const mapOutputTime = (value: number) => {
+								const held = heldTimeBefore(oldHolds, value);
+								return value + diff(value - held);
+							};
 
 							for (const overlay of [
 								...timeline.styleSegments,
 								...timeline.imageSegments,
 							]) {
-								overlay.start += diff(overlay.start);
-								overlay.end += diff(overlay.end);
+								overlay.start = mapOutputTime(overlay.start);
+								overlay.end = mapOutputTime(overlay.end);
 							}
 							for (const zoomSegment of timeline.zoomSegments) {
-								zoomSegment.start += diff(zoomSegment.start);
-								zoomSegment.end += diff(zoomSegment.end);
+								zoomSegment.start = mapOutputTime(zoomSegment.start);
+								zoomSegment.end = mapOutputTime(zoomSegment.end);
 							}
 
 							for (const sceneSegment of timeline.sceneSegments ?? []) {
-								sceneSegment.start += diff(sceneSegment.start);
-								sceneSegment.end += diff(sceneSegment.end);
+								sceneSegment.start = mapOutputTime(sceneSegment.start);
+								sceneSegment.end = mapOutputTime(sceneSegment.end);
 							}
 
 							for (const maskSegment of timeline.maskSegments) {
-								maskSegment.start += diff(maskSegment.start);
-								maskSegment.end += diff(maskSegment.end);
+								maskSegment.start = mapOutputTime(maskSegment.start);
+								maskSegment.end = mapOutputTime(maskSegment.end);
 							}
 
 							for (const textSegment of timeline.textSegments) {
-								textSegment.start += diff(textSegment.start);
-								textSegment.end += diff(textSegment.end);
+								textSegment.start = mapOutputTime(textSegment.start);
+								textSegment.end = mapOutputTime(textSegment.end);
 							}
 
 							for (const audioSegment of timeline.audioSegments ?? []) {
-								audioSegment.start += diff(audioSegment.start);
-								audioSegment.end += diff(audioSegment.end);
+								audioSegment.start = mapOutputTime(audioSegment.start);
+								audioSegment.end = mapOutputTime(audioSegment.end);
 							}
 
 							for (const captionSegment of timeline.captionSegments ?? []) {
-								captionSegment.start += diff(captionSegment.start);
-								captionSegment.end += diff(captionSegment.end);
+								captionSegment.start = mapOutputTime(captionSegment.start);
+								captionSegment.end = mapOutputTime(captionSegment.end);
 							}
 
-							for (const keyboardSegment of timeline.keyboardSegments ?? []) {
-								keyboardSegment.start += diff(keyboardSegment.start);
-								keyboardSegment.end += diff(keyboardSegment.end);
-							}
+							mapKeyboardTrackTimes(
+								timeline.keyboardSegments ?? [],
+								mapOutputTime,
+							);
 
 							for (const camera3dSegment of timeline.camera3dSegments ?? []) {
 								const previousDuration =
 									camera3dSegment.end - camera3dSegment.start;
-								camera3dSegment.start += diff(camera3dSegment.start);
-								camera3dSegment.end += diff(camera3dSegment.end);
+								camera3dSegment.start = mapOutputTime(camera3dSegment.start);
+								camera3dSegment.end = mapOutputTime(camera3dSegment.end);
 								// Keyframe times are relative to the segment start, so they
 								// have to follow the segment's new length rather than the
 								// absolute shift the other tracks use.
@@ -1720,15 +1743,27 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					hoveredMaskTime: null as number | null,
 					audioPicker: null as number | null,
 					audioReplace: null as number | null,
-					// The empty 3D track's setup flow: the scene and shot count the
-					// sidebar is currently offering, previewed live on the track.
-					camera3dSetup: null as null | { sceneId: string; shots: number },
+					camera3dSetup: null as Camera3DSetup | null,
 					// Index of a just-created text segment that should open its
 					// inline canvas editor as soon as its overlay mounts (set by the
 					// Add-track picker, consumed by TextOverlay).
 					pendingTextEdit: null as number | null,
 				},
 			});
+
+			createEffect(
+				on(
+					() => editorState.timeline.selection,
+					(selection) => {
+						if (!selection) return;
+						batch(() => {
+							setEditorState("timeline", "audioPicker", null);
+							setEditorState("timeline", "audioReplace", null);
+							setEditorState("timeline", "camera3dSetup", null);
+						});
+					},
+				),
+			);
 
 			let selectedStyleIdentity: StyleSegment | undefined;
 			const selectedStyle = () =>
@@ -1753,6 +1788,10 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					},
 					(index) => {
 						if (index !== null) enterStyleScope(index);
+						else {
+							selectedStyleIdentity = undefined;
+							setEditorState("styleEditIndex", null);
+						}
 					},
 				),
 			);
@@ -1893,13 +1932,25 @@ export const [EditorContextProvider, useBaseEditorContext] =
 
 				void (async () => {
 					try {
-						const segments = await commands.generateKeyboardSegments(
-							defaultKeyboardSettings.groupingThresholdMs,
-							defaultKeyboardSettings.lingerDuration * 1000,
-							defaultKeyboardSettings.showModifiers,
-							defaultKeyboardSettings.showSpecialKeys,
+						const segments = await generateForStableKeyboardTimeline(
+							() => keyboardTimelineSignature(project.timeline),
+							async () => {
+								await projectSave.flush();
+								return commands.generateKeyboardSegments(
+									defaultKeyboardSettings.groupingThresholdMs,
+									defaultKeyboardSettings.lingerDuration * 1000,
+									defaultKeyboardSettings.showModifiers,
+									defaultKeyboardSettings.showSpecialKeys,
+								);
+							},
 						);
 
+						if (!segments) {
+							toast.error(
+								"The timeline changed while keyboard events were generated. Try again.",
+							);
+							return;
+						}
 						if (segments.length < 1) return;
 
 						batch(() => {
@@ -1912,6 +1963,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						});
 					} catch (error) {
 						console.error("Failed to initialize keyboard segments", error);
+						toast.error("Unable to generate keyboard events");
 					}
 				})();
 			});
@@ -1935,6 +1987,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 							timeline.transitions ?? [],
 							undefined,
 							"incoming",
+							timeline.textSegments,
 						);
 					const inverted = segments.flatMap((segment) => {
 						const start = toSource(segment.start);

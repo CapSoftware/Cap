@@ -1,5 +1,8 @@
 use anyhow::Result;
-use cap_audio::AudioData;
+use cap_audio::{
+    AudioData, TranscriptionAudioSource, TranscriptionAudioTake, append_transcription_audio,
+};
+use cap_rendering::Video;
 use ffmpeg::{
     ChannelLayout, codec as avcodec,
     format::{self as avformat},
@@ -24,7 +27,9 @@ use tokio::sync::{Mutex, Notify};
 use tracing::instrument;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-pub use cap_project::{CaptionSegment, CaptionSettings, CaptionWord};
+pub use cap_project::{
+    CaptionSegment, CaptionSettings, CaptionWord, RecordingMeta, StudioRecordingMeta,
+};
 
 use crate::{general_settings::GeneralSettingsStore, http_client};
 
@@ -232,10 +237,7 @@ pub async fn save_model_file(path: String, data: Vec<u8>) -> Result<(), String> 
 }
 
 enum AudioExtractionSource {
-    ProjectDirectory {
-        base_path: PathBuf,
-        meta_path: PathBuf,
-    },
+    ProjectDirectory { base_path: PathBuf },
     MediaFile(PathBuf),
 }
 
@@ -250,10 +252,7 @@ fn resolve_audio_extraction_source(video_path: &str) -> Result<AudioExtractionSo
             return Err("Recording directory is missing recording-meta.json".to_string());
         }
 
-        return Ok(AudioExtractionSource::ProjectDirectory {
-            base_path: path,
-            meta_path,
-        });
+        return Ok(AudioExtractionSource::ProjectDirectory { base_path: path });
     }
 
     if metadata.is_file() {
@@ -269,100 +268,109 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
     log::info!("Output path: {output_path:?}");
 
     match resolve_audio_extraction_source(video_path)? {
-        AudioExtractionSource::ProjectDirectory {
-            base_path,
-            meta_path,
-        } => {
+        AudioExtractionSource::ProjectDirectory { base_path } => {
             log::info!("Detected recording project directory");
 
-            let meta_content = std::fs::read_to_string(&meta_path)
+            let recording_meta = RecordingMeta::load_for_project(&base_path)
                 .map_err(|e| format!("Failed to read recording metadata: {e}"))?;
+            let studio = recording_meta
+                .studio_meta()
+                .ok_or_else(|| "Only studio recordings can be transcribed".to_string())?;
+            studio.ensure_ordinary_media_access(&base_path)?;
 
-            let meta: serde_json::Value = serde_json::from_str(&meta_content)
-                .map_err(|e| format!("Failed to parse recording metadata: {e}"))?;
-
-            struct SegmentAudio {
-                sources: Vec<PathBuf>,
-            }
-
-            let mut segment_audios: Vec<SegmentAudio> = Vec::new();
-
-            if let Some(segments) = meta["segments"].as_array() {
-                for segment in segments {
+            let mut final_samples = Vec::new();
+            let mut any_audio = false;
+            match studio {
+                StudioRecordingMeta::SingleSegment { segment } => {
+                    let display_duration = Video::new(
+                        segment.display.path.to_path(&base_path),
+                        segment.display.start_time.unwrap_or_default(),
+                    )
+                    .map_err(|error| format!("Failed to read display video: {error}"))?
+                    .duration;
                     let mut sources = Vec::new();
-                    let mut push_source = |path: Option<&str>| {
-                        if let Some(path) = path {
-                            let full_path = base_path.join(path);
-                            if full_path.exists() && !sources.contains(&full_path) {
-                                sources.push(full_path);
+                    if let Some(audio) = &segment.audio {
+                        let path = audio.path.to_path(&base_path);
+                        if path.exists() {
+                            match AudioData::from_file(&path) {
+                                Ok(decoded) => {
+                                    any_audio = true;
+                                    sources.push(TranscriptionAudioSource {
+                                        samples: decoded.samples().to_vec(),
+                                        channels: decoded.channels() as usize,
+                                        offset_secs: 0.0,
+                                    });
+                                }
+                                Err(error) => {
+                                    log::warn!("Failed to process audio source {path:?}: {error}")
+                                }
                             }
                         }
+                    }
+                    let take = TranscriptionAudioTake {
+                        display_duration_secs: display_duration,
+                        sources,
                     };
-
-                    push_source(segment["system_audio"]["path"].as_str());
-                    push_source(segment["mic"]["path"].as_str());
-                    push_source(segment["audio"]["path"].as_str());
-
-                    if !sources.is_empty() {
-                        segment_audios.push(SegmentAudio { sources });
-                    }
+                    append_transcription_audio(&mut final_samples, &take, AudioData::SAMPLE_RATE)
+                        .map_err(|e| format!("Failed to assemble transcription audio: {e}"))?;
                 }
-            }
-
-            if segment_audios.is_empty() {
-                return Err("No audio sources found in the recording metadata".to_string());
-            }
-
-            log::info!("Found {} segments with audio sources", segment_audios.len());
-
-            let mut final_samples: Vec<f32> = Vec::new();
-
-            for (segment_idx, segment_audio) in segment_audios.iter().enumerate() {
-                log::info!(
-                    "Processing segment {} with {} audio sources",
-                    segment_idx,
-                    segment_audio.sources.len()
-                );
-
-                let mut segment_samples: Vec<f32> = Vec::new();
-
-                for source in &segment_audio.sources {
-                    match AudioData::from_file(source) {
-                        Ok(audio) => {
-                            log::info!(
-                                "Processing audio source {:?}: {} channels, {} samples",
-                                source,
-                                audio.channels(),
-                                audio.sample_count()
-                            );
-
-                            let mono_samples = if audio.channels() > 1 {
-                                convert_to_mono(audio.samples(), audio.channels() as usize)
-                            } else {
-                                audio.samples().to_vec()
-                            };
-
-                            if segment_samples.is_empty() {
-                                segment_samples = mono_samples;
-                            } else {
-                                mix_samples(&mut segment_samples, &mono_samples);
+                StudioRecordingMeta::MultipleSegments { inner } => {
+                    for (segment_idx, segment) in inner.segments.iter().enumerate() {
+                        let display_duration = Video::new(
+                            segment.display.path.to_path(&base_path),
+                            segment.display.start_time.unwrap_or_default(),
+                        )
+                        .map_err(|error| {
+                            format!(
+                                "Failed to read display video for segment {segment_idx}: {error}"
+                            )
+                        })?
+                        .duration;
+                        let offsets = segment.calculate_audio_offsets();
+                        let mut sources = Vec::new();
+                        let mut push_source = |path: &cap_project::AudioMeta, offset_secs: f64| {
+                            let path = path.path.to_path(&base_path);
+                            if !path.exists() {
+                                return;
                             }
+                            match AudioData::from_file(&path) {
+                                Ok(decoded) => {
+                                    any_audio = true;
+                                    sources.push(TranscriptionAudioSource {
+                                        samples: decoded.samples().to_vec(),
+                                        channels: decoded.channels() as usize,
+                                        offset_secs,
+                                    });
+                                }
+                                Err(error) => {
+                                    log::warn!("Failed to process audio source {path:?}: {error}")
+                                }
+                            }
+                        };
+
+                        if let Some(system_audio) = &segment.system_audio {
+                            push_source(system_audio, f64::from(offsets.system_audio));
                         }
-                        Err(e) => {
-                            log::warn!("Failed to process audio source {source:?}: {e}");
-                            continue;
+                        if let Some(mic) = &segment.mic {
+                            push_source(mic, f64::from(offsets.mic));
                         }
+
+                        let take = TranscriptionAudioTake {
+                            display_duration_secs: display_duration,
+                            sources,
+                        };
+                        append_transcription_audio(
+                            &mut final_samples,
+                            &take,
+                            AudioData::SAMPLE_RATE,
+                        )
+                        .map_err(|e| format!("Failed to assemble transcription audio: {e}"))?;
                     }
                 }
+            }
 
-                if !segment_samples.is_empty() {
-                    log::info!(
-                        "Segment {} produced {} samples, appending to final audio",
-                        segment_idx,
-                        segment_samples.len()
-                    );
-                    final_samples.extend(segment_samples);
-                }
+            if !any_audio {
+                return Err("No audio sources found in the recording metadata".to_string());
             }
 
             let mut mixed_samples = final_samples;
@@ -2733,33 +2741,6 @@ pub async fn export_captions_srt(
     }
 }
 
-fn convert_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
-    if channels == 1 {
-        return samples.to_vec();
-    }
-
-    let sample_count = samples.len() / channels;
-    let mut mono_samples = Vec::with_capacity(sample_count);
-
-    for i in 0..sample_count {
-        let mut sample_sum = 0.0;
-        for c in 0..channels {
-            sample_sum += samples[i * channels + c];
-        }
-        mono_samples.push(sample_sum / channels as f32);
-    }
-
-    mono_samples
-}
-
-fn mix_samples(dest: &mut [f32], source: &[f32]) -> usize {
-    let length = dest.len().min(source.len());
-    for i in 0..length {
-        dest[i] = (dest[i] + source[i]) * 0.5;
-    }
-    length
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2816,12 +2797,8 @@ mod tests {
         std::fs::write(project_dir.join("recording-meta.json"), "{}").unwrap();
 
         match resolve_audio_extraction_source(project_dir.to_string_lossy().as_ref()).unwrap() {
-            AudioExtractionSource::ProjectDirectory {
-                base_path,
-                meta_path,
-            } => {
+            AudioExtractionSource::ProjectDirectory { base_path } => {
                 assert_eq!(base_path, project_dir);
-                assert_eq!(meta_path, base_path.join("recording-meta.json"));
             }
             AudioExtractionSource::MediaFile(_) => panic!("expected project directory"),
         }

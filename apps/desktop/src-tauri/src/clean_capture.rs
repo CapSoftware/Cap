@@ -196,13 +196,13 @@ impl StopNotice {
             self.message
         );
         if let Some(previous) = &self.previous_message {
-            message.push_str("\n");
+            message.push('\n');
             message.push_str(previous);
         }
         if let Some(Err(error)) = &self.restoration
             && !self.message.contains(error)
         {
-            message.push_str("\n");
+            message.push('\n');
             message.push_str(error);
         }
         message
@@ -2284,1332 +2284,6 @@ pub async fn reveal_capture_window(
     reveal_with_options(window, generation, main, main).await
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn wayland_blocks_all_floating_labels_while_capture_can_run() {
-        for mode in [
-            cap_recording::RecordingMode::Studio,
-            cap_recording::RecordingMode::Instant,
-        ] {
-            for phase in [
-                Phase::Starting,
-                Phase::Recording,
-                Phase::Pausing,
-                Phase::Resuming,
-                Phase::ResumeFailed,
-                Phase::Restarting,
-                Phase::Stopping,
-            ] {
-                let mut inner = fixture();
-                let lease = inner.lease.as_mut().unwrap();
-                lease.mode = mode;
-                lease.wayland = true;
-                lease.phase = phase;
-                for label in [
-                    "main",
-                    "camera",
-                    "teleprompter",
-                    "settings",
-                    "editor-4",
-                    "unknown-js-window",
-                ] {
-                    assert!(!inner.may_reveal(1, label), "{phase:?}: {label}");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn x11_floating_admission_is_unchanged() {
-        let mut inner = fixture();
-        inner.lease.as_mut().unwrap().phase = Phase::Recording;
-        assert!(!inner.lease.as_ref().unwrap().wayland);
-        assert!(inner.may_reveal(1, "teleprompter"));
-        assert!(inner.may_reveal(1, "settings"));
-        assert!(!inner.may_reveal(1, "camera"));
-    }
-
-    #[test]
-    fn wayland_restore_keeps_non_camera_window_intent() {
-        for label in ["teleprompter", "settings", "editor-4", "unknown-js-window"] {
-            assert!(restore_floating_window(Some(label)));
-        }
-        assert!(restore_floating_window(None));
-        for label in [
-            "capture-area",
-            "in-progress-recording",
-            "target-select-overlay-1",
-            "window-capture-occluder-1",
-        ] {
-            assert!(!restore_floating_window(Some(label)));
-        }
-    }
-
-    #[test]
-    fn wayland_safe_ui_phases_allow_mapping_but_old_generation_does_not() {
-        for phase in [Phase::AwaitingShortcut, Phase::Paused, Phase::Restoring] {
-            assert!(!wayland_blocks_mapping(phase));
-            let mut inner = fixture();
-            let lease = inner.lease.as_mut().unwrap();
-            lease.wayland = true;
-            lease.phase = phase;
-            assert!(inner.may_reveal(1, "teleprompter"));
-            assert!(!inner.may_reveal(0, "teleprompter"));
-        }
-    }
-
-    #[tokio::test]
-    async fn restore_pass_waits_for_successful_ack_before_following_work() {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let work = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let observed = work.clone();
-        let task = tokio::spawn(async move {
-            if restore_pass_acknowledged(true, rx).await {
-                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-        });
-        tokio::task::yield_now().await;
-        assert!(!task.is_finished());
-        assert_eq!(work.load(std::sync::atomic::Ordering::SeqCst), 0);
-        tx.send(Ok(())).unwrap();
-        task.await.unwrap();
-        assert_eq!(work.load(std::sync::atomic::Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn rejected_restore_pass_does_not_authorize_following_work() {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        tx.send(Err("Instant cleanup is unconfirmed".into()))
-            .unwrap();
-        assert!(!restore_pass_acknowledged(true, rx).await);
-    }
-
-    #[tokio::test]
-    async fn dropped_restore_ack_does_not_authorize_following_work() {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        drop(tx);
-        assert!(!restore_pass_acknowledged(true, rx).await);
-    }
-
-    #[tokio::test]
-    async fn unscheduled_restore_pass_does_not_wait_for_an_ack() {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        assert!(
-            !tokio::time::timeout(
-                std::time::Duration::from_millis(100),
-                restore_pass_acknowledged(false, rx),
-            )
-            .await
-            .unwrap()
-        );
-        assert!(tx.is_closed());
-    }
-
-    #[cfg(target_os = "linux")]
-    fn x11_studio_restoring_fixture() -> Mutex<Inner> {
-        let mut inner = fixture();
-        inner.lease.as_mut().unwrap().phase = Phase::Restoring;
-        Mutex::new(inner)
-    }
-
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn x11_studio_restore_waits_for_windows_before_stop_cleanup_and_receipt() {
-        use std::sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        };
-
-        let inner = Arc::new(x11_studio_restoring_fixture());
-        let inputs = Arc::new(AtomicUsize::new(0));
-        let cleanup = Arc::new(AtomicUsize::new(0));
-        let (main_tx, main_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
-        let (camera_tx, camera_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
-        let (inputs_tx, inputs_rx) = tokio::sync::oneshot::channel();
-        let task = tokio::spawn({
-            let inner = inner.clone();
-            let inputs = inputs.clone();
-            let cleanup = cleanup.clone();
-            async move {
-                let result = restore_instant_sequence(
-                    async { main_rx.await.unwrap() },
-                    || async move {
-                        inputs.fetch_add(1, Ordering::SeqCst);
-                        inputs_tx.send(()).unwrap();
-                    },
-                    || async { camera_rx.await.unwrap() },
-                )
-                .await;
-                assert!(finish_x11_studio_restoration(&inner, 1, result, || {
-                    cleanup.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }));
-            }
-        });
-        tokio::task::yield_now().await;
-        assert!(!task.is_finished());
-        assert_eq!(inputs.load(Ordering::SeqCst), 0);
-        assert_eq!(cleanup.load(Ordering::SeqCst), 0);
-        assert!(inner.lock().unwrap().restored.is_none());
-        main_tx.send(Ok(())).unwrap();
-        inputs_rx.await.unwrap();
-        assert!(!task.is_finished());
-        assert_eq!(inputs.load(Ordering::SeqCst), 1);
-        assert_eq!(cleanup.load(Ordering::SeqCst), 0);
-        assert!(inner.lock().unwrap().lease.is_some());
-        assert!(inner.lock().unwrap().restored.is_none());
-        camera_tx.send(Ok(())).unwrap();
-        task.await.unwrap();
-        let inner = inner.lock().unwrap();
-        assert!(inner.lease.is_none());
-        assert_eq!(inner.generation, 2);
-        let receipt = inner.restored.as_ref().unwrap();
-        assert_eq!(receipt.generation, 1);
-        assert_eq!(receipt.restart_result(), Ok(()));
-        assert_eq!(cleanup.load(Ordering::SeqCst), 1);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn x11_studio_restore_failures_retain_ownership_and_report_failure_until_retry() {
-        for (windows, cleanup, error, cleanup_calls) in [
-            (
-                Err("window restoration failed".to_string()),
-                Ok(()),
-                "window restoration failed",
-                0,
-            ),
-            (
-                Ok(()),
-                Err("Stop cleanup failed".to_string()),
-                "Stop cleanup failed",
-                1,
-            ),
-        ] {
-            let state = x11_studio_restoring_fixture();
-            let calls = std::cell::Cell::new(0);
-            assert!(!finish_x11_studio_restoration(&state, 1, windows, || {
-                calls.set(calls.get() + 1);
-                cleanup
-            }));
-            assert_eq!(calls.get(), cleanup_calls);
-            {
-                let inner = state.lock().unwrap();
-                assert_eq!(inner.generation, 1);
-                let lease = inner.lease.as_ref().unwrap();
-                assert_eq!(lease.phase, Phase::Restoring);
-                assert!(lease.registered_shortcut);
-                assert!(inner.x11_cleanup.is_none());
-                assert_eq!(inner.snapshot().error.as_deref(), Some(error));
-                let receipt = inner.restored.as_ref().unwrap();
-                assert_eq!(receipt.generation, 1);
-                assert_eq!(receipt.restart_result(), Err(error.to_string()));
-            }
-            assert!(!finish_x11_studio_restoration(&state, 1, Ok(()), || {
-                panic!("a duplicate completion cannot retry cleanup")
-            }));
-            {
-                let mut inner = state.lock().unwrap();
-                assert_eq!(inner.begin_x11_studio_restore_retry(false), None);
-                assert_eq!(inner.begin_x11_studio_restore_retry(true), Some(1));
-                assert!(inner.lease.as_ref().unwrap().stop_requested);
-            }
-            assert!(finish_x11_studio_restoration(&state, 1, Ok(()), || Ok(())));
-            let inner = state.lock().unwrap();
-            assert!(inner.lease.is_none());
-            assert_eq!(inner.generation, 2);
-            assert_eq!(
-                inner.restored.as_ref().unwrap().restart_result(),
-                Err("Recording restart was cancelled by Stop".into())
-            );
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn x11_studio_stale_and_duplicate_restore_cannot_release_another_owner() {
-        let state = x11_studio_restoring_fixture();
-        assert!(!finish_x11_studio_restoration(&state, 0, Ok(()), || {
-            panic!("a stale generation must not release the shortcut")
-        }));
-        assert!(state.lock().unwrap().restored.is_none());
-        state.lock().unwrap().lease.as_mut().unwrap().phase = Phase::Starting;
-        assert!(!finish_x11_studio_restoration(&state, 1, Ok(()), || {
-            panic!("a live recording must not release the shortcut")
-        }));
-        state.lock().unwrap().lease.as_mut().unwrap().phase = Phase::Restoring;
-        assert!(finish_x11_studio_restoration(&state, 1, Ok(()), || Ok(())));
-        assert!(!finish_x11_studio_restoration(&state, 1, Ok(()), || {
-            panic!("a duplicate completion must not release the shortcut")
-        }));
-        assert_eq!(state.lock().unwrap().generation, 2);
-        let next = x11_studio_restoring_fixture();
-        {
-            let mut inner = next.lock().unwrap();
-            inner.generation = 2;
-            inner.lease.as_mut().unwrap().generation = 2;
-        }
-        assert!(!finish_x11_studio_restoration(&next, 1, Ok(()), || {
-            panic!("an old completion must not release the new shortcut")
-        }));
-        let inner = next.lock().unwrap();
-        assert_eq!(inner.generation, 2);
-        assert!(inner.lease.as_ref().unwrap().registered_shortcut);
-        assert!(inner.restored.is_none());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn x11_studio_restore_keeps_the_users_existing_stop_shortcut() {
-        let state = x11_studio_restoring_fixture();
-        state
-            .lock()
-            .unwrap()
-            .lease
-            .as_mut()
-            .unwrap()
-            .registered_shortcut = false;
-        assert!(finish_x11_studio_restoration(&state, 1, Ok(()), || {
-            panic!("the user shortcut is not owned by this restoration")
-        }));
-        let inner = state.lock().unwrap();
-        assert_eq!(inner.restored.as_ref().unwrap().restart_result(), Ok(()));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn x11_studio_stop_during_restoration_prevents_restart_after_cleanup() {
-        let state = x11_studio_restoring_fixture();
-        assert!(state.lock().unwrap().shortcut(true));
-        assert!(finish_x11_studio_restoration(&state, 1, Ok(()), || Ok(())));
-        let inner = state.lock().unwrap();
-        assert!(inner.lease.is_none());
-        assert_eq!(
-            inner.restored.as_ref().unwrap().restart_result(),
-            Err("Recording restart was cancelled by Stop".into())
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn x11_studio_completion_does_not_accept_instant_or_wayland_leases() {
-        for (mode, wayland) in [
-            (cap_recording::RecordingMode::Instant, false),
-            (cap_recording::RecordingMode::Studio, true),
-        ] {
-            let state = x11_studio_restoring_fixture();
-            {
-                let mut inner = state.lock().unwrap();
-                let lease = inner.lease.as_mut().unwrap();
-                lease.mode = mode;
-                lease.wayland = wayland;
-                assert_eq!(inner.begin_x11_studio_restore_retry(true), None);
-            }
-            assert!(!finish_x11_studio_restoration(&state, 1, Ok(()), || {
-                panic!("another restoration path owns this shortcut")
-            }));
-            let inner = state.lock().unwrap();
-            assert!(inner.restored.is_none());
-            assert!(inner.lease.is_some());
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn x11_studio_unregister_allows_the_f9_callback_to_lock_and_latch_stop() {
-        let state = x11_studio_restoring_fixture();
-        let (request_tx, request_rx) = std::sync::mpsc::channel();
-        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-        std::thread::scope(|scope| {
-            let callback_state = &state;
-            let callback = scope.spawn(move || {
-                request_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-                let mut inner = callback_state.lock().unwrap();
-                assert!(inner.x11_cleanup.is_some());
-                assert!(inner.lease.as_ref().unwrap().registered_shortcut);
-                assert!(inner.reserve_x11_studio_cleanup(1, Ok(())).is_none());
-                assert!(inner.shortcut(true));
-                drop(inner);
-                reply_tx.send(()).unwrap();
-            });
-            assert!(finish_x11_studio_restoration(&state, 1, Ok(()), || {
-                request_tx.send(()).unwrap();
-                reply_rx
-                    .recv_timeout(Duration::from_secs(1))
-                    .map_err(|_| "F9 callback could not acquire restoration state".into())
-            }));
-            callback.join().unwrap();
-        });
-        let inner = state.lock().unwrap();
-        assert!(inner.x11_cleanup.is_none());
-        assert!(inner.lease.is_none());
-        assert_eq!(
-            inner.restored.as_ref().unwrap().restart_result(),
-            Err("Recording restart was cancelled by Stop".into())
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn x11_studio_old_cleanup_completion_cannot_finish_a_retry() {
-        let state = x11_studio_restoring_fixture();
-        let mut inner = state.lock().unwrap();
-        let first = inner.reserve_x11_studio_cleanup(1, Ok(())).unwrap();
-        assert!(inner.reserve_x11_studio_cleanup(1, Ok(())).is_none());
-        assert!(!inner.complete_x11_studio_restoration(first, Err("unregister failed".into())));
-        assert_eq!(inner.begin_x11_studio_restore_retry(true), Some(1));
-        let retry = inner.reserve_x11_studio_cleanup(1, Ok(())).unwrap();
-        assert_ne!(first.sequence, retry.sequence);
-        assert!(!inner.complete_x11_studio_restoration(first, Ok(())));
-        assert!(inner.x11_cleanup == Some(retry));
-        assert!(inner.lease.as_ref().unwrap().registered_shortcut);
-        assert!(inner.complete_x11_studio_restoration(retry, Ok(())));
-        assert!(!inner.complete_x11_studio_restoration(retry, Ok(())));
-        assert_eq!(inner.generation, 2);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn x11_studio_pending_waiter_rejects_restart_after_error_f9_and_retry_success() {
-        let state = State {
-            inner: x11_studio_restoring_fixture(),
-            ..State::default()
-        };
-        let mut waiter = Box::pin(wait_for_restoration(&state, 1));
-        assert!(futures::poll!(&mut waiter).is_pending());
-        assert!(!finish_x11_studio_restoration(
-            &state.inner,
-            1,
-            Err("window acknowledgement failed".into()),
-            || panic!("window failure must retain the Stop shortcut"),
-        ));
-        state.changed.notify_waiters();
-        {
-            let mut inner = state.inner.lock().unwrap();
-            assert_eq!(inner.begin_x11_studio_restore_retry(true), Some(1));
-            assert!(inner.restored.is_none());
-            assert!(inner.lease.as_ref().unwrap().stop_requested);
-        }
-        assert!(finish_x11_studio_restoration(
-            &state.inner,
-            1,
-            Ok(()),
-            || Ok(())
-        ));
-        state.changed.notify_waiters();
-        assert_eq!(
-            waiter.await,
-            Err("Recording restart was cancelled by Stop".into())
-        );
-    }
-
-    fn fixture() -> Inner {
-        Inner {
-            generation: 1,
-            control_error: None,
-            restored: None,
-            #[cfg(target_os = "linux")]
-            x11_cleanup_sequence: 0,
-            #[cfg(target_os = "linux")]
-            x11_cleanup: None,
-            lease: Some(Lease {
-                mode: cap_recording::RecordingMode::Studio,
-                generation: 1,
-                phase: Phase::AwaitingShortcut,
-                pressed: false,
-                stop_requested: false,
-                registered_shortcut: true,
-                wayland: false,
-                stop_route: None,
-                stop_description: None,
-                stop_error: None,
-                lost_stop_routes: [false; 2],
-                recording_dir: None,
-                windows: Vec::new(),
-            }),
-        }
-    }
-
-    #[test]
-    fn requires_delivered_press_then_release() {
-        let mut state = fixture();
-        assert!(state.shortcut(false));
-        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::AwaitingShortcut);
-        assert!(state.shortcut(true));
-        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::AwaitingShortcut);
-        assert!(state.shortcut(false));
-        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::Starting);
-        assert!(!state.lease.as_ref().unwrap().stop_requested);
-        assert!(state.shortcut(true));
-        assert!(state.lease.as_ref().unwrap().stop_requested);
-    }
-
-    #[test]
-    fn delayed_reveal_cannot_cross_generation() {
-        let mut state = fixture();
-        assert!(state.may_reveal(1, "main"));
-        state.generation = 2;
-        state.lease = None;
-        assert!(!state.may_reveal(1, "main"));
-        assert!(!state.may_reveal(1, "camera"));
-        assert!(state.may_reveal(2, "main"));
-    }
-
-    #[test]
-    fn wayland_requires_delivered_current_stop_input() {
-        let mut state = fixture();
-        let lease = state.lease.as_mut().unwrap();
-        lease.wayland = true;
-        assert!(!lease.accept_stop_input(None, true));
-        assert!(!lease.accept_stop_input(Some((2, StopRoute::Tray)), true));
-        assert!(!lease.accept_stop_input(Some((1, StopRoute::Portal)), false));
-        assert_eq!(lease.phase, Phase::AwaitingShortcut);
-        assert!(lease.accept_stop_input(Some((1, StopRoute::Portal)), true));
-        assert!(state.shortcut(true));
-        assert!(
-            !state
-                .lease
-                .as_mut()
-                .unwrap()
-                .accept_stop_input(Some((1, StopRoute::Tray)), false)
-        );
-        assert!(
-            state
-                .lease
-                .as_mut()
-                .unwrap()
-                .accept_stop_input(Some((1, StopRoute::Portal)), false)
-        );
-        assert!(state.shortcut(false));
-        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::Starting);
-    }
-
-    #[test]
-    fn wayland_tray_activation_starts_and_next_activation_stops() {
-        let mut state = fixture();
-        state.lease.as_mut().unwrap().wayland = true;
-        for pressed in [true, false] {
-            assert!(
-                state
-                    .lease
-                    .as_mut()
-                    .unwrap()
-                    .accept_stop_input(Some((1, StopRoute::Tray)), pressed)
-            );
-            assert!(state.shortcut(pressed));
-        }
-        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::Starting);
-        state.lease.as_mut().unwrap().phase = Phase::Recording;
-        assert!(
-            state
-                .lease
-                .as_mut()
-                .unwrap()
-                .accept_stop_input(Some((1, StopRoute::Tray)), true)
-        );
-        assert!(state.shortcut(true));
-        assert!(state.lease.as_ref().unwrap().stop_requested);
-    }
-
-    #[test]
-    fn wayland_loss_cannot_start_or_silently_switch_control() {
-        let mut state = fixture();
-        let lease = state.lease.as_mut().unwrap();
-        lease.wayland = true;
-        assert!(!lease.lose_stop_route(StopRoute::Portal));
-        assert!(!lease.stop_requested);
-        assert!(!lease.accept_stop_input(Some((1, StopRoute::Portal)), true));
-        assert!(lease.accept_stop_input(Some((1, StopRoute::Tray)), true));
-        lease.phase = Phase::Recording;
-        assert!(lease.lose_stop_route(StopRoute::Tray));
-        assert!(lease.stop_requested);
-        assert!(!lease.accept_stop_input(Some((1, StopRoute::Tray)), true));
-    }
-
-    #[test]
-    fn wayland_both_missing_controls_cancel_visible_preflight() {
-        let mut state = fixture();
-        let lease = state.lease.as_mut().unwrap();
-        lease.wayland = true;
-        assert!(!lease.lose_stop_route(StopRoute::Tray));
-        assert!(!lease.lose_stop_route(StopRoute::Portal));
-        assert!(lease.stop_requested);
-        assert_eq!(lease.phase, Phase::AwaitingShortcut);
-    }
-
-    #[test]
-    fn wayland_control_loss_during_start_is_retained_until_cleanup() {
-        let mut state = fixture();
-        let lease = state.lease.as_mut().unwrap();
-        lease.wayland = true;
-        lease.stop_route = Some(StopRoute::Tray);
-        lease.phase = Phase::Starting;
-        assert!(!lease.lose_stop_route(StopRoute::Tray));
-        assert!(lease.stop_requested);
-        assert_eq!(lease.phase, Phase::Starting);
-    }
-
-    #[test]
-    fn only_acknowledged_pause_allows_main() {
-        let mut state = fixture();
-        for phase in [
-            Phase::Starting,
-            Phase::Recording,
-            Phase::Pausing,
-            Phase::Resuming,
-            Phase::Restarting,
-            Phase::Stopping,
-        ] {
-            state.lease.as_mut().unwrap().phase = phase;
-            assert!(!state.may_reveal(1, "main"));
-            assert!(!state.may_reveal(1, "camera"));
-            assert!(!state.may_reveal(1, "in-progress-recording"));
-        }
-        state.lease.as_mut().unwrap().phase = Phase::Paused;
-        assert!(state.may_reveal(1, "main"));
-        assert!(!state.may_reveal(1, "camera"));
-    }
-
-    #[test]
-    fn instant_uses_capture_backend_without_loosening_studio_environment() {
-        use cap_recording::RecordingMode;
-        for strict_x11 in [false, true] {
-            assert!(capture_environment_is_x11(
-                RecordingMode::Instant,
-                strict_x11,
-                false
-            ));
-            assert!(!capture_environment_is_x11(
-                RecordingMode::Instant,
-                strict_x11,
-                true
-            ));
-            for uses_wayland_portal in [false, true] {
-                assert_eq!(
-                    capture_environment_is_x11(
-                        RecordingMode::Studio,
-                        strict_x11,
-                        uses_wayland_portal
-                    ),
-                    strict_x11
-                );
-            }
-        }
-        assert!(!x11_environment(true, false, None));
-        assert!(capture_environment_is_x11(
-            RecordingMode::Instant,
-            x11_environment(true, false, None),
-            false
-        ));
-        assert!(!x11_environment(true, true, Some("x11")));
-        assert!(capture_environment_is_x11(
-            RecordingMode::Instant,
-            x11_environment(true, true, Some("x11")),
-            false
-        ));
-    }
-
-    #[test]
-    fn monitor_visibility_requires_x11_for_both_recording_modes() {
-        use cap_recording::{RecordingMode, screen_capture::ScreenCaptureTarget};
-        let display = ScreenCaptureTarget::Display {
-            id: "1".parse().unwrap(),
-        };
-        let area = ScreenCaptureTarget::Area {
-            screen: "1".parse().unwrap(),
-            bounds: scap_targets::bounds::LogicalBounds::new(
-                scap_targets::bounds::LogicalPosition::new(0.0, 0.0),
-                scap_targets::bounds::LogicalSize::new(100.0, 100.0),
-            ),
-        };
-        let window = ScreenCaptureTarget::Window {
-            id: "1".parse().unwrap(),
-        };
-        for mode in [RecordingMode::Studio, RecordingMode::Instant] {
-            for target in [&display, &area] {
-                assert_eq!(
-                    validate_capture_visibility(mode, target, false, false, true),
-                    Ok(true)
-                );
-                assert!(validate_capture_visibility(mode, target, false, false, false).is_err());
-            }
-            for target in [&window, &ScreenCaptureTarget::CameraOnly] {
-                assert_eq!(
-                    validate_capture_visibility(mode, target, false, false, true),
-                    Ok(false)
-                );
-                assert_eq!(
-                    validate_capture_visibility(mode, target, false, false, false),
-                    Ok(false)
-                );
-            }
-        }
-        assert_eq!(
-            validate_capture_visibility(RecordingMode::Screenshot, &display, false, false, false),
-            Ok(false)
-        );
-    }
-
-    #[test]
-    fn window_camera_visibility_is_required_only_for_x11_instant() {
-        use cap_recording::{RecordingMode, screen_capture::ScreenCaptureTarget};
-        let target = ScreenCaptureTarget::Window {
-            id: "1".parse().unwrap(),
-        };
-        for mode in [
-            RecordingMode::Studio,
-            RecordingMode::Instant,
-            RecordingMode::Screenshot,
-        ] {
-            for camera in [false, true] {
-                for wayland in [false, true] {
-                    let required = mode == RecordingMode::Instant && camera && !wayland;
-                    assert_eq!(
-                        validate_capture_visibility(mode, &target, camera, wayland, true),
-                        Ok(required)
-                    );
-                    let unsupported =
-                        validate_capture_visibility(mode, &target, camera, wayland, false);
-                    if required {
-                        assert!(unsupported.is_err());
-                    } else {
-                        assert_eq!(unsupported, Ok(false));
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn refuses_wayland_and_ambiguous_sessions() {
-        assert!(x11_environment(true, false, Some("x11")));
-        assert!(!x11_environment(true, true, Some("x11")));
-        assert!(!x11_environment(true, false, Some("wayland")));
-        assert!(!x11_environment(true, false, None));
-        assert!(!x11_environment(false, false, Some("x11")));
-    }
-
-    #[test]
-    fn cancel_preflight_never_starts() {
-        let mut state = fixture();
-        assert!(state.queue_stop());
-        assert!(state.shortcut(true));
-        assert!(state.shortcut(false));
-        assert!(state.lease.as_ref().unwrap().stop_requested);
-    }
-
-    #[test]
-    fn stop_is_retained_through_start_restart_and_control_transitions() {
-        for phase in [Phase::Starting, Phase::Restarting, Phase::Pausing] {
-            let mut state = fixture();
-            state.lease.as_mut().unwrap().phase = phase;
-            assert!(state.queue_stop());
-            assert!(state.lease.as_ref().unwrap().stop_requested);
-            assert_eq!(state.lease.as_ref().unwrap().phase, phase);
-        }
-    }
-
-    #[test]
-    fn active_stop_claims_cleanup_once() {
-        let mut state = fixture();
-        state.lease.as_mut().unwrap().phase = Phase::Recording;
-        assert!(!state.queue_stop());
-        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::Stopping);
-        assert!(state.queue_stop());
-        assert!(state.lease.as_ref().unwrap().stop_requested);
-    }
-
-    #[test]
-    fn unconfirmed_resume_failure_keeps_main_hidden_and_stop_actionable() {
-        let mut state = fixture();
-        let dir = PathBuf::from("recording-a");
-        let lease = state.lease.as_mut().unwrap();
-        lease.recording_dir = Some(dir.clone());
-        lease.phase = Phase::Resuming;
-        assert!(state.complete_control(
-            1,
-            &dir,
-            true,
-            &ControlOutcome::ActorFailed {
-                error: "actor transport failed".into(),
-                paused: false,
-            }
-        ));
-        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::ResumeFailed);
-        assert!(state.shortcut(true));
-        assert!(state.lease.as_ref().unwrap().phase.can_stop());
-        assert!(!state.may_reveal(1, "main"));
-        assert!(!state.queue_stop());
-        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::Stopping);
-    }
-
-    #[test]
-    fn old_control_acknowledgement_cannot_publish_into_new_recording() {
-        let mut state = fixture();
-        let lease = state.lease.as_mut().unwrap();
-        lease.phase = Phase::Pausing;
-        lease.recording_dir = Some(PathBuf::from("recording-b"));
-        lease.generation = 2;
-        state.generation = 2;
-        assert!(!state.complete_control(
-            1,
-            std::path::Path::new("recording-a"),
-            false,
-            &ControlOutcome::Succeeded
-        ));
-        assert!(!state.complete_control(
-            2,
-            std::path::Path::new("recording-a"),
-            false,
-            &ControlOutcome::Succeeded
-        ));
-        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::Pausing);
-    }
-
-    #[test]
-    fn target_overlays_stay_hidden_even_during_preflight_and_pause() {
-        let mut state = fixture();
-        for phase in [
-            Phase::AwaitingShortcut,
-            Phase::Recording,
-            Phase::Paused,
-            Phase::Restarting,
-            Phase::Restoring,
-        ] {
-            state.lease.as_mut().unwrap().phase = phase;
-            assert!(!state.may_reveal(1, "target-select-overlay-1"));
-        }
-    }
-
-    #[test]
-    fn restore_preserves_hidden_camera_and_rejects_replaced_native_window() {
-        for visible in [false, true] {
-            let saved = SavedWindow {
-                label: "camera".into(),
-                native_id: 42,
-                visible,
-            };
-            assert_eq!(saved.visibility_for(42), Some(visible));
-            assert_eq!(saved.visibility_for(43), None);
-        }
-    }
-
-    #[test]
-    fn startup_failure_cannot_own_a_different_pending_recording() {
-        let mut state = fixture();
-        let old = PathBuf::from("failed-start-a");
-        let new = PathBuf::from("pending-start-b");
-        state.lease.as_mut().unwrap().phase = Phase::Starting;
-        state.lease.as_mut().unwrap().recording_dir = Some(old.clone());
-        assert_eq!(state.owner(&old), Some(1));
-        assert_eq!(state.owner(&new), None);
-        state.lease.as_mut().unwrap().recording_dir = Some(new.clone());
-        state.lease.as_mut().unwrap().generation = 2;
-        state.generation = 2;
-        assert_eq!(state.owner(&old), None);
-        assert_eq!(state.owner(&new), Some(2));
-    }
-
-    #[tokio::test]
-    async fn pending_pause_does_not_reveal_main_and_retains_queued_stop_after_ack() {
-        let state = std::sync::Arc::new(Mutex::new(fixture()));
-        let dir = PathBuf::from("recording-a");
-        {
-            let mut state = state.lock().unwrap();
-            let lease = state.lease.as_mut().unwrap();
-            lease.phase = Phase::Pausing;
-            lease.recording_dir = Some(dir.clone());
-        }
-        let (acknowledge, received) = tokio::sync::oneshot::channel();
-        let pending = {
-            let state = state.clone();
-            tokio::spawn(async move {
-                received.await.unwrap();
-                state
-                    .lock()
-                    .unwrap()
-                    .complete_control(1, &dir, false, &ControlOutcome::Succeeded)
-            })
-        };
-        {
-            let mut state = state.lock().unwrap();
-            assert!(!state.may_reveal(1, "main"));
-            assert!(state.queue_stop());
-        }
-        acknowledge.send(()).unwrap();
-        assert!(pending.await.unwrap());
-        let mut state = state.lock().unwrap();
-        assert!(state.lease.as_ref().unwrap().stop_requested);
-        assert!(!state.queue_stop());
-        assert!(!state.may_reveal(1, "main"));
-    }
-
-    #[tokio::test]
-    async fn stopped_owner_rejects_delayed_resume_acknowledgement() {
-        let state = std::sync::Arc::new(Mutex::new(fixture()));
-        let dir = PathBuf::from("recording-a");
-        {
-            let mut state = state.lock().unwrap();
-            let lease = state.lease.as_mut().unwrap();
-            lease.phase = Phase::Resuming;
-            lease.recording_dir = Some(dir.clone());
-        }
-        let (acknowledge, received) = tokio::sync::oneshot::channel();
-        let pending = {
-            let state = state.clone();
-            tokio::spawn(async move {
-                received.await.unwrap();
-                state
-                    .lock()
-                    .unwrap()
-                    .complete_control(1, &dir, true, &ControlOutcome::Succeeded)
-            })
-        };
-        state.lock().unwrap().lease.as_mut().unwrap().phase = Phase::Restoring;
-        acknowledge.send(()).unwrap();
-        assert!(!pending.await.unwrap());
-        assert_eq!(
-            state.lock().unwrap().lease.as_ref().unwrap().phase,
-            Phase::Restoring
-        );
-    }
-
-    struct RunningControl {
-        state: std::sync::Arc<Mutex<Inner>>,
-        stages: tokio::sync::mpsc::UnboundedReceiver<&'static str>,
-        hide: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
-        change: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
-        paused: Option<tokio::sync::oneshot::Sender<bool>>,
-        reveal: Option<tokio::sync::oneshot::Sender<()>>,
-        result: tokio::task::JoinHandle<Result<(), String>>,
-    }
-
-    impl RunningControl {
-        fn start(resume: bool) -> Self {
-            let state = std::sync::Arc::new(Mutex::new(fixture()));
-            {
-                let mut inner = state.lock().unwrap();
-                let lease = inner.lease.as_mut().unwrap();
-                lease.phase = if resume {
-                    Phase::Resuming
-                } else {
-                    Phase::Pausing
-                };
-                lease.recording_dir = Some(PathBuf::from("recording-a"));
-            }
-            let (stages, observed) = tokio::sync::mpsc::unbounded_channel();
-            let (hide, hidden) = tokio::sync::oneshot::channel();
-            let (change, changed) = tokio::sync::oneshot::channel();
-            let (paused, acknowledged) = tokio::sync::oneshot::channel();
-            let (reveal, mapping) = tokio::sync::oneshot::channel();
-            let control_state = state.clone();
-            let result = tokio::spawn(async move {
-                let dir = PathBuf::from("recording-a");
-                ControlOperation {
-                    resume,
-                    generation: 1,
-                    dir: &dir,
-                    hide: async {
-                        stages.send("hide").unwrap();
-                        hidden.await.unwrap()
-                    },
-                    change: async {
-                        stages.send("actor").unwrap();
-                        changed.await.unwrap()
-                    },
-                    paused: async {
-                        stages.send("confirm-paused").unwrap();
-                        acknowledged.await.unwrap()
-                    },
-                    restore: async {
-                        stages.send("queue-main").unwrap();
-                        mapping.await.unwrap();
-                        if control_state
-                            .lock()
-                            .unwrap()
-                            .may_restore_paused_main(1, &dir)
-                        {
-                            stages.send("show-main").unwrap();
-                            Ok(())
-                        } else {
-                            stages.send("suppress-main").unwrap();
-                            Err("Recording changed before mapping".into())
-                        }
-                    },
-                    stop: async {
-                        stages.send("stop").unwrap();
-                        assert!(!control_state.lock().unwrap().queue_stop());
-                        Ok(())
-                    },
-                    notify: || stages.send("notify").unwrap(),
-                }
-                .run(&control_state)
-                .await
-            });
-            Self {
-                state,
-                stages: observed,
-                hide: Some(hide),
-                change: Some(change),
-                paused: Some(paused),
-                reveal: Some(reveal),
-                result,
-            }
-        }
-
-        async fn dispatch_stop(
-            &self,
-        ) -> (
-            tokio::sync::oneshot::Sender<()>,
-            tokio::task::JoinHandle<()>,
-        ) {
-            {
-                let mut inner = self.state.lock().unwrap();
-                assert!(inner.shortcut(true));
-                assert!(inner.lease.as_ref().unwrap().phase.can_stop());
-                assert!(!inner.queue_stop());
-            }
-            let (entered, delivered) = tokio::sync::oneshot::channel();
-            let (acknowledge, joined) = tokio::sync::oneshot::channel();
-            let state = self.state.clone();
-            let stop = tokio::spawn(async move {
-                entered.send(()).unwrap();
-                joined.await.unwrap();
-                let mut inner = state.lock().unwrap();
-                if inner.owner(std::path::Path::new("recording-a")) == Some(1)
-                    && inner.lease.as_ref().unwrap().phase == Phase::Stopping
-                {
-                    inner.lease.as_mut().unwrap().phase = Phase::Restoring;
-                }
-            });
-            tokio::time::timeout(Duration::from_secs(1), delivered)
-                .await
-                .unwrap()
-                .unwrap();
-            (acknowledge, stop)
-        }
-
-        async fn expect(&mut self, stage: &'static str) {
-            assert_eq!(
-                tokio::time::timeout(Duration::from_secs(1), self.stages.recv())
-                    .await
-                    .unwrap(),
-                Some(stage)
-            );
-        }
-
-        async fn finish(self) -> Result<(), String> {
-            tokio::time::timeout(Duration::from_secs(1), self.result)
-                .await
-                .unwrap()
-                .unwrap()
-        }
-    }
-
-    #[tokio::test]
-    async fn resume_hide_failure_restores_main_without_calling_actor() {
-        let mut run = RunningControl::start(true);
-        run.expect("hide").await;
-        run.hide
-            .take()
-            .unwrap()
-            .send(Err("partial unmap failed".into()))
-            .unwrap();
-        run.expect("notify").await;
-        run.expect("queue-main").await;
-        {
-            let inner = run.state.lock().unwrap();
-            assert_eq!(inner.lease.as_ref().unwrap().phase, Phase::Paused);
-            assert!(!inner.may_reveal(1, "camera"));
-            assert!(!inner.may_reveal(1, "in-progress-recording"));
-            assert!(inner.lease.as_ref().unwrap().registered_shortcut);
-        }
-        run.reveal.take().unwrap().send(()).unwrap();
-        run.expect("show-main").await;
-        assert_eq!(run.finish().await.unwrap_err(), "partial unmap failed");
-    }
-
-    #[tokio::test]
-    async fn actor_resume_error_waits_for_quiescent_pause_ack_before_mapping() {
-        let mut run = RunningControl::start(true);
-        run.expect("hide").await;
-        run.hide.take().unwrap().send(Ok(())).unwrap();
-        run.expect("actor").await;
-        run.change
-            .take()
-            .unwrap()
-            .send(Err("segment setup failed".into()))
-            .unwrap();
-        run.expect("confirm-paused").await;
-        assert!(!run.state.lock().unwrap().may_reveal(1, "main"));
-        run.paused.take().unwrap().send(true).unwrap();
-        run.expect("notify").await;
-        run.expect("queue-main").await;
-        run.reveal.take().unwrap().send(()).unwrap();
-        run.expect("show-main").await;
-        assert_eq!(run.finish().await.unwrap_err(), "segment setup failed");
-    }
-
-    #[tokio::test]
-    async fn unknown_resume_error_does_not_map_and_stop_remains_executable() {
-        let mut run = RunningControl::start(true);
-        run.expect("hide").await;
-        run.hide.take().unwrap().send(Ok(())).unwrap();
-        run.expect("actor").await;
-        run.change
-            .take()
-            .unwrap()
-            .send(Err("transport failed".into()))
-            .unwrap();
-        run.expect("confirm-paused").await;
-        run.paused.take().unwrap().send(false).unwrap();
-        run.expect("notify").await;
-        let state = run.state.clone();
-        assert!(
-            run.finish()
-                .await
-                .unwrap_err()
-                .contains("pause could not be confirmed")
-        );
-        let mut state = state.lock().unwrap();
-        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::ResumeFailed);
-        assert!(state.shortcut(true));
-        assert!(state.lease.as_ref().unwrap().phase.can_stop());
-        assert!(!state.may_reveal(1, "main"));
-        assert!(!state.queue_stop());
-    }
-
-    #[tokio::test]
-    async fn stop_during_hide_executes_before_resume_and_rejects_late_hide() {
-        for hidden in [Ok(()), Err("hide failed".into())] {
-            let mut run = RunningControl::start(true);
-            run.expect("hide").await;
-            let (ack, stopped) = run.dispatch_stop().await;
-            assert!(!run.result.is_finished());
-            ack.send(()).unwrap();
-            stopped.await.unwrap();
-            run.hide.take().unwrap().send(hidden).unwrap();
-            assert!(run.finish().await.unwrap_err().contains("changed during"));
-        }
-    }
-
-    #[tokio::test]
-    async fn stop_during_pause_confirmation_executes_without_waiting_for_it() {
-        for paused in [true, false] {
-            let mut run = RunningControl::start(true);
-            run.expect("hide").await;
-            run.hide.take().unwrap().send(Ok(())).unwrap();
-            run.expect("actor").await;
-            run.change
-                .take()
-                .unwrap()
-                .send(Err("setup failed".into()))
-                .unwrap();
-            run.expect("confirm-paused").await;
-            let (ack, stopped) = run.dispatch_stop().await;
-            assert!(!run.result.is_finished());
-            ack.send(()).unwrap();
-            stopped.await.unwrap();
-            run.paused.take().unwrap().send(paused).unwrap();
-            assert!(run.finish().await.unwrap_err().contains("changed during"));
-        }
-    }
-
-    #[tokio::test]
-    async fn pending_resume_does_not_block_stop_and_late_result_cannot_publish() {
-        for resumed in [Ok(()), Err("cancelled setup".into())] {
-            let mut run = RunningControl::start(true);
-            run.expect("hide").await;
-            run.hide.take().unwrap().send(Ok(())).unwrap();
-            run.expect("actor").await;
-            let (ack, stopped) = run.dispatch_stop().await;
-            assert!(!run.result.is_finished());
-            assert_eq!(
-                run.state.lock().unwrap().lease.as_ref().unwrap().phase,
-                Phase::Stopping
-            );
-            ack.send(()).unwrap();
-            stopped.await.unwrap();
-            assert!(!run.result.is_finished());
-            let failed = resumed.is_err();
-            run.change.take().unwrap().send(resumed).unwrap();
-            if failed {
-                run.expect("confirm-paused").await;
-                run.paused.take().unwrap().send(true).unwrap();
-            }
-            let state = run.state.clone();
-            assert!(run.finish().await.unwrap_err().contains("changed during"));
-            let inner = state.lock().unwrap();
-            assert_eq!(inner.lease.as_ref().unwrap().phase, Phase::Restoring);
-            assert!(inner.snapshot().error.is_none());
-        }
-    }
-
-    #[tokio::test]
-    async fn delayed_pause_confirmation_cannot_publish_to_new_owner() {
-        let mut run = RunningControl::start(true);
-        run.expect("hide").await;
-        run.hide.take().unwrap().send(Ok(())).unwrap();
-        run.expect("actor").await;
-        run.change
-            .take()
-            .unwrap()
-            .send(Err("setup failed".into()))
-            .unwrap();
-        run.expect("confirm-paused").await;
-        {
-            let mut inner = run.state.lock().unwrap();
-            inner.generation = 2;
-            let lease = inner.lease.as_mut().unwrap();
-            lease.generation = 2;
-            lease.recording_dir = Some(PathBuf::from("recording-b"));
-        }
-        run.paused.take().unwrap().send(true).unwrap();
-        let state = run.state.clone();
-        assert!(run.finish().await.unwrap_err().contains("changed during"));
-        assert_eq!(
-            state.lock().unwrap().lease.as_ref().unwrap().phase,
-            Phase::Resuming
-        );
-    }
-
-    #[tokio::test]
-    async fn delayed_main_mapping_rechecks_owner_phase_and_stop() {
-        for mutation in 0..4 {
-            let mut run = RunningControl::start(true);
-            run.expect("hide").await;
-            run.hide
-                .take()
-                .unwrap()
-                .send(Err("hide failed".into()))
-                .unwrap();
-            run.expect("notify").await;
-            run.expect("queue-main").await;
-            {
-                let mut inner = run.state.lock().unwrap();
-                match mutation {
-                    0 => {
-                        inner.generation = 2;
-                        inner.lease.as_mut().unwrap().generation = 2;
-                    }
-                    1 => {
-                        inner.lease.as_mut().unwrap().recording_dir =
-                            Some(PathBuf::from("recording-b"))
-                    }
-                    2 => inner.lease.as_mut().unwrap().phase = Phase::Resuming,
-                    _ => inner.lease.as_mut().unwrap().stop_requested = true,
-                }
-            }
-            run.reveal.take().unwrap().send(()).unwrap();
-            run.expect("suppress-main").await;
-            assert!(
-                run.finish()
-                    .await
-                    .unwrap_err()
-                    .contains("Could not restore controls")
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn ordinary_pause_and_successful_resume_never_use_failure_restore() {
-        for resume in [false, true] {
-            let mut run = RunningControl::start(resume);
-            if resume {
-                run.expect("hide").await;
-                run.hide.take().unwrap().send(Ok(())).unwrap();
-            }
-            run.expect("actor").await;
-            run.change.take().unwrap().send(Ok(())).unwrap();
-            run.expect("notify").await;
-            let state = run.state.clone();
-            assert!(run.finish().await.is_ok());
-            assert_eq!(
-                state.lock().unwrap().lease.as_ref().unwrap().phase,
-                if resume {
-                    Phase::Recording
-                } else {
-                    Phase::Paused
-                }
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn stale_hide_completion_never_invokes_actor_or_restores_main() {
-        for success in [false, true] {
-            let mut run = RunningControl::start(true);
-            run.expect("hide").await;
-            run.state.lock().unwrap().lease.as_mut().unwrap().phase = Phase::Restoring;
-            run.hide
-                .take()
-                .unwrap()
-                .send(if success {
-                    Ok(())
-                } else {
-                    Err("hide failed".into())
-                })
-                .unwrap();
-            assert!(run.finish().await.unwrap_err().contains("changed during"));
-        }
-    }
-
-    #[tokio::test]
-    async fn failed_pause_does_not_run_resume_probe_or_restore() {
-        let mut run = RunningControl::start(false);
-        run.expect("actor").await;
-        run.change
-            .take()
-            .unwrap()
-            .send(Err("pause failed".into()))
-            .unwrap();
-        run.expect("notify").await;
-        let state = run.state.clone();
-        assert_eq!(run.finish().await.unwrap_err(), "pause failed");
-        assert_eq!(
-            state.lock().unwrap().lease.as_ref().unwrap().phase,
-            Phase::Recording
-        );
-        assert!(!state.lock().unwrap().may_reveal(1, "main"));
-    }
-
-    #[test]
-    fn control_error_survives_stop_and_release_but_not_a_new_owner() {
-        let mut inner = fixture();
-        let dir = PathBuf::from("recording-a");
-        inner.lease.as_mut().unwrap().recording_dir = Some(dir.clone());
-        inner.lease.as_mut().unwrap().phase = Phase::Resuming;
-        assert!(inner.complete_control(
-            1,
-            &dir,
-            true,
-            &ControlOutcome::ActorFailed {
-                error: "capture setup failed".into(),
-                paused: false
-            }
-        ));
-        assert_eq!(
-            inner.snapshot().error.as_deref(),
-            Some("capture setup failed")
-        );
-        assert!(!inner.queue_stop());
-        assert_eq!(
-            inner.snapshot().error.as_deref(),
-            Some("capture setup failed")
-        );
-        inner.lease = None;
-        assert_eq!(
-            inner.snapshot().error.as_deref(),
-            Some("capture setup failed")
-        );
-        inner.generation = 2;
-        assert!(inner.snapshot().error.is_none());
-    }
-}
-
 #[cfg(all(test, target_os = "linux"))]
 mod instant_activation_tests {
     use super::*;
@@ -4558,4 +3232,1332 @@ fn restore_wayland_windows(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wayland_blocks_all_floating_labels_while_capture_can_run() {
+        for mode in [
+            cap_recording::RecordingMode::Studio,
+            cap_recording::RecordingMode::Instant,
+        ] {
+            for phase in [
+                Phase::Starting,
+                Phase::Recording,
+                Phase::Pausing,
+                Phase::Resuming,
+                Phase::ResumeFailed,
+                Phase::Restarting,
+                Phase::Stopping,
+            ] {
+                let mut inner = fixture();
+                let lease = inner.lease.as_mut().unwrap();
+                lease.mode = mode;
+                lease.wayland = true;
+                lease.phase = phase;
+                for label in [
+                    "main",
+                    "camera",
+                    "teleprompter",
+                    "settings",
+                    "editor-4",
+                    "unknown-js-window",
+                ] {
+                    assert!(!inner.may_reveal(1, label), "{phase:?}: {label}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn x11_floating_admission_is_unchanged() {
+        let mut inner = fixture();
+        inner.lease.as_mut().unwrap().phase = Phase::Recording;
+        assert!(!inner.lease.as_ref().unwrap().wayland);
+        assert!(inner.may_reveal(1, "teleprompter"));
+        assert!(inner.may_reveal(1, "settings"));
+        assert!(!inner.may_reveal(1, "camera"));
+    }
+
+    #[test]
+    fn wayland_restore_keeps_non_camera_window_intent() {
+        for label in ["teleprompter", "settings", "editor-4", "unknown-js-window"] {
+            assert!(restore_floating_window(Some(label)));
+        }
+        assert!(restore_floating_window(None));
+        for label in [
+            "capture-area",
+            "in-progress-recording",
+            "target-select-overlay-1",
+            "window-capture-occluder-1",
+        ] {
+            assert!(!restore_floating_window(Some(label)));
+        }
+    }
+
+    #[test]
+    fn wayland_safe_ui_phases_allow_mapping_but_old_generation_does_not() {
+        for phase in [Phase::AwaitingShortcut, Phase::Paused, Phase::Restoring] {
+            assert!(!wayland_blocks_mapping(phase));
+            let mut inner = fixture();
+            let lease = inner.lease.as_mut().unwrap();
+            lease.wayland = true;
+            lease.phase = phase;
+            assert!(inner.may_reveal(1, "teleprompter"));
+            assert!(!inner.may_reveal(0, "teleprompter"));
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_pass_waits_for_successful_ack_before_following_work() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let work = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = work.clone();
+        let task = tokio::spawn(async move {
+            if restore_pass_acknowledged(true, rx).await {
+                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+        assert_eq!(work.load(std::sync::atomic::Ordering::SeqCst), 0);
+        tx.send(Ok(())).unwrap();
+        task.await.unwrap();
+        assert_eq!(work.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn rejected_restore_pass_does_not_authorize_following_work() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tx.send(Err("Instant cleanup is unconfirmed".into()))
+            .unwrap();
+        assert!(!restore_pass_acknowledged(true, rx).await);
+    }
+
+    #[tokio::test]
+    async fn dropped_restore_ack_does_not_authorize_following_work() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        drop(tx);
+        assert!(!restore_pass_acknowledged(true, rx).await);
+    }
+
+    #[tokio::test]
+    async fn unscheduled_restore_pass_does_not_wait_for_an_ack() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        assert!(
+            !tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                restore_pass_acknowledged(false, rx),
+            )
+            .await
+            .unwrap()
+        );
+        assert!(tx.is_closed());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn x11_studio_restoring_fixture() -> Mutex<Inner> {
+        let mut inner = fixture();
+        inner.lease.as_mut().unwrap().phase = Phase::Restoring;
+        Mutex::new(inner)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn x11_studio_restore_waits_for_windows_before_stop_cleanup_and_receipt() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let inner = Arc::new(x11_studio_restoring_fixture());
+        let inputs = Arc::new(AtomicUsize::new(0));
+        let cleanup = Arc::new(AtomicUsize::new(0));
+        let (main_tx, main_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+        let (camera_tx, camera_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+        let (inputs_tx, inputs_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn({
+            let inner = inner.clone();
+            let inputs = inputs.clone();
+            let cleanup = cleanup.clone();
+            async move {
+                let result = restore_instant_sequence(
+                    async { main_rx.await.unwrap() },
+                    || async move {
+                        inputs.fetch_add(1, Ordering::SeqCst);
+                        inputs_tx.send(()).unwrap();
+                    },
+                    || async { camera_rx.await.unwrap() },
+                )
+                .await;
+                assert!(finish_x11_studio_restoration(&inner, 1, result, || {
+                    cleanup.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }));
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+        assert_eq!(inputs.load(Ordering::SeqCst), 0);
+        assert_eq!(cleanup.load(Ordering::SeqCst), 0);
+        assert!(inner.lock().unwrap().restored.is_none());
+        main_tx.send(Ok(())).unwrap();
+        inputs_rx.await.unwrap();
+        assert!(!task.is_finished());
+        assert_eq!(inputs.load(Ordering::SeqCst), 1);
+        assert_eq!(cleanup.load(Ordering::SeqCst), 0);
+        assert!(inner.lock().unwrap().lease.is_some());
+        assert!(inner.lock().unwrap().restored.is_none());
+        camera_tx.send(Ok(())).unwrap();
+        task.await.unwrap();
+        let inner = inner.lock().unwrap();
+        assert!(inner.lease.is_none());
+        assert_eq!(inner.generation, 2);
+        let receipt = inner.restored.as_ref().unwrap();
+        assert_eq!(receipt.generation, 1);
+        assert_eq!(receipt.restart_result(), Ok(()));
+        assert_eq!(cleanup.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn x11_studio_restore_failures_retain_ownership_and_report_failure_until_retry() {
+        for (windows, cleanup, error, cleanup_calls) in [
+            (
+                Err("window restoration failed".to_string()),
+                Ok(()),
+                "window restoration failed",
+                0,
+            ),
+            (
+                Ok(()),
+                Err("Stop cleanup failed".to_string()),
+                "Stop cleanup failed",
+                1,
+            ),
+        ] {
+            let state = x11_studio_restoring_fixture();
+            let calls = std::cell::Cell::new(0);
+            assert!(!finish_x11_studio_restoration(&state, 1, windows, || {
+                calls.set(calls.get() + 1);
+                cleanup
+            }));
+            assert_eq!(calls.get(), cleanup_calls);
+            {
+                let inner = state.lock().unwrap();
+                assert_eq!(inner.generation, 1);
+                let lease = inner.lease.as_ref().unwrap();
+                assert_eq!(lease.phase, Phase::Restoring);
+                assert!(lease.registered_shortcut);
+                assert!(inner.x11_cleanup.is_none());
+                assert_eq!(inner.snapshot().error.as_deref(), Some(error));
+                let receipt = inner.restored.as_ref().unwrap();
+                assert_eq!(receipt.generation, 1);
+                assert_eq!(receipt.restart_result(), Err(error.to_string()));
+            }
+            assert!(!finish_x11_studio_restoration(&state, 1, Ok(()), || {
+                panic!("a duplicate completion cannot retry cleanup")
+            }));
+            {
+                let mut inner = state.lock().unwrap();
+                assert_eq!(inner.begin_x11_studio_restore_retry(false), None);
+                assert_eq!(inner.begin_x11_studio_restore_retry(true), Some(1));
+                assert!(inner.lease.as_ref().unwrap().stop_requested);
+            }
+            assert!(finish_x11_studio_restoration(&state, 1, Ok(()), || Ok(())));
+            let inner = state.lock().unwrap();
+            assert!(inner.lease.is_none());
+            assert_eq!(inner.generation, 2);
+            assert_eq!(
+                inner.restored.as_ref().unwrap().restart_result(),
+                Err("Recording restart was cancelled by Stop".into())
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn x11_studio_stale_and_duplicate_restore_cannot_release_another_owner() {
+        let state = x11_studio_restoring_fixture();
+        assert!(!finish_x11_studio_restoration(&state, 0, Ok(()), || {
+            panic!("a stale generation must not release the shortcut")
+        }));
+        assert!(state.lock().unwrap().restored.is_none());
+        state.lock().unwrap().lease.as_mut().unwrap().phase = Phase::Starting;
+        assert!(!finish_x11_studio_restoration(&state, 1, Ok(()), || {
+            panic!("a live recording must not release the shortcut")
+        }));
+        state.lock().unwrap().lease.as_mut().unwrap().phase = Phase::Restoring;
+        assert!(finish_x11_studio_restoration(&state, 1, Ok(()), || Ok(())));
+        assert!(!finish_x11_studio_restoration(&state, 1, Ok(()), || {
+            panic!("a duplicate completion must not release the shortcut")
+        }));
+        assert_eq!(state.lock().unwrap().generation, 2);
+        let next = x11_studio_restoring_fixture();
+        {
+            let mut inner = next.lock().unwrap();
+            inner.generation = 2;
+            inner.lease.as_mut().unwrap().generation = 2;
+        }
+        assert!(!finish_x11_studio_restoration(&next, 1, Ok(()), || {
+            panic!("an old completion must not release the new shortcut")
+        }));
+        let inner = next.lock().unwrap();
+        assert_eq!(inner.generation, 2);
+        assert!(inner.lease.as_ref().unwrap().registered_shortcut);
+        assert!(inner.restored.is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn x11_studio_restore_keeps_the_users_existing_stop_shortcut() {
+        let state = x11_studio_restoring_fixture();
+        state
+            .lock()
+            .unwrap()
+            .lease
+            .as_mut()
+            .unwrap()
+            .registered_shortcut = false;
+        assert!(finish_x11_studio_restoration(&state, 1, Ok(()), || {
+            panic!("the user shortcut is not owned by this restoration")
+        }));
+        let inner = state.lock().unwrap();
+        assert_eq!(inner.restored.as_ref().unwrap().restart_result(), Ok(()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn x11_studio_stop_during_restoration_prevents_restart_after_cleanup() {
+        let state = x11_studio_restoring_fixture();
+        assert!(state.lock().unwrap().shortcut(true));
+        assert!(finish_x11_studio_restoration(&state, 1, Ok(()), || Ok(())));
+        let inner = state.lock().unwrap();
+        assert!(inner.lease.is_none());
+        assert_eq!(
+            inner.restored.as_ref().unwrap().restart_result(),
+            Err("Recording restart was cancelled by Stop".into())
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn x11_studio_completion_does_not_accept_instant_or_wayland_leases() {
+        for (mode, wayland) in [
+            (cap_recording::RecordingMode::Instant, false),
+            (cap_recording::RecordingMode::Studio, true),
+        ] {
+            let state = x11_studio_restoring_fixture();
+            {
+                let mut inner = state.lock().unwrap();
+                let lease = inner.lease.as_mut().unwrap();
+                lease.mode = mode;
+                lease.wayland = wayland;
+                assert_eq!(inner.begin_x11_studio_restore_retry(true), None);
+            }
+            assert!(!finish_x11_studio_restoration(&state, 1, Ok(()), || {
+                panic!("another restoration path owns this shortcut")
+            }));
+            let inner = state.lock().unwrap();
+            assert!(inner.restored.is_none());
+            assert!(inner.lease.is_some());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn x11_studio_unregister_allows_the_f9_callback_to_lock_and_latch_stop() {
+        let state = x11_studio_restoring_fixture();
+        let (request_tx, request_rx) = std::sync::mpsc::channel();
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let callback_state = &state;
+            let callback = scope.spawn(move || {
+                request_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+                let mut inner = callback_state.lock().unwrap();
+                assert!(inner.x11_cleanup.is_some());
+                assert!(inner.lease.as_ref().unwrap().registered_shortcut);
+                assert!(inner.reserve_x11_studio_cleanup(1, Ok(())).is_none());
+                assert!(inner.shortcut(true));
+                drop(inner);
+                reply_tx.send(()).unwrap();
+            });
+            assert!(finish_x11_studio_restoration(&state, 1, Ok(()), || {
+                request_tx.send(()).unwrap();
+                reply_rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .map_err(|_| "F9 callback could not acquire restoration state".into())
+            }));
+            callback.join().unwrap();
+        });
+        let inner = state.lock().unwrap();
+        assert!(inner.x11_cleanup.is_none());
+        assert!(inner.lease.is_none());
+        assert_eq!(
+            inner.restored.as_ref().unwrap().restart_result(),
+            Err("Recording restart was cancelled by Stop".into())
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn x11_studio_old_cleanup_completion_cannot_finish_a_retry() {
+        let state = x11_studio_restoring_fixture();
+        let mut inner = state.lock().unwrap();
+        let first = inner.reserve_x11_studio_cleanup(1, Ok(())).unwrap();
+        assert!(inner.reserve_x11_studio_cleanup(1, Ok(())).is_none());
+        assert!(!inner.complete_x11_studio_restoration(first, Err("unregister failed".into())));
+        assert_eq!(inner.begin_x11_studio_restore_retry(true), Some(1));
+        let retry = inner.reserve_x11_studio_cleanup(1, Ok(())).unwrap();
+        assert_ne!(first.sequence, retry.sequence);
+        assert!(!inner.complete_x11_studio_restoration(first, Ok(())));
+        assert!(inner.x11_cleanup == Some(retry));
+        assert!(inner.lease.as_ref().unwrap().registered_shortcut);
+        assert!(inner.complete_x11_studio_restoration(retry, Ok(())));
+        assert!(!inner.complete_x11_studio_restoration(retry, Ok(())));
+        assert_eq!(inner.generation, 2);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn x11_studio_pending_waiter_rejects_restart_after_error_f9_and_retry_success() {
+        let state = State {
+            inner: x11_studio_restoring_fixture(),
+            ..State::default()
+        };
+        let mut waiter = Box::pin(wait_for_restoration(&state, 1));
+        assert!(futures::poll!(&mut waiter).is_pending());
+        assert!(!finish_x11_studio_restoration(
+            &state.inner,
+            1,
+            Err("window acknowledgement failed".into()),
+            || panic!("window failure must retain the Stop shortcut"),
+        ));
+        state.changed.notify_waiters();
+        {
+            let mut inner = state.inner.lock().unwrap();
+            assert_eq!(inner.begin_x11_studio_restore_retry(true), Some(1));
+            assert!(inner.restored.is_none());
+            assert!(inner.lease.as_ref().unwrap().stop_requested);
+        }
+        assert!(finish_x11_studio_restoration(
+            &state.inner,
+            1,
+            Ok(()),
+            || Ok(())
+        ));
+        state.changed.notify_waiters();
+        assert_eq!(
+            waiter.await,
+            Err("Recording restart was cancelled by Stop".into())
+        );
+    }
+
+    fn fixture() -> Inner {
+        Inner {
+            generation: 1,
+            stop_notice: None,
+            stop_notice_sequence: 0,
+            control_error: None,
+            restored: None,
+            #[cfg(target_os = "linux")]
+            x11_cleanup_sequence: 0,
+            #[cfg(target_os = "linux")]
+            x11_cleanup: None,
+            lease: Some(Lease {
+                mode: cap_recording::RecordingMode::Studio,
+                generation: 1,
+                phase: Phase::AwaitingShortcut,
+                pressed: false,
+                stop_requested: false,
+                registered_shortcut: true,
+                wayland: false,
+                stop_route: None,
+                stop_description: None,
+                stop_error: None,
+                lost_stop_routes: [false; 2],
+                recording_dir: None,
+                windows: Vec::new(),
+            }),
+        }
+    }
+
+    #[test]
+    fn requires_delivered_press_then_release() {
+        let mut state = fixture();
+        assert!(state.shortcut(false));
+        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::AwaitingShortcut);
+        assert!(state.shortcut(true));
+        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::AwaitingShortcut);
+        assert!(state.shortcut(false));
+        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::Starting);
+        assert!(!state.lease.as_ref().unwrap().stop_requested);
+        assert!(state.shortcut(true));
+        assert!(state.lease.as_ref().unwrap().stop_requested);
+    }
+
+    #[test]
+    fn delayed_reveal_cannot_cross_generation() {
+        let mut state = fixture();
+        assert!(state.may_reveal(1, "main"));
+        state.generation = 2;
+        state.lease = None;
+        assert!(!state.may_reveal(1, "main"));
+        assert!(!state.may_reveal(1, "camera"));
+        assert!(state.may_reveal(2, "main"));
+    }
+
+    #[test]
+    fn wayland_requires_delivered_current_stop_input() {
+        let mut state = fixture();
+        let lease = state.lease.as_mut().unwrap();
+        lease.wayland = true;
+        assert!(!lease.accept_stop_input(None, true));
+        assert!(!lease.accept_stop_input(Some((2, StopRoute::Tray)), true));
+        assert!(!lease.accept_stop_input(Some((1, StopRoute::Portal)), false));
+        assert_eq!(lease.phase, Phase::AwaitingShortcut);
+        assert!(lease.accept_stop_input(Some((1, StopRoute::Portal)), true));
+        assert!(state.shortcut(true));
+        assert!(
+            !state
+                .lease
+                .as_mut()
+                .unwrap()
+                .accept_stop_input(Some((1, StopRoute::Tray)), false)
+        );
+        assert!(
+            state
+                .lease
+                .as_mut()
+                .unwrap()
+                .accept_stop_input(Some((1, StopRoute::Portal)), false)
+        );
+        assert!(state.shortcut(false));
+        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::Starting);
+    }
+
+    #[test]
+    fn wayland_tray_activation_starts_and_next_activation_stops() {
+        let mut state = fixture();
+        state.lease.as_mut().unwrap().wayland = true;
+        for pressed in [true, false] {
+            assert!(
+                state
+                    .lease
+                    .as_mut()
+                    .unwrap()
+                    .accept_stop_input(Some((1, StopRoute::Tray)), pressed)
+            );
+            assert!(state.shortcut(pressed));
+        }
+        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::Starting);
+        state.lease.as_mut().unwrap().phase = Phase::Recording;
+        assert!(
+            state
+                .lease
+                .as_mut()
+                .unwrap()
+                .accept_stop_input(Some((1, StopRoute::Tray)), true)
+        );
+        assert!(state.shortcut(true));
+        assert!(state.lease.as_ref().unwrap().stop_requested);
+    }
+
+    #[test]
+    fn wayland_loss_cannot_start_or_silently_switch_control() {
+        let mut state = fixture();
+        let lease = state.lease.as_mut().unwrap();
+        lease.wayland = true;
+        assert!(!lease.lose_stop_route(StopRoute::Portal));
+        assert!(!lease.stop_requested);
+        assert!(!lease.accept_stop_input(Some((1, StopRoute::Portal)), true));
+        assert!(lease.accept_stop_input(Some((1, StopRoute::Tray)), true));
+        lease.phase = Phase::Recording;
+        assert!(lease.lose_stop_route(StopRoute::Tray));
+        assert!(lease.stop_requested);
+        assert!(!lease.accept_stop_input(Some((1, StopRoute::Tray)), true));
+    }
+
+    #[test]
+    fn wayland_both_missing_controls_cancel_visible_preflight() {
+        let mut state = fixture();
+        let lease = state.lease.as_mut().unwrap();
+        lease.wayland = true;
+        assert!(!lease.lose_stop_route(StopRoute::Tray));
+        assert!(!lease.lose_stop_route(StopRoute::Portal));
+        assert!(lease.stop_requested);
+        assert_eq!(lease.phase, Phase::AwaitingShortcut);
+    }
+
+    #[test]
+    fn wayland_control_loss_during_start_is_retained_until_cleanup() {
+        let mut state = fixture();
+        let lease = state.lease.as_mut().unwrap();
+        lease.wayland = true;
+        lease.stop_route = Some(StopRoute::Tray);
+        lease.phase = Phase::Starting;
+        assert!(!lease.lose_stop_route(StopRoute::Tray));
+        assert!(lease.stop_requested);
+        assert_eq!(lease.phase, Phase::Starting);
+    }
+
+    #[test]
+    fn only_acknowledged_pause_allows_main() {
+        let mut state = fixture();
+        for phase in [
+            Phase::Starting,
+            Phase::Recording,
+            Phase::Pausing,
+            Phase::Resuming,
+            Phase::Restarting,
+            Phase::Stopping,
+        ] {
+            state.lease.as_mut().unwrap().phase = phase;
+            assert!(!state.may_reveal(1, "main"));
+            assert!(!state.may_reveal(1, "camera"));
+            assert!(!state.may_reveal(1, "in-progress-recording"));
+        }
+        state.lease.as_mut().unwrap().phase = Phase::Paused;
+        assert!(state.may_reveal(1, "main"));
+        assert!(!state.may_reveal(1, "camera"));
+    }
+
+    #[test]
+    fn instant_uses_capture_backend_without_loosening_studio_environment() {
+        use cap_recording::RecordingMode;
+        for strict_x11 in [false, true] {
+            assert!(capture_environment_is_x11(
+                RecordingMode::Instant,
+                strict_x11,
+                false
+            ));
+            assert!(!capture_environment_is_x11(
+                RecordingMode::Instant,
+                strict_x11,
+                true
+            ));
+            for uses_wayland_portal in [false, true] {
+                assert_eq!(
+                    capture_environment_is_x11(
+                        RecordingMode::Studio,
+                        strict_x11,
+                        uses_wayland_portal
+                    ),
+                    strict_x11
+                );
+            }
+        }
+        assert!(!x11_environment(true, false, None));
+        assert!(capture_environment_is_x11(
+            RecordingMode::Instant,
+            x11_environment(true, false, None),
+            false
+        ));
+        assert!(!x11_environment(true, true, Some("x11")));
+        assert!(capture_environment_is_x11(
+            RecordingMode::Instant,
+            x11_environment(true, true, Some("x11")),
+            false
+        ));
+    }
+
+    #[test]
+    fn monitor_visibility_requires_x11_for_both_recording_modes() {
+        use cap_recording::{RecordingMode, screen_capture::ScreenCaptureTarget};
+        let display = ScreenCaptureTarget::Display {
+            id: "1".parse().unwrap(),
+        };
+        let area = ScreenCaptureTarget::Area {
+            screen: "1".parse().unwrap(),
+            bounds: scap_targets::bounds::LogicalBounds::new(
+                scap_targets::bounds::LogicalPosition::new(0.0, 0.0),
+                scap_targets::bounds::LogicalSize::new(100.0, 100.0),
+            ),
+        };
+        let window = ScreenCaptureTarget::Window {
+            id: "1".parse().unwrap(),
+        };
+        for mode in [RecordingMode::Studio, RecordingMode::Instant] {
+            for target in [&display, &area] {
+                assert_eq!(
+                    validate_capture_visibility(mode, target, false, false, true),
+                    Ok(true)
+                );
+                assert!(validate_capture_visibility(mode, target, false, false, false).is_err());
+            }
+            for target in [&window, &ScreenCaptureTarget::CameraOnly] {
+                assert_eq!(
+                    validate_capture_visibility(mode, target, false, false, true),
+                    Ok(false)
+                );
+                assert_eq!(
+                    validate_capture_visibility(mode, target, false, false, false),
+                    Ok(false)
+                );
+            }
+        }
+        assert_eq!(
+            validate_capture_visibility(RecordingMode::Screenshot, &display, false, false, false),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn window_camera_visibility_is_required_only_for_x11_instant() {
+        use cap_recording::{RecordingMode, screen_capture::ScreenCaptureTarget};
+        let target = ScreenCaptureTarget::Window {
+            id: "1".parse().unwrap(),
+        };
+        for mode in [
+            RecordingMode::Studio,
+            RecordingMode::Instant,
+            RecordingMode::Screenshot,
+        ] {
+            for camera in [false, true] {
+                for wayland in [false, true] {
+                    let required = mode == RecordingMode::Instant && camera && !wayland;
+                    assert_eq!(
+                        validate_capture_visibility(mode, &target, camera, wayland, true),
+                        Ok(required)
+                    );
+                    let unsupported =
+                        validate_capture_visibility(mode, &target, camera, wayland, false);
+                    if required {
+                        assert!(unsupported.is_err());
+                    } else {
+                        assert_eq!(unsupported, Ok(false));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn refuses_wayland_and_ambiguous_sessions() {
+        assert!(x11_environment(true, false, Some("x11")));
+        assert!(!x11_environment(true, true, Some("x11")));
+        assert!(!x11_environment(true, false, Some("wayland")));
+        assert!(!x11_environment(true, false, None));
+        assert!(!x11_environment(false, false, Some("x11")));
+    }
+
+    #[test]
+    fn cancel_preflight_never_starts() {
+        let mut state = fixture();
+        assert!(state.queue_stop());
+        assert!(state.shortcut(true));
+        assert!(state.shortcut(false));
+        assert!(state.lease.as_ref().unwrap().stop_requested);
+    }
+
+    #[test]
+    fn stop_is_retained_through_start_restart_and_control_transitions() {
+        for phase in [Phase::Starting, Phase::Restarting, Phase::Pausing] {
+            let mut state = fixture();
+            state.lease.as_mut().unwrap().phase = phase;
+            assert!(state.queue_stop());
+            assert!(state.lease.as_ref().unwrap().stop_requested);
+            assert_eq!(state.lease.as_ref().unwrap().phase, phase);
+        }
+    }
+
+    #[test]
+    fn active_stop_claims_cleanup_once() {
+        let mut state = fixture();
+        state.lease.as_mut().unwrap().phase = Phase::Recording;
+        assert!(!state.queue_stop());
+        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::Stopping);
+        assert!(state.queue_stop());
+        assert!(state.lease.as_ref().unwrap().stop_requested);
+    }
+
+    #[test]
+    fn unconfirmed_resume_failure_keeps_main_hidden_and_stop_actionable() {
+        let mut state = fixture();
+        let dir = PathBuf::from("recording-a");
+        let lease = state.lease.as_mut().unwrap();
+        lease.recording_dir = Some(dir.clone());
+        lease.phase = Phase::Resuming;
+        assert!(state.complete_control(
+            1,
+            &dir,
+            true,
+            &ControlOutcome::ActorFailed {
+                error: "actor transport failed".into(),
+                paused: false,
+            }
+        ));
+        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::ResumeFailed);
+        assert!(state.shortcut(true));
+        assert!(state.lease.as_ref().unwrap().phase.can_stop());
+        assert!(!state.may_reveal(1, "main"));
+        assert!(!state.queue_stop());
+        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::Stopping);
+    }
+
+    #[test]
+    fn old_control_acknowledgement_cannot_publish_into_new_recording() {
+        let mut state = fixture();
+        let lease = state.lease.as_mut().unwrap();
+        lease.phase = Phase::Pausing;
+        lease.recording_dir = Some(PathBuf::from("recording-b"));
+        lease.generation = 2;
+        state.generation = 2;
+        assert!(!state.complete_control(
+            1,
+            std::path::Path::new("recording-a"),
+            false,
+            &ControlOutcome::Succeeded
+        ));
+        assert!(!state.complete_control(
+            2,
+            std::path::Path::new("recording-a"),
+            false,
+            &ControlOutcome::Succeeded
+        ));
+        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::Pausing);
+    }
+
+    #[test]
+    fn target_overlays_stay_hidden_even_during_preflight_and_pause() {
+        let mut state = fixture();
+        for phase in [
+            Phase::AwaitingShortcut,
+            Phase::Recording,
+            Phase::Paused,
+            Phase::Restarting,
+            Phase::Restoring,
+        ] {
+            state.lease.as_mut().unwrap().phase = phase;
+            assert!(!state.may_reveal(1, "target-select-overlay-1"));
+        }
+    }
+
+    #[test]
+    fn restore_preserves_hidden_camera_and_rejects_replaced_native_window() {
+        for visible in [false, true] {
+            let saved = SavedWindow {
+                label: "camera".into(),
+                native_id: 42,
+                visible,
+            };
+            assert_eq!(saved.visibility_for(42), Some(visible));
+            assert_eq!(saved.visibility_for(43), None);
+        }
+    }
+
+    #[test]
+    fn startup_failure_cannot_own_a_different_pending_recording() {
+        let mut state = fixture();
+        let old = PathBuf::from("failed-start-a");
+        let new = PathBuf::from("pending-start-b");
+        state.lease.as_mut().unwrap().phase = Phase::Starting;
+        state.lease.as_mut().unwrap().recording_dir = Some(old.clone());
+        assert_eq!(state.owner(&old), Some(1));
+        assert_eq!(state.owner(&new), None);
+        state.lease.as_mut().unwrap().recording_dir = Some(new.clone());
+        state.lease.as_mut().unwrap().generation = 2;
+        state.generation = 2;
+        assert_eq!(state.owner(&old), None);
+        assert_eq!(state.owner(&new), Some(2));
+    }
+
+    #[tokio::test]
+    async fn pending_pause_does_not_reveal_main_and_retains_queued_stop_after_ack() {
+        let state = std::sync::Arc::new(Mutex::new(fixture()));
+        let dir = PathBuf::from("recording-a");
+        {
+            let mut state = state.lock().unwrap();
+            let lease = state.lease.as_mut().unwrap();
+            lease.phase = Phase::Pausing;
+            lease.recording_dir = Some(dir.clone());
+        }
+        let (acknowledge, received) = tokio::sync::oneshot::channel();
+        let pending = {
+            let state = state.clone();
+            tokio::spawn(async move {
+                received.await.unwrap();
+                state
+                    .lock()
+                    .unwrap()
+                    .complete_control(1, &dir, false, &ControlOutcome::Succeeded)
+            })
+        };
+        {
+            let mut state = state.lock().unwrap();
+            assert!(!state.may_reveal(1, "main"));
+            assert!(state.queue_stop());
+        }
+        acknowledge.send(()).unwrap();
+        assert!(pending.await.unwrap());
+        let mut state = state.lock().unwrap();
+        assert!(state.lease.as_ref().unwrap().stop_requested);
+        assert!(!state.queue_stop());
+        assert!(!state.may_reveal(1, "main"));
+    }
+
+    #[tokio::test]
+    async fn stopped_owner_rejects_delayed_resume_acknowledgement() {
+        let state = std::sync::Arc::new(Mutex::new(fixture()));
+        let dir = PathBuf::from("recording-a");
+        {
+            let mut state = state.lock().unwrap();
+            let lease = state.lease.as_mut().unwrap();
+            lease.phase = Phase::Resuming;
+            lease.recording_dir = Some(dir.clone());
+        }
+        let (acknowledge, received) = tokio::sync::oneshot::channel();
+        let pending = {
+            let state = state.clone();
+            tokio::spawn(async move {
+                received.await.unwrap();
+                state
+                    .lock()
+                    .unwrap()
+                    .complete_control(1, &dir, true, &ControlOutcome::Succeeded)
+            })
+        };
+        state.lock().unwrap().lease.as_mut().unwrap().phase = Phase::Restoring;
+        acknowledge.send(()).unwrap();
+        assert!(!pending.await.unwrap());
+        assert_eq!(
+            state.lock().unwrap().lease.as_ref().unwrap().phase,
+            Phase::Restoring
+        );
+    }
+
+    struct RunningControl {
+        state: std::sync::Arc<Mutex<Inner>>,
+        stages: tokio::sync::mpsc::UnboundedReceiver<&'static str>,
+        hide: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+        change: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+        paused: Option<tokio::sync::oneshot::Sender<bool>>,
+        reveal: Option<tokio::sync::oneshot::Sender<()>>,
+        result: tokio::task::JoinHandle<Result<(), String>>,
+    }
+
+    impl RunningControl {
+        fn start(resume: bool) -> Self {
+            let state = std::sync::Arc::new(Mutex::new(fixture()));
+            {
+                let mut inner = state.lock().unwrap();
+                let lease = inner.lease.as_mut().unwrap();
+                lease.phase = if resume {
+                    Phase::Resuming
+                } else {
+                    Phase::Pausing
+                };
+                lease.recording_dir = Some(PathBuf::from("recording-a"));
+            }
+            let (stages, observed) = tokio::sync::mpsc::unbounded_channel();
+            let (hide, hidden) = tokio::sync::oneshot::channel();
+            let (change, changed) = tokio::sync::oneshot::channel();
+            let (paused, acknowledged) = tokio::sync::oneshot::channel();
+            let (reveal, mapping) = tokio::sync::oneshot::channel();
+            let control_state = state.clone();
+            let result = tokio::spawn(async move {
+                let dir = PathBuf::from("recording-a");
+                ControlOperation {
+                    resume,
+                    generation: 1,
+                    dir: &dir,
+                    hide: async {
+                        stages.send("hide").unwrap();
+                        hidden.await.unwrap()
+                    },
+                    change: async {
+                        stages.send("actor").unwrap();
+                        changed.await.unwrap()
+                    },
+                    paused: async {
+                        stages.send("confirm-paused").unwrap();
+                        acknowledged.await.unwrap()
+                    },
+                    restore: async {
+                        stages.send("queue-main").unwrap();
+                        mapping.await.unwrap();
+                        if control_state
+                            .lock()
+                            .unwrap()
+                            .may_restore_paused_main(1, &dir)
+                        {
+                            stages.send("show-main").unwrap();
+                            Ok(())
+                        } else {
+                            stages.send("suppress-main").unwrap();
+                            Err("Recording changed before mapping".into())
+                        }
+                    },
+                    stop: async {
+                        stages.send("stop").unwrap();
+                        assert!(!control_state.lock().unwrap().queue_stop());
+                        Ok(())
+                    },
+                    notify: || stages.send("notify").unwrap(),
+                }
+                .run(&control_state)
+                .await
+            });
+            Self {
+                state,
+                stages: observed,
+                hide: Some(hide),
+                change: Some(change),
+                paused: Some(paused),
+                reveal: Some(reveal),
+                result,
+            }
+        }
+
+        async fn dispatch_stop(
+            &self,
+        ) -> (
+            tokio::sync::oneshot::Sender<()>,
+            tokio::task::JoinHandle<()>,
+        ) {
+            {
+                let mut inner = self.state.lock().unwrap();
+                assert!(inner.shortcut(true));
+                assert!(inner.lease.as_ref().unwrap().phase.can_stop());
+                assert!(!inner.queue_stop());
+            }
+            let (entered, delivered) = tokio::sync::oneshot::channel();
+            let (acknowledge, joined) = tokio::sync::oneshot::channel();
+            let state = self.state.clone();
+            let stop = tokio::spawn(async move {
+                entered.send(()).unwrap();
+                joined.await.unwrap();
+                let mut inner = state.lock().unwrap();
+                if inner.owner(std::path::Path::new("recording-a")) == Some(1)
+                    && inner.lease.as_ref().unwrap().phase == Phase::Stopping
+                {
+                    inner.lease.as_mut().unwrap().phase = Phase::Restoring;
+                }
+            });
+            tokio::time::timeout(Duration::from_secs(1), delivered)
+                .await
+                .unwrap()
+                .unwrap();
+            (acknowledge, stop)
+        }
+
+        async fn expect(&mut self, stage: &'static str) {
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), self.stages.recv())
+                    .await
+                    .unwrap(),
+                Some(stage)
+            );
+        }
+
+        async fn finish(self) -> Result<(), String> {
+            tokio::time::timeout(Duration::from_secs(1), self.result)
+                .await
+                .unwrap()
+                .unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_hide_failure_restores_main_without_calling_actor() {
+        let mut run = RunningControl::start(true);
+        run.expect("hide").await;
+        run.hide
+            .take()
+            .unwrap()
+            .send(Err("partial unmap failed".into()))
+            .unwrap();
+        run.expect("notify").await;
+        run.expect("queue-main").await;
+        {
+            let inner = run.state.lock().unwrap();
+            assert_eq!(inner.lease.as_ref().unwrap().phase, Phase::Paused);
+            assert!(!inner.may_reveal(1, "camera"));
+            assert!(!inner.may_reveal(1, "in-progress-recording"));
+            assert!(inner.lease.as_ref().unwrap().registered_shortcut);
+        }
+        run.reveal.take().unwrap().send(()).unwrap();
+        run.expect("show-main").await;
+        assert_eq!(run.finish().await.unwrap_err(), "partial unmap failed");
+    }
+
+    #[tokio::test]
+    async fn actor_resume_error_waits_for_quiescent_pause_ack_before_mapping() {
+        let mut run = RunningControl::start(true);
+        run.expect("hide").await;
+        run.hide.take().unwrap().send(Ok(())).unwrap();
+        run.expect("actor").await;
+        run.change
+            .take()
+            .unwrap()
+            .send(Err("segment setup failed".into()))
+            .unwrap();
+        run.expect("confirm-paused").await;
+        assert!(!run.state.lock().unwrap().may_reveal(1, "main"));
+        run.paused.take().unwrap().send(true).unwrap();
+        run.expect("notify").await;
+        run.expect("queue-main").await;
+        run.reveal.take().unwrap().send(()).unwrap();
+        run.expect("show-main").await;
+        assert_eq!(run.finish().await.unwrap_err(), "segment setup failed");
+    }
+
+    #[tokio::test]
+    async fn unknown_resume_error_does_not_map_and_stop_remains_executable() {
+        let mut run = RunningControl::start(true);
+        run.expect("hide").await;
+        run.hide.take().unwrap().send(Ok(())).unwrap();
+        run.expect("actor").await;
+        run.change
+            .take()
+            .unwrap()
+            .send(Err("transport failed".into()))
+            .unwrap();
+        run.expect("confirm-paused").await;
+        run.paused.take().unwrap().send(false).unwrap();
+        run.expect("notify").await;
+        let state = run.state.clone();
+        assert!(
+            run.finish()
+                .await
+                .unwrap_err()
+                .contains("pause could not be confirmed")
+        );
+        let mut state = state.lock().unwrap();
+        assert_eq!(state.lease.as_ref().unwrap().phase, Phase::ResumeFailed);
+        assert!(state.shortcut(true));
+        assert!(state.lease.as_ref().unwrap().phase.can_stop());
+        assert!(!state.may_reveal(1, "main"));
+        assert!(!state.queue_stop());
+    }
+
+    #[tokio::test]
+    async fn stop_during_hide_executes_before_resume_and_rejects_late_hide() {
+        for hidden in [Ok(()), Err("hide failed".into())] {
+            let mut run = RunningControl::start(true);
+            run.expect("hide").await;
+            let (ack, stopped) = run.dispatch_stop().await;
+            assert!(!run.result.is_finished());
+            ack.send(()).unwrap();
+            stopped.await.unwrap();
+            run.hide.take().unwrap().send(hidden).unwrap();
+            assert!(run.finish().await.unwrap_err().contains("changed during"));
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_during_pause_confirmation_executes_without_waiting_for_it() {
+        for paused in [true, false] {
+            let mut run = RunningControl::start(true);
+            run.expect("hide").await;
+            run.hide.take().unwrap().send(Ok(())).unwrap();
+            run.expect("actor").await;
+            run.change
+                .take()
+                .unwrap()
+                .send(Err("setup failed".into()))
+                .unwrap();
+            run.expect("confirm-paused").await;
+            let (ack, stopped) = run.dispatch_stop().await;
+            assert!(!run.result.is_finished());
+            ack.send(()).unwrap();
+            stopped.await.unwrap();
+            run.paused.take().unwrap().send(paused).unwrap();
+            assert!(run.finish().await.unwrap_err().contains("changed during"));
+        }
+    }
+
+    #[tokio::test]
+    async fn pending_resume_does_not_block_stop_and_late_result_cannot_publish() {
+        for resumed in [Ok(()), Err("cancelled setup".into())] {
+            let mut run = RunningControl::start(true);
+            run.expect("hide").await;
+            run.hide.take().unwrap().send(Ok(())).unwrap();
+            run.expect("actor").await;
+            let (ack, stopped) = run.dispatch_stop().await;
+            assert!(!run.result.is_finished());
+            assert_eq!(
+                run.state.lock().unwrap().lease.as_ref().unwrap().phase,
+                Phase::Stopping
+            );
+            ack.send(()).unwrap();
+            stopped.await.unwrap();
+            assert!(!run.result.is_finished());
+            let failed = resumed.is_err();
+            run.change.take().unwrap().send(resumed).unwrap();
+            if failed {
+                run.expect("confirm-paused").await;
+                run.paused.take().unwrap().send(true).unwrap();
+            }
+            let state = run.state.clone();
+            assert!(run.finish().await.unwrap_err().contains("changed during"));
+            let inner = state.lock().unwrap();
+            assert_eq!(inner.lease.as_ref().unwrap().phase, Phase::Restoring);
+            assert!(inner.snapshot().error.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn delayed_pause_confirmation_cannot_publish_to_new_owner() {
+        let mut run = RunningControl::start(true);
+        run.expect("hide").await;
+        run.hide.take().unwrap().send(Ok(())).unwrap();
+        run.expect("actor").await;
+        run.change
+            .take()
+            .unwrap()
+            .send(Err("setup failed".into()))
+            .unwrap();
+        run.expect("confirm-paused").await;
+        {
+            let mut inner = run.state.lock().unwrap();
+            inner.generation = 2;
+            let lease = inner.lease.as_mut().unwrap();
+            lease.generation = 2;
+            lease.recording_dir = Some(PathBuf::from("recording-b"));
+        }
+        run.paused.take().unwrap().send(true).unwrap();
+        let state = run.state.clone();
+        assert!(run.finish().await.unwrap_err().contains("changed during"));
+        assert_eq!(
+            state.lock().unwrap().lease.as_ref().unwrap().phase,
+            Phase::Resuming
+        );
+    }
+
+    #[tokio::test]
+    async fn delayed_main_mapping_rechecks_owner_phase_and_stop() {
+        for mutation in 0..4 {
+            let mut run = RunningControl::start(true);
+            run.expect("hide").await;
+            run.hide
+                .take()
+                .unwrap()
+                .send(Err("hide failed".into()))
+                .unwrap();
+            run.expect("notify").await;
+            run.expect("queue-main").await;
+            {
+                let mut inner = run.state.lock().unwrap();
+                match mutation {
+                    0 => {
+                        inner.generation = 2;
+                        inner.lease.as_mut().unwrap().generation = 2;
+                    }
+                    1 => {
+                        inner.lease.as_mut().unwrap().recording_dir =
+                            Some(PathBuf::from("recording-b"))
+                    }
+                    2 => inner.lease.as_mut().unwrap().phase = Phase::Resuming,
+                    _ => inner.lease.as_mut().unwrap().stop_requested = true,
+                }
+            }
+            run.reveal.take().unwrap().send(()).unwrap();
+            run.expect("suppress-main").await;
+            assert!(
+                run.finish()
+                    .await
+                    .unwrap_err()
+                    .contains("Could not restore controls")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_pause_and_successful_resume_never_use_failure_restore() {
+        for resume in [false, true] {
+            let mut run = RunningControl::start(resume);
+            if resume {
+                run.expect("hide").await;
+                run.hide.take().unwrap().send(Ok(())).unwrap();
+            }
+            run.expect("actor").await;
+            run.change.take().unwrap().send(Ok(())).unwrap();
+            run.expect("notify").await;
+            let state = run.state.clone();
+            assert!(run.finish().await.is_ok());
+            assert_eq!(
+                state.lock().unwrap().lease.as_ref().unwrap().phase,
+                if resume {
+                    Phase::Recording
+                } else {
+                    Phase::Paused
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_hide_completion_never_invokes_actor_or_restores_main() {
+        for success in [false, true] {
+            let mut run = RunningControl::start(true);
+            run.expect("hide").await;
+            run.state.lock().unwrap().lease.as_mut().unwrap().phase = Phase::Restoring;
+            run.hide
+                .take()
+                .unwrap()
+                .send(if success {
+                    Ok(())
+                } else {
+                    Err("hide failed".into())
+                })
+                .unwrap();
+            assert!(run.finish().await.unwrap_err().contains("changed during"));
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_pause_does_not_run_resume_probe_or_restore() {
+        let mut run = RunningControl::start(false);
+        run.expect("actor").await;
+        run.change
+            .take()
+            .unwrap()
+            .send(Err("pause failed".into()))
+            .unwrap();
+        run.expect("notify").await;
+        let state = run.state.clone();
+        assert_eq!(run.finish().await.unwrap_err(), "pause failed");
+        assert_eq!(
+            state.lock().unwrap().lease.as_ref().unwrap().phase,
+            Phase::Recording
+        );
+        assert!(!state.lock().unwrap().may_reveal(1, "main"));
+    }
+
+    #[test]
+    fn control_error_survives_stop_and_release_but_not_a_new_owner() {
+        let mut inner = fixture();
+        let dir = PathBuf::from("recording-a");
+        inner.lease.as_mut().unwrap().recording_dir = Some(dir.clone());
+        inner.lease.as_mut().unwrap().phase = Phase::Resuming;
+        assert!(inner.complete_control(
+            1,
+            &dir,
+            true,
+            &ControlOutcome::ActorFailed {
+                error: "capture setup failed".into(),
+                paused: false
+            }
+        ));
+        assert_eq!(
+            inner.snapshot().error.as_deref(),
+            Some("capture setup failed")
+        );
+        assert!(!inner.queue_stop());
+        assert_eq!(
+            inner.snapshot().error.as_deref(),
+            Some("capture setup failed")
+        );
+        inner.lease = None;
+        assert_eq!(
+            inner.snapshot().error.as_deref(),
+            Some("capture setup failed")
+        );
+        inner.generation = 2;
+        assert!(inner.snapshot().error.is_none());
+    }
 }

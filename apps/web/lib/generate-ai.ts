@@ -89,10 +89,7 @@ export async function startAiGeneration(
 		const transitionResult = await db()
 			.update(videos)
 			.set({
-				metadata: {
-					...metadata,
-					aiGenerationStatus: "QUEUED",
-				},
+				metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.aiGenerationStatus', 'QUEUED')`,
 			})
 			.where(
 				and(

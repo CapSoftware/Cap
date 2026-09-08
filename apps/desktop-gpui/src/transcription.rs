@@ -34,11 +34,13 @@ use std::{
     time::Duration,
 };
 
+use cap_editor::{TranscriptionAudioSource, TranscriptionAudioTake, append_transcription_audio};
 use cap_project::{
     CaptionSegment, CaptionSettings, CaptionTrackSegment, CaptionWord, CaptionsData,
     ProjectConfiguration, RecordingMeta, StudioRecordingMeta, TimelineConfiguration,
     TimelineSegment,
 };
+use cap_rendering::Video;
 use ffmpeg::{
     ChannelLayout, codec as avcodec,
     format::{self as avformat},
@@ -1026,24 +1028,6 @@ fn append_resampled_frame(
     Ok(())
 }
 
-/// `convert_to_mono` (`captions.rs:2701-2718`).
-fn convert_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
-    if channels <= 1 {
-        return samples.to_vec();
-    }
-    samples
-        .chunks_exact(channels)
-        .map(|frame| frame.iter().sum::<f32>() / channels as f32)
-        .collect()
-}
-
-/// `mix_samples` (`captions.rs:2720-2726`): average, over the shorter length.
-fn mix_samples(dest: &mut [f32], source: &[f32]) {
-    for (dest_sample, source_sample) in dest.iter_mut().zip(source) {
-        *dest_sample = (*dest_sample + *source_sample) * 0.5;
-    }
-}
-
 /// `normalize_audio_for_transcription` (`captions.rs:885-915`).
 fn normalize_audio_for_transcription(samples: &mut [f32]) -> f32 {
     if samples.is_empty() {
@@ -1077,12 +1061,6 @@ fn normalize_audio_for_transcription(samples: &mut [f32]) -> f32 {
     gain
 }
 
-fn push_audio_source(sources: &mut Vec<PathBuf>, path: PathBuf) {
-    if path.exists() && !sources.contains(&path) {
-        sources.push(path);
-    }
-}
-
 /// The recording-directory arm of `extract_audio_from_video`
 /// (`captions.rs:250-517`): per segment, decode system audio then mic
 /// (`captions.rs:281-283`), downmix each to mono, average them together,
@@ -1096,62 +1074,95 @@ fn extract_project_audio(project_path: &Path, output_path: &Path) -> Result<(), 
         return Err("Only studio recordings can be transcribed".to_string());
     };
 
-    let mut segment_sources: Vec<Vec<PathBuf>> = Vec::new();
+    studio.ensure_ordinary_media_access(&meta.project_path)?;
+    let mut final_samples = Vec::new();
+    let mut any_audio = false;
     match studio {
         StudioRecordingMeta::SingleSegment { segment } => {
+            let display_duration = Video::new(
+                segment.display.path.to_path(&meta.project_path),
+                segment.display.start_time.unwrap_or_default(),
+            )
+            .map_err(|error| format!("Failed to read display video: {error}"))?
+            .duration;
             let mut sources = Vec::new();
             if let Some(audio) = &segment.audio {
-                push_audio_source(&mut sources, meta.path(&audio.path));
-            }
-            if !sources.is_empty() {
-                segment_sources.push(sources);
-            }
-        }
-        StudioRecordingMeta::MultipleSegments { inner } => {
-            for segment in &inner.segments {
-                let mut sources = Vec::new();
-                if let Some(system_audio) = &segment.system_audio {
-                    push_audio_source(&mut sources, meta.path(&system_audio.path));
-                }
-                if let Some(mic) = &segment.mic {
-                    push_audio_source(&mut sources, meta.path(&mic.path));
-                }
-                if !sources.is_empty() {
-                    segment_sources.push(sources);
-                }
-            }
-        }
-    }
-
-    if segment_sources.is_empty() {
-        return Err("No audio sources found in the recording metadata".to_string());
-    }
-
-    let mut final_samples: Vec<f32> = Vec::new();
-
-    for sources in &segment_sources {
-        let mut segment_samples: Vec<f32> = Vec::new();
-
-        for source in sources {
-            match decode_audio_file(source) {
-                Ok((samples, channels)) => {
-                    let mono_samples = convert_to_mono(&samples, channels);
-                    if segment_samples.is_empty() {
-                        segment_samples = mono_samples;
-                    } else {
-                        mix_samples(&mut segment_samples, &mono_samples);
+                let path = meta.path(&audio.path);
+                if path.exists() {
+                    match decode_audio_file(&path) {
+                        Ok((samples, channels)) => {
+                            any_audio = true;
+                            sources.push(TranscriptionAudioSource {
+                                samples,
+                                channels,
+                                offset_secs: 0.0,
+                            });
+                        }
+                        Err(error) => tracing::warn!(
+                            path = %path.display(),
+                            "Failed to process audio source: {error}"
+                        ),
                     }
                 }
-                Err(error) => {
-                    tracing::warn!(
-                        path = %source.display(),
-                        "Failed to process audio source: {error}"
-                    );
+            }
+            let take = TranscriptionAudioTake {
+                display_duration_secs: display_duration,
+                sources,
+            };
+            append_transcription_audio(&mut final_samples, &take, DECODE_SAMPLE_RATE)
+                .map_err(|error| format!("Failed to assemble transcription audio: {error}"))?;
+        }
+        StudioRecordingMeta::MultipleSegments { inner } => {
+            for (segment_idx, segment) in inner.segments.iter().enumerate() {
+                let display_duration = Video::new(
+                    segment.display.path.to_path(&meta.project_path),
+                    segment.display.start_time.unwrap_or_default(),
+                )
+                .map_err(|error| {
+                    format!("Failed to read display video for segment {segment_idx}: {error}")
+                })?
+                .duration;
+                let offsets = segment.calculate_audio_offsets();
+                let mut sources = Vec::new();
+                let mut push_source = |audio: &cap_project::AudioMeta, offset_secs: f64| {
+                    let path = meta.path(&audio.path);
+                    if !path.exists() {
+                        return;
+                    }
+                    match decode_audio_file(&path) {
+                        Ok((samples, channels)) => {
+                            any_audio = true;
+                            sources.push(TranscriptionAudioSource {
+                                samples,
+                                channels,
+                                offset_secs,
+                            });
+                        }
+                        Err(error) => tracing::warn!(
+                            path = %path.display(),
+                            "Failed to process audio source: {error}"
+                        ),
+                    }
+                };
+
+                if let Some(system_audio) = &segment.system_audio {
+                    push_source(system_audio, f64::from(offsets.system_audio));
                 }
+                if let Some(mic) = &segment.mic {
+                    push_source(mic, f64::from(offsets.mic));
+                }
+                let take = TranscriptionAudioTake {
+                    display_duration_secs: display_duration,
+                    sources,
+                };
+                append_transcription_audio(&mut final_samples, &take, DECODE_SAMPLE_RATE)
+                    .map_err(|error| format!("Failed to assemble transcription audio: {error}"))?;
             }
         }
+    }
 
-        final_samples.extend(segment_samples);
+    if !any_audio {
+        return Err("No audio sources found in the recording metadata".to_string());
     }
 
     if final_samples.is_empty() {
@@ -1835,49 +1846,8 @@ fn caption_word_chunks(words: &[CaptionWord]) -> Vec<&[CaptionWord]> {
 // Track derivation -- deriveCaptionTrackSegments, in Rust
 // ---------------------------------------------------------------------------
 
-/// `CAPTION_EDL_SEPARATOR` (`captions.ts:151`).
-const CAPTION_EDL_SEPARATOR: &str = "::edl";
-
-/// `sourceCaptionId` (`captions.ts:166-169`).
 pub fn source_caption_id(track_id: &str) -> &str {
-    track_id
-        .find(CAPTION_EDL_SEPARATOR)
-        .map_or(track_id, |index| &track_id[..index])
-}
-
-fn mapped_caption_segment_id(base_id: &str, index: usize, total: usize) -> String {
-    if total == 1 {
-        base_id.to_string()
-    } else {
-        format!("{base_id}{CAPTION_EDL_SEPARATOR}{index}")
-    }
-}
-
-/// `clampCaptionSegmentWords` (`captions.ts:36-52`).
-fn clamp_caption_segment_words(segment: &CaptionSegment) -> CaptionSegment {
-    if segment.words.is_empty() {
-        return segment.clone();
-    }
-
-    let clamped_words: Vec<CaptionWord> = segment
-        .words
-        .iter()
-        .map(|word| CaptionWord {
-            text: word.text.clone(),
-            start: word.start,
-            end: word.end.min(word.start + MAX_CAPTION_WORD_DURATION),
-        })
-        .collect();
-
-    let last_word_end = clamped_words.last().map_or(segment.end, |word| word.end);
-
-    CaptionSegment {
-        id: segment.id.clone(),
-        start: segment.start,
-        end: segment.end.min(last_word_end),
-        text: segment.text.clone(),
-        words: clamped_words,
-    }
+    cap_project::source_caption_id(track_id)
 }
 
 struct SourceToEditedMapping {
@@ -1922,220 +1892,12 @@ fn build_source_to_edited_mappings(
         .collect()
 }
 
-/// `mapTimeRangeWithinMapping` (`captions.ts:130-149`).
-fn map_time_range_within_mapping(
-    start: f64,
-    end: f64,
-    mapping: &SourceToEditedMapping,
-) -> Option<(f64, f64)> {
-    let overlap_start = start.max(mapping.source_start);
-    let overlap_end = end.min(mapping.source_end);
-    if overlap_start >= overlap_end {
-        return None;
-    }
-    Some((
-        mapping.edited_start + (overlap_start - mapping.source_start) / mapping.timescale,
-        mapping.edited_start + (overlap_end - mapping.source_start) / mapping.timescale,
-    ))
-}
-
-/// `effectiveToOutput` (`timeline-holds.ts:54-64`).
-fn effective_to_output(holds: &[(f64, f64)], effective: f64) -> f64 {
-    let mut output = effective;
-    for (start, end) in holds {
-        if output >= *start {
-            output += end - start;
-        } else {
-            break;
-        }
-    }
-    output
-}
-
-/// `effectiveToOutputEnd` (`timeline-holds.ts:70-80`): an end landing exactly
-/// on a hold boundary binds to the content before the pause.
-fn effective_to_output_end(holds: &[(f64, f64)], effective: f64) -> f64 {
-    let mut output = effective;
-    for (start, end) in holds {
-        if output > *start {
-            output += end - start;
-        } else {
-            break;
-        }
-    }
-    output
-}
-
-struct MappedCaption {
-    id: String,
-    start: f64,
-    end: f64,
-    text: String,
-    words: Vec<CaptionWord>,
-}
-
-/// `mapCaptionsToEditedTimeline` (`captions.ts:171-273`).
-fn map_captions_to_edited_timeline(
-    raw_segments: &[CaptionSegment],
-    timeline: &TimelineConfiguration,
-    recording_durations: &[f64],
-) -> Vec<MappedCaption> {
-    let sanitized: Vec<CaptionSegment> = raw_segments
-        .iter()
-        .map(clamp_caption_segment_words)
-        .collect();
-
-    if timeline.segments.is_empty() || recording_durations.is_empty() {
-        return sanitized
-            .into_iter()
-            .map(|segment| MappedCaption {
-                id: segment.id,
-                start: f64::from(segment.start),
-                end: f64::from(segment.end),
-                text: segment.text,
-                words: segment.words,
-            })
-            .collect();
-    }
-
-    let mappings = build_source_to_edited_mappings(timeline, recording_durations);
-    let holds = timeline.hold_windows();
-    let hold_adjusted = |start: f64, end: f64| {
-        if holds.is_empty() {
-            (start, end)
-        } else {
-            (
-                effective_to_output(&holds, start),
-                effective_to_output_end(&holds, end),
-            )
-        }
-    };
-
-    let mut result = Vec::new();
-
-    for caption in &sanitized {
-        let mut mapped_caption_segments: Vec<MappedCaption> = Vec::new();
-
-        for mapping in &mappings {
-            if !caption.words.is_empty() {
-                let mut mapped_words = Vec::new();
-                for word in &caption.words {
-                    let Some((start, end)) = map_time_range_within_mapping(
-                        f64::from(word.start),
-                        f64::from(word.end),
-                        mapping,
-                    ) else {
-                        continue;
-                    };
-                    let (start, end) = hold_adjusted(start, end);
-                    mapped_words.push(CaptionWord {
-                        text: word.text.clone(),
-                        start: start as f32,
-                        end: end as f32,
-                    });
-                }
-
-                if mapped_words.is_empty() {
-                    continue;
-                }
-
-                let start = mapped_words
-                    .first()
-                    .map_or(f64::from(caption.start), |word| f64::from(word.start));
-                let end = mapped_words
-                    .last()
-                    .map_or(f64::from(caption.end), |word| f64::from(word.end));
-                mapped_caption_segments.push(MappedCaption {
-                    id: caption.id.clone(),
-                    start,
-                    end,
-                    text: caption_text_from_words(&mapped_words),
-                    words: mapped_words,
-                });
-            } else {
-                let Some((start, end)) = map_time_range_within_mapping(
-                    f64::from(caption.start),
-                    f64::from(caption.end),
-                    mapping,
-                ) else {
-                    continue;
-                };
-                let (start, end) = hold_adjusted(start, end);
-                mapped_caption_segments.push(MappedCaption {
-                    id: caption.id.clone(),
-                    start,
-                    end,
-                    text: caption.text.clone(),
-                    words: Vec::new(),
-                });
-            }
-        }
-
-        let total = mapped_caption_segments.len();
-        for (index, mut segment) in mapped_caption_segments.into_iter().enumerate() {
-            segment.id = mapped_caption_segment_id(&caption.id, index, total);
-            result.push(segment);
-        }
-    }
-
-    result
-}
-
-/// `deriveCaptionTrackSegments` (`captions.ts:323-366`): project the
-/// source-time caption master through the current edit list, carrying per
-/// source-caption style overrides across by source id. The previous track is
-/// read from `timeline.caption_segments` itself.
 pub fn derive_caption_track_segments(
     source_segments: &[CaptionSegment],
     timeline: &TimelineConfiguration,
     recording_durations: &[f64],
 ) -> Vec<CaptionTrackSegment> {
-    struct TrackOverrides {
-        fade_duration: Option<f32>,
-        linger_duration: Option<f32>,
-        position: Option<String>,
-        color: Option<String>,
-        background_color: Option<String>,
-        font_size: Option<u32>,
-    }
-
-    let mut overrides_by_source_id: HashMap<String, TrackOverrides> = HashMap::new();
-    for segment in &timeline.caption_segments {
-        overrides_by_source_id
-            .entry(source_caption_id(&segment.id).to_string())
-            .or_insert_with(|| TrackOverrides {
-                fade_duration: segment.fade_duration_override,
-                linger_duration: segment.linger_duration_override,
-                position: segment.position_override.clone(),
-                color: segment.color_override.clone(),
-                background_color: segment.background_color_override.clone(),
-                font_size: segment.font_size_override,
-            });
-    }
-
-    let mut mapped =
-        map_captions_to_edited_timeline(source_segments, timeline, recording_durations);
-    mapped.sort_by(|a, b| a.start.total_cmp(&b.start));
-
-    mapped
-        .into_iter()
-        .map(|segment| {
-            let overrides = overrides_by_source_id.get(source_caption_id(&segment.id));
-            CaptionTrackSegment {
-                id: segment.id.clone(),
-                start: segment.start,
-                end: segment.end,
-                text: segment.text,
-                words: segment.words,
-                fade_duration_override: overrides.and_then(|o| o.fade_duration),
-                linger_duration_override: overrides.and_then(|o| o.linger_duration),
-                position_override: overrides.and_then(|o| o.position.clone()),
-                color_override: overrides.and_then(|o| o.color.clone()),
-                background_color_override: overrides.and_then(|o| o.background_color.clone()),
-                font_size_override: overrides.and_then(|o| o.font_size),
-            }
-        })
-        .collect()
+    cap_project::derive_caption_track_segments(source_segments, timeline, recording_durations)
 }
 
 /// `heldTimeBefore` (`timeline-holds.ts:45-50`): how much hold-extended

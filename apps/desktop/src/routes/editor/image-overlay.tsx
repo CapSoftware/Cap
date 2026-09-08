@@ -5,6 +5,7 @@ import { useCanvasSnapTargets } from "./CanvasElementsOverlay";
 import { useEditorContext } from "./context";
 import { resizeImage } from "./images";
 import { SNAP_PX, snapMovingRect } from "./snapping";
+import { getOverlayZIndex } from "./timelineTracks";
 
 export function ImageOverlay(props: {
 	size: { width: number; height: number };
@@ -63,6 +64,8 @@ export function ImageOverlay(props: {
 		const targets = snapTargets({ image: index });
 		const resume = projectHistory.pause();
 		let moved = false;
+		let frame: number | undefined;
+		let pending: MouseEvent | undefined;
 		const move = (next: MouseEvent) => {
 			if (project.timeline?.imageSegments[index] !== source) return;
 			const delta = {
@@ -125,21 +128,52 @@ export function ImageOverlay(props: {
 					resizeImage(initial, delta, mode, canvas),
 				);
 		};
-		const finish = (next?: MouseEvent) => {
+		const scheduleMove = (next: MouseEvent) => {
+			pending = next;
+			if (frame !== undefined) return;
+			frame = requestAnimationFrame(() => {
+				frame = undefined;
+				const latest = pending;
+				pending = undefined;
+				if (latest) move(latest);
+			});
+		};
+		const finish = (next?: MouseEvent, cancelled = false) => {
 			if (!endDrag) return;
+			if (frame !== undefined) cancelAnimationFrame(frame);
+			frame = undefined;
+			pending = undefined;
 			if (next) move(next);
-			window.removeEventListener("mousemove", move);
+			window.removeEventListener("mousemove", scheduleMove);
 			window.removeEventListener("mouseup", finish);
 			window.removeEventListener("blur", cancel);
+			window.removeEventListener("keydown", keydown, true);
 			endDrag = undefined;
+			if (
+				cancelled &&
+				moved &&
+				project.timeline?.imageSegments[index] === source
+			)
+				setProject("timeline", "imageSegments", index, {
+					center: initial.center,
+					size: initial.size,
+					rotation: initial.rotation,
+				});
 			setSnapGuides([]);
 			resume();
 		};
-		const cancel = () => finish();
+		const cancel = () => finish(undefined, true);
+		const keydown = (next: KeyboardEvent) => {
+			if (next.key !== "Escape") return;
+			next.preventDefault();
+			next.stopImmediatePropagation();
+			cancel();
+		};
 		endDrag = cancel;
-		window.addEventListener("mousemove", move);
+		window.addEventListener("mousemove", scheduleMove);
 		window.addEventListener("mouseup", finish);
 		window.addEventListener("blur", cancel);
+		window.addEventListener("keydown", keydown, true);
 	}
 
 	createEventListener(window, "keydown", (event) => {
@@ -150,6 +184,14 @@ export function ImageOverlay(props: {
 					["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)))
 		)
 			return;
+		if (
+			event.key === "Escape" &&
+			editorState.timeline.selection?.type === "image"
+		) {
+			event.preventDefault();
+			setEditorState("timeline", "selection", null);
+			return;
+		}
 		const direction = {
 			ArrowLeft: [-1, 0],
 			ArrowRight: [1, 0],
@@ -160,6 +202,7 @@ export function ImageOverlay(props: {
 		const items = visible().filter(({ index }) => selected(index));
 		if (!items.length) return;
 		event.preventDefault();
+		event.stopPropagation();
 		const resume = projectHistory.pause();
 		for (const { segment, index } of items) {
 			const step = event.shiftKey ? 10 : 1;
@@ -192,6 +235,7 @@ export function ImageOverlay(props: {
 							data-image-overlay
 							class="group/image absolute pointer-events-auto cursor-move"
 							style={{
+								"z-index": getOverlayZIndex(project, "image", segment.track),
 								left: `${segment.center.x * 100}%`,
 								top: `${segment.center.y * 100}%`,
 								width: `${segment.size.x * 100}%`,

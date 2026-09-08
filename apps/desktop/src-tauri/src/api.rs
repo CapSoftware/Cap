@@ -329,34 +329,6 @@ pub struct Organization {
     pub brand_colors: OrganizationBrandColors,
 }
 
-pub async fn signal_recording_complete(
-    app: &AppHandle,
-    video_id: &str,
-) -> Result<(), AuthedApiError> {
-    let resp = app
-        .authed_api_request("/api/upload/recording-complete", |client, url| {
-            client
-                .post(url)
-                .header("Content-Type", "application/json")
-                .json(&serde_json::json!({
-                    "videoId": video_id,
-                }))
-        })
-        .await
-        .map_err(|err| format!("api/signal_recording_complete/request: {err}"))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let error_body = resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!("api/signal_recording_complete/{status}: {error_body}").into());
-    }
-
-    Ok(())
-}
-
 pub async fn verify_recording_complete(
     app: &AppHandle,
     video_id: &str,

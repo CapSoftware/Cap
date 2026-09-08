@@ -35,6 +35,7 @@ aho-corasick.workspace = true
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+tracing-appender = "0.2.3"
 tempfile = "3"
 
 [lints]

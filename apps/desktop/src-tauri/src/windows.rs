@@ -3303,6 +3303,13 @@ impl ShowCapWindow {
             .theme(theme)
             .devtools(cfg!(debug_assertions));
 
+        #[cfg(all(target_os = "macos", debug_assertions))]
+        if matches!(id, CapWindowId::Main) {
+            // Main stays hidden until its frontend mounts; WebKit must finish loading Vite first.
+            builder = builder
+                .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled);
+        }
+
         if !id.is_transparent() {
             let is_dark = match theme {
                 Some(tauri::Theme::Dark) => true,
