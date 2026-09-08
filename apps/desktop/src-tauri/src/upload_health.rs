@@ -11,6 +11,10 @@ use crate::{
     web_api::{AuthedApiError, ManagerExt},
 };
 
+mod timing;
+
+use timing::{measure_warm_probe_rtt, upload_elapsed_after_rtt, upload_mbps_for_bytes};
+
 const PROBE_BYTES: usize = 256 * 1024;
 const HEALTH_FRESH_FOR: Duration = Duration::from_secs(10 * 60);
 const HEALTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
@@ -168,25 +172,8 @@ async fn measure_probe_rtt(app: &AppHandle) -> Option<Duration> {
     }
 }
 
-fn upload_elapsed_after_rtt(total_elapsed: Duration, rtt_elapsed: Option<Duration>) -> Duration {
-    let total_elapsed = total_elapsed.max(Duration::from_millis(1));
-
-    let Some(rtt_elapsed) = rtt_elapsed else {
-        return total_elapsed;
-    };
-
-    match total_elapsed.checked_sub(rtt_elapsed) {
-        Some(adjusted_elapsed) if adjusted_elapsed >= Duration::from_millis(50) => adjusted_elapsed,
-        _ => total_elapsed,
-    }
-}
-
-fn upload_mbps_for_bytes(byte_count: usize, elapsed: Duration) -> f64 {
-    (byte_count as f64 * 8.0) / elapsed.max(Duration::from_millis(1)).as_secs_f64() / 1_000_000.0
-}
-
 async fn run_probe(app: &AppHandle) -> UploadHealthSnapshot {
-    let rtt_elapsed = measure_probe_rtt(app).await;
+    let rtt_elapsed = measure_warm_probe_rtt(HEALTH_RTT_TIMEOUT, || measure_probe_rtt(app)).await;
     let payload = probe_payload();
     let payload_len = payload.len();
 
@@ -372,21 +359,5 @@ mod tests {
         };
 
         assert_eq!(cache.fresh_instant_resolution_cap().await, Some(1280));
-    }
-
-    #[test]
-    fn subtracts_rtt_from_probe_elapsed_when_safe() {
-        assert_eq!(
-            upload_elapsed_after_rtt(Duration::from_millis(700), Some(Duration::from_millis(500))),
-            Duration::from_millis(200)
-        );
-    }
-
-    #[test]
-    fn keeps_total_elapsed_when_rtt_would_overcorrect() {
-        assert_eq!(
-            upload_elapsed_after_rtt(Duration::from_millis(520), Some(Duration::from_millis(500))),
-            Duration::from_millis(520)
-        );
     }
 }
