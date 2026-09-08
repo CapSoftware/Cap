@@ -54,7 +54,7 @@ const publishSchema = z.object({
 		.int()
 		.positive()
 		.max(512 * 1024 * 1024),
-	inputLufs: z.number().finite().min(-50).max(-18),
+	inputLufs: z.number().finite().min(-55).max(-18),
 	outputLufs: z.number().finite().max(-14),
 	truePeak: z.number().finite().max(-1),
 });
@@ -193,9 +193,14 @@ export async function handleAudioLevelPublication(payload: unknown) {
 		const parsed = publishSchema.safeParse(payload);
 		if (!parsed.success) return unchanged("invalid-request");
 		const result = parsed.data;
+		const maximumGain = Math.min(
+			28,
+			Math.max(12, -22 - result.inputLufs),
+			-16 - result.inputLufs,
+		);
 		if (
 			result.outputLufs < result.inputLufs + 0.5 ||
-			result.outputLufs > result.inputLufs + 12.75
+			result.outputLufs > result.inputLufs + maximumGain + 0.75
 		)
 			return unchanged("invalid-levels");
 		const context = decodeToken(result.token, secret);

@@ -161,6 +161,28 @@ async function prepare(overrides: Record<string, unknown> = {}) {
 }
 
 describe("audio derivative publication", () => {
+	it.each([
+		{ inputLufs: -50.48, outputLufs: -22.49, truePeak: -3.04 },
+		{ inputLufs: -55, outputLufs: -27, truePeak: -10 },
+		{ inputLufs: -35, outputLufs: -22, truePeak: -3 },
+	])(
+		"selects a validated quiet correction for playback: %j",
+		async (levels) => {
+			const prepared = await prepare();
+			expect(
+				await handleAudioLevelPublication({
+					...result,
+					...levels,
+					token: prepared.token,
+				}),
+			).toEqual({ status: "published" });
+			expect(writes).toHaveLength(1);
+			expect(resolveRecordingObjectKey(current, "owner/video/result.mp4")).toBe(
+				current.source.audioLevelOutputKey,
+			);
+			expect(getPublishedRecordingOutputKey(current)).toBe(sourceKey);
+		},
+	);
 	it.each(["desktopMP4", "webMP4"] as const)(
 		"publishes %s with the original retained",
 		async (type) => {
@@ -229,6 +251,10 @@ describe("audio derivative publication", () => {
 			{ token: `${prepared.token}0` },
 			{ truePeak: 0 },
 			{ outputLufs: -30 },
+			{ inputLufs: -55.01, outputLufs: -27.01 },
+			{ inputLufs: -50.48, outputLufs: -21.48 },
+			{ inputLufs: -35, outputLufs: -21 },
+			{ inputLufs: -30, outputLufs: -17 },
 			{ outputSize: 1024 * 1024 },
 		]) {
 			expect(
