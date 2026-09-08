@@ -41,6 +41,9 @@ jobs:
         working-directory: apps/web
         run: |
           pnpm exec vitest run \
+            __tests__/unit/audio-level-publication.test.ts \
+            __tests__/unit/recording-output.test.ts \
+            __tests__/unit/recording-storage-lifecycle.test.ts \
             __tests__/unit/desktop-recording-*.test.ts \
             __tests__/unit/desktop-segments-*.test.ts \
             __tests__/unit/finalize-desktop-recording.test.ts \

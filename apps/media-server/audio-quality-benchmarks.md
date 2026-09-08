@@ -1,12 +1,26 @@
 # Instant audio quality experiment
 
-This is an offline, shadow-only experiment. No route, recording finalizer, player,
-export, upload, desktop capture path, or production flag imports the worker.
-`mode: "off"` returns before filesystem access. There is no publishing mode.
+The level-correction worker is connected to the desktop recording finalizer after
+the original recording is verified and published. The original output key and
+verification receipt remain intact. A separate, versioned MP4 becomes the playback
+and download source only after local and remote-byte validation and an atomic check
+that ownership, storage, source, and upload state have not changed.
 
-The proposed first rollout is bounded, constant level correction, after production
-validation. EQ and denoising remain experimental because consistent perceptual
-improvement has not been established. This PR does not enable either profile.
+The serving integration uses bounded, constant level correction. EQ and denoising
+remain experimental because consistent perceptual improvement has not been
+established. No desktop capture change is required.
+
+Eligibility is limited to newly finalized, durably verified desktop MP4 recordings
+on S3-compatible storage, at most 15 minutes and 256 MiB. All existing audio-policy
+gates still apply. Google Drive, legacy recordings without an immutable output,
+unsupported audio, and larger recordings retain their original audio. There is no
+historical backfill. Only one enhancement runs per media-server replica, it requires
+spare processing capacity, and the entire request has a two-minute deadline.
+Capacity, timeout, transfer, or validation failures retain the original. The step
+does not retry capacity failures or delay original publication.
+
+Rollback to the previous web deployment selects the retained original output;
+the original recording verification target is never redirected to a derivative.
 
 ## Evidence and limits
 
@@ -135,7 +149,7 @@ browser captures and recordings without completed transcripts, were left unchang
 by stream, level, headroom, or timestamp gates. All original hashes were preserved.
 These are bounded compatibility checks, not proof of safety for every possible file.
 
-## Before serving any enhanced audio
+## Before enabling voice processing
 
 Human review of the 12 volume-matched A/B excerpts is still required. Speech-only
 eligibility, noisy and mixed-system-audio cases, and recordings excluded by the
@@ -147,9 +161,10 @@ Run the exact policy in the production Linux image, then verify actual share-pag
 embed, seeking, downloads, edits, transcript alignment, and fallback behavior.
 Measure worker memory, throughput, storage, and tail latency before rollout.
 
-Future integration should create a separately versioned derivative after the
-original is available, using a durable idempotent job bound to the source hash.
-Publish atomically only after validation and only if the source still matches.
-Keep the original available throughout processing, on failure, and for rollback.
-Existing desktop installs could then benefit server-side without a capture update;
-this experiment does not yet implement that serving integration.
+The level-correction integration runs as a durable Workflow step. Its immutable
+derivative key is bound to the original key, object identity, and step identity.
+The worker hashes the source and output, verifies video packets and audio timing,
+and verifies the uploaded bytes before returning. Publication rechecks source and
+output identities and locks the video row while selecting the derivative. A
+response lost after upload can leave an unpublished derivative; it is never served
+and remains under the recording's prefix for normal recording deletion.

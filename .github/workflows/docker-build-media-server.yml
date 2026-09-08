@@ -109,6 +109,8 @@ jobs:
             src/__tests__/lib/audio-quality-formats.integration.test.ts \
             src/__tests__/lib/audio-quality-benchmark.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/audio-levels-route.integration.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/lib/recording-verification.integration.test.ts \
             src/__tests__/lib/job-manager.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
