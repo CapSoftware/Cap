@@ -11,7 +11,9 @@ RUN bun install --frozen-lockfile --production
 
 COPY apps/media-server/src ./src
 
-RUN bun test src/__tests__/lib/drive-resumable-upload.test.ts src/__tests__/lib/storage-upload.test.ts src/__tests__/lib/container-memory.test.ts \
+RUN bun test src/__tests__/lib/audio-quality-policy.test.ts src/__tests__/lib/audio-quality.integration.test.ts \
+	&& bun test src/__tests__/lib/audio-quality-formats.integration.test.ts src/__tests__/lib/audio-quality-benchmark.test.ts \
+	&& bun test src/__tests__/lib/drive-resumable-upload.test.ts src/__tests__/lib/storage-upload.test.ts src/__tests__/lib/container-memory.test.ts \
 	&& bun test src/__tests__/lib/media-size.test.ts src/__tests__/lib/media-probe.integration.test.ts \
 	&& bun test src/__tests__/lib/recording-verification.integration.test.ts src/__tests__/lib/job-manager.test.ts \
 	&& bun test src/__tests__/lib/media-transfer.test.ts \
