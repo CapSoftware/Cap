@@ -5,7 +5,6 @@ import { userIsPro } from "@cap/utils";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
-import { reconcileStaleEditUpload } from "@/lib/video-edit-processing";
 import {
 	areEditSpecsEquivalent,
 	createIdentityEditSpec,
@@ -25,8 +24,6 @@ export default async function EditVideoPage(props: {
 	const user = await getCurrentUser();
 
 	if (!user) notFound();
-
-	await reconcileStaleEditUpload(videoId);
 
 	const [video] = await db()
 		.select({

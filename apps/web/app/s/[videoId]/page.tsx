@@ -66,10 +66,7 @@ import {
 } from "@/lib/social-crawlers";
 import { transcribeVideo } from "@/lib/transcribe";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
-import {
-	isEditSourceKey,
-	reconcileStaleEditUpload,
-} from "@/lib/video-edit-processing";
+import { isEditSourceKey } from "@/lib/video-edit-processing";
 import {
 	areEditSpecsEquivalent,
 	createIdentityEditSpec,
@@ -327,8 +324,6 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const videoId = params.videoId as Video.VideoId;
 	const awaitRecording =
 		isValidVideoIdParam(videoId) && hasRecordingStoppedParam(searchParams);
-
-	await reconcileStaleEditUpload(videoId);
 
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
