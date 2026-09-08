@@ -176,6 +176,7 @@ pub struct ExportUi {
     pub preview_stats: Option<PreviewStats>,
     pub preview_error: Option<String>,
     pub preview_task: Option<gpui::Task<()>>,
+    preview_request: Arc<()>,
     pub phase: ExportPhase,
     close_requested: bool,
     pub rendered: u32,
@@ -231,6 +232,7 @@ impl ExportUi {
             preview_stats: None,
             preview_error: None,
             preview_task: None,
+            preview_request: Arc::new(()),
             phase: ExportPhase::Idle,
             close_requested: false,
             rendered: 0,
@@ -246,6 +248,14 @@ impl ExportUi {
             upload_progress: 0.0,
             copy_link_pressed: false,
         }
+    }
+
+    fn update_preview(&mut self, request: &Arc<()>, update: impl FnOnce(&mut Self)) -> bool {
+        if !Arc::ptr_eq(&self.preview_request, request) {
+            return false;
+        }
+        update(self);
+        true
     }
 
     fn persist(&self) {
@@ -483,6 +493,8 @@ impl EditorWindow {
         // Match Windows editor playback: a fresh Media Foundation preview seek can return black.
         let force = cfg!(target_os = "windows") || ui.force_ffmpeg;
         ui.preview_error = None;
+        let request = Arc::new(());
+        ui.preview_request = request.clone();
         ui.preview_task = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(120))
@@ -496,7 +508,7 @@ impl EditorWindow {
                 let Some(ui) = this.export.as_mut() else {
                     return;
                 };
-                match result {
+                let updated = ui.update_preview(&request, |ui| match result {
                     Some(Ok(preview)) => {
                         let bytes = base64::Engine::decode(
                             &base64::engine::general_purpose::STANDARD,
@@ -523,6 +535,9 @@ impl EditorWindow {
                     None => {
                         ui.preview_error = Some("Preview unavailable".into());
                     }
+                });
+                if !updated {
+                    return;
                 }
                 cx.notify();
                 window.refresh();
@@ -2303,6 +2318,21 @@ mod tests {
             advanced_open: false,
             organization_id: None,
         })
+    }
+
+    #[test]
+    fn stale_preview_results_cannot_replace_the_latest_or_reopened_preview() {
+        let mut ui = clipboard_export();
+        let previous = ui.preview_request.clone();
+        let current = Arc::new(());
+        ui.preview_request = current.clone();
+        assert!(ui.update_preview(&current, |ui| ui.preview_error = Some("Latest".into())));
+        assert!(!ui.update_preview(&previous, |ui| ui.preview_error = Some("Stale".into())));
+        assert_eq!(ui.preview_error.as_deref(), Some("Latest"));
+
+        let mut reopened = clipboard_export();
+        assert!(!reopened.update_preview(&current, |ui| ui.preview_error = Some("Closed".into())));
+        assert!(reopened.preview_error.is_none());
     }
 
     #[test]
