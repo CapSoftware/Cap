@@ -1494,6 +1494,7 @@ dependencies = [
  "gdkwayland-sys",
  "global-hotkey",
  "gtk",
+ "hound",
  "image 0.25.8",
  "kameo",
  "keyed_priority_queue",

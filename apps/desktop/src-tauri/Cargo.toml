@@ -151,6 +151,7 @@ cap-camera-ffmpeg = { path = "../../../crates/camera-ffmpeg" }
 
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
 parakeet-rs = "0.3.4"
+hound = "3.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libappindicator = "0.9.0"
