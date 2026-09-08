@@ -1,15 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { commands, type UploadHealthStatus } from "./tauri";
 
-export type UploadHealthKind = "unknown" | "healthy" | "slow" | "unavailable";
-
-export type UploadHealthStatus = {
-	kind: UploadHealthKind;
-	uploadMbps: number | null;
-	maxInstantResolution: number | null;
-	checkedAtUnixMs: number | null;
-	stale: boolean;
-	message: string;
-};
+export type { UploadHealthKind, UploadHealthStatus } from "./tauri";
 
 export type UploadHealthPresentation = {
 	label: string;
@@ -17,11 +8,9 @@ export type UploadHealthPresentation = {
 	tone: "neutral" | "good" | "warning" | "danger";
 };
 
-export const getUploadHealthStatus = () =>
-	invoke<UploadHealthStatus>("get_upload_health_status");
+export const getUploadHealthStatus = commands.getUploadHealthStatus;
 
-export const refreshUploadHealthStatus = () =>
-	invoke<UploadHealthStatus>("refresh_upload_health_status");
+export const refreshUploadHealthStatus = commands.refreshUploadHealthStatus;
 
 export function formatUploadMbps(uploadMbps: number) {
 	if (uploadMbps >= 10) return `${Math.round(uploadMbps)} Mbps`;

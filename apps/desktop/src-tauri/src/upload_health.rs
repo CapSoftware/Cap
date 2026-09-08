@@ -39,6 +39,7 @@ pub struct UploadHealthStatus {
     pub kind: UploadHealthKind,
     pub upload_mbps: Option<f64>,
     pub max_instant_resolution: Option<u32>,
+    #[specta(type = Option<f64>)]
     pub checked_at_unix_ms: Option<u64>,
     pub stale: bool,
     pub message: String,
@@ -357,6 +358,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn timestamp_exports_as_a_nullable_number() {
+        let bindings =
+            specta_typescript::export::<UploadHealthStatus>(&crate::typescript_exporter()).unwrap();
+        assert!(bindings.contains("checkedAtUnixMs: number | null"));
+    }
+
+    #[test]
     fn maps_upload_speed_to_resolution_tiers() {
         assert_eq!(max_resolution_for_upload_mbps(3.9), 1280);
         assert_eq!(max_resolution_for_upload_mbps(6.0), 1920);
@@ -372,7 +380,7 @@ mod tests {
                 upload_mbps: Some(50.0),
                 max_instant_resolution: Some(3840),
                 checked_at_unix_ms: Some(now_unix_ms()),
-                recorded_at: Some(Instant::now() - HEALTH_FRESH_FOR - Duration::from_secs(1)),
+                recorded_at: Instant::now().checked_sub(HEALTH_FRESH_FOR + Duration::from_secs(1)),
                 message: "old".to_string(),
             }),
             probe: ProbeControl::default(),
