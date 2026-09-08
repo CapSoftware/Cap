@@ -37,6 +37,57 @@ Clearing the two audio selection fields restores the retained original. Rolling 
 to the pre-activation web deployment also selects the original; the original recording
 verification target is never redirected to a derivative.
 
+## Quiet-recording policy update
+
+A customer-reported 13.93-second recording measured -50.48 LUFS with -31.03 dBTP
+peaks. A local +28 dB comparison was preferred in a listening check. The previous
+constant-gain policy skipped it below -50 LUFS, and its audio ended 144 ms after
+the video, exceeding the old input-duration check.
+
+Level correction now accepts finite measurements down to -55 LUFS. It retains
+the previous gain for inputs at or above -34 LUFS and progressively raises quieter
+inputs toward -22 LUFS, capped at 28 dB and the available -2 dBTP peak headroom.
+Encoded output must still remain below -1 dBTP and pass the existing timing and
+dynamics checks. Output gain is checked against that recording's actual planned
+gain, including the peak limit. Silence, invalid measurements, clipping, and
+insufficient headroom keep the original. Experimental voice processing retains
+its previous level limits and remains disabled.
+The web publication callback enforces the same quiet-input range and loudness-based
+gain bound before selecting the derivative. Its tests include the reported output
+measurements, excessive-gain rejection, and retained-original playback resolution.
+
+Level correction permits different source audio and video end times because each
+original timeline is preserved independently. It neither pads nor truncates one
+track to match the other. Source and output video packets, terminal packet timing,
+audio start, decoded sample count, and audio duration are still checked. Both
+track durations must remain within the worker's duration limit. Tests exercise
+quiet audio ending before and after video, including the last audible pulse.
+
+Rerunning the same 60 audio files produced 42 validated corrections and 18 unchanged
+originals, with no rejected outputs or previously accepted files becoming ineligible.
+Twenty-five prior output hashes were unchanged; fourteen prior outputs received
+stronger bounded gain, and two previously excluded quiet recordings became eligible.
+The remaining unchanged-gain output matched a fresh run of the previous worker
+byte for byte, despite differing from its historical encoded hash.
+All decoded sample counts were unchanged. The largest container-duration change was
+21 ms, and the highest encoded true peak was -1.95 dBTP. The input corpus remains
+the same historical tuning/holdout split; repeated tuning does not create a new
+independent holdout.
+
+The complete MP4 worker was also exercised offline on 21 production files in the
+Linux image with two CPUs and 2 GiB of memory. Four published into mocked storage
+and seventeen retained their originals. Every original hash was preserved, and no
+source download occurred. The reported recording reached -22.49 LUFS and -3.04 dBTP
+with identical decoded sample count and audio duration, unchanged LRA, and verified
+video packets. Constant gain also raises existing background noise; this is a level
+improvement, not a denoising claim or a universal listening-quality guarantee.
+
+Signal comparisons covered all 42 accepted audio files and the reported recording.
+The minimum STOI similarity to the input was 0.9924, median 0.99986, minimum SI-SDR
+25.93 dB, and measured lag zero in every comparison. These relative metrics check
+encoding distortion against each original; they do not establish clean speech or
+improved intelligibility against a clean reference.
+
 ## Evidence and limits
 
 The September 7–8, 2026 study measured 60 additional public, unprotected Instant
