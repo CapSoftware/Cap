@@ -214,7 +214,7 @@ impl KeyboardTrackSegment {
         } else if self.start < cut_start {
             self.end = cut_start;
         } else {
-            self.start = cut_start;
+            self.start = cut_end - shift;
             self.end = (self.end - shift).max(self.start);
         }
         let new_start = self.start;
@@ -306,31 +306,212 @@ pub fn generate_project_keyboard_segments(
     Ok(project_keyboard_events(&takes, timeline, settings))
 }
 
+fn legacy_keyboard_capture_offset(meta: &crate::RecordingMeta, recording_clip: u32) -> f64 {
+    match meta.studio_meta() {
+        Some(crate::StudioRecordingMeta::MultipleSegments { inner }) => inner
+            .segments
+            .get(recording_clip as usize)
+            .and_then(|take| take.latest_start_time())
+            .unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
+fn project_legacy_keyboard_track(
+    meta: &crate::RecordingMeta,
+    timeline: &crate::TimelineConfiguration,
+    settings: &crate::KeyboardSettings,
+) -> Vec<KeyboardTrackSegment> {
+    let offsets = crate::caption_timing::clip_timeline_offsets(timeline);
+    let holds = timeline.hold_windows();
+    let to_output = |effective: f64, end: bool| {
+        let mut output = effective;
+        for (start, finish) in &holds {
+            if output > *start || (!end && output == *start) {
+                output += finish - start;
+            } else {
+                break;
+            }
+        }
+        output
+    };
+    let mut result: Vec<_> = timeline
+        .keyboard_segments
+        .iter()
+        .filter(|segment| segment.id.starts_with("kb-edit-"))
+        .cloned()
+        .collect();
+    for (index, clip) in timeline.segments.iter().enumerate() {
+        if !clip.timescale.is_finite() || clip.timescale <= 0.0 {
+            continue;
+        }
+        let offset = legacy_keyboard_capture_offset(meta, clip.recording_clip);
+        let source_start = clip.start + offset;
+        let source_end = clip.end + offset;
+        for previous in &timeline.keyboard_segments {
+            if previous.id.starts_with("kb-edit-") {
+                continue;
+            }
+            let start = previous.start.max(source_start);
+            let end = previous.end.min(source_end);
+            if !start.is_finite() || !end.is_finite() || end <= start {
+                continue;
+            }
+            let map = |time: f64, end: bool| {
+                to_output(offsets[index] + (time - source_start) / clip.timescale, end)
+            };
+            let mut segment = previous.clone();
+            segment.id = format!("kb-edit-legacy-{index}-{}", previous.id);
+            segment.start = map(start, false);
+            segment.end = map(end, true);
+            let retained: Vec<bool> = previous
+                .keys
+                .iter()
+                .map(|key| {
+                    let time = previous.start + key.time_offset / 1000.0;
+                    time >= source_start && time < source_end
+                })
+                .collect();
+            if retained.iter().any(|keep| !keep) {
+                let chars: Vec<char> = previous.display_text.chars().collect();
+                if chars.len() != previous.keys.len() || !retained.iter().any(|keep| *keep) {
+                    continue;
+                }
+                segment.display_text = chars
+                    .into_iter()
+                    .zip(&retained)
+                    .filter_map(|(ch, keep)| keep.then_some(ch))
+                    .collect();
+            }
+            segment.keys = previous
+                .keys
+                .iter()
+                .zip(retained)
+                .filter(|(_, keep)| *keep)
+                .map(|(key, _)| KeyPressDisplay {
+                    key: key.key.clone(),
+                    time_offset: ((map(previous.start + key.time_offset / 1000.0, false)
+                        - segment.start)
+                        * 1000.0)
+                        .max(0.0),
+                })
+                .collect();
+            segment.fade_duration_override = Some(
+                previous
+                    .fade_duration_override
+                    .unwrap_or(settings.fade_duration)
+                    / clip.timescale as f32,
+            );
+            result.push(segment);
+        }
+    }
+    result.sort_by(|a, b| a.start.total_cmp(&b.start));
+    result
+}
+
+fn legacy_keyboard_tracks_match(
+    generated: &[KeyboardTrackSegment],
+    saved: &[KeyboardTrackSegment],
+) -> bool {
+    generated.len() == saved.len()
+        && generated.iter().zip(saved).all(|(generated, saved)| {
+            generated.id == saved.id
+                && (generated.start - saved.start).abs() <= 1e-6
+                && (generated.end - saved.end).abs() <= 1e-6
+                && generated.display_text == saved.display_text
+                && generated.keys.len() == saved.keys.len()
+                && generated
+                    .keys
+                    .iter()
+                    .zip(&saved.keys)
+                    .all(|(a, b)| a.key == b.key && (a.time_offset - b.time_offset).abs() <= 1e-3)
+        })
+}
+
+fn legacy_keyboard_after_cuts(
+    legacy: &[KeyboardTrackSegment],
+    timeline: &crate::TimelineConfiguration,
+) -> Option<Vec<KeyboardTrackSegment>> {
+    if timeline.segments.is_empty()
+        || !timeline.transitions.is_empty()
+        || !timeline.hold_windows().is_empty()
+        || timeline.segments.iter().any(|clip| {
+            clip.recording_clip != 0
+                || !clip.timescale.is_finite()
+                || (clip.timescale - 1.0).abs() > 1e-6
+                || !clip.start.is_finite()
+                || clip.start < 0.0
+                || !clip.end.is_finite()
+                || clip.end <= clip.start
+        })
+        || timeline
+            .segments
+            .windows(2)
+            .any(|pair| pair[0].end > pair[1].start)
+    {
+        return None;
+    }
+    let mut projected = legacy.to_vec();
+    for index in (0..timeline.segments.len()).rev() {
+        let cut_start = index
+            .checked_sub(1)
+            .map(|previous| timeline.segments[previous].end)
+            .unwrap_or(0.0);
+        let cut_end = timeline.segments[index].start;
+        let shift = cut_end - cut_start;
+        if shift <= 1e-6 {
+            continue;
+        }
+        projected.retain_mut(|segment| {
+            if segment.end <= cut_start {
+                return true;
+            }
+            if segment.start >= cut_end {
+                segment.start -= shift;
+                segment.end -= shift;
+            } else if segment.start >= cut_start && segment.end <= cut_end {
+                return false;
+            } else if segment.start < cut_start && segment.end > cut_end {
+                segment.end -= shift;
+            } else if segment.start < cut_start {
+                segment.end = cut_start;
+            } else {
+                segment.start = cut_start;
+                segment.end = (segment.end - shift).max(cut_start);
+            }
+            true
+        });
+    }
+    Some(projected)
+}
+
 pub fn synchronize_legacy_keyboard(
     meta: &crate::RecordingMeta,
     project: &mut crate::ProjectConfiguration,
 ) {
-    let (Some(keyboard), Some(timeline)) = (&project.keyboard, &mut project.timeline) else {
+    let Some(timeline) = &mut project.timeline else {
         return;
     };
     if timeline.keyboard_segments.is_empty()
         || timeline
             .keyboard_segments
             .iter()
-            .any(|segment| segment.id.starts_with("kb-edit-"))
+            .all(|segment| segment.id.starts_with("kb-edit-"))
     {
         return;
     }
-    let Some(crate::StudioRecordingMeta::MultipleSegments { inner }) = meta.studio_meta() else {
-        return;
-    };
-    let Ok(takes) = load_project_keyboard_events(meta) else {
-        return;
-    };
+    let settings = project
+        .keyboard
+        .as_ref()
+        .map(|keyboard| keyboard.settings.clone())
+        .unwrap_or_default();
+    let takes = load_project_keyboard_events(meta).ok();
     let mut events = KeyboardEvents {
         presses: takes
+            .as_ref()
             .into_iter()
-            .flat_map(|(events, _)| events.presses)
+            .flatten()
+            .flat_map(|(events, _)| events.presses.clone())
             .collect(),
     };
     events
@@ -338,34 +519,23 @@ pub fn synchronize_legacy_keyboard(
         .sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
     let legacy = group_key_events(
         &events,
-        keyboard.settings.grouping_threshold_ms,
-        f64::from(keyboard.settings.linger_duration) * 1000.0,
-        keyboard.settings.show_modifiers,
-        keyboard.settings.show_special_keys,
+        settings.grouping_threshold_ms,
+        f64::from(settings.linger_duration) * 1000.0,
+        settings.show_modifiers,
+        settings.show_special_keys,
     );
-    let unchanged = legacy.len() == timeline.keyboard_segments.len()
-        && legacy
-            .iter()
-            .zip(&timeline.keyboard_segments)
-            .all(|(generated, saved)| {
-                generated.id == saved.id
-                    && (generated.start - saved.start).abs() <= 1e-6
-                    && (generated.end - saved.end).abs() <= 1e-6
-                    && generated.display_text == saved.display_text
-                    && generated.keys.len() == saved.keys.len()
-                    && generated.keys.iter().zip(&saved.keys).all(|(a, b)| {
-                        a.key == b.key && (a.time_offset - b.time_offset).abs() <= 1e-3
-                    })
-            });
-    if !unchanged {
+    let unchanged =
+        takes.is_some() && legacy_keyboard_tracks_match(&legacy, &timeline.keyboard_segments);
+    let stale_cut_track = takes.as_ref().is_some_and(|takes| takes.len() == 1)
+        && legacy_keyboard_after_cuts(&legacy, timeline).is_some_and(|projected| {
+            legacy_keyboard_tracks_match(&projected, &timeline.keyboard_segments)
+        });
+    if !unchanged && !stale_cut_track {
+        timeline.keyboard_segments = project_legacy_keyboard_track(meta, timeline, &settings);
         return;
     }
-    // Older projects have no clock marker. Only untouched generated timings
-    // can be identified safely; ambiguous manual edits remain as authored.
-    let Ok(mut generated) = generate_project_keyboard_segments(meta, timeline, &keyboard.settings)
-    else {
-        return;
-    };
+    let mut generated =
+        project_keyboard_events(takes.as_deref().unwrap_or_default(), timeline, &settings);
     let clip_offsets = crate::caption_timing::clip_timeline_offsets(timeline);
     let holds = timeline.hold_windows();
     for segment in &mut generated {
@@ -386,17 +556,18 @@ pub fn synchronize_legacy_keyboard(
             .sum();
         let source_time =
             clip.start + (segment.start - held_time - clip_offsets[index]) * clip.timescale;
-        let offset = inner
-            .segments
-            .get(clip.recording_clip as usize)
-            .and_then(|take| take.latest_start_time())
-            .unwrap_or(0.0);
-        let captured = source_time + offset;
+        let captured = source_time + legacy_keyboard_capture_offset(meta, clip.recording_clip);
+        let Some(source) = legacy
+            .iter()
+            .rev()
+            .find(|source| captured >= source.start && captured < source.end)
+        else {
+            continue;
+        };
         let Some(previous) = timeline
             .keyboard_segments
             .iter()
-            .rev()
-            .find(|previous| captured >= previous.start && captured < previous.end)
+            .find(|previous| previous.id == source.id)
         else {
             continue;
         };
@@ -1102,7 +1273,7 @@ mod timing_tests {
     }
 
     #[test]
-    fn legacy_generated_tracks_migrate_once_without_overwriting_manual_edits() {
+    fn legacy_tracks_migrate_once_and_preserve_authored_payloads() {
         let directory = tempfile::tempdir().unwrap();
         let captured = events(&[("a", 8.2)]);
         captured
@@ -1126,6 +1297,11 @@ mod timing_tests {
             Some("#123456".into());
         let mut manual = project.clone();
         manual.timeline.as_mut().unwrap().keyboard_segments[0].start += 0.1;
+        synchronize_legacy_keyboard(&meta, &mut manual);
+        let migrated_manual = &manual.timeline.as_ref().unwrap().keyboard_segments[0];
+        assert!((migrated_manual.start - 7.1).abs() < 1e-9);
+        assert_eq!(migrated_manual.display_text, "a");
+        assert_eq!(migrated_manual.color_override.as_deref(), Some("#123456"));
         let original_manual = serde_json::to_string(&manual).unwrap();
         synchronize_legacy_keyboard(&meta, &mut manual);
         assert_eq!(serde_json::to_string(&manual).unwrap(), original_manual);
@@ -1142,6 +1318,57 @@ mod timing_tests {
                 .presses,
             captured.presses
         );
+    }
+
+    #[test]
+    fn legacy_generated_tracks_already_rippled_by_a_cut_are_not_shifted_twice() {
+        let directory = tempfile::tempdir().unwrap();
+        let captured = events(&[("a", 8.2)]);
+        captured
+            .write_to_file(&directory.path().join("keyboard.bin"))
+            .unwrap();
+        let mut meta: crate::RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name":"old cut", "segments":[
+                {"display":{"path":"display.mp4","fps":30,"start_time":0.2},"keyboard":"keyboard.bin"}
+            ],"cursors":{}
+        })).unwrap();
+        meta.project_path = directory.path().to_path_buf();
+        let mut project = crate::ProjectConfiguration {
+            keyboard: Some(crate::KeyboardData::default()),
+            timeline: Some(timeline(serde_json::json!([
+                {"start":0.0,"end":5.0,"timescale":1.0},
+                {"start":6.0,"end":10.0,"timescale":1.0}
+            ]))),
+            ..Default::default()
+        };
+        let mut track = group_key_events(&captured, 500.0, 800.0, true, true).remove(0);
+        track.start -= 1.0;
+        track.end -= 1.0;
+        track.color_override = Some("#123456".into());
+        project
+            .timeline
+            .as_mut()
+            .unwrap()
+            .keyboard_segments
+            .push(track);
+        let mut prefix_cut = project.clone();
+        prefix_cut.timeline.as_mut().unwrap().segments = timeline(serde_json::json!([
+            {"start":1.0,"end":10.0,"timescale":1.0}
+        ]))
+        .segments;
+        synchronize_legacy_keyboard(&meta, &mut prefix_cut);
+        assert!(
+            (prefix_cut.timeline.as_ref().unwrap().keyboard_segments[0].start - 7.0).abs() < 1e-9
+        );
+        synchronize_legacy_keyboard(&meta, &mut project);
+        let segment = &project.timeline.as_ref().unwrap().keyboard_segments[0];
+        assert!((segment.start - 7.0).abs() < 1e-9);
+        assert!((segment.end - 7.8).abs() < 1e-6);
+        assert_eq!(segment.display_text, "a");
+        assert_eq!(segment.color_override.as_deref(), Some("#123456"));
+        let saved = serde_json::to_string(&project).unwrap();
+        synchronize_legacy_keyboard(&meta, &mut project);
+        assert_eq!(serde_json::to_string(&project).unwrap(), saved);
     }
 
     #[test]
@@ -1195,6 +1422,105 @@ mod timing_tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn authored_legacy_keyboard_projects_speed_holds_and_repeated_takes_without_logs() {
+        let meta: crate::RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name":"manual", "segments":[
+                {"display":{"path":"display.mp4","fps":30,"start_time":0.2}}
+            ],"cursors":{}
+        }))
+        .unwrap();
+        let mut project = crate::ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!([
+                {"start":2.0,"end":6.0,"timescale":2.0},
+                {"start":2.0,"end":6.0,"timescale":1.0}
+            ]))),
+            ..Default::default()
+        };
+        let mut track = group_key_events(
+            &events(&[("a", 2.8), ("b", 3.6)]),
+            1000.0,
+            1000.0,
+            true,
+            true,
+        )
+        .remove(0);
+        track.id = "kb-split-authored".into();
+        track.color_override = Some("#123456".into());
+        project
+            .timeline
+            .as_mut()
+            .unwrap()
+            .keyboard_segments
+            .push(track);
+        project.timeline.as_mut().unwrap().text_segments =
+            serde_json::from_value(serde_json::json!([
+                {"start":0.5,"end":1.5,"layout":"fullscreen","enabled":true}
+            ]))
+            .unwrap();
+        synchronize_legacy_keyboard(&meta, &mut project);
+        let segments = &project.timeline.as_ref().unwrap().keyboard_segments;
+        assert_eq!(segments.len(), 2);
+        assert!((segments[0].start - 0.3).abs() < 1e-9);
+        assert!((segments[0].keys[1].time_offset - 1400.0).abs() < 1e-6);
+        assert!((segments[1].start - 3.6).abs() < 1e-9);
+        assert!((segments[1].keys[1].time_offset - 800.0).abs() < 1e-6);
+        assert!(
+            segments
+                .iter()
+                .all(|segment| segment.id.starts_with("kb-edit-")
+                    && segment.display_text == "ab"
+                    && segment.color_override.as_deref() == Some("#123456"))
+        );
+        let saved = serde_json::to_string(&project).unwrap();
+        let mut reopened = serde_json::from_str(&saved).unwrap();
+        synchronize_legacy_keyboard(&meta, &mut reopened);
+        assert_eq!(serde_json::to_string(&reopened).unwrap(), saved);
+    }
+
+    #[test]
+    fn authored_legacy_keyboard_discards_keys_from_deleted_footage() {
+        let meta: crate::RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name":"manual cut", "segments":[
+                {"display":{"path":"display.mp4","fps":30}}
+            ],"cursors":{}
+        }))
+        .unwrap();
+        let mut project = crate::ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!([
+                {"start":1.0,"end":4.0,"timescale":1.0},
+                {"start":6.0,"end":9.0,"timescale":1.0}
+            ]))),
+            ..Default::default()
+        };
+        let mut track = group_key_events(
+            &events(&[("a", 1.0), ("b", 5.0), ("c", 8.0)]),
+            5000.0,
+            1000.0,
+            true,
+            true,
+        )
+        .remove(0);
+        track.id = "authored".into();
+        track.display_text = "abé".into();
+        track.color_override = Some("#123456".into());
+        project
+            .timeline
+            .as_mut()
+            .unwrap()
+            .keyboard_segments
+            .push(track);
+        synchronize_legacy_keyboard(&meta, &mut project);
+        let segments = &project.timeline.as_ref().unwrap().keyboard_segments;
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].display_text, "a");
+        assert_eq!(segments[1].display_text, "é");
+        assert_eq!(segments[1].start, 3.0);
+        assert_eq!(segments[1].keys[0].time_offset, 2000.0);
+        assert!(segments.iter().all(|segment| segment.keys.len() == 1
+            && segment.color_override.as_deref() == Some("#123456")));
     }
 
     #[test]
@@ -1339,6 +1665,16 @@ mod timing_tests {
         assert_eq!(segment.start, 10.0);
         assert_eq!(segment.end, 12.0);
         assert_eq!(segment.keys[1].time_offset, 1000.0);
+    }
+
+    #[test]
+    fn ripple_right_tail_uses_actual_duration_shift() {
+        let mut segment = typed_segment();
+        assert!(segment.ripple_delete(9.5, 11.5, 1.0));
+        assert_eq!(segment.start, 10.5);
+        assert_eq!(segment.end, 12.0);
+        assert_eq!(segment.display_text, "c");
+        assert_eq!(segment.keys[0].time_offset, 500.0);
     }
 
     #[test]
