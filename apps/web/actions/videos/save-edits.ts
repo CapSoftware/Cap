@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
@@ -12,6 +13,10 @@ import { Effect } from "effect";
 import { revalidatePath } from "next/cache";
 import { start } from "workflow/api";
 import { runPromise } from "@/lib/server";
+import {
+	clearPendingEdit,
+	type EditOperation,
+} from "@/lib/video-edit-operation";
 import { getEditSourceKey } from "@/lib/video-edit-processing";
 import {
 	areEditSpecsEquivalent,
@@ -76,16 +81,57 @@ async function ensureOriginalSourceCopy(
 }
 
 async function markEditProcessing({
-	videoId,
+	video,
 	sourceKey,
+	previousSpec,
 }: {
-	videoId: Video.VideoId;
+	video: typeof videos.$inferSelect;
 	sourceKey: string;
-}) {
-	await db()
-		.insert(videoUploads)
-		.values({
-			videoId,
+	previousSpec: VideoEditSpec;
+}): Promise<EditOperation> {
+	const startedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
+	const operation = { token: randomUUID(), startedAt: startedAt.toISOString() };
+	await db().transaction(async (tx) => {
+		const [current] = await tx
+			.select()
+			.from(videos)
+			.where(eq(videos.id, video.id))
+			.for("update");
+		if (
+			!current ||
+			current.ownerId !== video.ownerId ||
+			current.bucket !== video.bucket ||
+			current.storageIntegrationId !== video.storageIntegrationId ||
+			JSON.stringify(current.source) !== JSON.stringify(video.source)
+		) {
+			throw new Error("Video changed before the edit could start");
+		}
+		const [upload] = await tx
+			.select()
+			.from(videoUploads)
+			.where(eq(videoUploads.videoId, video.id))
+			.for("update");
+		if (upload || (current.metadata && "editProcessing" in current.metadata)) {
+			throw new Error("Video is already uploading or processing");
+		}
+		const [currentEdit] = await tx
+			.select()
+			.from(videoEdits)
+			.where(eq(videoEdits.videoId, video.id))
+			.for("update");
+		if (
+			!areEditSpecsEquivalent(
+				currentEdit?.editSpec ??
+					createIdentityEditSpec(
+						current.duration ?? previousSpec.sourceDuration,
+					),
+				previousSpec,
+			)
+		) {
+			throw new Error("Video edits changed before this edit could start");
+		}
+		await tx.insert(videoUploads).values({
+			videoId: video.id,
 			uploaded: 0,
 			total: 0,
 			mode: "singlepart",
@@ -94,21 +140,24 @@ async function markEditProcessing({
 			processingMessage: "Starting video edit...",
 			processingError: null,
 			rawFileKey: sourceKey,
-			updatedAt: new Date(),
-		})
-		.onDuplicateKeyUpdate({
-			set: {
-				uploaded: 0,
-				total: 0,
-				mode: "singlepart",
-				phase: "processing",
-				processingProgress: 0,
-				processingMessage: "Starting video edit...",
-				processingError: null,
-				rawFileKey: sourceKey,
-				updatedAt: new Date(),
-			},
+			startedAt,
+			updatedAt: startedAt,
 		});
+		const metadata = {
+			...(current.metadata ?? {}),
+			editProcessing: {
+				...operation,
+				sourceKey,
+				ownerId: current.ownerId,
+				bucket: current.bucket,
+				storageIntegrationId: current.storageIntegrationId,
+				source: JSON.stringify(current.source),
+				dispatch: "pending" as const,
+			},
+		};
+		await tx.update(videos).set({ metadata }).where(eq(videos.id, video.id));
+	});
+	return operation;
 }
 
 async function loadEditableVideo(videoId: Video.VideoId) {
@@ -181,13 +230,20 @@ export async function saveVideoEdits(
 		return { success: true, skipped: true };
 	}
 
-	const sourceKey = await ensureOriginalSourceCopy(
-		video,
-		existingEdit?.sourceKey,
-	);
+	const sourceKey =
+		existingEdit?.sourceKey ?? getEditSourceKey(video.ownerId, video.id);
 	const aiGenerationEnabled = await isAiGenerationEnabled(user);
-
-	await markEditProcessing({ videoId, sourceKey });
+	const operation = await markEditProcessing({
+		video,
+		sourceKey,
+		previousSpec,
+	});
+	try {
+		await ensureOriginalSourceCopy(video, sourceKey);
+	} catch (error) {
+		await clearPendingEdit(videoId, sourceKey, operation);
+		throw error;
+	}
 
 	try {
 		await start(editVideoWorkflow, [
@@ -199,10 +255,10 @@ export async function saveVideoEdits(
 				editSpec: normalizedEditSpec,
 				keepRanges: normalizedEditSpec.keepRanges,
 				aiGenerationEnabled,
+				operation,
 			},
 		]);
 	} catch (error) {
-		await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
 		throw error instanceof Error
 			? error
 			: new Error("Video edit could not start");
@@ -248,7 +304,11 @@ export async function restoreVideoToOriginal(videoId: Video.VideoId) {
 
 	const aiGenerationEnabled = await isAiGenerationEnabled(user);
 
-	await markEditProcessing({ videoId, sourceKey });
+	const operation = await markEditProcessing({
+		video,
+		sourceKey,
+		previousSpec,
+	});
 
 	try {
 		await start(editVideoWorkflow, [
@@ -260,10 +320,10 @@ export async function restoreVideoToOriginal(videoId: Video.VideoId) {
 				editSpec: restoredSpec,
 				keepRanges: restoredSpec.keepRanges,
 				aiGenerationEnabled,
+				operation,
 			},
 		]);
 	} catch (error) {
-		await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
 		throw error instanceof Error
 			? error
 			: new Error("Video restore could not start");

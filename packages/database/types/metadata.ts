@@ -6,6 +6,23 @@
  * Video metadata structure
  */
 export interface VideoMetadata {
+	editProcessing?: {
+		token: string;
+		startedAt: string;
+		ownerId: string;
+		bucket: string | null;
+		storageIntegrationId: string | null;
+		sourceKey: string;
+		source: string;
+		dispatch: "pending" | "dispatching" | "accepted";
+		jobId?: string;
+		resultCommitted?: boolean;
+	};
+	completedVideoEdit?: {
+		token: string;
+		startedAt: string;
+		transcriptRemapped: boolean;
+	};
 	desktopRecordingUpload?: {
 		version: 1;
 		artifact:
