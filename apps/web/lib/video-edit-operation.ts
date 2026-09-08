@@ -26,6 +26,14 @@ const stateSchema = z.object({
 	dispatch: z.enum(["pending", "dispatching", "accepted"]),
 	jobId: z.string().optional(),
 	resultCommitted: z.boolean().optional(),
+	renderedMetadata: z
+		.object({
+			duration: z.number().positive(),
+			width: z.number().positive(),
+			height: z.number().positive(),
+			fps: z.number().positive(),
+		})
+		.optional(),
 });
 export type EditProcessingState = z.infer<typeof stateSchema>;
 type Transaction = Parameters<
@@ -159,6 +167,49 @@ export async function clearPendingEdit(
 		await tx
 			.update(videos)
 			.set({ metadata: withoutEditProcessing(video.metadata) })
+			.where(eq(videos.id, video.id));
+		await tx.delete(videoUploads).where(eq(videoUploads.videoId, video.id));
+	});
+}
+
+export function getEditOutputKeys(
+	ownerId: string,
+	videoId: string,
+	operation: EditOperation,
+) {
+	const prefix = `${ownerId}/${videoId}/.recording/outputs/edit-${operation.token}`;
+	return {
+		outputKey: `${prefix}/result.mp4`,
+		thumbnailKey: `${prefix}/thumbnail.jpg`,
+		previewKey: `${prefix}/preview.gif`,
+	};
+}
+
+export async function clearFailedEdit(
+	videoId: string,
+	sourceKey: string,
+	operation: EditOperation,
+): Promise<void> {
+	await db().transaction(async (tx) => {
+		const [video] = await tx
+			.select()
+			.from(videos)
+			.where(eq(videos.id, videoId as Video.VideoId))
+			.for("update");
+		const [upload] = await tx
+			.select()
+			.from(videoUploads)
+			.where(eq(videoUploads.videoId, videoId as Video.VideoId))
+			.for("update");
+		if (!video || !matchesEditOperation(video, upload, sourceKey, operation))
+			return;
+		const state = getEditProcessingState(video.metadata);
+		await tx
+			.update(videos)
+			.set({
+				metadata: withoutEditProcessing(video.metadata),
+				...(state?.resultCommitted ? { transcriptionStatus: null } : {}),
+			})
 			.where(eq(videos.id, video.id));
 		await tx.delete(videoUploads).where(eq(videoUploads.videoId, video.id));
 	});

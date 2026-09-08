@@ -16,7 +16,7 @@ export function isInternalRecordingKey(key: string) {
 }
 
 export function getPublishedRecordingOutputKey(video: RecordingVideo) {
-	return video.source.type === "desktopMP4"
+	return video.source.type === "desktopMP4" || video.source.type === "webMP4"
 		? Video.getRetainedRecordingOutputKey(
 				video.ownerId,
 				video.id,
@@ -34,7 +34,7 @@ export function resolveRecordingObjectKey(video: RecordingVideo, key: string) {
 				? video.source.previewKey
 				: undefined;
 	if (
-		video.source.type === "desktopMP4" &&
+		(video.source.type === "desktopMP4" || video.source.type === "webMP4") &&
 		asset?.startsWith(`${prefix}.recording/outputs/`) &&
 		!asset.includes("..") &&
 		/^[a-zA-Z0-9_./-]+$/.test(asset)

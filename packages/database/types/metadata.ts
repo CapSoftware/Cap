@@ -17,6 +17,12 @@ export interface VideoMetadata {
 		dispatch: "pending" | "dispatching" | "accepted";
 		jobId?: string;
 		resultCommitted?: boolean;
+		renderedMetadata?: {
+			duration: number;
+			width: number;
+			height: number;
+			fps: number;
+		};
 	};
 	completedVideoEdit?: {
 		token: string;

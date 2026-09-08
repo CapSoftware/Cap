@@ -46,7 +46,9 @@ vi.mock("@cap/database", () => {
 });
 
 import {
+	clearFailedEdit,
 	clearPendingEdit,
+	getEditOutputKeys,
 	getEditProcessingState,
 	matchesEditOperation,
 } from "@/lib/video-edit-operation";
@@ -179,7 +181,10 @@ describe("edit operation ownership", () => {
 		);
 		expect(mocks.writes).toEqual([]);
 		expect(mocks.upload?.phase).toBe("complete");
-		expect(mocks.video?.duration).toBe(5);
+		expect(mocks.video?.duration).toBe(10);
+		expect(mocks.video?.metadata).toMatchObject({
+			editProcessing: { renderedMetadata: { duration: 5 } },
+		});
 	});
 	it("rejects invalid completion metadata without changing state", async () => {
 		await expect(
@@ -203,6 +208,42 @@ describe("edit operation ownership", () => {
 	it("preserves ambiguous dispatches during cleanup", async () => {
 		await clearPendingEdit("video", sourceKey, operation);
 		expect(mocks.writes).toEqual([]);
+	});
+	it.each(["pending", "dispatching", "accepted"] as const)(
+		"releases a failed %s edit while preserving published media",
+		async (dispatch) => {
+			if (!mocks.video) throw new Error("Missing fixture");
+			mocks.video.metadata = { editProcessing: { ...state, dispatch } };
+			await clearFailedEdit("video", sourceKey, operation);
+			expect(mocks.upload).toBeUndefined();
+			expect(mocks.video.source).toEqual(source);
+			expect(mocks.video.duration).toBe(10);
+			mocks.writes = [];
+			await applyEditProgress(
+				{
+					...progress,
+					phase: "complete",
+					metadata: { duration: 2, width: 320, height: 180, fps: 30 },
+				},
+				operation.token,
+				operation.startedAt,
+			);
+			expect(mocks.writes).toEqual([]);
+		},
+	);
+	it("isolates every worker output from earlier and later edits", () => {
+		const first = getEditOutputKeys("owner", "video", operation);
+		const second = getEditOutputKeys("owner", "video", {
+			...operation,
+			token: "22222222-2222-4222-8222-222222222222",
+		});
+		expect(
+			new Set([...Object.values(first), ...Object.values(second)]).size,
+		).toBe(6);
+		for (const key of Object.values(first))
+			expect(key).toContain(
+				`/video/.recording/outputs/edit-${operation.token}/`,
+			);
 	});
 	it("clears only an operation that has not dispatched", async () => {
 		if (!mocks.video) throw new Error("Missing fixture");

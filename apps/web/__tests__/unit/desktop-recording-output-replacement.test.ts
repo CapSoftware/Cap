@@ -252,7 +252,25 @@ describe("edited recording publication", () => {
 		);
 	});
 
-	it("switches a completed edit to canonical output and retires old upload proof atomically", async () => {
+	it("verifies the current edit output independently of the published video", async () => {
+		await verifyRenderedEditOutput(
+			"video",
+			"user",
+			editSpec,
+			metadata,
+			operation,
+		);
+		expect(mocks.fetch).toHaveBeenCalledWith(
+			"https://media.test/video/probe",
+			expect.objectContaining({
+				body: JSON.stringify({
+					videoUrl: `https://storage.test/canonical/user/video/.recording/outputs/edit-${operation.token}/result.mp4`,
+				}),
+			}),
+		);
+	});
+
+	it("publishes a completed edit from its own output and retires old upload proof atomically", async () => {
 		video.metadata.editProcessing = {
 			...operation,
 			ownerId: video.ownerId,
@@ -270,7 +288,12 @@ describe("edited recording publication", () => {
 			metadata,
 			operation,
 		);
-		expect(video.source).toEqual({ type: "desktopMP4" });
+		expect(video.source).toEqual({
+			type: "desktopMP4",
+			outputKey: `user/video/.recording/outputs/edit-${operation.token}/result.mp4`,
+			thumbnailKey: `user/video/.recording/outputs/edit-${operation.token}/thumbnail.jpg`,
+			previewKey: `user/video/.recording/outputs/edit-${operation.token}/preview.gif`,
+		});
 		expect(video.metadata).not.toHaveProperty("desktopRecordingUpload");
 		expect(video.metadata.customCreatedAt).toBe("2020-01-01T00:00:00Z");
 		expect(events.indexOf("lock-job")).toBeLessThan(

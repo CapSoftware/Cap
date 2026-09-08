@@ -34,9 +34,10 @@ import { decryptEditTranscriptObject } from "@/lib/edit-transcript-storage";
 import { startAiGeneration } from "@/lib/generate-ai";
 import { transcribeVideo } from "@/lib/transcribe";
 import {
-	clearPendingEdit,
+	clearFailedEdit,
 	type EditOperation,
 	getCompletedEdit,
+	getEditOutputKeys,
 	matchesEditOperation,
 	withEditOperation,
 	withoutEditProcessing,
@@ -75,10 +76,6 @@ const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
 const MEDIA_SERVER_OUTPUT_VERIFICATION_MAX_ATTEMPTS = 4;
 const MEDIA_SERVER_OUTPUT_VERIFICATION_RETRY_MS = 1000;
 const EDIT_TRANSCRIPT_CURRENCY_TOLERANCE_MS = 250;
-
-function isPositiveNumber(value: number | null): value is number {
-	return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
 
 function getValidDuration(duration: number) {
 	return Number.isFinite(duration) && duration > 0 ? duration : undefined;
@@ -143,9 +140,15 @@ export async function editVideoWorkflow(
 		}
 		if (!result)
 			throw new FatalError(
-				"Video edit timed out; its worker must be reconciled before another edit can start",
+				"Video edit timed out. Your previous video is preserved; please try again.",
 			);
-		await verifyRenderedEditOutput(videoId, userId, editSpec, result.metadata);
+		await verifyRenderedEditOutput(
+			videoId,
+			userId,
+			editSpec,
+			result.metadata,
+			operation,
+		);
 		await invalidateEditedVideoCache(videoId, editSpec);
 		const { transcriptRemapped } = await saveEditResultAndComplete(
 			videoId,
@@ -299,9 +302,11 @@ async function renderVideoEditOnMediaServer(
 		})
 		.pipe(runWorkflowPromise);
 
-	const outputKey = `${userId}/${videoId}/result.mp4`;
-	const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
-	const previewGifKey = `${userId}/${videoId}/preview/animated-preview.gif`;
+	const {
+		outputKey,
+		thumbnailKey,
+		previewKey: previewGifKey,
+	} = getEditOutputKeys(userId, videoId, operation);
 
 	const outputPresignedUrl = await bucket
 		.getInternalPresignedPutUrl(
@@ -431,33 +436,6 @@ async function markEditWaitingForCapacity(
 	});
 }
 
-function getMetadataFromVideoRow(
-	video:
-		| {
-				duration: number | null;
-				width: number | null;
-				height: number | null;
-				fps: number | null;
-		  }
-		| undefined,
-): VideoEditRenderResult["metadata"] | null {
-	if (
-		!video ||
-		!isPositiveNumber(video.width) ||
-		!isPositiveNumber(video.height) ||
-		!isPositiveNumber(video.fps)
-	) {
-		return null;
-	}
-
-	return {
-		duration: isPositiveNumber(video.duration) ? video.duration : 0,
-		width: video.width,
-		height: video.height,
-		fps: video.fps,
-	};
-}
-
 async function probeVideoOnMediaServer(
 	mediaServerUrl: string,
 	videoUrl: string,
@@ -495,6 +473,7 @@ export async function verifyRenderedEditOutput(
 	userId: string,
 	editSpec: VideoEditSpec,
 	reportedMetadata: VideoEditRenderResult["metadata"],
+	operation?: EditOperation,
 ): Promise<void> {
 	"use step";
 
@@ -522,7 +501,9 @@ export async function verifyRenderedEditOutput(
 	const [bucket] = await Storage.getAccessForVideo(decodeStorageVideo(video), {
 		resolvePublishedOutput: false,
 	}).pipe(runWorkflowPromise);
-	const outputKey = `${userId}/${videoId}/result.mp4`;
+	const outputKey = operation
+		? getEditOutputKeys(userId, videoId, operation).outputKey
+		: `${userId}/${videoId}/result.mp4`;
 	const outputUrl = await bucket
 		.getInternalSignedObjectUrl(outputKey, {
 			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
@@ -707,9 +688,9 @@ async function readEditCompletion(
 		videoId,
 		sourceKey,
 		operation,
-		async (_tx, video, upload) => {
+		async (_tx, _video, upload, state) => {
 			if (upload.phase === "complete") {
-				const metadata = getMetadataFromVideoRow(video);
+				const metadata = state.renderedMetadata;
 				if (!metadata)
 					throw new FatalError("Edit completed but video metadata is missing");
 				return { metadata };
@@ -846,17 +827,26 @@ export async function saveEditResultAndComplete(
 				videoId: video.id,
 				userId: video.ownerId,
 			});
+			const source = {
+				...lockedVideo.source,
+				...getEditOutputKeys(lockedVideo.ownerId, videoId, operation),
+			};
 			const nextMetadata = clearAiMetadata(lockedVideo.metadata);
 			delete nextMetadata.desktopRecordingUpload;
 			await tx
 				.update(videos)
 				.set({
+					source,
 					width: metadata.width,
 					height: metadata.height,
 					fps: metadata.fps,
 					metadata: {
 						...nextMetadata,
-						editProcessing: { ...state, resultCommitted: true },
+						editProcessing: {
+							...state,
+							source: JSON.stringify(source),
+							resultCommitted: true,
+						},
 					},
 					// Derivable captions keep the transcription COMPLETE; only legacy
 					// videos without a stored word transcript get re-transcribed.
@@ -965,9 +955,6 @@ async function completeEditProcessing(
 						...withoutEditProcessing(video.metadata),
 						completedVideoEdit: { ...operation, transcriptRemapped },
 					},
-					...(video.source.type === "desktopMP4"
-						? { source: { type: "desktopMP4" as const } }
-						: {}),
 				})
 				.where(eq(videos.id, video.id));
 			await tx.delete(videoUploads).where(eq(videoUploads.videoId, video.id));
@@ -981,5 +968,5 @@ async function clearEditProcessingState(
 	operation: EditOperation,
 ): Promise<void> {
 	"use step";
-	await clearPendingEdit(videoId, sourceKey, operation);
+	await clearFailedEdit(videoId, sourceKey, operation);
 }

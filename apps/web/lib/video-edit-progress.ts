@@ -29,7 +29,28 @@ export async function applyEditProgress(
 			.where(eq(videos.id, payload.videoId as Video.VideoId))
 			.for("update");
 		const state = getEditProcessingState(video?.metadata ?? null);
-		if (!token && !state) return false;
+		if (!token && !state) {
+			if (
+				video &&
+				"outputKey" in video.source &&
+				video.source.outputKey?.startsWith(
+					`${video.ownerId}/${video.id}/.recording/outputs/edit-`,
+				)
+			) {
+				const [currentUpload] = await tx
+					.select()
+					.from(videoUploads)
+					.where(eq(videoUploads.videoId, video.id))
+					.for("update");
+				if (
+					!currentUpload ||
+					currentUpload.rawFileKey ===
+						`${video.ownerId}/${video.id}/source/original.mp4`
+				)
+					return true;
+			}
+			return false;
+		}
 		if (!video || !state || !token || !startedAt) return true;
 		const [upload] = await tx
 			.select()
@@ -70,18 +91,21 @@ export async function applyEditProgress(
 						...state,
 						dispatch: "accepted",
 						jobId: payload.jobId,
+						...(complete && payload.metadata
+							? {
+									renderedMetadata: {
+										duration: payload.metadata.duration,
+										width: payload.metadata.width,
+										height: payload.metadata.height,
+										fps: payload.metadata.fps,
+									},
+								}
+							: {}),
 					},
 				},
-				...(complete && payload.metadata
-					? {
-							duration: payload.metadata.duration,
-							width: payload.metadata.width,
-							height: payload.metadata.height,
-							fps: payload.metadata.fps,
-						}
-					: {}),
 			})
 			.where(eq(videos.id, video.id));
+
 		await tx
 			.update(videoUploads)
 			.set({
