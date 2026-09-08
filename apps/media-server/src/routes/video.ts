@@ -114,6 +114,7 @@ const processSchema = z.object({
 	userId: z.string(),
 	videoUrl: z.string().url(),
 	outputPresignedUrl: z.string().url(),
+	sourcePresignedUrl: z.string().url().optional(),
 	thumbnailPresignedUrl: z.string().url().optional(),
 	previewGifPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
@@ -664,13 +665,17 @@ video.post("/convert", async (c) => {
 	}
 });
 
-video.post("/process", async (c) => {
+video.on("POST", ["/process", "/import"], async (c) => {
 	if (!validateMediaServerSecret(c)) {
 		return c.json({ error: "Unauthorized" }, 401);
 	}
 
 	const body = await c.req.json();
-	const result = processSchema.safeParse(body);
+	const result = (
+		c.req.path.endsWith("/import")
+			? processSchema.extend({ sourcePresignedUrl: z.string().url() })
+			: processSchema
+	).safeParse(body);
 
 	if (!result.success) {
 		return c.json(
@@ -1301,6 +1306,20 @@ async function processVideoAsync(
 			),
 		);
 		updateJob(jobId, { inputTempFile });
+
+		const sourcePresignedUrl = options.sourcePresignedUrl;
+		if (sourcePresignedUrl) {
+			updateJob(jobId, { message: "Saving original video..." });
+			await sendWebhook(job);
+			await withJobHeartbeat(jobId, () =>
+				uploadFileToS3(
+					inputTempFile.path,
+					sourcePresignedUrl,
+					"video/mp4",
+					abortController.signal,
+				),
+			);
+		}
 
 		const isWebm = isWebmInput(options.inputExtension);
 
