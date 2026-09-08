@@ -1342,8 +1342,6 @@ fn build_rows(
     }
     let mut overlay_tracks = Vec::new();
     for (kind, segments, count) in [
-        (TrackKind::Style, &model.style, lanes.style),
-        (TrackKind::Image, &model.image, lanes.image),
         (TrackKind::Text, &model.text, lanes.text),
         (TrackKind::Image, &model.image, lanes.image),
         (TrackKind::Mask, &model.mask, lanes.mask),
