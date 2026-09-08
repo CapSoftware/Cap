@@ -64,5 +64,22 @@
 	},
 	"codeHash": "40ef7500ef8643decd898509879bfe0293ced1f5d124f8a93535f9080f1bf609",
 	"scope": "Offline public/transcribed cohort; passing technical gates does not establish perceptual quality or production eligibility.",
-	"productionEnabled": false
+	"productionEnabled": false,
+	"reviewValidation": {
+		"workerCodeHash": "d1dbc4b3be3ff1b833b51a5a87b0933b2b7c82eb0816e7eba690fee12c7a7cf1",
+		"existingCohortRetested": 60,
+		"existingOutputHashesIdentical": true,
+		"additionalProductionFiles": 16,
+		"additionalProductionFilesUnchanged": 16,
+		"additionalProductionOriginalHashesPreserved": true,
+		"localTests": 46,
+		"localAssertions": 148,
+		"alignmentUnitTests": 2,
+		"alignedIntelligibility": {
+			"count": 39,
+			"medianStoiDelta": -0.00025973077349839,
+			"worstStoiDelta": -0.005509516622390076,
+			"belowMinusPointZeroOne": 0
+		}
+	}
 }

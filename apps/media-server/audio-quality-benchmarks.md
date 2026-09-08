@@ -39,7 +39,7 @@ is available for content whose suitability for voice processing is unknown.
 
 The exact final worker was tested on 39 controlled cases at 48 kHz: three reference
 voice excerpts, four additive noise types, and three SNRs, plus the unmodified
-references. Median STOI change was -0.000260, worst -0.005318; none exceeded the
+references. Median STOI change was -0.000260, worst -0.005510; none exceeded the
 chosen -0.01 regression tolerance. Six inputs were conservatively left unchanged.
 These are relative tests against existing recordings, not clean studio ground
 truth, subjective quality ratings, or a matched Loom comparison. The calibration
@@ -49,6 +49,12 @@ Volume-matched RMS in uncaptioned intervals changed by a median +0.096 dB across
 41 passing clips, with a maximum increase of 6.841 dB. Twelve voice candidates
 changed LRA by more than two LU. Those observations require listening review for
 background noise swelling and altered dynamics before enabling voice processing.
+
+The reviewed intelligibility scorer aligns reference, noisy input, and processed
+audio to the same overlapping sample interval before computing STOI and SI-SDR.
+It retains unaligned scores and the measured lag separately; aligning a score does
+not waive timing gates. The 39 exact-worker cases were rescored from their original
+artifacts after this correction, with zero cases below the -0.01 tolerance.
 
 Full-recording LUFS and caption-aligned RMS answer different questions. Caption
 intervals approximate speech activity; uncaptioned audio is not necessarily noise
@@ -64,6 +70,11 @@ them with the existing packet-proof helper. Existing finalization checks are
 unchanged. Results carry source/output hashes, metrics, version, and validation
 failures; every nonempty validation failure list disqualifies that candidate.
 
+The worker restricts demuxers and protocols to local media files, rejecting playlists
+instead of following their references. Only AAC inputs are eligible for processing;
+other codecs are left unchanged. A MOV/PCM fixture exposed a video preservation
+mismatch, so the first rollout deliberately bypasses that format.
+
 The worker skips silence, extreme levels, existing clipping, unsupported formats,
 already loud content, nonzero audio start times, discontinuous source timestamps,
 and mismatched source audio/video durations. Voice processing additionally requires
@@ -77,11 +88,12 @@ remeasured, with one bounded peak correction rendered from the original if neede
 Failed validation never authorizes publication. Cancellation, timeouts, and exceptions
 clean up only the worker's own temporary files.
 
-26 tests cover policy gates, mono/stereo, 44.1/48 kHz, both profiles, speech-like
+46 tests cover policy gates, mono/stereo, 44.1/48 kHz, both profiles, speech-like
 markers at clip boundaries, exact video packets, source preservation, silence,
 nonzero/discontinuous timestamps, cancellation, and timeout. Scoped TypeScript and
 Biome checks also pass. Measurements used macOS FFmpeg 8.0.1 and Bun 1.4.0;
-production Linux/FFmpeg behavior has not been validated.
+the reviewed format suite also runs in both production-image architectures and
+in the Railway Docker build. The full production cohort was rerun locally.
 
 ## Reproducing
 
@@ -105,12 +117,23 @@ bun apps/media-server/scripts/benchmark-audio-quality.ts /absolute/study holdout
 ```
 
 Use a new label per run; the worker benchmark will not overwrite existing results.
+Rejected candidates are recorded with their validation failures but are not copied
+into the output set. Earlier historical runs retained rejected files for diagnosis.
 The intelligibility calibration requires NumPy, SciPy, and pystoi. Supply three
 reference IDs with `--reference-ids`; their M4A files must be two directories above
 the output directory. Output-directory suffix `-v2` selects the corrected mild
 policy; a name containing `strength` selects the 6/12 dB comparison. This calibration
 script records historical filter alternatives; the TypeScript worker benchmark is
 the authoritative final implementation.
+
+## Production-data revalidation
+
+The tighter local-input restrictions were applied to the original 60-recording
+cohort again. All 40 accepted outputs had identical hashes to the benchmark outputs;
+20 sources were left unchanged. Sixteen additional public production files, including
+browser captures and recordings without completed transcripts, were left unchanged
+by stream, level, headroom, or timestamp gates. All original hashes were preserved.
+These are bounded compatibility checks, not proof of safety for every possible file.
 
 ## Before serving any enhanced audio
 
