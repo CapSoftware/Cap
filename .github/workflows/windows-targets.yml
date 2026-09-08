@@ -1,0 +1,36 @@
+name: Windows Target Discovery
+
+on:
+  pull_request:
+    paths:
+      - "crates/scap-targets/**"
+      - "crates/recording/src/sources/screen_capture/**"
+      - "apps/cli/src/targets.rs"
+      - "apps/cli/src/record.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/windows-targets.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-targets-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  windows-targets:
+    name: Native Windows window discovery
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: clippy
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+      - run: cargo test --locked -p scap-targets --lib --test windows_targets -- --nocapture
+      - run: cargo clippy --locked -p scap-targets --all-targets -- -D warnings
