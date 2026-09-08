@@ -1594,6 +1594,7 @@ dependencies = [
  "ringbuf",
  "sentry",
  "serde",
+ "serde_json",
  "specta",
  "tempfile",
  "tokio",

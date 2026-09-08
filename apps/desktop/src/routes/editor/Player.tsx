@@ -19,7 +19,7 @@ import { CaptionsRegenerateBadge } from "./CaptionsRegenerateBadge";
 import { createCaptionTrackSegments } from "./captions";
 import { type EditorPreviewQuality, FPS, useEditorContext } from "./context";
 import { FrameButton } from "./FrameButton";
-import { ImageOverlay } from "./ImageOverlay";
+import { ImageOverlay } from "./image-overlay";
 import { MaskOverlay } from "./MaskOverlay";
 import { PerformanceOverlay } from "./PerformanceOverlay";
 import { SplitScreenOverlay } from "./SplitScreenOverlay";

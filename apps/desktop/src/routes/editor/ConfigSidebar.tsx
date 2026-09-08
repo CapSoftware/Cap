@@ -135,7 +135,7 @@ import {
 } from "./context";
 import { FontPicker } from "./FontPicker";
 import { GradientEditor } from "./GradientEditor";
-import { ImageSegmentConfig } from "./ImageSegmentConfig";
+import { ImageSegmentConfig } from "./image-segment-config";
 import { KeyboardTab } from "./KeyboardTab";
 import {
 	encodeMaskEffect,
@@ -155,7 +155,7 @@ import {
 	DEFAULT_SPLIT_LAYOUT,
 } from "./projectConfig";
 import ShadowSettings from "./ShadowSettings";
-import { StyleGroupToggle, StyleSegmentConfig } from "./StyleSegmentConfig";
+import { StyleGroupToggle, StyleSegmentConfig } from "./style-segment-config";
 import { TextInput } from "./TextInput";
 import {
 	TEXT_FONT_SIZE_MAX,

@@ -49,4 +49,5 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 windows = { workspace = true, features = ["Win32_Media"] }
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile = "3"
