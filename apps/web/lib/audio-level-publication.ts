@@ -246,6 +246,7 @@ export async function handleAudioLevelPublication(payload: unknown) {
 					.headObject(context.outputKey)
 					.pipe(Effect.timeout("10 seconds"), runWorkflowPromise),
 			]);
+			// The authenticated worker hashes stored bytes with If-Match; retain that verified identity without another download.
 			if (
 				source.ETag !== context.sourceIdentity ||
 				source.ContentLength !== context.sourceSize ||

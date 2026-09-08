@@ -136,7 +136,7 @@ export async function enhanceLocalRecording(input: {
 				);
 				const result = {
 					sourceSha256: candidate.sourceSha256,
-					outputSha256: candidate.outputSha256,
+					outputSha256: verified.remoteSha256,
 					outputIdentity: verified.objectIdentity,
 					outputSize,
 					inputLufs: candidate.input.lufs,

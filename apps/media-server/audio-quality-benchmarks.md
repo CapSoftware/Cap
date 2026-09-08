@@ -31,6 +31,15 @@ two one-byte identity reads. Media bytes travel directly to storage; the web cal
 only handles metadata and signed URLs. Output verification has its own reserved
 transfer budget, independent of the completed original job's download budget.
 
+Stored-byte verification happens in the authenticated media worker, before the
+publication callback. It hashes a complete conditional GET, compares SHA-256 with
+the locally validated derivative, and checks the strong ETag and size before and
+after that read. The callback carries the digest returned by this remote verifier.
+The web transaction pins the same verified identity with metadata checks instead
+of downloading the media again. Corrupted bytes are rejected even when the mocked
+storage preserves ETag and size. Storage must honor strong ETag/If-Match semantics;
+these checks do not treat an ETag as a cryptographic digest.
+
 The original becomes playable before correction. Corrections run only with spare
 capacity, use one FFmpeg decoder/filter thread, and occupy one audio slot per replica.
 Clearing the two audio selection fields restores the retained original. Rolling back

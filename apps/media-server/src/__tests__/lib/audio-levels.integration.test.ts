@@ -146,7 +146,8 @@ function storage(
 					);
 				}
 				publications++;
-				expect(output).toBeDefined();
+				if (!output) throw new Error("Output not uploaded");
+				expect(body.outputSha256).toBe(hash(new Uint8Array(output)));
 				expect(body.action).toBe("publish");
 				return Response.json({
 					status: options.rejectPublication ? "unchanged" : "published",
@@ -160,6 +161,7 @@ function storage(
 				return new Response(null, { headers: { ETag: '"output"' } });
 			}
 			if (!output) throw new Error("Output not uploaded");
+			expect(new Headers(init?.headers).get("If-Match")).toBe('"output"');
 			if (new Headers(init?.headers).get("range") === "bytes=0-0") {
 				downloadedBytes++;
 				return new Response(output.slice(0, 1), {
