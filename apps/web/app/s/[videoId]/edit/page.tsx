@@ -36,6 +36,7 @@ export default async function EditVideoPage(props: {
 			width: videos.width,
 			height: videos.height,
 			source: videos.source,
+			metadata: videos.metadata,
 			isScreenshot: videos.isScreenshot,
 			transcriptionStatus: videos.transcriptionStatus,
 			uploadPhase: videoUploads.phase,
@@ -68,7 +69,15 @@ export default async function EditVideoPage(props: {
 			rawFileKey: video.rawFileKey,
 		})
 	) {
-		return <EditRecovery videoId={videoId} />;
+		return (
+			<EditRecovery
+				videoId={videoId}
+				canRestore={
+					!video.metadata?.editProcessing &&
+					process.env.CAP_LEGACY_EDIT_RECOVERY === "enabled"
+				}
+			/>
+		);
 	}
 	if (
 		video.uploadPhase &&

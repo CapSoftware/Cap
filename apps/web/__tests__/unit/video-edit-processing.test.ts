@@ -1,6 +1,6 @@
 import { Context, Effect } from "effect";
 import { isValidElement } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type EditUpload = {
 	phase: "processing" | "generating_thumbnail" | "complete" | "error";
@@ -10,7 +10,10 @@ type EditUpload = {
 };
 
 const database = vi.hoisted(() => {
-	const state: { upload: EditUpload | null } = { upload: null };
+	const state: {
+		upload: EditUpload | null;
+		metadata: Record<string, unknown> | null;
+	} = { upload: null, metadata: null };
 	let selection: Record<string, unknown> | undefined;
 	const where = vi.fn(async () => {
 		if (selection && "editSpec" in selection) return [];
@@ -24,6 +27,7 @@ const database = vi.hoisted(() => {
 				width: 1920,
 				height: 1080,
 				source: { type: "desktopMP4" },
+				metadata: state.metadata,
 				isScreenshot: false,
 				password: null,
 				organizationTombstoneAt: null,
@@ -122,7 +126,10 @@ describe("viewing a recording during an edit", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		database.state.upload = null;
+		database.state.metadata = null;
+		vi.stubEnv("CAP_LEGACY_EDIT_RECOVERY", "enabled");
 	});
+	afterEach(() => vi.unstubAllEnvs());
 
 	it.each([
 		["processing", 15],
@@ -161,11 +168,36 @@ describe("viewing a recording during an edit", () => {
 			);
 			expect(isValidElement(element)).toBe(true);
 			expect(element.type).toBe(EditRecovery);
+			expect(element.props.canRestore).toBe(true);
 
 			expect(database.state.upload).toBe(upload);
 			expect(database.remove).not.toHaveBeenCalled();
 			expect(database.insert).not.toHaveBeenCalled();
 			expect(database.update).not.toHaveBeenCalled();
+		},
+	);
+	it.each(["pending", "dispatching", "accepted", "rollout-disabled"])(
+		"hides restoration while the operation is %s",
+		async (dispatch) => {
+			database.state.upload = {
+				phase: "processing",
+				processingProgress: 15,
+				updatedAt: new Date(),
+				rawFileKey: "owner123/video123/source/original.mp4",
+			};
+			if (dispatch === "rollout-disabled") {
+				vi.stubEnv("CAP_LEGACY_EDIT_RECOVERY", "");
+			} else {
+				database.state.metadata = { editProcessing: { dispatch } };
+			}
+			const { default: EditVideoPage } = await import(
+				"@/app/s/[videoId]/edit/page"
+			);
+			const element = await EditVideoPage({
+				params: Promise.resolve({ videoId: "video123" }),
+			});
+			expect(element.props.canRestore).toBe(false);
+			expect(database.remove).not.toHaveBeenCalled();
 		},
 	);
 });
