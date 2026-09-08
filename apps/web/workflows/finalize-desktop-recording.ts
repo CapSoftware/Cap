@@ -39,7 +39,6 @@ import { getMediaServerCapacityDelay } from "@/lib/media-server-backpressure";
 import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
-import { enhanceRecordingAudio } from "./enhance-recording-audio";
 
 interface FinalizeDesktopRecordingWorkflowPayload {
 	videoId: string;
@@ -196,8 +195,6 @@ export async function finalizeDesktopRecordingWorkflow(
 		if (queued) break;
 		await sleep(Math.min(15_000 * 2 ** Math.min(attempt, 5), 300_000));
 	}
-	if (!mediaServerUnavailable)
-		await enhanceRecordingAudio(payload.videoId, payload.userId);
 	return mediaServerUnavailable
 		? { success: false, reason: "media-server-unconfigured" }
 		: { success: true, ...(completedJobId ? { jobId: completedJobId } : {}) };
@@ -541,6 +538,7 @@ export async function startDesktopRecordingJob(
 		}
 		path = "/video/mux-segments";
 		body = {
+			audioLevels: true,
 			...context,
 			...urls,
 			...(await buildDesktopSegmentsOutput({ video, attempt })),

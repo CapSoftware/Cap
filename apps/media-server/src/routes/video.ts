@@ -3,6 +3,7 @@ import { link } from "node:fs/promises";
 import { file } from "bun";
 import { Hono } from "hono";
 import { z } from "zod";
+import { enhanceLocalRecording } from "../lib/audio-levels";
 import { validateMediaServerSecret } from "../lib/auth";
 import type {
 	Job,
@@ -110,6 +111,7 @@ const convertSchema = z.object({
 });
 
 const processSchema = z.object({
+	audioLevels: z.boolean().optional(),
 	videoId: z.string(),
 	userId: z.string(),
 	videoUrl: z.string().url(),
@@ -1352,7 +1354,7 @@ async function processVideoAsync(
 		});
 		await sendWebhook(job);
 
-		await uploadFileToS3(
+		const uploadReceipt = await uploadFileToS3(
 			outputTempFile.path,
 			outputPresignedUrl,
 			"video/mp4",
@@ -1410,6 +1412,19 @@ async function processVideoAsync(
 		if (completedJob) {
 			await sendWebhook(completedJob);
 		}
+
+		if (options.audioLevels)
+			await enhanceLocalRecording({
+				path: outputTempFile.path,
+				videoId: options.videoId,
+				userId: options.userId,
+				jobId,
+				sourceKey: `${options.userId}/${options.videoId}/result.mp4`,
+				sourceIdentity: uploadReceipt?.objectIdentity,
+				duration: metadata.duration,
+				webhookUrl: options.webhookUrl,
+				webhookSecret: options.webhookSecret,
+			});
 
 		await inputTempFile.cleanup();
 		await outputTempFile.cleanup();
@@ -1950,6 +1965,7 @@ async function verifyUploadedRecordingAsync(
 
 const muxSegmentsSchema = z
 	.object({
+		audioLevels: z.boolean().optional(),
 		...recordingAttemptFields,
 		requiredAudio: z.boolean().optional(),
 		sourceObjects: z
@@ -2071,6 +2087,7 @@ type MuxContext = Pick<
 	| "inventorySha256"
 	| "sourceObjects"
 	| "requiredAudio"
+	| "audioLevels"
 >;
 
 function getMuxSegmentsOutputUpload(
@@ -2898,7 +2915,8 @@ async function muxSegmentsAsync(
 			progress: 100,
 			metadata,
 		});
-		sendCurrentJobWebhook(jobId);
+		if (!(context.audioLevels && context.outputKey))
+			sendCurrentJobWebhook(jobId);
 		logVideoEvent("video_mux_succeeded", {
 			jobId,
 			videoId,
@@ -2906,6 +2924,28 @@ async function muxSegmentsAsync(
 			metadata,
 			resources: getSystemResources(),
 		});
+		if (context.audioLevels && context.outputKey) {
+			if (processingTimeout) clearTimeout(processingTimeout);
+			const completedJob = getJob(jobId);
+			if (completedJob) {
+				try {
+					await sendWebhook(completedJob);
+					await enhanceLocalRecording({
+						path: resultPath,
+						videoId,
+						userId: completedJob.userId,
+						jobId,
+						sourceKey: context.outputKey,
+						sourceIdentity: uploadReceipt.objectIdentity,
+						duration: metadata.duration,
+						webhookUrl: completedJob.webhookUrl,
+						webhookSecret: completedJob.webhookSecret,
+					});
+				} catch {
+					console.warn("[audio-levels] Original retained", { videoId });
+				}
+			}
+		}
 	} catch (error: unknown) {
 		logVideoEvent("video_mux_failed", {
 			jobId,
