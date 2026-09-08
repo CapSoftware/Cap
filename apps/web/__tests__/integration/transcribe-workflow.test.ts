@@ -98,9 +98,12 @@ vi.mock("drizzle-orm", () => ({
 
 vi.mock("server-only", () => ({}));
 
-vi.mock("workflow", () => ({
-	FatalError: class FatalError extends Error {},
-}));
+vi.mock("workflow", async () => {
+	const { runInNewContext } = await import("node:vm");
+	return {
+		FatalError: runInNewContext("(class FatalError extends Error {})"),
+	};
+});
 
 vi.mock("workflow/api", () => ({
 	start: vi.fn(),
@@ -245,7 +248,9 @@ describe("transcribeVideoWorkflow", () => {
 		expect(mocks.updates.at(-1)).toEqual({ transcriptionStatus: "COMPLETE" });
 	});
 
-	it("marks audio without speech as skipped without retrying transcription", async () => {
+	it("handles no-speech errors across workflow realms without retrying transcription", async () => {
+		const { FatalError } = await import("workflow");
+		expect(new FatalError("no spoken audio")).not.toBeInstanceOf(Error);
 		mocks.transcribe.mockResolvedValueOnce({
 			id: "silent-transcript",
 			status: "error",
@@ -268,6 +273,7 @@ describe("transcribeVideoWorkflow", () => {
 		expect(mocks.updates).toContainEqual({ transcriptionStatus: "NO_AUDIO" });
 		expect(mocks.updates).not.toContainEqual({ transcriptionStatus: "ERROR" });
 		expect(mocks.startAiGeneration).not.toHaveBeenCalled();
+		expect(mocks.deleteObject).toHaveBeenCalledTimes(1);
 	});
 
 	it("preserves transcription failures unrelated to missing speech", async () => {
