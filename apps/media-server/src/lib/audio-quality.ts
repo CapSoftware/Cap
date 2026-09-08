@@ -29,6 +29,13 @@ const loudnessSchema = z.object({
 	input_lra: z.string(),
 });
 
+const localInputOptions = [
+	"-protocol_whitelist",
+	"file",
+	"-format_whitelist",
+	"mov,matroska,webm,avi,wav,mp3,flac,ogg,aac",
+];
+
 async function readBounded(
 	stream: ReadableStream<Uint8Array>,
 	limit: number,
@@ -105,7 +112,16 @@ async function fingerprint(path: string, signal: AbortSignal) {
 
 async function probe(path: string, signal: AbortSignal) {
 	const result = await run(
-		["ffprobe", "-v", "error", "-show_streams", "-of", "json", path],
+		[
+			"ffprobe",
+			"-v",
+			"error",
+			...localInputOptions,
+			"-show_streams",
+			"-of",
+			"json",
+			path,
+		],
 		signal,
 	);
 	return probeSchema.parse(JSON.parse(result.stdout)).streams;
@@ -128,6 +144,7 @@ async function hasContinuousAudioTimeline(
 			"frame=pts_time,nb_samples",
 			"-of",
 			"csv=p=0",
+			...localInputOptions,
 			path,
 		],
 		signal,
@@ -169,6 +186,7 @@ export async function measureAudioQuality(
 			"-nostats",
 			"-threads",
 			"1",
+			...localInputOptions,
 			"-i",
 			path,
 			"-map",
@@ -249,6 +267,8 @@ export async function createAudioQualityCandidate(
 			streams.some((s) => !["audio", "video"].includes(s.codec_type))
 		)
 			return { status: "unchanged", reason: "unsupported-streams" };
+		if (audioStreams[0]?.codec_name !== "aac")
+			return { status: "unchanged", reason: "unsupported-audio-codec" };
 		const input = await measureAudioQuality(sourcePath, signal);
 		const plan = planAudioQuality(input, options);
 		if (plan.kind === "skip")
@@ -285,6 +305,7 @@ export async function createAudioQualityCandidate(
 			"error",
 			"-n",
 			"-copyts",
+			...localInputOptions,
 			"-i",
 			sourcePath,
 			"-map",
@@ -336,6 +357,7 @@ export async function createAudioQualityCandidate(
 				"error",
 				"-xerror",
 				"-nostdin",
+				...localInputOptions,
 				"-i",
 				path,
 				"-f",
