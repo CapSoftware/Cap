@@ -3,7 +3,7 @@ import {
 	MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES,
 	readUploadHealthProbeBytes,
 	UploadHealthProbeTooLargeError,
-} from "@/app/api/desktop/[...route]/uploadHealth";
+} from "@/app/api/desktop/upload-health/upload-health";
 
 describe("desktop upload health probe", () => {
 	it("counts a bounded probe body without storing it", async () => {
@@ -38,5 +38,31 @@ describe("desktop upload health probe", () => {
 		await expect(readUploadHealthProbeBytes(request)).rejects.toBeInstanceOf(
 			UploadHealthProbeTooLargeError,
 		);
+	});
+
+	it("preserves the size error if cancelling the stream also fails", async () => {
+		const body = new ReadableStream<Uint8Array>(
+			{
+				pull(controller) {
+					controller.enqueue(
+						new Uint8Array(MAX_DESKTOP_UPLOAD_HEALTH_PROBE_BYTES + 1),
+					);
+				},
+				cancel() {
+					throw new Error("connection already closed");
+				},
+			},
+			{ highWaterMark: 0 },
+		);
+		const options = { method: "POST", body, duplex: "half" };
+		const request = new Request(
+			"https://cap.test/api/desktop/upload-health",
+			options,
+		);
+
+		await expect(readUploadHealthProbeBytes(request)).rejects.toBeInstanceOf(
+			UploadHealthProbeTooLargeError,
+		);
+		expect(body.locked).toBe(false);
 	});
 });
