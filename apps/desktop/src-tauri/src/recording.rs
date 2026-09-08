@@ -1712,6 +1712,8 @@ async fn start_recording_prepared(
         }
     }
 
+    crate::upload_health::wait_for_probe_to_stop(&app).await;
+
     if cfg!(target_os = "linux") && inputs.mode == RecordingMode::Instant {
         drop(_input_operation.take());
     }

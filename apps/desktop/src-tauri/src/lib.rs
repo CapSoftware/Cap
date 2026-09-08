@@ -1150,6 +1150,7 @@ impl App {
         }
 
         self.recording_state = RecordingState::Pending { mode, target };
+        upload_health::cancel_probe_for_recording(&self.handle);
         CurrentRecordingChanged.emit(&self.handle).ok();
 
         Ok(())
