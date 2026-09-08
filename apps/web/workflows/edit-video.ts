@@ -871,8 +871,9 @@ export async function saveEditResultAndComplete(
 				height: metadata.height,
 				fps: metadata.fps,
 				metadata: nextMetadata,
-				...(lockedVideo.source.type === "desktopMP4"
-					? { source: { type: "desktopMP4" as const } }
+				...(lockedVideo.source.type === "desktopMP4" ||
+				lockedVideo.source.type === "webMP4"
+					? { source: { type: lockedVideo.source.type } }
 					: {}),
 				// Derivable captions keep the transcription COMPLETE; only legacy
 				// videos without a stored word transcript get re-transcribed.

@@ -89,6 +89,8 @@ let video: {
 		outputKey?: string;
 		thumbnailKey?: string;
 		previewKey?: string;
+		audioLevelOutputKey?: string;
+		audioLevelSourceKey?: string;
 	};
 	metadata: Record<string, unknown>;
 };
@@ -219,6 +221,29 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("edited recording publication", () => {
+	it.each(["edit", "reprocess", "replace"])(
+		"clears a browser audio derivative after %s",
+		async (operation) => {
+			video.source = {
+				type: "webMP4",
+				audioLevelSourceKey: "user/video/result.mp4",
+				audioLevelOutputKey:
+					"user/video/.recording/outputs/audio-quality-v3/test.mp4",
+			};
+			if (operation === "edit")
+				await saveEditResultAndComplete(
+					"video",
+					"user/video/edit-original.mp4",
+					editSpec,
+					editSpec,
+					metadata,
+				);
+			else if (operation === "reprocess")
+				await saveMetadataAndComplete("video", metadata);
+			else await invalidateVideoCache("video");
+			expect(video.source).toEqual({ type: "webMP4" });
+		},
+	);
 	it("verifies the newly rendered canonical output instead of the old published immutable recording", async () => {
 		await verifyRenderedEditOutput("video", "user", editSpec, metadata);
 		expect(mocks.access).toHaveBeenCalledWith(video, {

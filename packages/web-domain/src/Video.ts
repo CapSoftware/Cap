@@ -174,15 +174,23 @@ export function getAudioLevelOutputKey(video: {
 	};
 }) {
 	const { source } = video;
+	const originalKey =
+		source.type === "webMP4"
+			? `${video.ownerId}/${video.id}/result.mp4`
+			: getRetainedRecordingOutputKey(
+					video.ownerId,
+					video.id,
+					source.outputKey,
+				);
 	const key = getRetainedRecordingOutputKey(
 		video.ownerId,
 		video.id,
 		source.audioLevelOutputKey,
 	);
 	if (
-		source.type !== "desktopMP4" ||
-		!getRetainedRecordingOutputKey(video.ownerId, video.id, source.outputKey) ||
-		source.audioLevelSourceKey !== source.outputKey ||
+		!["desktopMP4", "webMP4"].includes(source.type) ||
+		!originalKey ||
+		source.audioLevelSourceKey !== originalKey ||
 		!key?.startsWith(
 			`${video.ownerId}/${video.id}/.recording/outputs/audio-quality-v3/`,
 		)

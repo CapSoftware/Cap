@@ -51,7 +51,11 @@ export function resolveRecordingObjectKey(video: RecordingVideo, key: string) {
 }
 
 export function getPublishedRecordingCopyKeys(video: RecordingVideo) {
-	if (!getPublishedRecordingOutputKey(video)) return [];
+	if (
+		!getPublishedRecordingOutputKey(video) &&
+		!Video.getAudioLevelOutputKey(video)
+	)
+		return [];
 	const prefix = `${video.ownerId}/${video.id}/`;
 	return [
 		`${prefix}result.mp4`,
