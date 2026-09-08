@@ -137,6 +137,30 @@ describe("desktop diagnostic reconstruction", () => {
 		expect(
 			analysis.operations[0].stages.map((stage) => stage.revision),
 		).toEqual([1, 2, 3]);
+		expect(analysis.operations[0].stages[1]).toEqual({
+			revision: 2,
+			stage: "rendering",
+			elapsedMs: 600,
+			outcome: "in_progress",
+		});
+	});
+
+	it("keeps the newest duplicate stage in either input order", () => {
+		const stale = record({ revision: 2, elapsedMs: 1 });
+		const current = record({ revision: 2, stage: "rendering", elapsedMs: 600 });
+		for (const [snapshot, logged] of [
+			[stale, current],
+			[current, stale],
+		]) {
+			const analysis = analyzeDesktopDiagnostics(logLine(logged), {
+				operations: { records: [snapshot] },
+			});
+			expect(analysis.operations[0]).toMatchObject({
+				stage: "rendering",
+				elapsedMs: 600,
+				stages: [{ revision: 2, stage: "rendering", elapsedMs: 600 }],
+			});
+		}
 	});
 
 	it("links a failed worker to its parent and retains the build and settings", () => {

@@ -97,8 +97,9 @@ export function analyzeDesktopDiagnostics(log: string, context: unknown) {
 		) {
 			operation.latest = record;
 		}
-		if (!operation.stages.has(record.revision)) {
-			if (operation.stages.size >= 32) {
+		const previousStage = operation.stages.get(record.revision);
+		if (!previousStage || record.elapsedMs > previousStage.elapsedMs) {
+			if (!previousStage && operation.stages.size >= 32) {
 				omittedStages++;
 			} else {
 				operation.stages.set(record.revision, {
