@@ -11,9 +11,13 @@ use crate::{
     web_api::{AuthedApiError, ManagerExt},
 };
 
+mod lifecycle;
 mod timing;
 
-use timing::{measure_warm_probe_rtt, upload_elapsed_after_rtt, upload_mbps_for_bytes};
+use lifecycle::ProbeControl;
+use timing::{
+    connection_will_close, measure_warm_probe_rtt, upload_elapsed_after_rtt, upload_mbps_for_bytes,
+};
 
 const PROBE_BYTES: usize = 256 * 1024;
 const HEALTH_FRESH_FOR: Duration = Duration::from_secs(10 * 60);
@@ -90,7 +94,7 @@ impl UploadHealthSnapshot {
 #[derive(Default)]
 pub struct UploadHealthCache {
     snapshot: Mutex<UploadHealthSnapshot>,
-    probe: Mutex<()>,
+    probe: ProbeControl,
 }
 
 impl UploadHealthCache {
@@ -159,7 +163,22 @@ async fn measure_probe_rtt(app: &AppHandle) -> Option<Duration> {
         .await;
 
     match response {
-        Ok(response) if response.status().is_success() => Some(started.elapsed()),
+        Ok(response) if response.status().is_success() => {
+            let closes_connection = response.version() == reqwest::Version::HTTP_10
+                || response
+                    .headers()
+                    .get_all(reqwest::header::CONNECTION)
+                    .iter()
+                    .any(|value| match value.to_str() {
+                        Ok(value) => connection_will_close(value),
+                        Err(_) => true,
+                    });
+            if closes_connection {
+                None
+            } else {
+                Some(started.elapsed())
+            }
+        }
         Ok(response) => {
             let status = response.status();
             debug!(%status, "Upload health RTT probe returned a non-success status");
@@ -298,16 +317,34 @@ pub async fn refresh_upload_health_status(
     app_state: MutableState<'_, App>,
     cache: State<'_, UploadHealthCache>,
 ) -> Result<UploadHealthStatus, String> {
-    if app_state.read().await.is_recording_active_or_pending() {
+    let state = app_state.read().await;
+    if state.is_recording_active_or_pending() {
+        drop(state);
         return Ok(cache.status().await);
     }
 
-    let Ok(_probe_guard) = cache.probe.try_lock() else {
+    let Some(mut probe) = cache.probe.try_start() else {
+        drop(state);
         return Ok(cache.status().await);
     };
+    drop(state);
 
-    let snapshot = run_probe(&app).await;
+    let Some(snapshot) = probe.run(run_probe(&app)).await else {
+        return Ok(cache.status().await);
+    };
     Ok(cache.update(snapshot).await)
+}
+
+pub fn cancel_probe_for_recording(app: &AppHandle) {
+    if let Some(cache) = app.try_state::<UploadHealthCache>() {
+        cache.probe.cancel();
+    }
+}
+
+pub async fn wait_for_probe_to_stop(app: &AppHandle) {
+    if let Some(cache) = app.try_state::<UploadHealthCache>() {
+        cache.probe.cancel_and_wait().await;
+    }
 }
 
 pub async fn cached_instant_resolution_cap(app: &AppHandle) -> Option<u32> {
@@ -338,7 +375,7 @@ mod tests {
                 recorded_at: Some(Instant::now() - HEALTH_FRESH_FOR - Duration::from_secs(1)),
                 message: "old".to_string(),
             }),
-            probe: Mutex::new(()),
+            probe: ProbeControl::default(),
         };
 
         assert_eq!(cache.fresh_instant_resolution_cap().await, None);
@@ -355,7 +392,7 @@ mod tests {
                 recorded_at: Some(Instant::now()),
                 message: "slow".to_string(),
             }),
-            probe: Mutex::new(()),
+            probe: ProbeControl::default(),
         };
 
         assert_eq!(cache.fresh_instant_resolution_cap().await, Some(1280));

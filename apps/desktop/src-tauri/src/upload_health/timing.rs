@@ -1,5 +1,11 @@
 use std::{future::Future, time::Duration};
 
+pub(super) fn connection_will_close(value: &str) -> bool {
+    value
+        .split(',')
+        .any(|token| token.trim().eq_ignore_ascii_case("close"))
+}
+
 pub(super) async fn measure_warm_probe_rtt<Probe, ProbeFuture>(
     budget: Duration,
     mut probe: Probe,
@@ -43,6 +49,15 @@ mod tests {
     use std::future::{pending, ready};
 
     use super::*;
+
+    #[test]
+    fn detects_close_among_connection_tokens() {
+        assert!(connection_will_close("close"));
+        assert!(connection_will_close("keep-alive, CLOSE"));
+        assert!(connection_will_close(" Close , upgrade"));
+        assert!(!connection_will_close("keep-alive"));
+        assert!(!connection_will_close(""));
+    }
 
     #[tokio::test]
     async fn cold_connection_time_does_not_inflate_upload_speed() {
