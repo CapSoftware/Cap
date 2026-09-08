@@ -135,6 +135,23 @@ pub struct DeviceSnapshot {
 }
 
 impl DeviceSnapshot {
+    pub fn update_camera_formats(
+        &mut self,
+        queried: &CameraOption,
+        formats: Vec<CameraFormat>,
+    ) -> bool {
+        let Some(camera) = self
+            .cameras
+            .iter_mut()
+            .find(|camera| camera.same_device(queried))
+        else {
+            return false;
+        };
+        camera.best_format = formats.first().copied();
+        camera.formats = formats;
+        true
+    }
+
     /// Enumerate everything. This blocks — AVFoundation camera discovery and the
     /// window-server queries are both slow enough to drop frames — so callers
     /// should run it on the background executor, never inside `render`.
@@ -280,6 +297,48 @@ mod input_enumeration_tests {
             height: 1080,
             frame_rate: 30.0,
         }]
+    }
+
+    #[test]
+    fn completed_query_updates_matching_camera_capabilities() {
+        let queried = camera_fixture("camera-a");
+        let mut snapshot = DeviceSnapshot {
+            cameras: vec![queried.clone()],
+            ..Default::default()
+        };
+        assert!(snapshot.update_camera_formats(&queried, formats_fixture()));
+        assert_eq!(snapshot.cameras[0].formats, formats_fixture());
+        assert_eq!(
+            snapshot.cameras[0].best_format,
+            formats_fixture().first().copied()
+        );
+    }
+
+    #[test]
+    fn completed_query_cannot_overwrite_replacement_camera_capabilities() {
+        let queried = camera_fixture("camera-a");
+        let mut changed_id = queried.clone();
+        changed_id.device_id = "camera-b".into();
+        let mut changed_model = queried.clone();
+        changed_model.model_id =
+            Some(cap_camera::ModelID::try_from("046d:08e5".to_string()).unwrap());
+        let mut changed_label = queried.clone();
+        changed_label.label = "Replacement camera".into();
+        for replacement in [changed_id, changed_model, changed_label] {
+            let mut snapshot = DeviceSnapshot {
+                cameras: vec![replacement.clone()],
+                ..Default::default()
+            };
+            assert!(!snapshot.update_camera_formats(&queried, formats_fixture()));
+            assert_eq!(snapshot.cameras, vec![replacement]);
+        }
+    }
+
+    #[test]
+    fn completed_query_cannot_restore_disconnected_camera() {
+        let mut snapshot = DeviceSnapshot::default();
+        assert!(!snapshot.update_camera_formats(&camera_fixture("camera-a"), formats_fixture()));
+        assert!(snapshot.cameras.is_empty());
     }
 
     #[test]

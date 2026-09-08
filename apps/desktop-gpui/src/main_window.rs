@@ -5048,14 +5048,13 @@ impl MainWindow {
                     }
                     if let Some(formats) = camera_formats
                         && let Some(DeviceFormatTarget::Camera(camera)) = &this.device_format_target
-                        && let Some(device) = this
-                            .devices
-                            .cameras
-                            .iter_mut()
-                            .find(|device| device.device_id == camera.device_id)
+                        && !this.devices.update_camera_formats(camera, formats)
                     {
-                        device.best_format = formats.first().copied();
-                        device.formats = formats;
+                        this.device_formats = Some(Err(
+                            "Camera changed or disconnected. Reopen its format settings.".into(),
+                        ));
+                        cx.notify();
+                        return;
                     }
                     this.device_format_notice = notice;
                     this.device_formats = Some(formats);
