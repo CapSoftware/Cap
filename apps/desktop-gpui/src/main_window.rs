@@ -347,6 +347,60 @@ pub enum DeviceMenu {
     Microphone,
 }
 
+fn camera_format_choices(
+    formats: Result<Vec<devices::CameraFormat>, String>,
+) -> (Vec<DeviceFormat>, Option<String>) {
+    let mut choices = vec![DeviceFormat::Camera(Default::default())];
+    match formats {
+        Ok(formats) => {
+            choices.extend(
+                formats
+                    .into_iter()
+                    .map(|format| DeviceFormat::Camera(format.settings())),
+            );
+            (choices, None)
+        }
+        Err(error) => (choices, Some(error)),
+    }
+}
+
+#[cfg(test)]
+mod camera_format_choice_tests {
+    use super::*;
+
+    #[test]
+    fn failed_probe_keeps_automatic_available() {
+        let (choices, notice) = camera_format_choices(Err("Camera access denied".into()));
+        assert_eq!(choices, vec![DeviceFormat::Camera(Default::default())]);
+        assert_eq!(notice.as_deref(), Some("Camera access denied"));
+    }
+
+    #[test]
+    fn empty_formats_keep_automatic_available() {
+        let (choices, notice) = camera_format_choices(Ok(Vec::new()));
+        assert_eq!(choices, vec![DeviceFormat::Camera(Default::default())]);
+        assert!(notice.is_none());
+    }
+
+    #[test]
+    fn successful_retry_adds_current_formats_and_clears_error() {
+        let format = devices::CameraFormat {
+            width: 1280,
+            height: 720,
+            frame_rate: 60.0,
+        };
+        let (choices, notice) = camera_format_choices(Ok(vec![format]));
+        assert_eq!(
+            choices,
+            vec![
+                DeviceFormat::Camera(Default::default()),
+                DeviceFormat::Camera(format.settings())
+            ]
+        );
+        assert!(notice.is_none());
+    }
+}
+
 fn input_refresh_is_current(
     current_generation: u64,
     current_menu: Option<DeviceMenu>,
@@ -1312,10 +1366,18 @@ impl MainWindow {
                         ),
                         !this.device_restore_suspended && this.target_prewarm_allowed(window, cx),
                     )
+                    .map(|allowed| {
+                        let cameras = if allowed && menu == DeviceMenu::Camera {
+                            this.devices.cameras.clone()
+                        } else {
+                            Vec::new()
+                        };
+                        (allowed, cameras)
+                    })
                 }) else {
                     return;
                 };
-                let Some(allowed) = allowed else {
+                let Some((allowed, previous_cameras)) = allowed else {
                     return;
                 };
                 if allowed && let Some(permit) = gate.try_enter() {
@@ -1324,7 +1386,9 @@ impl MainWindow {
                         .spawn(async move {
                             let _permit = permit;
                             match menu {
-                                DeviceMenu::Camera => devices::InputSnapshot::cameras(),
+                                DeviceMenu::Camera => {
+                                    devices::InputSnapshot::cameras(&previous_cameras)
+                                }
                                 DeviceMenu::Microphone => devices::InputSnapshot::microphones(),
                             }
                         })
@@ -4936,6 +5000,10 @@ impl MainWindow {
         });
         self.device_format_target = Some(target.clone());
         self.device_format_notice = None;
+        let should_query = match &target {
+            DeviceFormatTarget::Camera(camera) => camera.formats.is_empty(),
+            DeviceFormatTarget::Microphone(_) => true,
+        };
         self.device_formats = match &target {
             DeviceFormatTarget::Camera(camera) => Some(Ok(std::iter::once(DeviceFormat::Camera(
                 Default::default(),
@@ -4947,18 +5015,29 @@ impl MainWindow {
                     .map(|format| DeviceFormat::Camera(format.settings())),
             )
             .collect())),
-            DeviceFormatTarget::Microphone(_) => None,
+            _ => None,
         };
-        if let DeviceFormatTarget::Microphone(name) = target {
+        if should_query {
             cx.spawn(async move |this, cx| {
-                let formats = cx
+                let (formats, camera_formats, notice) = cx
                     .background_executor()
                     .spawn(async move {
-                        devices::microphone_formats(&name).map(|formats| {
-                            std::iter::once(DeviceFormat::Microphone(Default::default()))
-                                .chain(formats.into_iter().map(DeviceFormat::Microphone))
-                                .collect()
-                        })
+                        match target {
+                            DeviceFormatTarget::Camera(camera) => {
+                                let formats = devices::camera_formats(&camera.device_id);
+                                let metadata = formats.as_ref().ok().cloned();
+                                let (choices, notice) = camera_format_choices(formats);
+                                (Ok(choices), metadata, notice)
+                            }
+                            DeviceFormatTarget::Microphone(name) => {
+                                let formats = devices::microphone_formats(&name).map(|formats| {
+                                    std::iter::once(DeviceFormat::Microphone(Default::default()))
+                                        .chain(formats.into_iter().map(DeviceFormat::Microphone))
+                                        .collect()
+                                });
+                                (formats, None, None)
+                            }
+                        }
                     })
                     .await;
                 this.update(cx, |this, cx| {
@@ -4967,6 +5046,17 @@ impl MainWindow {
                     {
                         return;
                     }
+                    if let Some(formats) = camera_formats
+                        && let Some(DeviceFormatTarget::Camera(camera)) = &this.device_format_target
+                        && !this.devices.update_camera_formats(camera, formats)
+                    {
+                        this.device_formats = Some(Err(
+                            "Camera changed or disconnected. Reopen its format settings.".into(),
+                        ));
+                        cx.notify();
+                        return;
+                    }
+                    this.device_format_notice = notice;
                     this.device_formats = Some(formats);
                     cx.notify();
                 })

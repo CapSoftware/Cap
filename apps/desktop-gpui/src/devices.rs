@@ -135,6 +135,23 @@ pub struct DeviceSnapshot {
 }
 
 impl DeviceSnapshot {
+    pub fn update_camera_formats(
+        &mut self,
+        queried: &CameraOption,
+        formats: Vec<CameraFormat>,
+    ) -> bool {
+        let Some(camera) = self
+            .cameras
+            .iter_mut()
+            .find(|camera| camera.same_device(queried))
+        else {
+            return false;
+        };
+        camera.best_format = formats.first().copied();
+        camera.formats = formats;
+        true
+    }
+
     /// Enumerate everything. This blocks — AVFoundation camera discovery and the
     /// window-server queries are both slow enough to drop frames — so callers
     /// should run it on the background executor, never inside `render`.
@@ -179,8 +196,8 @@ pub enum InputSnapshot {
 }
 
 impl InputSnapshot {
-    pub fn cameras() -> Self {
-        Self::Cameras(list_cameras())
+    pub fn cameras(previous: &[CameraOption]) -> Self {
+        Self::Cameras(list_cameras_with_previous(previous))
     }
 
     pub fn microphones() -> Self {
@@ -189,7 +206,20 @@ impl InputSnapshot {
 
     pub fn install(self, snapshot: &mut DeviceSnapshot) -> bool {
         match self {
-            Self::Cameras(cameras) if snapshot.cameras != cameras => {
+            Self::Cameras(mut cameras) => {
+                for camera in &mut cameras {
+                    if camera.formats.is_empty()
+                        && let Some(current) = snapshot.cameras.iter().find(|current| {
+                            current.same_device(camera) && !current.formats.is_empty()
+                        })
+                    {
+                        camera.best_format = current.best_format;
+                        camera.formats = current.formats.clone();
+                    }
+                }
+                if snapshot.cameras == cameras {
+                    return false;
+                }
                 snapshot.cameras = cameras;
             }
             Self::Microphones(microphones) if snapshot.microphones != microphones => {
@@ -251,6 +281,149 @@ mod input_enumeration_tests {
         assert!(InputSnapshot::Microphones(Vec::new()).install(&mut snapshot));
         assert_eq!(snapshot.cameras, vec![camera]);
     }
+    fn camera_fixture(id: &str) -> CameraOption {
+        CameraOption {
+            device_id: id.into(),
+            model_id: None,
+            label: "Camera".into(),
+            best_format: None,
+            formats: Vec::new(),
+        }
+    }
+
+    fn formats_fixture() -> Vec<CameraFormat> {
+        vec![CameraFormat {
+            width: 1920,
+            height: 1080,
+            frame_rate: 30.0,
+        }]
+    }
+
+    #[test]
+    fn completed_query_updates_matching_camera_capabilities() {
+        let queried = camera_fixture("camera-a");
+        let mut snapshot = DeviceSnapshot {
+            cameras: vec![queried.clone()],
+            ..Default::default()
+        };
+        assert!(snapshot.update_camera_formats(&queried, formats_fixture()));
+        assert_eq!(snapshot.cameras[0].formats, formats_fixture());
+        assert_eq!(
+            snapshot.cameras[0].best_format,
+            formats_fixture().first().copied()
+        );
+    }
+
+    #[test]
+    fn completed_query_cannot_overwrite_replacement_camera_capabilities() {
+        let queried = camera_fixture("camera-a");
+        let mut changed_id = queried.clone();
+        changed_id.device_id = "camera-b".into();
+        let mut changed_model = queried.clone();
+        changed_model.model_id =
+            Some(cap_camera::ModelID::try_from("046d:08e5".to_string()).unwrap());
+        let mut changed_label = queried.clone();
+        changed_label.label = "Replacement camera".into();
+        for replacement in [changed_id, changed_model, changed_label] {
+            let mut snapshot = DeviceSnapshot {
+                cameras: vec![replacement.clone()],
+                ..Default::default()
+            };
+            assert!(!snapshot.update_camera_formats(&queried, formats_fixture()));
+            assert_eq!(snapshot.cameras, vec![replacement]);
+        }
+    }
+
+    #[test]
+    fn completed_query_cannot_restore_disconnected_camera() {
+        let mut snapshot = DeviceSnapshot::default();
+        assert!(!snapshot.update_camera_formats(&camera_fixture("camera-a"), formats_fixture()));
+        assert!(snapshot.cameras.is_empty());
+    }
+
+    #[test]
+    fn repeated_camera_refresh_does_not_reopen_unchanged_devices() {
+        let mut previous = vec![camera_fixture("camera-a").with_formats(&[], formats_fixture)];
+        for _ in 0..1000 {
+            let refreshed = camera_fixture("camera-a").with_formats(&previous, || {
+                panic!("unchanged camera must not reopen its driver")
+            });
+            assert_eq!(refreshed, previous[0]);
+            previous = vec![refreshed];
+        }
+    }
+
+    #[test]
+    fn new_camera_does_not_inherit_another_devices_formats() {
+        let previous = vec![camera_fixture("camera-a").with_formats(&[], formats_fixture)];
+        let mut probes = 0;
+        let refreshed = camera_fixture("camera-b").with_formats(&previous, || {
+            probes += 1;
+            Vec::new()
+        });
+        assert_eq!(probes, 1);
+        assert!(refreshed.formats.is_empty());
+        assert!(refreshed.best_format.is_none());
+    }
+
+    #[test]
+    fn reconnect_refreshes_formats_after_camera_disappears() {
+        let connected = camera_fixture("camera-a").with_formats(&[], formats_fixture);
+        let after_disconnect = Vec::new();
+        let changed_format = CameraFormat {
+            width: 1280,
+            height: 720,
+            frame_rate: 60.0,
+        };
+        let reconnected =
+            camera_fixture("camera-a").with_formats(&after_disconnect, || vec![changed_format]);
+        assert_ne!(reconnected.formats, connected.formats);
+        assert_eq!(reconnected.best_format, Some(changed_format));
+    }
+
+    #[test]
+    fn renamed_camera_refreshes_capabilities() {
+        let previous = vec![camera_fixture("camera-a").with_formats(&[], formats_fixture)];
+        let mut camera = camera_fixture("camera-a");
+        camera.label = "Reconfigured virtual camera".into();
+        let mut probes = 0;
+        camera.with_formats(&previous, || {
+            probes += 1;
+            Vec::new()
+        });
+        assert_eq!(probes, 1);
+    }
+    #[test]
+    fn failed_probe_is_not_retried_by_background_refresh() {
+        let previous = vec![camera_fixture("camera-a").with_formats(&[], Vec::new)];
+        let refreshed = camera_fixture("camera-a").with_formats(&previous, || {
+            panic!("background refresh must not retry a native probe")
+        });
+        assert!(refreshed.formats.is_empty());
+    }
+
+    #[test]
+    fn late_refresh_does_not_erase_successful_explicit_retry() {
+        let refreshed = vec![camera_fixture("camera-a")];
+        let mut snapshot = DeviceSnapshot {
+            cameras: vec![camera_fixture("camera-a").with_formats(&[], formats_fixture)],
+            ..Default::default()
+        };
+        assert!(!InputSnapshot::Cameras(refreshed).install(&mut snapshot));
+        assert_eq!(snapshot.cameras[0].formats, formats_fixture());
+    }
+
+    #[test]
+    fn changed_device_does_not_inherit_previous_capabilities() {
+        let mut changed = camera_fixture("camera-a");
+        changed.label = "Changed virtual camera".into();
+        let mut snapshot = DeviceSnapshot {
+            cameras: vec![camera_fixture("camera-a").with_formats(&[], formats_fixture)],
+            ..Default::default()
+        };
+        assert!(InputSnapshot::Cameras(vec![changed]).install(&mut snapshot));
+        assert!(snapshot.cameras[0].formats.is_empty());
+    }
 }
 
 /// Just the capture targets.
@@ -279,42 +452,105 @@ impl TargetSnapshot {
 }
 
 fn list_cameras() -> Vec<CameraOption> {
+    list_cameras_with_previous(&[])
+}
+
+fn list_cameras_with_previous(previous: &[CameraOption]) -> Vec<CameraOption> {
     cap_camera::list_cameras()
         .map(|camera| {
-            let mut formats = camera
-                .formats()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|format| CameraFormat {
-                    width: format.width(),
-                    height: format.height(),
-                    frame_rate: format.frame_rate(),
-                })
-                .collect::<Vec<_>>();
-            let mut seen = std::collections::HashSet::new();
-            formats.retain(|format| {
-                seen.insert((
-                    format.width,
-                    format.height,
-                    format.frame_rate.round() as u32,
-                ))
-            });
-            formats.sort_by(|a, b| {
-                (b.width * b.height)
-                    .cmp(&(a.width * a.height))
-                    .then(b.frame_rate.total_cmp(&a.frame_rate))
-            });
-            let best_format = formats.first().copied();
-
             CameraOption {
                 device_id: camera.device_id().to_string(),
                 model_id: camera.model_id().cloned(),
                 label: camera.display_name().to_string(),
-                best_format,
-                formats,
+                best_format: None,
+                formats: Vec::new(),
             }
+            .with_formats(previous, || {
+                camera
+                    .formats()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|format| CameraFormat {
+                        width: format.width(),
+                        height: format.height(),
+                        frame_rate: format.frame_rate(),
+                    })
+                    .collect()
+            })
         })
         .collect()
+}
+
+impl CameraOption {
+    fn same_device(&self, other: &Self) -> bool {
+        self.device_id == other.device_id
+            && self.model_id == other.model_id
+            && self.label == other.label
+    }
+
+    fn with_formats(
+        mut self,
+        previous: &[Self],
+        load_formats: impl FnOnce() -> Vec<CameraFormat>,
+    ) -> Self {
+        // Windows format probing opens native camera sources; polling an unchanged
+        // device must reuse metadata rather than repeatedly activating its driver.
+        if let Some(previous) = previous.iter().find(|previous| previous.same_device(&self)) {
+            self.best_format = previous.best_format;
+            self.formats = previous.formats.clone();
+            return self;
+        }
+
+        let mut formats = load_formats();
+        let mut seen = std::collections::HashSet::new();
+        formats.retain(|format| {
+            seen.insert((
+                format.width,
+                format.height,
+                format.frame_rate.round() as u32,
+            ))
+        });
+        formats.sort_by(|a, b| {
+            (u64::from(b.width) * u64::from(b.height))
+                .cmp(&(u64::from(a.width) * u64::from(a.height)))
+                .then(b.frame_rate.total_cmp(&a.frame_rate))
+        });
+        self.best_format = formats.first().copied();
+        self.formats = formats;
+        self
+    }
+}
+
+pub fn camera_formats(device_id: &str) -> Result<Vec<CameraFormat>, String> {
+    let camera = cap_camera::list_cameras()
+        .find(|camera| camera.device_id() == device_id)
+        .ok_or_else(|| "Camera is no longer available. Reconnect it and try again.".to_string())?;
+    let formats = camera.formats().ok_or_else(|| {
+        "Could not read camera formats. Check camera access and try again.".to_string()
+    })?;
+    if formats.is_empty() {
+        return Err(
+            "No camera formats are available. Check camera access and try again.".to_string(),
+        );
+    }
+    Ok(CameraOption {
+        device_id: camera.device_id().to_string(),
+        model_id: camera.model_id().cloned(),
+        label: camera.display_name().to_string(),
+        best_format: None,
+        formats: Vec::new(),
+    }
+    .with_formats(&[], || {
+        formats
+            .into_iter()
+            .map(|format| CameraFormat {
+                width: format.width(),
+                height: format.height(),
+                frame_rate: format.frame_rate(),
+            })
+            .collect()
+    })
+    .formats)
 }
 
 /// Mirrors `MicrophoneFeed::list_with_settings`: the default input device is
