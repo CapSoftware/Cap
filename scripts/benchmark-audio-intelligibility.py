@@ -24,12 +24,29 @@ def sdr(reference, output):
 	return float(10 * np.log10(max(np.sum(projection ** 2), 1e-20) / max(np.sum((output - projection) ** 2), 1e-20)))
 
 
+def score_signals(reference, noisy, output):
+	n = min(len(reference), len(noisy), len(output))
+	a, baseline, b = reference[:n], noisy[:n], output[:n]
+	correlation = correlate(b, a, method="fft")
+	lags = correlation_lags(len(b), len(a))
+	region = np.abs(lags) <= 1600
+	lag = int(lags[region][np.argmax(correlation[region])])
+	unaligned_input = float(stoi(a, baseline, 16000))
+	unaligned_output = float(stoi(a, b, 16000))
+	if lag > 0:
+		a, baseline, b = a[:-lag], baseline[:-lag], b[lag:]
+	elif lag < 0:
+		a, baseline, b = a[-lag:], baseline[-lag:], b[:lag]
+	input_stoi = float(stoi(a, baseline, 16000))
+	output_stoi = float(stoi(a, b, 16000))
+	return {"metricVersion": "aligned-v1", "inputStoi": input_stoi, "outputStoi": output_stoi, "stoiDelta": output_stoi - input_stoi, "inputSiSdr": sdr(a, baseline), "outputSiSdr": sdr(a, b), "lagMs": lag / 16, "evaluatedSamples": len(a), "unalignedInputStoi": unaligned_input, "unalignedOutputStoi": unaligned_output, "unalignedStoiDelta": unaligned_output - unaligned_input}
+
+
 def evaluate(case, root):
 	name, reference, noisy = case
 	case_path = root / f"{name}.wav"
 	wavfile.write(case_path, 16000, noisy.astype(np.float32))
 	base = benchmark.measure(case_path)
-	input_stoi = float(stoi(reference, noisy, 16000))
 	results = []
 	policies = ["levels", "equalized-v2", "clean-v2"] if root.name.endswith("-v2") else ["levels", "equalized", "clean", "clean3"]
 	if "strength" in root.name:
@@ -52,14 +69,7 @@ def evaluate(case, root):
 		output = root / f"{name}-{policy}.m4a"
 		_, elapsed = benchmark.execute(["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(case_path), "-af", filters, "-ar", "16000", "-c:a", "aac", "-b:a", "96k", str(output)])
 		y = decode(output)
-		n = min(len(y), len(reference))
-		a, b = reference[:n], y[:n]
-		correlation = correlate(b, a, method="fft")
-		lags = correlation_lags(len(b), len(a))
-		region = np.abs(lags) <= 1600
-		lag = int(lags[region][np.argmax(correlation[region])])
-		output_stoi = float(stoi(a, b, 16000))
-		results.append({"case": name, "policy": policy, "inputStoi": input_stoi, "outputStoi": output_stoi, "stoiDelta": output_stoi - input_stoi, "inputSiSdr": sdr(reference, noisy), "outputSiSdr": sdr(a, b), "lagMs": lag / 16, "sampleDelta": len(y) - len(reference), "processingSeconds": elapsed})
+		results.append({"case": name, "policy": policy, **score_signals(reference, noisy, y), "sampleDelta": len(y) - len(reference), "processingSeconds": elapsed})
 	print(json.dumps({"case": name, "stoiDeltas": {r["policy"]: round(r["stoiDelta"], 5) for r in results}}), flush=True)
 	return results
 
