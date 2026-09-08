@@ -23,6 +23,19 @@ describe("splitZoomSegmentAt", () => {
 		expect(result?.newSegmentIndex).toBe(1);
 	});
 
+	it("tracks the new piece by identity when the sort moves it past later segments", () => {
+		const segments = [segment(10, 20), segment(30, 40)];
+		const result = splitZoomSegmentAt(segments, 0, 5);
+
+		expect(segments.map((s) => s.start)).toEqual([10, 15, 30]);
+		expect(segments.map((s) => s.end)).toEqual([15, 20, 40]);
+		expect(result?.newSegmentIndex).toBe(1);
+		expect(segments[result?.newSegmentIndex ?? -1]).toMatchObject({
+			start: 15,
+			end: 20,
+		});
+	});
+
 	it("preserves the segment's other properties on both halves", () => {
 		const segments = [segment(0, 10, 2.5)];
 		splitZoomSegmentAt(segments, 0, 4);

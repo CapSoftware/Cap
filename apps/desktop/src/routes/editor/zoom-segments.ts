@@ -31,9 +31,9 @@ export function splitZoomSegmentAt<ZoomSegment extends ZoomSegmentLike>(
 	});
 	segments[index].end = segment.start + time;
 
-	const newSegmentIndex = sortTrackSegments(segments).indexOf(
-		segments[index + 1],
-	);
+	const inserted = segments[index + 1];
+	const newSegmentIndex = sortTrackSegments(segments).indexOf(inserted);
+	if (newSegmentIndex === -1) return null;
 
 	return { segments, newSegmentIndex };
 }
