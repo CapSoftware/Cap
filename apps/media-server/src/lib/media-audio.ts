@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { type Subprocess, spawn } from "bun";
+import { z } from "zod";
 import { withTimeout } from "./media-common";
 import {
 	canAcceptNewAudioOperation,
@@ -31,6 +32,9 @@ const MAX_AUDIO_SIZE_BYTES = 100 * 1024 * 1024;
 const MAX_STDERR_BYTES = 64 * 1024;
 const AUDIO_PROBE_MAX_ATTEMPTS = 3;
 const AUDIO_PROBE_RETRY_BASE_MS = 250;
+const AUDIO_PROBE_SCHEMA = z.object({
+	streams: z.array(z.object({ codec_type: z.string().optional() })),
+});
 
 const DEFAULT_OPTIONS: Required<AudioExtractionOptions> = {
 	format: "mp3",
@@ -144,7 +148,7 @@ function getAudioProbeArgs(inputPath: string): string[] {
 			"0",
 		);
 	}
-	args.push("-show_entries", "stream=codec_type", "-of", "csv=p=0", inputPath);
+	args.push("-show_entries", "stream=codec_type", "-of", "json", inputPath);
 	return args;
 }
 
@@ -224,10 +228,8 @@ async function probeAudioTracks(
 			const safeStderrText = redactProcessOutput(stderrText, sourceUrl);
 
 			if (exitCode === 0) {
-				const trackTypes = stdoutText
-					.split(/\r?\n/)
-					.map((value) => value.trim())
-					.filter(Boolean);
+				const { streams } = AUDIO_PROBE_SCHEMA.parse(JSON.parse(stdoutText));
+				const trackTypes = streams.map((stream) => stream.codec_type);
 				if (!trackTypes.includes("video")) {
 					throw new Error("No video stream found");
 				}
