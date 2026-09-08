@@ -36,12 +36,16 @@ pub(super) fn start(
     let context = session.context();
     Task(tokio::spawn(inherit_upload_context(context, async move {
         let mut preparation = Preparation::default();
+        let mut next_request = tokio::time::Instant::now();
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 _ = session.cancelled() => return,
                 _ = interval.tick() => {}
+            }
+            if tokio::time::Instant::now() < next_request {
+                continue;
             }
             let batch = {
                 let state = state.lock().unwrap_or_else(|error| error.into_inner());
@@ -62,11 +66,12 @@ pub(super) fn start(
                     preparation.acknowledge(&batch, &prepared);
                 }
                 Ok(None) => return,
-                Err(error) => tracing::debug!(%error, "Optional recording preparation unavailable"),
+                Err(error) => {
+                    preparation.request_failed();
+                    tracing::debug!(%error, "Optional recording preparation unavailable");
+                }
             }
-            if preparation.exhausted() {
-                return;
-            }
+            next_request = tokio::time::Instant::now() + preparation.retry_delay();
         }
     })))
 }

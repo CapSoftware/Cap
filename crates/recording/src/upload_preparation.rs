@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -18,6 +19,7 @@ pub struct Segment {
 pub struct Preparation {
     attempts: BTreeMap<Segment, u8>,
     acknowledged: BTreeSet<Segment>,
+    consecutive_failures: u32,
 }
 
 impl Preparation {
@@ -51,18 +53,29 @@ impl Preparation {
     }
 
     pub fn acknowledge(&mut self, requested: &[Segment], prepared: &[Segment]) {
+        let before = self.acknowledged.len();
         self.acknowledged.extend(
             prepared
                 .iter()
                 .filter(|segment| requested.contains(segment))
                 .copied(),
         );
+        if self.acknowledged.len() > before {
+            self.consecutive_failures = 0;
+        } else {
+            self.request_failed();
+        }
     }
 
-    pub fn exhausted(&self) -> bool {
-        self.attempts
-            .iter()
-            .any(|(segment, attempts)| *attempts >= 2 && !self.acknowledged.contains(segment))
+    pub fn request_failed(&mut self) {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+    }
+
+    pub fn retry_delay(&self) -> Duration {
+        if self.consecutive_failures == 0 {
+            return Duration::ZERO;
+        }
+        Duration::from_secs((30u64 << self.consecutive_failures.min(4)).min(300))
     }
 }
 
@@ -113,13 +126,40 @@ mod tests {
                 },
             ],
         );
-        assert!(!preparation.exhausted());
         let retry = preparation.next_batch([1, 2, 99], [1]);
         assert_eq!(retry.len(), 3);
-        assert!(preparation.exhausted());
         preparation.acknowledge(&retry, &retry);
-        assert!(!preparation.exhausted());
         assert!(preparation.next_batch([1, 2, 99], [1]).is_empty());
+    }
+
+    #[test]
+    fn an_exhausted_fragment_does_not_disable_later_uploads() {
+        let mut preparation = Preparation::default();
+        assert_eq!(preparation.next_batch([1], []).len(), 1);
+        assert_eq!(preparation.next_batch([1], []).len(), 1);
+        assert_eq!(
+            preparation.next_batch([1, 2], []),
+            vec![Segment {
+                track: Track::Video,
+                index: 2
+            }]
+        );
+    }
+
+    #[test]
+    fn backs_off_outages_and_resets_after_real_progress() {
+        let mut preparation = Preparation::default();
+        let batch = preparation.next_batch([1], []);
+        preparation.acknowledge(&batch, &[]);
+        assert_eq!(preparation.retry_delay(), Duration::from_secs(60));
+        preparation.request_failed();
+        assert_eq!(preparation.retry_delay(), Duration::from_secs(120));
+        for _ in 0..10 {
+            preparation.request_failed();
+        }
+        assert_eq!(preparation.retry_delay(), Duration::from_secs(300));
+        preparation.acknowledge(&batch, &batch);
+        assert_eq!(preparation.retry_delay(), Duration::ZERO);
     }
 
     #[test]

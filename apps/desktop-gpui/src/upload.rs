@@ -638,6 +638,7 @@ async fn upload_segments(
     let mut preparation_interval = tokio::time::interval(Duration::from_secs(30));
     preparation_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut preparation_request = None;
+    let mut next_preparation_request = tokio::time::Instant::now();
     let mut next_prefetch = SEGMENT_URL_PREFETCH + 1;
     let prefetched = checked_segment_step(&cancel, || async {
         Ok(transport.prefetch(video_id, 1, SEGMENT_URL_PREFETCH).await)
@@ -662,6 +663,7 @@ async fn upload_segments(
         };
         tokio::select! {
             _ = preparation_interval.tick(), if preparation_enabled && preparation_request.is_none() => {
+                if tokio::time::Instant::now() < next_preparation_request { continue; }
                 preparation_batch = preparation.next_batch(manifest.video_segments.iter().map(|segment| segment.index), manifest.audio_segments.iter().map(|segment| segment.index));
                 if !preparation_batch.is_empty() {
                     preparation_request = Some(Box::pin(transport.prepare(video_id, preparation_batch.clone())));
@@ -672,9 +674,12 @@ async fn upload_segments(
                 match response {
                     Ok(Some(prepared)) => preparation.acknowledge(&preparation_batch, &prepared),
                     Ok(None) => preparation_enabled = false,
-                    Err(error) => tracing::debug!(%error, "Optional recording preparation unavailable"),
+                    Err(error) => {
+                        preparation.request_failed();
+                        tracing::debug!(%error, "Optional recording preparation unavailable");
+                    }
                 }
-                if preparation.exhausted() { preparation_enabled = false; }
+                next_preparation_request = tokio::time::Instant::now() + preparation.retry_delay();
             }
             permission = async { permission.unwrap().await }, if !authorized => {
                 permission.map_err(|_| "Instant completion was not authorized".to_string())?;
