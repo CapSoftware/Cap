@@ -16,6 +16,7 @@ import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type appType from "../../app";
+import * as audioLevels from "../../lib/audio-levels";
 import * as containerCpu from "../../lib/container-cpu";
 import * as containerMemory from "../../lib/container-memory";
 import type { Job, JobProgress } from "../../lib/job-manager";
@@ -216,6 +217,23 @@ beforeAll(async () => {
 	getJob = jobManager.getJob;
 	deleteJob = jobManager.deleteJob;
 	tempDir = mkdtempSync(join(tmpdir(), "cap-real-world-routes-"));
+	execFileSync("ffmpeg", [
+		"-v",
+		"error",
+		"-i",
+		TEST_VIDEO_WITH_AUDIO,
+		"-c:v",
+		"libvpx-vp9",
+		"-deadline",
+		"realtime",
+		"-cpu-used",
+		"8",
+		"-c:a",
+		"libopus",
+		"-threads",
+		"1",
+		join(tempDir, "chrome.webm"),
+	]);
 	for (const kind of ["video", "audio"] as const) {
 		const path = join(tempDir, `${kind}-fragmented.mp4`);
 		execFileSync("ffmpeg", [
@@ -367,13 +385,17 @@ beforeAll(async () => {
 							? TEST_VIDEO_NO_AUDIO
 							: url.pathname === "/fixtures/test-with-audio.mp4"
 								? TEST_VIDEO_WITH_AUDIO
-								: null;
+								: url.pathname === "/fixtures/chrome.webm"
+									? join(tempDir, "chrome.webm")
+									: null;
 
 				if (fixturePath) {
 					if (request.method === "GET") fixtureReads.push(url.pathname);
 					const fixture = Bun.file(fixturePath);
 					const headers = {
-						"Content-Type": "video/mp4",
+						"Content-Type": fixturePath.endsWith(".webm")
+							? "video/webm"
+							: "video/mp4",
 						"Content-Length": String(await fixture.size),
 					};
 					return request.method === "HEAD"
@@ -658,6 +680,125 @@ describe("media routes real-world integration tests", () => {
 			remoteDecode.mockRestore();
 			bytesOnly.mockRestore();
 			deleteJob(jobId);
+		}
+	}, 30_000);
+
+	test("runs optional audio correction on the local verified file after publication and retains success if it fails", async () => {
+		let observed: () => void = () => {};
+		const observations: Record<string, unknown>[] = [];
+		const called = new Promise<void>((resolve) => {
+			observed = resolve;
+		});
+		const audio = spyOn(
+			audioLevels,
+			"enhanceLocalRecording",
+		).mockImplementation(async (input) => {
+			try {
+				observations.push({
+					phase: getJob(input.jobId)?.phase,
+					webhookPhase: webhookPhases.at(-1),
+					matchesPublishedBytes:
+						objectIdentity(await readFile(input.path)) === input.sourceIdentity,
+					sourceKey: input.sourceKey,
+				});
+			} finally {
+				observed();
+			}
+			throw new Error("Optional correction unavailable");
+		});
+		let jobId: string | undefined;
+		try {
+			const body = { ...fencedMuxRequest("local-audio"), audioLevels: true };
+			const response = await app.fetch(
+				mediaPostRequest("/video/mux-segments", body),
+			);
+			expect(response.status).toBe(200);
+			jobId = ((await response.json()) as { jobId: string }).jobId;
+			await withTimeout(called, 10_000);
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			expect(getJob(jobId)?.phase).toBe("complete");
+			expect(getJob(jobId)?.error).toBeUndefined();
+			expect(audio).toHaveBeenCalledTimes(1);
+			expect(observations).toEqual([
+				{
+					phase: "complete",
+					webhookPhase: "complete",
+					matchesPublishedBytes: true,
+					sourceKey: "recording-generations/local-audio/result.mp4",
+				},
+			]);
+			expect(sourceReads).toHaveLength(body.sourceObjects.length);
+		} finally {
+			audio.mockRestore();
+			if (jobId) deleteJob(jobId);
+		}
+	}, 30_000);
+
+	test("downloads Chrome input once and corrects the local MP4 only after publishing the original", async () => {
+		let observed: () => void = () => {};
+		const called = new Promise<void>((resolve) => {
+			observed = resolve;
+		});
+		const observations: Record<string, unknown>[] = [];
+		let outputPath: string | undefined;
+		const audio = spyOn(
+			audioLevels,
+			"enhanceLocalRecording",
+		).mockImplementation(async (input) => {
+			try {
+				outputPath = input.path;
+				observations.push({
+					phase: getJob(input.jobId)?.phase,
+					webhookPhase: webhookPhases.at(-1),
+					matchesPublishedBytes:
+						objectIdentity(await readFile(input.path)) === input.sourceIdentity,
+					sourceKey: input.sourceKey,
+				});
+			} finally {
+				observed();
+			}
+			throw new Error("Optional correction unavailable");
+		});
+		let jobId: string | undefined;
+		try {
+			const response = await app.fetch(
+				mediaPostRequest("/video/process", {
+					videoId: "chrome-audio",
+					userId: "owner",
+					audioLevels: true,
+					videoUrl: fixtureUrl("chrome.webm"),
+					inputExtension: ".webm",
+					outputPresignedUrl: uploadUrl("chrome-audio.mp4"),
+					webhookUrl: `${baseUrl}/ignored-webhook`,
+					webhookSecret: MEDIA_SERVER_SECRET,
+				}),
+			);
+			expect(response.status).toBe(200);
+			jobId = ((await response.json()) as { jobId: string }).jobId;
+			await withTimeout(called, 10_000);
+			await withTimeout(
+				(async () => {
+					while (outputPath && (await Bun.file(outputPath).exists()))
+						await Bun.sleep(10);
+				})(),
+				2_000,
+			);
+			expect(getJob(jobId)?.phase).toBe("complete");
+			expect(getJob(jobId)?.error).toBeUndefined();
+			expect(audio).toHaveBeenCalledTimes(1);
+			expect(observations).toEqual([
+				{
+					phase: "complete",
+					webhookPhase: "complete",
+					matchesPublishedBytes: true,
+					sourceKey: "owner/chrome-audio/result.mp4",
+				},
+			]);
+			expect(fixtureReads).toEqual(["/fixtures/chrome.webm"]);
+			expect(uploadRequests).toEqual(["/uploads/chrome-audio.mp4"]);
+		} finally {
+			audio.mockRestore();
+			if (jobId) deleteJob(jobId);
 		}
 	}, 30_000);
 

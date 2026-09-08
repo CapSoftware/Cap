@@ -1,7 +1,7 @@
 # Instant audio quality experiment
 
-The level-correction worker is connected to the desktop recording finalizer after
-the original recording is verified and published. The original output key and
+The level-correction worker reuses the local MP4 from the existing desktop Instant
+segment mux or Chrome/WebM conversion, after publishing the original recording. The original output key and
 verification receipt remain intact. A separate, versioned MP4 becomes the playback
 and download source only after local and remote-byte validation and an atomic check
 that ownership, storage, source, and upload state have not changed.
@@ -10,8 +10,9 @@ The serving integration uses bounded, constant level correction. EQ and denoisin
 remain experimental because consistent perceptual improvement has not been
 established. No desktop capture change is required.
 
-Eligibility is limited to newly finalized, durably verified desktop MP4 recordings
-on S3-compatible storage, at most 15 minutes and 256 MiB. All existing audio-policy
+Eligibility is limited to newly finalized, durably verified desktop Instant segment
+recordings and completed browser conversions on S3-compatible storage, at most
+15 minutes and 256 MiB. All existing audio-policy
 gates still apply. Google Drive, legacy recordings without an immutable output,
 unsupported audio, and larger recordings retain their original audio. There is no
 historical backfill. Only one enhancement runs per media-server replica, it requires
@@ -19,8 +20,22 @@ spare processing capacity, and the entire request has a two-minute deadline.
 Capacity, timeout, transfer, or validation failures retain the original. The step
 does not retry capacity failures or delay original publication.
 
-Rollback to the previous web deployment selects the retained original output;
-the original recording verification target is never redirected to a derivative.
+There is no second download of the source and no second video encode. Correction
+reads the local completed MP4, copies video packets, and encodes its audio to a
+separate MP4. Candidate decode validation is audio-only; video packet identity is
+checked separately. The original recording verification remains unchanged. Chrome
+conversion already encodes audio, so correction adds one audio encode and can make
+one bounded peak-correction attempt. Keeping both originals and derivatives requires
+an additional output upload and one full output read to verify stored bytes, plus
+two one-byte identity reads. Media bytes travel directly to storage; the web callback
+only handles metadata and signed URLs. Output verification has its own reserved
+transfer budget, independent of the completed original job's download budget.
+
+The original becomes playable before correction. Corrections run only with spare
+capacity, use one FFmpeg decoder/filter thread, and occupy one audio slot per replica.
+Clearing the two audio selection fields restores the retained original. Rolling back
+to the pre-activation web deployment also selects the original; the original recording
+verification target is never redirected to a derivative.
 
 ## Evidence and limits
 
@@ -161,10 +176,32 @@ Run the exact policy in the production Linux image, then verify actual share-pag
 embed, seeking, downloads, edits, transcript alignment, and fallback behavior.
 Measure worker memory, throughput, storage, and tail latency before rollout.
 
-The level-correction integration runs as a durable Workflow step. Its immutable
-derivative key is bound to the original key, object identity, and step identity.
-The worker hashes the source and output, verifies video packets and audio timing,
-and verifies the uploaded bytes before returning. Publication rechecks source and
-output identities and locks the video row while selecting the derivative. A
-response lost after upload can leave an unpublished derivative; it is never served
-and remains under the recording's prefix for normal recording deletion.
+The level-correction integration runs inside the existing media job, after the
+original completion callback and before local cleanup. It does not start another
+Workflow or media job. Its immutable derivative key is bound to the original key,
+object identity, and media job identity. A signed, expiring publication token binds
+ownership, storage, source, and output. The worker hashes the source and output,
+verifies video packets and audio timing, and verifies uploaded bytes. Publication
+rechecks source and output identities while holding the video row lock. Edits,
+replacement, and reprocessing clear stale audio selection; copying resolves selected
+bytes into the new recording's canonical output. A lost publication response can
+leave an unpublished derivative under the recording prefix for normal deletion.
+
+The local-file integration was exercised on 20 complete production MP4s in the Linux
+image with two CPUs and 2 GiB of memory. That set includes eight browser recordings
+and twelve desktop recordings. One quiet recording was eligible; nineteen remained
+unchanged under the existing stream, level, and timing gates. All 20 original hashes
+were preserved, and the eligible output was byte-identical to the prior worker's
+output. It improved from -33.06 to -21.75 LUFS with a -1.99 dBTP true peak. A timed
+run took 13.1 seconds versus 16.1 seconds with the separate-source-download worker;
+these offline runs use mocked storage and do not establish production tail latency.
+
+Route tests exercise actual segmented muxing and Chrome/WebM conversion, assert each
+source is downloaded once, and check that correction receives the published local
+MP4 only after original completion. A thrown correction failure preserves the
+successful recording and cleans up temporary files. Separate worker tests exercise
+real correction, corrupted output, unavailable publication, capacity rejection,
+concurrency, and independent transfer-budget accounting. Web tests cover authenticated
+callbacks, signed publication, source/storage races, output selection, copies, edits,
+and replacements. These checks cannot guarantee zero regressions on every recording;
+unsupported cases retain their original audio.
