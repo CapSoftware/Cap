@@ -355,6 +355,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
                     end: segment.duration(),
                     name: None,
                     speed_audio_mode: None,
+                    audio_muted: false,
                 })
                 .collect(),
             // `TimelineConfiguration` has no `Default`, so the eight other
@@ -6269,7 +6270,7 @@ impl EditorWindow {
             .as_ref()
             .and_then(|timeline| timeline.segments.get(menu.index))?;
         let timescale = segment.timescale;
-        let muted = edits::clip_is_muted(segment);
+        let muted = segment.audio_muted;
         let audio_mode = segment.speed_audio_mode.unwrap_or_default();
         let speeds = [0.25, 0.5, 1.0, 1.5, 2.0, 4.0, 8.0];
         let audio_modes = [
@@ -6357,7 +6358,52 @@ impl EditorWindow {
                                         }))
                                 })),
                         )
-                        .child(if normal_speed {
+                        .when(!normal_speed, |popover| {
+                            popover.child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(4.))
+                                    .rounded(px(8.))
+                                    .bg(Hsla::from(theme.gray_2))
+                                    .p(px(4.))
+                                    .children(audio_modes.into_iter().map(|(mode, label)| {
+                                        let selected = audio_mode == mode;
+                                        div()
+                                            .id(SharedString::from(format!(
+                                                "clip-speed-audio-{label}"
+                                            )))
+                                            .rounded(px(6.))
+                                            .px(px(8.))
+                                            .py(px(4.))
+                                            .text_size(px(12.))
+                                            .cursor_pointer()
+                                            .bg(if selected {
+                                                Hsla::from(theme.gray_4)
+                                            } else {
+                                                gpui::transparent_black()
+                                            })
+                                            .text_color(Hsla::from(if selected {
+                                                theme.gray_12
+                                            } else {
+                                                theme.gray_10
+                                            }))
+                                            .hover(|this| {
+                                                this.text_color(Hsla::from(theme.gray_12))
+                                            })
+                                            .child(label)
+                                            .on_click(cx.listener(
+                                                move |this, _, window, cx| {
+                                                    this.set_clip_speed_audio_mode(
+                                                        index, mode, window, cx,
+                                                    );
+                                                },
+                                            ))
+                                    })),
+                            )
+                        })
+                        .child(
                             div()
                                 .flex()
                                 .flex_row()
@@ -6389,45 +6435,8 @@ impl EditorWindow {
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.set_clip_muted(index, !muted, window, cx);
                                         })),
-                                )
-                                .into_any_element()
-                        } else {
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(4.))
-                                .rounded(px(8.))
-                                .bg(Hsla::from(theme.gray_2))
-                                .p(px(4.))
-                                .children(audio_modes.into_iter().map(|(mode, label)| {
-                                    let selected = audio_mode == mode
-                                        || (mode == ClipSpeedAudioMode::Mute && muted);
-                                    div()
-                                        .id(SharedString::from(format!("clip-speed-audio-{label}")))
-                                        .rounded(px(6.))
-                                        .px(px(8.))
-                                        .py(px(4.))
-                                        .text_size(px(12.))
-                                        .cursor_pointer()
-                                        .bg(if selected {
-                                            Hsla::from(theme.gray_4)
-                                        } else {
-                                            gpui::transparent_black()
-                                        })
-                                        .text_color(Hsla::from(if selected {
-                                            theme.gray_12
-                                        } else {
-                                            theme.gray_10
-                                        }))
-                                        .hover(|this| this.text_color(Hsla::from(theme.gray_12)))
-                                        .child(label)
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.set_clip_speed_audio_mode(index, mode, window, cx);
-                                        }))
-                                }))
-                                .into_any_element()
-                        }),
+                                ),
+                        ),
                 )
                 .into_any_element(),
         )

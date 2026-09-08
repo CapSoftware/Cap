@@ -1050,6 +1050,7 @@ mod tests {
                 end: 202.220711,
                 name: None,
                 speed_audio_mode: None,
+                audio_muted: false,
             }],
             transitions: Vec::new(),
             zoom_segments: vec![ZoomSegment {
@@ -1104,6 +1105,7 @@ mod tests {
                 end: 202.220711,
                 name: None,
                 speed_audio_mode: None,
+                audio_muted: false,
             }],
             transitions: Vec::new(),
             zoom_segments: vec![],
@@ -1178,6 +1180,7 @@ mod tests {
                     end: 100.0,
                     name: None,
                     speed_audio_mode: None,
+                    audio_muted: false,
                 },
                 TimelineSegment {
                     recording_clip: 1,
@@ -1186,6 +1189,7 @@ mod tests {
                     end: 50.0,
                     name: None,
                     speed_audio_mode: None,
+                    audio_muted: false,
                 },
             ],
             transitions: Vec::new(),
