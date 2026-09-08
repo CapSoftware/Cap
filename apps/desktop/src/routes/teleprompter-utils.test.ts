@@ -4,6 +4,9 @@ import {
 	calculatePlaybackSpeed,
 	clamp,
 	countWords,
+	type TeleprompterPlaybackState,
+	teleprompterPlaybackRunning,
+	updateTeleprompterPlayback,
 } from "./teleprompter-utils";
 
 describe("teleprompter utilities", () => {
@@ -29,5 +32,50 @@ describe("teleprompter utilities", () => {
 		}
 
 		expect(position).toBeCloseTo(10);
+	});
+});
+
+describe("teleprompter recording controls", () => {
+	const initial: TeleprompterPlaybackState = {
+		requested: false,
+		recordingPaused: false,
+	};
+
+	it("holds scrolling while recording is paused and preserves playback intent", () => {
+		let state = updateTeleprompterPlayback(initial, "play");
+		expect(teleprompterPlaybackRunning(state)).toBe(true);
+		state = updateTeleprompterPlayback(state, "recording-paused");
+		expect(teleprompterPlaybackRunning(state)).toBe(false);
+		expect(state.requested).toBe(true);
+		state = updateTeleprompterPlayback(state, "recording-resumed");
+		expect(teleprompterPlaybackRunning(state)).toBe(true);
+	});
+
+	it("does not start a manually paused script on recording resume", () => {
+		let state = updateTeleprompterPlayback(initial, "recording-paused");
+		state = updateTeleprompterPlayback(state, "recording-resumed");
+		expect(teleprompterPlaybackRunning(state)).toBe(false);
+	});
+
+	it("lets manual pause cancel automatic resumption", () => {
+		let state = updateTeleprompterPlayback(initial, "play");
+		state = updateTeleprompterPlayback(state, "recording-paused");
+		state = updateTeleprompterPlayback(state, "pause");
+		state = updateTeleprompterPlayback(state, "recording-resumed");
+		expect(teleprompterPlaybackRunning(state)).toBe(false);
+	});
+
+	it("cannot scroll by pressing Play during recording pause", () => {
+		let state = updateTeleprompterPlayback(initial, "recording-paused");
+		state = updateTeleprompterPlayback(state, "play");
+		expect(teleprompterPlaybackRunning(state)).toBe(false);
+	});
+
+	it("clears automatic resumption when recording stops", () => {
+		let state = updateTeleprompterPlayback(initial, "play");
+		state = updateTeleprompterPlayback(state, "recording-paused");
+		state = updateTeleprompterPlayback(state, "recording-stopped");
+		state = updateTeleprompterPlayback(state, "recording-resumed");
+		expect(teleprompterPlaybackRunning(state)).toBe(false);
 	});
 });

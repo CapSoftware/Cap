@@ -1,3 +1,4 @@
+import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 
 export const freeScreenRecorderContent = {
@@ -78,8 +79,7 @@ export const freeScreenRecorderContent = {
 		},
 		{
 			question: "Can I store my recordings in the cloud?",
-			answer:
-				"Yes, from just $6/month, Cap offers unlimited cloud storage, making it easy to access and share recordings whenever needed.",
+			answer: `Yes, from just $${PRICING.pro.annualPerMonth}/month, Cap offers unlimited cloud storage, making it easy to access and share recordings whenever needed.`,
 		},
 		{
 			question: "What makes Cap's free screen recorder different?",

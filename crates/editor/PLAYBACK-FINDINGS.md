@@ -35,7 +35,7 @@
 
 ## Current Status
 
-**Last Updated**: 2026-07-03
+**Last Updated**: 2026-08-17
 
 ### Performance Summary
 
@@ -59,6 +59,9 @@
 - ✅ Multi-position decoder pool for smooth scrubbing
 - ✅ Mic audio sync within tolerance
 - ✅ Camera-display sync perfect (0ms drift)
+- ✅ GPUI editor playback sustains 60 FPS with zero dropped frames
+- ✅ GPUI editor playback uses 17.52% median CPU and 440.09 MB average RSS at 1248×702
+- ✅ GPUI editor playback beats optimized Electron CPU by 67.1% and memory by 57.5%
 
 ### Known Issues (Lower Priority)
 1. **System audio timing**: ~162ms difference inherited from recording-side timing issue
@@ -75,6 +78,7 @@
 - [ ] **Investigate display decoder init time** - 337ms may be optimizable
 
 ### Completed
+- [x] **Optimize GPUI editor playback** - Reduced median playback CPU from 85.66% to 17.52% and average RSS from 847.68 MB to 440.09 MB while retaining 60 FPS and zero drops (2026-08-17)
 - [x] **Run initial baseline** - Established current playback performance metrics (2026-01-28)
 - [x] **Profile decoder init time** - Hardware acceleration confirmed (AVAssetReader) (2026-01-28)
 - [x] **Identify latency hotspots** - No issues found, p95=3.1ms (2026-01-28)
@@ -727,6 +731,34 @@ The CPU RGBA→NV12 conversion was taking 15-25ms per frame for 3024x1964 resolu
 - `cargo check -p cap-export`
 
 **Stopping point**: The reproduced transition and seek workload is smooth at 60fps with zero measured playback skips. The final implementation retains only the measured scheduling changes and their decoder-pool regression test.
+
+---
+
+### Session 2026-08-17 (GPUI End-to-End Playback Optimization)
+
+**Goal**: Measure every GPUI editor playback stage under a fair optimized-Electron comparison and make GPUI materially faster without changing editor behavior or preview quality.
+
+**What was done**:
+1. Re-ran the packaged optimized Electron app and GPUI on the same Mac16,6 M4 Max, AC power, reference recording, 1248×702 preview output, 60 FPS target, sampler, warmup, and four-trial protocol.
+2. Profiled symbolized GPUI release builds and separated decode, render, frame transport, paint, layout, and WindowServer costs.
+3. Retained AVAssetReader IOSurface frames on the GPU instead of materializing CPU planes during normal playback.
+4. Added direct GPU RGBA-to-NV12 IOSurface output and GPUI surface presentation, with a reusable eight-surface ring and lazy RGBA readback allocation.
+5. Reduced the decoded-frame cache to one frame with a 16 MB byte ceiling.
+6. Isolated the preview, header, toolbar, transport, sidebar, and timeline as reactive GPUI entities behind cache boundaries so frame arrival no longer recomputes the complete editor layout.
+
+**Results**:
+- Before optimization: 59.90 FPS, 85.66% median CPU, 847.68 MB average RSS.
+- After optimization: 60.00 renderer FPS, 59.98 paint FPS, 17.52% median CPU, 18.82% CPU p95, 440.09 MB average RSS.
+- Four measured CPU runs: 17.83%, 17.20%, 18.41%, 17.03%.
+- Every accepted run rendered and delivered 60 FPS with zero drops.
+- Optimized Electron baseline: 60.62 receive FPS, 60.43 WebGPU render FPS, 53.19% median CPU, 1035.00 MB average RSS.
+- GPUI versus optimized Electron: 67.1% lower playback CPU and 57.5% lower playback memory.
+- The final comparison disabled telemetry and the Chrome fixture, enforced 1248×702 and Electron WebGPU, aligned both CPU samples to 1.5–16.5 seconds after play, and interleaved the four trial pairs.
+- A GPUI trial that lost active-window presentation and fell to 30 FPS was rejected and replaced; the harness now fails any GPUI run below 59 FPS or with a dropped frame.
+- Visual verification confirmed the complete editor remained functional and displayed the expected half-resolution preview.
+- Validation passed: `cargo fmt --all`, scoped checks for `cap-rendering`, `cap-editor`, and `cap-desktop-gpui`, 31 `cap-editor` unit tests, and 171 `cap-rendering` unit tests.
+
+**Stopping point**: The original CPU gap is closed with substantial margin under four repeatable trials. The remaining NV12-to-RGBA composition and RGBA-to-NV12 presentation passes are GPU work and are no longer a material CPU bottleneck; removing them would require a larger renderer architecture change without evidence that it is currently justified.
 
 ---
 

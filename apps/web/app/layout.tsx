@@ -74,7 +74,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: PropsWithChildren) {
 	return (
-		<html className={defaultFont.className} lang="en">
+		// suppressHydrationWarning: the Cap Chrome extension stamps
+		// data-cap-chrome-extension-installed on <html> at document_idle,
+		// which can land before hydration finishes.
+		<html className={defaultFont.className} lang="en" suppressHydrationWarning>
 			<head>
 				<link
 					rel="apple-touch-icon"

@@ -1,9 +1,8 @@
 import { Button } from "@cap/ui-solid";
 import { makePersisted } from "@solid-primitives/storage";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, message as showMessage } from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import { relaunch } from "@tauri-apps/plugin-process";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
@@ -2008,7 +2007,14 @@ function PermissionsStep(props: {
 			cancelLabel: "No, I still need to add it",
 		});
 		if (shouldRestart) {
-			await relaunch();
+			try {
+				await commands.restartApp();
+			} catch (error) {
+				await showMessage(
+					typeof error === "string" ? error : "Unable to restart Cap safely.",
+					{ title: "Unable to restart Cap", kind: "warning" },
+				);
+			}
 		}
 	};
 

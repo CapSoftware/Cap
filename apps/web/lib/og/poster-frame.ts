@@ -28,7 +28,7 @@ const grabFrame = (
 ) =>
 	new Promise<Buffer>((resolve, reject) => {
 		const proc = spawn(
-			ffmpeg,
+			/*turbopackIgnore: true*/ ffmpeg,
 			[
 				"-hide_banner",
 				"-loglevel",

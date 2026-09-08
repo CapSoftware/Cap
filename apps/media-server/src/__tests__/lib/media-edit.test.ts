@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -15,6 +16,30 @@ const TEST_VIDEO_WITH_AUDIO = join(FIXTURES_DIR, "test-with-audio.mp4");
 const TEST_VIDEO_NO_AUDIO = join(FIXTURES_DIR, "test-no-audio.mp4");
 
 const tempFiles: string[] = [];
+
+function readH264Encoding(filePath: string) {
+	const result = JSON.parse(
+		execFileSync("ffprobe", [
+			"-hide_banner",
+			"-v",
+			"error",
+			"-select_streams",
+			"v:0",
+			"-show_entries",
+			"stream=level,time_base",
+			"-of",
+			"json",
+			filePath,
+		]).toString(),
+	) as {
+		streams?: Array<{ level: number; time_base: string }>;
+	};
+	const stream = result.streams?.[0];
+	if (!stream) {
+		throw new Error("Edited video has no H.264 stream");
+	}
+	return { level: stream.level, timeBase: stream.time_base };
+}
 
 afterAll(() => {
 	for (const file of tempFiles) {
@@ -119,6 +144,19 @@ describe("media edit helpers", () => {
 		expect(filter).toContain("concat=n=3:v=1:a=1[v][a]");
 		expect(filter).toContain("[1:v:0]fps=60,setpts=PTS-STARTPTS[v1]");
 		expect(filter).toContain("[2:a:0]asetpts=PTS-STARTPTS[a2]");
+		expect(args[args.indexOf("-enc_time_base:v") + 1]).toBe("1/60");
+	});
+
+	test("pins fractional frame rates to a safe encoder time base", () => {
+		const args = buildTranscodeEditArgs(
+			"/input.mp4",
+			[{ start: 0, end: 1 }],
+			"/output.mp4",
+			true,
+			29.97,
+		);
+
+		expect(args[args.indexOf("-enc_time_base:v") + 1]).toBe("1/29.97");
 	});
 
 	test("rejects unbounded transcode graphs", () => {
@@ -164,6 +202,9 @@ describe("renderEditedVideo integration tests", () => {
 		expect(outputMetadata.duration).toBeLessThan(metadata.duration + 0.2);
 		expect(progressUpdates.length).toBeGreaterThan(0);
 		expect(progressUpdates.at(-1)).toBe(75);
+		const encoding = readH264Encoding(editedFile.path);
+		expect(encoding.level).toBeLessThanOrEqual(42);
+		expect(encoding.timeBase).not.toBe("1/1000000");
 
 		await editedFile.cleanup();
 	}, 60000);
@@ -183,6 +224,9 @@ describe("renderEditedVideo integration tests", () => {
 		expect(outputMetadata.audioCodec).toBeNull();
 		expect(outputMetadata.duration).toBeGreaterThan(0.2);
 		expect(outputMetadata.duration).toBeLessThan(metadata.duration + 0.2);
+		const encoding = readH264Encoding(editedFile.path);
+		expect(encoding.level).toBeLessThanOrEqual(42);
+		expect(encoding.timeBase).not.toBe("1/1000000");
 
 		await editedFile.cleanup();
 	}, 60000);

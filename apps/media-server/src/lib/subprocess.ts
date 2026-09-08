@@ -3,14 +3,19 @@ import type { Subprocess } from "bun";
 const PROCESS_EXIT_WAIT_MS = 5_000;
 const FORCE_KILL_WAIT_MS = 1_000;
 
-const activeSubprocesses = new Map<number, Subprocess>();
+type ManagedSubprocess = Pick<
+	Subprocess,
+	"pid" | "exited" | "exitCode" | "kill"
+>;
 
-export function registerSubprocess<T extends Subprocess>(proc: T): T {
+const activeSubprocesses = new Map<number, ManagedSubprocess>();
+
+export function registerSubprocess<T extends ManagedSubprocess>(proc: T): T {
 	activeSubprocesses.set(proc.pid, proc);
 	return proc;
 }
 
-export function unregisterSubprocess(proc: Subprocess): void {
+export function unregisterSubprocess(proc: ManagedSubprocess): void {
 	activeSubprocesses.delete(proc.pid);
 }
 
@@ -36,7 +41,7 @@ async function waitForProcessExit(
 }
 
 export async function terminateProcess(
-	proc: Subprocess,
+	proc: ManagedSubprocess,
 	timeoutMs = PROCESS_EXIT_WAIT_MS,
 ): Promise<void> {
 	if (proc.exitCode !== null) {

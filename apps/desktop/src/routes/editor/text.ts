@@ -7,6 +7,18 @@ export const TEXT_REFERENCE_HEIGHT = 1080;
 export const TEXT_FONT_SIZE_MIN = 8;
 export const TEXT_FONT_SIZE_MAX = 400;
 
+export type TextAlign = "left" | "center" | "right";
+
+export type TextAnimation =
+	| "none"
+	| "fade"
+	| "slideUp"
+	| "slideDown"
+	| "pop"
+	| "typewriter";
+
+export type TextLayout = "overlay" | "fullscreen" | "splitLeft" | "splitRight";
+
 export type TextSegment = {
 	start: number;
 	end: number;
@@ -20,7 +32,19 @@ export type TextSegment = {
 	fontWeight: number;
 	italic: boolean;
 	color: string;
+	backgroundColor?: string | null;
 	fadeDuration: number;
+	align: TextAlign;
+	letterSpacing: number;
+	lineHeight: number;
+	opacity: number;
+	shadow: number;
+	animationIn: TextAnimation;
+	animationOut: TextAnimation;
+	animationInDuration: number;
+	animationOutDuration: number;
+	layout: TextLayout;
+	layoutTransition: number;
 };
 
 // Picks the starting colour for a new text segment by sampling the composited
@@ -97,5 +121,17 @@ export const defaultTextSegment = (
 	fontWeight: 700,
 	italic: false,
 	color: "#ffffff",
+	backgroundColor: undefined,
 	fadeDuration: 0.15,
+	align: "center",
+	letterSpacing: 0,
+	lineHeight: 1.2,
+	opacity: 1,
+	shadow: 0,
+	animationIn: "fade",
+	animationOut: "fade",
+	animationInDuration: 0.15,
+	animationOutDuration: 0.15,
+	layout: "overlay",
+	layoutTransition: 0.5,
 });

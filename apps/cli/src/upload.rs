@@ -116,7 +116,17 @@ impl UploadArgs {
     async fn run_inner(self, format: OutputFormat) -> Result<(), String> {
         let file_path = self.resolve_upload_file().await?;
         let meta = probe_video_meta(&file_path)?;
-        let (video_id, link) = if prefer_agent_upload() {
+        let use_agent = prefer_agent_upload();
+        // The agent upload API always creates a new Cap, so honoring --video-id there would
+        // silently upload to the wrong place. Fail loudly instead of scattering new videos.
+        if use_agent && self.video_id.is_some() {
+            return Err(
+                "--video-id is not supported with a CLI API key (cap_cli_) or agent login; it \
+                 requires Cap Desktop login or a legacy desktop CAP_API_KEY."
+                    .to_string(),
+            );
+        }
+        let (video_id, link) = if use_agent {
             upload_file_with_agent(&file_path, self.name.as_deref(), &meta)
                 .await
                 .map_err(|error| {
@@ -141,7 +151,7 @@ impl UploadArgs {
                 Err(legacy_error) => {
                     if self.video_id.is_some() {
                         return Err(format!(
-                            "{legacy_error} --video-id currently requires Cap Desktop or CAP_API_KEY authentication"
+                            "{legacy_error} --video-id currently requires Cap Desktop login or a legacy desktop CAP_API_KEY"
                         ));
                     }
                     upload_file_with_agent(&file_path, self.name.as_deref(), &meta)

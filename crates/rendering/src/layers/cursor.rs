@@ -2,13 +2,13 @@ use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 use cap_project::*;
-use image::GenericImageView;
+use image::{GenericImageView, imageops::FilterType};
 use tracing::error;
 use wgpu::{BindGroup, FilterMode, include_wgsl, util::DeviceExt};
 
 use crate::{
     Coord, DecodedSegmentFrames, FrameSpace, ProjectUniforms, RenderVideoConstants,
-    STANDARD_CURSOR_HEIGHT, zoom::InterpolatedZoom,
+    STANDARD_CURSOR_HEIGHT, composite_frame::ColorGradeUniformParams,
 };
 
 const CURSOR_CLICK_DURATION: f64 = 0.13;
@@ -272,10 +272,11 @@ impl CursorLayer {
         constants: &RenderVideoConstants,
         cursor_id: &str,
         use_svg: bool,
+        cursor_type: &CursorType,
     ) -> Option<CursorTexture> {
         let mut loaded_cursor = None;
 
-        let cursor_shape = match &constants.recording_meta.inner {
+        let recorded_shape = match &constants.recording_meta.inner {
             RecordingMetaInner::Studio(studio) => match studio.as_ref() {
                 StudioRecordingMeta::MultipleSegments {
                     inner:
@@ -287,6 +288,20 @@ impl CursorLayer {
                 _ => None,
             },
             _ => None,
+        };
+
+        // An explicit family cross-maps the recorded shape into it (and
+        // stands in with its arrow for recordings that carry no shape info at
+        // all, e.g. Linux PNG-only captures), so SVG assets are the only
+        // possible source and `use_svg` no longer applies.
+        let (cursor_shape, use_svg) = match cursor_type.family() {
+            Some(family) => (
+                Some(
+                    recorded_shape.map_or_else(|| family.arrow(), |shape| shape.in_family(family)),
+                ),
+                true,
+            ),
+            None => (recorded_shape, use_svg),
         };
 
         if let Some(cursor_shape) = cursor_shape
@@ -315,7 +330,12 @@ impl CursorLayer {
         loaded_cursor
     }
 
-    fn preload_cursor_textures(&mut self, constants: &RenderVideoConstants, use_svg: bool) {
+    fn preload_cursor_textures(
+        &mut self,
+        constants: &RenderVideoConstants,
+        use_svg: bool,
+        cursor_type: &CursorType,
+    ) {
         let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta else {
             return;
         };
@@ -326,7 +346,8 @@ impl CursorLayer {
 
         for cursor_id in cursors.keys() {
             if !self.cursors.contains_key(cursor_id)
-                && let Some(texture) = Self::load_cursor_texture(constants, cursor_id, use_svg)
+                && let Some(texture) =
+                    Self::load_cursor_texture(constants, cursor_id, use_svg, cursor_type)
             {
                 self.cursors.insert(cursor_id.clone(), texture);
             }
@@ -349,16 +370,14 @@ impl CursorLayer {
         }
 
         self.prev_is_svg_assets_enabled = Some(use_svg);
-        self.preload_cursor_textures(constants, use_svg);
+        self.preload_cursor_textures(constants, use_svg, cursor_type);
         self.cursor_assets_preloaded = true;
     }
 
     pub fn prepare(
         &mut self,
         segment_frames: &DecodedSegmentFrames,
-        resolution_base: XY<u32>,
         cursor: &CursorEvents,
-        zoom: &InterpolatedZoom,
         uniforms: &ProjectUniforms,
         constants: &RenderVideoConstants,
     ) {
@@ -385,7 +404,6 @@ impl CursorLayer {
         }
 
         let fps = uniforms.frame_rate.max(1) as f32;
-        let screen_size = constants.options.screen_size;
         let fps_scale = fps / CURSOR_BASELINE_FPS;
         let cursor_strength = (uniforms.motion_blur_amount * CURSOR_MULTIPLIER * fps_scale)
             .clamp(0.0, CURSOR_MAX_STRENGTH);
@@ -394,14 +412,11 @@ impl CursorLayer {
             .as_ref()
             .filter(|prev| prev.cursor_id == interpolated_cursor.cursor_id)
             .map(|prev| {
-                let delta_uv = XY::new(
-                    (interpolated_cursor.position.coord.x - prev.position.coord.x) as f32,
-                    (interpolated_cursor.position.coord.y - prev.position.coord.y) as f32,
-                );
-                XY::new(
-                    delta_uv.x * screen_size.x as f32,
-                    delta_uv.y * screen_size.y as f32,
-                )
+                let current = uniforms
+                    .display
+                    .source_uv_to_target(interpolated_cursor.position.coord);
+                let previous = uniforms.display.source_uv_to_target(prev.position.coord);
+                (current - previous).map(|value| value as f32)
             })
             .unwrap_or_else(|| XY::new(0.0, 0.0));
 
@@ -440,9 +455,13 @@ impl CursorLayer {
 
         let cursor_type = uniforms.project.cursor.cursor_type().clone();
 
+        // The family a cursor id resolves to is baked into its texture, so a
+        // type change has to evict every cached sprite, not just the circle.
         if self.prev_cursor_type.as_ref() != Some(&cursor_type) {
             self.prev_cursor_type = Some(cursor_type.clone());
             self.circle_cursor = None;
+            self.cursors.clear();
+            self.cursor_assets_preloaded = false;
         }
 
         if self.prev_is_svg_assets_enabled != Some(uniforms.project.cursor.use_svg) {
@@ -458,7 +477,11 @@ impl CursorLayer {
             self.circle_cursor.as_ref().unwrap()
         } else {
             if !self.cursor_assets_preloaded {
-                self.preload_cursor_textures(constants, uniforms.project.cursor.use_svg);
+                self.preload_cursor_textures(
+                    constants,
+                    uniforms.project.cursor.use_svg,
+                    &cursor_type,
+                );
                 self.cursor_assets_preloaded = true;
             }
             if !self.cursors.contains_key(&interpolated_cursor.cursor_id)
@@ -466,6 +489,7 @@ impl CursorLayer {
                     constants,
                     &interpolated_cursor.cursor_id,
                     uniforms.project.cursor.use_svg,
+                    &cursor_type,
                 )
             {
                 self.cursors
@@ -481,16 +505,11 @@ impl CursorLayer {
         let size = {
             let click_t = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0);
             let click_scale_factor = click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE;
-            let crop = ProjectUniforms::get_crop(&constants.options, &uniforms.project);
-            let display_size = ProjectUniforms::display_size(
-                &constants.options,
-                &uniforms.project,
-                resolution_base,
-            );
+            let display = &uniforms.display;
             let size = cursor_height_px(
-                constants.options.screen_size.y as f32,
-                crop.size.y as f32,
-                display_size.y as f32,
+                display.frame_size[1],
+                display.crop_bounds[3] - display.crop_bounds[1],
+                display.target_size[1],
                 uniforms.cursor_size,
                 click_scale_factor,
             );
@@ -511,87 +530,17 @@ impl CursorLayer {
             })
         };
 
-        let hotspot = Coord::<FrameSpace>::new(size.coord * cursor_texture.hotspot);
-
-        // Calculate position without hotspot first
-        let position = interpolated_cursor.position.to_frame_space(
-            &constants.options,
-            &uniforms.project,
-            resolution_base,
-        ) - hotspot;
-
-        // Transform to zoomed space
-        let zoomed_position = position.to_zoomed_frame_space(
-            &constants.options,
-            &uniforms.project,
-            resolution_base,
-            zoom,
+        let (position_size, cursor_opacity) = CursorPlacement { uniforms }.map(
+            interpolated_cursor.position.coord,
+            size,
+            cursor_texture.hotspot,
+            cursor_opacity,
         );
 
-        let zoomed_size = (position + size).to_zoomed_frame_space(
-            &constants.options,
-            &uniforms.project,
-            resolution_base,
-            zoom,
-        ) - zoomed_position;
-
-        // In split-screen the screen only occupies a half-rect, so remap the
-        // cursor from its raw source UV into that pane (matching the display
-        // layer's split crop -> half-rect mapping) and scale the sprite by the
-        // same factor. The cursor shader's screen_bounds clip already follows
-        // uniforms.display.target_bounds (the morphing half), so a cursor that
-        // lands outside the visible crop is confined automatically.
-        let position_size = match &uniforms.split {
-            Some(split) if split.factor > 0.001 => {
-                let screen_size = constants.options.screen_size;
-                let crop = ProjectUniforms::get_crop(&constants.options, &uniforms.project);
-                let display_size = ProjectUniforms::display_size(
-                    &constants.options,
-                    &uniforms.project,
-                    resolution_base,
-                );
-
-                let scrop = split.screen.crop;
-                let starget = split.screen.target;
-                let crop_w = (scrop[2] - scrop[0]).max(f32::EPSILON);
-                let crop_h = (scrop[3] - scrop[1]).max(f32::EPSILON);
-                let target_w = starget[2] - starget[0];
-                let target_h = starget[3] - starget[1];
-
-                let cursor_px = [
-                    cursor_uv.x as f32 * screen_size.x as f32,
-                    cursor_uv.y as f32 * screen_size.y as f32,
-                ];
-                let tip = [
-                    starget[0] + (cursor_px[0] - scrop[0]) / crop_w * target_w,
-                    starget[1] + (cursor_px[1] - scrop[1]) / crop_h * target_h,
-                ];
-
-                // Source->pane scale (uniform; the split crop matches the pane
-                // aspect) relative to the normal source->frame scale.
-                let normal_scale = display_size.x as f32 / (crop.size.x as f32).max(f32::EPSILON);
-                let size_factor = (target_w / crop_w) / normal_scale.max(f32::EPSILON);
-
-                let split_pos = [
-                    tip[0] - hotspot.x as f32 * size_factor,
-                    tip[1] - hotspot.y as f32 * size_factor,
-                ];
-                let split_size = [size.x as f32 * size_factor, size.y as f32 * size_factor];
-
-                let t = split.factor as f32;
-                [
-                    crate::lerp_f32(zoomed_position.x as f32, split_pos[0], t),
-                    crate::lerp_f32(zoomed_position.y as f32, split_pos[1], t),
-                    crate::lerp_f32(zoomed_size.x as f32, split_size[0], t),
-                    crate::lerp_f32(zoomed_size.y as f32, split_size[1], t),
-                ]
-            }
-            _ => [
-                zoomed_position.x as f32,
-                zoomed_position.y as f32,
-                zoomed_size.x as f32,
-                zoomed_size.y as f32,
-            ],
+        let cursor_grade = if uniforms.project.color_correction.grade_cursor {
+            uniforms.screen_color_grade
+        } else {
+            ColorGradeUniformParams::IDENTITY
         };
 
         let cursor_uniforms = CursorUniforms {
@@ -621,6 +570,9 @@ impl CursorLayer {
                 uniforms.cursor_x_axis_tilt_radians,
                 0.0,
             ],
+            color_adjust_a: cursor_grade.color_adjust_a,
+            color_adjust_b: cursor_grade.color_adjust_b,
+            grain_params: cursor_grade.grain_params,
         };
 
         constants.queue.write_buffer(
@@ -644,6 +596,34 @@ impl CursorLayer {
     }
 }
 
+pub(crate) struct CursorPlacement<'a> {
+    pub uniforms: &'a ProjectUniforms,
+}
+
+impl CursorPlacement<'_> {
+    pub(crate) fn map(
+        &self,
+        position_uv: XY<f64>,
+        size: Coord<FrameSpace>,
+        hotspot_frac: XY<f64>,
+        opacity: f32,
+    ) -> ([f32; 4], f32) {
+        let hotspot = size.coord * hotspot_frac;
+        let position = self.uniforms.display.source_uv_to_target(position_uv) - hotspot;
+        let position_size = [
+            position.x as f32,
+            position.y as f32,
+            size.x as f32,
+            size.y as f32,
+        ];
+        let opacity = match &self.uniforms.takeover {
+            Some(takeover) if takeover.t > 0.001 => opacity * takeover.overlay_fade,
+            _ => opacity,
+        };
+        (position_size, opacity)
+    }
+}
+
 fn composite_cursor_layer(dst: &mut [f32; 4], src: [f32; 4]) {
     let src_a = src[3];
     if src_a <= 0.0 {
@@ -662,7 +642,7 @@ fn composite_cursor_layer(dst: &mut [f32; 4], src: [f32; 4]) {
     dst[3] = out_a;
 }
 
-fn cursor_height_px(
+pub(crate) fn cursor_height_px(
     source_screen_height: f32,
     crop_height: f32,
     display_frame_height: f32,
@@ -714,6 +694,11 @@ pub struct CursorUniforms {
     screen_bounds: [f32; 4],
     motion_vector_strength: [f32; 4],
     rotation_params: [f32; 4],
+    /// Screen grade (see `ColorGradeUniformParams`); identity when the
+    /// cursor opts out.
+    color_adjust_a: [f32; 4],
+    color_adjust_b: [f32; 4],
+    grain_params: [f32; 4],
 }
 
 fn compute_cursor_idle_opacity(
@@ -843,6 +828,88 @@ struct CursorTexture {
     hotspot: XY<f64>,
 }
 
+struct CursorMipLevel {
+    rgba: Vec<u8>,
+    dimensions: (u32, u32),
+}
+
+fn downsample_premultiplied_rgba(
+    rgba: &[u8],
+    dimensions: (u32, u32),
+    next_dimensions: (u32, u32),
+) -> Vec<u8> {
+    let (width, height) = dimensions;
+    let (next_width, next_height) = next_dimensions;
+    let image = image::RgbaImage::from_raw(width, height, rgba.to_vec())
+        .expect("cursor mip dimensions should match its RGBA data");
+    let mut output =
+        image::imageops::resize(&image, next_width, next_height, FilterType::Triangle).into_raw();
+
+    for pixel in output.chunks_exact_mut(4) {
+        let alpha = pixel[3];
+        for channel in &mut pixel[..3] {
+            *channel = (*channel).min(alpha);
+        }
+    }
+
+    output
+}
+
+fn premultiplied_rgba_mip_chain(rgba: &[u8], dimensions: (u32, u32)) -> Vec<CursorMipLevel> {
+    assert_eq!(
+        rgba.len(),
+        dimensions.0 as usize * dimensions.1 as usize * 4
+    );
+
+    let mut levels = vec![CursorMipLevel {
+        rgba: rgba.to_vec(),
+        dimensions,
+    }];
+
+    while let Some(current) = levels.last() {
+        if current.dimensions == (1, 1) {
+            break;
+        }
+
+        let next_dimensions = (
+            (current.dimensions.0 / 2).max(1),
+            (current.dimensions.1 / 2).max(1),
+        );
+        let next_rgba =
+            downsample_premultiplied_rgba(&current.rgba, current.dimensions, next_dimensions);
+        levels.push(CursorMipLevel {
+            rgba: next_rgba,
+            dimensions: next_dimensions,
+        });
+    }
+
+    levels
+}
+
+fn rasterize_svg_cursor(svg_data: &str) -> Result<CursorMipLevel, String> {
+    let tree = resvg::usvg::Tree::from_str(svg_data, &resvg::usvg::Options::default())
+        .map_err(|error| format!("Failed to parse SVG: {error}"))?;
+    let aspect_ratio = tree.size().width() / tree.size().height();
+    let width = (aspect_ratio * SVG_CURSOR_RASTERIZED_HEIGHT as f32) as u32;
+    let mut pixmap = tiny_skia::Pixmap::new(width, SVG_CURSOR_RASTERIZED_HEIGHT)
+        .ok_or("Failed to create pixmap")?;
+    let scale_x = width as f32 / tree.size().width();
+    let scale_y = SVG_CURSOR_RASTERIZED_HEIGHT as f32 / tree.size().height();
+    let scale = scale_x.min(scale_y);
+    let transform = tiny_skia::Transform::from_scale(scale, scale);
+
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+    Ok(CursorMipLevel {
+        rgba: pixmap
+            .pixels()
+            .iter()
+            .flat_map(|pixel| [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()])
+            .collect(),
+        dimensions: (pixmap.width(), pixmap.height()),
+    })
+}
+
 impl CursorTexture {
     /// Prepare a cursor texture on the GPU from RGBA data.
     fn prepare(
@@ -889,44 +956,65 @@ impl CursorTexture {
         Self { texture, hotspot }
     }
 
+    fn prepare_svg_mipmapped(
+        constants: &RenderVideoConstants,
+        rgba: &[u8],
+        dimensions: (u32, u32),
+        hotspot: XY<f64>,
+    ) -> Self {
+        let mip_levels = premultiplied_rgba_mip_chain(rgba, dimensions);
+        let texture = constants.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Cursor Texture"),
+            size: wgpu::Extent3d {
+                width: dimensions.0,
+                height: dimensions.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: mip_levels.len() as u32,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        for (mip_level, level) in mip_levels.iter().enumerate() {
+            constants.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: mip_level as u32,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &level.rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * level.dimensions.0),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: level.dimensions.0,
+                    height: level.dimensions.1,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        Self { texture, hotspot }
+    }
+
     /// Prepare a cursor texture on the GPU from a raw SVG file
     fn prepare_svg(
         constants: &RenderVideoConstants,
         svg_data: &str,
         hotspot: XY<f64>,
     ) -> Result<Self, String> {
-        let rtree = resvg::usvg::Tree::from_str(svg_data, &resvg::usvg::Options::default())
-            .map_err(|e| format!("Failed to parse SVG: {e}"))?;
+        let rasterized = rasterize_svg_cursor(svg_data)?;
 
-        // Although we could probably determine the size that the cursor is going to be render,
-        // that would depend on the cursor size the user selects.
-        //
-        // This would require reinitializing the texture every time that changes which would be more complicated.
-        // So we trade a small about VRAM for only initializing it once.
-        let aspect_ratio = rtree.size().width() / rtree.size().height();
-        let width = (aspect_ratio * SVG_CURSOR_RASTERIZED_HEIGHT as f32) as u32;
-
-        let mut pixmap = tiny_skia::Pixmap::new(width, SVG_CURSOR_RASTERIZED_HEIGHT)
-            .ok_or("Failed to create pixmap")?;
-
-        // Calculate scale to fit the SVG into the target size while maintaining aspect ratio
-        let scale_x = width as f32 / rtree.size().width();
-        let scale_y = SVG_CURSOR_RASTERIZED_HEIGHT as f32 / rtree.size().height();
-        let scale = scale_x.min(scale_y);
-        let transform = tiny_skia::Transform::from_scale(scale, scale);
-
-        resvg::render(&rtree, transform, &mut pixmap.as_mut());
-
-        let rgba: Vec<u8> = pixmap
-            .pixels()
-            .iter()
-            .flat_map(|p| [p.red(), p.green(), p.blue(), p.alpha()])
-            .collect();
-
-        Ok(Self::prepare(
+        Ok(Self::prepare_svg_mipmapped(
             constants,
-            &rgba,
-            (pixmap.width(), pixmap.height()),
+            &rasterized.rgba,
+            rasterized.dimensions,
             hotspot,
         ))
     }
@@ -935,6 +1023,15 @@ impl CursorTexture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn alpha_coverage(level: &CursorMipLevel) -> f64 {
+        let alpha_sum: u64 = level
+            .rgba
+            .chunks_exact(4)
+            .map(|pixel| u64::from(pixel[3]))
+            .sum();
+        alpha_sum as f64 / (f64::from(level.dimensions.0 * level.dimensions.1) * 255.0)
+    }
 
     fn move_event(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
         CursorMoveEvent {
@@ -965,6 +1062,80 @@ mod tests {
     }
 
     #[test]
+    fn svg_mips_cover_odd_non_square_edges() {
+        let mut rgba = vec![0; 5 * 3 * 4];
+        rgba[(5 * 3 - 1) * 4..].copy_from_slice(&[255, 255, 255, 255]);
+
+        let levels = premultiplied_rgba_mip_chain(&rgba, (5, 3));
+        let dimensions: Vec<_> = levels.iter().map(|level| level.dimensions).collect();
+
+        assert_eq!(dimensions, vec![(5, 3), (2, 1), (1, 1)]);
+        assert!(levels[1].rgba.chunks_exact(4).any(|pixel| pixel[3] > 0));
+        assert!(levels[2].rgba[3] > 0);
+    }
+
+    #[test]
+    fn svg_mips_keep_channels_premultiplied() {
+        let rgba: Vec<u8> = [
+            [0, 0, 0, 0],
+            [10, 20, 30, 40],
+            [100, 50, 25, 100],
+            [255, 255, 255, 255],
+        ]
+        .into_iter()
+        .cycle()
+        .take(7 * 5)
+        .flatten()
+        .collect();
+
+        let levels = premultiplied_rgba_mip_chain(&rgba, (7, 5));
+
+        assert_eq!(levels.last().map(|level| level.dimensions), Some((1, 1)));
+        assert!(levels.iter().all(|level| {
+            level
+                .rgba
+                .chunks_exact(4)
+                .all(|pixel| pixel[..3].iter().all(|channel| *channel <= pixel[3]))
+        }));
+    }
+
+    #[test]
+    fn macos_arrow_mips_preserve_minified_structure_and_coverage() {
+        let arrow = cap_cursor_info::CursorShapeMacOS::Arrow
+            .resolve()
+            .expect("macOS arrow asset should resolve");
+        let rasterized = rasterize_svg_cursor(arrow.raw).expect("macOS arrow SVG should rasterize");
+        let levels = premultiplied_rgba_mip_chain(&rasterized.rgba, rasterized.dimensions);
+        let minified = levels
+            .iter()
+            .find(|level| level.dimensions.1 == 25)
+            .expect("25px macOS arrow mip should exist");
+        let base_coverage = alpha_coverage(&levels[0]);
+        let minified_coverage = alpha_coverage(minified);
+
+        assert_eq!(minified.dimensions, (18, 25));
+        assert!((base_coverage - minified_coverage).abs() < 0.01);
+        assert!(
+            minified
+                .rgba
+                .chunks_exact(4)
+                .any(|pixel| pixel[3] > 200 && pixel[..3].iter().all(|channel| *channel < 32))
+        );
+        assert!(
+            minified
+                .rgba
+                .chunks_exact(4)
+                .any(|pixel| pixel[3] > 200 && pixel[..3].iter().all(|channel| *channel > 200))
+        );
+        assert!(
+            minified
+                .rgba
+                .chunks_exact(4)
+                .any(|pixel| pixel[3] > 0 && pixel[3] < 255)
+        );
+    }
+
+    #[test]
     fn cursor_height_scales_with_source_crop() {
         let height = cursor_height_px(2160.0, 1080.0, 1080.0, 100.0, 1.0);
         let expected = STANDARD_CURSOR_HEIGHT * 2.0;
@@ -973,32 +1144,11 @@ mod tests {
     }
 
     #[test]
-    fn cursor_height_is_zoomed_once_by_frame_transform() {
-        let options = crate::RenderOptions {
-            camera_size: None,
-            screen_size: XY::new(1080, 1080),
-            preserve_screen_alpha: false,
-        };
-        let mut project = ProjectConfiguration::default();
-        project.background.padding = 0.0;
-        let resolution_base = XY::new(1080, 1080);
-        let zoom = InterpolatedZoom {
-            t: 1.0,
-            bounds: crate::zoom::SegmentBounds::new(XY::new(0.0, 0.0), XY::new(2.0, 2.0)),
-        };
-        let position = Coord::<FrameSpace>::new(XY::new(0.0, 0.0));
-        let size = Coord::<FrameSpace>::new(XY::new(
-            0.0,
-            cursor_height_px(1080.0, 1080.0, 1080.0, 100.0, 1.0) as f64,
-        ));
-
-        let zoomed_position =
-            position.to_zoomed_frame_space(&options, &project, resolution_base, &zoom);
-        let zoomed_size =
-            (position + size).to_zoomed_frame_space(&options, &project, resolution_base, &zoom)
-                - zoomed_position;
-
-        assert!((zoomed_size.y as f32 - STANDARD_CURSOR_HEIGHT * 2.0).abs() < 0.001);
+    fn cursor_height_uses_the_fitted_zoomed_display_once() {
+        for source_height in [540.0, 1080.0, 2160.0] {
+            let height = cursor_height_px(source_height, source_height, 2160.0, 100.0, 1.0);
+            assert!((height - STANDARD_CURSOR_HEIGHT * 2.0).abs() < 0.001);
+        }
     }
 
     #[test]

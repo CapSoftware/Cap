@@ -6,7 +6,7 @@ These rules are enforced by CI (`cargo clippy -D warnings`, Biome). Fixing them 
 
 ### Zero-tolerance rules
 - **Default to no code comments. Add a comment only after solving a bug or working through a complex issue, and only when it captures non-obvious context that a future investigator or reviewer genuinely needs** — e.g. why the fix looks the way it does, the upstream/platform bug being worked around, a non-obvious invariant or trade-off chosen after investigation, or a link to the PR/issue that explains the decision. Bad cases that remain banned: narrating what the code does, restating types, JSDoc that paraphrases parameter names, "TODO: refactor" or "this should be cleaner" notes, and any comment that just describes the change you are currently making. When in doubt, prefer better naming/types over a comment. Applies to every language: Rust, TS, JS, Python, shell, SQL, TOML, etc.
-- **Never edit generated files**: `**/tauri.ts`, `apps/desktop/src-tauri/gen/**`, `packages/ui-solid/src/auto-imports.d.ts`, Drizzle migration SQL under `packages/database/migrations/`. These are regenerated (e.g. `tauri.ts` only on debug desktop runs) but stay committed because CI typecheck and fresh clones depend on them; commit binding changes alongside the Rust change that produced them. Note: `apps/desktop/src/utils/queries.ts` is hand-written, not generated — edit it normally.
+- **Never hand-edit generated files**: `**/tauri.ts`, `apps/desktop/src-tauri/gen/**`, `packages/ui-solid/src/auto-imports.d.ts`, Drizzle migration SQL under `packages/database/migrations/`. These are regenerated (e.g. `tauri.ts` only on debug desktop runs) but stay committed because CI typecheck and fresh clones depend on them; commit binding changes alongside the Rust change that produced them. For database schema changes, run `pnpm db:generate` and commit the generated SQL, snapshot, and journal changes alongside the schema change. Generating and committing these artifacts is required; modifying generated output by hand is prohibited. Note: `apps/desktop/src/utils/queries.ts` is hand-written, not generated — edit it normally.
 - **Never start additional dev servers** (`pnpm dev`, `pnpm dev:web`, `pnpm dev:desktop`, Docker services). Assume they are already running.
 
 ### Post-edit checks (run before you say "done")
@@ -78,6 +78,7 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 
 ## Commits & PRs
 - Conventional style: `feat:`, `fix:`, `chore:`, `improve:`, `refactor:`, `docs:` (e.g., `fix: hide watermark for pro users`).
+- Never add `Co-authored-by` or other attribution trailers (Cursor, Cursor Agent, or anyone else). Commit as the user only.
 - PRs: clear description, linked issues, screenshots/GIFs for UI, env/migration notes. Keep scope tight and update docs when behavior changes.
 
 ## Agent‑Specific Practices

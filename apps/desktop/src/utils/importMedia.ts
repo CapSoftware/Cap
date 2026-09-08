@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
+import { hideCurrentWindow } from "~/utils/hide-window";
 import { commands } from "~/utils/tauri";
 
 const videoExtensions = [
@@ -32,7 +32,7 @@ const selectedPath = (result: string | string[] | null) =>
 	typeof result === "string" ? result : null;
 
 const maybeHideCurrentWindow = async (options?: ImportOptions) => {
-	if (options?.hideCurrentWindow) await getCurrentWindow().hide();
+	if (options?.hideCurrentWindow) await hideCurrentWindow();
 };
 
 export const importVideoPath = async (

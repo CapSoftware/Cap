@@ -369,10 +369,41 @@ describe("importFromLoom", () => {
 		expect(valuesMock).not.toHaveBeenCalled();
 	});
 
-	it("rate limits single Loom imports per user", async () => {
+	it("does not call the Vercel firewall from the Loom import server action", async () => {
 		checkRateLimitMock.mockResolvedValueOnce({ rateLimited: true });
 
 		const fetchMock = vi.mocked(fetch);
+		fetchMock.mockImplementation(async (input) => {
+			const url = typeof input === "string" ? input : input.toString();
+
+			if (url.includes("/transcoded-url")) {
+				return {
+					ok: true,
+					status: 200,
+					text: async () =>
+						JSON.stringify({ url: "https://cdn.loom.com/video.mp4" }),
+				} as Response;
+			}
+
+			if (url === "https://www.loom.com/graphql") {
+				return {
+					ok: true,
+					json: async () => ({
+						data: { getVideo: { name: "Imported video" } },
+					}),
+				} as Response;
+			}
+
+			if (url.includes("/v1/oembed")) {
+				return {
+					ok: true,
+					json: async () => ({ duration: 42, width: 1920, height: 1080 }),
+				} as Response;
+			}
+
+			throw new Error(`Unexpected fetch: ${url}`);
+		});
+
 		const { importFromLoom } = await import("@/actions/loom");
 
 		const result = await importFromLoom({
@@ -381,18 +412,11 @@ describe("importFromLoom", () => {
 		});
 
 		expect(result).toEqual({
-			success: false,
-			error:
-				"Too many Loom imports started. Please wait a few minutes, then try again.",
+			success: true,
+			videoId: "video-123",
 		});
-		expect(checkRateLimitMock).toHaveBeenCalledWith(
-			"rl_loom_import_per_user",
-			expect.objectContaining({
-				rateLimitKey: "loom-import:user-123",
-			}),
-		);
-		expect(fetchMock).not.toHaveBeenCalled();
-		expect(valuesMock).not.toHaveBeenCalled();
+		expect(checkRateLimitMock).not.toHaveBeenCalled();
+		expect(startMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("removes a stale Loom row and recreates it with the Cap video id", async () => {
@@ -594,53 +618,7 @@ describe("importFromLoom", () => {
 		);
 	});
 
-	it("rejects CSV imports when the current user is rate limited", async () => {
-		whereMock.mockReturnValueOnce(
-			withLimit([{ userId: "member-123", email: "member@example.com" }]),
-		);
-		checkRateLimitMock.mockResolvedValueOnce({ rateLimited: true });
-
-		const fetchMock = vi.mocked(fetch);
-		const { importFromLoomCsv } = await import("@/actions/loom");
-
-		const result = await importFromLoomCsv({
-			orgId: "org-1" as never,
-			rows: [
-				{
-					rowNumber: 2,
-					loomUrl: "https://www.loom.com/share/loom-abc1234567",
-					userEmail: "member@example.com",
-				},
-			],
-		});
-
-		expect(result).toEqual({
-			success: false,
-			importedCount: 0,
-			failedCount: 1,
-			results: [
-				{
-					rowNumber: 2,
-					userEmail: "member@example.com",
-					spaceName: undefined,
-					success: false,
-					error:
-						"Too many Loom imports started. Please wait a few minutes, then try again.",
-				},
-			],
-			error: "No Loom videos were imported.",
-		});
-		expect(checkRateLimitMock).toHaveBeenCalledWith(
-			"rl_loom_import_per_user",
-			expect.objectContaining({
-				rateLimitKey: "loom-import:user-123",
-			}),
-		);
-		expect(fetchMock).not.toHaveBeenCalled();
-		expect(valuesMock).not.toHaveBeenCalled();
-	});
-
-	it("skips rate limit checks for csv rows that were already imported", async () => {
+	it("imports a CSV row without calling the Vercel firewall", async () => {
 		whereMock.mockImplementation((conditions: unknown) => {
 			const serializedConditions = JSON.stringify(conditions);
 
@@ -728,7 +706,7 @@ describe("importFromLoom", () => {
 			],
 			error: undefined,
 		});
-		expect(checkRateLimitMock).toHaveBeenCalledTimes(1);
+		expect(checkRateLimitMock).not.toHaveBeenCalled();
 		expect(fetchMock).toHaveBeenCalled();
 		expect(startMock).toHaveBeenCalledTimes(1);
 	});

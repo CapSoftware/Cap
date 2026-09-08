@@ -12,6 +12,13 @@ import {
 	type TimelineSegment,
 } from "~/utils/tauri";
 import { type ClipTransition, clipTimelineOffsets } from "./clip-transitions";
+import type { TextSegment } from "./text";
+import {
+	effectiveToOutput,
+	effectiveToOutputEnd,
+	heldTimeBefore,
+	holdWindows,
+} from "./timeline-holds";
 export const DEFAULT_CAPTION_MODEL = "best";
 export const DEFAULT_WHISPER_CAPTION_MODEL = "small";
 export const DEFAULT_CAPTION_LANGUAGE = "auto";
@@ -166,6 +173,7 @@ export function mapCaptionsToEditedTimeline(
 	timelineSegments: TimelineSegment[],
 	recordingSegments: SegmentRecordings[],
 	transitions: ClipTransition[] = [],
+	textSegments?: readonly TextSegment[],
 ): CaptionSegment[] {
 	const sanitizedSegments = rawSegments.map(clampCaptionSegmentWords);
 
@@ -179,6 +187,20 @@ export function mapCaptionsToEditedTimeline(
 		transitions,
 	);
 
+	// The edit-list mappings live in the gapless recording-flow domain; the
+	// rendered track is compared against the output clock, which includes
+	// fullscreen-text holds. Land every projected range back in output time
+	// so captions after (or across) a hold stay on their spoken content.
+	const holds = holdWindows(textSegments);
+	const holdAdjusted = (range: MappedTimeRange): MappedTimeRange =>
+		holds.length === 0
+			? range
+			: {
+					...range,
+					start: effectiveToOutput(holds, range.start),
+					end: effectiveToOutputEnd(holds, range.end),
+				};
+
 	const result: CaptionSegment[] = [];
 
 	for (const caption of sanitizedSegments) {
@@ -190,16 +212,16 @@ export function mapCaptionsToEditedTimeline(
 						word.end,
 						mapping,
 					);
+					if (!wordMapped) return [];
 
-					return wordMapped
-						? [
-								{
-									text: word.text,
-									start: wordMapped.start,
-									end: wordMapped.end,
-								},
-							]
-						: [];
+					const adjusted = holdAdjusted(wordMapped);
+					return [
+						{
+							text: word.text,
+							start: adjusted.start,
+							end: adjusted.end,
+						},
+					];
 				});
 
 				if (mappedWords.length === 0) {
@@ -222,17 +244,17 @@ export function mapCaptionsToEditedTimeline(
 				caption.end,
 				mapping,
 			);
+			if (!mappedRange) return [];
 
-			return mappedRange
-				? [
-						{
-							...caption,
-							start: mappedRange.start,
-							end: mappedRange.end,
-							words: caption.words,
-						},
-					]
-				: [];
+			const adjusted = holdAdjusted(mappedRange);
+			return [
+				{
+					...caption,
+					start: adjusted.start,
+					end: adjusted.end,
+					words: caption.words,
+				},
+			];
 		});
 
 		mappedCaptionSegments.forEach((segment, index) => {
@@ -304,6 +326,7 @@ export function deriveCaptionTrackSegments(
 	recordingSegments: SegmentRecordings[],
 	previousTrack: CaptionTrackSegment[] = [],
 	transitions: ClipTransition[] = [],
+	textSegments?: readonly TextSegment[],
 ): CaptionTrackSegment[] {
 	const overridesBySourceId = new Map<string, CaptionTrackOverrides>();
 	for (const segment of previousTrack) {
@@ -325,6 +348,7 @@ export function deriveCaptionTrackSegments(
 		timelineSegments,
 		recordingSegments,
 		transitions,
+		textSegments,
 	);
 
 	return mapped
@@ -350,6 +374,7 @@ export function mapSourceTimeToEdited(
 	timelineSegments: TimelineSegment[],
 	recordingSegments: SegmentRecordings[],
 	transitions: ClipTransition[] = [],
+	textSegments?: readonly TextSegment[],
 ): number | null {
 	const mappings = buildSourceToEditedMappings(
 		timelineSegments,
@@ -358,9 +383,12 @@ export function mapSourceTimeToEdited(
 	);
 	for (const mapping of mappings) {
 		if (sourceTime >= mapping.sourceStart && sourceTime <= mapping.sourceEnd) {
-			return (
+			// The mapping is in the gapless recording-flow domain; seeks need
+			// output time, which includes fullscreen-text holds.
+			return effectiveToOutput(
+				holdWindows(textSegments),
 				mapping.editedStart +
-				(sourceTime - mapping.sourceStart) / mapping.timescale
+					(sourceTime - mapping.sourceStart) / mapping.timescale,
 			);
 		}
 	}
@@ -404,7 +432,11 @@ export function mapEditedTimeToSource(
 	transitions: ClipTransition[] = [],
 	sourceRange?: { start: number; end: number },
 	overlapPreference: "outgoing" | "incoming" = "outgoing",
+	textSegments?: readonly TextSegment[],
 ): number | null {
+	// Output time includes fullscreen-text holds; the mappings below live in
+	// the gapless recording-flow domain.
+	editedTime -= heldTimeBefore(holdWindows(textSegments), editedTime);
 	const mappings = buildSourceToEditedMappings(
 		timelineSegments,
 		recordingSegments,
@@ -447,6 +479,7 @@ export function applyCaptionResultToProject<
 					segments: TimelineSegment[];
 					captionSegments?: CaptionTrackSegment[] | null;
 					transitions?: ClipTransition[] | null;
+					textSegments?: TextSegment[] | null;
 			  } & Record<string, unknown>)
 			| null;
 	},
@@ -489,6 +522,7 @@ export function applyCaptionResultToProject<
 		recordingSegments,
 		timeline.captionSegments ?? [],
 		timeline.transitions ?? [],
+		timeline.textSegments ?? [],
 	);
 }
 
@@ -711,6 +745,82 @@ if (import.meta.vitest) {
 			expect(result[0]?.words?.[2]?.end).toBeCloseTo(1.5);
 		});
 
+		it("projects captions into hold-extended output time", () => {
+			const fullscreenText = (start: number, end: number): TextSegment =>
+				({
+					start,
+					end,
+					enabled: true,
+					layout: "fullscreen",
+				}) as TextSegment;
+			const identityTimeline: TimelineSegment[] = [
+				{ start: 0, end: 10, timescale: 1, recordingSegment: 0 },
+			];
+			const recordings = [{ display: { duration: 10 } } as SegmentRecordings];
+
+			// Speech after the hold lands after the inserted pause.
+			const after = mapCaptionsToEditedTimeline(
+				[
+					{
+						id: "caption",
+						start: 4,
+						end: 5,
+						text: "later",
+						words: [{ text: "later", start: 4, end: 5 }],
+					},
+				],
+				identityTimeline,
+				recordings,
+				[],
+				[fullscreenText(2, 5)],
+			);
+			expect(after).toHaveLength(1);
+			expect(after[0]?.start).toBeCloseTo(7);
+			expect(after[0]?.end).toBeCloseTo(8);
+			expect(after[0]?.words?.[0]?.start).toBeCloseTo(7);
+			expect(after[0]?.words?.[0]?.end).toBeCloseTo(8);
+
+			// A caption ending exactly where the hold begins stays before it.
+			const before = mapCaptionsToEditedTimeline(
+				[{ id: "caption", start: 1, end: 2, text: "before", words: [] }],
+				identityTimeline,
+				recordings,
+				[],
+				[fullscreenText(2, 5)],
+			);
+			expect(before[0]?.start).toBeCloseTo(1);
+			expect(before[0]?.end).toBeCloseTo(2);
+
+			// A caption crossing the hold spans the inserted time: the word
+			// before the pause stays put, the word after resumes with the
+			// recording.
+			const across = mapCaptionsToEditedTimeline(
+				[
+					{
+						id: "caption",
+						start: 1,
+						end: 3,
+						text: "across it",
+						words: [
+							{ text: "across", start: 1, end: 2 },
+							{ text: "it", start: 2, end: 3 },
+						],
+					},
+				],
+				identityTimeline,
+				recordings,
+				[],
+				[fullscreenText(2, 5)],
+			);
+			expect(across).toHaveLength(1);
+			expect(across[0]?.start).toBeCloseTo(1);
+			expect(across[0]?.end).toBeCloseTo(6);
+			expect(across[0]?.words?.[0]?.start).toBeCloseTo(1);
+			expect(across[0]?.words?.[0]?.end).toBeCloseTo(2);
+			expect(across[0]?.words?.[1]?.start).toBeCloseTo(5);
+			expect(across[0]?.words?.[1]?.end).toBeCloseTo(6);
+		});
+
 		it("splits captions without word timing across retained timeline ranges", () => {
 			const result = mapCaptionsToEditedTimeline(
 				[
@@ -817,6 +927,32 @@ if (import.meta.vitest) {
 			);
 
 			expect(rederived.find((s) => s.id === "capA")?.fontSizeOverride).toBe(42);
+		});
+
+		it("derives the render track in hold-extended output time", () => {
+			const identity: TimelineSegment[] = [
+				{ start: 0, end: 10, timescale: 1, recordingSegment: 0 },
+			];
+
+			const track = deriveCaptionTrackSegments(
+				sourceSegments,
+				identity,
+				recordings,
+				[],
+				[],
+				[
+					{
+						start: 3,
+						end: 5,
+						enabled: true,
+						layout: "fullscreen",
+					} as TextSegment,
+				],
+			);
+
+			expect(track.find((s) => s.id === "capA")?.start).toBeCloseTo(1);
+			expect(track.find((s) => s.id === "capB")?.start).toBeCloseTo(8);
+			expect(track.find((s) => s.id === "capB")?.end).toBeCloseTo(9);
 		});
 	});
 

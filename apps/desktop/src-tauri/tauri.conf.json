@@ -100,8 +100,12 @@
 					"libayatana-appindicator3-1",
 					"libva2",
 					"libva-drm2",
+					"pulseaudio-utils",
 					"libpipewire-0.3-0",
-					"libasound2t64 | libasound2"
+					"libasound2t64 | libasound2",
+					"libxkbcommon0",
+					"libxkbcommon-x11-0",
+					"libssl3t64 | libssl3"
 				],
 				"files": {
 					"/usr/share/icons/hicolor/scalable/status/so.cap.desktop-tray-default-symbolic.svg": "icons/linux/so.cap.desktop-tray-default-symbolic.svg",

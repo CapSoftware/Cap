@@ -4,13 +4,19 @@ pub mod mp4;
 pub mod preview;
 pub mod settings;
 
-use cap_editor::SegmentMedia;
+use cap_editor::{ExportAudioPreparation, ExportAudioRenderer, SegmentMedia};
 use cap_project::{
     BackgroundSource, ProjectConfiguration, RecordingMeta, StudioRecordingMeta,
     TimelineConfiguration, TimelineSegment,
 };
 use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExportError {
@@ -78,6 +84,22 @@ impl ExporterBuilder {
     }
 
     pub async fn build(self) -> Result<ExporterBase, ExporterBuildError> {
+        self.build_inner(None).await
+    }
+
+    pub async fn build_for_mp4(
+        self,
+        cancellation: Arc<AtomicBool>,
+    ) -> Result<Mp4ExporterBase, ExporterBuildError> {
+        self.build_inner(Some(cancellation))
+            .await
+            .map(Mp4ExporterBase)
+    }
+
+    async fn build_inner(
+        self,
+        cancellation: Option<Arc<AtomicBool>>,
+    ) -> Result<ExporterBase, ExporterBuildError> {
         type Error = ExporterBuildError;
 
         let mut project_config = if let Some(config) = self.config {
@@ -132,9 +154,19 @@ impl ExporterBuilder {
                     caption_segments: Vec::new(),
                     keyboard_segments: Vec::new(),
                     audio_segments: Vec::new(),
+                    camera3d_segments: Vec::new(),
                 });
             }
         }
+
+        let output_path = self
+            .output_path
+            .unwrap_or_else(|| recording_meta.output_path());
+        let streaming_output = prepare_streaming_output(
+            &output_path,
+            cancellation.is_some() && ExportAudioRenderer::eligible(&project_config, studio_meta),
+        );
+        let stream_audio = streaming_output.is_some();
 
         let render_constants = Arc::new(
             RenderVideoConstants::new(
@@ -146,21 +178,42 @@ impl ExporterBuilder {
             .map_err(Error::RendererSetup)?,
         );
 
-        let segments =
-            cap_editor::create_segments(&recording_meta, studio_meta, self.force_ffmpeg_decoder)
-                .await
-                .map_err(Error::MediaLoad)?;
-
-        // Audio decodes in the background after create_segments; exports must
-        // not silently drop a track, so fail loudly if any decode failed.
-        for segment in &segments {
-            segment.audio.get().await.map_err(Error::MediaLoad)?;
-            segment.system_audio.get().await.map_err(Error::MediaLoad)?;
-        }
-
-        let output_path = self
-            .output_path
-            .unwrap_or_else(|| recording_meta.output_path());
+        let audio_cancellation = if stream_audio {
+            cancellation.map(ExportAudioCancellation::new)
+        } else {
+            None
+        };
+        let (segments, streaming_audio) = if let Some(control) = &audio_cancellation {
+            let recording = recording_meta.clone();
+            let studio = studio_meta.clone();
+            let cancellation = control.user.clone();
+            let abort = control.stop.clone();
+            let preparation = tokio::task::spawn_blocking(move || {
+                ExportAudioPreparation::open(&recording, &studio, cancellation, abort)
+            });
+            let segments = cap_editor::create_segments_without_audio(
+                &recording_meta,
+                studio_meta,
+                self.force_ffmpeg_decoder,
+            )
+            .await;
+            let (segments, audio) =
+                finish_audio_preparation(segments, preparation, &control.stop).await?;
+            (segments, Some(audio))
+        } else {
+            let segments = cap_editor::create_segments(
+                &recording_meta,
+                studio_meta,
+                self.force_ffmpeg_decoder,
+            )
+            .await
+            .map_err(Error::MediaLoad)?;
+            for segment in &segments {
+                segment.audio.get().await.map_err(Error::MediaLoad)?;
+                segment.system_audio.get().await.map_err(Error::MediaLoad)?;
+            }
+            (segments, None)
+        };
 
         if let Some(parent) = output_path.parent() {
             std::fs::create_dir_all(parent)
@@ -176,8 +229,31 @@ impl ExporterBuilder {
             recording_meta,
             project_config,
             project_path: self.project_path,
+            streaming_audio,
+            streaming_output,
+            audio_cancellation,
         })
     }
+}
+
+async fn finish_audio_preparation(
+    segments: Result<Vec<SegmentMedia>, String>,
+    preparation: tokio::task::JoinHandle<
+        Result<ExportAudioPreparation, cap_editor::ExportAudioError>,
+    >,
+    abort: &AtomicBool,
+) -> Result<(Vec<SegmentMedia>, ExportAudioRenderer), ExporterBuildError> {
+    if segments.is_err() {
+        abort.store(true, Ordering::Relaxed);
+    }
+    let preparation = preparation.await;
+    let segments = segments.map_err(ExporterBuildError::MediaLoad)?;
+    let audio = preparation
+        .map_err(|error| ExporterBuildError::MediaLoad(error.to_string()))?
+        .map_err(|error| ExporterBuildError::MediaLoad(error.to_string()))?
+        .finish(&segments)
+        .map_err(|error| ExporterBuildError::MediaLoad(error.to_string()))?;
+    Ok((segments, audio))
 }
 
 pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> ProjectConfiguration {
@@ -189,18 +265,70 @@ pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> Pro
     project_config.background.shadow = 0.0;
     project_config.background.advanced_shadow = None;
     project_config.background.border = None;
-    project_config.camera.hide = true;
     project_config.captions = None;
     project_config.keyboard = None;
 
     if let Some(timeline) = project_config.timeline.as_mut() {
         timeline.mask_segments.clear();
-        timeline.text_segments.clear();
+        // Fullscreen text segments pause the recording clock (holds), which
+        // shapes the frame count and cursor motion. Split titles also move
+        // the cursor with the display, so both need invisible placeholders.
+        timeline
+            .text_segments
+            .retain(|text| text.layout != cap_project::TextLayout::Overlay);
+        for text in &mut timeline.text_segments {
+            text.content.clear();
+        }
         timeline.caption_segments.clear();
         timeline.keyboard_segments.clear();
     }
 
     project_config
+}
+
+fn prepare_streaming_output(
+    output: &std::path::Path,
+    eligible: bool,
+) -> Option<mp4::TemporaryMp4Output> {
+    if !eligible
+        || output.extension().and_then(|extension| extension.to_str()) != Some("mp4")
+        || !matches!(std::fs::symlink_metadata(output), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return None;
+    }
+    mp4::temporary_mp4_output(output).ok()
+}
+
+struct ExportAudioCancellation {
+    user: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+}
+
+impl ExportAudioCancellation {
+    fn new(user: Arc<AtomicBool>) -> Self {
+        Self {
+            user,
+            stop: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl Drop for ExportAudioCancellation {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+pub struct Mp4ExporterBase(ExporterBase);
+
+impl Mp4ExporterBase {
+    pub fn total_frames(&self, fps: u32) -> u32 {
+        self.0.total_frames(fps)
+    }
+
+    pub fn uses_streaming_audio(&self) -> bool {
+        self.0.streaming_audio.is_some()
+    }
 }
 
 pub struct ExporterBase {
@@ -212,6 +340,9 @@ pub struct ExporterBase {
     render_constants: Arc<RenderVideoConstants>,
     segments: Vec<SegmentMedia>,
     output_path: PathBuf,
+    streaming_audio: Option<ExportAudioRenderer>,
+    streaming_output: Option<mp4::TemporaryMp4Output>,
+    audio_cancellation: Option<ExportAudioCancellation>,
 }
 
 impl ExporterBase {
@@ -233,5 +364,207 @@ impl ExporterBase {
             output_path: None,
             force_ffmpeg_decoder: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod cursor_only_tests {
+    use super::*;
+    use cap_project::TextLayout;
+
+    #[test]
+    fn cursor_only_preserves_layout_and_recording_time_without_title_pixels() {
+        for hide_camera in [false, true] {
+            let mut project = ProjectConfiguration::default();
+            project.camera.hide = hide_camera;
+            project.timeline = Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{ "start": 0.0, "end": 8.0, "timescale": 1.0 }],
+                    "zoomSegments": [],
+                    "sceneSegments": [{ "start": 1.0, "end": 3.0, "mode": "splitScreen" }],
+                    "textSegments": [
+                        { "start": 0.0, "end": 1.0, "layout": "overlay" },
+                        { "start": 1.0, "end": 2.0, "layout": "fullscreen" },
+                        { "start": 2.0, "end": 3.0, "layout": "splitLeft" },
+                        { "start": 3.0, "end": 4.0, "layout": "splitRight" }
+                    ]
+                }))
+                .unwrap(),
+            );
+            let duration = project.timeline.as_ref().unwrap().duration();
+            let cursor_only = make_cursor_only_project(project);
+            let timeline = cursor_only.timeline.unwrap();
+            assert_eq!(cursor_only.camera.hide, hide_camera);
+            assert_eq!(timeline.duration(), duration);
+            assert_eq!(
+                timeline
+                    .text_segments
+                    .iter()
+                    .map(|text| text.layout)
+                    .collect::<Vec<_>>(),
+                [
+                    TextLayout::Fullscreen,
+                    TextLayout::SplitLeft,
+                    TextLayout::SplitRight
+                ],
+            );
+            assert!(
+                timeline
+                    .text_segments
+                    .iter()
+                    .all(|text| text.content.is_empty())
+            );
+            assert!(matches!(
+                timeline.scene_segments[0].mode,
+                cap_project::SceneMode::SplitScreen
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn segment_failure_aborts_and_joins_preparation_before_returning() {
+        use std::time::{Duration, Instant};
+
+        let user = Arc::new(AtomicBool::new(false));
+        let control = ExportAudioCancellation::new(user.clone());
+        let abort = control.stop.clone();
+        let completed = Arc::new(AtomicBool::new(false));
+        let worker_completed = completed.clone();
+        let (started, entered) = tokio::sync::oneshot::channel();
+        let preparation = tokio::task::spawn_blocking(move || {
+            started.send(()).unwrap();
+            let start = Instant::now();
+            while !abort.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(2) {
+                std::thread::yield_now();
+            }
+            assert!(abort.load(Ordering::Relaxed));
+            worker_completed.store(true, Ordering::Release);
+            Err(cap_editor::ExportAudioError::Sink(
+                "audio preparation error".into(),
+            ))
+        });
+        entered.await.unwrap();
+        let result = finish_audio_preparation(
+            Err("segment setup error".into()),
+            preparation,
+            &control.stop,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(ExporterBuildError::MediaLoad(error)) if error == "segment setup error")
+        );
+        assert!(completed.load(Ordering::Acquire));
+        assert!(!user.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn preparation_error_or_panic_is_returned_after_successful_segment_setup() {
+        let abort = AtomicBool::new(false);
+        for panic in [false, true] {
+            let preparation = tokio::task::spawn_blocking(move || {
+                assert!(!panic, "preparation panic");
+                Err(cap_editor::ExportAudioError::Sink(
+                    "preparation error".into(),
+                ))
+            });
+            let result = finish_audio_preparation(Ok(Vec::new()), preparation, &abort).await;
+            let Err(ExporterBuildError::MediaLoad(error)) = result else {
+                panic!("preparation failure was lost");
+            };
+            assert!(error.contains(if panic {
+                "preparation panic"
+            } else {
+                "preparation error"
+            }));
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dropped_builder_aborts_preparation_without_user_cancellation() {
+        use std::time::{Duration, Instant};
+
+        let user = Arc::new(AtomicBool::new(false));
+        let worker_user = user.clone();
+        let (started, entered) = tokio::sync::oneshot::channel();
+        let (finished, observed) = std::sync::mpsc::channel();
+        let builder = tokio::spawn(async move {
+            let control = ExportAudioCancellation::new(worker_user);
+            let abort = control.stop.clone();
+            let preparation = tokio::task::spawn_blocking(move || {
+                started.send(()).unwrap();
+                let start = Instant::now();
+                while !abort.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(2) {
+                    std::thread::yield_now();
+                }
+                finished.send(abort.load(Ordering::Relaxed)).unwrap();
+                Err(cap_editor::ExportAudioError::Cancelled)
+            });
+            finish_audio_preparation(Ok(Vec::new()), preparation, &control.stop)
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        });
+        entered.await.unwrap();
+        builder.abort();
+        assert!(builder.await.is_err_and(|error| error.is_cancelled()));
+        let stopped =
+            tokio::task::spawn_blocking(move || observed.recv_timeout(Duration::from_secs(2)))
+                .await
+                .unwrap()
+                .unwrap();
+        assert!(stopped);
+        assert!(!user.load(Ordering::Relaxed));
+        assert_eq!(Arc::strong_count(&user), 1);
+    }
+
+    #[test]
+    fn unavailable_streaming_destination_falls_back_without_creating_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing_parent = directory.path().join("missing");
+        assert!(prepare_streaming_output(&missing_parent.join("export.mp4"), true).is_none());
+        assert!(!missing_parent.exists());
+        let existing = directory.path().join("existing.mp4");
+        std::fs::write(&existing, b"existing").unwrap();
+        assert!(prepare_streaming_output(&existing, true).is_none());
+        assert_eq!(std::fs::read(existing).unwrap(), b"existing");
+    }
+
+    #[test]
+    fn prepared_destination_is_removed_when_preparation_is_dropped() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("export.mp4");
+        assert!(prepare_streaming_output(&output, false).is_none());
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+        let prepared = prepare_streaming_output(&output, true).unwrap();
+        let temporary_path = prepared.to_path_buf();
+        assert!(temporary_path.exists());
+        assert!(!output.exists());
+        drop(prepared);
+        assert!(!temporary_path.exists());
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn pipeline_stop_does_not_change_user_cancellation() {
+        let user = Arc::new(AtomicBool::new(false));
+        let cancellation = ExportAudioCancellation::new(user.clone());
+        let stop = cancellation.stop.clone();
+        drop(cancellation);
+        assert!(stop.load(Ordering::Relaxed));
+        assert!(!user.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn user_cancellation_does_not_change_pipeline_abort() {
+        let user = Arc::new(AtomicBool::new(false));
+        let cancellation = ExportAudioCancellation::new(user.clone());
+        user.store(true, Ordering::Relaxed);
+        assert!(cancellation.user.load(Ordering::Relaxed));
+        assert!(!cancellation.stop.load(Ordering::Relaxed));
     }
 }

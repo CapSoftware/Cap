@@ -31,6 +31,7 @@ async function getVideoUploadPresignedUrl({
 	video,
 	userId,
 	organizationId,
+	videoTitle,
 }: {
 	fileKey: string;
 	duration?: string;
@@ -40,6 +41,7 @@ async function getVideoUploadPresignedUrl({
 	video?: Video.Video;
 	userId: User.UserId;
 	organizationId?: Organisation.OrganisationId;
+	videoTitle?: string;
 }) {
 	try {
 		const contentType = fileKey.endsWith(".aac")
@@ -89,6 +91,7 @@ async function getVideoUploadPresignedUrl({
 				{
 					contentType,
 					fields: Fields,
+					videoTitle,
 				},
 				organizationId,
 			);
@@ -193,6 +196,9 @@ export async function createVideoAndGetUploadUrl({
 		}
 
 		const idToUse = Video.VideoId.make(videoId || nanoId());
+		const videoTitle = `Cap ${
+			isScreenshot ? "Screenshot" : isUpload ? "Upload" : "Recording"
+		} - ${formattedDate}`;
 
 		const screenshotExtension =
 			screenshotContentType?.toLowerCase() === "image/png" ? "png" : "jpg";
@@ -210,13 +216,12 @@ export async function createVideoAndGetUploadUrl({
 				audioCodec,
 				userId: user.id,
 				organizationId: orgId,
+				videoTitle,
 			});
 
 		const videoData = {
 			id: idToUse,
-			name: `Cap ${
-				isScreenshot ? "Screenshot" : isUpload ? "Upload" : "Recording"
-			} - ${formattedDate}`,
+			name: videoTitle,
 			ownerId: user.id,
 			orgId,
 			source: { type: "webMP4" as const },

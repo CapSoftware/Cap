@@ -5,6 +5,7 @@ use std::ops::Range;
 
 pub const SHORT_CURSOR_SHAPE_DEBOUNCE_MS: f64 = 1000.0;
 use std::fs::File;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use crate::XY;
@@ -59,7 +60,8 @@ pub struct CursorData {
 impl CursorData {
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
         let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {e}"))?;
-        serde_json::from_reader(file).map_err(|e| format!("Failed to parse cursor data: {e}"))
+        serde_json::from_reader(BufReader::new(file))
+            .map_err(|e| format!("Failed to parse cursor data: {e}"))
     }
 }
 
@@ -72,7 +74,8 @@ pub struct CursorEvents {
 impl CursorEvents {
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
         let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {e}"))?;
-        serde_json::from_reader(file).map_err(|e| format!("Failed to parse cursor data: {e}"))
+        serde_json::from_reader(BufReader::new(file))
+            .map_err(|e| format!("Failed to parse cursor data: {e}"))
     }
 
     pub fn stabilize_short_lived_cursor_shapes(
@@ -278,6 +281,85 @@ struct CursorSegment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn buffered_load_preserves_events_and_legacy_images_across_read_boundaries() {
+        let data = CursorData {
+            clicks: vec![click_event(0.0, "pointer"), click_event(9876.5, "文字🖱")],
+            moves: (0..2000)
+                .map(|index| move_event(f64::from(index) * 16.67, "文字🖱"))
+                .collect(),
+            cursor_images: CursorImages(HashMap::from([(
+                "文字🖱".to_string(),
+                CursorImage {
+                    path: "cursors/文字.png".into(),
+                    hotspot: XY::new(0.125, 0.75),
+                },
+            )])),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cursor.json");
+        let json = serde_json::to_vec(&data).unwrap();
+        std::fs::write(&path, &json).unwrap();
+
+        let expected: CursorData = serde_json::from_reader(File::open(&path).unwrap()).unwrap();
+        let events = CursorEvents::load_from_file(&path).unwrap();
+        assert_eq!(events.moves, expected.moves);
+        assert_eq!(events.clicks, expected.clicks);
+        let legacy = CursorData::load_from_file(&path).unwrap();
+        assert_eq!(
+            serde_json::to_value(legacy).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+
+        let events_json = serde_json::to_vec(&events).unwrap();
+        std::fs::write(&path, events_json).unwrap();
+        let expected: CursorEvents = serde_json::from_reader(File::open(&path).unwrap()).unwrap();
+        let loaded_events = CursorEvents::load_from_file(&path).unwrap();
+        assert_eq!(loaded_events.moves, expected.moves);
+        assert_eq!(loaded_events.clicks, expected.clicks);
+    }
+
+    #[test]
+    fn buffered_load_preserves_parse_and_open_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cursor.json");
+        for json in [
+            "",
+            "{",
+            r#"{"moves":[],"clicks":[]} trailing"#,
+            r#"{"moves":[{"time_ms":1e999}],"clicks":[]}"#,
+            r#"{"moves":[],"clicks":[],"cursor_images":null}"#,
+        ] {
+            for padding in [0, 8191, 8192] {
+                std::fs::write(&path, format!("{}{json}", " ".repeat(padding))).unwrap();
+                let expected_events =
+                    serde_json::from_reader::<_, CursorEvents>(File::open(&path).unwrap())
+                        .map_err(|error| format!("Failed to parse cursor data: {error}"));
+                assert_eq!(
+                    CursorEvents::load_from_file(&path).err(),
+                    expected_events.err()
+                );
+                let expected_legacy =
+                    serde_json::from_reader::<_, CursorData>(File::open(&path).unwrap())
+                        .map_err(|error| format!("Failed to parse cursor data: {error}"));
+                assert_eq!(
+                    CursorData::load_from_file(&path).err(),
+                    expected_legacy.err()
+                );
+            }
+        }
+        let missing = dir.path().join("missing.json");
+        let expected = format!(
+            "Failed to open cursor file: {}",
+            File::open(&missing).unwrap_err()
+        );
+        assert_eq!(
+            CursorEvents::load_from_file(&missing).unwrap_err(),
+            expected
+        );
+        assert_eq!(CursorData::load_from_file(&missing).unwrap_err(), expected);
+    }
 
     fn move_event(time_ms: f64, cursor_id: &str) -> CursorMoveEvent {
         CursorMoveEvent {

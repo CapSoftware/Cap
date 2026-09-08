@@ -15,7 +15,9 @@ function runFfmpeg(args: string[]): Promise<void> {
 	const ffmpeg = getFfmpegPath();
 
 	return new Promise((resolve, reject) => {
-		const proc = spawn(ffmpeg, args, { stdio: ["ignore", "ignore", "pipe"] });
+		const proc = spawn(/*turbopackIgnore: true*/ ffmpeg, args, {
+			stdio: ["ignore", "ignore", "pipe"],
+		});
 
 		let stderr = "";
 
@@ -270,7 +272,7 @@ export async function convertRemoteVideoToMp4Buffer(
 	const result = await convertRemoteVideoToMp4(videoUrl);
 
 	try {
-		return await fs.readFile(result.filePath);
+		return await fs.readFile(/*turbopackIgnore: true*/ result.filePath);
 	} finally {
 		await result.cleanup();
 	}

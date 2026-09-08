@@ -152,6 +152,65 @@ describe("transcribeVideo", () => {
 	});
 
 	describe("transcription disabled scenarios", () => {
+		it("defers to a provably fresh live transcription instead of racing it", async () => {
+			mockQueryResult = [
+				{
+					video: {
+						id: "video-123",
+						transcriptionStatus: null,
+						settings: null,
+						metadata: {
+							liveTranscript: {
+								status: "active",
+								updatedAt: new Date().toISOString(),
+							},
+						},
+					},
+					bucket: null,
+					settings: null,
+					orgSettings: null,
+				},
+			];
+
+			const result = await transcribeVideo(
+				"video-123" as Video.VideoId,
+				"user-456",
+			);
+
+			expect(result.success).toBe(true);
+			expect(result.message).toContain("Live transcription in progress");
+			expect(mockStart).not.toHaveBeenCalled();
+		});
+
+		it("ignores a stale live claim so a dead workflow can never block transcription", async () => {
+			mockQueryResult = [
+				{
+					video: {
+						id: "video-123",
+						transcriptionStatus: null,
+						settings: null,
+						metadata: {
+							liveTranscript: {
+								status: "active",
+								updatedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+							},
+						},
+					},
+					bucket: null,
+					settings: null,
+					orgSettings: null,
+				},
+			];
+
+			const result = await transcribeVideo(
+				"video-123" as Video.VideoId,
+				"user-456",
+			);
+
+			expect(result.success).toBe(true);
+			expect(mockStart).toHaveBeenCalledTimes(1);
+		});
+
 		it("skips transcription when video settings disable it", async () => {
 			mockQueryResult = [
 				{

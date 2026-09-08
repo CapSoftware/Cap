@@ -6,6 +6,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
+import { useCurrency } from "hooks/useCurrency";
 import { useRouter } from "next/navigation";
 import { type MouseEvent, startTransition, useId, useState } from "react";
 import { toast } from "sonner";
@@ -17,6 +18,7 @@ import { Base } from "./Base";
 export function InviteTeamPage() {
 	const billingCycleId = useId();
 	const stripeCtx = useStripeContext();
+	const { currency, symbol } = useCurrency();
 	const [users, setUsers] = useState(1);
 	const [isAnnually, setIsAnnually] = useState(true);
 	const router = useRouter();
@@ -116,7 +118,8 @@ export function InviteTeamPage() {
 		>
 			<div className="text-center">
 				<span className="mr-2 text-2xl tabular-nums lg:text-3xl text-gray-12">
-					$<NumberFlow suffix="/mo" value={currentTotalPrice} />
+					{symbol}
+					<NumberFlow suffix="/mo" value={currentTotalPrice} />
 				</span>
 				<span className="text-base tabular-nums text-gray-10">
 					{" "}
@@ -131,7 +134,7 @@ export function InviteTeamPage() {
 							format={{
 								notation: "compact",
 								style: "currency",
-								currency: "USD",
+								currency: currency.toUpperCase(),
 							}}
 							suffix="/mo"
 						/>{" "}
@@ -155,7 +158,7 @@ export function InviteTeamPage() {
 							format={{
 								notation: "compact",
 								style: "currency",
-								currency: "USD",
+								currency: currency.toUpperCase(),
 							}}
 							suffix="/mo"
 						/>{" "}

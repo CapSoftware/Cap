@@ -6,13 +6,24 @@ use crate::ProjectUniforms;
 pub struct BlurLayer {
     pub blur_amount: f64,
     sampler: wgpu::Sampler,
-    uniforms_buffer: wgpu::Buffer,
+    uniforms_buffer_h: wgpu::Buffer,
+    uniforms_buffer_v: wgpu::Buffer,
     pipeline: BlurPipeline,
     cached_uniforms: Option<BlurUniforms>,
 }
 
 impl BlurLayer {
     pub fn new(device: &wgpu::Device) -> Self {
+        let make_buffer = |direction: f32| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("BackgroundBlur Uniform Buffer"),
+                contents: bytemuck::cast_slice(&[BlurUniforms {
+                    direction,
+                    ..Default::default()
+                }]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            })
+        };
         Self {
             blur_amount: 0.0,
             sampler: device.create_sampler(&wgpu::SamplerDescriptor {
@@ -24,11 +35,8 @@ impl BlurLayer {
                 mipmap_filter: wgpu::FilterMode::Nearest,
                 ..Default::default()
             }),
-            uniforms_buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("BackgroundBlur Uniform Buffer"),
-                contents: bytemuck::cast_slice(&[BlurUniforms::default()]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }),
+            uniforms_buffer_h: make_buffer(0.0),
+            uniforms_buffer_v: make_buffer(1.0),
             pipeline: BlurPipeline::new(device),
             cached_uniforms: None,
         }
@@ -44,31 +52,58 @@ impl BlurLayer {
         let blur_uniform = BlurUniforms {
             output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
             blur_strength,
-            _padding: 0.0,
+            direction: 0.0,
         };
 
         if self.cached_uniforms.as_ref() != Some(&blur_uniform) {
             queue.write_buffer(
-                &self.uniforms_buffer,
+                &self.uniforms_buffer_h,
                 0,
                 bytemuck::cast_slice(&[blur_uniform]),
+            );
+            queue.write_buffer(
+                &self.uniforms_buffer_v,
+                0,
+                bytemuck::cast_slice(&[BlurUniforms {
+                    direction: 1.0,
+                    ..blur_uniform
+                }]),
             );
             self.cached_uniforms = Some(blur_uniform);
         }
     }
 
-    pub fn render(
+    pub fn render_h(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
         source_texture: &wgpu::TextureView,
+    ) {
+        self.render_pass(pass, device, source_texture, &self.uniforms_buffer_h);
+    }
+
+    pub fn render_v(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        device: &wgpu::Device,
+        source_texture: &wgpu::TextureView,
+    ) {
+        self.render_pass(pass, device, source_texture, &self.uniforms_buffer_v);
+    }
+
+    fn render_pass(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        device: &wgpu::Device,
+        source_texture: &wgpu::TextureView,
+        uniforms_buffer: &wgpu::Buffer,
     ) {
         pass.set_pipeline(&self.pipeline.render_pipeline);
         pass.set_bind_group(
             0,
             &self
                 .pipeline
-                .bind_group(device, &self.uniforms_buffer, source_texture, &self.sampler),
+                .bind_group(device, uniforms_buffer, source_texture, &self.sampler),
             &[],
         );
         pass.draw(0..4, 0..1);
@@ -80,7 +115,7 @@ impl BlurLayer {
 pub struct BlurUniforms {
     output_size: [f32; 2],
     blur_strength: f32,
-    _padding: f32,
+    direction: f32,
 }
 
 pub struct BlurPipeline {

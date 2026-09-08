@@ -8,12 +8,14 @@ import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect } from "effect";
 import { AnimatePresence, motion } from "framer-motion";
+import { useCurrency } from "hooks/useCurrency";
 import { Minus, Plus } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { memo, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { useStripeContext } from "@/app/Layout/StripeContext";
+import { PRICING } from "@/data/pricing";
 import { useEffectQuery } from "@/lib/EffectRuntime";
 import { Fit, Layout, useRive } from "@/lib/rive";
 import { useDashboardContext } from "../../Contexts";
@@ -48,6 +50,7 @@ export function AnalyticsDashboard() {
 	const capId = searchParams.get("capId");
 	const user = useCurrentUser();
 	const stripeCtx = useStripeContext();
+	const { currency } = useCurrency();
 	const { push } = useRouter();
 	const { activeOrganization, organizationData, spacesData } =
 		useDashboardContext();
@@ -59,7 +62,9 @@ export function AnalyticsDashboard() {
 	const [proQuantity, setProQuantity] = useState(1);
 
 	const showOverlay = buildEnv.NEXT_PUBLIC_IS_CAP === "true" && !user?.isPro;
-	const pricePerUser = isAnnual ? 8.16 : 12;
+	const pricePerUser = isAnnual
+		? PRICING.pro.annualPerMonth
+		: PRICING.pro.monthly;
 	const totalPrice = pricePerUser * proQuantity;
 	const billingText = isAnnual ? "billed annually" : "billed monthly";
 
@@ -235,7 +240,7 @@ export function AnalyticsDashboard() {
 										</h1>
 									</div>
 									<p className="mt-1 text-lg text-center text-gray-11">
-										You can cancel anytime. Early adopter pricing locked in.
+										You can cancel anytime.
 									</p>
 
 									<div className="flex flex-col items-center mt-3 mb-4 w-full">
@@ -245,7 +250,7 @@ export function AnalyticsDashboard() {
 												className="text-3xl font-medium tabular-nums text-gray-12"
 												format={{
 													style: "currency",
-													currency: "USD",
+													currency: currency.toUpperCase(),
 												}}
 											/>
 											<span className="mb-2 ml-2 text-gray-11">

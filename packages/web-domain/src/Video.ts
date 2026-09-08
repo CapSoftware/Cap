@@ -15,6 +15,14 @@ export type VideoId = typeof VideoId.Type;
 
 export const FREE_PLAN_MAX_RECORDING_SECONDS = 5 * 60;
 
+export const FREE_PLAN_SHAREABLE_LINKS_PER_MONTH = 25;
+
+// Quota is not retroactive: videos created before this date never count
+// toward, nor get gated by, the monthly shareable-link limit.
+export const SHAREABLE_LINK_LIMIT_ENFORCED_FROM = new Date(
+	"2026-08-19T00:00:00.000Z",
+);
+
 // Purposefully doesn't include password as this is a public class
 export class Video extends Schema.Class<Video>("Video")({
 	id: VideoId,
@@ -23,6 +31,9 @@ export class Video extends Schema.Class<Video>("Video")({
 	name: Schema.String,
 	public: Schema.Boolean,
 	source: Schema.Struct({
+		outputKey: Schema.optional(Schema.String),
+		thumbnailKey: Schema.optional(Schema.String),
+		previewKey: Schema.optional(Schema.String),
 		type: Schema.Literal(
 			"MediaConvert",
 			"local",
@@ -67,7 +78,11 @@ export class Video extends Schema.Class<Video>("Video")({
 			return new SegmentsSource({ videoId: self.id, ownerId: self.ownerId });
 
 		if (self.source.type === "desktopMP4" || self.source.type === "webMP4")
-			return new Mp4Source({ videoId: self.id, ownerId: self.ownerId });
+			return new Mp4Source({
+				videoId: self.id,
+				ownerId: self.ownerId,
+				outputKey: self.source.outputKey,
+			});
 	}
 }
 
@@ -92,6 +107,7 @@ export class UploadProgress extends Schema.Class<UploadProgress>(
 	processingMessage: Schema.OptionFromNullOr(Schema.String),
 	processingError: Schema.OptionFromNullOr(Schema.String),
 	hasRawFallback: Schema.Boolean,
+	automaticRetry: Schema.optional(Schema.Boolean),
 }) {}
 
 export const UploadProgressUpdateInput = Schema.Struct({
@@ -129,12 +145,35 @@ export class ImportSource extends Schema.Class<ImportSource>("ImportSource")({
 	id: Schema.String,
 }) {}
 
+export function getRetainedRecordingOutputKey(
+	ownerId: string,
+	videoId: string,
+	key: string | undefined,
+) {
+	if (
+		!key?.startsWith(`${ownerId}/${videoId}/.recording/`) ||
+		!key.endsWith(".mp4") ||
+		key.includes("..") ||
+		!/^[a-zA-Z0-9_./-]+$/.test(key)
+	) {
+		return undefined;
+	}
+	return key;
+}
+
 export class Mp4Source extends Schema.TaggedClass<Mp4Source>()("Mp4Source", {
 	videoId: Schema.String,
 	ownerId: Schema.String,
+	outputKey: Schema.optional(Schema.String),
 }) {
 	getFileKey() {
-		return `${this.ownerId}/${this.videoId}/result.mp4`;
+		return (
+			getRetainedRecordingOutputKey(
+				this.ownerId,
+				this.videoId,
+				this.outputKey,
+			) ?? `${this.ownerId}/${this.videoId}/result.mp4`
+		);
 	}
 }
 
@@ -230,7 +269,7 @@ export const verifyPassword = (video: Video, password: Option.Option<string>) =>
 	);
 
 export const verifyPasswordCandidates = (
-	video: Video,
+	video: Pick<Video, "id">,
 	passwords: ReadonlyArray<string>,
 ) =>
 	Effect.gen(function* () {

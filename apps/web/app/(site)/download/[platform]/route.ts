@@ -1,13 +1,14 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getGitHubReleases, type ReleaseDownloadKey } from "@/utils/releases";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 async function checkCrabNebulaDownload(
 	url: string,
 ): Promise<{ ok: true; finalUrl: string } | { ok: false }> {
 	try {
 		const res = await fetch(url, {
+			signal: AbortSignal.timeout(10_000),
 			redirect: "follow",
 			cache: "no-store",
 			headers: {
@@ -15,6 +16,7 @@ async function checkCrabNebulaDownload(
 			},
 		});
 
+		await res.body?.cancel().catch(() => {});
 		if (res.status >= 200 && res.status < 300) {
 			return { ok: true, finalUrl: res.url };
 		}
@@ -43,7 +45,10 @@ export async function GET(
 	props: { params: Promise<{ platform: string }> },
 ) {
 	const params = await props.params;
-	const platform = params.platform.toLowerCase();
+	const platform = params.platform?.toLowerCase();
+	if (!platform) {
+		return NextResponse.redirect(new URL("/download", request.url));
+	}
 
 	const downloadUrls: Record<
 		string,

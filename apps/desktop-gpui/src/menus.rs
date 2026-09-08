@@ -1,0 +1,939 @@
+//! The macOS app menu bar, the window shortcuts behind it, and the dock-icon
+//! policy.
+//!
+//! Three things that are really one thing on macOS: the menu bar only exists
+//! while the app is `NSApplicationActivationPolicyRegular`, ⌘W has to mean
+//! something different on the main window than on every other window, and the
+//! Tauri app decides between Regular and Accessory from exactly the set of
+//! windows ⌘W changes.
+//!
+//! The menu itself is [`build_menus`], a byte-for-byte transcription of
+//! `build_macos_app_menu` (`apps/desktop/src-tauri/src/lib.rs:479-566`). gpui
+//! builds the real `NSMenu` from it and takes each item's key equivalent from
+//! the *keymap*, so an action with no `KeyBinding` renders without a shortcut
+//! and an action with no live handler renders disabled
+//! (`gpui_macos/src/platform.rs:322-420` + `validate_menu_item`). Both halves
+//! are load-bearing: every action below is bound in [`init`] and given a global
+//! handler there, and the Edit menu deliberately gets neither -- its items
+//! carry the *text field's* actions, whose bindings are scoped to the
+//! `TextInput` key context, so ⌘Z is a menu key equivalent only while a field
+//! is focused and falls through to the editor's own project-undo otherwise.
+
+use gpui::{
+    AnyWindowHandle, App, Global, KeyBinding, Menu, MenuItem, OsAction, Subscription,
+    SystemMenuType, actions,
+};
+
+use crate::{
+    app_windows::{self, AppWindows},
+    main_window::MainWindow,
+    platform,
+    session::{Phase, RecordingSession},
+    store,
+    ui::text_input,
+};
+
+/// `productName` in `tauri.conf.json`, which is what macOS renames the first
+/// submenu to and what the About/Hide/Quit labels interpolate.
+pub const APP_NAME: &str = "Cap";
+
+/// `env!("CARGO_PKG_VERSION")`, exactly as `build_tray_menu` spells it -- this
+/// crate's version, which is the gpui app's own (0.1.x) rather than the
+/// shipping desktop app's. Noted as a deviation in the report: there is no
+/// shared version constant to read.
+pub fn app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+actions!(
+    cap,
+    [
+        /// `PredefinedMenuItem::about` -- `orderFrontStandardAboutPanel`.
+        About,
+        /// `PredefinedMenuItem::hide` -- ⌘H.
+        HideSelf,
+        /// `PredefinedMenuItem::hide_others` -- ⌥⌘H.
+        HideOthers,
+        /// The Cap menu's explicit Quit item -- ⌘Q.
+        Quit,
+        /// `PredefinedMenuItem::close_window` -- ⌘W. Present twice in the
+        /// Tauri menu (File and Window), one action either way.
+        CloseWindow,
+        /// `PredefinedMenuItem::minimize` -- ⌘M.
+        Minimize,
+        /// `PredefinedMenuItem::maximize`, titled "Zoom" on macOS. No
+        /// accelerator over there, so none here.
+        Zoom,
+        /// `PredefinedMenuItem::fullscreen` -- ⌃⌘F.
+        ToggleFullscreen,
+    ]
+);
+
+/// Bind the keys, register the handlers, install the menu bar. Called once from
+/// `main`, after [`crate::app_windows::init`] -- every handler reaches into the
+/// window registry.
+pub fn init(cx: &mut App) {
+    // No key context: these are window/application commands, not field
+    // commands. Deliberately *not* including cmd-z/x/c/v/a -- those stay the
+    // text field's own `TextInput`-scoped bindings (and, for the editor, its
+    // `on_key_down` project-undo). A global binding here would shadow both.
+    cx.bind_keys([
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-h", HideSelf, None),
+        KeyBinding::new("alt-cmd-h", HideOthers, None),
+        KeyBinding::new("cmd-w", CloseWindow, None),
+        KeyBinding::new("cmd-m", Minimize, None),
+        KeyBinding::new("ctrl-cmd-f", ToggleFullscreen, None),
+    ]);
+
+    cx.on_action(|_: &About, cx: &mut App| {
+        // Ordering a window front re-enters gpui's window callbacks, so it runs
+        // from a task with no borrow held (`platform::place_overlay_panel`'s
+        // rule).
+        cx.spawn(async move |_| platform::show_about_panel(APP_NAME, app_version()))
+            .detach();
+    });
+    cx.on_action(|_: &HideSelf, cx: &mut App| cx.hide());
+    cx.on_action(|_: &HideOthers, cx: &mut App| cx.hide_other_apps());
+    cx.on_action(|_: &Quit, cx: &mut App| quit(cx));
+    cx.on_action(|_: &CloseWindow, cx: &mut App| close_key_window(cx));
+    cx.on_action(|_: &Minimize, cx: &mut App| with_key_native(cx, platform::minimize_native));
+    cx.on_action(|_: &Zoom, cx: &mut App| with_key_native(cx, platform::zoom_native));
+    cx.on_action(|_: &ToggleFullscreen, cx: &mut App| {
+        #[cfg(target_os = "windows")]
+        if let Some(handle) = cx.active_window() {
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |_, window, _| window.toggle_fullscreen());
+            });
+        }
+        #[cfg(not(target_os = "windows"))]
+        with_key_native(cx, platform::toggle_fullscreen_native)
+    });
+
+    cx.set_menus(build_menus());
+}
+
+/// The menu bar model.
+///
+/// One-to-one with `build_macos_app_menu`, including the empty Help submenu
+/// (`Submenu::with_id_and_items(.., HELP_SUBMENU_ID, "Help", true, &[])`).
+pub fn build_menus() -> Vec<Menu> {
+    vec![
+        Menu {
+            name: APP_NAME.into(),
+            disabled: false,
+            items: vec![
+                MenuItem::action(format!("About {APP_NAME}"), About),
+                MenuItem::separator(),
+                MenuItem::os_submenu("Services", SystemMenuType::Services),
+                MenuItem::separator(),
+                MenuItem::action(format!("Hide {APP_NAME}"), HideSelf),
+                MenuItem::action("Hide Others", HideOthers),
+                MenuItem::separator(),
+                MenuItem::action(format!("Quit {APP_NAME}"), Quit),
+            ],
+        },
+        Menu {
+            name: "File".into(),
+            disabled: false,
+            items: vec![MenuItem::action("Close Window", CloseWindow)],
+        },
+        Menu {
+            name: "Edit".into(),
+            disabled: false,
+            // The text field's own actions, tagged with the AppKit selector
+            // that belongs to each. gpui routes `cut:`/`copy:`/`paste:`/
+            // `selectAll:` through the app delegate back into
+            // `cx.dispatch_action`, so all six land in whatever element holds
+            // focus -- there is no separate "menu implementation" of copy.
+            items: vec![
+                MenuItem::os_action("Undo", text_input::Undo, OsAction::Undo),
+                MenuItem::os_action("Redo", text_input::Redo, OsAction::Redo),
+                MenuItem::separator(),
+                MenuItem::os_action("Cut", text_input::Cut, OsAction::Cut),
+                MenuItem::os_action("Copy", text_input::Copy, OsAction::Copy),
+                MenuItem::os_action("Paste", text_input::Paste, OsAction::Paste),
+                MenuItem::os_action("Select All", text_input::SelectAll, OsAction::SelectAll),
+            ],
+        },
+        Menu {
+            name: "View".into(),
+            disabled: false,
+            // muda's own string for this item is "Toggle Full Screen"; AppKit
+            // relabels any item wired to `toggleFullScreen:` to "Enter Full
+            // Screen", which is what the shipping menu shows. Our item carries
+            // a gpui action rather than that selector, so the title is written
+            // out -- and, unlike the shipping one, does not flip to "Exit Full
+            // Screen" while fullscreen (noted deviation).
+            items: vec![MenuItem::action("Enter Full Screen", ToggleFullscreen)],
+        },
+        Menu {
+            name: "Window".into(),
+            disabled: false,
+            items: vec![
+                MenuItem::action("Minimize", Minimize),
+                MenuItem::action("Zoom", Zoom),
+                MenuItem::separator(),
+                MenuItem::action("Close Window", CloseWindow),
+            ],
+        },
+        Menu {
+            name: "Help".into(),
+            disabled: false,
+            items: vec![],
+        },
+    ]
+}
+
+// -- Window commands ---------------------------------------------------------
+
+/// Run an AppKit window command on the key window, from a task.
+///
+/// `miniaturize:`, `zoom:` and `toggleFullScreen:` all synchronously re-enter
+/// gpui's own move/resize/occlusion callbacks, so they may not run inside the
+/// update that read the handle -- the `place_overlay_panel` rule, which is also
+/// why gpui's own `Window::minimize_window` is not called here.
+fn with_key_native(cx: &mut App, action: fn(&platform::NativeWindow)) {
+    let Some(handle) = cx.active_window() else {
+        tracing::info!("window command: no key window");
+        return;
+    };
+    // A ⌘-keystroke action arrives *inside* the key window's own dispatch,
+    // which holds that window's lease -- `handle.update` on the same window
+    // returns Err there (observed: ⌘W resolved no native handle and silently
+    // did nothing). Deferred, so the lease is back first. The menu-click path
+    // has no lease and rides the same defer unharmed.
+    cx.defer(move |cx| {
+        let native = handle
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        cx.spawn(async move |_| {
+            if let Some(native) = &native {
+                action(native);
+            }
+        })
+        .detach();
+    });
+}
+
+/// ⌘W, the File > Close Window item, and the Window > Close Window item.
+///
+/// Every window except the main one closes through its own close path --
+/// `performClose:`, i.e. what clicking its red traffic light sends -- so
+/// `on_window_should_close` runs and the registry bookkeeping
+/// (`settings_closed`, `editor_closed`, `mode_select_closed`,
+/// `teleprompter_closed`) happens exactly once, on one code path.
+///
+/// The main window is the exception, and it is the whole reason this function
+/// exists: `CapWindowId::Main`'s `CloseRequested` arm calls
+/// `api.prevent_close()` and hides the window instead
+/// (`apps/desktop/src-tauri/src/lib.rs:5644-5697`).
+pub fn close_key_window(cx: &mut App) {
+    if let Some(handle) = cx.active_window() {
+        close_window_by_handle(handle, cx);
+        return;
+    }
+    // The main window is a non-activating panel: the app can be active with
+    // the main window frontmost while gpui tracks NO key window at all, and
+    // the ⌘W that reached the menu then had nothing to route to (observed
+    // live: this log line firing while the main window sat visible). The
+    // Tauri app never meets this state -- its main webview window is a
+    // regular key window -- so match its observable contract instead: ⌘W
+    // with the app active and the main window up hides the main window.
+    // Everything below is deferred: the keystroke still arrived THROUGH the
+    // main window's dispatch (its lease is held even when gpui says no window
+    // is active), so even the visibility probe's `main.update` would silently
+    // Err here -- the with_key_native trap, again.
+    cx.defer(|cx| {
+        if !cx.has_global::<app_windows::AppWindows>() {
+            return;
+        }
+        let main = cx.global::<app_windows::AppWindows>().main;
+        let visible = main
+            .update(cx, |_, window, _| platform::window_is_visible(window))
+            .unwrap_or(false);
+        if visible {
+            tracing::info!("close window: no key window; routing to the visible main window");
+            app_windows::request_close_main(cx);
+        } else {
+            tracing::info!("close window: no key window and no visible main window");
+        }
+    });
+}
+
+/// The ⌘W body, keyed by handle -- split out so the harness can close a
+/// specific window without depending on focus (synthetic activation races
+/// whatever the user has focused).
+pub fn close_window_by_handle(handle: gpui::AnyWindowHandle, cx: &mut App) {
+    tracing::info!(
+        main = handle.downcast::<MainWindow>().is_some(),
+        "close window"
+    );
+    // Deferred for the `with_key_native` reason: the ⌘W keystroke's dispatch
+    // holds the key window's lease, and both arms below update windows.
+    cx.defer(move |cx| {
+        if handle.downcast::<MainWindow>().is_some() {
+            app_windows::request_close_main(cx);
+            return;
+        }
+        let native = handle
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        cx.spawn(async move |_| {
+            if let Some(native) = &native {
+                platform::close_native(native);
+            }
+        })
+        .detach();
+    });
+}
+
+const QUIT_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QuitAction {
+    Wait,
+    Stop,
+    Exit,
+    Failed,
+    TimedOut,
+}
+
+#[derive(Default)]
+struct QuitGate {
+    generation: u64,
+    pending: Option<(u64, bool)>,
+    exit_committed: bool,
+}
+
+impl QuitGate {
+    fn recording_start_allowed(&self) -> bool {
+        !self.exit_committed && self.pending.is_none()
+    }
+
+    fn cancel_exit(&mut self) {
+        self.exit_committed = false;
+    }
+
+    fn request(&mut self, phase: Phase) -> Option<(u64, QuitAction)> {
+        if self.exit_committed || self.pending.is_some() {
+            return None;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        let action = match phase {
+            Phase::Idle => QuitAction::Exit,
+            Phase::Starting | Phase::Recording { .. } => QuitAction::Stop,
+            Phase::Stopping => QuitAction::Wait,
+        };
+        if action != QuitAction::Exit {
+            self.pending = Some((self.generation, phase != Phase::Starting));
+        } else {
+            self.exit_committed = true;
+        }
+        Some((self.generation, action))
+    }
+
+    fn advance(
+        &mut self,
+        generation: u64,
+        phase: Phase,
+        failed: bool,
+        timed_out: bool,
+    ) -> QuitAction {
+        let Some((current, stop_requested)) = self.pending.as_mut() else {
+            return QuitAction::Wait;
+        };
+        if *current != generation {
+            return QuitAction::Wait;
+        }
+        let action = if failed {
+            QuitAction::Failed
+        } else if phase == Phase::Idle {
+            QuitAction::Exit
+        } else if timed_out {
+            QuitAction::TimedOut
+        } else {
+            match phase {
+                Phase::Recording { .. } if *stop_requested => QuitAction::Wait,
+                Phase::Recording { .. } => {
+                    *stop_requested = true;
+                    QuitAction::Stop
+                }
+                Phase::Starting | Phase::Stopping => QuitAction::Wait,
+                Phase::Idle => unreachable!(),
+            }
+        };
+        if matches!(
+            action,
+            QuitAction::Exit | QuitAction::Failed | QuitAction::TimedOut
+        ) {
+            self.pending = None;
+        }
+        if action == QuitAction::Exit {
+            self.exit_committed = true;
+        }
+        action
+    }
+}
+
+#[derive(Default)]
+struct QuitCoordinator {
+    gate: QuitGate,
+    observer: Option<Subscription>,
+}
+
+impl Global for QuitCoordinator {}
+
+pub(crate) fn recording_start_allowed(cx: &App) -> bool {
+    cx.try_global::<QuitCoordinator>()
+        .is_none_or(|coordinator| coordinator.gate.recording_start_allowed())
+}
+
+fn quit_phase(phase: Phase, ui_cleanup_pending: bool) -> Phase {
+    if phase == Phase::Idle && ui_cleanup_pending {
+        Phase::Stopping
+    } else {
+        phase
+    }
+}
+
+pub fn quit(cx: &mut App) {
+    let session = RecordingSession::global(cx);
+    if !cx.has_global::<QuitCoordinator>() {
+        cx.set_global(QuitCoordinator::default());
+    }
+    let phase = session.read(cx).phase;
+    let ui_cleanup_pending = app_windows::clean_capture_owned(cx);
+    let Some((generation, action)) = cx
+        .global_mut::<QuitCoordinator>()
+        .gate
+        .request(quit_phase(phase, ui_cleanup_pending))
+    else {
+        return;
+    };
+    if action == QuitAction::Exit {
+        apply_quit_action(action, cx);
+        return;
+    }
+
+    tracing::info!("quit requested during a recording; stopping it first");
+    let observer = cx.observe(&session, move |_, cx| {
+        advance_pending_quit(generation, false, cx)
+    });
+    cx.global_mut::<QuitCoordinator>().observer = Some(observer);
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(QUIT_STOP_TIMEOUT).await;
+        cx.update(|cx| advance_pending_quit(generation, true, cx));
+    })
+    .detach();
+    apply_quit_action(action, cx);
+    if phase == Phase::Idle && ui_cleanup_pending {
+        app_windows::cancel_clean_capture(cx);
+        advance_pending_quit(generation, false, cx);
+    }
+}
+
+fn advance_pending_quit(generation: u64, timed_out: bool, cx: &mut App) {
+    let session = RecordingSession::global(cx);
+    let phase = quit_phase(session.read(cx).phase, app_windows::clean_capture_owned(cx));
+    let failed = session.read(cx).error.is_some();
+    let action = cx
+        .global_mut::<QuitCoordinator>()
+        .gate
+        .advance(generation, phase, failed, timed_out);
+    apply_quit_action(action, cx);
+}
+
+fn apply_quit_action(action: QuitAction, cx: &mut App) {
+    match action {
+        QuitAction::Wait => {}
+        QuitAction::Stop => RecordingSession::global(cx).update(cx, |session, cx| session.stop(cx)),
+        QuitAction::Exit => {
+            cx.global_mut::<QuitCoordinator>().observer = None;
+            cx.defer(|cx| {
+                if let Err(error) = app_windows::flush_pending_editor_saves(cx) {
+                    cx.global_mut::<QuitCoordinator>().gate.cancel_exit();
+                    tracing::error!(%error, "quit canceled because editor changes could not be saved");
+                    cx.spawn(async move |_| {
+                        platform::alert_dialog("Cap is still open", &error);
+                    })
+                    .detach();
+                    return;
+                }
+                #[cfg(target_os = "macos")]
+                platform::permit_native_quit();
+                cx.quit();
+            });
+        }
+        QuitAction::Failed | QuitAction::TimedOut => {
+            cx.global_mut::<QuitCoordinator>().observer = None;
+            let message = RecordingSession::global(cx).update(cx, |session, cx| {
+                let message = match session.error.as_deref() {
+                    Some(error) => format!("Quit canceled: {error}. Cap will stay open so you can finish or recover the recording."),
+                    None if action == QuitAction::TimedOut => "Quit canceled because recording shutdown is still pending. Cap will stay open. Use Stop once available, then try Quit again.".into(),
+                    None => "Quit canceled because recording shutdown could not be confirmed. Cap will stay open. Use Stop, then try Quit again.".into(),
+                };
+                session.error = Some(message.clone());
+                cx.notify();
+                message
+            });
+            tracing::warn!(%message);
+            cx.spawn(async move |_| platform::alert_dialog("Cap is still open", &message))
+                .detach();
+        }
+    }
+}
+
+// -- The dock icon -----------------------------------------------------------
+
+/// Whether the dock icon (and therefore the menu bar) should be showing.
+///
+/// `sync_macos_dock_visibility` (`src-tauri/src/permissions.rs:212-249`),
+/// factored out so the rule can be tested without an NSApplication:
+///
+/// - a visible *panel* window (camera bubble, recording bar, target-select
+///   overlay, teleprompter) while the user has asked for no dock icon leaves
+///   the policy exactly as it is -- `None` here, which is the `return` there;
+/// - otherwise the icon shows unless the user asked for it hidden and no
+///   dock-activating window (main, settings, mode select, editor) is visible.
+pub fn dock_decision(
+    hide_dock_icon: bool,
+    has_visible_panel_window: bool,
+    has_visible_dock_window: bool,
+) -> Option<bool> {
+    if has_visible_panel_window && hide_dock_icon {
+        return None;
+    }
+    Some(!hide_dock_icon || has_visible_dock_window)
+}
+
+/// Bumped by every [`schedule_dock_sync`]; only the newest scheduled sync runs.
+static DOCK_SYNC_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `schedule_macos_dock_visibility_sync`: coalesce a burst of window changes
+/// into one policy change, 100ms later.
+pub fn schedule_dock_sync(cx: &mut App) {
+    schedule_dock_sync_after(cx, std::time::Duration::from_millis(100));
+}
+
+fn schedule_dock_sync_after(cx: &mut App, delay: std::time::Duration) {
+    use std::sync::atomic::Ordering;
+    let generation = DOCK_SYNC_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(delay).await;
+        if DOCK_SYNC_GENERATION.load(Ordering::Acquire) != generation {
+            return;
+        }
+        cx.update(sync_dock_visibility);
+    })
+    .detach();
+}
+
+/// Apply [`dock_decision`] to the live window registry.
+pub fn sync_dock_visibility(cx: &mut App) {
+    // "Changing the activation policy while any window owns a fullscreen Space
+    // makes AppKit throw an NSException that aborts the process when it unwinds
+    // into Rust" -- `macos_any_window_fullscreen`'s comment, and the reason the
+    // View menu's fullscreen item and this function have to stay out of each
+    // other's way.
+    if any_window_fullscreen(cx) {
+        return;
+    }
+
+    let hide_dock_icon = store::GeneralSettings::load().hide_dock_icon;
+    let (panel, dock) = visible_window_classes(cx);
+    let Some(show) = dock_decision(hide_dock_icon, panel, dock) else {
+        return;
+    };
+
+    let before = platform::activation_policy();
+    let want = if show { 0 } else { 1 };
+    if before == want {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    if !show {
+        let delay = platform::dock_hide_delay();
+        if !delay.is_zero() {
+            schedule_dock_sync_after(cx, delay);
+            return;
+        }
+    }
+    if !platform::set_activation_policy(show) && cfg!(target_os = "macos") {
+        tracing::warn!(show, "Could not change Dock activation policy");
+        return;
+    }
+    tracing::info!(
+        hide_dock_icon,
+        panel_visible = panel,
+        dock_visible = dock,
+        show,
+        policy = platform::activation_policy(),
+        "dock visibility synced"
+    );
+    if show {
+        // An Accessory app has no menu bar. Coming back to Regular is not
+        // enough on its own -- the app has to be the active application for
+        // macOS to draw its menu bar, and the transition drops activation.
+        cx.activate(true);
+    }
+}
+
+/// Is any window fullscreen? Read-only, so it is safe inside an update.
+fn any_window_fullscreen(cx: &mut App) -> bool {
+    cx.windows().into_iter().any(|handle: AnyWindowHandle| {
+        handle
+            .update(cx, |_, window, _| window.is_fullscreen())
+            .unwrap_or(false)
+    })
+}
+
+/// `(has_visible_panel_window, has_visible_dock_window)`.
+///
+/// The split is `CapWindowId::activates_dock()` (`windows.rs:1049-1060`): Main,
+/// Editor, Settings, ModeSelect, Onboarding (plus Upgrade/ScreenshotEditor,
+/// which this app has no equivalent of) activate the dock; the camera bubble,
+/// the recording bar, the target-select overlays and the teleprompter do not.
+///
+/// A window in the registry is on screen -- these are opened shown and removed
+/// when closed -- except the main one, which is hidden and shown in place, so
+/// that one is asked.
+fn visible_window_classes(cx: &mut App) -> (bool, bool) {
+    let main = cx.global::<AppWindows>().main;
+    let main_visible = main
+        .update(cx, |_, window, _| platform::window_is_visible(window))
+        .unwrap_or(false);
+    let teleprompter = cx.global::<AppWindows>().teleprompter;
+    let teleprompter_visible = teleprompter
+        .and_then(|handle| {
+            handle
+                .update(cx, |_, window, _| platform::window_is_visible(window))
+                .ok()
+        })
+        .unwrap_or(false);
+
+    let windows = cx.global::<AppWindows>();
+    let panel = windows.camera.is_some()
+        || windows.controls.is_some()
+        || !windows.overlays.is_empty()
+        || teleprompter_visible;
+    let dock = main_visible
+        || windows.settings.is_some()
+        || windows.onboarding.is_some()
+        || windows.mode_select.is_some()
+        || !windows.editors.is_empty();
+    (panel, dock)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quit_waits_for_recording_ui_restoration() {
+        for phase in [Phase::Idle, Phase::Starting] {
+            let mut gate = QuitGate::default();
+            let (generation, action) = gate.request(quit_phase(phase, true)).unwrap();
+            assert_ne!(action, QuitAction::Exit);
+            assert!(!gate.recording_start_allowed());
+            assert_eq!(
+                gate.advance(generation, quit_phase(Phase::Idle, true), false, false),
+                QuitAction::Wait
+            );
+            assert_eq!(
+                gate.advance(generation, quit_phase(Phase::Idle, false), false, false),
+                QuitAction::Exit
+            );
+        }
+    }
+
+    #[test]
+    fn restoration_failure_or_timeout_keeps_cap_open() {
+        for failed in [false, true] {
+            let mut gate = QuitGate::default();
+            let (generation, _) = gate.request(quit_phase(Phase::Idle, true)).unwrap();
+            assert_eq!(
+                gate.advance(generation, quit_phase(Phase::Idle, true), failed, !failed),
+                if failed {
+                    QuitAction::Failed
+                } else {
+                    QuitAction::TimedOut
+                }
+            );
+            assert!(gate.recording_start_allowed());
+            assert_eq!(
+                gate.advance(generation, quit_phase(Phase::Idle, false), false, false),
+                QuitAction::Wait
+            );
+        }
+    }
+
+    #[test]
+    fn quit_deadline_does_not_authorize_exit_after_a_delayed_stop() {
+        let mut gate = QuitGate::default();
+        let (generation, action) = gate.request(Phase::Recording { paused: false }).unwrap();
+        assert_eq!(action, QuitAction::Stop);
+        assert_eq!(
+            gate.advance(generation, Phase::Stopping, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Stopping, false, true),
+            QuitAction::TimedOut
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, false, false),
+            QuitAction::Wait
+        );
+        assert!(gate.pending.is_none());
+    }
+
+    #[test]
+    fn failed_stop_cancels_quit_instead_of_exiting_or_retrying_stop() {
+        let mut gate = QuitGate::default();
+        let (generation, _) = gate.request(Phase::Recording { paused: false }).unwrap();
+        assert_eq!(
+            gate.advance(generation, Phase::Stopping, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Recording { paused: false }, true, false),
+            QuitAction::Failed
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, false, true),
+            QuitAction::Wait
+        );
+    }
+
+    #[test]
+    fn quit_during_startup_stops_the_recording_once_it_starts() {
+        let mut gate = QuitGate::default();
+        let (generation, action) = gate.request(Phase::Starting).unwrap();
+        assert_eq!(action, QuitAction::Stop);
+        assert_eq!(
+            gate.advance(generation, Phase::Starting, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Recording { paused: false }, false, false),
+            QuitAction::Stop
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Stopping, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, false, false),
+            QuitAction::Exit
+        );
+    }
+
+    #[test]
+    fn quit_waits_when_stop_is_queued_behind_a_pause_acknowledgement() {
+        let mut gate = QuitGate::default();
+        let (generation, action) = gate.request(Phase::Recording { paused: false }).unwrap();
+        assert_eq!(action, QuitAction::Stop);
+        assert_eq!(
+            gate.advance(generation, Phase::Recording { paused: false }, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Recording { paused: true }, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Stopping, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, false, false),
+            QuitAction::Exit
+        );
+    }
+
+    #[test]
+    fn repeated_quit_does_not_replace_the_pending_request() {
+        let mut gate = QuitGate::default();
+        let (generation, _) = gate.request(Phase::Stopping).unwrap();
+        assert_eq!(gate.request(Phase::Stopping), None);
+        assert_eq!(gate.request(Phase::Idle), None);
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, false, false),
+            QuitAction::Exit
+        );
+    }
+
+    #[test]
+    fn idle_quit_has_no_stop_or_deadline_wait() {
+        let mut gate = QuitGate::default();
+        let (_, action) = gate.request(Phase::Idle).unwrap();
+        assert_eq!(action, QuitAction::Exit);
+        assert!(gate.pending.is_none());
+        assert!(gate.exit_committed);
+    }
+
+    #[test]
+    fn failed_editor_save_allows_recording_and_a_later_quit() {
+        for phase in [Phase::Idle, Phase::Stopping] {
+            let mut gate = QuitGate::default();
+            let (previous, action) = gate.request(phase).unwrap();
+            if action == QuitAction::Wait {
+                assert_eq!(
+                    gate.advance(previous, Phase::Idle, false, false),
+                    QuitAction::Exit
+                );
+            }
+            assert!(!gate.recording_start_allowed());
+            gate.cancel_exit();
+            assert!(gate.recording_start_allowed());
+            let (current, action) = gate.request(Phase::Idle).unwrap();
+            assert_ne!(previous, current);
+            assert_eq!(action, QuitAction::Exit);
+            assert_eq!(
+                gate.advance(previous, Phase::Idle, false, true),
+                QuitAction::Wait
+            );
+            assert!(gate.exit_committed);
+        }
+    }
+
+    #[test]
+    fn committed_exit_closes_recording_admission_before_the_native_callback() {
+        let mut gate = QuitGate::default();
+        assert!(gate.recording_start_allowed());
+        let (generation, _) = gate.request(Phase::Stopping).unwrap();
+        assert!(!gate.recording_start_allowed());
+        assert!(!gate.exit_committed);
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, false, false),
+            QuitAction::Exit
+        );
+        assert!(gate.exit_committed);
+        assert!(!gate.recording_start_allowed());
+        assert_eq!(gate.request(Phase::Idle), None);
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, false, true),
+            QuitAction::Wait
+        );
+        assert!(gate.exit_committed);
+        assert!(!gate.recording_start_allowed());
+    }
+
+    #[test]
+    fn expired_quit_cannot_affect_a_new_recording_or_quit_request() {
+        let mut gate = QuitGate::default();
+        let (old, _) = gate.request(Phase::Stopping).unwrap();
+        assert_eq!(
+            gate.advance(old, Phase::Stopping, false, true),
+            QuitAction::TimedOut
+        );
+        assert!(!gate.exit_committed);
+        assert!(gate.recording_start_allowed());
+        let (current, _) = gate.request(Phase::Recording { paused: false }).unwrap();
+        assert_eq!(
+            gate.advance(old, Phase::Idle, false, true),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(current, Phase::Stopping, false, false),
+            QuitAction::Wait
+        );
+        assert_eq!(
+            gate.advance(current, Phase::Idle, false, false),
+            QuitAction::Exit
+        );
+    }
+
+    #[test]
+    fn completed_capture_with_finalization_error_does_not_exit() {
+        let mut gate = QuitGate::default();
+        let (generation, _) = gate.request(Phase::Stopping).unwrap();
+        assert_eq!(
+            gate.advance(generation, Phase::Idle, true, false),
+            QuitAction::Failed
+        );
+        assert!(gate.pending.is_none());
+    }
+
+    /// The menu bar, transcribed from `build_macos_app_menu`. Separators are
+    /// spelled `"-"` so the ordering is checked too.
+    fn describe(menu: &Menu) -> (String, Vec<String>) {
+        let items = menu
+            .items
+            .iter()
+            .map(|item| match item {
+                MenuItem::Separator => "-".to_string(),
+                MenuItem::Action { name, .. } => name.to_string(),
+                MenuItem::Submenu(menu) => menu.name.to_string(),
+                MenuItem::SystemMenu(menu) => menu.name.to_string(),
+            })
+            .collect();
+        (menu.name.to_string(), items)
+    }
+
+    #[test]
+    fn menu_bar_matches_the_tauri_structure() {
+        let menus: Vec<_> = build_menus().iter().map(describe).collect();
+        assert_eq!(
+            menus,
+            vec![
+                (
+                    "Cap".to_string(),
+                    vec![
+                        "About Cap".to_string(),
+                        "-".into(),
+                        "Services".into(),
+                        "-".into(),
+                        "Hide Cap".into(),
+                        "Hide Others".into(),
+                        "-".into(),
+                        "Quit Cap".into(),
+                    ]
+                ),
+                ("File".into(), vec!["Close Window".into()]),
+                (
+                    "Edit".into(),
+                    vec![
+                        "Undo".into(),
+                        "Redo".into(),
+                        "-".into(),
+                        "Cut".into(),
+                        "Copy".into(),
+                        "Paste".into(),
+                        "Select All".into(),
+                    ]
+                ),
+                ("View".into(), vec!["Enter Full Screen".into()]),
+                (
+                    "Window".into(),
+                    vec![
+                        "Minimize".into(),
+                        "Zoom".into(),
+                        "-".into(),
+                        "Close Window".into(),
+                    ]
+                ),
+                ("Help".into(), vec![]),
+            ]
+        );
+    }
+
+    /// `sync_macos_dock_visibility`'s three branches.
+    #[test]
+    fn dock_policy_matches_the_tauri_rule() {
+        // The dock icon is never hidden while the setting is off.
+        assert_eq!(dock_decision(false, false, false), Some(true));
+        assert_eq!(dock_decision(false, true, false), Some(true));
+        assert_eq!(dock_decision(false, true, true), Some(true));
+
+        // With the setting on: a visible panel window freezes the policy...
+        assert_eq!(dock_decision(true, true, false), None);
+        assert_eq!(dock_decision(true, true, true), None);
+        // ...and otherwise the icon follows the dock-activating windows.
+        assert_eq!(dock_decision(true, false, true), Some(true));
+        assert_eq!(dock_decision(true, false, false), Some(false));
+    }
+}

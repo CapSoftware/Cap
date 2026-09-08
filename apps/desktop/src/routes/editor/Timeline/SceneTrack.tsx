@@ -15,14 +15,11 @@ import {
 import { produce } from "solid-js/store";
 
 import { useEditorContext } from "../context";
-import {
-	useSegmentContext,
-	useTimelineContext,
-	useTrackContext,
-} from "./context";
+import { useTimelineContext, useTrackContext } from "./context";
 import {
 	SegmentContent,
 	SegmentHandle,
+	SegmentLabel,
 	SegmentRoot,
 	TrackRoot,
 	useSetPreviewTime,
@@ -424,6 +421,7 @@ export function SceneTrack(props: {
 								isSelected() ? "border-gray-12" : "border-transparent",
 							)}
 							innerClass="ring-blue-5"
+							title={`Scene · ${getSceneLabel(segment.mode)}`}
 							segment={segment}
 							onMouseEnter={() => {
 								setHoveringSegment(true);
@@ -542,25 +540,30 @@ export function SceneTrack(props: {
 									},
 								)}
 							>
-								{(() => {
-									const ctx = useSegmentContext();
-
-									return (
-										<Show when={ctx.width() > 80}>
-											<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
-												<span class="opacity-70">Scene</span>
-												<div class="flex gap-1 items-center text-md">
-													{getSceneIcon(segment.mode)}
-													{ctx.width() > 120 && (
-														<span class="text-xs">
-															{getSceneLabel(segment.mode)}
-														</span>
-													)}
-												</div>
+								<SegmentLabel
+									full={() => (
+										<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
+											<span class="opacity-70">Scene</span>
+											<div class="flex gap-1 items-center text-md">
+												{getSceneIcon(segment.mode)}
+												<span class="text-xs">
+													{getSceneLabel(segment.mode)}
+												</span>
 											</div>
-										</Show>
-									);
-								})()}
+										</div>
+									)}
+									compact={() => (
+										<div class="flex gap-1 items-center text-md whitespace-nowrap text-gray-1 dark:text-gray-12">
+											{getSceneIcon(segment.mode)}
+											<span class="text-xs">{getSceneLabel(segment.mode)}</span>
+										</div>
+									)}
+									glyph={() => (
+										<div class="flex justify-center items-center text-gray-1 dark:text-gray-12">
+											{getSceneIcon(segment.mode)}
+										</div>
+									)}
+								/>
 							</SegmentContent>
 							<SegmentHandle
 								position="end"

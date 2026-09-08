@@ -1027,12 +1027,15 @@ fn process_with_whisper(
         let start_time = (start_i64 as f32) / 100.0;
         let end_time = (end_i64 as f32) / 100.0;
 
+        // The transcript text itself stays out of the log: log files are
+        // uploaded from the Feedback page, and this is a verbatim record of
+        // what the user said on camera.
         log::info!(
-            "=== Segment {}: start={:.2}s, end={:.2}s, raw_text='{}'",
+            "=== Segment {}: start={:.2}s, end={:.2}s, chars={}",
             i,
             start_time,
             end_time,
-            raw_text.trim()
+            raw_text.trim().chars().count()
         );
 
         let mut words = Vec::new();
@@ -1064,7 +1067,9 @@ fn process_with_whisper(
                 let token_start = (data.t0 as f32) / 100.0;
                 let token_end = (data.t1 as f32) / 100.0;
 
-                log::info!(
+                // debug, not info: release builds filter at info, and these
+                // carry the transcript verbatim into an uploadable log.
+                log::debug!(
                     "  Token[{t}]: id={token_id}, text={token_text:?}, t0={token_start:.2}s, t1={token_end:.2}s, prob={token_prob:.4}"
                 );
 
@@ -1072,7 +1077,7 @@ fn process_with_whisper(
                     if !current_word.is_empty()
                         && let Some(ws) = word_start
                     {
-                        log::info!(
+                        log::debug!(
                             "    -> Completing word: '{}' ({:.2}s - {:.2}s)",
                             current_word.trim(),
                             ws,

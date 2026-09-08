@@ -1,4 +1,12 @@
+import { isInternalRecordingKey } from "@cap/web-backend/src/Storage/recording-output";
 import { parseVideoIdOrFileKey } from "../utils";
+
+function assertWritableFileKey(key: string) {
+	if (isInternalRecordingKey(key)) {
+		throw new Error("Recording snapshots are immutable");
+	}
+	return key;
+}
 
 export const getSubpath = (input: { subpath?: string; fileKey?: string }) => {
 	if ("fileKey" in input) {
@@ -17,17 +25,21 @@ export const getMultipartFileKey = (
 		  },
 ) => {
 	if ("fileKey" in input && input.fileKey) {
-		return parseVideoIdOrFileKey(userId, { fileKey: input.fileKey });
+		return assertWritableFileKey(
+			parseVideoIdOrFileKey(userId, { fileKey: input.fileKey }),
+		);
 	}
 
 	if (!("videoId" in input) || !input.videoId) {
 		throw new Error("Video id not found");
 	}
 
-	return parseVideoIdOrFileKey(userId, {
-		videoId: input.videoId,
-		subpath: input.subpath ?? "result.mp4",
-	});
+	return assertWritableFileKey(
+		parseVideoIdOrFileKey(userId, {
+			videoId: input.videoId,
+			subpath: input.subpath ?? "result.mp4",
+		}),
+	);
 };
 
 export const isRawRecorderUpload = (subpath: string) =>

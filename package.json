@@ -28,7 +28,7 @@
 		"docker:up": "turbo run docker:up",
 		"format": "pnpm exec biome check --write",
 		"lint": "pnpm exec biome lint",
-		"tauri:build": "node scripts/build-desktop-binaries.mjs && dotenv -e .env -- pnpm --dir apps/desktop run preparescript && dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
+		"tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop run build:tauri --config src-tauri/tauri.prod.conf.json --verbose",
 		"typecheck": "pnpm --dir apps/web exec next typegen && pnpm tsc -b",
 		"test": "turbo run test",
 		"test:web": "pnpm --filter=@cap/web test",

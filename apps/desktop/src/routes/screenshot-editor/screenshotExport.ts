@@ -88,6 +88,28 @@ const drawAnnotations = (
 			ctx.closePath();
 			ctx.fillStyle = ann.strokeColor;
 			ctx.fill();
+		} else if (ann.type === "draw" && ann.points && ann.points.length >= 2) {
+			ctx.beginPath();
+			ctx.lineCap = "round";
+			ctx.lineJoin = "round";
+			const w = ann.width || 1;
+			const h = ann.height || 1;
+			const pts = ann.points.map(
+				(p) => [ann.x + p[0] * w, ann.y + p[1] * h] as [number, number],
+			);
+			ctx.moveTo(pts[0][0], pts[0][1]);
+			if (pts.length === 2) {
+				ctx.lineTo(pts[1][0], pts[1][1]);
+			} else {
+				for (let i = 0; i < pts.length - 1; i++) {
+					const mx = (pts[i][0] + pts[i + 1][0]) / 2;
+					const my = (pts[i][1] + pts[i + 1][1]) / 2;
+					ctx.quadraticCurveTo(pts[i][0], pts[i][1], mx, my);
+				}
+				const last = pts[pts.length - 1];
+				ctx.lineTo(last[0], last[1]);
+			}
+			ctx.stroke();
 		} else if (ann.type === "text" && ann.text) {
 			ctx.fillStyle = ann.strokeColor;
 			ctx.font = `${ann.height}px sans-serif`;

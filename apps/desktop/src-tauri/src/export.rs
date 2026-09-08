@@ -469,12 +469,12 @@ impl Drop for ExportSessionGuard {
 }
 
 #[cfg(windows)]
-fn configure_exporter_command(command: &mut tokio::process::Command) {
+pub(crate) fn configure_exporter_command(command: &mut tokio::process::Command) {
     command.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg(not(windows))]
-fn configure_exporter_command(_command: &mut tokio::process::Command) {}
+pub(crate) fn configure_exporter_command(_command: &mut tokio::process::Command) {}
 
 async fn run_out_of_process_export(
     project_path: &Path,
@@ -688,11 +688,12 @@ async fn collect_exporter_stderr_tail(stderr: tokio::process::ChildStderr) -> Ve
     tail
 }
 
-fn resolve_exporter_binary() -> Result<PathBuf, String> {
+pub(crate) fn resolve_exporter_binary() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     if let Some(dir) = exe.parent() {
         for candidate in adjacent_exporter_binary_candidates(dir) {
             if candidate.exists() {
+                warn_if_exporter_stale(&exe, &candidate);
                 return Ok(candidate);
             }
         }
@@ -702,6 +703,7 @@ fn resolve_exporter_binary() -> Result<PathBuf, String> {
         for root in std::iter::once(cwd.as_path()).chain(cwd.ancestors()) {
             for candidate in exporter_binary_candidates(root) {
                 if candidate.exists() {
+                    warn_if_exporter_stale(&exe, &candidate);
                     return Ok(candidate);
                 }
             }
@@ -712,6 +714,28 @@ fn resolve_exporter_binary() -> Result<PathBuf, String> {
         "Export worker binary not found; place {} next to the app executable or build the Tauri sidecar bundle",
         exporter_bin_name()
     ))
+}
+
+/// Dev-loop trap: `tauri dev` rebuilds the app but not the exporter sidecar,
+/// so exports can silently run renderer code from days earlier and disagree
+/// with the preview. Debug builds log loudly when that is happening.
+fn warn_if_exporter_stale(app_exe: &Path, exporter: &Path) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    if let (Some(app_time), Some(exporter_time)) = (mtime(app_exe), mtime(exporter))
+        && let Ok(lag) = app_time.duration_since(exporter_time)
+        && lag.as_secs() > 60
+    {
+        tracing::warn!(
+            exporter = %exporter.display(),
+            lag_secs = lag.as_secs(),
+            "Export worker binary is older than the app; exports may not match \
+             the preview. Rebuild it (cargo build -p cap) and copy it over \
+             target/debug/cap-exporter."
+        );
+    }
 }
 
 fn exporter_binary_candidates(root: &Path) -> Vec<PathBuf> {
@@ -1327,11 +1351,7 @@ pub async fn get_export_estimates(
 
     let meta = RecordingMeta::load_for_project(&path).map_err(|e| e.to_string())?;
     let project_config = meta.project_config();
-    let duration_seconds = if let Some(timeline) = &project_config.timeline {
-        timeline.duration()
-    } else {
-        metadata.duration
-    };
+    let duration_seconds = export_estimate_duration(&project_config, metadata.duration);
 
     let (resolution, fps) = match &settings {
         ExportSettings::Mp4(s) => (s.resolution_base, s.fps),
@@ -1418,6 +1438,17 @@ pub struct ExportPreviewResult {
 fn estimate_cursor_only_size_mb(total_pixels: f64, total_frames: f64) -> f64 {
     let bytes_per_frame = total_pixels * 0.4;
     (bytes_per_frame * total_frames) / (1024.0 * 1024.0)
+}
+
+fn export_estimate_duration(
+    project_config: &cap_project::ProjectConfiguration,
+    source_duration: f64,
+) -> f64 {
+    project_config
+        .timeline
+        .as_ref()
+        .map(cap_project::TimelineConfiguration::duration)
+        .unwrap_or(source_duration)
 }
 
 fn bpp_to_jpeg_quality(bpp: f32) -> u8 {
@@ -1544,7 +1575,7 @@ async fn generate_export_preview_inner(
         .decoders
         .get_frames(
             segment_time as f32,
-            !project_config.camera.hide,
+            !project_config.camera.hide && render_segment.render_display,
             render_segment.render_display,
             clip_config.map(|v| v.offsets).unwrap_or_default(),
         )
@@ -1598,7 +1629,7 @@ async fn generate_export_preview_inner(
             .decoders
             .get_frames(
                 outgoing.source_time as f32,
-                !project_config.camera.hide,
+                !project_config.camera.hide && outgoing_segment.render_display,
                 outgoing_segment.render_display,
                 outgoing_offsets,
             )
@@ -1685,11 +1716,7 @@ async fn generate_export_preview_inner(
     let fps_f64 = settings.fps as f64;
 
     let metadata = get_video_metadata(project_path.clone()).await?;
-    let duration_seconds = if let Some(timeline) = &project_config.timeline {
-        timeline.duration()
-    } else {
-        metadata.duration
-    };
+    let duration_seconds = export_estimate_duration(&project_config, metadata.duration);
     let total_frames = (duration_seconds * fps_f64).ceil() as u32;
 
     let estimated_size_mb = if settings.cursor_only {
@@ -1718,6 +1745,46 @@ async fn generate_export_preview_inner(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn export_estimates_use_source_duration_without_a_timeline() {
+        assert_eq!(
+            export_estimate_duration(&cap_project::ProjectConfiguration::default(), 361.0),
+            361.0
+        );
+    }
+
+    #[test]
+    fn export_estimates_follow_trims_and_playback_speed() {
+        for (timescale, expected) in [(1.0, 12.0), (2.0, 6.0)] {
+            let project = serde_json::from_value(serde_json::json!({
+                "timeline": {
+                    "segments": [{"start": 45.0, "end": 57.0, "timescale": timescale}],
+                    "zoomSegments": []
+                }
+            }))
+            .unwrap();
+
+            assert_eq!(export_estimate_duration(&project, 361.0), expected);
+        }
+    }
+
+    #[test]
+    fn export_estimates_include_transition_overlap() {
+        let project = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    {"start": 5.0, "end": 11.0, "timescale": 1.0},
+                    {"start": 20.0, "end": 26.0, "timescale": 1.0}
+                ],
+                "transitions": [{"segmentIndex": 1, "type": "cross-fade", "duration": 1.0}],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(export_estimate_duration(&project, 361.0), 11.0);
+    }
 
     #[test]
     fn export_settings_exposes_force_ffmpeg_for_mp4_only() {
@@ -1866,7 +1933,7 @@ async fn generate_export_preview_fast_inner(
         .decoders
         .get_frames(
             segment_time as f32,
-            !project_config.camera.hide,
+            !project_config.camera.hide && !settings.cursor_only,
             !settings.cursor_only,
             clip_config.map(|v| v.offsets).unwrap_or_default(),
         )
@@ -1920,7 +1987,7 @@ async fn generate_export_preview_fast_inner(
             .decoders
             .get_frames(
                 outgoing.source_time as f32,
-                !project_config.camera.hide,
+                !project_config.camera.hide && !settings.cursor_only,
                 !settings.cursor_only,
                 outgoing_offsets,
             )
@@ -2006,7 +2073,7 @@ async fn generate_export_preview_fast_inner(
     let total_pixels = (settings.resolution_base.x * settings.resolution_base.y) as f64;
     let fps_f64 = settings.fps as f64;
 
-    let duration_seconds = editor.recordings.duration();
+    let duration_seconds = export_estimate_duration(&project_config, editor.recordings.duration());
     let total_frames = (duration_seconds * fps_f64).ceil() as u32;
 
     let estimated_size_mb = if settings.cursor_only {

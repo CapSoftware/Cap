@@ -3,6 +3,7 @@ import { cx } from "cva";
 import { createMemo, createRoot, createSignal, For, Show } from "solid-js";
 import { produce } from "solid-js/store";
 
+import { cssFontFamily } from "~/utils/fonts";
 import { useEditorContext } from "../context";
 import { autoTextColorAt, defaultTextSegment } from "../text";
 import { getSegmentTrack, sortTrackSegments } from "../timelineTracks";
@@ -10,6 +11,7 @@ import { useTimelineContext } from "./context";
 import {
 	SegmentContent,
 	SegmentHandle,
+	SegmentLabel,
 	SegmentRoot,
 	TrackRoot,
 	useSetPreviewTime,
@@ -322,6 +324,36 @@ export function TextTrack(props: {
 
 					const segmentWidth = () => segment.end - segment.start;
 
+					const textContentRow = () => (
+						<div class="flex gap-1.5 justify-center items-center max-w-full text-md">
+							<span
+								class="size-2 shrink-0 rounded-full border border-white/40"
+								style={{
+									"background-color": segment.color ?? "#ffffff",
+								}}
+							/>
+							<span
+								class="truncate max-w-full"
+								style={{
+									"font-family": cssFontFamily(
+										segment.fontFamily ?? "sans-serif",
+									),
+									"font-style": segment.italic ? "italic" : "normal",
+									"font-weight": segment.fontWeight ?? 700,
+								}}
+							>
+								{segment.content || "Label"}
+							</span>
+						</div>
+					);
+
+					const textTitle = () => {
+						const base = `Text · ${segment.content || "Label"}`;
+						return segment.layout === "fullscreen"
+							? `${base} · Fullscreen: pauses the video while shown`
+							: base;
+					};
+
 					return (
 						<SegmentRoot
 							data-text-segment
@@ -333,6 +365,7 @@ export function TextTrack(props: {
 								!segment.enabled && "opacity-60",
 							)}
 							innerClass="ring-blue-6"
+							title={textTitle()}
 							segment={segment}
 							onMouseDown={(e) => {
 								e.stopPropagation();
@@ -423,14 +456,31 @@ export function TextTrack(props: {
 									},
 								)}
 							>
-								<div class="flex flex-col gap-0.5 justify-center items-center text-xs text-gray-1 dark:text-gray-12 w-full min-w-0 overflow-hidden">
-									<span class="opacity-70">Text</span>
-									<div class="flex gap-1 items-center text-md w-full min-w-0 justify-center">
-										<span class="truncate max-w-full">
-											{segment.content || "Label"}
-										</span>
-									</div>
-								</div>
+								<SegmentLabel
+									full={() => (
+										<div class="flex flex-col gap-0.5 justify-center items-center text-xs text-gray-1 dark:text-gray-12">
+											<span class="flex gap-1 items-center opacity-70">
+												Text
+												<Show when={segment.layout === "fullscreen"}>
+													<IconLucidePause class="size-2.5" />
+												</Show>
+											</span>
+											{textContentRow()}
+										</div>
+									)}
+									compact={() => (
+										<div class="flex justify-center items-center text-xs text-gray-1 dark:text-gray-12">
+											{textContentRow()}
+										</div>
+									)}
+									glyph={
+										segment.layout === "fullscreen"
+											? () => (
+													<IconLucidePause class="size-2.5 text-gray-1 opacity-70 dark:text-gray-12" />
+												)
+											: undefined
+									}
+								/>
 							</SegmentContent>
 							<SegmentHandle
 								position="end"

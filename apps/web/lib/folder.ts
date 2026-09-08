@@ -392,6 +392,7 @@ export const getChildFolders = Effect.fn(function* (
 				public: folders.public,
 				parentId: folders.parentId,
 				organizationId: folders.organizationId,
+				createdAt: folders.createdAt,
 				videoCount,
 			})
 			.from(folders)

@@ -1,13 +1,24 @@
+import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub } from "@cap/utils";
-import { CurrentUser, type Folder, Policy, Video } from "@cap/web-domain";
+import {
+	CurrentUser,
+	type Folder,
+	Policy,
+	Storage as StorageDomain,
+	Video,
+} from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import { Effect, Array as EffectArray, Exit, Option } from "effect";
+import { Effect, Exit, Option } from "effect";
 import type { Schema } from "effect/Schema";
 
 import { Database } from "../Database.ts";
 import { Storage as StorageService } from "../Storage/index.ts";
+import {
+	getPublishedRecordingCopyKeys,
+	isInternalRecordingKey,
+} from "../Storage/recording-output.ts";
 import { Tinybird } from "../Tinybird/index.ts";
 import { VideosPolicy } from "./VideosPolicy.ts";
 import type { CreateVideoInput as RepoCreateVideoInput } from "./VideosRepo.ts";
@@ -94,6 +105,22 @@ type RepoTranscriptionStatusValue = OptionValue<
 	RepoCreateVideoInput["transcriptionStatus"]
 >;
 
+const nextObjectPage = (
+	page: { IsTruncated?: boolean; NextContinuationToken?: string },
+	seen: Set<string>,
+) => {
+	const next = page.NextContinuationToken;
+	if ((page.IsTruncated && !next) || (next && seen.has(next))) {
+		return Effect.fail(
+			new StorageDomain.StorageError({
+				cause: new Error("Storage returned an invalid continuation token"),
+			}),
+		);
+	}
+	if (next) seen.add(next);
+	return Effect.succeed(next);
+};
+
 export class Videos extends Effect.Service<Videos>()("Videos", {
 	effect: Effect.gen(function* () {
 		const db = yield* Database;
@@ -103,12 +130,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		const tinybird = yield* Tinybird;
 
 		const getByIdForViewing = (id: Video.VideoId) =>
-			repo
-				.getById(id)
-				.pipe(
-					Policy.withPublicPolicy(policy.canView(id)),
-					Effect.withSpan("Videos.getById"),
-				);
+			policy.getViewableById(id).pipe(Effect.withSpan("Videos.getById"));
 
 		const getAnalyticsCounts = Effect.fn("Videos.getAnalyticsCounts")(
 			function* (
@@ -275,30 +297,46 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			 * Delete a video. Will fail if the user does not have access.
 			 */
 			delete: Effect.fn("Videos.delete")(function* (videoId: Video.VideoId) {
-				const maybeVideo = yield* repo.getById(videoId);
+				const maybeVideo = yield* policy.getOwnedById(videoId);
 				if (Option.isNone(maybeVideo))
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
 
 				const [bucket] = yield* storage.getAccessForVideo(video);
 
-				yield* repo
-					.delete(video.id)
-					.pipe(Policy.withPolicy(policy.isOwner(video.id)));
-
-				yield* Effect.log(`Deleted video ${video.id}`);
+				yield* repo.prepareDelete(video.id, video.ownerId);
 
 				const prefix = `${video.ownerId}/${video.id}/`;
 
-				const listedObjects = yield* bucket.listObjects({ prefix });
-
-				if (listedObjects.Contents) {
-					yield* bucket.deleteObjects(
-						listedObjects.Contents.map((content) => ({
-							Key: content.Key,
-						})),
-					);
-				}
+				let continuationToken: string | undefined;
+				const seenTokens = new Set<string>();
+				do {
+					const listedObjects = yield* bucket.listObjects({
+						prefix,
+						continuationToken,
+					});
+					continuationToken = yield* nextObjectPage(listedObjects, seenTokens);
+					if (listedObjects.Contents?.length) {
+						if (
+							listedObjects.Contents.some(
+								(content) => !content.Key?.startsWith(prefix),
+							)
+						) {
+							return yield* Effect.fail(
+								new StorageDomain.StorageError({
+									cause: new Error(
+										"Storage returned an unexpected recording key",
+									),
+								}),
+							);
+						}
+						yield* bucket.deleteObjects(
+							listedObjects.Contents.map((content) => ({ Key: content.Key })),
+						);
+					}
+				} while (continuationToken);
+				yield* repo.delete(video.id, video.ownerId);
+				yield* Effect.log(`Deleted video ${video.id}`);
 			}),
 
 			/*
@@ -308,36 +346,115 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			duplicate: Effect.fn("Videos.duplicate")(function* (
 				videoId: Video.VideoId,
 			) {
-				const maybeVideo = yield* repo
-					.getById(videoId)
-					.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+				const maybeVideo = yield* policy.getOwnedById(videoId);
 				if (Option.isNone(maybeVideo))
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
 
 				const [bucket] = yield* storage.getAccessForVideo(video);
 
-				// Don't duplicate password or sharing data
-				const newVideoId = yield* repo.create(video);
+				const publishedKeys = new Set(getPublishedRecordingCopyKeys(video));
+				const newVideoId = Video.VideoId.make(nanoId());
+				if (Option.isSome(yield* repo.getById(newVideoId))) {
+					return yield* Effect.fail(
+						new StorageDomain.StorageError({
+							cause: new Error("Duplicate video id is already in use"),
+						}),
+					);
+				}
 
 				const prefix = `${video.ownerId}/${video.id}/`;
 				const newPrefix = `${video.ownerId}/${newVideoId}/`;
+				const attemptedKeys: string[] = [];
+				let publicationAttempted = false;
 
-				const allObjects = yield* bucket.listObjects({ prefix });
-
-				if (allObjects.Contents)
-					yield* Effect.all(
-						EffectArray.filterMap(allObjects.Contents, (obj) =>
-							Option.map(Option.fromNullable(obj.Key), (key) => {
-								const newKey = key.replace(prefix, newPrefix);
-								return bucket.copyObject(
-									`${bucket.bucketName}/${obj.Key}`,
-									newKey,
+				const copyObject = (key: string) =>
+					Effect.gen(function* () {
+						const newKey = `${newPrefix}${key.slice(prefix.length)}`;
+						attemptedKeys.push(newKey);
+						yield* bucket.copyObjectForRecording(
+							`${bucket.bucketName}/${key}`,
+							newKey,
+						);
+					});
+				yield* Effect.gen(function* () {
+					for (const key of publishedKeys) yield* copyObject(key);
+					let continuationToken: string | undefined;
+					const seenTokens = new Set<string>();
+					do {
+						const allObjects = yield* bucket.listObjects({
+							prefix,
+							continuationToken,
+						});
+						continuationToken = yield* nextObjectPage(allObjects, seenTokens);
+						for (const object of allObjects.Contents ?? []) {
+							const key = object.Key;
+							if (!key?.startsWith(prefix)) {
+								return yield* Effect.fail(
+									new StorageDomain.StorageError({
+										cause: new Error(
+											"Storage returned an unexpected recording key",
+										),
+									}),
 								);
+							}
+							if (
+								key.includes("/comments/") ||
+								isInternalRecordingKey(key) ||
+								publishedKeys.has(key) ||
+								(publishedKeys.size > 0 && key.startsWith(`${prefix}segments/`))
+							) {
+								continue;
+							}
+							yield* copyObject(key);
+						}
+					} while (continuationToken);
+					publicationAttempted = true;
+					yield* repo.create(
+						{
+							...video,
+							source:
+								publishedKeys.size > 0 ? { type: "desktopMP4" } : video.source,
+							metadata: Option.map(video.metadata, (metadata) => {
+								const copied = { ...metadata };
+								delete copied.desktopRecordingUpload;
+								return copied;
 							}),
-						),
-						{ concurrency: 1 },
+						},
+						{ id: newVideoId },
 					);
+				}).pipe(
+					Effect.onError(() =>
+						Effect.gen(function* () {
+							if (
+								publicationAttempted &&
+								Option.isSome(yield* repo.getById(newVideoId))
+							) {
+								return;
+							}
+							for (
+								let offset = 0;
+								offset < attemptedKeys.length;
+								offset += 1000
+							) {
+								yield* bucket.deleteObjects(
+									attemptedKeys
+										.slice(offset, offset + 1000)
+										.map((Key) => ({ Key })),
+								);
+							}
+						}).pipe(
+							Effect.catchAllCause(() =>
+								Effect.logWarning(
+									"Recording duplicate cleanup did not finish",
+									{
+										videoId: newVideoId,
+									},
+								),
+							),
+						),
+					),
+				);
 			}),
 
 			/*
@@ -359,24 +476,37 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 								processingMessage: Db.videoUploads.processingMessage,
 								processingError: Db.videoUploads.processingError,
 								rawFileKey: Db.videoUploads.rawFileKey,
+								processingJobState: Db.videoProcessingJobs.state,
 							})
 							.from(Db.videoUploads)
+							.leftJoin(
+								Db.videoProcessingJobs,
+								Dz.eq(Db.videoProcessingJobs.videoId, Db.videoUploads.videoId),
+							)
 							.where(Dz.eq(Db.videoUploads.videoId, videoId)),
 					)
 					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
 
 				if (result == null) return Option.none();
+				const automaticRetry =
+					result.processingJobState === "committing" ||
+					result.processingJobState === "queued" ||
+					result.processingJobState === "processing" ||
+					result.processingJobState === "retry";
 				return Option.some(
 					new Video.UploadProgress({
 						uploaded: result.uploaded,
 						total: result.total,
 						startedAt: result.startedAt,
 						updatedAt: result.updatedAt,
-						phase: result.phase,
+						phase: automaticRetry ? "processing" : result.phase,
 						processingProgress: result.processingProgress,
 						processingMessage: Option.fromNullable(result.processingMessage),
-						processingError: Option.fromNullable(result.processingError),
+						processingError: automaticRetry
+							? Option.none()
+							: Option.fromNullable(result.processingError),
 						hasRawFallback: result.rawFileKey != null,
+						automaticRetry,
 					}),
 				);
 			}),
@@ -389,23 +519,22 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				const updatedAt = input.updatedAt;
 				const videoId = input.videoId;
 
-				const [record] = yield* db
-					.use((db) =>
-						db
-							.select({
-								video: Db.videos,
-								upload: Db.videoUploads,
-							})
-							.from(Db.videos)
-							.leftJoin(
-								Db.videoUploads,
-								Dz.eq(Db.videos.id, Db.videoUploads.videoId),
-							)
-							.where(Dz.eq(Db.videos.id, videoId)),
-					)
-					.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+				const [record] = yield* db.use((db) =>
+					db
+						.select({
+							video: Db.videos,
+							upload: Db.videoUploads,
+						})
+						.from(Db.videos)
+						.leftJoin(
+							Db.videoUploads,
+							Dz.eq(Db.videos.id, Db.videoUploads.videoId),
+						)
+						.where(Dz.eq(Db.videos.id, videoId)),
+				);
 
 				if (!record) return yield* Effect.fail(new Video.NotFoundError());
+				yield* policy.isOwnerLoaded(record.video);
 
 				yield* db.use((db) =>
 					db.transaction(async (tx) => {
@@ -566,9 +695,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			getDownloadInfo: Effect.fn("Videos.getDownloadInfo")(function* (
 				videoId: Video.VideoId,
 			) {
-				const maybeVideo = yield* repo
-					.getById(videoId)
-					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
+				const maybeVideo = yield* policy.getViewableById(videoId);
 				if (Option.isNone(maybeVideo))
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
@@ -649,9 +776,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			getThumbnailURL: Effect.fn("Videos.getThumbnailURL")(function* (
 				videoId: Video.VideoId,
 			) {
-				const maybeVideo = yield* repo
-					.getById(videoId)
-					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
+				const maybeVideo = yield* policy.getViewableById(videoId);
 				if (Option.isNone(maybeVideo)) return Option.none();
 				const [video] = maybeVideo.value;
 

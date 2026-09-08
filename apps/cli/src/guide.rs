@@ -111,8 +111,8 @@ fn build() -> Guide {
             EnvVar {
                 name: "CAP_API_KEY",
                 required: false,
-                used_by: "upload",
-                description: "Overrides auth for upload (Cap auth key from Settings). Optional when signed into Cap Desktop, which the CLI reuses automatically.",
+                used_by: "upload, auth, caps, mcp",
+                description: "Overrides auth (create a CLI API key in the Cap dashboard under Settings -> Account, or use a legacy desktop key). Optional when signed into Cap Desktop, which the CLI reuses automatically.",
             },
             EnvVar {
                 name: "CAP_SERVER_URL",
@@ -124,7 +124,7 @@ fn build() -> Guide {
                 name: "CAP_AGENT_TOKEN",
                 required: false,
                 used_by: "caps, mcp",
-                description: "Overrides the OS-stored Cap agent credential for headless use.",
+                description: "Overrides the OS-stored Cap agent credential for headless use. Mint one in the Cap dashboard under Settings -> Account.",
             },
             EnvVar {
                 name: "CAP_NO_MODIFY_PATH",

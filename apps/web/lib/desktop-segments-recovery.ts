@@ -1,55 +1,40 @@
 import { db } from "@cap/database";
-import { videos, videoUploads } from "@cap/database/schema";
+import {
+	videoProcessingJobs,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import { type User, Video } from "@cap/web-domain";
-import {
-	and,
-	asc,
-	desc,
-	eq,
-	gte,
-	inArray,
-	isNull,
-	like,
-	lte,
-	notLike,
-	or,
-	sql,
-} from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
+import {
+	DesktopRecordingSourceBlockedError,
+	listRecoverableSegmentJobs,
+	SourceCommitPendingError,
+} from "@/lib/desktop-recording-jobs";
 import {
 	type DesktopSegmentsFinalizationStatus,
 	queueDesktopSegmentsFinalization,
 } from "@/lib/desktop-segments-finalization";
-import {
-	buildDesktopSegmentsRecoveryMarker,
-	DESKTOP_SEGMENTS_RECOVERY_MARKER_PREFIX,
-	getDesktopSegmentsManifestSignature,
-	parseDesktopSegmentsRecoveryMarker,
-} from "@/lib/desktop-segments-recovery-marker";
+import { getDesktopSegmentsManifestSignature } from "@/lib/desktop-segments-recovery-marker";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
-import { WORKFLOW_UPGRADE_ERROR_FRAGMENT } from "@/lib/workflow-recovery";
 
-const MINUTE = 60 * 1000;
-
-export const DESKTOP_SEGMENTS_RECOVERY_MIN_AGE_MS = 60 * MINUTE;
-export const DESKTOP_SEGMENTS_RECOVERY_STABILITY_MS = 15 * MINUTE;
+export const DESKTOP_SEGMENTS_RECOVERY_MIN_AGE_MS = 60 * 60 * 1_000;
 export const DESKTOP_SEGMENTS_RECOVERY_BATCH_SIZE = 20;
 
-const RECOVERABLE_UPLOAD_PHASES = ["uploading", "error"] as const;
-
-// After this many consecutive scans where a candidate is unrecoverable
-// (missing manifest, no segments, ...), it is retired from the scan queue so
-// dead rows can't permanently clog the head of the updatedAt-ordered scan.
-export const DESKTOP_SEGMENTS_RECOVERY_MAX_DEAD_ATTEMPTS = 3;
-const DEAD_MARKER_SIGNATURE = "dead";
-const RECOVERY_ABANDONED_PREFIX = "recovery-abandoned:";
+const RECOVERABLE_UPLOAD_PHASES = [
+	"uploading",
+	"processing",
+	"generating_thumbnail",
+	"error",
+] as const;
 
 type DesktopSegmentsRecoveryResult =
 	| {
 			status: DesktopSegmentsFinalizationStatus;
-			manifestCompleted: boolean;
+			manifestCompleted: false;
 			videoSegments: number;
 			audioSegments: number;
 	  }
@@ -59,12 +44,12 @@ type DesktopSegmentsRecoveryResult =
 	| { status: "missing-manifest" }
 	| { status: "invalid-manifest"; error: string }
 	| { status: "no-video-segments" }
-	| { status: "manifest-changed" };
+	| { status: "manifest-changed" }
+	| { status: "source-incomplete" }
+	| { status: "source-committing" };
 
 export type StaleDesktopSegmentsRecoveryStatus =
 	| DesktopSegmentsRecoveryResult["status"]
-	| "observing"
-	| "waiting-for-stability"
 	| "failed";
 
 export type StaleDesktopSegmentsRecoverySummary = {
@@ -76,23 +61,11 @@ export type StaleDesktopSegmentsRecoverySummary = {
 	}>;
 };
 
-type DesktopSegmentsVideo = typeof videos.$inferSelect;
-
 type LoadedDesktopSegmentsManifest =
 	| {
 			status: "loaded";
-			video: DesktopSegmentsVideo;
-			manifestKey: string;
+			video: typeof videos.$inferSelect;
 			manifest: Video.SegmentManifestType;
-			bucket: Awaited<
-				ReturnType<typeof Storage.getAccessForVideo> extends Effect.Effect<
-					infer A,
-					unknown,
-					unknown
-				>
-					? Promise<A>
-					: never
-			>[0];
 	  }
 	| { status: "already-finalized" }
 	| { status: "not-found" }
@@ -104,30 +77,6 @@ function getErrorMessage(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
 }
 
-async function decodeSegmentManifest(
-	manifestJson: string,
-): Promise<
-	| { status: "loaded"; manifest: Video.SegmentManifestType }
-	| { status: "invalid-manifest"; error: string }
-> {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(manifestJson);
-	} catch (error) {
-		return { status: "invalid-manifest", error: getErrorMessage(error) };
-	}
-
-	try {
-		const manifest = await Schema.decodeUnknown(Video.SegmentManifest)(parsed)
-			.pipe(Effect.mapError(getErrorMessage))
-			.pipe(runPromise);
-
-		return { status: "loaded", manifest };
-	} catch (error) {
-		return { status: "invalid-manifest", error: getErrorMessage(error) };
-	}
-}
-
 async function loadDesktopSegmentsManifest({
 	videoId,
 	userId,
@@ -135,41 +84,40 @@ async function loadDesktopSegmentsManifest({
 	videoId: Video.VideoId;
 	userId?: User.UserId;
 }): Promise<LoadedDesktopSegmentsManifest> {
-	const where = userId
-		? and(eq(videos.id, videoId), eq(videos.ownerId, userId))
-		: eq(videos.id, videoId);
-
-	const [video] = await db().select().from(videos).where(where).limit(1);
-
+	const [video] = await db()
+		.select()
+		.from(videos)
+		.where(
+			and(
+				eq(videos.id, videoId),
+				userId ? eq(videos.ownerId, userId) : undefined,
+			),
+		)
+		.limit(1);
 	if (!video) return { status: "not-found" };
-	if (video.source?.type === "desktopMP4")
+	if (video.source.type === "desktopMP4")
 		return { status: "already-finalized" };
-	if (video.source?.type !== "desktopSegments")
+	if (video.source.type !== "desktopSegments")
 		return { status: "not-segmented" };
-
 	const [bucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
 	).pipe(runPromise);
-	const segSource = new Video.SegmentsSource({
-		videoId,
-		ownerId: video.ownerId,
-	});
-	const manifestKey = segSource.getManifestKey();
-	const manifestContent = await bucket.getObject(manifestKey).pipe(runPromise);
-	const manifestJson = Option.getOrNull(manifestContent);
-
-	if (!manifestJson) return { status: "missing-manifest" };
-
-	const decoded = await decodeSegmentManifest(manifestJson);
-	if (decoded.status !== "loaded") return decoded;
-
-	return {
-		status: "loaded",
-		video,
-		manifestKey,
-		manifest: decoded.manifest,
-		bucket,
-	};
+	const source = new Video.SegmentsSource({ videoId, ownerId: video.ownerId });
+	const content = await bucket
+		.getObject(source.getManifestKey())
+		.pipe(runPromise);
+	const json = Option.getOrNull(content);
+	if (!json) return { status: "missing-manifest" };
+	try {
+		const manifest = await Schema.decodeUnknown(Video.SegmentManifest)(
+			JSON.parse(json),
+		)
+			.pipe(Effect.mapError(getErrorMessage))
+			.pipe(runPromise);
+		return { status: "loaded", video, manifest };
+	} catch (error) {
+		return { status: "invalid-manifest", error: getErrorMessage(error) };
+	}
 }
 
 export async function completeDesktopSegmentsManifestAndQueue({
@@ -182,214 +130,64 @@ export async function completeDesktopSegmentsManifestAndQueue({
 	expectedManifestSignature?: string;
 }): Promise<DesktopSegmentsRecoveryResult> {
 	const loaded = await loadDesktopSegmentsManifest({ videoId, userId });
-
 	if (loaded.status !== "loaded") return loaded;
-
 	if (
 		!loaded.manifest.video_init_uploaded ||
 		loaded.manifest.video_segments.length === 0
 	) {
 		return { status: "no-video-segments" };
 	}
-
-	const signature = getDesktopSegmentsManifestSignature(loaded.manifest);
-	if (expectedManifestSignature && signature !== expectedManifestSignature) {
+	if (
+		expectedManifestSignature &&
+		getDesktopSegmentsManifestSignature(loaded.manifest) !==
+			expectedManifestSignature
+	) {
 		return { status: "manifest-changed" };
 	}
-
-	let manifestCompleted = false;
-	if (!loaded.manifest.is_complete) {
-		const completedManifest = {
-			...loaded.manifest,
-			is_complete: true,
+	if (!loaded.manifest.is_complete) return { status: "source-incomplete" };
+	try {
+		const status = await queueDesktopSegmentsFinalization({
+			videoId,
+			userId: loaded.video.ownerId,
+		});
+		return {
+			status,
+			manifestCompleted: false,
+			videoSegments: loaded.manifest.video_segments.length,
+			audioSegments: loaded.manifest.audio_segments.length,
 		};
-		const body = JSON.stringify(completedManifest, null, 2);
-		await loaded.bucket
-			.putObject(loaded.manifestKey, body, {
-				contentType: "application/json",
-				contentLength: Buffer.byteLength(body),
-			})
-			.pipe(runPromise);
-		manifestCompleted = true;
+	} catch (error) {
+		if (error instanceof SourceCommitPendingError)
+			return { status: "source-committing" };
+		if (error instanceof DesktopRecordingSourceBlockedError)
+			return { status: "source-incomplete" };
+		throw error;
 	}
-
-	const status = await queueDesktopSegmentsFinalization({
-		videoId,
-		userId: loaded.video.ownerId,
-	});
-
-	return {
-		status,
-		manifestCompleted,
-		videoSegments: loaded.manifest.video_segments.length,
-		audioSegments: loaded.manifest.audio_segments.length,
-	};
 }
 
-async function markCandidateObserved({
+async function recoverRecording({
 	videoId,
-	signature,
-	now,
-}: {
-	videoId: Video.VideoId;
-	signature: string;
-	now: Date;
-}) {
-	await db()
-		.update(videoUploads)
-		.set({
-			updatedAt: now,
-			processingMessage: buildDesktopSegmentsRecoveryMarker(
-				signature,
-				now.getTime(),
-			),
-		})
-		.where(
-			and(
-				eq(videoUploads.videoId, videoId),
-				inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
-			),
-		);
-}
-
-async function retireCandidate({
-	videoId,
-	status,
-	now,
-}: {
-	videoId: Video.VideoId;
-	status: StaleDesktopSegmentsRecoveryStatus;
-	now: Date;
-}) {
-	await db()
-		.update(videoUploads)
-		.set({
-			updatedAt: now,
-			// Terminal phase so viewers stop seeing an eternal "uploading" state;
-			// the desktop can still revive it by re-uploading and re-queueing.
-			phase: "error",
-			processingError: `${RECOVERY_ABANDONED_PREFIX} ${status} — the upload was interrupted and could not be recovered automatically. Reopen Cap on the recording device to retry, or record again.`,
-		})
-		.where(
-			and(
-				eq(videoUploads.videoId, videoId),
-				inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
-			),
-		);
-}
-
-async function recordDeadCandidateObservation({
-	videoId,
-	status,
-	marker,
-	now,
-}: {
-	videoId: Video.VideoId;
-	status: StaleDesktopSegmentsRecoveryStatus;
-	marker: ReturnType<typeof parseDesktopSegmentsRecoveryMarker>;
-	now: Date;
-}) {
-	const attempts =
-		(marker?.signature === DEAD_MARKER_SIGNATURE ? marker.attempts : 0) + 1;
-
-	if (attempts >= DESKTOP_SEGMENTS_RECOVERY_MAX_DEAD_ATTEMPTS) {
-		await retireCandidate({ videoId, status, now });
-		return;
-	}
-
-	// Bump updatedAt so the candidate rotates to the back of the
-	// updatedAt-ordered scan instead of blocking the queue head.
-	await db()
-		.update(videoUploads)
-		.set({
-			updatedAt: now,
-			processingMessage: buildDesktopSegmentsRecoveryMarker(
-				DEAD_MARKER_SIGNATURE,
-				now.getTime(),
-				attempts,
-			),
-		})
-		.where(
-			and(
-				eq(videoUploads.videoId, videoId),
-				inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
-			),
-		);
-}
-
-async function recoverStaleDesktopSegmentsCandidate({
-	videoId,
-	processingMessage,
-	now,
-}: {
-	videoId: Video.VideoId;
-	processingMessage: string | null;
-	now: Date;
-}): Promise<StaleDesktopSegmentsRecoveryStatus> {
-	const marker = parseDesktopSegmentsRecoveryMarker(processingMessage);
-	const loaded = await loadDesktopSegmentsManifest({ videoId });
-
-	if (loaded.status === "already-finalized") {
-		// The upload row outlived finalization; retire it immediately so it
-		// stops occupying the scan queue.
-		await retireCandidate({ videoId, status: loaded.status, now });
-		return loaded.status;
-	}
-
-	if (loaded.status !== "loaded") {
-		await recordDeadCandidateObservation({
+	userId,
+	verification,
+}: Parameters<
+	typeof queueDesktopSegmentsFinalization
+>[0]): Promise<StaleDesktopSegmentsRecoveryStatus> {
+	try {
+		return await queueDesktopSegmentsFinalization({
 			videoId,
-			status: loaded.status,
-			marker,
-			now,
+			userId,
+			verification,
 		});
-		return loaded.status;
+	} catch (error) {
+		if (error instanceof SourceCommitPendingError) return "source-committing";
+		if (error instanceof DesktopRecordingSourceBlockedError)
+			return "source-incomplete";
+		console.error(
+			"[desktop-segments-recovery] Durable recovery dispatch failed",
+			{ videoId, error },
+		);
+		return "failed";
 	}
-
-	if (
-		!loaded.manifest.video_init_uploaded ||
-		loaded.manifest.video_segments.length === 0
-	) {
-		await recordDeadCandidateObservation({
-			videoId,
-			status: "no-video-segments",
-			marker,
-			now,
-		});
-		return "no-video-segments";
-	}
-
-	if (loaded.manifest.is_complete) {
-		return (
-			await completeDesktopSegmentsManifestAndQueue({
-				videoId,
-				expectedManifestSignature: getDesktopSegmentsManifestSignature(
-					loaded.manifest,
-				),
-			})
-		).status;
-	}
-
-	const signature = getDesktopSegmentsManifestSignature(loaded.manifest);
-
-	if (marker?.signature !== signature) {
-		await markCandidateObserved({ videoId, signature, now });
-		return "observing";
-	}
-
-	if (
-		now.getTime() - marker.observedAtMs <
-		DESKTOP_SEGMENTS_RECOVERY_STABILITY_MS
-	) {
-		return "waiting-for-stability";
-	}
-
-	return (
-		await completeDesktopSegmentsManifestAndQueue({
-			videoId,
-			expectedManifestSignature: signature,
-		})
-	).status;
 }
 
 export async function recoverStaleDesktopSegments({
@@ -399,94 +197,67 @@ export async function recoverStaleDesktopSegments({
 	now?: Date;
 	limit?: number;
 } = {}): Promise<StaleDesktopSegmentsRecoverySummary> {
-	const staleBefore = new Date(
-		now.getTime() - DESKTOP_SEGMENTS_RECOVERY_MIN_AGE_MS,
-	);
-	const stabilityBefore = new Date(
-		now.getTime() - DESKTOP_SEGMENTS_RECOVERY_STABILITY_MS,
-	);
-	const candidates = await db()
-		.select({
-			videoId: videos.id,
-			processingMessage: videoUploads.processingMessage,
-		})
-		.from(videos)
-		.innerJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-		.where(
-			and(
-				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'desktopSegments'`,
-				gte(videoUploads.startedAt, sql`UTC_TIMESTAMP() - INTERVAL 28 HOUR`),
-				lte(videos.createdAt, staleBefore),
-				or(
-					lte(videoUploads.updatedAt, staleBefore),
-					and(
-						like(
-							videoUploads.processingMessage,
-							`${DESKTOP_SEGMENTS_RECOVERY_MARKER_PREFIX}%`,
-						),
-						lte(videoUploads.updatedAt, stabilityBefore),
-					),
-				),
-				inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
-				or(
-					isNull(videoUploads.processingError),
-					notLike(
-						videoUploads.processingError,
-						`${RECOVERY_ABANDONED_PREFIX}%`,
-					),
-				),
-			),
-		)
-		.orderBy(
-			desc(
-				sql<number>`CASE WHEN ${videoUploads.processingError} LIKE ${`%${WORKFLOW_UPGRADE_ERROR_FRAGMENT}%`} THEN 1 ELSE 0 END`,
-			),
-			asc(videoUploads.updatedAt),
-		)
-		.limit(limit);
-
+	const batchSize = Math.max(1, Math.min(limit, 100));
+	const legacyReserve =
+		batchSize > 1 ? Math.max(1, Math.floor(batchSize / 4)) : 0;
+	const jobs = await listRecoverableSegmentJobs({
+		now,
+		limit: batchSize - legacyReserve,
+	});
 	const summary: StaleDesktopSegmentsRecoverySummary = {
-		checked: candidates.length,
+		checked: 0,
 		statuses: {},
 		results: [],
 	};
-
-	for (const candidate of candidates) {
-		let status: StaleDesktopSegmentsRecoveryStatus;
-		try {
-			status = await recoverStaleDesktopSegmentsCandidate({
-				videoId: candidate.videoId,
-				processingMessage: candidate.processingMessage,
-				now,
-			});
-		} catch (error) {
-			status = "failed";
-			console.error(
-				`[desktop-segments-recovery] Failed to recover ${candidate.videoId}:`,
-				error,
-			);
-			// A candidate that keeps throwing must still rotate/retire, or it
-			// blocks the queue head forever.
-			try {
-				await recordDeadCandidateObservation({
-					videoId: Video.VideoId.make(candidate.videoId),
-					status: "failed",
-					marker: parseDesktopSegmentsRecoveryMarker(
-						candidate.processingMessage,
-					),
-					now,
-				});
-			} catch (markError) {
-				console.error(
-					`[desktop-segments-recovery] Failed to mark ${candidate.videoId}:`,
-					markError,
-				);
-			}
-		}
-
+	const record = (
+		videoId: Video.VideoId,
+		status: StaleDesktopSegmentsRecoveryStatus,
+	) => {
+		summary.checked++;
 		summary.statuses[status] = (summary.statuses[status] ?? 0) + 1;
-		summary.results.push({ videoId: candidate.videoId, status });
+		summary.results.push({ videoId, status });
+	};
+	for (const job of jobs) {
+		record(
+			job.videoId,
+			await recoverRecording({
+				videoId: job.videoId,
+				userId: job.ownerId,
+				verification: job.verification ?? undefined,
+			}),
+		);
 	}
-
+	const remaining = batchSize - jobs.length;
+	if (remaining <= 0) return summary;
+	const staleBefore = new Date(
+		now.getTime() - DESKTOP_SEGMENTS_RECOVERY_MIN_AGE_MS,
+	);
+	const legacy = await db()
+		.select({ videoId: videos.id, ownerId: videos.ownerId })
+		.from(videoUploads)
+		.innerJoin(videos, eq(videoUploads.videoId, videos.id))
+		.leftJoin(
+			videoProcessingJobs,
+			eq(videoUploads.videoId, videoProcessingJobs.videoId),
+		)
+		.where(
+			and(
+				inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
+				lte(videoUploads.updatedAt, staleBefore),
+				isNull(videoProcessingJobs.videoId),
+				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'desktopSegments'`,
+			),
+		)
+		.orderBy(asc(videoUploads.updatedAt), asc(videoUploads.videoId))
+		.limit(remaining);
+	for (const candidate of legacy) {
+		record(
+			candidate.videoId,
+			await recoverRecording({
+				videoId: candidate.videoId,
+				userId: candidate.ownerId,
+			}),
+		);
+	}
 	return summary;
 }

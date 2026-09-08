@@ -70,12 +70,14 @@ export async function createVideoForServerProcessing({
 	})} ${date.getFullYear()}`;
 
 	const rawFileKey = `${user.id}/${videoId}/raw-upload.mp4`;
+	const videoTitle = `Cap Upload - ${formattedDate}`;
 
 	const uploadResult = await StorageService.createUploadTargetForUser(
 		user.id,
 		rawFileKey,
 		{
 			contentType: "video/mp4",
+			videoTitle,
 			method: "put",
 			fields: {
 				"x-amz-meta-userid": user.id,
@@ -90,7 +92,7 @@ export async function createVideoForServerProcessing({
 		.insert(videos)
 		.values({
 			id: videoId,
-			name: `Cap Upload - ${formattedDate}`,
+			name: videoTitle,
 			ownerId: user.id,
 			orgId,
 			source: { type: "webMP4" as const },

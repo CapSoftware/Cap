@@ -21,7 +21,8 @@ import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
-import { FatalError } from "workflow";
+import { FatalError, sleep } from "workflow";
+import { retireDesktopRecordingJobForOutputReplacement } from "@/lib/desktop-recording-jobs";
 import {
 	type EditTranscript,
 	editTranscriptWordsToCaptionVtt,
@@ -31,6 +32,10 @@ import {
 } from "@/lib/edit-transcript";
 import { decryptEditTranscriptObject } from "@/lib/edit-transcript-storage";
 import { startAiGeneration } from "@/lib/generate-ai";
+import {
+	createMediaServerCapacityError,
+	isMediaServerCapacityError,
+} from "@/lib/media-server-backpressure";
 import { transcribeVideo } from "@/lib/transcribe";
 import {
 	getEditSpecOutputDuration,
@@ -58,8 +63,8 @@ interface VideoEditRenderResult {
 	};
 }
 
-const MEDIA_SERVER_START_MAX_ATTEMPTS = 6;
-const MEDIA_SERVER_START_RETRY_BASE_MS = 2000;
+const MEDIA_SERVER_START_MAX_ATTEMPTS = 2;
+const MEDIA_SERVER_START_RETRY_BASE_MS = 250;
 const MEDIA_SERVER_COMPLETION_MAX_ATTEMPTS = 720;
 const MEDIA_SERVER_COMPLETION_POLL_INTERVAL_MS = 5000;
 const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
@@ -109,7 +114,19 @@ export async function editVideoWorkflow(
 
 	try {
 		await validateEditRequest(videoId, sourceKey);
-		const result = await renderVideoEditOnMediaServer(payload);
+		let result: VideoEditRenderResult;
+		let capacityRetryCount = 0;
+		while (true) {
+			try {
+				result = await renderVideoEditOnMediaServer(payload);
+				break;
+			} catch (error) {
+				if (!isMediaServerCapacityError(error)) throw error;
+				await markEditWaitingForCapacity(videoId);
+				await sleep(`${Math.min(120, 15 + capacityRetryCount * 15)}s`);
+				capacityRetryCount++;
+			}
+		}
 		await verifyRenderedEditOutput(videoId, userId, editSpec, result.metadata);
 		await invalidateEditedVideoCache(videoId, editSpec);
 		const { transcriptRemapped } = await saveEditResultAndComplete(
@@ -254,6 +271,14 @@ async function startMediaServerEditJob(
 			continue;
 		}
 
+		if (shouldRetry) {
+			throw createMediaServerCapacityError({
+				response,
+				message: errorMessage,
+				videoId: body.videoId,
+			});
+		}
+
 		throw new Error(errorMessage);
 	}
 
@@ -306,7 +331,11 @@ async function renderVideoEditOnMediaServer(
 		)
 		.pipe(runWorkflowPromise);
 
-	const outputVerificationUrl = await bucket
+	const [outputBucket] = await Storage.getAccessForVideo(
+		decodeStorageVideo(video),
+		{ resolvePublishedOutput: false },
+	).pipe(runWorkflowPromise);
+	const outputVerificationUrl = await outputBucket
 		.getInternalSignedObjectUrl(outputKey, {
 			expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
 		})
@@ -361,6 +390,19 @@ async function renderVideoEditOnMediaServer(
 	});
 
 	return await waitForEditCompletion(videoId);
+}
+
+async function markEditWaitingForCapacity(videoId: string): Promise<void> {
+	"use step";
+
+	await db()
+		.update(videoUploads)
+		.set({
+			processingMessage: "Queued for video editing...",
+			processingError: null,
+			updatedAt: new Date(),
+		})
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 }
 
 function getMetadataFromVideoRow(
@@ -438,7 +480,7 @@ async function probeVideoOnMediaServer(
 	return metadata;
 }
 
-async function verifyRenderedEditOutput(
+export async function verifyRenderedEditOutput(
 	videoId: string,
 	userId: string,
 	editSpec: VideoEditSpec,
@@ -467,9 +509,9 @@ async function verifyRenderedEditOutput(
 		throw new FatalError("Video does not exist");
 	}
 
-	const [bucket] = await Storage.getAccessForVideo(
-		decodeStorageVideo(video),
-	).pipe(runWorkflowPromise);
+	const [bucket] = await Storage.getAccessForVideo(decodeStorageVideo(video), {
+		resolvePublishedOutput: false,
+	}).pipe(runWorkflowPromise);
 	const outputKey = `${userId}/${videoId}/result.mp4`;
 	const outputUrl = await bucket
 		.getInternalSignedObjectUrl(outputKey, {
@@ -773,7 +815,7 @@ async function invalidateEditedVideoCache(
 	}
 }
 
-async function saveEditResultAndComplete(
+export async function saveEditResultAndComplete(
 	videoId: string,
 	sourceKey: string,
 	previousSpec: VideoEditSpec,
@@ -792,7 +834,6 @@ async function saveEditResultAndComplete(
 		throw new FatalError("Video does not exist");
 	}
 
-	const nextMetadata = clearAiMetadata(video.metadata as VideoMetadata | null);
 	let originalTranscript: EditTranscript | null = null;
 	try {
 		originalTranscript = await loadOriginalEditTranscript(video, editSpec);
@@ -804,6 +845,25 @@ async function saveEditResultAndComplete(
 	}
 
 	await db().transaction(async (tx) => {
+		await retireDesktopRecordingJobForOutputReplacement(tx, {
+			videoId: video.id,
+			userId: video.ownerId,
+		});
+		const [lockedVideo] = await tx
+			.select()
+			.from(videos)
+			.where(eq(videos.id, video.id))
+			.for("update");
+		if (
+			!lockedVideo ||
+			lockedVideo.ownerId !== video.ownerId ||
+			lockedVideo.bucket !== video.bucket ||
+			lockedVideo.storageIntegrationId !== video.storageIntegrationId
+		) {
+			throw new Error("Recording storage changed while the edit was rendering");
+		}
+		const nextMetadata = clearAiMetadata(lockedVideo.metadata);
+		delete nextMetadata.desktopRecordingUpload;
 		await tx
 			.update(videos)
 			.set({
@@ -811,6 +871,9 @@ async function saveEditResultAndComplete(
 				height: metadata.height,
 				fps: metadata.fps,
 				metadata: nextMetadata,
+				...(lockedVideo.source.type === "desktopMP4"
+					? { source: { type: "desktopMP4" as const } }
+					: {}),
 				// Derivable captions keep the transcription COMPLETE; only legacy
 				// videos without a stored word transcript get re-transcribed.
 				...(originalTranscript ? {} : { transcriptionStatus: null }),

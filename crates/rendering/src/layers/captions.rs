@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use cap_project::XY;
+use cap_project::{CaptionWord, XY};
 use glyphon::cosmic_text::LayoutRunIter;
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
@@ -9,13 +9,6 @@ use log::warn;
 use wgpu::{Device, Queue, include_wgsl, util::DeviceExt};
 
 use crate::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, parse_color_component};
-
-#[derive(Debug, Clone)]
-pub struct CaptionWord {
-    pub text: String,
-    pub start: f32,
-    pub end: f32,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable, Debug)]
@@ -518,23 +511,14 @@ impl CaptionsLayer {
         } else {
             joined_caption_text
         };
-        let caption_words: Vec<CaptionWord> = active
-            .segment
-            .words
-            .iter()
-            .map(|w| CaptionWord {
-                text: w.text.clone(),
-                start: w.start,
-                end: w.end,
-            })
-            .collect();
+        let caption_words = &active.segment.words;
 
         let fade_opacity = calculate_caption_fade(
             current_time,
             active.segment.start,
             effective_end,
             segment_fade,
-        );
+        ) * uniforms.takeover_overlay_fade();
         if fade_opacity <= 0.0 {
             self.current_text = None;
             return;
@@ -572,8 +556,8 @@ impl CaptionsLayer {
             active_word_highlight_enabled && !caption_words.is_empty() && !use_pill_highlight;
 
         let active_word_byte_range = if use_pill_highlight {
-            find_active_word_index(current_time as f32, &caption_words)
-                .and_then(|idx| word_byte_range(&caption_text, &caption_words, idx, uppercase))
+            find_active_word_index(current_time as f32, caption_words)
+                .and_then(|idx| word_byte_range(&caption_text, caption_words, idx, uppercase))
         } else {
             None
         };
@@ -677,7 +661,7 @@ impl CaptionsLayer {
                         current_time as f32,
                         word,
                         idx,
-                        &caption_words,
+                        caption_words,
                         word_transition_duration,
                     );
 
@@ -960,64 +944,62 @@ impl CaptionsLayer {
             bytemuck::bytes_of(&background_uniforms),
         );
 
-        if let Some((min_x, max_x, line_top, line_height)) = highlight_extent {
-            if max_x > min_x {
-                let pill_pad_x = effective_font_size * 0.28 * anim_scale;
-                let pill_pad_y = effective_font_size * 0.12 * anim_scale;
-                let pill_left = (text_left + min_x * render_scale - pill_pad_x).max(0.0);
-                let pill_top = (text_top + line_top * render_scale - pill_pad_y).max(0.0);
-                let pill_width = ((max_x - min_x) * render_scale + pill_pad_x * 2.0)
-                    .min((width as f32 - pill_left).max(0.0))
-                    .max(1.0);
-                let pill_height = (line_height * render_scale + pill_pad_y * 2.0)
-                    .min((height as f32 - pill_top).max(0.0))
-                    .max(1.0);
-                let pill_radius = (pill_height * 0.4).min(pill_width / 2.0);
+        if let Some((min_x, max_x, line_top, line_height)) = highlight_extent
+            && max_x > min_x
+        {
+            let pill_pad_x = effective_font_size * 0.28 * anim_scale;
+            let pill_pad_y = effective_font_size * 0.12 * anim_scale;
+            let pill_left = (text_left + min_x * render_scale - pill_pad_x).max(0.0);
+            let pill_top = (text_top + line_top * render_scale - pill_pad_y).max(0.0);
+            let pill_width = ((max_x - min_x) * render_scale + pill_pad_x * 2.0)
+                .min((width as f32 - pill_left).max(0.0))
+                .max(1.0);
+            let pill_height = (line_height * render_scale + pill_pad_y * 2.0)
+                .min((height as f32 - pill_top).max(0.0))
+                .max(1.0);
+            let pill_radius = (pill_height * 0.4).min(pill_width / 2.0);
 
-                let pill_uniforms = CaptionBackgroundUniforms {
-                    rect: [pill_left, pill_top, pill_width, pill_height],
-                    color: [
-                        highlight_color_rgb[0],
-                        highlight_color_rgb[1],
-                        highlight_color_rgb[2],
-                        fade_opacity,
-                    ],
-                    radius: pill_radius,
-                    _padding: [0.0; 3],
-                    _padding2: [0.0; 4],
-                };
-                queue.write_buffer(
-                    &self.highlight_uniform_buffer,
-                    0,
-                    bytemuck::bytes_of(&pill_uniforms),
-                );
+            let pill_uniforms = CaptionBackgroundUniforms {
+                rect: [pill_left, pill_top, pill_width, pill_height],
+                color: [
+                    highlight_color_rgb[0],
+                    highlight_color_rgb[1],
+                    highlight_color_rgb[2],
+                    fade_opacity,
+                ],
+                radius: pill_radius,
+                _padding: [0.0; 3],
+                _padding2: [0.0; 4],
+            };
+            queue.write_buffer(
+                &self.highlight_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&pill_uniforms),
+            );
 
-                let pill_scissor_pad = 3.0;
-                let pill_scissor_x = (pill_left - pill_scissor_pad).max(0.0).floor() as u32;
-                let pill_scissor_y = (pill_top - pill_scissor_pad).max(0.0).floor() as u32;
-                let pill_max_width = width.saturating_sub(pill_scissor_x);
-                let pill_max_height = height.saturating_sub(pill_scissor_y);
+            let pill_scissor_pad = 3.0;
+            let pill_scissor_x = (pill_left - pill_scissor_pad).max(0.0).floor() as u32;
+            let pill_scissor_y = (pill_top - pill_scissor_pad).max(0.0).floor() as u32;
+            let pill_max_width = width.saturating_sub(pill_scissor_x);
+            let pill_max_height = height.saturating_sub(pill_scissor_y);
 
-                if pill_max_width > 0 && pill_max_height > 0 {
-                    let pill_scissor_width = (pill_width + pill_scissor_pad * 2.0)
-                        .ceil()
-                        .max(1.0)
-                        .min(pill_max_width as f32)
-                        as u32;
-                    let pill_scissor_height = (pill_height + pill_scissor_pad * 2.0)
-                        .ceil()
-                        .max(1.0)
-                        .min(pill_max_height as f32)
-                        as u32;
+            if pill_max_width > 0 && pill_max_height > 0 {
+                let pill_scissor_width = (pill_width + pill_scissor_pad * 2.0)
+                    .ceil()
+                    .max(1.0)
+                    .min(pill_max_width as f32) as u32;
+                let pill_scissor_height = (pill_height + pill_scissor_pad * 2.0)
+                    .ceil()
+                    .max(1.0)
+                    .min(pill_max_height as f32) as u32;
 
-                    self.highlight_scissor = Some([
-                        pill_scissor_x,
-                        pill_scissor_y,
-                        pill_scissor_width,
-                        pill_scissor_height,
-                    ]);
-                    self.has_highlight = true;
-                }
+                self.highlight_scissor = Some([
+                    pill_scissor_x,
+                    pill_scissor_y,
+                    pill_scissor_width,
+                    pill_scissor_height,
+                ]);
+                self.has_highlight = true;
             }
         }
 
@@ -1182,7 +1164,10 @@ fn calculate_caption_bounce(current_time: f64, start: f64, end: f64, fade_durati
 
 #[cfg(test)]
 mod tests {
-    use super::{caption_segment_effective_end, find_active_caption_segment};
+    use super::{
+        caption_segment_effective_end, find_active_caption_segment, find_active_word_index,
+        word_byte_range,
+    };
     use cap_project::{CaptionTrackSegment, CaptionWord};
 
     fn segment(start: f64, end: f64, words: Vec<CaptionWord>) -> CaptionTrackSegment {
@@ -1231,5 +1216,45 @@ mod tests {
         assert!(find_active_caption_segment(41.0, &segments, 0.2).is_none());
         // Still active while the (capped) word is on screen.
         assert!(find_active_caption_segment(37.0, &segments, 0.2).is_some());
+    }
+
+    #[test]
+    fn active_word_selection_preserves_boundaries_and_gaps() {
+        let words = [word(0.1, 0.4), word(0.5, 0.9)];
+
+        for (time, expected) in [
+            (-0.1, 0),
+            (0.1, 0),
+            (0.4, 0),
+            (0.49, 0),
+            (0.5, 1),
+            (0.9, 1),
+            (1.2, 1),
+        ] {
+            assert_eq!(find_active_word_index(time, &words), Some(expected));
+        }
+        assert_eq!(find_active_word_index(0.5, &[]), None);
+    }
+
+    #[test]
+    fn word_ranges_preserve_repeated_words_and_unicode_uppercase() {
+        let words = ["ŉ", "Straße", "ŉ"].map(|text| CaptionWord {
+            text: text.to_string(),
+            start: 0.0,
+            end: 1.0,
+        });
+        let text = "ŉ Straße ŉ";
+
+        for (index, expected) in [(0, (0, 2)), (1, (3, 10)), (2, (11, 13))] {
+            assert_eq!(word_byte_range(text, &words, index, false), Some(expected));
+        }
+        for (index, expected) in [(0, (0, 3)), (1, (4, 11)), (2, (12, 15))] {
+            assert_eq!(
+                word_byte_range(&text.to_uppercase(), &words, index, true),
+                Some(expected)
+            );
+        }
+        assert_eq!(word_byte_range(text, &words, 3, false), None);
+        assert_eq!(word_byte_range("missing", &words, 0, false), None);
     }
 }

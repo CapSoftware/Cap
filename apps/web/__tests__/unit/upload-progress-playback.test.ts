@@ -192,4 +192,18 @@ describe("shouldDeferPlaybackSource", () => {
 			}),
 		).toBe("Video processing stalled. Retry processing.");
 	});
+
+	it.each([0, 25, 90])(
+		"does not report a durable automatic retry as failed at %i percent",
+		(processingProgress) => {
+			expect(
+				getStalledProcessingMessage({
+					phase: "processing",
+					updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+					processingProgress,
+					automaticRetry: true,
+				}),
+			).toBeNull();
+		},
+	);
 });

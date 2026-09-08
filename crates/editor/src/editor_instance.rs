@@ -7,14 +7,15 @@ use cap_project::{
     TimelineFrameMapping, TimelineSegment, XY,
 };
 use cap_rendering::{
-    ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
-    SegmentVideoPaths, SharedWgpuDevice, Video, ZoomTransformTimeline, get_duration,
+    PrecomputedCursorTimeline, ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders,
+    RenderVideoConstants, SegmentVideoPaths, SharedWgpuDevice, Video, ZoomTransformTimeline,
+    get_duration, spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 use tokio::sync::{Mutex, watch};
@@ -23,6 +24,83 @@ use tracing::warn;
 
 const PREVIEW_RENDER_MAX_ATTEMPTS: u32 = 3;
 const PREVIEW_RENDER_RETRY_DELAY_MS: u64 = 120;
+const PREVIEW_CURSOR_CACHE_CAPACITY: usize = 2;
+
+#[derive(Default)]
+struct PreviewCursorCache {
+    entries: Vec<PreviewCursorCacheEntry>,
+}
+
+struct PreviewCursorCacheEntry {
+    recording_clip: u32,
+    cursor: Arc<CursorEvents>,
+    settings: [u32; 6],
+    timeline: Arc<PrecomputedCursorTimeline>,
+}
+
+impl PreviewCursorCache {
+    fn get(
+        &mut self,
+        recording_clip: u32,
+        cursor: &Arc<CursorEvents>,
+        project: &ProjectConfiguration,
+    ) -> Option<Arc<PrecomputedCursorTimeline>> {
+        if project.cursor.raw {
+            self.entries.clear();
+            return None;
+        }
+        if cursor.moves.is_empty() {
+            self.entries
+                .retain(|entry| entry.recording_clip != recording_clip);
+            return None;
+        }
+
+        let smoothing = SpringMassDamperSimulationConfig {
+            tension: project.cursor.tension,
+            mass: project.cursor.mass,
+            friction: project.cursor.friction,
+        };
+        let click_spring = project.cursor.click_spring_config();
+        let settings = [
+            smoothing.tension.to_bits(),
+            smoothing.mass.to_bits(),
+            smoothing.friction.to_bits(),
+            click_spring.tension.to_bits(),
+            click_spring.mass.to_bits(),
+            click_spring.friction.to_bits(),
+        ];
+
+        if let Some(index) = self.entries.iter().position(|entry| {
+            entry.recording_clip == recording_clip
+                && Arc::ptr_eq(&entry.cursor, cursor)
+                && entry.settings == settings
+        }) {
+            let entry = self.entries.remove(index);
+            let timeline = Arc::clone(&entry.timeline);
+            self.entries.push(entry);
+            return Some(timeline);
+        }
+
+        self.entries
+            .retain(|entry| entry.recording_clip != recording_clip);
+        if self.entries.len() == PREVIEW_CURSOR_CACHE_CAPACITY {
+            self.entries.remove(0);
+        }
+
+        let timeline = Arc::new(PrecomputedCursorTimeline::new(
+            cursor,
+            Some(smoothing),
+            Some(click_spring),
+        ));
+        self.entries.push(PreviewCursorCacheEntry {
+            recording_clip,
+            cursor: Arc::clone(cursor),
+            settings,
+            timeline: Arc::clone(&timeline),
+        });
+        Some(timeline)
+    }
+}
 
 fn get_video_duration_fallback(path: &Path) -> Option<f64> {
     tracing::debug!("get_video_duration_fallback called for: {:?}", path);
@@ -92,6 +170,11 @@ pub struct EditorInstance {
     pub render_constants: Arc<RenderVideoConstants>,
     playback_active: watch::Sender<bool>,
     playback_active_rx: watch::Receiver<bool>,
+    // Guards playback_active against a restart race: the event pump of a
+    // replaced playback receives its Stop after the successor already sent
+    // true, and without the epoch check that late Stop would flip the watch
+    // to false while the new playback is running.
+    playback_epoch: AtomicU64,
     pub state: Arc<Mutex<EditorState>>,
     on_state_change: Box<dyn Fn(&EditorState) + Send + Sync + 'static>,
     pub preview_tx: watch::Sender<Option<PreviewFrameInstruction>>,
@@ -125,6 +208,24 @@ impl EditorInstance {
         .await
     }
 
+    pub async fn new_with_frame_format(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        frame_format: editor::EditorFrameFormat,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_with_audio_output_and_frame_format(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            frame_format,
+            Arc::new(crate::AudioOutput::new()),
+        )
+        .await
+    }
+
     /// Like [`EditorInstance::new`] but with a caller-provided audio output,
     /// letting harnesses substitute a headless sink while everything else
     /// (decoders, renderer, playback) runs the production path.
@@ -134,6 +235,67 @@ impl EditorInstance {
         frame_cb: editor::EditorFrameCallback,
         shared_device: Option<SharedWgpuDevice>,
         audio_output: Arc<crate::AudioOutput>,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_with_audio_output_and_frame_format(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            editor::EditorFrameFormat::Rgba,
+            audio_output,
+        )
+        .await
+    }
+
+    pub async fn new_with_audio_output_and_frame_format(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        frame_format: editor::EditorFrameFormat,
+        audio_output: Arc<crate::AudioOutput>,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_inner(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            frame_format,
+            audio_output,
+            None,
+        )
+        .await
+    }
+
+    pub async fn new_with_preloaded_recordings(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        frame_format: editor::EditorFrameFormat,
+        audio_output: Arc<crate::AudioOutput>,
+        recordings: Arc<ProjectRecordingsMeta>,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_inner(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            frame_format,
+            audio_output,
+            Some(recordings),
+        )
+        .await
+    }
+
+    async fn new_inner(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        frame_format: editor::EditorFrameFormat,
+        audio_output: Arc<crate::AudioOutput>,
+        preloaded_recordings: Option<Arc<ProjectRecordingsMeta>>,
     ) -> Result<Arc<Self>, String> {
         if !project_path.exists() {
             return Err(format!("Video path {} not found!", project_path.display()));
@@ -145,6 +307,8 @@ impl EditorInstance {
         let RecordingMetaInner::Studio(meta) = &recording_meta.inner else {
             return Err("Cannot edit non-studio recordings".to_string());
         };
+
+        meta.ensure_ordinary_media_access(&project_path)?;
 
         let segment_count = match meta.as_ref() {
             StudioRecordingMeta::SingleSegment { .. } => 1,
@@ -221,6 +385,7 @@ impl EditorInstance {
                     caption_segments: Vec::new(),
                     keyboard_segments: Vec::new(),
                     audio_segments: Vec::new(),
+                    camera3d_segments: Vec::new(),
                 });
 
                 if let Err(e) = project.write(&recording_meta.project_path) {
@@ -304,10 +469,30 @@ impl EditorInstance {
             audio_output.prewarm();
         }
 
-        let recordings = Arc::new(ProjectRecordingsMeta::new(
-            &recording_meta.project_path,
-            meta.as_ref(),
-        )?);
+        let music_cache = Arc::new(std::sync::Mutex::new(crate::MusicTracks::new()));
+        if has_music {
+            let project = project.clone();
+            let project_path = project_path.clone();
+            let cache = Arc::clone(&music_cache);
+            tokio::task::spawn_blocking(move || {
+                let mut cache = cache
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                drop(crate::load_music_tracks(
+                    &project,
+                    &project_path,
+                    &mut cache,
+                ));
+            });
+        }
+
+        let recordings = match preloaded_recordings {
+            Some(recordings) => recordings,
+            None => Arc::new(ProjectRecordingsMeta::new(
+                &recording_meta.project_path,
+                meta.as_ref(),
+            )?),
+        };
 
         let render_constants = if let Some(shared) = shared_device {
             let rc = RenderVideoConstants::new_with_device(
@@ -336,10 +521,11 @@ impl EditorInstance {
             .map_err(|e| format!("Segment setup task failed: {e}"))??;
         let layers_rx = editor::finish_renderer_layers_creation(layers_rx).await;
 
-        let renderer = Arc::new(editor::Renderer::spawn(
+        let renderer = Arc::new(editor::Renderer::spawn_with_format(
             render_constants.clone(),
             frame_cb,
             layers_rx,
+            frame_format,
         )?);
 
         let (preview_tx, preview_rx) = watch::channel(None);
@@ -359,12 +545,13 @@ impl EditorInstance {
             preview_tx,
             project_config: watch::channel(project),
             segment_medias: Arc::new(segments),
-            music_cache: Arc::new(std::sync::Mutex::new(crate::MusicTracks::new())),
+            music_cache,
             meta: recording_meta,
             playback_active: playback_active_tx,
             playback_active_rx,
             export_preview_active: AtomicBool::new(false),
             export_active: AtomicBool::new(false),
+            playback_epoch: AtomicU64::new(0),
             runtime_handle: tokio::runtime::Handle::current(),
             audio_output,
         });
@@ -432,7 +619,7 @@ impl EditorInstance {
     pub async fn start_playback(self: &Arc<Self>, fps: u32, resolution_base: XY<u32>) {
         let music = self.load_music_tracks().await;
 
-        let (mut handle, prev) = {
+        let (mut handle, prev, epoch) = {
             let mut state = self.state.lock().await;
 
             let start_frame_number = state.playhead_position;
@@ -457,13 +644,14 @@ impl EditorInstance {
                 }
             };
 
+            let epoch = self.playback_epoch.fetch_add(1, Ordering::SeqCst) + 1;
             if let Err(e) = self.playback_active.send(true) {
                 tracing::warn!(%e, "failed to send playback_active=true");
             }
 
             let prev = state.playback_task.replace(playback_handle.clone());
 
-            (playback_handle, prev)
+            (playback_handle, prev, epoch)
         };
 
         let this = self.clone();
@@ -480,7 +668,9 @@ impl EditorInstance {
                         .await;
                     }
                     playback::PlaybackEvent::Stop => {
-                        if let Err(e) = this.playback_active.send(false) {
+                        if this.playback_epoch.load(Ordering::SeqCst) == epoch
+                            && let Err(e) = this.playback_active.send(false)
+                        {
                             tracing::warn!(%e, "failed to send playback_active=false");
                         }
                         return;
@@ -494,12 +684,31 @@ impl EditorInstance {
         }
     }
 
+    /// True while a playback engine is live. Epoch-guarded against restart
+    /// races, so a false here means the engine genuinely stopped -- end of
+    /// timeline, warmup abort, or error -- not a stop/start transition.
+    pub fn playback_watch(&self) -> watch::Receiver<bool> {
+        self.playback_active_rx.clone()
+    }
+
+    /// Live-seek the running playback. Returns false when no engine is
+    /// running (or it died before the seek landed); the caller decides
+    /// whether that means a plain playhead move or a restart.
+    pub async fn seek_playback(&self, frame_number: u32) -> bool {
+        let state = self.state.lock().await;
+        state
+            .playback_task
+            .as_ref()
+            .is_some_and(|handle| handle.seek(frame_number))
+    }
+
     fn spawn_preview_renderer(
         self: Arc<Self>,
         mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut prefetch_cancel_token: Option<CancellationToken> = None;
+            let mut cursor_cache = PreviewCursorCache::default();
 
             loop {
                 preview_rx.changed().await.unwrap();
@@ -637,17 +846,42 @@ impl EditorInstance {
                                     outgoing_zoom.ensure_precomputed_until(
                                         (frame_number as f32 + 1.0) / fps as f32,
                                     );
-                                    let outgoing_uniforms = ProjectUniforms::new(
-                                        &self.render_constants,
-                                        &project,
-                                        frame_number,
-                                        fps,
-                                        resolution_base,
+                                    let outgoing_cursor_timeline = cursor_cache.get(
+                                        outgoing.segment.recording_clip,
                                         &outgoing_media.cursor,
-                                        &outgoing_frames,
-                                        total_duration,
-                                        &outgoing_zoom,
+                                        &project,
                                     );
+                                    if preview_rx.has_changed().unwrap_or(false) {
+                                        continue;
+                                    }
+                                    let outgoing_uniforms = if let Some(cursor_timeline) =
+                                        &outgoing_cursor_timeline
+                                    {
+                                        ProjectUniforms::new_with_precomputed_cursor(
+                                            &self.render_constants,
+                                            &project,
+                                            frame_number,
+                                            fps,
+                                            resolution_base,
+                                            &outgoing_media.cursor,
+                                            &outgoing_frames,
+                                            total_duration,
+                                            &outgoing_zoom,
+                                            cursor_timeline,
+                                        )
+                                    } else {
+                                        ProjectUniforms::new(
+                                            &self.render_constants,
+                                            &project,
+                                            frame_number,
+                                            fps,
+                                            resolution_base,
+                                            &outgoing_media.cursor,
+                                            &outgoing_frames,
+                                            total_duration,
+                                            &outgoing_zoom,
+                                        )
+                                    };
                                     Some((
                                         outgoing_frames,
                                         outgoing_uniforms,
@@ -666,6 +900,15 @@ impl EditorInstance {
                                 continue;
                             }
 
+                            let cursor_timeline = cursor_cache.get(
+                                segment.recording_clip,
+                                &segment_medias.cursor,
+                                &project,
+                            );
+                            if preview_rx.has_changed().unwrap_or(false) {
+                                continue;
+                            }
+
                             let mut next_segment_frames = segment_frames_opt;
                             let mut rendered = false;
 
@@ -674,17 +917,32 @@ impl EditorInstance {
                                     break;
                                 };
 
-                                let uniforms = ProjectUniforms::new(
-                                    &self.render_constants,
-                                    &project,
-                                    frame_number,
-                                    fps,
-                                    resolution_base,
-                                    &segment_medias.cursor,
-                                    &segment_frames,
-                                    total_duration,
-                                    &zoom_timeline,
-                                );
+                                let uniforms = if let Some(cursor_timeline) = &cursor_timeline {
+                                    ProjectUniforms::new_with_precomputed_cursor(
+                                        &self.render_constants,
+                                        &project,
+                                        frame_number,
+                                        fps,
+                                        resolution_base,
+                                        &segment_medias.cursor,
+                                        &segment_frames,
+                                        total_duration,
+                                        &zoom_timeline,
+                                        cursor_timeline,
+                                    )
+                                } else {
+                                    ProjectUniforms::new(
+                                        &self.render_constants,
+                                        &project,
+                                        frame_number,
+                                        fps,
+                                        resolution_base,
+                                        &segment_medias.cursor,
+                                        &segment_frames,
+                                        total_duration,
+                                        &zoom_timeline,
+                                    )
+                                };
 
                                 let render_confirmed = if let Some((
                                     outgoing_frames,
@@ -1092,6 +1350,23 @@ pub async fn create_segments(
     meta: &StudioRecordingMeta,
     force_ffmpeg: bool,
 ) -> Result<Vec<SegmentMedia>, String> {
+    create_segments_with_audio(recording_meta, meta, force_ffmpeg, true).await
+}
+
+pub async fn create_segments_without_audio(
+    recording_meta: &RecordingMeta,
+    meta: &StudioRecordingMeta,
+    force_ffmpeg: bool,
+) -> Result<Vec<SegmentMedia>, String> {
+    create_segments_with_audio(recording_meta, meta, force_ffmpeg, false).await
+}
+
+async fn create_segments_with_audio(
+    recording_meta: &RecordingMeta,
+    meta: &StudioRecordingMeta,
+    force_ffmpeg: bool,
+    load_audio: bool,
+) -> Result<Vec<SegmentMedia>, String> {
     let legacy_timing_repair = LegacyAudioTimingRepair::load(&recording_meta.project_path);
     let legacy_timing_repair = &legacy_timing_repair;
 
@@ -1100,6 +1375,7 @@ pub async fn create_segments(
             let audio = s
                 .audio
                 .as_ref()
+                .filter(|_| load_audio)
                 .map(|audio_meta| {
                     AudioLoader::spawn(
                         recording_meta.path(&audio_meta.path),
@@ -1165,6 +1441,7 @@ pub async fn create_segments(
                 let audio = s
                     .mic
                     .as_ref()
+                    .filter(|_| load_audio)
                     .map(|audio| {
                         AudioLoader::spawn(
                             recording_meta.path(&audio.path),
@@ -1176,6 +1453,7 @@ pub async fn create_segments(
                 let system_audio = s
                     .system_audio
                     .as_ref()
+                    .filter(|_| load_audio)
                     .map(|audio| {
                         AudioLoader::spawn(
                             recording_meta.path(&audio.path),
@@ -1251,7 +1529,260 @@ fn get_calibration_offset(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cap_project::AudioGapSummary;
+    use cap_project::{AudioGapSummary, CursorClickEvent, CursorConfiguration, CursorMoveEvent};
+
+    fn preview_cursor_events() -> Arc<CursorEvents> {
+        Arc::new(CursorEvents {
+            moves: [
+                (0.0, 0.1, 0.2, "arrow"),
+                (100.0, 0.3, 0.4, "arrow"),
+                (100.0, 0.4, 0.3, "hand"),
+                (300.0, 0.8, 0.6, "hand"),
+                (1500.0, 0.6, 0.2, "arrow"),
+                (1600.0, 0.2, 0.8, "arrow"),
+            ]
+            .into_iter()
+            .map(|(time_ms, x, y, cursor_id)| CursorMoveEvent {
+                active_modifiers: Vec::new(),
+                cursor_id: cursor_id.to_string(),
+                time_ms,
+                x,
+                y,
+            })
+            .collect(),
+            clicks: [
+                (80.0, true),
+                (240.0, false),
+                (1400.0, true),
+                (1550.0, false),
+            ]
+            .into_iter()
+            .map(|(time_ms, down)| CursorClickEvent {
+                active_modifiers: Vec::new(),
+                cursor_id: "arrow".to_string(),
+                cursor_num: 0,
+                time_ms,
+                down,
+            })
+            .collect(),
+        })
+    }
+
+    #[test]
+    fn preview_cursor_cache_reuses_effective_settings() {
+        let cursor = preview_cursor_events();
+        let mut project = ProjectConfiguration::default();
+        let mut cache = PreviewCursorCache::default();
+        let first = cache.get(0, &cursor, &project).unwrap();
+
+        project.cursor.hide = !project.cursor.hide;
+        project.cursor.size += 1;
+        project.cursor.rotation_amount += 0.1;
+        project.cursor.stop_movement_in_last_seconds = Some(0.5);
+        project.cursor.click_spring = Some(project.cursor.click_spring_config());
+        let repeated = cache.get(0, &Arc::clone(&cursor), &project).unwrap();
+
+        assert!(Arc::ptr_eq(&first, &repeated));
+        assert_eq!(cache.entries.len(), 1);
+    }
+
+    #[test]
+    fn preview_cursor_cache_invalidates_each_spring_parameter() {
+        let cursor = preview_cursor_events();
+        let project = ProjectConfiguration::default();
+        let changes: [fn(&mut CursorConfiguration); 6] = [
+            |cursor| cursor.tension += 1.0,
+            |cursor| cursor.mass += 1.0,
+            |cursor| cursor.friction += 1.0,
+            |cursor| {
+                cursor
+                    .click_spring
+                    .get_or_insert_with(Default::default)
+                    .tension += 1.0;
+            },
+            |cursor| {
+                cursor
+                    .click_spring
+                    .get_or_insert_with(Default::default)
+                    .mass += 1.0;
+            },
+            |cursor| {
+                cursor
+                    .click_spring
+                    .get_or_insert_with(Default::default)
+                    .friction += 1.0;
+            },
+        ];
+
+        for change in changes {
+            let mut cache = PreviewCursorCache::default();
+            let first = cache.get(0, &cursor, &project).unwrap();
+            let mut changed = project.clone();
+            change(&mut changed.cursor);
+            let updated = cache.get(0, &cursor, &changed).unwrap();
+
+            assert!(!Arc::ptr_eq(&first, &updated));
+            assert!(Arc::ptr_eq(
+                &updated,
+                &cache.get(0, &cursor, &changed).unwrap()
+            ));
+            assert_eq!(cache.entries.len(), 1);
+        }
+    }
+
+    #[test]
+    fn preview_cursor_cache_bypasses_raw_mode_without_retaining_cursor_data() {
+        let cursor = preview_cursor_events();
+        let mut project = ProjectConfiguration::default();
+        let mut cache = PreviewCursorCache::default();
+        let smoothed = cache.get(0, &cursor, &project).unwrap();
+        let smoothed_weak = Arc::downgrade(&smoothed);
+        drop(smoothed);
+        drop(cache.get(1, &cursor, &project).unwrap());
+        project.cursor.raw = true;
+
+        assert!(cache.get(0, &cursor, &project).is_none());
+        assert!(cache.entries.is_empty());
+        assert!(smoothed_weak.upgrade().is_none());
+        assert_eq!(Arc::strong_count(&cursor), 1);
+
+        project.cursor.tension += 1.0;
+        project.cursor.click_spring = Some(cap_project::ClickSpringConfig {
+            tension: 900.0,
+            mass: 2.0,
+            friction: 60.0,
+        });
+        assert!(cache.get(0, &cursor, &project).is_none());
+        assert!(cache.entries.is_empty());
+        assert_eq!(Arc::strong_count(&cursor), 1);
+
+        project.cursor.raw = false;
+        assert!(cache.get(0, &cursor, &project).is_some());
+        assert_eq!(cache.entries.len(), 1);
+    }
+
+    #[test]
+    fn preview_cursor_cache_bypasses_empty_moves_without_retaining_cursor_data() {
+        let cursor = preview_cursor_events();
+        let empty = Arc::new(CursorEvents {
+            moves: Vec::new(),
+            clicks: cursor.clicks.clone(),
+        });
+        let project = ProjectConfiguration::default();
+        let mut cache = PreviewCursorCache::default();
+        drop(cache.get(0, &cursor, &project).unwrap());
+        let other_segment = cache.get(1, &cursor, &project).unwrap();
+
+        assert!(cache.get(0, &empty, &project).is_none());
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(Arc::strong_count(&empty), 1);
+        assert!(Arc::ptr_eq(
+            &other_segment,
+            &cache.get(1, &cursor, &project).unwrap()
+        ));
+    }
+
+    #[test]
+    fn preview_cursor_cache_distinguishes_cursor_identity_and_segments() {
+        let cursor = preview_cursor_events();
+        let project = ProjectConfiguration::default();
+        let mut cache = PreviewCursorCache::default();
+        let first = cache.get(0, &cursor, &project).unwrap();
+        let replacement = Arc::new((*cursor).clone());
+        let replaced = cache.get(0, &replacement, &project).unwrap();
+        assert!(!Arc::ptr_eq(&first, &replaced));
+        assert_eq!(cache.entries.len(), 1);
+
+        let second_segment = cache.get(1, &replacement, &project).unwrap();
+        assert!(!Arc::ptr_eq(&replaced, &second_segment));
+        assert!(Arc::ptr_eq(
+            &replaced,
+            &cache.get(0, &replacement, &project).unwrap()
+        ));
+        assert_eq!(cache.entries.len(), 2);
+    }
+
+    #[test]
+    fn preview_cursor_cache_evicts_the_least_recent_segment() {
+        let cursor = preview_cursor_events();
+        let project = ProjectConfiguration::default();
+        let mut cache = PreviewCursorCache::default();
+        let first = cache.get(0, &cursor, &project).unwrap();
+        let second = cache.get(1, &cursor, &project).unwrap();
+        let second_weak = Arc::downgrade(&second);
+        drop(second);
+
+        assert!(Arc::ptr_eq(
+            &first,
+            &cache.get(0, &cursor, &project).unwrap()
+        ));
+        drop(cache.get(2, &cursor, &project).unwrap());
+
+        assert!(second_weak.upgrade().is_none());
+        assert_eq!(cache.entries.len(), PREVIEW_CURSOR_CACHE_CAPACITY);
+        assert!(Arc::ptr_eq(
+            &first,
+            &cache.get(0, &cursor, &project).unwrap()
+        ));
+    }
+
+    #[test]
+    fn preview_cursor_cache_matches_fresh_interpolation_across_seeks_and_modes() {
+        let mut project = ProjectConfiguration::default();
+        let mut cache = PreviewCursorCache::default();
+        for cursor in [preview_cursor_events(), Arc::new(CursorEvents::default())] {
+            for (raw, click_spring) in [
+                (false, None),
+                (
+                    false,
+                    Some(cap_project::ClickSpringConfig {
+                        tension: 720.0,
+                        mass: 2.0,
+                        friction: 55.0,
+                    }),
+                ),
+                (true, None),
+            ] {
+                project.cursor.raw = raw;
+                project.cursor.click_spring = click_spring;
+                let cached = cache.get(0, &cursor, &project);
+                if raw || cursor.moves.is_empty() {
+                    assert!(cached.is_none());
+                    continue;
+                }
+                let cached = cached.unwrap();
+                let fresh = PrecomputedCursorTimeline::new(
+                    &cursor,
+                    (!raw).then_some(SpringMassDamperSimulationConfig {
+                        tension: project.cursor.tension,
+                        mass: project.cursor.mass,
+                        friction: project.cursor.friction,
+                    }),
+                    Some(project.cursor.click_spring_config()),
+                );
+
+                for time in [1.5, 0.0, 0.08, 0.1, 0.23, 0.24, 0.3, 1.0, 1.6, 2.5, -1.0] {
+                    match (cached.interpolate(time), fresh.interpolate(time)) {
+                        (Some(actual), Some(expected)) => {
+                            assert_eq!(
+                                actual.position.coord.x.to_bits(),
+                                expected.position.coord.x.to_bits()
+                            );
+                            assert_eq!(
+                                actual.position.coord.y.to_bits(),
+                                expected.position.coord.y.to_bits()
+                            );
+                            assert_eq!(actual.velocity.x.to_bits(), expected.velocity.x.to_bits());
+                            assert_eq!(actual.velocity.y.to_bits(), expected.velocity.y.to_bits());
+                            assert_eq!(actual.cursor_id, expected.cursor_id);
+                        }
+                        (None, None) => {}
+                        _ => panic!("cached cursor presence differed at {time}"),
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn audio_timing_repair_uses_startup_trimmed_overlap() {

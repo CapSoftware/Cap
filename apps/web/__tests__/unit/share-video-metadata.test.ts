@@ -22,6 +22,26 @@ describe("share video metadata", () => {
 		);
 	});
 
+	it("advertises a custom domain but keeps the player and oEmbed canonical", () => {
+		const urls = getShareVideoUrls({
+			videoId: "video123",
+			sourceType: "desktopMP4",
+			webUrl: "https://looms.example.com",
+			canonicalWebUrl: "https://cap.so",
+		});
+
+		expect(urls.shareUrl).toBe("https://looms.example.com/s/video123");
+		expect(urls.previewImageUrl).toContain("https://looms.example.com/");
+		expect(urls.ogImageUrl).toContain("https://looms.example.com/");
+		expect(urls.streamUrl).toContain("https://looms.example.com/");
+		// `/embed/` redirects off a custom domain and `/api/oembed` rejects a
+		// custom domain `url`, so both stay on the default origin.
+		expect(urls.playerUrl).toBe("https://cap.so/embed/video123");
+		expect(urls.oEmbedUrl).toBe(
+			"https://cap.so/api/oembed?url=https%3A%2F%2Fcap.so%2Fs%2Fvideo123&format=json",
+		);
+	});
+
 	it("emits video metadata used by Open Graph and Twitter players", () => {
 		const metadata = buildShareVideoMetadata({
 			videoId: "video123",

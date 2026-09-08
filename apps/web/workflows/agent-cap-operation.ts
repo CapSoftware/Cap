@@ -20,6 +20,7 @@ import {
 	getDomainResponse,
 } from "@/actions/organization/domain-utils";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 type CapSnapshot = {
@@ -215,6 +216,7 @@ async function createDuplicate(operationId: string, payload: OperationPayload) {
 			})
 			.where(eq(Db.agentApiOperations.id, operationId));
 	});
+	await enqueueVideoStorageNameSync(destinationId);
 }
 
 async function deleteCapObjects(payload: OperationPayload) {

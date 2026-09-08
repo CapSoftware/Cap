@@ -52,6 +52,30 @@ impl Display {
     pub fn refresh_rate(&self) -> f64 {
         self.0.refresh_rate()
     }
+
+    pub fn notch(&self) -> Option<NotchGeometry> {
+        #[cfg(target_os = "macos")]
+        {
+            self.0.notch()
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
+}
+
+/// Geometry of the camera housing ("notch") on a built-in MacBook display, as
+/// fractions of that display's size. Fractions rather than points so the values
+/// survive scaled display modes and the logical-to-physical step between
+/// capture and playback.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NotchGeometry {
+    /// Distance from the left edge of the display to the notch.
+    pub x: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone, PartialEq, Debug)]
@@ -230,6 +254,32 @@ impl FromStr for WindowId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         s.parse::<WindowIdImpl>().map(Self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notch_geometry_is_within_the_display() {
+        for display in Display::list() {
+            let Some(notch) = display.notch() else {
+                continue;
+            };
+
+            assert!(notch.width > 0.0 && notch.height > 0.0, "{notch:?}");
+            assert!(notch.x > 0.0 && notch.x + notch.width < 1.0, "{notch:?}");
+            assert!(notch.height < 0.5, "{notch:?}");
+
+            println!("{:?}: {notch:?}", display.name());
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn no_notch_off_macos() {
+        assert!(Display::list().iter().all(|d| d.notch().is_none()));
     }
 }
 

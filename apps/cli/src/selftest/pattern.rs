@@ -93,11 +93,41 @@ pub fn shutdown_main_thread_runner() {
 
 /// Runs pattern requests on the main thread until the sender is dropped via
 /// [`shutdown_main_thread_runner`].
+///
+/// The event loop is built once and reused: winit allows exactly one
+/// `EventLoop` per process, so a second `--mode both` leg would otherwise fail
+/// with `RecreationAttempt`. `run_app_on_demand` exists for exactly this.
 pub fn serve_main_thread(rx: mpsc::Receiver<PatternRequest>) {
+    let mut event_loop: Option<EventLoop<()>> = None;
+
     while let Ok(request) = rx.recv() {
-        let result = run_pattern(request.spec);
+        let result = match event_loop_for(&mut event_loop) {
+            Ok(event_loop) => run_pattern(event_loop, request.spec),
+            Err(e) => Err(e),
+        };
         let _ = request.reply.send(result);
     }
+}
+
+fn event_loop_for(slot: &mut Option<EventLoop<()>>) -> Result<&mut EventLoop<()>, String> {
+    if slot.is_none() {
+        #[allow(unused_mut)]
+        let mut builder = EventLoop::builder();
+        #[cfg(target_os = "macos")]
+        {
+            use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+            builder
+                .with_activation_policy(ActivationPolicy::Regular)
+                .with_activate_ignoring_other_apps(true);
+        }
+        *slot = Some(
+            builder
+                .build()
+                .map_err(|e| format!("failed to create event loop: {e}"))?,
+        );
+    }
+
+    Ok(slot.as_mut().expect("event loop was just created"))
 }
 
 /// Called from the async side; blocks the calling task until the pattern
@@ -392,9 +422,14 @@ impl ApplicationHandler for PatternApp {
         if self.window.is_some() {
             return;
         }
+        // The self-test records the primary display, so the pattern has to
+        // land there: on a multi-monitor desk `Borderless(None)` picks the
+        // window's current monitor, which can be a screen nothing is
+        // recording (measured as zero flashes).
+        let monitor = event_loop.primary_monitor();
         let attrs = Window::default_attributes()
             .with_title("Cap Sync Test")
-            .with_fullscreen(Some(Fullscreen::Borderless(None)))
+            .with_fullscreen(Some(Fullscreen::Borderless(monitor)))
             .with_window_level(WindowLevel::AlwaysOnTop);
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
@@ -467,20 +502,54 @@ impl ApplicationHandler for PatternApp {
     }
 }
 
-fn run_pattern(spec: PatternSpec) -> Result<PatternReport, String> {
-    #[allow(unused_mut)]
-    let mut builder = EventLoop::builder();
-    #[cfg(target_os = "macos")]
-    {
-        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
-        builder
-            .with_activation_policy(ActivationPolicy::Regular)
-            .with_activate_ignoring_other_apps(true);
-    }
-    let mut event_loop = builder
-        .build()
-        .map_err(|e| format!("failed to create event loop: {e}"))?;
+/// How long the loop may keep turning after the pattern window is gone.
+const TEARDOWN_BUDGET: Duration = Duration::from_millis(750);
 
+/// Runs the loop for a brief, bounded moment after the pattern window has been
+/// dropped.
+///
+/// The fullscreen pattern window lives in a real macOS Space (winit's
+/// `Fullscreen::Borderless` is `toggleFullScreen:`), and leaving that Space is
+/// animated: it needs run-loop turns to finish. Without this the loop stops
+/// turning the instant `run_pattern` returns -- the main thread goes straight
+/// back to blocking on its request channel -- so the black always-on-top window
+/// can still be up over the next leg's recording.
+///
+/// Deliberately not `pump_app_events`: after `run_app_on_demand` returns, the
+/// loop's exit flag is still set and only `run_on_demand` clears it, so a pump
+/// would dispatch init events and exit again without ever turning the loop.
+/// Running the loop with a handler that cannot create a window is the mechanism
+/// that actually works. It creates nothing and exits on a deadline, so it
+/// cannot hang and it cannot bring a second window up.
+struct TeardownApp {
+    deadline: Instant,
+}
+
+impl ApplicationHandler for TeardownApp {
+    /// Empty by design: nothing in this handler may create a window.
+    fn resumed(&mut self, _event_loop: &ActiveEventLoop) {}
+
+    fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if Instant::now() >= self.deadline {
+            event_loop.exit();
+            return;
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(self.deadline));
+    }
+}
+
+fn drain_after_window_close(event_loop: &mut EventLoop<()>) {
+    let mut teardown = TeardownApp {
+        deadline: Instant::now() + TEARDOWN_BUDGET,
+    };
+    if let Err(e) = event_loop.run_app_on_demand(&mut teardown) {
+        tracing::warn!("selftest pattern teardown: {e}");
+    }
+}
+
+fn run_pattern(event_loop: &mut EventLoop<()>, spec: PatternSpec) -> Result<PatternReport, String> {
     let run_start = Instant::now();
     let epoch = run_start + spec.settle;
 
@@ -503,11 +572,20 @@ fn run_pattern(spec: PatternSpec) -> Result<PatternReport, String> {
         error: None,
     };
 
-    event_loop
+    let run_result = event_loop
         .run_app_on_demand(&mut app)
-        .map_err(|e| format!("event loop error: {e}"))?;
+        .map_err(|e| format!("event loop error: {e}"));
 
     drop(stream);
+
+    // Dropping the surface and then the window is what asks AppKit to leave the
+    // fullscreen Space; the drain gives it the run-loop turns to finish before
+    // the main thread parks on its request channel again.
+    app.surface = None;
+    app.window = None;
+    drain_after_window_close(event_loop);
+
+    run_result?;
 
     if let Some(error) = app.error {
         return Err(error);

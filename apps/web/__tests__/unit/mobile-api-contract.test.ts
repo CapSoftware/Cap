@@ -212,6 +212,66 @@ describe("mobile API contract schemas", () => {
 		expect(continuationUrl.searchParams.get("redirectUri")).toBe(redirectUri);
 	});
 
+	it.each(["person@example.com", "example.com", "aaaaaaaaaaaaaaa"])(
+		"consumes the SSO choice for %s while preserving the mobile callback",
+		(organizationId) => {
+			const requestUrl = new URL(
+				"https://incoming.test/api/mobile/session/request",
+			);
+			requestUrl.searchParams.set("provider", "workos");
+			requestUrl.searchParams.set("organizationId", organizationId);
+			requestUrl.searchParams.set("redirectUri", "cap://auth");
+			requestUrl.searchParams.set("type", "api_key");
+			const loginRedirectUrl = Mobile.createMobileSessionLoginRedirectUrl({
+				deploymentOrigin: "https://cap.so",
+				requestUrl: requestUrl.toString(),
+				provider: "workos",
+				organizationId,
+			});
+			const continuationUrl = new URL(
+				loginRedirectUrl.searchParams.get("next") ?? "",
+			);
+
+			expect(loginRedirectUrl.origin).toBe("https://cap.so");
+			expect(loginRedirectUrl.searchParams.get("mobileProvider")).toBe(
+				"workos",
+			);
+			expect(loginRedirectUrl.searchParams.get("organizationId")).toBe(
+				organizationId,
+			);
+			expect(continuationUrl.origin).toBe("https://cap.so");
+			expect(continuationUrl.pathname).toBe("/api/mobile/session/request");
+			expect(Array.from(continuationUrl.searchParams)).toEqual([
+				["redirectUri", "cap://auth"],
+				["type", "api_key"],
+			]);
+			expect(
+				Schema.decodeUnknownSync(Mobile.MobileSessionRequestParams)(
+					Object.fromEntries(continuationUrl.searchParams),
+				),
+			).toEqual({ redirectUri: "cap://auth" });
+		},
+	);
+
+	it("preserves the Expo callback when SSO starts without an organization identifier", () => {
+		const redirectUri =
+			"exp+cap://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081%2F--%2Fauth";
+		const loginRedirectUrl = Mobile.createMobileSessionLoginRedirectUrl({
+			deploymentOrigin: "http://localhost:3000",
+			requestUrl: `/api/mobile/session/request?provider=workos&redirectUri=${encodeURIComponent(redirectUri)}`,
+			provider: "workos",
+		});
+		const continuationUrl = new URL(
+			loginRedirectUrl.searchParams.get("next") ?? "",
+		);
+
+		expect(loginRedirectUrl.searchParams.get("mobileProvider")).toBe("workos");
+		expect(loginRedirectUrl.searchParams.has("organizationId")).toBe(false);
+		expect(continuationUrl.toString()).toBe(
+			`http://localhost:3000/api/mobile/session/request?redirectUri=${encodeURIComponent(redirectUri)}`,
+		);
+	});
+
 	it("allows only mobile auth callback redirects for session requests", () => {
 		const decodeRedirect = (redirectUri: string) =>
 			Schema.decodeUnknownSync(Mobile.MobileSessionRequestParams)({

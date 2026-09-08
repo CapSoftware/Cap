@@ -7,6 +7,7 @@ import { Avatar, Logo } from "@cap/ui";
 import type { ViewerSettings } from "@cap/web-backend";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTranscript } from "hooks/use-transcript";
+import Image from "next/image";
 import {
 	forwardRef,
 	useEffect,
@@ -27,6 +28,7 @@ import {
 	parseVTT,
 	type TranscriptEntry,
 } from "@/app/s/[videoId]/_components/utils/transcript-utils";
+import type { SharePageBranding } from "@/lib/share-branding";
 import { usePlayerJsReceiver } from "./use-player-js-receiver";
 
 declare global {
@@ -53,11 +55,14 @@ export const EmbedVideo = forwardRef<
 		data: Omit<typeof videos.$inferSelect, "password"> & {
 			hasActiveUpload: boolean | undefined;
 		};
+		branding: SharePageBranding | null;
 		user: typeof userSelectProps | null;
 		comments: CommentWithAuthor[];
 		chapters?: { title: string; start: number }[];
 		ownerName?: string | null;
 		autoplay?: boolean;
+		/** Seconds to open at, from the embed URL's `?t=`. */
+		startTime?: number | null;
 		minimal?: boolean;
 		viewerSettings?: ViewerSettings | null;
 		showPlaybackStatusBadge?: boolean;
@@ -66,11 +71,13 @@ export const EmbedVideo = forwardRef<
 	(
 		{
 			data,
+			branding,
 			user: _user,
 			comments: _comments,
 			chapters = [],
 			ownerName,
 			autoplay = false,
+			startTime = null,
 			minimal = false,
 			viewerSettings,
 			showPlaybackStatusBadge = false,
@@ -78,6 +85,7 @@ export const EmbedVideo = forwardRef<
 		ref,
 	) => {
 		const videoRef = useRef<HTMLVideoElement>(null);
+		const seekedToStart = useRef(false);
 		const playerContainerRef = useRef<HTMLDivElement>(null);
 		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 		usePlayerJsReceiver({ playerContainerRef, videoRef });
@@ -210,10 +218,24 @@ export const EmbedVideo = forwardRef<
 			const player = videoRef.current;
 			const handleLoadedMetadata = () => {
 				setLongestDuration(player.duration);
+
+				// Once only. HLS level switches and source swaps fire this again, and
+				// yanking a viewer who has since scrubbed back to the start offset
+				// would be worse than ignoring the deep link.
+				if (startTime === null || seekedToStart.current) return;
+				seekedToStart.current = true;
+				const limit = Number.isFinite(player.duration)
+					? Math.max(player.duration - 0.001, 0)
+					: startTime;
+				try {
+					player.currentTime = Math.min(startTime, limit);
+				} catch (error) {
+					console.warn("Failed to seek embed to start time", error);
+				}
 			};
 
 			if (player.readyState >= 1) {
-				setLongestDuration(player.duration);
+				handleLoadedMetadata();
 			} else {
 				player.addEventListener("loadedmetadata", handleLoadedMetadata);
 			}
@@ -221,7 +243,7 @@ export const EmbedVideo = forwardRef<
 			return () => {
 				player.removeEventListener("loadedmetadata", handleLoadedMetadata);
 			};
-		}, []);
+		}, [startTime]);
 
 		return (
 			<>
@@ -321,23 +343,42 @@ export const EmbedVideo = forwardRef<
 										</div>
 									</div>
 								</motion.div>
-								<motion.button
-									initial={{ opacity: 0, y: 10 }}
-									animate={{ opacity: 1, y: 0 }}
-									exit={{ opacity: 0, y: 10 }}
-									transition={{ duration: 0.3, delay: 0.1 }}
-									onClick={(e) => {
-										e.stopPropagation();
-										window.open("https://cap.so", "_blank");
-									}}
-									className="hidden z-10 gap-2 items-center px-3 py-2 text-sm rounded-full border backdrop-blur-sm transition-colors duration-200 sm:flex border-white/10 w-fit text-white/80 hover:text-white bg-black/50"
-									aria-label="Powered by Cap"
-								>
-									<span className="text-xs md:text-sm text-white/80">
-										Powered by
-									</span>
-									<Logo className="w-auto h-4" white={true} />
-								</motion.button>
+								{branding?.type === "custom" ? (
+									<motion.div
+										initial={{ opacity: 0, y: 10 }}
+										animate={{ opacity: 1, y: 0 }}
+										exit={{ opacity: 0, y: 10 }}
+										transition={{ duration: 0.3, delay: 0.1 }}
+										className="w-fit rounded-lg border border-white/10 bg-black/50 px-3 py-2 backdrop-blur-sm"
+									>
+										<Image
+											src={branding.imageUrl}
+											alt={`${branding.name} logo`}
+											width={160}
+											height={32}
+											unoptimized
+											className="h-8 w-auto max-w-40 object-contain"
+										/>
+									</motion.div>
+								) : branding?.type === "cap" ? (
+									<motion.button
+										initial={{ opacity: 0, y: 10 }}
+										animate={{ opacity: 1, y: 0 }}
+										exit={{ opacity: 0, y: 10 }}
+										transition={{ duration: 0.3, delay: 0.1 }}
+										onClick={(e) => {
+											e.stopPropagation();
+											window.open("https://cap.so", "_blank");
+										}}
+										className="hidden z-10 gap-2 items-center px-3 py-2 text-sm rounded-full border backdrop-blur-sm transition-colors duration-200 sm:flex border-white/10 w-fit text-white/80 hover:text-white bg-black/50"
+										aria-label="Powered by Cap"
+									>
+										<span className="text-xs md:text-sm text-white/80">
+											Powered by
+										</span>
+										<Logo className="w-auto h-4" white={true} />
+									</motion.button>
+								) : null}
 							</div>
 						)}
 					</AnimatePresence>

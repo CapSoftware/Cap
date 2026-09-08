@@ -19,15 +19,75 @@ export type JobPhase =
 	| "error"
 	| "cancelled";
 
+export type RecordingErrorCode =
+	| "source-invalid"
+	| "source-missing"
+	| "source-changed"
+	| "output-invalid"
+	| "processing-unavailable"
+	| "processing-budget-exhausted";
+
+export interface RecordingVerificationRequest {
+	version: 1;
+	artifact:
+		| { kind: "segments"; manifestSha256: string }
+		| {
+				kind: "mp4";
+				fileSize: number;
+				duration: number;
+				objectIdentity: string;
+		  };
+	requiredAudio: boolean;
+}
+
+export interface RecordingVerificationProof {
+	request: RecordingVerificationRequest;
+	fullDecode: true;
+	objectIdentity: string;
+	outputKey?: string;
+	outputSha256?: string;
+	sourceProof?: {
+		version: 1;
+		manifestSha256: string;
+		inventorySha256: string;
+		sourcePreserved: true;
+		videoDuration: number;
+		hasAudio: boolean;
+		audioVerified: boolean;
+	};
+}
+
 export interface JobProgress {
+	recordingWorker?: {
+		version: 1;
+		action: "claim" | "progress";
+		sequence: number;
+	};
+	generation?: string;
+	attemptId?: string;
+	inventorySha256?: string;
+	recordingVerification?: RecordingVerificationProof;
+	manifestSha256?: string;
 	jobId: string;
 	videoId: string;
 	phase: JobPhase;
 	progress: number;
 	message?: string;
 	error?: string;
+	errorCode?: RecordingErrorCode;
 	metadata?: VideoMetadata;
 	outputUrl?: string;
+}
+
+export interface RecordingWorkerAcknowledgement {
+	version: 1;
+	status: "accepted" | "owned" | "superseded" | "stale";
+	generation: string;
+	attemptId: string;
+	jobId: string;
+	sequence: number;
+	ownerJobId?: string;
+	leaseDurationMs?: number;
 }
 
 export interface VideoMetadata {
@@ -44,6 +104,28 @@ export interface VideoMetadata {
 }
 
 export interface Job {
+	recordingWorkerVersion?: 1;
+	recordingWorkerSequence?: number;
+	recordingWorkerClaimed?: boolean;
+	recordingWorkerRevoked?: boolean;
+	recordingWorkerLeaseExpiresAt?: number;
+	recordingWorkerLeaseTimer?: ReturnType<typeof setTimeout>;
+	recordingWorkerClaim?: Promise<RecordingWorkerAcknowledgement | undefined>;
+	generation?: string;
+	attemptId?: string;
+	inventorySha256?: string;
+	recordingRequestKey?: string;
+	terminalAt?: number;
+	terminalWebhookAcknowledgedAt?: number;
+	webhookInFlight?: boolean;
+	webhookPending?: boolean;
+	webhookPromise?: Promise<RecordingWorkerAcknowledgement | undefined>;
+	webhookAcknowledgedAt?: number;
+	webhookLastAttemptAt?: number;
+	recordingVerificationDeadlineAt?: number;
+	recordingProcessingDeadlineAt?: number;
+	recordingVerification?: RecordingVerificationProof;
+	manifestSha256?: string;
 	jobId: string;
 	videoId: string;
 	userId: string;
@@ -51,6 +133,7 @@ export interface Job {
 	progress: number;
 	message?: string;
 	error?: string;
+	errorCode?: RecordingErrorCode;
 	metadata?: VideoMetadata;
 	outputUrl?: string;
 	createdAt: number;
@@ -67,9 +150,13 @@ const jobs = new Map<string, Job>();
 const JOB_TTL_MS = 60 * 60 * 1000;
 const STALE_JOB_MS = 15 * 60 * 1000;
 const MAX_JOB_LIFETIME_MS = 60 * 60 * 1000;
+const MAX_RECORDING_PROCESSING_BUDGET_MS = 3 * 60 * 60 * 1000;
 const WEBHOOK_MAX_ATTEMPTS = 3;
 const WEBHOOK_RETRY_BASE_MS = 500;
 const WEBHOOK_TIMEOUT_MS = 5000;
+const RECORDING_HEARTBEAT_MS = 60_000;
+const MAX_RECORDING_WORKER_LEASE_MS = 5 * 60_000;
+const UNACKNOWLEDGED_TERMINAL_TTL_MS = 24 * 60 * 60 * 1000;
 
 const configuredMaxProcesses =
 	Number.parseInt(
@@ -172,6 +259,8 @@ export interface SystemResources {
 	processHeapMB: number;
 	processRssLimitMB: number;
 	containerMemoryUsageMB: number;
+	containerMemoryWorkingSetMB: number;
+	containerMemoryReclaimableCacheMB: number;
 	containerMemoryLimitMB: number;
 	memoryPressure: number;
 	configuredMax: number;
@@ -187,7 +276,7 @@ export function getSystemResources(): SystemResources {
 	const processRssMB = Math.round(mem.rss / (1024 * 1024));
 	const processHeapMB = Math.round(mem.heapUsed / (1024 * 1024));
 	const containerMemory = getContainerMemoryMetrics();
-	const memoryUsageMB = containerMemory.usageMB || processRssMB;
+	const memoryUsageMB = Math.max(containerMemory.workingSetMB, processRssMB);
 	const memoryLimitMB = containerMemory.limitMB;
 	const memoryPressure = memoryLimitMB > 0 ? memoryUsageMB / memoryLimitMB : 0;
 	const max = getMaxConcurrentVideoProcesses();
@@ -226,6 +315,8 @@ export function getSystemResources(): SystemResources {
 		processHeapMB,
 		processRssLimitMB: memoryLimitMB,
 		containerMemoryUsageMB: containerMemory.usageMB,
+		containerMemoryWorkingSetMB: containerMemory.workingSetMB,
+		containerMemoryReclaimableCacheMB: containerMemory.reclaimableCacheMB,
 		containerMemoryLimitMB: containerMemory.limitMB,
 		memoryPressure,
 		configuredMax: configuredMaxProcesses,
@@ -238,10 +329,17 @@ export function hasCriticalMemoryPressure(): boolean {
 	return getSystemResources().memoryPressure >= MEMORY_REJECT_THRESHOLD;
 }
 
-export function canAcceptNewVideoProcess(): boolean {
+export function canAcceptNewVideoProcess(
+	priority: "interactive" | "recovery" = "interactive",
+): boolean {
 	const active = getActiveVideoProcessCount();
 	const resources = getSystemResources();
-	return active < resources.effectiveMax;
+	return (
+		active <
+		(priority === "recovery" && resources.effectiveMax > 1
+			? Math.max(1, Math.floor(resources.effectiveMax / 2))
+			: resources.effectiveMax)
+	);
 }
 
 export function generateJobId(): string {
@@ -281,10 +379,17 @@ export function updateJob(
 		Pick<
 			Job,
 			| "phase"
+			| "generation"
+			| "attemptId"
+			| "inventorySha256"
+			| "recordingRequestKey"
 			| "progress"
 			| "message"
 			| "error"
+			| "errorCode"
 			| "metadata"
+			| "manifestSha256"
+			| "recordingVerification"
 			| "outputUrl"
 			| "inputTempFile"
 			| "outputTempFile"
@@ -295,8 +400,19 @@ export function updateJob(
 ): Job | undefined {
 	const job = jobs.get(jobId);
 	if (!job) return undefined;
+	if (!isActivePhase(job.phase)) return undefined;
 
 	Object.assign(job, updates, { updatedAt: Date.now() });
+	if (job.recordingWorkerVersion) {
+		job.recordingWorkerSequence = (job.recordingWorkerSequence ?? 0) + 1;
+	}
+	if (!isActivePhase(job.phase)) {
+		job.terminalAt ??= job.updatedAt;
+		if (job.recordingWorkerLeaseTimer)
+			clearTimeout(job.recordingWorkerLeaseTimer);
+	}
+	if (!isActivePhase(job.phase) && job.webhookInFlight)
+		job.webhookPending = true;
 	return job;
 }
 
@@ -308,9 +424,62 @@ export function touchJob(jobId: string): Job | undefined {
 	return job;
 }
 
+export function beginRecordingVerification(
+	jobId: string,
+	budgetMs: number,
+): boolean {
+	const job = jobs.get(jobId);
+	const now = Date.now();
+	if (
+		!job ||
+		!isActivePhase(job.phase) ||
+		job.abortController?.signal.aborted ||
+		job.recordingVerificationDeadlineAt !== undefined ||
+		now >
+			(job.recordingProcessingDeadlineAt ??
+				job.createdAt + MAX_JOB_LIFETIME_MS) ||
+		!Number.isSafeInteger(budgetMs) ||
+		budgetMs <= 0 ||
+		budgetMs > MAX_JOB_LIFETIME_MS
+	)
+		return false;
+	job.recordingVerificationDeadlineAt = Math.min(
+		now + budgetMs,
+		job.recordingProcessingDeadlineAt ?? Number.POSITIVE_INFINITY,
+	);
+	job.updatedAt = now;
+	return true;
+}
+
+export function beginRecordingProcessing(
+	jobId: string,
+	budgetMs: number,
+): boolean {
+	const job = jobs.get(jobId);
+	const now = Date.now();
+	if (
+		!job ||
+		!isActivePhase(job.phase) ||
+		job.abortController?.signal.aborted ||
+		job.recordingProcessingDeadlineAt !== undefined ||
+		job.recordingVerificationDeadlineAt !== undefined ||
+		now - job.updatedAt > STALE_JOB_MS ||
+		now - job.createdAt > MAX_JOB_LIFETIME_MS ||
+		!Number.isSafeInteger(budgetMs) ||
+		budgetMs <= 0 ||
+		budgetMs > MAX_RECORDING_PROCESSING_BUDGET_MS
+	)
+		return false;
+	job.recordingProcessingDeadlineAt = now + budgetMs;
+	job.updatedAt = now;
+	return true;
+}
+
 export function deleteJob(jobId: string): boolean {
 	const job = jobs.get(jobId);
 	if (job) {
+		if (job.recordingWorkerLeaseTimer)
+			clearTimeout(job.recordingWorkerLeaseTimer);
 		job.abortController?.abort();
 		job.inputTempFile?.cleanup().catch(() => {});
 		job.outputTempFile?.cleanup().catch(() => {});
@@ -329,9 +498,10 @@ export async function abortAllJobs(): Promise<number> {
 			job.phase !== "cancelled"
 		) {
 			job.abortController?.abort();
-			job.phase = "cancelled";
-			job.message = "Server shutting down";
-			job.updatedAt = Date.now();
+			updateJob(job.jobId, {
+				phase: "cancelled",
+				message: "Server shutting down",
+			});
 			abortedJobs.push(job);
 		}
 	}
@@ -352,6 +522,33 @@ export function cleanupExpiredJobs(): number {
 	for (const [jobId, job] of jobs) {
 		const age = now - job.createdAt;
 		const staleness = now - job.updatedAt;
+		if (!isActivePhase(job.phase)) {
+			const terminalAge = now - (job.terminalAt ?? job.updatedAt);
+			const awaitingWebhook =
+				Boolean(job.webhookUrl) && !job.terminalWebhookAcknowledgedAt;
+			if (
+				terminalAge >
+				(awaitingWebhook ? UNACKNOWLEDGED_TERMINAL_TTL_MS : JOB_TTL_MS)
+			) {
+				deleteJob(jobId);
+				cleaned++;
+			} else if (
+				awaitingWebhook &&
+				now - (job.webhookLastAttemptAt ?? 0) >= 60_000
+			) {
+				void sendWebhook(job);
+			}
+			continue;
+		}
+		if (
+			job.recordingWorkerClaimed &&
+			job.recordingWorkerLeaseExpiresAt !== undefined &&
+			now >= job.recordingWorkerLeaseExpiresAt
+		) {
+			revokeRecordingWorker(job, "Recording worker lease expired");
+			cleaned++;
+			continue;
+		}
 
 		if (staleness > JOB_TTL_MS) {
 			if (isActivePhase(job.phase)) {
@@ -359,13 +556,13 @@ export function cleanupExpiredJobs(): number {
 					`[job-manager] Cleaning up expired job ${jobId} (phase=${job.phase}, age=${Math.round(age / 60000)}m)`,
 				);
 				job.abortController?.abort();
-				job.phase = "error";
-				job.error = `Job expired: no progress update for ${Math.round(staleness / 60000)} minutes`;
-				job.message = "Processing failed (expired)";
-				job.updatedAt = now;
+				updateJob(jobId, {
+					phase: "error",
+					error: `Job expired: no progress update for ${Math.round(staleness / 60000)} minutes`,
+					message: "Processing failed (expired)",
+				});
 				void sendWebhook(job);
 			}
-			deleteJob(jobId);
 			cleaned++;
 			continue;
 		}
@@ -375,27 +572,45 @@ export function cleanupExpiredJobs(): number {
 				`[job-manager] Marking stale job ${jobId} as error (phase=${job.phase}, no update for ${Math.round(staleness / 60000)}m)`,
 			);
 			job.abortController?.abort();
-			job.phase = "error";
-			job.error = `Job stale: no progress update for ${Math.round(staleness / 60000)} minutes`;
-			job.message = "Processing failed (stale)";
-			job.updatedAt = now;
+			updateJob(jobId, {
+				phase: "error",
+				error: `Job stale: no progress update for ${Math.round(staleness / 60000)} minutes`,
+				message: "Processing failed (stale)",
+			});
 			void sendWebhook(job);
 			cleaned++;
 			continue;
 		}
 
-		if (isActivePhase(job.phase) && age > MAX_JOB_LIFETIME_MS) {
+		const deadline =
+			job.recordingVerificationDeadlineAt ??
+			job.recordingProcessingDeadlineAt ??
+			job.createdAt + MAX_JOB_LIFETIME_MS;
+		if (isActivePhase(job.phase) && now > deadline) {
 			console.warn(
 				`[job-manager] Marking long-running job ${jobId} as error (phase=${job.phase}, age=${Math.round(age / 60000)}m)`,
 			);
 			job.abortController?.abort();
-			job.phase = "error";
-			job.error = `Job exceeded maximum lifetime of ${Math.round(MAX_JOB_LIFETIME_MS / 60000)} minutes`;
-			job.message = "Processing failed (timeout)";
-			job.updatedAt = now;
+			updateJob(jobId, {
+				phase: "error",
+				error:
+					job.recordingVerificationDeadlineAt === undefined &&
+					job.recordingProcessingDeadlineAt === undefined
+						? `Job exceeded maximum lifetime of ${Math.round(MAX_JOB_LIFETIME_MS / 60000)} minutes`
+						: "Recording verification timed out",
+				message: "Processing failed (timeout)",
+			});
 			void sendWebhook(job);
 			cleaned++;
+			continue;
 		}
+		if (
+			job.generation &&
+			job.attemptId &&
+			(!job.recordingWorkerVersion || job.recordingWorkerClaimed) &&
+			now - (job.webhookLastAttemptAt ?? 0) >= RECORDING_HEARTBEAT_MS
+		)
+			void sendWebhook(job);
 	}
 
 	return cleaned;
@@ -403,21 +618,98 @@ export function cleanupExpiredJobs(): number {
 
 export function getJobProgress(job: Job): JobProgress {
 	return {
+		...(job.recordingWorkerVersion && {
+			recordingWorker: {
+				version: 1 as const,
+				action: job.recordingWorkerClaimed
+					? ("progress" as const)
+					: ("claim" as const),
+				sequence: job.recordingWorkerSequence ?? 0,
+			},
+		}),
+		generation: job.generation,
+		attemptId: job.attemptId,
+		inventorySha256: job.inventorySha256,
+		manifestSha256: job.manifestSha256,
+		recordingVerification: job.recordingVerification,
 		jobId: job.jobId,
 		videoId: job.videoId,
 		phase: job.phase,
 		progress: job.progress,
 		message: job.message,
 		error: job.error,
+		errorCode: job.errorCode,
 		metadata: job.metadata,
 		outputUrl: job.outputUrl,
 	};
 }
 
-export async function sendWebhook(job: Job): Promise<void> {
-	if (!job.webhookUrl) return;
+function revokeRecordingWorker(job: Job, reason: string): void {
+	job.recordingWorkerRevoked = true;
+	job.webhookPending = false;
+	job.abortController?.abort(new Error(reason));
+	if (isActivePhase(job.phase)) {
+		updateJob(job.jobId, {
+			phase: "cancelled",
+			errorCode: "processing-unavailable",
+			error: reason,
+			message: reason,
+		});
+	}
+	job.webhookPending = false;
+	job.terminalWebhookAcknowledgedAt = Date.now();
+	console.warn("[job-manager] Recording worker stopped", {
+		jobId: job.jobId,
+		videoId: job.videoId,
+		generation: job.generation,
+		attemptId: job.attemptId,
+		reason,
+	});
+}
 
-	const payload = getJobProgress(job);
+function parseWorkerAcknowledgement(
+	value: unknown,
+	payload: JobProgress,
+): RecordingWorkerAcknowledgement | undefined {
+	if (!value || typeof value !== "object" || !("recordingWorker" in value))
+		return undefined;
+	const ack = value.recordingWorker;
+	if (!ack || typeof ack !== "object") return undefined;
+	if (
+		!("version" in ack) ||
+		ack.version !== 1 ||
+		!("status" in ack) ||
+		typeof ack.status !== "string" ||
+		!["accepted", "owned", "superseded", "stale"].includes(ack.status) ||
+		!("generation" in ack) ||
+		ack.generation !== payload.generation ||
+		!("attemptId" in ack) ||
+		ack.attemptId !== payload.attemptId ||
+		!("jobId" in ack) ||
+		ack.jobId !== payload.jobId ||
+		!("sequence" in ack) ||
+		ack.sequence !== payload.recordingWorker?.sequence ||
+		("ownerJobId" in ack && typeof ack.ownerJobId !== "string") ||
+		(ack.status === "owned" &&
+			(!("ownerJobId" in ack) ||
+				!ack.ownerJobId ||
+				ack.ownerJobId === payload.jobId)) ||
+		("leaseDurationMs" in ack &&
+			(typeof ack.leaseDurationMs !== "number" ||
+				!Number.isSafeInteger(ack.leaseDurationMs) ||
+				ack.leaseDurationMs <= 0 ||
+				ack.leaseDurationMs > MAX_RECORDING_WORKER_LEASE_MS))
+	)
+		return undefined;
+	return ack as RecordingWorkerAcknowledgement;
+}
+
+async function deliverWebhook(
+	job: Job,
+	payload: JobProgress,
+): Promise<RecordingWorkerAcknowledgement | undefined> {
+	if (!job.webhookUrl) return undefined;
+	const body = JSON.stringify(payload);
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
 	};
@@ -428,23 +720,89 @@ export async function sendWebhook(job: Job): Promise<void> {
 	let lastError: unknown;
 
 	for (let attempt = 0; attempt < WEBHOOK_MAX_ATTEMPTS; attempt++) {
+		if (body !== JSON.stringify(getJobProgress(job))) {
+			job.webhookPending = true;
+			return undefined;
+		}
+		const startedAt = Date.now();
+		job.webhookLastAttemptAt = startedAt;
 		try {
 			const resp = await fetch(job.webhookUrl, {
 				method: "POST",
 				headers,
-				body: JSON.stringify(payload),
+				body,
 				signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
 			});
+			if (job.recordingWorkerRevoked || jobs.get(job.jobId) !== job) {
+				await resp.body?.cancel();
+				return undefined;
+			}
 
 			if (resp.ok) {
-				return;
+				let ack: RecordingWorkerAcknowledgement | undefined;
+				if (payload.recordingWorker) {
+					ack = parseWorkerAcknowledgement(await resp.json(), payload);
+					if (!ack)
+						throw new Error(
+							"Recording worker acknowledgement is unsupported or invalid",
+						);
+					if (ack.status === "owned" || ack.status === "superseded") {
+						revokeRecordingWorker(
+							job,
+							"Recording worker ownership was superseded",
+						);
+						return ack;
+					}
+					if (ack.status === "stale") return ack;
+					if (isActivePhase(payload.phase)) {
+						if (
+							!ack.leaseDurationMs ||
+							startedAt + ack.leaseDurationMs <= Date.now()
+						)
+							throw new Error(
+								"Recording worker acknowledgement has no live lease",
+							);
+						job.recordingWorkerLeaseExpiresAt = startedAt + ack.leaseDurationMs;
+						job.recordingWorkerClaimed = true;
+						if (job.recordingWorkerLeaseTimer)
+							clearTimeout(job.recordingWorkerLeaseTimer);
+						if (isActivePhase(job.phase)) {
+							job.recordingWorkerLeaseTimer = setTimeout(
+								() => {
+									if (isActivePhase(job.phase))
+										revokeRecordingWorker(
+											job,
+											"Recording worker lease expired",
+										);
+								},
+								Math.max(0, job.recordingWorkerLeaseExpiresAt - Date.now()),
+							);
+							job.recordingWorkerLeaseTimer.unref?.();
+						}
+					}
+				} else {
+					await resp.body?.cancel();
+				}
+				job.webhookAcknowledgedAt = Date.now();
+				if (
+					!isActivePhase(payload.phase) &&
+					body === JSON.stringify(getJobProgress(job))
+				) {
+					job.terminalWebhookAcknowledgedAt = Date.now();
+				}
+				return ack;
 			}
+			await resp.body?.cancel();
 
 			lastError = new Error(
 				`Webhook returned ${resp.status} for job ${job.jobId}`,
 			);
 		} catch (err) {
 			lastError = err;
+		}
+		if (body !== JSON.stringify(getJobProgress(job))) {
+			job.webhookPending = true;
+			return undefined;
 		}
 
 		if (attempt < WEBHOOK_MAX_ATTEMPTS - 1) {
@@ -453,11 +811,46 @@ export async function sendWebhook(job: Job): Promise<void> {
 			);
 		}
 	}
-
 	console.error(
 		`[job-manager] Failed to send webhook for job ${job.jobId}:`,
 		lastError,
 	);
+	return undefined;
+}
+
+export function sendWebhook(
+	job: Job,
+): Promise<RecordingWorkerAcknowledgement | undefined> {
+	if (!job.webhookUrl || job.recordingWorkerRevoked)
+		return Promise.resolve(undefined);
+	job.webhookPending = true;
+	if (job.webhookPromise) return job.webhookPromise;
+	job.webhookInFlight = true;
+	job.webhookPromise = (async () => {
+		let acknowledgement: RecordingWorkerAcknowledgement | undefined;
+		while (
+			job.webhookPending &&
+			!job.recordingWorkerRevoked &&
+			jobs.get(job.jobId) === job
+		) {
+			job.webhookPending = false;
+			acknowledgement = await deliverWebhook(job, getJobProgress(job));
+		}
+		return acknowledgement;
+	})().finally(() => {
+		job.webhookInFlight = false;
+		job.webhookPromise = undefined;
+	});
+	return job.webhookPromise;
+}
+
+export function claimRecordingWorker(
+	job: Job,
+): Promise<RecordingWorkerAcknowledgement | undefined> {
+	job.recordingWorkerVersion = 1;
+	job.recordingWorkerSequence ??= 0;
+	job.recordingWorkerClaim ??= sendWebhook(job);
+	return job.recordingWorkerClaim;
 }
 
 export function forceCleanupActiveJobs(): number {
@@ -470,10 +863,11 @@ export function forceCleanupActiveJobs(): number {
 				`[job-manager] Force-cleaning job ${jobId} (phase=${job.phase}, age=${Math.round((now - job.createdAt) / 60000)}m)`,
 			);
 			job.abortController?.abort();
-			job.phase = "error";
-			job.error = "Force-cleaned by admin";
-			job.message = "Processing failed (force-cleaned)";
-			job.updatedAt = now;
+			updateJob(jobId, {
+				phase: "error",
+				error: "Force-cleaned by admin",
+				message: "Processing failed (force-cleaned)",
+			});
 			void sendWebhook(job);
 			cleaned++;
 		}

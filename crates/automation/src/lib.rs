@@ -208,6 +208,13 @@ pub trait AutomationHost: Send + Sync {
         open_in_browser: bool,
     ) -> impl std::future::Future<Output = Result<(), String>> + Send;
 
+    fn upload_is_verified(
+        &self,
+        _ctx: &TriggerContext,
+    ) -> impl std::future::Future<Output = Result<bool, String>> + Send {
+        std::future::ready(Ok(false))
+    }
+
     fn reveal_in_file_manager(
         &self,
         ctx: &TriggerContext,
@@ -304,11 +311,23 @@ pub async fn run<H: AutomationHost>(
     for (rule_id, actions) in matched {
         info!(rule_id = %rule_id, trigger = ?trigger, "Running automation rule");
         let mut action_results = Vec::new();
+        let mut remaining_uploads = actions
+            .iter()
+            .filter(|action| matches!(action, Action::Upload { .. }))
+            .count();
+        let requires_upload_verification =
+            remaining_uploads > 0 || *trigger == Trigger::UploadCompleted;
+        let mut upload_failed = false;
 
         for action in &actions {
+            let is_upload = matches!(action, Action::Upload { .. });
+            if is_upload {
+                remaining_uploads -= 1;
+            }
             if let Some(cap) = action.required_capability()
                 && !caps.contains(&cap)
             {
+                upload_failed |= is_upload;
                 warn!(
                     rule_id = %rule_id,
                     action = ?action,
@@ -323,7 +342,29 @@ pub async fn run<H: AutomationHost>(
                 continue;
             }
 
-            let result = execute_action(host, action, ctx).await;
+            let result = if matches!(action, Action::DeleteLocalFiles)
+                && requires_upload_verification
+            {
+                if remaining_uploads > 0 {
+                    Err("Upload has not finished; local recording retained".to_string())
+                } else if upload_failed {
+                    Err("Upload failed; local recording retained".to_string())
+                } else {
+                    match host.upload_is_verified(ctx).await {
+                        Ok(true) => execute_action(host, action, ctx).await,
+                        Ok(false) => Err(
+                            "Upload submitted, but remote verification is unavailable; local recording retained"
+                                .to_string(),
+                        ),
+                        Err(error) => Err(format!(
+                            "Upload verification failed; local recording retained: {error}"
+                        )),
+                    }
+                }
+            } else {
+                execute_action(host, action, ctx).await
+            };
+            upload_failed |= is_upload && result.is_err();
             let (success, error) = match result {
                 Ok(()) => (true, None),
                 Err(e) => {

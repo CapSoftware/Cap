@@ -1,12 +1,14 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizationInvites } from "@cap/database/schema";
+import { userIsPro } from "@cap/utils";
 import { and, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AuthContextProvider } from "@/app/Layout/AuthContext";
 import { resolveCurrentUser } from "@/app/Layout/current-user";
 import { runPromise } from "@/lib/server";
+import { getShareableLinkUsage } from "@/lib/shareable-link-quota";
 import DashboardInner from "./_components/DashboardInner";
 import { DashboardPasteImport } from "./_components/DashboardPasteImport";
 import MobileTab from "./_components/MobileTab";
@@ -78,6 +80,14 @@ export default async function DashboardLayout({
 		userPreferences = null;
 	}
 
+	// Fail-open: the meter is informational and must never take the shell down.
+	const shareableLinkUsage = userIsPro(user)
+		? null
+		: await getShareableLinkUsage(user.id).catch((error) => {
+				console.error("Failed to load shareable link usage", error);
+				return null;
+			});
+
 	let activeOrganization = organizationSelect.find(
 		(organization) =>
 			organization.organization.id === user.activeOrganizationId,
@@ -105,6 +115,7 @@ export default async function DashboardLayout({
 					anyNewNotifications={anyNewNotifications}
 					userPreferences={userPreferences}
 					referClicked={referClicked === "true"}
+					shareableLinkUsage={shareableLinkUsage}
 				>
 					<DashboardPasteImport />
 					<div className="bg-gray-2 dashboard-grid">

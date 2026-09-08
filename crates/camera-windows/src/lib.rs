@@ -189,6 +189,8 @@ pub enum StartCapturingError {
     DirectShow(#[from] cap_camera_directshow::StartCapturingError),
     #[error("Format/{0}")]
     Format(#[from] VideoFormatError),
+    #[error("format doesn't match any backend available for this device")]
+    FormatMismatch,
 }
 
 impl VideoDeviceInfo {
@@ -321,7 +323,7 @@ impl VideoDeviceInfo {
     ) -> Result<CaptureHandle, StartCapturingError> {
         let res = match (self.inner, &format) {
             (
-                VideoDeviceInfoInner::MediaFoundation { device },
+                VideoDeviceInfoInner::MediaFoundation { device, .. },
                 VideoFormatInner::MediaFoundation(mf_format),
             ) => {
                 let format = VideoFormat::new_mf(mf_format.clone())?;
@@ -351,7 +353,14 @@ impl VideoDeviceInfo {
 
                 CaptureHandle::MediaFoundation(handle)
             }
-            (VideoDeviceInfoInner::DirectShow(device), VideoFormatInner::DirectShow(format)) => {
+            (
+                VideoDeviceInfoInner::DirectShow(device)
+                | VideoDeviceInfoInner::MediaFoundation {
+                    dshow_fallback: Some(device),
+                    ..
+                },
+                VideoFormatInner::DirectShow(format),
+            ) => {
                 let handle = device.start_capturing(
                     format,
                     Box::new(move |data| {
@@ -384,7 +393,7 @@ impl VideoDeviceInfo {
 
                 CaptureHandle::DirectShow(handle)
             }
-            _ => todo!(),
+            _ => return Err(StartCapturingError::FormatMismatch),
         };
 
         Ok(res)
@@ -392,20 +401,32 @@ impl VideoDeviceInfo {
 
     pub fn formats(&self) -> Vec<VideoFormat> {
         match &self.inner {
-            VideoDeviceInfoInner::MediaFoundation { device } => device
-                .formats()
-                .map(|formats| {
-                    formats
-                        .filter_map(|t| VideoFormat::new_mf(t).ok())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default(),
-            VideoDeviceInfoInner::DirectShow(device) => device
-                .media_types()
-                .into_iter()
-                .flatten()
-                .filter_map(|media_type| VideoFormat::new_ds(media_type).ok())
-                .collect::<Vec<_>>(),
+            VideoDeviceInfoInner::MediaFoundation {
+                device,
+                dshow_fallback,
+            } => {
+                let formats = device
+                    .formats()
+                    .map(|formats| {
+                        formats
+                            .filter_map(|t| VideoFormat::new_mf(t).ok())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+
+                if !formats.is_empty() {
+                    return formats;
+                }
+
+                // MF yielded nothing for this device, so release it at the
+                // driver: repeated format requests must not accumulate
+                // half-open sources, and exclusive drivers reject
+                // DirectShow's bind while the failed source holds the device.
+                device.shutdown();
+
+                dshow_fallback.as_ref().map(ds_formats).unwrap_or_default()
+            }
+            VideoDeviceInfoInner::DirectShow(device) => ds_formats(device),
         }
     }
 }
@@ -507,10 +528,26 @@ fn directshow_frame_is_bottom_up(pixel_format: PixelFormat, bi_height: i32) -> b
     bi_height > 0 && pixel_format.is_traditionally_bottom_up()
 }
 
+fn ds_formats(device: &cap_camera_directshow::VideoInputDevice) -> Vec<VideoFormat> {
+    device
+        .media_types()
+        .into_iter()
+        .flatten()
+        .filter_map(|media_type| VideoFormat::new_ds(media_type).ok())
+        .collect()
+}
+
 #[derive(Clone)]
 enum VideoDeviceInfoInner {
     MediaFoundation {
         device: cap_camera_mediafoundation::Device,
+        // Some devices register with Media Foundation but only actually work
+        // through DirectShow (capture cards, some virtual cameras). The DS
+        // twin is kept so formats/capture can fall back to it when the MF
+        // device fails to activate or reports no formats — probing MF during
+        // enumeration would open every device on every poll
+        // (CapSoftware/Cap#2132).
+        dshow_fallback: Option<cap_camera_directshow::VideoInputDevice>,
     },
     DirectShow(cap_camera_directshow::VideoInputDevice),
 }
@@ -549,7 +586,10 @@ pub fn get_devices() -> Result<Vec<VideoDeviceInfo>, GetDevicesError> {
                 id,
                 model_id,
                 category,
-                inner: VideoDeviceInfoInner::MediaFoundation { device },
+                inner: VideoDeviceInfoInner::MediaFoundation {
+                    device,
+                    dshow_fallback: None,
+                },
             })
         })
         .filter_map(|result| match result {
@@ -590,16 +630,27 @@ pub fn get_devices() -> Result<Vec<VideoDeviceInfo>, GetDevicesError> {
     for dshow_device in dshow_devices {
         let name_and_model = dshow_device.name_and_model();
 
-        let mf_device = devices
-            .iter()
-            .enumerate()
-            .find(|(_, device)| device.is_mf() && device.name_and_model() == name_and_model);
+        // Identical devices produce identical names; pair each DS device with
+        // the first MF entry that doesn't have a fallback yet so twins map
+        // one-to-one instead of piling onto the first match.
+        let mf_twin = devices.iter().position(|device| {
+            matches!(
+                &device.inner,
+                VideoDeviceInfoInner::MediaFoundation {
+                    dshow_fallback: None,
+                    ..
+                }
+            ) && device.name_and_model() == name_and_model
+        });
 
-        match mf_device {
-            Some((i, mf_device)) => {
-                if mf_device.formats().is_empty() {
-                    devices.push(mf_device.clone());
-                    devices.swap_remove(i);
+        match mf_twin {
+            Some(index) => {
+                if let (
+                    VideoDeviceInfoInner::MediaFoundation { dshow_fallback, .. },
+                    VideoDeviceInfoInner::DirectShow(dshow),
+                ) = (&mut devices[index].inner, dshow_device.inner)
+                {
+                    *dshow_fallback = Some(dshow);
                 }
             }
             None => devices.push(dshow_device),

@@ -7,6 +7,7 @@ import { makePersisted } from "@solid-primitives/storage";
 import { createMutation, createQuery, skipToken } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { emitTo } from "@tauri-apps/api/event";
 import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -52,7 +53,8 @@ import {
 	useEditorInstanceContext,
 } from "./context";
 import { EditorErrorScreen } from "./EditorErrorScreen";
-import { Header } from "./Header";
+import { EditorSkeleton } from "./editor-skeleton";
+import { Header, type TitleSaveRegistration } from "./Header";
 import { ImportProgress } from "./ImportProgress";
 import { PlayerContent } from "./Player";
 import { Timeline } from "./Timeline";
@@ -129,10 +131,92 @@ function getPreviewProjectConfig(
 		};
 	}
 
+	if (!editorState.timeline.tracks["3d"] && config.timeline) {
+		config.timeline = {
+			...config.timeline,
+			camera3dSegments: [],
+		};
+	}
+
 	return config;
 }
 
 export function Editor() {
+	const currentWindow = getCurrentWindow();
+	let flushTitleSave: (() => Promise<void>) | undefined;
+	let setTitleReadOnly: ((readOnly: boolean) => void) | undefined;
+	let activeTitleSave: { generation: number; requestId: string } | undefined;
+	const registerTitleSave = (
+		registration: TitleSaveRegistration | undefined,
+	) => {
+		flushTitleSave = registration?.flush;
+		setTitleReadOnly = registration?.setReadOnly;
+		setTitleReadOnly?.(activeTitleSave !== undefined);
+	};
+
+	onMount(() => {
+		let disposed = false;
+		let titleSaveGeneration = 0;
+
+		const titleSaveCancelled = currentWindow.listen<{ requestId: string }>(
+			"editor-title-save-cancelled",
+			({ payload }) => {
+				if (activeTitleSave?.requestId !== payload.requestId) return;
+				activeTitleSave = undefined;
+				setTitleReadOnly?.(false);
+			},
+		);
+
+		const titleSaveRequest = titleSaveCancelled.then(() =>
+			currentWindow.listen<{ requestId: string }>(
+				"editor-title-save-request",
+				async ({ payload }) => {
+					if (disposed) return;
+
+					const generation = titleSaveGeneration + 1;
+					titleSaveGeneration = generation;
+					const { requestId } = payload;
+					activeTitleSave = { generation, requestId };
+					const readOnly = setTitleReadOnly;
+					readOnly?.(true);
+
+					let error: string | null = null;
+					try {
+						if (flushTitleSave) await flushTitleSave();
+					} catch (cause) {
+						error = cause instanceof Error ? cause.message : String(cause);
+					}
+
+					if (
+						disposed ||
+						activeTitleSave?.generation !== generation ||
+						activeTitleSave?.requestId !== requestId
+					)
+						return;
+
+					try {
+						await emitTo(currentWindow.label, "editor-title-save-finished", {
+							requestId,
+							windowLabel: currentWindow.label,
+							error,
+						});
+					} catch (cause) {
+						console.error("Failed to acknowledge editor title save:", cause);
+						return;
+					}
+				},
+			),
+		);
+
+		onCleanup(() => {
+			disposed = true;
+			activeTitleSave = undefined;
+			setTitleReadOnly?.(false);
+			void titleSaveRequest.then((unlisten) => unlisten()).catch(() => {});
+			void titleSaveCancelled.then((unlisten) => unlisten()).catch(() => {});
+		});
+	});
+
 	const [projectPath] = createResource(() => commands.getEditorProjectPath());
 
 	const rawMetaQuery = createQuery(() => ({
@@ -204,13 +288,7 @@ export function Editor() {
 	};
 
 	return (
-		<Switch
-			fallback={
-				<div class="flex items-center justify-center h-full w-full">
-					<div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-500" />
-				</div>
-			}
-		>
+		<Switch fallback={<EditorSkeleton />}>
 			<Match
 				when={importStatus() === "importing" ? (projectPath() ?? null) : null}
 			>
@@ -233,7 +311,11 @@ export function Editor() {
 						)}
 					>
 						<EditorInstanceContextProvider>
-							<EditorContent projectPath={path()} />
+							<EditorContent
+								projectPath={path()}
+								getTitleSave={() => flushTitleSave}
+								registerTitleSave={registerTitleSave}
+							/>
 						</EditorInstanceContextProvider>
 					</ErrorBoundary>
 				)}
@@ -242,7 +324,11 @@ export function Editor() {
 	);
 }
 
-function EditorContent(props: { projectPath: string }) {
+function EditorContent(props: {
+	projectPath: string;
+	getTitleSave: () => (() => Promise<void>) | undefined;
+	registerTitleSave: (registration: TitleSaveRegistration | undefined) => void;
+}) {
 	const ctx = useEditorInstanceContext();
 
 	const errorInfo = () => {
@@ -271,7 +357,7 @@ function EditorContent(props: { projectPath: string }) {
 	};
 
 	return (
-		<Switch>
+		<Switch fallback={<EditorSkeleton />}>
 			<Match when={errorInfo()}>
 				{(info) => (
 					<EditorErrorScreen
@@ -283,7 +369,10 @@ function EditorContent(props: { projectPath: string }) {
 			<Match when={readyData()}>
 				{(values) => (
 					<EditorContextProvider {...values()}>
-						<Inner />
+						<Inner
+							getTitleSave={props.getTitleSave}
+							registerTitleSave={props.registerTitleSave}
+						/>
 					</EditorContextProvider>
 				)}
 			</Match>
@@ -291,7 +380,10 @@ function EditorContent(props: { projectPath: string }) {
 	);
 }
 
-function Inner() {
+function Inner(props: {
+	getTitleSave: () => (() => Promise<void>) | undefined;
+	registerTitleSave: (registration: TitleSaveRegistration | undefined) => void;
+}) {
 	const {
 		project,
 		editorInstance,
@@ -362,21 +454,27 @@ function Inner() {
 	let allowExportClose = false;
 	let closePromptOpen = false;
 
-	onMount(async () => {
-		const unlisten = await currentWindow.onCloseRequested(async (event) => {
-			if (
-				allowExportClose ||
-				exportState.type === "idle" ||
-				exportState.type === "done"
-			) {
-				return;
-			}
+	onMount(() => {
+		const closeRequested = currentWindow.onCloseRequested(async (event) => {
+			if (allowExportClose) return;
 
 			event.preventDefault();
 			if (closePromptOpen) return;
 
 			closePromptOpen = true;
 			try {
+				try {
+					await props.getTitleSave()?.();
+				} catch {
+					return;
+				}
+
+				if (exportState.type === "idle" || exportState.type === "done") {
+					allowExportClose = true;
+					await currentWindow.close();
+					return;
+				}
+
 				const resumeExport = await ask(
 					"An export is currently running. Keep this editor open to continue it, or quit the editor and cancel the export.",
 					{
@@ -396,7 +494,9 @@ function Inner() {
 			}
 		});
 
-		onCleanup(() => unlisten());
+		onCleanup(() => {
+			void closeRequested.then((unlisten) => unlisten()).catch(() => {});
+		});
 	});
 
 	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
@@ -566,6 +666,7 @@ function Inner() {
 				return {
 					caption: editorState.timeline.tracks.caption,
 					keyboard: editorState.timeline.tracks.keyboard,
+					threeD: editorState.timeline.tracks["3d"],
 				};
 			},
 			() => {
@@ -657,13 +758,13 @@ function Inner() {
 		<Show
 			when={!fullscreenMode()}
 			fallback={
-				<Suspense>
+				<Suspense fallback={<EditorSkeleton />}>
 					<ExportPage />
 				</Suspense>
 			}
 		>
 			<div class="flex flex-col flex-1 min-h-0">
-				<Header />
+				<Header registerTitleSave={props.registerTitleSave} />
 				<div
 					class="flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0 leading-5"
 					data-tauri-drag-region

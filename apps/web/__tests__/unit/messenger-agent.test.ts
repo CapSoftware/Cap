@@ -1,34 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MockLanguageModelV4 } from "ai/test";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AiModelSelection } from "@/lib/ai/provider";
 
-type ServerEnvMockValue = {
-	ANTHROPIC_API_KEY: string | undefined;
-	OPENAI_API_KEY: string | undefined;
-	GROQ_API_KEY: string | undefined;
-	SUPERMEMORY_API_KEY: string | undefined;
-	SUPERMEMORY_KNOWLEDGE_TAG: string | undefined;
-};
+type LanguageModelV4GenerateResult = Awaited<
+	ReturnType<MockLanguageModelV4["doGenerate"]>
+>;
 
-const serverEnvMock = vi.hoisted(() =>
-	vi.fn<() => ServerEnvMockValue>(() => ({
-		ANTHROPIC_API_KEY: "anthropic-key",
-		OPENAI_API_KEY: undefined,
-		GROQ_API_KEY: undefined,
-		SUPERMEMORY_API_KEY: undefined,
-		SUPERMEMORY_KNOWLEDGE_TAG: undefined,
-	})),
-);
+const getAiProviderChainMock = vi.hoisted(() => vi.fn());
 const searchSupermemoryMock = vi.hoisted(() => vi.fn());
-const getGroqClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("server-only", () => ({}));
 
-vi.mock("@cap/env", () => ({
-	serverEnv: serverEnvMock,
-}));
-
-vi.mock("@/lib/groq-client", () => ({
-	GROQ_MODEL: "groq-model",
-	getGroqClient: getGroqClientMock,
+vi.mock("@/lib/ai/provider", () => ({
+	getAiProviderChain: getAiProviderChainMock,
 }));
 
 vi.mock("@/lib/messenger/supermemory", () => ({
@@ -36,91 +20,90 @@ vi.mock("@/lib/messenger/supermemory", () => ({
 	searchSupermemory: searchSupermemoryMock,
 }));
 
-const readFetchBody = (call: unknown[]) => {
-	const init = call[1] as { body?: unknown };
-	if (typeof init.body !== "string") {
-		throw new Error("Expected fetch body");
-	}
-	return JSON.parse(init.body) as {
-		model?: string;
-		max_tokens?: number;
-		tool_choice?: string;
-		parallel_tool_calls?: boolean;
-		tools?: Array<{
-			name?: string;
-			input_schema?: {
-				properties?: Record<string, unknown>;
-			};
-			function?: {
-				name?: string;
-				parameters?: {
-					properties?: Record<string, unknown>;
-				};
-			};
-		}>;
-		messages?: Array<{
-			role?: string;
-			content?: unknown;
-			tool_calls?: unknown;
-			tool_call_id?: string;
-		}>;
-	};
+const testUsage = {
+	inputTokens: {
+		total: 1,
+		noCache: 1,
+		cacheRead: undefined,
+		cacheWrite: undefined,
+	},
+	outputTokens: {
+		total: 1,
+		text: 1,
+		reasoning: undefined,
+	},
+};
+
+const textResult = (text: string): LanguageModelV4GenerateResult => ({
+	content: text ? [{ type: "text", text }] : [],
+	finishReason: { unified: "stop", raw: undefined },
+	usage: testUsage,
+	warnings: [],
+});
+
+const toolCallPart = (input: Record<string, unknown>, id: string) => ({
+	type: "tool-call" as const,
+	toolCallId: id,
+	toolName: "send_support_email",
+	input: JSON.stringify(input),
+});
+
+const toolCallResult = (
+	inputs: Record<string, unknown>[],
+): LanguageModelV4GenerateResult => ({
+	content: inputs.map((input, index) =>
+		toolCallPart(input, `tool-${index + 1}`),
+	),
+	finishReason: { unified: "tool-calls", raw: undefined },
+	usage: testUsage,
+	warnings: [],
+});
+
+const makeSelection = (
+	model: MockLanguageModelV4,
+	overrides: Partial<AiModelSelection> = {},
+): AiModelSelection => ({
+	provider: "groq",
+	modelId: "test-model",
+	model: () => model,
+	supportsStreaming: true,
+	supportsTemperature: true,
+	defaultMaxOutputTokens: 512,
+	providerOptions: { groq: { parallelToolCalls: false } },
+	...overrides,
+});
+
+const baseArgs = {
+	userIdentity: "Test User <user@example.com>",
+	identityTag: "user:user-123",
+	query: "Please send this to support",
+	history: [
+		{
+			role: "user" as const,
+			content: "Uploads keep failing. Please send this to support.",
+		},
+	],
+};
+
+const supportEmailInput = {
+	subject: "Upload issue",
+	message: "The user cannot upload their recording.",
 };
 
 describe("generateMessengerAgentReply", () => {
 	beforeEach(() => {
-		vi.clearAllMocks();
-		serverEnvMock.mockReturnValue({
-			ANTHROPIC_API_KEY: "anthropic-key",
-			OPENAI_API_KEY: undefined,
-			GROQ_API_KEY: undefined,
-			SUPERMEMORY_API_KEY: undefined,
-			SUPERMEMORY_KNOWLEDGE_TAG: undefined,
-		});
 		searchSupermemoryMock.mockResolvedValue([]);
-		getGroqClientMock.mockReturnValue(null);
+		vi.spyOn(console, "error").mockImplementation(() => {});
 	});
 
-	afterEach(() => {
-		vi.unstubAllGlobals();
-	});
-
-	it("uses Sonnet 5 and executes the constrained support email tool", async () => {
-		const fetchMock = vi
-			.fn()
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						content: [
-							{
-								type: "tool_use",
-								id: "tool-1",
-								name: "send_support_email",
-								input: {
-									subject: "Upload issue",
-									message: "The user cannot upload their recording.",
-									email: "spoof@example.com",
-								},
-							},
-						],
-					}),
-					{ status: 200 },
-				),
-			)
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						content: [
-							{
-								type: "text",
-								text: "Done, I sent that to the team from your account email.",
-							},
-						],
-					}),
-					{ status: 200 },
-				),
-			);
-		vi.stubGlobal("fetch", fetchMock);
+	it("executes the constrained support email tool and strips spoofed fields", async () => {
+		const model = new MockLanguageModelV4({
+			doGenerate: [
+				toolCallResult([{ ...supportEmailInput, email: "spoof@example.com" }]),
+				textResult("Done, I sent that to the team from your account email."),
+			],
+		});
+		getAiProviderChainMock.mockReturnValue([makeSelection(model)]);
 
 		const execute = vi.fn().mockResolvedValue({
 			status: "sent" as const,
@@ -131,85 +114,51 @@ describe("generateMessengerAgentReply", () => {
 		);
 
 		const result = await generateMessengerAgentReply({
-			userIdentity: "Test User <user@example.com>",
-			identityTag: "user:user-123",
-			query: "Please send this to support",
-			history: [
-				{
-					role: "user",
-					content: "Uploads keep failing. Please send this to support.",
-				},
-			],
-			supportEmailTool: {
-				execute,
-			},
+			...baseArgs,
+			supportEmailTool: { execute },
 		});
 
 		expect(result).toBe(
 			"Done, I sent that to the team from your account email.",
 		);
-		expect(fetchMock).toHaveBeenCalledTimes(2);
-		const firstBody = readFetchBody(fetchMock.mock.calls[0] ?? []);
-		expect(firstBody.model).toBe("claude-sonnet-5");
-		expect(firstBody.max_tokens).toBe(512);
-		expect(firstBody.tools?.[0]?.name).toBe("send_support_email");
-		expect(firstBody.tools?.[0]?.input_schema?.properties?.email).toBe(
-			undefined,
-		);
-		expect(execute).toHaveBeenCalledWith({
-			subject: "Upload issue",
-			message: "The user cannot upload their recording.",
+		expect(execute).toHaveBeenCalledTimes(1);
+		expect(execute).toHaveBeenCalledWith(supportEmailInput);
+
+		expect(model.doGenerateCalls).toHaveLength(2);
+		const firstCall = model.doGenerateCalls[0];
+		expect(firstCall?.maxOutputTokens).toBe(512);
+		expect(firstCall?.temperature).toBe(0.65);
+		expect(firstCall?.providerOptions).toEqual({
+			groq: { parallelToolCalls: false },
 		});
 
-		const secondBody = readFetchBody(fetchMock.mock.calls[1] ?? []);
-		expect(secondBody.max_tokens).toBe(350);
-		const toolResultMessage = secondBody.messages?.at(-1);
-		expect(toolResultMessage?.role).toBe("user");
-		expect(toolResultMessage?.content).toEqual([
-			{
-				type: "tool_result",
-				tool_use_id: "tool-1",
-				content:
-					"Support email sent to hello@cap.so from the user's account email. Remaining sends today: 1.",
-			},
-		]);
+		const toolDefinition = firstCall?.tools?.[0] as
+			| {
+					name?: string;
+					inputSchema?: { properties?: Record<string, unknown> };
+			  }
+			| undefined;
+		expect(toolDefinition?.name).toBe("send_support_email");
+		expect(toolDefinition?.inputSchema?.properties?.subject).toBeDefined();
+		expect(toolDefinition?.inputSchema?.properties?.message).toBeDefined();
+		expect(toolDefinition?.inputSchema?.properties?.email).toBeUndefined();
+
+		expect(JSON.stringify(firstCall?.prompt)).toContain("Support email tool");
+		expect(JSON.stringify(model.doGenerateCalls[1]?.prompt)).toContain(
+			"Support email sent to hello@cap.so from the user's account email. Remaining sends today: 1.",
+		);
 	});
 
-	it("returns a tool error result when the support email tool fails", async () => {
-		const fetchMock = vi
-			.fn()
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						content: [
-							{
-								type: "tool_use",
-								id: "tool-1",
-								name: "send_support_email",
-								input: {
-									subject: "Upload issue",
-									message: "The user cannot upload their recording.",
-								},
-							},
-						],
-					}),
-					{ status: 200 },
+	it("reports a tool error result when the support email tool fails", async () => {
+		const model = new MockLanguageModelV4({
+			doGenerate: [
+				toolCallResult([supportEmailInput]),
+				textResult(
+					"I couldn't send that to the team right now. Please email hello@cap.so directly.",
 				),
-			)
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						content: [
-							{
-								type: "text",
-								text: "I couldn't send that to the team right now. Please email hello@cap.so directly.",
-							},
-						],
-					}),
-					{ status: 200 },
-				),
-			);
-		vi.stubGlobal("fetch", fetchMock);
+			],
+		});
+		getAiProviderChainMock.mockReturnValue([makeSelection(model)]);
 
 		const execute = vi.fn().mockRejectedValue(new Error("provider failed"));
 		const { generateMessengerAgentReply } = await import(
@@ -217,91 +166,98 @@ describe("generateMessengerAgentReply", () => {
 		);
 
 		const result = await generateMessengerAgentReply({
-			userIdentity: "Test User <user@example.com>",
-			identityTag: "user:user-123",
-			query: "Please send this to support",
-			history: [
-				{
-					role: "user",
-					content: "Uploads keep failing. Please send this to support.",
-				},
-			],
-			supportEmailTool: {
-				execute,
-			},
+			...baseArgs,
+			supportEmailTool: { execute },
 		});
 
 		expect(result).toBe(
 			"I couldn't send that to the team right now. Please email hello@cap.so directly.",
 		);
+		expect(JSON.stringify(model.doGenerateCalls[1]?.prompt)).toContain(
+			"Failed to send support email.",
+		);
+	});
 
-		const secondBody = readFetchBody(fetchMock.mock.calls[1] ?? []);
-		const toolResultMessage = secondBody.messages?.at(-1);
-		expect(toolResultMessage?.content).toEqual([
-			{
-				type: "tool_result",
-				tool_use_id: "tool-1",
-				content: "Failed to send support email.",
-				is_error: true,
+	it("sends at most one support email per assistant response", async () => {
+		const model = new MockLanguageModelV4({
+			doGenerate: [
+				toolCallResult([
+					supportEmailInput,
+					{ subject: "Second email", message: "Should be rejected." },
+				]),
+				textResult("Done, I sent that to the team from your account email."),
+			],
+		});
+		getAiProviderChainMock.mockReturnValue([makeSelection(model)]);
+
+		const execute = vi.fn().mockResolvedValue({
+			status: "sent" as const,
+			remainingToday: 1,
+		});
+		const { generateMessengerAgentReply } = await import(
+			"@/lib/messenger/agent"
+		);
+
+		const result = await generateMessengerAgentReply({
+			...baseArgs,
+			supportEmailTool: { execute },
+		});
+
+		expect(result).toBe(
+			"Done, I sent that to the team from your account email.",
+		);
+		expect(execute).toHaveBeenCalledTimes(1);
+		expect(execute).toHaveBeenCalledWith(supportEmailInput);
+		expect(JSON.stringify(model.doGenerateCalls[1]?.prompt)).toContain(
+			"Only one support email can be sent per assistant response.",
+		);
+	});
+
+	it("falls back to the next provider in the chain when the first fails", async () => {
+		const failingModel = new MockLanguageModelV4({
+			doGenerate: async () => {
+				throw new Error("primary provider down");
 			},
+		});
+		const workingModel = new MockLanguageModelV4({
+			doGenerate: [textResult("Hey there!")],
+		});
+		getAiProviderChainMock.mockReturnValue([
+			makeSelection(failingModel, {
+				provider: "anthropic",
+				providerOptions: { anthropic: { disableParallelToolUse: true } },
+			}),
+			makeSelection(workingModel),
 		]);
+
+		const { generateMessengerAgentReply } = await import(
+			"@/lib/messenger/agent"
+		);
+
+		const result = await generateMessengerAgentReply(baseArgs);
+
+		expect(result).toBe("Hey there!");
+		expect(workingModel.doGenerateCalls).toHaveLength(1);
 	});
 
-	it("executes the support email tool through OpenAI fallback", async () => {
-		serverEnvMock.mockReturnValue({
-			ANTHROPIC_API_KEY: undefined,
-			OPENAI_API_KEY: "openai-key",
-			GROQ_API_KEY: undefined,
-			SUPERMEMORY_API_KEY: undefined,
-			SUPERMEMORY_KNOWLEDGE_TAG: undefined,
-		});
-		const toolCalls = [
-			{
-				id: "call-1",
-				type: "function",
-				function: {
-					name: "send_support_email",
-					arguments: JSON.stringify({
-						subject: "Upload issue",
-						message: "The user cannot upload their recording.",
-						email: "spoof@example.com",
-					}),
-				},
+	it("does not retry another provider after the support email was sent", async () => {
+		let calls = 0;
+		const failingAfterToolModel = new MockLanguageModelV4({
+			doGenerate: async () => {
+				calls += 1;
+				if (calls > 1) {
+					throw new Error("provider failed mid-turn");
+				}
+				return toolCallResult([supportEmailInput]);
 			},
-		];
-		const fetchMock = vi
-			.fn()
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						choices: [
-							{
-								message: {
-									content: null,
-									tool_calls: toolCalls,
-								},
-							},
-						],
-					}),
-					{ status: 200 },
-				),
-			)
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						choices: [
-							{
-								message: {
-									content:
-										"Done, I sent that to the team from your account email.",
-								},
-							},
-						],
-					}),
-					{ status: 200 },
-				),
-			);
-		vi.stubGlobal("fetch", fetchMock);
+		});
+		const secondaryModel = new MockLanguageModelV4({
+			doGenerate: [textResult("Should never be used.")],
+		});
+		getAiProviderChainMock.mockReturnValue([
+			makeSelection(failingAfterToolModel),
+			makeSelection(secondaryModel, { provider: "openai" }),
+		]);
 
 		const execute = vi.fn().mockResolvedValue({
 			status: "sent" as const,
@@ -312,238 +268,106 @@ describe("generateMessengerAgentReply", () => {
 		);
 
 		const result = await generateMessengerAgentReply({
-			userIdentity: "Test User <user@example.com>",
-			identityTag: "user:user-123",
-			query: "Please send this to support",
-			history: [
-				{
-					role: "user",
-					content: "Uploads keep failing. Please send this to support.",
-				},
-			],
-			supportEmailTool: {
-				execute,
-			},
-		});
-
-		expect(result).toBe(
-			"Done, I sent that to the team from your account email.",
-		);
-		expect(fetchMock).toHaveBeenCalledTimes(2);
-		const firstBody = readFetchBody(fetchMock.mock.calls[0] ?? []);
-		expect(firstBody.model).toBe("gpt-4o-mini");
-		expect(firstBody.max_tokens).toBe(512);
-		expect(firstBody.tool_choice).toBe("auto");
-		expect(firstBody.parallel_tool_calls).toBe(false);
-		expect(firstBody.tools?.[0]?.function?.name).toBe("send_support_email");
-		expect(firstBody.tools?.[0]?.function?.parameters?.properties?.email).toBe(
-			undefined,
-		);
-		expect(firstBody.messages?.[0]?.content).toContain("Support email tool");
-		expect(firstBody.messages?.[0]?.content).not.toContain(
-			"You cannot send support email",
-		);
-		expect(execute).toHaveBeenCalledWith({
-			subject: "Upload issue",
-			message: "The user cannot upload their recording.",
-		});
-
-		const secondBody = readFetchBody(fetchMock.mock.calls[1] ?? []);
-		expect(secondBody.max_tokens).toBe(350);
-		expect(secondBody.tools).toBeUndefined();
-		expect(secondBody.messages?.at(-2)?.role).toBe("assistant");
-		expect(secondBody.messages?.at(-2)?.tool_calls).toEqual(toolCalls);
-		expect(secondBody.messages?.at(-1)).toEqual({
-			role: "tool",
-			tool_call_id: "call-1",
-			content:
-				"Support email sent to hello@cap.so from the user's account email. Remaining sends today: 1.",
-		});
-	});
-
-	it("executes the support email tool through Groq fallback", async () => {
-		serverEnvMock.mockReturnValue({
-			ANTHROPIC_API_KEY: undefined,
-			OPENAI_API_KEY: undefined,
-			GROQ_API_KEY: "groq-key",
-			SUPERMEMORY_API_KEY: undefined,
-			SUPERMEMORY_KNOWLEDGE_TAG: undefined,
-		});
-		const create = vi
-			.fn()
-			.mockResolvedValueOnce({
-				choices: [
-					{
-						message: {
-							content: null,
-							tool_calls: [
-								{
-									id: "call-1",
-									type: "function",
-									function: {
-										name: "send_support_email",
-										arguments: JSON.stringify({
-											subject: "Upload issue",
-											message: "The user cannot upload their recording.",
-										}),
-									},
-								},
-							],
-						},
-					},
-				],
-			})
-			.mockResolvedValueOnce({
-				choices: [
-					{
-						message: {
-							content: "Done, I sent that to the team from your account email.",
-						},
-					},
-				],
-			});
-		getGroqClientMock.mockReturnValue({
-			chat: {
-				completions: {
-					create,
-				},
-			},
-		});
-
-		const execute = vi.fn().mockResolvedValue({
-			status: "sent" as const,
-			remainingToday: 1,
-		});
-		const { generateMessengerAgentReply } = await import(
-			"@/lib/messenger/agent"
-		);
-
-		const result = await generateMessengerAgentReply({
-			userIdentity: "Test User <user@example.com>",
-			identityTag: "user:user-123",
-			query: "Please send this to support",
-			history: [
-				{
-					role: "user",
-					content: "Uploads keep failing. Please send this to support.",
-				},
-			],
-			supportEmailTool: {
-				execute,
-			},
-		});
-
-		expect(result).toBe(
-			"Done, I sent that to the team from your account email.",
-		);
-		expect(create).toHaveBeenCalledTimes(2);
-		expect(create.mock.calls[0]?.[0]).toMatchObject({
-			model: "groq-model",
-			max_tokens: 512,
-			tool_choice: "auto",
-			parallel_tool_calls: false,
-			tools: [
-				{
-					type: "function",
-					function: {
-						name: "send_support_email",
-					},
-				},
-			],
-		});
-		expect(create.mock.calls[1]?.[0]).toMatchObject({
-			max_tokens: 350,
-			messages: expect.arrayContaining([
-				{
-					role: "tool",
-					tool_call_id: "call-1",
-					content:
-						"Support email sent to hello@cap.so from the user's account email. Remaining sends today: 1.",
-				},
-			]),
-		});
-		expect(execute).toHaveBeenCalledWith({
-			subject: "Upload issue",
-			message: "The user cannot upload their recording.",
-		});
-	});
-
-	it("does not retry another provider after a fallback provider sends support email", async () => {
-		serverEnvMock.mockReturnValue({
-			ANTHROPIC_API_KEY: undefined,
-			OPENAI_API_KEY: "openai-key",
-			GROQ_API_KEY: "groq-key",
-			SUPERMEMORY_API_KEY: undefined,
-			SUPERMEMORY_KNOWLEDGE_TAG: undefined,
-		});
-		const fetchMock = vi
-			.fn()
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						choices: [
-							{
-								message: {
-									content: null,
-									tool_calls: [
-										{
-											id: "call-1",
-											type: "function",
-											function: {
-												name: "send_support_email",
-												arguments: JSON.stringify({
-													subject: "Upload issue",
-													message: "The user cannot upload their recording.",
-												}),
-											},
-										},
-									],
-								},
-							},
-						],
-					}),
-					{ status: 200 },
-				),
-			)
-			.mockResolvedValueOnce(new Response("provider failed", { status: 500 }));
-		vi.stubGlobal("fetch", fetchMock);
-
-		const create = vi.fn();
-		getGroqClientMock.mockReturnValue({
-			chat: {
-				completions: {
-					create,
-				},
-			},
-		});
-		const execute = vi.fn().mockResolvedValue({
-			status: "sent" as const,
-			remainingToday: 1,
-		});
-		const { generateMessengerAgentReply } = await import(
-			"@/lib/messenger/agent"
-		);
-
-		const result = await generateMessengerAgentReply({
-			userIdentity: "Test User <user@example.com>",
-			identityTag: "user:user-123",
-			query: "Please send this to support",
-			history: [
-				{
-					role: "user",
-					content: "Uploads keep failing. Please send this to support.",
-				},
-			],
-			supportEmailTool: {
-				execute,
-			},
+			...baseArgs,
+			supportEmailTool: { execute },
 		});
 
 		expect(result).toBe(
 			"Done, I sent that to the team from your account email. We'll follow up with you there.",
 		);
-		expect(fetchMock).toHaveBeenCalledTimes(2);
-		expect(create).not.toHaveBeenCalled();
 		expect(execute).toHaveBeenCalledTimes(1);
+		expect(secondaryModel.doGenerateCalls).toHaveLength(0);
+	});
+
+	it("uses the rate limited fallback reply when the model gives no closing text", async () => {
+		const model = new MockLanguageModelV4({
+			doGenerate: [toolCallResult([supportEmailInput]), textResult("")],
+		});
+		getAiProviderChainMock.mockReturnValue([makeSelection(model)]);
+
+		const execute = vi.fn().mockResolvedValue({
+			status: "rate_limited" as const,
+			remainingToday: 0 as const,
+		});
+		const { generateMessengerAgentReply } = await import(
+			"@/lib/messenger/agent"
+		);
+
+		const result = await generateMessengerAgentReply({
+			...baseArgs,
+			supportEmailTool: { execute },
+		});
+
+		expect(result).toBe(
+			"I couldn't send another support email from your account today. You're limited to 2 per day, but you can still email hello@cap.so directly.",
+		);
+	});
+
+	it("returns the apology when every provider fails", async () => {
+		const firstModel = new MockLanguageModelV4({
+			doGenerate: async () => {
+				throw new Error("first provider down");
+			},
+		});
+		const secondModel = new MockLanguageModelV4({
+			doGenerate: async () => {
+				throw new Error("second provider down");
+			},
+		});
+		getAiProviderChainMock.mockReturnValue([
+			makeSelection(firstModel),
+			makeSelection(secondModel, { provider: "openai" }),
+		]);
+
+		const { generateMessengerAgentReply } = await import(
+			"@/lib/messenger/agent"
+		);
+
+		const result = await generateMessengerAgentReply(baseArgs);
+
+		expect(result).toBe(
+			"Oh no, I'm so sorry about this! I'm having a little technical hiccup on my end. Someone from the team will jump in here shortly to help you out though!",
+		);
+	});
+
+	it("uses 350 max output tokens and no tools without the support email tool", async () => {
+		const model = new MockLanguageModelV4({
+			doGenerate: [textResult("Happy to help!")],
+		});
+		getAiProviderChainMock.mockReturnValue([makeSelection(model)]);
+
+		const { generateMessengerAgentReply } = await import(
+			"@/lib/messenger/agent"
+		);
+
+		const result = await generateMessengerAgentReply(baseArgs);
+
+		expect(result).toBe("Happy to help!");
+		const call = model.doGenerateCalls[0];
+		expect(call?.maxOutputTokens).toBe(350);
+		expect(call?.tools ?? []).toEqual([]);
+		expect(JSON.stringify(call?.prompt)).toContain(
+			"You cannot send support email",
+		);
+	});
+
+	it("omits temperature for anthropic like the previous implementation", async () => {
+		const model = new MockLanguageModelV4({
+			doGenerate: [textResult("Hello!")],
+		});
+		getAiProviderChainMock.mockReturnValue([
+			makeSelection(model, {
+				provider: "anthropic",
+				providerOptions: { anthropic: { disableParallelToolUse: true } },
+			}),
+		]);
+
+		const { generateMessengerAgentReply } = await import(
+			"@/lib/messenger/agent"
+		);
+
+		await generateMessengerAgentReply(baseArgs);
+
+		expect(model.doGenerateCalls[0]?.temperature).toBeUndefined();
 	});
 });

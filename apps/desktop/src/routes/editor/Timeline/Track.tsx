@@ -1,10 +1,14 @@
 import { mergeRefs } from "@solid-primitives/refs";
 import { cx } from "cva";
 import {
+	type Accessor,
 	type ComponentProps,
 	createMemo,
 	createSignal,
+	type JSX,
+	Match,
 	Show,
+	Switch,
 	splitProps,
 } from "solid-js";
 import { useEditorContext } from "../context";
@@ -95,7 +99,7 @@ export function SegmentRoot(
 
 	return (
 		<Show when={visible()}>
-			<SegmentContextProvider width={width}>
+			<SegmentContextProvider width={width} segment={() => local.segment}>
 				<div
 					{...rest}
 					class={cx(
@@ -130,6 +134,88 @@ export function SegmentRoot(
 				</div>
 			</SegmentContextProvider>
 		</Show>
+	);
+}
+
+export const SEGMENT_LABEL_FULL_PX = 100;
+export const SEGMENT_LABEL_COMPACT_PX = 48;
+
+// Pixel box of the segment's intersection with the viewport, in
+// segment-local coordinates, with a clamped center for label anchoring.
+// A zoomed-in segment can extend well past the viewport, so its true
+// centre is often off-screen; labels anchor to this instead.
+export function useSegmentVisibleBox(): Accessor<{
+	width: number;
+	centerX: number;
+}> {
+	const { width, segment } = useSegmentContext();
+	const { secsPerPixel } = useTrackContext();
+	const { editorState } = useEditorContext();
+
+	return createMemo(() => {
+		const segmentWidth = width();
+		const { transform } = editorState.timeline;
+
+		const leftPx = (segment().start - transform.position) / secsPerPixel();
+		const viewportPx = transform.zoom / secsPerPixel();
+
+		const visibleStart = Math.max(0, -leftPx);
+		const visibleEnd = Math.min(segmentWidth, viewportPx - leftPx);
+		const visibleWidth = Math.max(0, visibleEnd - visibleStart);
+
+		// Keep the label inside the segment box, but when only a small slice
+		// of a wide segment is on screen the margin must shrink with it, or
+		// the clamp would push the label out of view past the viewport edge.
+		const margin = Math.min(
+			60,
+			segmentWidth / 2,
+			Math.max(visibleWidth / 2, 4),
+		);
+		const centerX = Math.min(
+			Math.max((visibleStart + visibleEnd) / 2, margin),
+			segmentWidth - margin,
+		);
+
+		return { width: visibleWidth, centerX };
+	});
+}
+
+// Progressive disclosure for segment labels: the label degrades from its
+// full form down to a compact row and then to a state glyph as the visible
+// slice of the segment shrinks, rather than vanishing at a hard cliff.
+export function SegmentLabel(props: {
+	full: () => JSX.Element;
+	compact?: () => JSX.Element;
+	glyph?: () => JSX.Element;
+	fullAt?: number;
+	compactAt?: number;
+}) {
+	const visibleBox = useSegmentVisibleBox();
+
+	const fullAt = () => props.fullAt ?? SEGMENT_LABEL_FULL_PX;
+	const compactAt = () => props.compactAt ?? SEGMENT_LABEL_COMPACT_PX;
+
+	return (
+		<div
+			class="absolute pointer-events-none"
+			style={{
+				left: `${visibleBox().centerX}px`,
+				top: "50%",
+				transform: "translate(-50%, -50%)",
+				"max-width": `${Math.max(0, visibleBox().width - 8)}px`,
+				overflow: "hidden",
+			}}
+		>
+			<Switch>
+				<Match when={visibleBox().width >= fullAt()}>{props.full()}</Match>
+				<Match when={visibleBox().width >= compactAt() && !!props.compact}>
+					{props.compact?.()}
+				</Match>
+				<Match when={visibleBox().width >= 16 && !!props.glyph}>
+					{props.glyph?.()}
+				</Match>
+			</Switch>
+		</div>
 	);
 }
 

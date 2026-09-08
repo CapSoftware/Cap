@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "vite";
+import { resolveDesktopBenchmarkBrowser } from "./desktop-display-transport-browser.js";
 
 const DESKTOP_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -13,8 +14,6 @@ const DESKTOP_ROOT = path.resolve(
 const REPO_ROOT = path.resolve(DESKTOP_ROOT, "../..");
 const DEFAULT_RECORDING =
 	"/tmp/cap-performance-fixtures/reference-recording.cap";
-const CHROME_PATH =
-	"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 function parseArgs(argv) {
 	const options = {
@@ -84,9 +83,22 @@ if (!wsUrl) throw new Error("Missing ws query param");
 const canvas = document.getElementById("canvas");
 const status = document.getElementById("status");
 const samples = [];
+const animationFrameIntervals = [];
 let frameNotifications = 0;
 let latestFrame = null;
 let lastRequestFrameCount = 0;
+let previousAnimationFrameAt = null;
+let animationFrameId = null;
+
+function observeAnimationFrame(timestamp) {
+	if (previousAnimationFrameAt !== null) {
+		animationFrameIntervals.push(timestamp - previousAnimationFrameAt);
+	}
+	previousAnimationFrameAt = timestamp;
+	animationFrameId = requestAnimationFrame(observeAnimationFrame);
+}
+
+animationFrameId = requestAnimationFrame(observeAnimationFrame);
 
 const [ws, isConnected, isWorkerReady, controls] = createImageDataWS(
 	wsUrl,
@@ -186,10 +198,22 @@ window.__capDisplayBenchmarkResult = () => {
 		frameNotifications,
 		lastRequestFrameCount,
 		readyState: ws.readyState,
+		animationFrames: {
+			sampleCount: animationFrameIntervals.length,
+			averageFps:
+				animationFrameIntervals.length === 0
+					? 0
+					: (animationFrameIntervals.length * 1000) /
+						animationFrameIntervals.reduce((total, interval) => total + interval, 0),
+			maximumIntervalMs: Math.max(0, ...animationFrameIntervals),
+			visibilityState: document.visibilityState,
+			hasFocus: document.hasFocus(),
+		},
 	};
 };
 window.__capDisplayBenchmarkDispose = () => {
 	window.clearInterval(interval);
+	if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
 	controls.dispose();
 };
 window.__capDisplayBenchmarkReady = true;
@@ -294,7 +318,7 @@ function spawnRustBenchmark(options) {
 
 function spawnChrome(debuggingPort, tempDir) {
 	const child = spawn(
-		CHROME_PATH,
+		resolveDesktopBenchmarkBrowser(),
 		[
 			`--user-data-dir=${path.join(tempDir, "chrome-profile")}`,
 			`--remote-debugging-port=${debuggingPort}`,
@@ -305,6 +329,15 @@ function spawnChrome(debuggingPort, tempDir) {
 			"--disable-extensions",
 			"--allow-file-access-from-files",
 			"--enable-unsafe-webgpu",
+			...(process.platform === "linux" && process.getuid?.() === 0
+				? ["--no-sandbox"]
+				: []),
+			...(process.env.CAP_DESKTOP_BENCHMARK_HEADLESS === "1"
+				? ["--headless=new"]
+				: []),
+			...(process.env.CAP_DESKTOP_BENCHMARK_SOFTWARE_GPU === "1"
+				? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
+				: []),
 			"about:blank",
 		],
 		{ stdio: ["ignore", "ignore", "pipe"] },
@@ -509,6 +542,8 @@ async function main() {
 		});
 		await cdp.send("Page.enable");
 		await cdp.send("Runtime.enable");
+		await cdp.send("Page.bringToFront");
+		await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
 		const loadPromise = waitForCdpEvent(cdp, "Page.loadEventFired").catch(
 			() => null,
 		);

@@ -110,13 +110,60 @@ By default, login links are printed to the server logs. To send emails:
 
 ### AI Features
 
-For video transcription and AI summaries:
+For video transcription and AI features (titles, summaries, chapters,
+transcript translation, and docs Ask AI):
 
 ```bash
 ASSEMBLY_API_KEY=your-key    # Transcription
-GROQ_API_KEY=your-key        # AI summaries (preferred)
-OPENAI_API_KEY=your-key      # AI summaries (fallback)
+GROQ_API_KEY=your-key        # AI features
+OPENAI_API_KEY=your-key      # AI features
+ANTHROPIC_API_KEY=your-key   # AI features
 ```
+
+When `AI_PROVIDER` is not set, AI providers are auto-detected from whichever
+keys are present. Generation features (titles, summaries, chapters,
+translation) prefer Groq → OpenAI → Anthropic; chat features (the support
+messenger and docs Ask AI) prefer Anthropic → OpenAI → Groq. Earlier
+providers are preferred; later ones are automatic fallbacks.
+
+To pick a provider explicitly, set `AI_PROVIDER` to one of `assemblyai`,
+`openai`, `anthropic`, `groq`, or `openai-compatible`. Any other configured
+providers stay in the chain as fallbacks.
+
+```bash
+AI_PROVIDER=assemblyai
+```
+
+`assemblyai` reuses your existing `ASSEMBLY_API_KEY` via the AssemblyAI LLM
+Gateway, so one key covers transcription and AI features. It is never
+auto-detected: transcription-only instances don't start incurring LLM charges
+unless you opt in, and opting in bills LLM tokens to the same AssemblyAI
+account as transcription.
+
+`openai-compatible` works with any OpenAI-compatible endpoint such as Ollama,
+OpenRouter, or LM Studio. It requires `AI_BASE_URL` and `AI_MODEL` (and
+`AI_API_KEY` if your endpoint needs one):
+
+```bash
+AI_PROVIDER=openai-compatible
+AI_BASE_URL=http://localhost:11434/v1
+AI_MODEL=llama3.3
+AI_API_KEY=your-key          # If the endpoint requires one
+```
+
+Each provider has sensible default models. You can override them per role for
+the provider selected by `AI_PROVIDER`:
+
+```bash
+AI_MODEL=your-model          # Generation: titles, summaries, chapters, translation
+AI_CHAT_MODEL=your-model     # Support chat
+AI_STREAM_MODEL=your-model   # Streaming docs Ask AI
+```
+
+For the AssemblyAI EU gateway, set
+`AI_BASE_URL=https://llm-gateway.eu.assemblyai.com/v1`. The EU gateway only
+serves Claude and Gemini models, so you must also override `AI_MODEL` and
+`AI_STREAM_MODEL` (the defaults are OpenAI-family models that are US-only).
 
 ### Google OAuth
 

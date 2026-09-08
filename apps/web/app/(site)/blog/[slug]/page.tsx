@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import { MDXRemote } from "next-mdx-remote/rsc";
 import { AuthorByline } from "@/components/blog/AuthorByline";
 import { BlogTemplate } from "@/components/blog/BlogTemplate";
+import { getPostComponents } from "@/components/blog/post-components";
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 import { ogImageUrl } from "@/lib/og/url";
 import { getBlogPosts } from "@/utils/blog";
@@ -122,7 +123,10 @@ export default async function PostPage(props: PostProps) {
 						</p>
 					</header>
 					<hr className="my-6" />
-					<MDXRemote source={post.content} />
+					<MDXRemote
+						source={post.content}
+						components={getPostComponents(post.slug)}
+					/>
 					{"author" in post.metadata && post.metadata.author && (
 						<AuthorByline authors={post.metadata.author} />
 					)}

@@ -150,6 +150,13 @@ impl output_pipeline::VideoFrame for VideoFrame {
     fn timestamp(&self) -> Timestamp {
         self.timestamp
     }
+
+    fn duplicate(&self) -> Option<Self> {
+        Some(Self {
+            sample_buf: self.sample_buf.clone(),
+            timestamp: self.timestamp,
+        })
+    }
 }
 
 impl ScreenCaptureConfig<CMSampleBufferCapture> {

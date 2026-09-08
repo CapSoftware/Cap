@@ -144,7 +144,7 @@ pub struct MFDecodedFrame {
 }
 
 pub struct NV12Data {
-    pub data: Vec<u8>,
+    pub data: Arc<Vec<u8>>,
     pub y_stride: u32,
     pub uv_stride: u32,
 }
@@ -731,7 +731,7 @@ impl MediaFoundationDecoder {
         }
 
         Ok(NV12Data {
-            data,
+            data: Arc::new(data),
             y_stride,
             uv_stride: y_stride,
         })
@@ -825,12 +825,14 @@ impl MediaFoundationDecoder {
                 None,
             );
 
-            self.plane_converter.convert(
-                &frame_textures.nv12.texture,
-                &frame_textures,
-                self.width,
-                self.height,
-            )?;
+            if !frame_textures.y.handle.0.is_null() && !frame_textures.uv.handle.0.is_null() {
+                self.plane_converter.convert(
+                    &frame_textures.nv12.texture,
+                    &frame_textures,
+                    self.width,
+                    self.height,
+                )?;
+            }
         }
 
         let plane_time = plane_start.elapsed();
@@ -1031,11 +1033,7 @@ unsafe fn create_source_reader(
             .map_err(|e| format!("SetUINT32 ENABLE_ADVANCED_VIDEO_PROCESSING failed: {e:?}"))?;
     }
 
-    let path_wide: Vec<u16> = path
-        .to_string_lossy()
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let path_wide = media_foundation_path(path);
 
     let source_reader = unsafe {
         MFCreateSourceReaderFromURL(PCWSTR(path_wide.as_ptr()), &attributes)
@@ -1043,6 +1041,23 @@ unsafe fn create_source_reader(
     };
 
     Ok(source_reader)
+}
+
+fn media_foundation_path(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let mut path: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let extended_unc = [92, 92, 63, 92, 85, 78, 67, 92];
+    let extended_drive = [92, 92, 63, 92];
+
+    if path.starts_with(&extended_unc) {
+        path.splice(..extended_unc.len(), [92, 92]);
+    } else if path.starts_with(&extended_drive) {
+        path.drain(..extended_drive.len());
+    }
+
+    path.push(0);
+    path
 }
 
 unsafe fn configure_output_type(source_reader: &IMFSourceReader) -> Result<(), String> {
@@ -1099,3 +1114,35 @@ unsafe fn get_video_info(source_reader: &IMFSourceReader) -> Result<(u32, u32, u
 }
 
 unsafe impl Send for MediaFoundationDecoder {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn normalized(path: &str) -> String {
+        let encoded = media_foundation_path(Path::new(path));
+        assert_eq!(encoded.last(), Some(&0));
+        String::from_utf16(&encoded[..encoded.len().saturating_sub(1)]).unwrap()
+    }
+
+    #[test]
+    fn removes_extended_drive_prefix_for_media_foundation() {
+        assert_eq!(
+            normalized(r"\\?\C:\Recordings\clip.mp4"),
+            r"C:\Recordings\clip.mp4"
+        );
+    }
+
+    #[test]
+    fn restores_unc_prefix_for_media_foundation() {
+        assert_eq!(
+            normalized(r"\\?\UNC\server\recordings\clip.mp4"),
+            r"\\server\recordings\clip.mp4"
+        );
+    }
+
+    #[test]
+    fn preserves_regular_unicode_paths() {
+        assert_eq!(normalized(r"C:\Vidéos\录制.mp4"), r"C:\Vidéos\录制.mp4");
+    }
+}

@@ -136,6 +136,10 @@ export function Editor() {
 						setActiveTool("circle");
 						setSelectedAnnotationId(null);
 						break;
+					case "d":
+						setActiveTool("draw");
+						setSelectedAnnotationId(null);
+						break;
 					case "t":
 						setActiveTool("text");
 						setSelectedAnnotationId(null);

@@ -1,0 +1,29 @@
+---
+title: CLI API Keys, No-Mic Confirmation & macOS Memory Leak Fixes
+app: Cap Desktop
+publishedAt: "2026-08-05"
+version: 0.5.8
+image:
+---
+
+This release adds API key authentication for the Cap CLI, a safety check that stops you from accidentally recording without a microphone, and a batch of fixes covering memory leaks on macOS, recordings that failed to open, and lighter instant recordings.
+
+## Features
+
+- **API keys for the CLI** - Generate API keys from your account settings on the Cap dashboard and set the `CAP_API_KEY` environment variable to authenticate the Cap CLI without a browser login. This makes it possible to run Cap in CI, on remote servers, and with agents in headless environments. You can list and revoke your keys from the dashboard at any time.
+- **Confirm before recording without a microphone** - Cap now asks for confirmation before starting a recording when no microphone is selected or the selected microphone is unavailable, so you never finish a take only to find it silent. It is on by default and can be turned off in Settings under General.
+- **Exclude floating panels from recordings on macOS** - The excluded-windows picker in Settings now lists floating accessory panels, like quick launchers and utility palettes, so you can keep them out of your recordings too.
+
+## Fixes
+
+- **Recordings with a damaged mic track open again** - A recording whose microphone audio file was empty or unreadable previously refused to open in the editor at all. The editor now opens the recording without the mic audio and logs a warning instead, and exports still validate audio strictly so a track is never silently dropped from a final file.
+- **Memory growth while idle on macOS** - Routine permission checks queried the display list every few seconds and leaked a small amount of memory each time, which could add up to significant usage over long sessions. This is fixed, along with smaller leaks in camera enumeration, display name and scale lookups, microphone device names, and the mic volume meter.
+- **Recording start feedback** - Clicking record from the target picker now shows a loading state immediately instead of appearing to do nothing while the recording starts.
+- **Window screenshots on Windows** - Taking a screenshot of a window no longer fails because the picker window closed itself before the capture was dispatched.
+- **Editor playback with background music** - Playback audio now works when your timeline has music but no recorded audio track.
+- **Mic volume meter accuracy** - The microphone level meter no longer stalls or grows memory when an audio device's capture clock freezes.
+
+## Performance
+
+- **Lighter instant recordings on macOS** - Instant recordings now capture at a size matched to the output resolution instead of the display's full Retina resolution, reducing CPU and memory use on high-density displays.
+- **Faster camera preview during instant recordings** - The camera preview streams frames in a more efficient format while instant recording, lowering preview overhead.

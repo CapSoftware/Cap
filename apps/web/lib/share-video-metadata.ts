@@ -15,6 +15,13 @@ export type ShareVideoMetadataInput = {
 	name: string;
 	sourceType: ShareVideoSourceType;
 	webUrl: string;
+	/**
+	 * Two surfaces only answer on the default Cap origin: `proxy.ts` redirects
+	 * `/embed/` away from a custom domain, and `parseCapShareUrl` accepts share
+	 * URLs on `cap.so` and `cap.link` alone, so `/api/oembed` rejects a custom
+	 * domain `url`. Defaults to `webUrl`.
+	 */
+	canonicalWebUrl?: string;
 	advertiseIframelyPlayer?: boolean;
 };
 
@@ -22,9 +29,17 @@ export const getShareVideoUrls = ({
 	videoId,
 	sourceType,
 	webUrl,
-}: Pick<ShareVideoMetadataInput, "videoId" | "sourceType" | "webUrl">) => {
+	canonicalWebUrl = webUrl,
+}: Pick<
+	ShareVideoMetadataInput,
+	"videoId" | "sourceType" | "webUrl" | "canonicalWebUrl"
+>) => {
 	const shareUrl = new URL(`/s/${videoId}`, webUrl).toString();
-	const playerUrl = new URL(`/embed/${videoId}`, webUrl).toString();
+	const canonicalShareUrl = new URL(
+		`/s/${videoId}`,
+		canonicalWebUrl,
+	).toString();
+	const playerUrl = new URL(`/embed/${videoId}`, canonicalWebUrl).toString();
 	const streamUrl = new URL("/api/playlist", webUrl);
 	streamUrl.searchParams.set("videoId", videoId);
 	let streamContentType = "application/vnd.apple.mpegurl";
@@ -42,8 +57,8 @@ export const getShareVideoUrls = ({
 	previewImageUrl.searchParams.set("fallback", "og");
 	const ogImageUrl = new URL("/api/video/og", webUrl);
 	ogImageUrl.searchParams.set("videoId", videoId);
-	const oEmbedUrl = new URL("/api/oembed", webUrl);
-	oEmbedUrl.searchParams.set("url", shareUrl);
+	const oEmbedUrl = new URL("/api/oembed", canonicalWebUrl);
+	oEmbedUrl.searchParams.set("url", canonicalShareUrl);
 	oEmbedUrl.searchParams.set("format", "json");
 
 	return {
@@ -62,9 +77,15 @@ export const buildShareVideoMetadata = ({
 	name,
 	sourceType,
 	webUrl,
+	canonicalWebUrl,
 	advertiseIframelyPlayer = false,
 }: ShareVideoMetadataInput): Metadata => {
-	const urls = getShareVideoUrls({ videoId, sourceType, webUrl });
+	const urls = getShareVideoUrls({
+		videoId,
+		sourceType,
+		webUrl,
+		canonicalWebUrl,
+	});
 	const title = `${name} | Cap Recording`;
 	const description = "Watch this video on Cap";
 

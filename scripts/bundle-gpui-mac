@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+gpui_dir="$repo_root/apps/desktop-gpui"
+target_dir="${CARGO_TARGET_DIR:-$gpui_dir/target}"
+framework="$repo_root/target/native-deps/Spacedrive.framework"
+backgrounds="$repo_root/apps/desktop/src-tauri/assets/backgrounds"
+onnxruntime="$repo_root/target/native-deps/onnxruntime"
+icon="$repo_root/apps/desktop/src-tauri/icons/macos/icon.icns"
+info_plist="$gpui_dir/resources/Info.plist"
+entitlements="$repo_root/apps/desktop/src-tauri/Entitlements.plist"
+target_triple="$(rustc -vV | awk '/^host:/ { host = $2 } END { print host }')"
+sidecars="$repo_root/apps/desktop/src-tauri/binaries"
+
+if [[ "$target_dir" != /* ]]; then
+	target_dir="$gpui_dir/$target_dir"
+fi
+
+if [[ ! -d "$framework" ]]; then
+	echo "Missing $framework" >&2
+	exit 1
+fi
+
+if [[ ! -d "$backgrounds" ]]; then
+	echo "Missing $backgrounds" >&2
+	exit 1
+fi
+
+for file in "$icon" "$info_plist" "$entitlements"; do
+	if [[ ! -f "$file" ]]; then
+		echo "Missing $file" >&2
+		exit 1
+	fi
+done
+
+for binary in cap-cli cap-exporter cap-muxer; do
+	if [[ ! -x "$sidecars/$binary-$target_triple" ]]; then
+		echo "Missing $sidecars/$binary-$target_triple" >&2
+		exit 1
+	fi
+done
+
+if [[ "${CAP_GPUI_BUNDLE_SKIP_BUILD:-0}" != "1" ]]; then
+	pushd "$gpui_dir" >/dev/null
+	cargo build --release
+	popd >/dev/null
+fi
+
+binary_path="$target_dir/release/cap-gpui"
+if [[ ! -x "$binary_path" ]]; then
+	echo "Missing $binary_path" >&2
+	exit 1
+fi
+
+app_path="$target_dir/release/bundle/osx/Cap GPUI.app"
+contents="$app_path/Contents"
+
+rm -rf "$app_path"
+mkdir -p "$contents/MacOS" "$contents/Frameworks" "$contents/Resources/assets"
+/usr/bin/ditto "$binary_path" "$contents/MacOS/cap-gpui"
+/usr/bin/ditto "$info_plist" "$contents/Info.plist"
+/usr/bin/ditto "$icon" "$contents/Resources/icon.icns"
+rm -rf "$contents/Frameworks/Spacedrive.framework"
+/usr/bin/ditto "$framework" "$contents/Frameworks/Spacedrive.framework"
+rm -rf "$contents/Resources/assets/backgrounds"
+/usr/bin/ditto "$backgrounds" "$contents/Resources/assets/backgrounds"
+
+if [[ -d "$onnxruntime" ]]; then
+	rm -rf "$contents/Resources/onnxruntime"
+	/usr/bin/ditto "$onnxruntime" "$contents/Resources/onnxruntime"
+fi
+
+rm -f "$contents/MacOS/cap-cli" "$contents/MacOS/cap-exporter" "$contents/MacOS/cap-muxer"
+/usr/bin/ditto "$sidecars/cap-cli-$target_triple" "$contents/MacOS/cap-cli"
+/usr/bin/ditto "$sidecars/cap-muxer-$target_triple" "$contents/MacOS/cap-muxer"
+if cmp -s "$sidecars/cap-cli-$target_triple" "$sidecars/cap-exporter-$target_triple"; then
+	ln -s "cap-cli" "$contents/MacOS/cap-exporter"
+else
+	/usr/bin/ditto "$sidecars/cap-exporter-$target_triple" "$contents/MacOS/cap-exporter"
+fi
+
+/usr/bin/plutil -lint "$contents/Info.plist"
+/usr/bin/codesign --force --deep --entitlements "$entitlements" --sign - "$app_path"
+/usr/bin/codesign --verify --deep --strict "$app_path"
+
+printf '%s\n' "$app_path"

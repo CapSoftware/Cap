@@ -31,6 +31,14 @@ struct Args {
     /// Output resolution height (defaults to project resolution)
     #[arg(long)]
     height: Option<u32>,
+
+    /// Timeline position to render, in seconds
+    #[arg(long, default_value_t = 0.0)]
+    time: f64,
+
+    /// Frame rate the timeline is sampled at; `--time` snaps to this grid
+    #[arg(long, default_value_t = 30)]
+    fps: u32,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -167,9 +175,16 @@ async fn main() -> Result<()> {
         std::fs::create_dir_all(parent).context("Failed to create output directory")?;
     }
 
+    let fps = args.fps.max(1);
+    let target_frame = (args.time.max(0.0) * fps as f64).round() as u32;
+
     println!(
-        "Rendering first frame at {}x{}",
-        output_size.0, output_size.1
+        "Rendering frame {} (t={:.3}s @ {}fps) at {}x{}",
+        target_frame,
+        target_frame as f64 / fps as f64,
+        fps,
+        output_size.0,
+        output_size.1
     );
     println!("Output: {}", output_path.display());
 
@@ -185,24 +200,28 @@ async fn main() -> Result<()> {
             &recording_meta.clone(),
             &studio_meta,
             render_segments,
-            1, // Only render 1 frame
+            fps,
             XY::new(output_size.0, output_size.1),
             &recordings,
         )
         .await
     });
 
-    // Wait for the first frame
-    let (frame, frame_number) = rx
-        .recv()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("No frame received"))?;
+    let mut received = None;
+    while let Some((frame, frame_number)) = rx.recv().await {
+        if frame_number >= target_frame {
+            received = Some((frame, frame_number));
+            break;
+        }
+    }
+
+    let (frame, frame_number) =
+        received.ok_or_else(|| anyhow::anyhow!("No frame received at t={}s", args.time))?;
     println!(
         "Received frame {} ({}x{})",
         frame_number, frame.width, frame.height
     );
 
-    // Cancel the render task since we only want the first frame
     render_task.abort();
 
     // Save the frame in the requested format

@@ -5,7 +5,7 @@ import { buildMarketingMetadata } from "@/lib/og/url";
 export const metadata: Metadata = buildMarketingMetadata({
 	title: "Download — Cap",
 	path: "/download",
-	ogTitle: "Download Cap for macOS & Windows",
+	ogTitle: "Download Cap for macOS, Windows, Linux & Chrome",
 	ogTag: "Download",
 });
 

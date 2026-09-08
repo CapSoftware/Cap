@@ -16,6 +16,13 @@ import { db } from "../index.ts";
 import { users } from "../schema.ts";
 import { isEmailAllowedForSignup } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
+import {
+	provisionSsoMembership,
+	type SsoAuthContext,
+	type ValidatedSsoIdentity,
+	validateSsoSignIn,
+} from "./sso.ts";
+import { ssoLoginErrorPath } from "./sso-state.ts";
 
 export const maxDuration = 120;
 
@@ -46,14 +53,17 @@ export async function decodeSessionToken(
 	return token;
 }
 
-export const authOptions = (): NextAuthOptions => {
+export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 	let _adapter: Adapter | undefined;
 	let _providers: Provider[] | undefined;
+	let validatedSsoIdentity: ValidatedSsoIdentity | null = null;
 
 	return {
 		get adapter() {
 			if (_adapter) return _adapter;
-			_adapter = DrizzleAdapter(db());
+			_adapter = DrizzleAdapter(db(), {
+				getSsoIdentity: () => validatedSsoIdentity,
+			});
 			return _adapter;
 		},
 		debug: process.env.NODE_ENV !== "production",
@@ -95,20 +105,29 @@ export const authOptions = (): NextAuthOptions => {
 						},
 					},
 				}),
-				WorkOSProvider({
-					clientId: serverEnv().WORKOS_CLIENT_ID as string,
-					clientSecret: serverEnv().WORKOS_API_KEY as string,
-					profile(profile) {
-						return {
-							id: profile.id,
-							name: profile.first_name
-								? `${profile.first_name} ${profile.last_name || ""}`
-								: profile.email?.split("@")[0] || profile.id,
-							email: profile.email,
-							image: profile.profile_picture_url,
-						};
-					},
-				}),
+				...(serverEnv().WORKOS_CLIENT_ID && serverEnv().WORKOS_API_KEY
+					? [
+							WorkOSProvider({
+								clientId: serverEnv().WORKOS_CLIENT_ID as string,
+								clientSecret: serverEnv().WORKOS_API_KEY as string,
+								checks: ["state", "pkce"],
+								allowDangerousEmailAccountLinking: true,
+								profile(profile) {
+									return {
+										id: profile.id,
+										name:
+											[profile.first_name, profile.last_name]
+												.filter(Boolean)
+												.join(" ") ||
+											profile.email?.split("@")[0] ||
+											profile.id,
+										email: profile.email?.trim().toLowerCase(),
+										image: null,
+									};
+								},
+							}),
+						]
+					: []),
 				EmailProvider({
 					// next-auth defaults to 24h, but the code is 6 digits and the
 					// verify path has no attempt limiting, so a day-long window is a
@@ -183,7 +202,22 @@ export const authOptions = (): NextAuthOptions => {
 			},
 		},
 		callbacks: {
-			async signIn({ user, email, credentials }) {
+			async signIn({ user, email, credentials, account, profile }) {
+				if (account?.provider === "workos") {
+					validatedSsoIdentity = null;
+					try {
+						validatedSsoIdentity = await validateSsoSignIn(
+							profile,
+							account.providerAccountId,
+							ssoContext,
+						);
+					} catch {
+						return ssoLoginErrorPath(
+							"SsoSignInFailed",
+							ssoContext?.intent?.returnTo,
+						);
+					}
+				}
 				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
 				if (!allowedDomains) return true;
 
@@ -226,7 +260,16 @@ export const authOptions = (): NextAuthOptions => {
 
 				return session;
 			},
-			async jwt({ token, user }) {
+			async jwt({ token, user, account }) {
+				if (account?.provider === "workos") {
+					if (!user || !validatedSsoIdentity) {
+						throw new Error("The SSO sign-in was not verified.");
+					}
+					await provisionSsoMembership(
+						User.UserId.make(user.id),
+						validatedSsoIdentity,
+					);
+				}
 				if (user || !token.id) {
 					const [dbUser] = await db()
 						.select({
@@ -238,7 +281,11 @@ export const authOptions = (): NextAuthOptions => {
 							authSessionVersion: users.authSessionVersion,
 						})
 						.from(users)
-						.where(eq(users.email, (token.email || "").toLowerCase()))
+						.where(
+							user
+								? eq(users.id, User.UserId.make(user.id))
+								: eq(users.email, (token.email || "").toLowerCase()),
+						)
 						.limit(1);
 
 					if (!dbUser) {

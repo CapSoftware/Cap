@@ -48,6 +48,14 @@ export type RecorderApiOptions = {
 	 * count).
 	 */
 	requestTimeoutMs?: number;
+	/**
+	 * Base path for the multipart control-plane routes. Defaults to
+	 * "/api/upload/multipart"; comment-media uploads point this at
+	 * "/api/upload/comment-media", whose routes accept the same bodies.
+	 */
+	multipartBasePath?: string;
+	/** Merged into every control-plane JSON body (e.g. a capability token). */
+	extraBody?: Record<string, unknown>;
 };
 
 interface UploadedPartPayload {
@@ -67,12 +75,23 @@ interface MultipartCompletePayload {
 class HttpRequestError extends Error {
 	readonly status: number;
 	readonly url: string;
+	readonly code?: string;
 
 	constructor(url: string, status: number, message: string) {
 		super(`Request to ${url} failed: ${status} ${message}`);
 		this.name = "HttpRequestError";
 		this.status = status;
 		this.url = url;
+		try {
+			const body: unknown = JSON.parse(message);
+			if (
+				body &&
+				typeof body === "object" &&
+				"code" in body &&
+				typeof body.code === "string"
+			)
+				this.code = body.code;
+		} catch {}
 	}
 }
 
@@ -117,7 +136,7 @@ const postJson = async <TResponse>(
 		method: "POST",
 		headers,
 		credentials: api.credentials ?? (api.authToken ? "omit" : "same-origin"),
-		body: JSON.stringify(body),
+		body: JSON.stringify({ ...body, ...api.extraBody }),
 		signal: AbortSignal.timeout(api.requestTimeoutMs ?? defaultTimeoutMs),
 	});
 
@@ -131,6 +150,9 @@ const postJson = async <TResponse>(
 
 const resolveApiUrl = (url: string, api: RecorderApiOptions) =>
 	api.baseUrl ? new URL(url, api.baseUrl).toString() : url;
+
+const multipartPath = (api: RecorderApiOptions | undefined, route: string) =>
+	`${api?.multipartBasePath ?? "/api/upload/multipart"}/${route}`;
 
 const normalizeMultipartContentType = (mimeType: string) => {
 	const normalized = mimeType.split(";")[0]?.trim();
@@ -152,7 +174,7 @@ export const initiateMultipartUpload = async ({
 		uploadId: string;
 		provider?: "s3" | "googleDrive";
 	}>(
-		"/api/upload/multipart/initiate",
+		multipartPath(api, "initiate"),
 		{
 			videoId,
 			contentType: normalizeMultipartContentType(contentType),
@@ -182,7 +204,7 @@ const presignMultipartPart = async (
 		presignedUrl: string;
 		provider?: "s3" | "googleDrive";
 	}>(
-		"/api/upload/multipart/presign-part",
+		multipartPath(api, "presign-part"),
 		{
 			videoId,
 			uploadId,
@@ -223,7 +245,7 @@ const completeMultipartUpload = async (
 				success: boolean;
 				processingStarted?: boolean;
 			}>(
-				"/api/upload/multipart/complete",
+				multipartPath(api, "complete"),
 				{
 					videoId,
 					uploadId,
@@ -276,7 +298,7 @@ const abortMultipartUpload = async (
 	api: RecorderApiOptions,
 ) => {
 	await postJson<{ success: boolean }>(
-		"/api/upload/multipart/abort",
+		multipartPath(api, "abort"),
 		{
 			videoId,
 			uploadId,
@@ -655,7 +677,12 @@ export class InstantRecordingUploader {
 					throw new CancelledUploadError();
 				}
 
-				if (attempt >= MAX_PART_UPLOAD_ATTEMPTS) {
+				if (
+					attempt >= MAX_PART_UPLOAD_ATTEMPTS ||
+					(error instanceof HttpRequestError &&
+						error.status === 404 &&
+						error.code === "VIDEO_NOT_FOUND")
+				) {
 					this.updateChunkState(partNumber, { status: "error" });
 					this.pendingUploadBytes = Math.max(
 						0,

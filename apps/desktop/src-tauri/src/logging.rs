@@ -82,6 +82,7 @@ fn collect_cameras(has_permission: bool) -> Vec<CameraDiagnostics> {
                     width: f.width(),
                     height: f.height(),
                     frame_rate: f.frame_rate(),
+                    pixel_format: f.pixel_format_name(),
                 })
                 .collect();
 
@@ -107,6 +108,13 @@ fn collect_microphones(has_permission: bool) -> Vec<MicrophoneDiagnostics> {
             sample_rate: config.sample_rate().0,
             channels: config.channels(),
             sample_format: format!("{:?}", config.sample_format()),
+            // The richer capability/heuristic fields belong to the diagnostic
+            // report; the log upload keeps its existing shape.
+            is_default: None,
+            is_bluetooth: None,
+            is_usb: None,
+            is_builtin: None,
+            supported_configs: None,
         })
         .collect()
 }
@@ -127,10 +135,23 @@ fn collect_storage_info(recordings_path: &std::path::Path) -> Option<StorageInfo
     }
 
     best_match.map(|(disk, _)| StorageInfo {
-        recordings_path: recordings_path.display().to_string(),
+        // The diagnostic report redacts these same paths, and both fields ride
+        // in one upload -- leaving this one raw defeats the redaction.
+        recordings_path: cap_recording::diagnostics::redact_home_paths(
+            &recordings_path.display().to_string(),
+        ),
         available_space_mb: disk.available_space() / (1024 * 1024),
         total_space_mb: disk.total_space() / (1024 * 1024),
     })
+}
+
+pub(crate) fn permission_status_str(status: &permissions::OSPermissionStatus) -> &'static str {
+    match status {
+        permissions::OSPermissionStatus::NotNeeded => "not_needed",
+        permissions::OSPermissionStatus::Empty => "not_requested",
+        permissions::OSPermissionStatus::Granted => "granted",
+        permissions::OSPermissionStatus::Denied => "denied",
+    }
 }
 
 fn collect_diagnostics_for_upload(
@@ -147,13 +168,6 @@ fn collect_diagnostics_for_upload(
     let microphones = collect_microphones(permissions.microphone.permitted());
     let storage = collect_storage_info(recordings_dir);
 
-    let perm_status = |p: &permissions::OSPermissionStatus| match p {
-        permissions::OSPermissionStatus::NotNeeded => "not_needed",
-        permissions::OSPermissionStatus::Empty => "not_requested",
-        permissions::OSPermissionStatus::Granted => "granted",
-        permissions::OSPermissionStatus::Denied => "denied",
-    };
-
     LogUploadDiagnostics {
         hardware,
         system,
@@ -162,19 +176,32 @@ fn collect_diagnostics_for_upload(
         microphones,
         storage,
         permissions: PermissionsInfo {
-            screen_recording: perm_status(&permissions.screen_recording).to_string(),
-            camera: perm_status(&permissions.camera).to_string(),
-            microphone: perm_status(&permissions.microphone).to_string(),
+            screen_recording: permission_status_str(&permissions.screen_recording).to_string(),
+            camera: permission_status_str(&permissions.camera).to_string(),
+            microphone: permission_status_str(&permissions.microphone).to_string(),
         },
         app_state: AppStateInfo {
             is_recording,
-            recordings_dir: recordings_dir.display().to_string(),
-            app_data_dir: app_data_dir.display().to_string(),
+            recordings_dir: cap_recording::diagnostics::redact_home_paths(
+                &recordings_dir.display().to_string(),
+            ),
+            app_data_dir: cap_recording::diagnostics::redact_home_paths(
+                &app_data_dir.display().to_string(),
+            ),
         },
     }
 }
 
 pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
+    upload_log_file_inner(app, None).await
+}
+
+/// `report` is the optional diagnostic report JSON. With `None` the request is
+/// byte-identical to the log upload that has always shipped.
+pub(crate) async fn upload_log_file_inner(
+    app: &AppHandle,
+    report: Option<String>,
+) -> Result<(), String> {
     let log_file = get_latest_log_file(app).await.ok_or("No log file found")?;
 
     let metadata =
@@ -193,7 +220,13 @@ pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
         let max_content_size = (MAX_SIZE as usize) - header.len();
 
         if content.len() > max_content_size {
-            let start_pos = content.len() - max_content_size;
+            // Walk forward to a char boundary first: slicing a String at an
+            // arbitrary byte offset panics, and logs carry multi-byte text
+            // (device names, paths).
+            let mut start_pos = content.len() - max_content_size;
+            while start_pos < content.len() && !content.is_char_boundary(start_pos) {
+                start_pos += 1;
+            }
             let truncated = &content[start_pos..];
             if let Some(newline_pos) = truncated.find('\n') {
                 format!("{}{}", header, &truncated[newline_pos + 1..])
@@ -225,11 +258,21 @@ pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
     let diagnostics = collect_diagnostics_for_upload(&recordings_dir, &app_data_dir, is_recording);
     let diagnostics_json = serde_json::to_string(&diagnostics).unwrap_or_else(|_| "{}".to_string());
 
-    let form = reqwest::multipart::Form::new()
-        .text("log", log_content)
+    // Everything leaving the machine goes through the redactor. Logs record
+    // whole URLs on failure (reqwest's Display and Debug both append the URL),
+    // and an upload failure logs a presigned S3 PUT, whose query string is a
+    // live write credential for up to an hour.
+    use cap_recording::log_redaction::scrub_log_text;
+
+    let mut form = reqwest::multipart::Form::new()
+        .text("log", scrub_log_text(&log_content))
         .text("os", std::env::consts::OS)
         .text("version", env!("CARGO_PKG_VERSION"))
-        .text("diagnostics", diagnostics_json);
+        .text("diagnostics", scrub_log_text(&diagnostics_json));
+
+    if let Some(report) = report {
+        form = form.text("report", scrub_log_text(&report));
+    }
 
     let response = app
         .api_request("/api/desktop/logs", |client, url| {

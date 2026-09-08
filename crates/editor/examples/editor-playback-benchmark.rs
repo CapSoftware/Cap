@@ -388,6 +388,7 @@ async fn load_recording(
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
             });
         }
     }
@@ -526,6 +527,8 @@ async fn main() {
                 data.len() + metadata_bytes
             }
             EditorFrameOutput::Rgba(frame) => frame.data.len() + 24,
+            #[cfg(target_os = "macos")]
+            EditorFrameOutput::Surface(_) => return,
         };
         let _ = frame_tx.send(bytes);
     });

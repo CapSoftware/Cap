@@ -284,7 +284,64 @@ fn build_time_map(timeline: Option<&TimelineConfiguration>) -> Vec<TimeMapSegmen
         });
         accum += duration;
     }
-    map
+
+    let holds = timeline.hold_windows();
+    if holds.is_empty() {
+        return map;
+    }
+
+    // Fullscreen text segments pause the recording clock: re-express the map
+    // in held-output time, splitting entries at each hold and inserting a
+    // timescale-0 (frozen) span so cursor-driven zoom aiming stays aligned
+    // with what the display actually shows.
+    let mut out = Vec::with_capacity(map.len() + holds.len());
+    let mut hold_idx = 0usize;
+    let mut shift = 0.0;
+    for segment in map {
+        let mut piece_start_out = segment.timeline_start + shift;
+        let mut piece_start_rec = segment.recording_start;
+        let mut remaining = segment.timeline_end - segment.timeline_start;
+        while hold_idx < holds.len() {
+            let (hold_start, hold_end) = holds[hold_idx];
+            if hold_start >= piece_start_out + remaining {
+                break;
+            }
+            if hold_start > piece_start_out {
+                let len = hold_start - piece_start_out;
+                out.push(TimeMapSegment {
+                    timeline_start: piece_start_out,
+                    timeline_end: hold_start,
+                    recording_start: piece_start_rec,
+                    timescale: segment.timescale,
+                    recording_clip: segment.recording_clip,
+                });
+                piece_start_rec += len * segment.timescale;
+                remaining -= len;
+                piece_start_out = hold_start;
+            }
+            let hold_len = hold_end - hold_start;
+            out.push(TimeMapSegment {
+                timeline_start: piece_start_out,
+                timeline_end: piece_start_out + hold_len,
+                recording_start: piece_start_rec,
+                timescale: 0.0,
+                recording_clip: segment.recording_clip,
+            });
+            piece_start_out += hold_len;
+            shift += hold_len;
+            hold_idx += 1;
+        }
+        if remaining > 0.0 {
+            out.push(TimeMapSegment {
+                timeline_start: piece_start_out,
+                timeline_end: piece_start_out + remaining,
+                recording_start: piece_start_rec,
+                timescale: segment.timescale,
+                recording_clip: segment.recording_clip,
+            });
+        }
+    }
+    out
 }
 
 /// Maps a timeline timestamp to recording seconds. Identity when no timeline
@@ -421,7 +478,11 @@ impl ZoomTransformTimeline {
         let mut zoom_segments = zoom_segments.to_vec();
         zoom_segments.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.end.total_cmp(&b.end)));
 
-        let time_map = build_time_map(timeline);
+        let time_map = if zoom_segments.is_empty() {
+            Vec::new()
+        } else {
+            build_time_map(timeline)
+        };
         let clusters = zoom_segments
             .iter()
             .map(|segment| match segment.mode {
@@ -461,12 +522,7 @@ impl ZoomTransformTimeline {
         let total_samples = (duration_secs * 1000.0 / STEP_MS).ceil() as usize + 2;
         if zoom_segments.is_empty() {
             return Self {
-                samples: vec![TimelineSample {
-                    amount: 1.0,
-                    center: XY::new(0.5, 0.5),
-                    activity: 0.0,
-                    snapped: false,
-                }],
+                samples: Vec::new(),
                 state: None,
                 zoom_segments,
                 clusters,
@@ -889,11 +945,35 @@ mod tests {
     #[test]
     fn empty_zoom_timeline_stays_constant_without_precompute_work() {
         let mut timeline = timeline_for(&[], &CursorEvents::default(), 60.0 * 60.0);
-        timeline.ensure_precomputed_until(60.0 * 60.0);
+        for seconds in [
+            f32::NEG_INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
+            0.5,
+            60.0 * 60.0,
+            f32::MAX,
+            f32::INFINITY,
+            f32::NAN,
+        ] {
+            timeline.ensure_precomputed_until(seconds);
+            timeline.precompute();
+            let sample = timeline.sample(seconds);
+            assert_eq!(
+                [
+                    sample.t,
+                    sample.bounds.top_left.x,
+                    sample.bounds.top_left.y,
+                    sample.bounds.bottom_right.x,
+                    sample.bounds.bottom_right.y,
+                ]
+                .map(f64::to_bits),
+                [0.0, 0.0, 0.0, 1.0, 1.0].map(f64::to_bits)
+            );
+            assert!(!timeline.snapped_within(seconds, 0.0));
+        }
 
         assert!(timeline.state.is_none());
-        assert_eq!(timeline.samples.len(), 1);
-        assert_eq!(timeline.sample(60.0 * 60.0).display_amount(), 1.0);
     }
 
     /// Max |value delta| and |slope delta| between adjacent 8ms sample
@@ -925,10 +1005,7 @@ mod tests {
         let mut max_value_jump = 0.0f64;
         let mut max_slope_jump = 0.0f64;
         for window in values.windows(3) {
-            for channel in 0..5 {
-                let v0 = window[0][channel];
-                let v1 = window[1][channel];
-                let v2 = window[2][channel];
+            for ((v0, v1), v2) in window[0].iter().zip(&window[1]).zip(&window[2]) {
                 let slope_a = (v1 - v0) / step_secs;
                 let slope_b = (v2 - v1) / step_secs;
                 max_value_jump = max_value_jump.max((v1 - v0).abs()).max((v2 - v1).abs());
@@ -1501,6 +1578,7 @@ mod tests {
             caption_segments: vec![],
             keyboard_segments: vec![],
             audio_segments: vec![],
+            camera3d_segments: Vec::new(),
         };
         let cursor = CursorEvents {
             moves: vec![
@@ -1570,6 +1648,7 @@ mod tests {
             caption_segments: Vec::new(),
             keyboard_segments: Vec::new(),
             audio_segments: Vec::new(),
+            camera3d_segments: Vec::new(),
         };
         let map = build_time_map(Some(&timeline));
 

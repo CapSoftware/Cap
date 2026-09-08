@@ -426,27 +426,132 @@ async fn ensure_remuxed(project_path: PathBuf) -> Result<(), String> {
 }
 
 async fn prepare_instant_output(project_path: PathBuf) -> Result<PathBuf, String> {
-    let output_path = project_path.join("content/output.mp4");
-    let audio_dir = project_path.join("content/audio");
-    if std::fs::metadata(&output_path)
-        .map(|metadata| metadata.len() > 0)
-        .unwrap_or(false)
-        && !audio_dir.exists()
-    {
-        return Ok(output_path);
-    }
-
-    let display_dir = project_path.join("content/display");
     tokio::task::spawn_blocking(move || {
+        if let Some(output) = completed_instant_output(&project_path)? {
+            return Ok(output);
+        }
+        let ownership = cap_recording::upload_resume::UploadLock::acquire(&project_path).map_err(
+            |error| {
+                format!(
+                    "Instant output needs repair, but upload ownership is unavailable: {error}; local recording retained"
+                )
+            },
+        )?;
+        let project_path = ownership.project_path();
+        if let Some(output) = completed_instant_output(project_path)? {
+            return Ok(output);
+        }
         cap_recording::recovery::RecoveryManager::finalize_instant_output(
-            &display_dir,
-            &audio_dir,
-            &output_path,
+            &project_path.join("content/display"),
+            &project_path.join("content/audio"),
+            &project_path.join("content/output.mp4"),
         )
+        .map_err(|error| format!("Failed to finalize instant recording before export: {error}"))
     })
     .await
-    .map_err(|e| format!("instant export finalize task failed: {e}"))?
-    .map_err(|e| format!("Failed to finalize instant recording before export: {e}"))
+    .map_err(|error| format!("instant export finalize task failed: {error}"))?
+}
+
+fn completed_instant_output(project_path: &Path) -> Result<Option<PathBuf>, String> {
+    for path in [project_path.to_path_buf(), project_path.join("content")] {
+        if let Some(metadata) = instant_input_metadata(&path)?
+            && !metadata.is_dir()
+        {
+            return Err("Invalid Instant recording directory; local recording retained".into());
+        }
+    }
+    let meta = RecordingMeta::load_for_project(project_path)
+        .map_err(|error| format!("Failed to load Instant recording metadata: {error}"))?;
+    let RecordingMetaInner::Instant(cap_project::InstantRecordingMeta::Complete {
+        sample_rate,
+        ..
+    }) = meta.inner
+    else {
+        return Ok(None);
+    };
+    let mut required_audio = sample_rate.is_some();
+    for (name, field) in [
+        ("tauri-upload.json", "required_audio"),
+        ("instant-upload.json", "requested_audio"),
+    ] {
+        let path = project_path.join(name);
+        if let Some(metadata) = instant_input_metadata(&path)? {
+            if !metadata.is_file() || metadata.len() > 65536 {
+                return Err("Invalid Instant upload intent; local recording retained".into());
+            }
+            let intent: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).map_err(|error| error.to_string())?)
+                    .map_err(|error| format!("Invalid Instant upload intent: {error}"))?;
+            if let Some(value) = intent.get(field).filter(|value| !value.is_null()) {
+                required_audio |= value
+                    .as_bool()
+                    .ok_or("Invalid Instant audio intent; local recording retained")?;
+            }
+        }
+    }
+    let audio_dir = project_path.join("content/audio");
+    let audio_metadata = instant_input_metadata(&audio_dir)?;
+    let has_audio_directory = audio_metadata.is_some();
+    let mut has_audio_sources = false;
+    if let Some(metadata) = audio_metadata {
+        if !metadata.is_dir() {
+            return Err("Invalid Instant audio directory; local recording retained".into());
+        }
+        for entry in std::fs::read_dir(audio_dir).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            let is_audio_media = path.extension().is_some_and(|extension| {
+                ["m4s", "mp4", "ogg", "aac", "wav", "webm", "m4a"]
+                    .iter()
+                    .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+            });
+            if let Some(metadata) = instant_input_metadata(&path)?
+                && is_audio_media
+                && metadata.is_file()
+                && metadata.len() > 0
+            {
+                required_audio = true;
+                has_audio_sources = true;
+            }
+        }
+    }
+    let output = project_path.join("content/output.mp4");
+    if !required_audio
+        && !has_audio_directory
+        && instant_input_metadata(&output)?
+            .is_some_and(|metadata| metadata.is_file() && metadata.len() > 0)
+    {
+        return Ok(Some(output));
+    }
+    match cap_recording::recovery::RecoveryManager::validate_instant_output(
+        project_path,
+        required_audio,
+    ) {
+        Ok(output) => Ok(Some(output)),
+        Err(error) if required_audio && !has_audio_sources => Err(format!(
+            "Instant output failed validation and required audio cannot be repaired: {error}; local recording retained"
+        )),
+        Err(_) => Ok(None),
+    }
+}
+
+fn instant_input_metadata(path: &Path) -> Result<Option<std::fs::Metadata>, String> {
+    let metadata = match path.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err("Instant input is a reparse point; local recording retained".into());
+        }
+    }
+    if metadata.file_type().is_symlink() {
+        return Err("Instant input is a symbolic link; local recording retained".into());
+    }
+    Ok(Some(metadata))
 }
 
 fn instant_export_settings_supported(settings: &CliExportSettings) -> bool {
@@ -667,6 +772,147 @@ fn emit_export_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn playable_instant_project() -> tempfile::TempDir {
+        ffmpeg::init().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let content = project.path().join("content");
+        std::fs::create_dir(&content).unwrap();
+        let mut output = ffmpeg::format::output(&content.join("output.mp4")).unwrap();
+        let codec = ffmpeg::encoder::find(ffmpeg::codec::Id::MPEG4).unwrap();
+        let mut encoder = ffmpeg::codec::Context::new_with_codec(codec)
+            .encoder()
+            .video()
+            .unwrap();
+        encoder.set_width(32);
+        encoder.set_height(32);
+        encoder.set_format(ffmpeg::format::Pixel::YUV420P);
+        encoder.set_time_base((1, 30));
+        encoder.set_frame_rate(Some((30, 1)));
+        encoder.set_flags(ffmpeg::codec::Flags::GLOBAL_HEADER);
+        let mut encoder = encoder.open_as(codec).unwrap();
+        output.add_stream(codec).unwrap().set_parameters(&encoder);
+        output.write_header().unwrap();
+        let output_time_base = output.stream(0).unwrap().time_base();
+        {
+            let mut drain = |encoder: &mut ffmpeg::encoder::video::Encoder, finished: bool| loop {
+                let mut packet = ffmpeg::Packet::empty();
+                match encoder.receive_packet(&mut packet) {
+                    Ok(()) => {
+                        packet.set_stream(0);
+                        packet.rescale_ts((1, 30), output_time_base);
+                        packet.write_interleaved(&mut output).unwrap();
+                    }
+                    Err(ffmpeg::Error::Other { errno })
+                        if !finished && errno == ffmpeg::ffi::EAGAIN =>
+                    {
+                        break;
+                    }
+                    Err(ffmpeg::Error::Eof) if finished => break,
+                    Err(error) => panic!("Synthetic video encoding failed: {error}"),
+                }
+            };
+            for index in 0..30 {
+                let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUV420P, 32, 32);
+                frame.data_mut(0).fill(32 + index as u8);
+                frame.data_mut(1).fill(128);
+                frame.data_mut(2).fill(128);
+                frame.set_pts(Some(index));
+                encoder.send_frame(&frame).unwrap();
+                drain(&mut encoder, false);
+            }
+            encoder.send_eof().unwrap();
+            drain(&mut encoder, true);
+        }
+        output.write_trailer().unwrap();
+        drop(output);
+        RecordingMeta {
+            project_path: project.path().to_path_buf(),
+            platform: None,
+            pretty_name: "Owned Instant fixture".into(),
+            sharing: None,
+            inner: RecordingMetaInner::Instant(cap_project::InstantRecordingMeta::Complete {
+                fps: 30,
+                sample_rate: None,
+            }),
+            upload: None,
+        }
+        .save_for_project()
+        .unwrap();
+        project
+    }
+
+    #[tokio::test]
+    async fn completed_instant_export_is_read_only_while_upload_owns_the_project() {
+        let project = playable_instant_project();
+        std::fs::create_dir(project.path().join("content/audio")).unwrap();
+        let output = project.path().join("content/output.mp4");
+        let before = std::fs::read(&output).unwrap();
+        let _upload = cap_recording::upload_resume::UploadLock::acquire(project.path()).unwrap();
+        assert_eq!(
+            prepare_instant_output(project.path().to_path_buf())
+                .await
+                .unwrap(),
+            output
+        );
+        let exported = project.path().join("copy.mp4");
+        assert_eq!(
+            copy_instant_output(&output, exported.clone()).unwrap(),
+            exported
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), before);
+        assert_eq!(std::fs::read(&exported).unwrap(), before);
+        assert!(!project.path().join(".recovery.lock").exists());
+    }
+
+    #[tokio::test]
+    async fn instant_export_needing_repair_cannot_rewrite_an_owned_upload() {
+        let project = playable_instant_project();
+        std::fs::create_dir(project.path().join("content/audio")).unwrap();
+        let output = project.path().join("content/output.mp4");
+        std::fs::write(&output, b"broken media must remain available for repair").unwrap();
+        let before = std::fs::read(&output).unwrap();
+        let _upload = cap_recording::upload_resume::UploadLock::acquire(project.path()).unwrap();
+        let error = prepare_instant_output(project.path().to_path_buf())
+            .await
+            .unwrap_err();
+        assert!(error.contains("Another upload owns this recording"));
+        assert_eq!(std::fs::read(&output).unwrap(), before);
+        assert!(!project.path().join(".recovery.lock").exists());
+    }
+
+    #[tokio::test]
+    async fn instant_export_cannot_ignore_persisted_or_recorded_audio() {
+        for intent in ["tauri-upload.json", "instant-upload.json", "audio-media"] {
+            let project = playable_instant_project();
+            let output = project.path().join("content/output.mp4");
+            let before = std::fs::read(&output).unwrap();
+            match intent {
+                "tauri-upload.json" => {
+                    std::fs::write(project.path().join(intent), br#"{"required_audio":true}"#)
+                        .unwrap();
+                }
+                "instant-upload.json" => {
+                    std::fs::write(project.path().join(intent), br#"{"requested_audio":true}"#)
+                        .unwrap();
+                }
+                _ => {
+                    let audio = project.path().join("content/audio");
+                    std::fs::create_dir(&audio).unwrap();
+                    std::fs::write(audio.join("segment_001.m4s"), b"retained audio source")
+                        .unwrap();
+                }
+            }
+            let _upload =
+                cap_recording::upload_resume::UploadLock::acquire(project.path()).unwrap();
+            assert!(
+                prepare_instant_output(project.path().to_path_buf())
+                    .await
+                    .is_err()
+            );
+            assert_eq!(std::fs::read(output).unwrap(), before);
+        }
+    }
 
     #[test]
     fn default_flags_produce_maximum_mp4_1080p60() {

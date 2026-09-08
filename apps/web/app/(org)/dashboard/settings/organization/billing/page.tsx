@@ -10,6 +10,7 @@ import {
 import { BillingSummaryCard } from "../components/BillingSummaryCard";
 import { MembersCard } from "../components/MembersCard";
 import { SeatManagementCard } from "../components/SeatManagementCard";
+import { SignedBaaCard } from "../components/SignedBaaCard";
 
 export default function BillingAndMembersPage() {
 	const { activeOrganization, user, setInviteDialogOpen } =
@@ -30,8 +31,13 @@ export default function BillingAndMembersPage() {
 				(canManageBilling ? (
 					<>
 						<BillingSummaryCard />
-						{activeOrganization?.hasActiveProSeatProvider && (
-							<SeatManagementCard />
+						{activeOrganization?.hasActiveProSeatProvider ? (
+							<div className="grid gap-6 items-stretch md:grid-cols-2">
+								<SeatManagementCard />
+								<SignedBaaCard />
+							</div>
+						) : (
+							<SignedBaaCard />
 						)}
 					</>
 				) : (

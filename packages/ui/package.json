@@ -5,6 +5,9 @@
 	"types": "./src/index.tsx",
 	"exports": {
 		".": "./src/index.tsx",
+		"./logo": "./src/components/icons/Logo.tsx",
+		"./button": "./src/components/Button.tsx",
+		"./navigation-menu": "./src/components/NavigationMenu.tsx",
 		"./tailwind": "./tailwind.config.js",
 		"./postcss": "./postcss.config.js",
 		"./style": "./style/styles.css"

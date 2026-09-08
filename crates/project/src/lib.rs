@@ -1,8 +1,10 @@
+mod animated_gradient;
 mod configuration;
 pub mod cursor;
 pub mod keyboard;
 mod meta;
 
+pub use animated_gradient::*;
 pub use configuration::*;
 pub use cursor::*;
 pub use keyboard::*;

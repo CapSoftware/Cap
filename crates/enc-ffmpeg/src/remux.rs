@@ -3,7 +3,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     ptr,
-    sync::atomic::{AtomicI32, Ordering},
+    sync::atomic::{AtomicI32, AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -13,6 +13,7 @@ use ffmpeg::{ChannelLayout, codec as avcodec, format as avformat, packet::Mut as
 use crate::audio::opus::{OpusEncoder, OpusEncoderError};
 
 static ORIGINAL_LOG_LEVEL: AtomicI32 = AtomicI32::new(-1);
+static VALIDATED_AGGREGATE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const SEEK_PROBE_PACKET_LIMIT: usize = 240;
 const SEEK_PROBE_PADDING_US: i64 = 250_000;
 
@@ -43,6 +44,8 @@ pub enum RemuxError {
     NoFragments,
     #[error("Fragment not found: {0}")]
     FragmentNotFound(PathBuf),
+    #[error("Fragment path cannot be written to an FFmpeg concat list: {0}")]
+    InvalidConcatPath(PathBuf),
     #[error("No audio stream found")]
     NoAudioStream,
     #[error("Opus encoder error: {0}")]
@@ -51,6 +54,8 @@ pub enum RemuxError {
     AudioInfo(#[from] AudioInfoError),
     #[error("Concat demuxer not found")]
     ConcatDemuxerNotFound,
+    #[error("Video validation failed: {0}")]
+    VideoValidation(&'static str),
 }
 
 pub fn concatenate_video_fragments(fragments: &[PathBuf], output: &Path) -> Result<(), RemuxError> {
@@ -65,22 +70,42 @@ pub fn concatenate_video_fragments(fragments: &[PathBuf], output: &Path) -> Resu
     }
 
     let concat_list_path = output.with_extension("concat.txt");
-    {
-        let mut file = std::fs::File::create(&concat_list_path)?;
-        for fragment in fragments {
-            writeln!(
-                file,
-                "file '{}'",
-                fragment.to_string_lossy().replace('\'', "'\\''")
-            )?;
-        }
-    }
+    write_concat_list(fragments, &concat_list_path)?;
 
     let result = concatenate_with_concat_demuxer(&concat_list_path, output);
 
     let _ = std::fs::remove_file(&concat_list_path);
 
     result
+}
+
+fn concat_fragment_entry(fragment: &Path, concat_list: &Path) -> Result<String, RemuxError> {
+    let fragment = std::path::absolute(fragment)?;
+    let concat_list = std::path::absolute(concat_list)?;
+    let directory = concat_list.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Concat list has no parent directory",
+        )
+    })?;
+    let relative = fragment.strip_prefix(directory).ok();
+    let reference = relative.unwrap_or(&fragment);
+    let text = reference
+        .to_str()
+        .filter(|text| !text.contains(['\r', '\n']))
+        .ok_or_else(|| RemuxError::InvalidConcatPath(fragment.clone()))?;
+    let prefix = if relative.is_some() { "./" } else { "" };
+
+    Ok(format!("file '{prefix}{}'\n", text.replace('\'', "'\\''")))
+}
+
+fn write_concat_list(fragments: &[PathBuf], concat_list: &Path) -> Result<(), RemuxError> {
+    let entries = fragments
+        .iter()
+        .map(|fragment| concat_fragment_entry(fragment, concat_list))
+        .collect::<Result<Vec<_>, _>>()?;
+    std::fs::write(concat_list, entries.concat())?;
+    Ok(())
 }
 
 fn open_input_with_format(
@@ -96,7 +121,13 @@ fn open_input_with_format(
             return Err(RemuxError::ConcatDemuxerNotFound);
         }
 
-        let path_cstr = CString::new(path.to_string_lossy().as_bytes()).map_err(|_| {
+        let path_text = path.to_str().ok_or_else(|| {
+            RemuxError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "FFmpeg input path is not valid UTF-8",
+            ))
+        })?;
+        let path_cstr = CString::new(path_text).map_err(|_| {
             RemuxError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "Invalid path",
@@ -125,55 +156,68 @@ fn open_input_with_format(
     }
 }
 
-fn remux_streams(
-    ictx: &mut avformat::context::Input,
-    octx: &mut avformat::context::Output,
-) -> Result<(), RemuxError> {
-    let mut stream_mapping: Vec<Option<usize>> = Vec::new();
-    let mut output_stream_index = 0usize;
+struct StreamRemuxer {
+    stream_mapping: Vec<Option<usize>>,
+    last_dts: Vec<i64>,
+    dts_offset: Vec<i64>,
+}
 
-    for input_stream in ictx.streams() {
-        let codec_params = input_stream.parameters();
-        let medium = codec_params.medium();
+impl StreamRemuxer {
+    fn new(
+        ictx: &avformat::context::Input,
+        octx: &mut avformat::context::Output,
+    ) -> Result<Self, RemuxError> {
+        let mut stream_mapping = Vec::new();
+        let mut output_stream_index = 0usize;
 
-        if medium == ffmpeg::media::Type::Video || medium == ffmpeg::media::Type::Audio {
-            stream_mapping.push(Some(output_stream_index));
-            output_stream_index += 1;
+        for input_stream in ictx.streams() {
+            let codec_params = input_stream.parameters();
+            let medium = codec_params.medium();
 
-            let mut output_stream = octx.add_stream(None)?;
-            output_stream.set_parameters(codec_params);
-            unsafe {
-                (*output_stream.as_mut_ptr()).time_base = (*input_stream.as_ptr()).time_base;
+            if medium == ffmpeg::media::Type::Video || medium == ffmpeg::media::Type::Audio {
+                stream_mapping.push(Some(output_stream_index));
+                output_stream_index += 1;
+
+                let mut output_stream = octx.add_stream(None)?;
+                output_stream.set_parameters(codec_params);
+                unsafe {
+                    (*output_stream.as_mut_ptr()).time_base = (*input_stream.as_ptr()).time_base;
+                }
+            } else {
+                stream_mapping.push(None);
             }
-        } else {
-            stream_mapping.push(None);
         }
+
+        octx.write_header()?;
+
+        Ok(Self {
+            stream_mapping,
+            last_dts: vec![i64::MIN; output_stream_index],
+            dts_offset: vec![0; output_stream_index],
+        })
     }
 
-    octx.write_header()?;
-
-    let mut last_dts: Vec<i64> = vec![i64::MIN; output_stream_index];
-    let mut dts_offset: Vec<i64> = vec![0; output_stream_index];
-
-    for (input_stream, packet) in ictx.packets() {
-        let input_stream_index = input_stream.index();
-
-        if let Some(Some(output_index)) = stream_mapping.get(input_stream_index) {
+    fn write_packet(
+        &mut self,
+        mut packet: ffmpeg::Packet,
+        input_time_base: ffmpeg::Rational,
+        octx: &mut avformat::context::Output,
+    ) -> Result<(), RemuxError> {
+        if let Some(Some(output_index)) = self.stream_mapping.get(packet.stream()) {
             let output_index = *output_index;
-            let mut packet = packet;
-            let input_time_base = input_stream.time_base();
             let output_time_base = octx.stream(output_index).unwrap().time_base();
 
             packet.rescale_ts(input_time_base, output_time_base);
 
             let current_dts = packet.dts().unwrap_or(0);
 
-            if last_dts[output_index] != i64::MIN && current_dts <= last_dts[output_index] {
-                dts_offset[output_index] = last_dts[output_index] - current_dts + 1;
+            if self.last_dts[output_index] != i64::MIN && current_dts <= self.last_dts[output_index]
+            {
+                self.dts_offset[output_index] = self.last_dts[output_index] - current_dts + 1;
             }
 
-            let adjusted_dts = current_dts + dts_offset[output_index];
-            let adjusted_pts = packet.pts().map(|pts| pts + dts_offset[output_index]);
+            let adjusted_dts = current_dts + self.dts_offset[output_index];
+            let adjusted_pts = packet.pts().map(|pts| pts + self.dts_offset[output_index]);
 
             unsafe {
                 (*packet.as_mut_ptr()).dts = adjusted_dts;
@@ -182,17 +226,106 @@ fn remux_streams(
                 }
             }
 
-            last_dts[output_index] = adjusted_dts;
+            self.last_dts[output_index] = adjusted_dts;
 
             packet.set_stream(output_index);
             packet.set_position(-1);
 
             packet.write_interleaved(octx)?;
         }
+        Ok(())
+    }
+}
+
+fn remux_streams(
+    ictx: &mut avformat::context::Input,
+    octx: &mut avformat::context::Output,
+) -> Result<(), RemuxError> {
+    let mut remuxer = StreamRemuxer::new(ictx, octx)?;
+    for (input_stream, packet) in ictx.packets() {
+        remuxer.write_packet(packet, input_stream.time_base(), octx)?;
     }
 
     octx.write_trailer()?;
 
+    Ok(())
+}
+
+fn remux_streams_validated_with_reader(
+    ictx: &mut avformat::context::Input,
+    octx: &mut avformat::context::Output,
+    mut read_packet: impl FnMut(
+        &mut ffmpeg::Packet,
+        &mut avformat::context::Input,
+    ) -> Result<(), ffmpeg::Error>,
+) -> Result<(), RemuxError> {
+    let stream = ictx
+        .streams()
+        .best(ffmpeg::media::Type::Video)
+        .ok_or(RemuxError::VideoValidation("No video stream found"))?;
+    let video_index = stream.index();
+    let context = avcodec::Context::from_parameters(stream.parameters())?;
+    let codec = ffmpeg::decoder::find(context.id())
+        .ok_or(RemuxError::VideoValidation("Video decoder unavailable"))?;
+    let mut decoder = context.decoder();
+    decoder.check(avcodec::decoder::Check::EXPLODE | avcodec::decoder::Check::CRC);
+    let mut decoder = decoder.open_as(codec)?;
+    let mut frame = unsafe { ffmpeg::Frame::empty() };
+    let mut decoded = false;
+    let mut remuxer = StreamRemuxer::new(ictx, octx)?;
+
+    loop {
+        let mut packet = ffmpeg::Packet::empty();
+        match read_packet(&mut packet, ictx) {
+            Ok(()) => {}
+            Err(ffmpeg::Error::Eof) => break,
+            Err(error) => return Err(error.into()),
+        }
+        if packet.stream() == video_index {
+            if packet.is_corrupt() {
+                return Err(RemuxError::VideoValidation("Corrupt video packet"));
+            }
+            if !decoded {
+                decoder.send_packet(&packet)?;
+                loop {
+                    match decoder.receive_frame(&mut frame) {
+                        Ok(()) if !frame.is_corrupt() => decoded = true,
+                        Ok(()) => {
+                            return Err(RemuxError::VideoValidation("Corrupt decoded video frame"));
+                        }
+                        Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => {
+                            break;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+            }
+        }
+        let input_time_base = ictx
+            .stream(packet.stream())
+            .ok_or(ffmpeg::Error::StreamNotFound)?
+            .time_base();
+        remuxer.write_packet(packet, input_time_base, octx)?;
+    }
+
+    decoder.send_eof()?;
+    loop {
+        match decoder.receive_frame(&mut frame) {
+            Ok(()) if !frame.is_corrupt() => decoded = true,
+            Ok(()) => {
+                return Err(RemuxError::VideoValidation("Corrupt decoded video frame"));
+            }
+            Err(ffmpeg::Error::Eof) => break,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    if !decoded {
+        return Err(RemuxError::VideoValidation(
+            "Video contains no decoded frames",
+        ));
+    }
+
+    octx.write_trailer()?;
     Ok(())
 }
 
@@ -221,16 +354,7 @@ pub fn concatenate_audio_to_ogg(fragments: &[PathBuf], output: &Path) -> Result<
     }
 
     let concat_list_path = output.with_extension("concat.txt");
-    {
-        let mut file = std::fs::File::create(&concat_list_path)?;
-        for fragment in fragments {
-            writeln!(
-                file,
-                "file '{}'",
-                fragment.to_string_lossy().replace('\'', "'\\''")
-            )?;
-        }
-    }
+    write_concat_list(fragments, &concat_list_path)?;
 
     let result = transcode_audio_to_ogg(&concat_list_path, output);
 
@@ -320,7 +444,7 @@ pub fn probe_video_seek_points(path: &Path, sample_count: usize) -> Result<(), S
 }
 
 fn probe_video_can_decode_inner(path: &Path) -> Result<bool, String> {
-    let input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
+    let mut input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
 
     let input_stream = input
         .streams()
@@ -336,8 +460,6 @@ fn probe_video_can_decode_inner(path: &Path) -> Result<bool, String> {
         .map_err(|e| format!("Failed to create video decoder: {e}"))?;
 
     let stream_index = input_stream.index();
-
-    let mut input = avformat::input(path).map_err(|e| format!("Failed to reopen file: {e}"))?;
 
     let mut frame = ffmpeg::frame::Video::empty();
     let mut packets_tried = 0;
@@ -736,6 +858,71 @@ pub fn concatenate_m4s_segments_with_init(
     result
 }
 
+pub fn concatenate_m4s_segments_with_init_validated(
+    init_path: &Path,
+    segments: &[PathBuf],
+    output: &Path,
+) -> Result<(), RemuxError> {
+    concatenate_m4s_segments_with_init_validated_with_reader(
+        init_path,
+        segments,
+        output,
+        ffmpeg::Packet::read,
+    )
+}
+
+fn concatenate_m4s_segments_with_init_validated_with_reader(
+    init_path: &Path,
+    segments: &[PathBuf],
+    output: &Path,
+    read_packet: impl FnMut(
+        &mut ffmpeg::Packet,
+        &mut avformat::context::Input,
+    ) -> Result<(), ffmpeg::Error>,
+) -> Result<(), RemuxError> {
+    if segments.is_empty() {
+        return Err(RemuxError::NoFragments);
+    }
+    for path in std::iter::once(init_path).chain(segments.iter().map(PathBuf::as_path)) {
+        if !path.exists() {
+            return Err(RemuxError::FragmentNotFound(path.to_path_buf()));
+        }
+    }
+
+    let sequence = VALIDATED_AGGREGATE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let combined_path = output.with_extension(format!(
+        "validated-combined-{}-{sequence}.mp4",
+        std::process::id()
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut combined_file = options.open(&combined_path)?;
+    let result = (|| {
+        for path in std::iter::once(init_path).chain(segments.iter().map(PathBuf::as_path)) {
+            let mut source = std::fs::File::open(path)?;
+            std::io::copy(&mut source, &mut combined_file)?;
+        }
+        drop(combined_file);
+
+        let mut ictx = avformat::input(&combined_path)?;
+        let mut octx = avformat::output(output)?;
+        remux_streams_validated_with_reader(&mut ictx, &mut octx, read_packet)
+    })();
+    if let Err(cleanup_error) = std::fs::remove_file(&combined_path) {
+        tracing::warn!(
+            "failed to remove validated combined file {}: {}",
+            combined_path.display(),
+            cleanup_error
+        );
+    }
+    result
+}
+
 fn remux_to_regular_mp4(input_path: &Path, output_path: &Path) -> Result<(), RemuxError> {
     let mut ictx = avformat::input(input_path)?;
     let mut octx = avformat::output(output_path)?;
@@ -955,9 +1142,417 @@ fn merge_video_audio_inner(
 
 #[cfg(test)]
 mod tests {
-    use super::build_seek_probe_positions;
-    use super::probe_video_pts_ladder;
-    use std::time::Duration;
+    use super::{
+        build_seek_probe_positions, concat_fragment_entry, concatenate_audio_to_ogg,
+        concatenate_m4s_segments_with_init, concatenate_m4s_segments_with_init_validated,
+        concatenate_m4s_segments_with_init_validated_with_reader, concatenate_video_fragments,
+        probe_video_pts_ladder, write_concat_list,
+    };
+    use std::{
+        path::{Path, PathBuf},
+        time::Duration,
+    };
+
+    fn encode_test_segments(directory: &Path) -> (PathBuf, Vec<PathBuf>) {
+        use crate::segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig};
+
+        ffmpeg::init().unwrap();
+        let mut encoder = SegmentedVideoEncoder::init(
+            directory.to_path_buf(),
+            cap_media_info::VideoInfo {
+                pixel_format: cap_media_info::Pixel::NV12,
+                width: 320,
+                height: 240,
+                time_base: ffmpeg::Rational(1, 1_000_000),
+                frame_rate: ffmpeg::Rational(30, 1),
+            },
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+        for index in 0..320 {
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
+            frame.data_mut(0).fill(32 + (index % 192) as u8);
+            frame.data_mut(1).fill(128);
+            encoder
+                .queue_frame(frame, Duration::from_micros(index * 1_000_000 / 30))
+                .unwrap();
+        }
+        encoder.finish().unwrap();
+        let segments: Vec<_> = encoder
+            .completed_segments()
+            .iter()
+            .map(|segment| segment.path.clone())
+            .collect();
+        assert!(segments.len() >= 2);
+        (encoder.init_segment_path(), segments)
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct TestVideoPacket {
+        pts: Option<i64>,
+        dts: Option<i64>,
+        duration: i64,
+        data: Vec<u8>,
+    }
+
+    fn video_packet_contents(path: &Path) -> (ffmpeg::Rational, Vec<TestVideoPacket>) {
+        let mut input = ffmpeg::format::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let index = stream.index();
+        let time_base = stream.time_base();
+        let mut packets = Vec::new();
+        loop {
+            let mut packet = ffmpeg::Packet::empty();
+            match packet.read(&mut input) {
+                Ok(()) => {}
+                Err(ffmpeg::Error::Eof) => break,
+                Err(error) => panic!("Failed to read video packet: {error}"),
+            }
+            if packet.stream() == index {
+                packets.push(TestVideoPacket {
+                    pts: packet.pts(),
+                    dts: packet.dts(),
+                    duration: packet.duration(),
+                    data: packet.data().unwrap().to_vec(),
+                });
+            }
+        }
+        (time_base, packets)
+    }
+
+    fn decoded_video_frame_count(path: &Path) -> usize {
+        let mut input = ffmpeg::format::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        let index = stream.index();
+        let mut decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frame = ffmpeg::frame::Video::empty();
+        let mut count = 0;
+        for (stream, packet) in input.packets() {
+            if stream.index() != index {
+                continue;
+            }
+            decoder.send_packet(&packet).unwrap();
+            loop {
+                match decoder.receive_frame(&mut frame) {
+                    Ok(()) => {
+                        assert!(!frame.is_corrupt());
+                        count += 1;
+                    }
+                    Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => {
+                        break;
+                    }
+                    Err(error) => panic!("Failed to decode video frame: {error}"),
+                }
+            }
+        }
+        decoder.send_eof().unwrap();
+        loop {
+            match decoder.receive_frame(&mut frame) {
+                Ok(()) => {
+                    assert!(!frame.is_corrupt());
+                    count += 1;
+                }
+                Err(ffmpeg::Error::Eof) => break,
+                Err(error) => panic!("Failed to drain video decoder: {error}"),
+            }
+        }
+        count
+    }
+
+    fn assert_no_validated_aggregate(directory: &Path) {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            assert!(
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".validated-combined-")
+            );
+        }
+    }
+
+    #[test]
+    fn validated_m4s_concat_preserves_packets_timestamps_and_all_frames() {
+        let directory = tempfile::tempdir().unwrap();
+        let (init, segments) = encode_test_segments(&directory.path().join("source"));
+        let output = directory.path().join("validated.mp4");
+        let legacy = directory.path().join("legacy.mp4");
+        concatenate_m4s_segments_with_init(&init, &segments, &legacy).unwrap();
+        concatenate_m4s_segments_with_init_validated(&init, &segments, &output).unwrap();
+
+        assert_eq!(
+            video_packet_contents(&output),
+            video_packet_contents(&legacy)
+        );
+        assert_eq!(decoded_video_frame_count(&output), 320);
+        assert!(super::probe_video_can_decode(&output).unwrap());
+        super::probe_video_seek_points(&output, 8).unwrap();
+        assert_no_validated_aggregate(directory.path());
+    }
+
+    #[test]
+    fn validated_m4s_concat_rejects_undecodable_payload_and_retains_sources() {
+        let directory = tempfile::tempdir().unwrap();
+        let (init, segments) = encode_test_segments(&directory.path().join("source"));
+        let init_bytes = std::fs::read(&init).unwrap();
+        let mut damaged_segments = Vec::new();
+        for segment in &segments {
+            let mut bytes = std::fs::read(segment).unwrap();
+            let mut position = 0;
+            let mut payloads = 0;
+            while position < bytes.len() {
+                let size =
+                    u32::from_be_bytes(bytes[position..position + 4].try_into().unwrap()) as usize;
+                assert!(size >= 8 && size <= bytes.len() - position);
+                if &bytes[position + 4..position + 8] == b"mdat" {
+                    bytes[position + 8..position + size].fill(0);
+                    payloads += 1;
+                }
+                position += size;
+            }
+            assert!(payloads > 0);
+            std::fs::write(segment, &bytes).unwrap();
+            damaged_segments.push(bytes);
+        }
+        let output = directory.path().join("invalid.mp4");
+        assert!(concatenate_m4s_segments_with_init_validated(&init, &segments, &output).is_err());
+        assert_eq!(std::fs::read(&init).unwrap(), init_bytes);
+        for (segment, expected) in segments.iter().zip(damaged_segments) {
+            assert_eq!(std::fs::read(segment).unwrap(), expected);
+        }
+        assert_no_validated_aggregate(directory.path());
+    }
+
+    #[test]
+    fn validated_m4s_concat_rejects_late_packet_read_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let (init, segments) = encode_test_segments(&directory.path().join("source"));
+        let output = directory.path().join("read-error.mp4");
+        let mut packets_read = 0;
+        let result = concatenate_m4s_segments_with_init_validated_with_reader(
+            &init,
+            &segments,
+            &output,
+            |packet, input| match packet.read(input) {
+                Ok(()) => {
+                    packets_read += 1;
+                    Ok(())
+                }
+                Err(ffmpeg::Error::Eof) => Err(ffmpeg::Error::InvalidData),
+                Err(error) => Err(error),
+            },
+        );
+        assert_eq!(packets_read, 320);
+        assert!(matches!(
+            result,
+            Err(super::RemuxError::Ffmpeg(ffmpeg::Error::InvalidData))
+        ));
+        assert_no_validated_aggregate(directory.path());
+    }
+
+    #[test]
+    fn validated_m4s_concat_rejects_corrupt_packets_after_valid_frames() {
+        let directory = tempfile::tempdir().unwrap();
+        let (init, segments) = encode_test_segments(&directory.path().join("source"));
+        let output = directory.path().join("corrupt-packet.mp4");
+        let mut packets_read = 0;
+        let result = concatenate_m4s_segments_with_init_validated_with_reader(
+            &init,
+            &segments,
+            &output,
+            |packet, input| {
+                packet.read(input)?;
+                packets_read += 1;
+                if packets_read == 160 {
+                    packet.set_flags(packet.flags() | ffmpeg::packet::Flags::CORRUPT);
+                }
+                Ok(())
+            },
+        );
+        assert_eq!(packets_read, 160);
+        assert!(matches!(
+            result,
+            Err(super::RemuxError::VideoValidation("Corrupt video packet"))
+        ));
+        assert_no_validated_aggregate(directory.path());
+    }
+
+    #[test]
+    fn concat_entries_resolve_fragments_from_the_list_directory() {
+        assert_eq!(
+            concat_fragment_entry(
+                Path::new("recording/segment/audio.m4a"),
+                Path::new("recording/segment/audio.concat.txt"),
+            )
+            .unwrap(),
+            "file './audio.m4a'\n"
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let fragment = directory.path().join("input.m4a");
+        let list = directory.path().join("other/output.concat.txt");
+        assert_eq!(
+            concat_fragment_entry(&fragment, &list).unwrap(),
+            format!("file '{}'\n", fragment.display())
+        );
+    }
+
+    #[test]
+    fn concat_entries_escape_apostrophes_without_changing_parent_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("parent 'quoted'");
+        assert_eq!(
+            concat_fragment_entry(
+                &parent.join("fragment 'quoted'.m4a"),
+                &parent.join("output.concat.txt"),
+            )
+            .unwrap(),
+            concat!(r"file './fragment '\''quoted'\''.m4a'", "\n")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concat_relative_entries_cannot_be_interpreted_as_url_schemes() {
+        assert_eq!(
+            concat_fragment_entry(
+                Path::new("recording/https:fragment.m4a"),
+                Path::new("recording/output.concat.txt"),
+            )
+            .unwrap(),
+            "file './https:fragment.m4a'\n"
+        );
+    }
+
+    #[test]
+    fn unrepresentable_concat_entries_fail_before_creating_the_list() {
+        let directory = tempfile::tempdir().unwrap();
+        let list = directory.path().join("output.concat.txt");
+        for name in ["fragment\nname.m4a", "fragment\rname.m4a"] {
+            assert!(write_concat_list(&[directory.path().join(name)], &list).is_err());
+            assert!(!list.exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concat_entries_reject_non_unicode_names_without_lossy_conversion() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let fragment =
+            Path::new("recording").join(OsString::from_vec(b"fragment-\xff.m4a".to_vec()));
+        assert!(matches!(
+            concat_fragment_entry(&fragment, Path::new("recording/output.concat.txt")),
+            Err(super::RemuxError::InvalidConcatPath(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concat_entries_preserve_symlink_spelling() {
+        let directory = tempfile::tempdir().unwrap();
+        let actual = directory.path().join("actual");
+        std::fs::create_dir(&actual).unwrap();
+        std::fs::write(actual.join("fragment.m4a"), []).unwrap();
+        let alias = directory.path().join("alias");
+        std::os::unix::fs::symlink(&actual, &alias).unwrap();
+
+        assert_eq!(
+            concat_fragment_entry(
+                &alias.join("fragment.m4a"),
+                &directory.path().join("output.concat.txt"),
+            )
+            .unwrap(),
+            "file './alias/fragment.m4a'\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concat_input_rejects_non_unicode_paths_explicitly() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let path = std::path::PathBuf::from(OsString::from_vec(b"input-\xff.concat.txt".to_vec()));
+        assert!(matches!(
+            super::open_input_with_format(&path, "concat", ffmpeg::Dictionary::new()),
+            Err(super::RemuxError::Io(error))
+                if error.kind() == std::io::ErrorKind::InvalidInput
+        ));
+    }
+
+    fn encode_test_audio(directory: &Path) -> std::path::PathBuf {
+        use crate::fragmented_audio::FragmentedAudioFile;
+        use cap_media_info::AudioInfo;
+        use ffmpeg::{ChannelLayout, format::Sample, format::sample::Type};
+
+        let path = directory.join("fragment.m4a");
+        let info = AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 1);
+        let mut output = FragmentedAudioFile::init(path.clone(), info).unwrap();
+        for block in 0..10 {
+            let mut frame =
+                ffmpeg::frame::Audio::new(Sample::F32(Type::Packed), 1024, ChannelLayout::MONO);
+            frame.set_rate(48_000);
+            frame.set_pts(Some(block * 1024));
+            for (index, value) in frame.data_mut(0)[..1024 * 4]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                let position = (block * 1024) as f32 + index as f32;
+                let sample = 0.25 * (position * 440.0 * std::f32::consts::TAU / 48_000.0).sin();
+                value.copy_from_slice(&sample.to_ne_bytes());
+            }
+            output
+                .queue_frame(
+                    frame,
+                    Duration::from_secs_f64(block as f64 * 1024.0 / 48_000.0),
+                )
+                .unwrap();
+        }
+        output.finish().unwrap().unwrap();
+        path
+    }
+
+    fn assert_concat_roundtrip(parent_name: &str) {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join(parent_name);
+        std::fs::create_dir(&parent).unwrap();
+        let timestamps: Vec<_> = (0..12)
+            .map(|frame| Duration::from_nanos(frame * 1_000_000_000 / 30))
+            .collect();
+        let first = encode_test_mp4(&parent, &timestamps);
+        let second = parent.join("second.mp4");
+        std::fs::copy(&first, &second).unwrap();
+        let output = parent.join("combined.mp4");
+        concatenate_video_fragments(&[first, second], &output).unwrap();
+        let mut input = ffmpeg::format::input(&output).unwrap();
+        assert_eq!(input.packets().count(), 24);
+        assert!(!output.with_extension("concat.txt").exists());
+
+        let first = encode_test_audio(&parent.join("audio-input"));
+        let second = parent.join("audio-input/second.m4a");
+        std::fs::copy(&first, &second).unwrap();
+        let output = parent.join("combined.ogg");
+        concatenate_audio_to_ogg(&[first, second], &output).unwrap();
+        let input = ffmpeg::format::input(&output).unwrap();
+        let duration = input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE);
+        assert!((0.35..0.6).contains(&duration), "duration={duration}");
+        assert!(!output.with_extension("concat.txt").exists());
+    }
+
+    #[test]
+    fn concat_audio_and_video_with_quoted_parent_directories() {
+        assert_concat_roundtrip("recording 'quoted' λ");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concat_audio_and_video_with_newline_parent_directories() {
+        assert_concat_roundtrip("recording\n");
+    }
 
     /// Encodes a small mp4 whose frames are stamped with the given
     /// timestamps, mirroring how recordings reach disk.
@@ -1048,7 +1643,7 @@ mod tests {
         // cadence; deterministic pseudo-jitter stands in for QPC noise.
         let timestamps: Vec<Duration> = (0..120)
             .map(|i| {
-                let jitter_us = ((i * 7919) % 7000) as u64; // 0..7ms
+                let jitter_us = (i * 7919) % 7000; // 0..7ms
                 Duration::from_nanos(i * 1_000_000_000 / 30 + jitter_us * 1_000)
             })
             .collect();

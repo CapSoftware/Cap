@@ -25,7 +25,7 @@ import toast from "solid-toast";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
-import { Input } from "~/routes/editor/ui";
+import { Input, Slider } from "~/routes/editor/ui";
 import {
 	authStore,
 	generalSettingsStore,
@@ -662,11 +662,37 @@ function Inner(props: {
 							value={!!settings.autoZoomOnClicks}
 							onChange={(value) => handleChange("autoZoomOnClicks", value)}
 						/>
+						<SettingItem
+							label="Default zoom amount"
+							description="Zoom level for newly created and auto-generated zoom segments."
+						>
+							<div class="flex gap-2 items-center w-52">
+								<Slider
+									class="flex-1"
+									value={[settings.defaultZoomAmount ?? 1.5]}
+									onChange={(v) => setSettings("defaultZoomAmount", v[0])}
+									onChangeEnd={(v) => handleChange("defaultZoomAmount", v[0])}
+									minValue={1}
+									maxValue={4.5}
+									step={0.1}
+									formatTooltip="x"
+								/>
+								<span class="w-9 text-xs text-right text-gray-11 tabular-nums">
+									{`${(settings.defaultZoomAmount ?? 1.5).toFixed(1)}x`}
+								</span>
+							</div>
+						</SettingItem>
 						<ToggleSettingItem
 							label="Capture keyboard presses"
 							description="Record key presses so you can add keyboard overlays in the editor."
 							value={!!settings.captureKeyboardEvents}
 							onChange={(value) => handleChange("captureKeyboardEvents", value)}
+						/>
+						<ToggleSettingItem
+							label="Draw the MacBook notch on screen recordings"
+							description="Automatically restores the notch for new screen and area recordings when the selected region contains the complete notch. External displays, partial areas, and window recordings are left alone. Each recording can override it in the editor."
+							value={!!settings.macbookNotchOverlay}
+							onChange={(value) => handleChange("macbookNotchOverlay", value)}
 						/>
 						<SelectSettingItem
 							label="Max capture framerate"

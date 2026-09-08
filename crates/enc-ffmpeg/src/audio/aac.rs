@@ -114,7 +114,88 @@ impl AudioEncoder for AACEncoder {
         let _ = self.send_frame(frame, Duration::MAX, output);
     }
 
+    fn try_send_frame(
+        &mut self,
+        frame: frame::Audio,
+        output: &mut format::context::Output,
+    ) -> Result<(), ffmpeg::Error> {
+        self.send_frame(frame, Duration::MAX, output)
+    }
+
     fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
         self.flush(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ffmpeg::ChannelLayout;
+
+    fn input_frame(start: i64, samples: usize) -> frame::Audio {
+        let mut audio =
+            frame::Audio::new(Sample::F32(Type::Packed), samples, ChannelLayout::STEREO);
+        audio.set_rate(48_000);
+        audio.set_pts(Some(start));
+        for (index, sample) in audio.data_mut(0)[..samples * 2 * size_of::<f32>()]
+            .chunks_exact_mut(size_of::<f32>())
+            .enumerate()
+        {
+            let value = ((index % 17) as f32 - 8.0) / 32.0;
+            sample.copy_from_slice(&value.to_le_bytes());
+        }
+        audio
+    }
+
+    fn encode_audio(checked: bool) -> Vec<u8> {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audio.mp4");
+        let mut output = format::output(&path).unwrap();
+        let mut encoder = AACEncoder::init(
+            AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 2),
+            &mut output,
+        )
+        .unwrap();
+        output.write_header().unwrap();
+
+        let mut position = 0;
+        for samples in [1, 997, 4_096, 1_024, 37] {
+            let audio = input_frame(position, samples);
+            if checked {
+                AudioEncoder::try_send_frame(&mut encoder, audio, &mut output).unwrap();
+            } else {
+                AudioEncoder::send_frame(&mut encoder, audio, &mut output);
+            }
+            position += samples as i64;
+        }
+
+        encoder.flush(&mut output).unwrap();
+        output.write_trailer().unwrap();
+        drop(encoder);
+        drop(output);
+        std::fs::read(path).unwrap()
+    }
+
+    #[test]
+    fn checked_audio_submission_preserves_encoded_bytes() {
+        assert_eq!(encode_audio(false), encode_audio(true));
+    }
+
+    #[test]
+    fn checked_audio_submission_reports_a_closed_encoder() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut output = format::output(&directory.path().join("closed.mp4")).unwrap();
+        let mut encoder = AACEncoder::init(
+            AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 2),
+            &mut output,
+        )
+        .unwrap();
+        output.write_header().unwrap();
+        encoder.flush(&mut output).unwrap();
+
+        assert_eq!(
+            AudioEncoder::try_send_frame(&mut encoder, input_frame(0, 1_024), &mut output),
+            Err(ffmpeg::Error::Eof)
+        );
     }
 }

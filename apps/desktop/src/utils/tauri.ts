@@ -5,6 +5,21 @@
 
 
 export const commands = {
+async submitCameraPresentation(nonce: string, input: CameraPresentationInput | null, error: string | null) : Promise<null> {
+    return await TAURI_INVOKE("submit_camera_presentation", { nonce, input, error });
+},
+async getCleanCaptureState() : Promise<Snapshot> {
+    return await TAURI_INVOKE("get_clean_capture_state");
+},
+async revealCaptureWindow(generation: number, targetOverlay: string | null) : Promise<boolean> {
+    return await TAURI_INVOKE("reveal_capture_window", { generation, targetOverlay });
+},
+async animatedGradientCatalog() : Promise<AnimatedGradientCatalog> {
+    return await TAURI_INVOKE("animated_gradient_catalog");
+},
+async randomAnimatedGradient() : Promise<AnimatedGradientConfig> {
+    return await TAURI_INVOKE("random_animated_gradient");
+},
 async setMicInput(label: string | null) : Promise<null> {
     return await TAURI_INVOKE("set_mic_input", { label });
 },
@@ -14,6 +29,17 @@ async setCameraInput(id: DeviceOrModelID | null, skipCameraWindow: boolean | nul
 async setNativeCameraPreviewEnabled(enabled: boolean) : Promise<null> {
     return await TAURI_INVOKE("set_native_camera_preview_enabled", { enabled });
 },
+async gpuiAppAvailable() : Promise<boolean> {
+    return await TAURI_INVOKE("gpui_app_available");
+},
+/**
+ * Close this app and open the native one. The setting has already been written
+ * by the caller, so a failure here has to be reported rather than swallowed:
+ * the page reverts it.
+ */
+async switchToGpuiApp() : Promise<null> {
+    return await TAURI_INVOKE("switch_to_gpui_app");
+},
 async setRecordingMode(mode: RecordingMode) : Promise<null> {
     return await TAURI_INVOKE("set_recording_mode", { mode });
 },
@@ -22,6 +48,15 @@ async uploadLogs() : Promise<null> {
 },
 async getSystemDiagnostics() : Promise<SystemDiagnostics> {
     return await TAURI_INVOKE("get_system_diagnostics");
+},
+async runDiagnostic(options: DiagnosticOptions) : Promise<DiagnosticRunResult> {
+    return await TAURI_INVOKE("run_diagnostic", { options });
+},
+async uploadDiagnosticReport(reportPath: string) : Promise<null> {
+    return await TAURI_INVOKE("upload_diagnostic_report", { reportPath });
+},
+async revealDiagnosticReport(reportPath: string) : Promise<null> {
+    return await TAURI_INVOKE("reveal_diagnostic_report", { reportPath });
 },
 async getCliInstallStatus() : Promise<CliInstallStatus> {
     return await TAURI_INVOKE("get_cli_install_status");
@@ -40,6 +75,9 @@ async stopRecording() : Promise<null> {
 },
 async pauseRecording() : Promise<null> {
     return await TAURI_INVOKE("pause_recording");
+},
+async getRecordingPauseState() : Promise<boolean | null> {
+    return await TAURI_INVOKE("get_recording_pause_state");
 },
 async resumeRecording() : Promise<null> {
     return await TAURI_INVOKE("resume_recording");
@@ -91,6 +129,9 @@ async getDefaultExcludedWindows() : Promise<WindowExclusion[]> {
 },
 async listAudioDevices() : Promise<string[]> {
     return await TAURI_INVOKE("list_audio_devices");
+},
+async listSystemFonts() : Promise<string[]> {
+    return await TAURI_INVOKE("list_system_fonts");
 },
 async closeRecordingsOverlayWindow() : Promise<void> {
     await TAURI_INVOKE("close_recordings_overlay_window");
@@ -487,6 +528,9 @@ async updatesCheck() : Promise<UpdateCheckResult | null> {
 async updatesDownloadAndInstall() : Promise<null> {
     return await TAURI_INVOKE("updates_download_and_install");
 },
+async restartApp() : Promise<null> {
+    return await TAURI_INVOKE("restart_app");
+},
 async updatesChannelChanged() : Promise<null> {
     return await TAURI_INVOKE("updates_channel_changed");
 }
@@ -497,8 +541,10 @@ async updatesChannelChanged() : Promise<null> {
 
 export const events = __makeEvents__<{
 audioInputLevelChange: AudioInputLevelChange,
+cameraPresentationRequested: CameraPresentationRequested,
 currentRecordingChanged: CurrentRecordingChanged,
 devicesUpdated: DevicesUpdated,
+diagnosticProgress: DiagnosticProgress,
 downloadProgress: DownloadProgress,
 editorRecordingAdded: EditorRecordingAdded,
 editorStateChanged: EditorStateChanged,
@@ -528,8 +574,10 @@ uploadProgressEvent: UploadProgressEvent,
 videoImportProgress: VideoImportProgress
 }>({
 audioInputLevelChange: "audio-input-level-change",
+cameraPresentationRequested: "camera-presentation-requested",
 currentRecordingChanged: "current-recording-changed",
 devicesUpdated: "devices-updated",
+diagnosticProgress: "diagnostic-progress",
 downloadProgress: "download-progress",
 editorRecordingAdded: "editor-recording-added",
 editorStateChanged: "editor-state-changed",
@@ -566,8 +614,15 @@ videoImportProgress: "video-import-progress"
 /** user-defined types **/
 
 export type Action = { type: "copyToClipboard"; source?: ClipboardSource } | { type: "saveToLocation"; dir: string; filenameTemplate?: string | null } | { type: "export"; profile: ExportProfile; destination?: ExportDestination } | { type: "upload"; organizationId?: string | null; copyLink?: boolean; openInBrowser?: boolean } | { type: "revealInFileManager" } | { type: "openFile" } | { type: "runCommand"; program: string; args?: string[]; cwd?: string | null; env?: { [key in string]: string }; useShell?: boolean } | { type: "webhook"; url: string; method?: string; headers?: { [key in string]: string }; bodyTemplate?: string | null } | { type: "recognizeTextToClipboard" } | { type: "notify"; titleTemplate?: string; bodyTemplate?: string } | { type: "openEditor" } | { type: "skipEditor" } | { type: "applyPreset"; name: string } | { type: "deleteLocalFiles" }
-export type Annotation = { id: string; type: AnnotationType; x: number; y: number; width: number; height: number; strokeColor: string; strokeWidth: number; fillColor: string; opacity: number; rotation: number; text: string | null; maskType?: MaskType | null; maskLevel?: number | null }
-export type AnnotationType = "arrow" | "circle" | "rectangle" | "text" | "mask"
+export type AnimatedGradientCatalog = { defaultConfig: AnimatedGradientConfig; templates: AnimatedGradientPreset[]; controls: AnimatedGradientControl[] }
+export type AnimatedGradientConfig = { colorStops: AnimatedGradientStop[]; direction: number; flowScale: number; flowStrength: number; curvature: number; detail: number; relief: number; light: number; shade: number; ripples: number; grainAmount: number; grainSize: number; exposure: number; contrast: number; vibrance: number; motionSpeed: number; seed: number }
+export type AnimatedGradientControl = { key: AnimatedGradientParameter; label: string; group: string; min: number; max: number; step: number }
+export type AnimatedGradientLibrary = { presets: AnimatedGradientPreset[]; lastUsed: AnimatedGradientConfig | null; selected: boolean }
+export type AnimatedGradientParameter = "direction" | "flowScale" | "flowStrength" | "curvature" | "detail" | "relief" | "light" | "shade" | "ripples" | "grainAmount" | "grainSize" | "exposure" | "contrast" | "vibrance" | "motionSpeed"
+export type AnimatedGradientPreset = { id: string; name: string; config: AnimatedGradientConfig }
+export type AnimatedGradientStop = { color: [number, number, number]; position: number }
+export type Annotation = { id: string; type: AnnotationType; x: number; y: number; width: number; height: number; strokeColor: string; strokeWidth: number; fillColor: string; opacity: number; rotation: number; text: string | null; maskType?: MaskType | null; maskLevel?: number | null; points?: ([number, number])[] | null }
+export type AnnotationType = "arrow" | "circle" | "rectangle" | "text" | "mask" | "draw"
 export type AppTheme = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
@@ -577,19 +632,19 @@ export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb:
  * editor can compensate for stale-startup audio drift from typed data instead of scraping
  * the recording log. See `cap-editor`'s `audio_timing_repair_offset`.
  */
-export type AudioGapSummary = { 
+export type AudioGapSummary = {
 /**
  * Total audio trimmed from overlapping frames over the whole recording, in milliseconds.
  */
-total_overlap_trimmed_ms: number; 
+total_overlap_trimmed_ms: number;
 /**
  * Startup-window trim used for stale-startup repair, excluding mid-recording trims.
  */
-startup_overlap_trimmed_ms?: number; 
+startup_overlap_trimmed_ms?: number;
 /**
  * Number of whole audio frames dropped because they fully overlapped the committed timeline.
  */
-overlap_dropped_frames: number; 
+overlap_dropped_frames: number;
 /**
  * Subset of `overlap_dropped_frames` that dropped within the first few frames — the
  * signature of a stale buffered burst at capture start.
@@ -600,17 +655,17 @@ export type AudioLibraryTrack = { id: string; name: string; category: string }
 export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null; gap_summary?: AudioGapSummary | null }
 /**
  * A timeline-positioned audio clip (background music or imported audio).
- * 
+ *
  * Unlike the recording's mic/system audio (which is keyed to recording clips),
  * these segments live in output/timeline time exactly like zoom/text/mask
  * segments. `path` is resolved relative to the project directory so projects
  * stay portable when moved.
  */
-export type AudioTrackSegment = { start: number; end: number; track?: number; path: string; name?: string | null; enabled?: boolean; 
+export type AudioTrackSegment = { start: number; end: number; track?: number; path: string; name?: string | null; enabled?: boolean;
 /**
  * Offset into the source audio file (seconds) at which playback begins.
  */
-trimStart?: number; volumeDb?: number; fadeIn?: number; fadeOut?: number; 
+trimStart?: number; volumeDb?: number; fadeIn?: number; fadeOut?: number;
 /**
  * Source duration in seconds, persisted so the UI can clamp resizing
  * without re-decoding the file.
@@ -626,30 +681,146 @@ export type AutomationTestReport = { ruleId: string; ruleName: string; actionChe
 export type AutomationsStore = { version?: number; rules?: AutomationRule[] }
 export type BackgroundBlurConfig = { mode: BackgroundBlurMode }
 export type BackgroundBlurMode = "off" | "light" | "heavy"
-export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; roundingType: CornerStyle; inset: number; crop: Crop | null; 
+export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; roundingType: CornerStyle; inset: number; crop: Crop | null;
 /**
  * Normalized (0-1) center of the display rect in output-frame space.
  * `None` keeps the display centered. When a frame is active this is the
  * center of the framed card (chrome included), not the bare video.
  */
-displayPosition: XY<number> | null; shadow: number; advancedShadow: ShadowConfiguration | null; border: BorderConfiguration | null; 
+displayPosition: XY<number> | null; shadow: number; advancedShadow: ShadowConfiguration | null; border: BorderConfiguration | null;
 /**
  * Decorative frame around the recording. `None` (or `FrameStyle::None`)
  * renders the bare video exactly as before the feature existed.
  */
-frame: FrameConfiguration | null }
-export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number]; alpha?: number } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number; noise_intensity?: number | null; noise_scale?: number | null; animated?: boolean | null; animation_speed?: number | null }
+frame: FrameConfiguration | null;
+/**
+ * Redraws the recording device's physical notch over the capture. Distinct
+ * from `frame`: the decorative MacBook style is a mockup, this restores
+ * something the capture really did hide, and the two are independent.
+ */
+notch: NotchConfiguration | null }
+export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number]; alpha?: number } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number; noise_intensity?: number | null; noise_scale?: number | null; animated?: boolean | null; animation_speed?: number | null } | { type: "animatedGradient"; config: AnimatedGradientConfig }
 export type BorderConfiguration = { enabled: boolean; width: number; color: [number, number, number]; opacity: number }
-export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; 
+export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition;
 /**
  * Normalized (0-1) center of the camera rect in output-frame space.
  * Overrides `position` when set.
  */
 manualPosition: XY<number> | null; size: number; zoomSize: number | null; rounding: number; shadow: number; advancedShadow: ShadowConfiguration | null; shape: CameraShape; roundingType: CornerStyle; scaleDuringZoom?: number; backgroundBlur?: BackgroundBlurConfig }
+/**
+ * Screen-space focus blur applied over the composed frame while a 3d segment
+ * is active (a UV-mask variable blur, not a depth-of-field). `strength` is a
+ * blur radius in pixels at 1080p output height; the renderer scales it with
+ * output size so preview and export match.
+ */
+export type Camera3DBlur = { mode?: Camera3DBlurMode; strength?: number;
+/**
+ * Widens and flattens the sharp-to-blurred transition (0..1).
+ */
+falloff?: number;
+/**
+ * Focus center in screen UV (radial mode).
+ */
+focusX?: number; focusY?: number;
+/**
+ * Sharp region size: radius (radial) or band width (tilt-shift).
+ */
+focusSize?: number;
+/**
+ * Degrees; blur direction (directional) or band angle (tilt-shift).
+ */
+angle?: number;
+/**
+ * Where the directional blur begins along its axis (0..1).
+ */
+dirPosition?: number;
+/**
+ * Swaps the gaussian kernel for a ring-disc bokeh kernel with highlight
+ * gain. Strength is capped at 20 while enabled.
+ */
+bokeh?: boolean }
+export type Camera3DBlurMode = "none" | "radial" | "directional" | "tiltShift"
+/**
+ * One scalar keyframe on a per-property track. Interpolation between two
+ * keyframes is a linear value lerp with time remapped by a cubic bezier whose
+ * P1 comes from the left keyframe's `out_easing` and P2 from the right one's
+ * `in_easing` (a split-handle model). Absent handles default to cubic
+ * ease-in-out: P1 [0.65, 0], P2 [0.35, 1].
+ */
+export type Camera3DKeyframe = {
+/**
+ * Seconds relative to the segment start.
+ */
+time: number; value: number;
+/**
+ * Bezier P1 for the track segment leaving this keyframe.
+ */
+outEasing?: [number, number] | null;
+/**
+ * Bezier P2 for the track segment entering this keyframe.
+ */
+inEasing?: [number, number] | null }
+/**
+ * A 3D camera pose for the composed content plane. Angles are degrees.
+ *
+ * Geometry: the content plane's longest side spans 2 world units, centered at
+ * the origin facing +Z. `tilt_x`/`tilt_y`/`roll` orbit the CAMERA (Euler YXZ,
+ * roll innermost); `rotate_x`/`rotate_y` rotate the CONTENT plane itself.
+ * `zoom` is the camera DISTANCE in world units (larger = further = smaller on
+ * screen); `fov` is the vertical field of view with no size compensation, so
+ * apparent size ∝ 1 / (zoom · tan(fov/2)). `pan_x`/`pan_y` truck the camera in
+ * its own plane (world units; +x moves the subject right, +y up).
+ */
+export type Camera3DProperties = {
+/**
+ * Camera orbit pitch.
+ */
+tiltX?: number;
+/**
+ * Camera orbit yaw.
+ */
+tiltY?: number;
+/**
+ * Camera roll (innermost camera rotation).
+ */
+roll?: number;
+/**
+ * Content plane pitch.
+ */
+rotateX?: number;
+/**
+ * Content plane yaw.
+ */
+rotateY?: number; fov?: number;
+/**
+ * Camera distance in world units.
+ */
+zoom?: number; panX?: number; panY?: number }
+export type Camera3DSegment = { start: number; end: number; enabled?: boolean;
+/**
+ * Base pose; per-property tracks override individual values.
+ */
+properties?: Camera3DProperties; blur?: Camera3DBlur; tracks?: Camera3DTracks;
+/**
+ * Seconds to ease from the flat frame into the pose at the segment start.
+ */
+transitionIn?: number;
+/**
+ * Seconds to ease back to the flat frame before the segment end.
+ */
+transitionOut?: number }
+/**
+ * Per-property keyframe tracks. A property with an empty track holds the
+ * segment's base value; each track holds independently before its first and
+ * after its last keyframe.
+ */
+export type Camera3DTracks = { tiltX: Camera3DKeyframe[]; tiltY: Camera3DKeyframe[]; roll: Camera3DKeyframe[]; rotateX: Camera3DKeyframe[]; rotateY: Camera3DKeyframe[]; fov: Camera3DKeyframe[]; zoom: Camera3DKeyframe[]; panX: Camera3DKeyframe[]; panY: Camera3DKeyframe[]; blurStrength: Camera3DKeyframe[]; blurFalloff: Camera3DKeyframe[]; blurFocusSize: Camera3DKeyframe[]; blurFocusX: Camera3DKeyframe[]; blurFocusY: Camera3DKeyframe[]; blurAngle: Camera3DKeyframe[]; blurDirPosition: Camera3DKeyframe[] }
 export type CameraDeviceSettings = { width: number | null; height: number | null; frameRate: number | null }
 export type CameraFormatInfo = { width: number; height: number; frameRate: number }
 export type CameraInfo = { device_id: string; model_id: ModelIDType | null; display_name: string }
 export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
+export type CameraPresentationInput = { viewportWidth: number; viewportHeight: number; left: number; top: number; width: number; height: number; radius: number; layoutRevision: number; state: CameraPreviewState }
+export type CameraPresentationRequested = { nonce: string; generation: number; cameraRevision: string }
 export type CameraPreviewShape = "round" | "square" | "full"
 export type CameraPreviewState = { size: number; shape: CameraPreviewShape; mirrored: boolean; background_blur?: BackgroundBlurMode }
 export type CameraShape = "square" | "source"
@@ -661,7 +832,7 @@ export type CaptionSegment = { id: string; start: number; end: number; text: str
 export type CaptionSettings = { enabled: boolean; font: string; size: number; color: string; backgroundColor: string; backgroundOpacity: number; position: string; italic: boolean; fontWeight: number; outline: boolean; outlineColor: string; exportWithSubtitles: boolean; highlightColor: string; fadeDuration: number; lingerDuration: number; wordTransitionDuration: number; activeWordHighlight: boolean; manualPosition: XY<number> | null; preset: string; animation: string; highlightStyle: string; uppercase: boolean }
 export type CaptionTrackSegment = { id: string; start: number; end: number; text: string; words?: CaptionWord[]; fadeDurationOverride?: number | null; lingerDurationOverride?: number | null; positionOverride?: string | null; colorOverride?: string | null; backgroundColorOverride?: string | null; fontSizeOverride?: number | null }
 export type CaptionWord = { text: string; start: number; end: number }
-export type CaptionsData = { segments: CaptionSegment[]; settings: CaptionSettings; 
+export type CaptionsData = { segments: CaptionSegment[]; settings: CaptionSettings;
 /**
  * When true, `segments` are stored in source/recording time and the
  * rendered `timeline.caption_segments` are derived by projecting them
@@ -676,14 +847,14 @@ export type CaptureDisplayWithThumbnail = { id: DisplayId; name: string; refresh
 export type CaptureTargetKind = "display" | "window" | "area"
 export type CaptureWindow = { id: WindowId; owner_name: string; name: string; bounds: LogicalBounds; refresh_rate: number; bundle_identifier: string | null }
 export type CaptureWindowWithThumbnail = { id: WindowId; owner_name: string; name: string; bounds: LogicalBounds; refresh_rate: number; thumbnail: string | null; app_icon: string | null; bundle_identifier: string | null }
-export type CliInstallStatus = { installDir: string; shimPath: string; targetPath: string; installed: boolean; onPath: boolean; conflict: string | null; pathEntry: string; shellCommand: string; 
+export type CliInstallStatus = { installDir: string; shimPath: string; targetPath: string; installed: boolean; onPath: boolean; conflict: string | null; pathEntry: string; shellCommand: string;
 /**
  * Whether the install dir is persisted to the user's shell PATH config (profile/registry),
  * so `cap` will be available in a new terminal even though it is not on the current PATH.
  */
 pathConfigured: boolean }
 export type ClickSpringConfig = { tension: number; mass: number; friction: number }
-export type ClipConfiguration = { index: number; offsets: ClipOffsets; 
+export type ClipConfiguration = { index: number; offsets: ClipOffsets;
 /**
  * Whether `offsets` were computed automatically (recording start-time
  * alignment + device sync calibration) rather than entered by the user.
@@ -695,6 +866,66 @@ export type ClipSpeedAudioMode = "mute" | "maintainPitch" | "matchSpeed"
 export type ClipTransition = { segmentIndex: number; type: ClipTransitionType; duration: number }
 export type ClipTransitionType = "cross-fade" | "fade-through-black"
 export type ClipboardSource = "raw" | "rendered"
+/**
+ * Parametric color grade for a single layer (screen or camera). Every field
+ * except `intensity` has 0 as its identity, so a default struct renders
+ * exactly like no grade at all. Adjustment fields are normalized: -1..1 for
+ * bipolar controls, 0..1 for unipolar ones.
+ */
+export type ColorCorrection = {
+/**
+ * UI preset id ("none", "cinematic", ..., or "custom"). The renderer
+ * ignores this; the numeric fields below are the source of truth.
+ */
+preset: string;
+/**
+ * 0..1 master strength applied to every adjustment except `grain`,
+ * which has its own dedicated control.
+ */
+intensity: number;
+/**
+ * -1..1, full scale is ±1.5 stops.
+ */
+exposure: number;
+/**
+ * -1..1 around a mid-gray pivot.
+ */
+contrast: number;
+/**
+ * -1..1; -1 is grayscale.
+ */
+saturation: number;
+/**
+ * -1..1; positive warms, negative cools.
+ */
+temperature: number;
+/**
+ * -1..1; positive shifts magenta, negative green.
+ */
+tint: number;
+/**
+ * 0..1 lifted-blacks film fade.
+ */
+fade: number;
+/**
+ * -1..1 teal-shadows/orange-highlights split toning (negative reverses).
+ */
+splitTone: number;
+/**
+ * 0..1 edge darkening within the layer's own rect.
+ */
+vignette: number;
+/**
+ * 0..1 animated film grain.
+ */
+grain: number }
+export type ColorCorrectionConfiguration = { screen: ColorCorrection; camera: ColorCorrection;
+/**
+ * Whether the screen grade also covers the rendered cursor. On by
+ * default so the pointer reads as part of the graded footage; off keeps
+ * it crisp for legibility over vignettes and grain.
+ */
+gradeCursor: boolean }
 export type CommercialLicense = { licenseKey: string; expiryDate: number | null; refresh: number; activatedOn: number }
 export type Condition = { type: "captureTargetIs"; target: CaptureTargetKind } | { type: "recordingModeIs"; mode: AutomationRecordingMode } | { type: "durationAtLeast"; secs: number } | { type: "durationAtMost"; secs: number } | { type: "windowTitleContains"; pattern: string } | { type: "organizationIs"; id: string }
 export type CornerStyle = "squircle" | "rounded"
@@ -703,14 +934,39 @@ export type CurrentRecording = { target: CurrentRecordingTarget; mode: Recording
 export type CurrentRecordingChanged = null
 export type CurrentRecordingTarget = { window: { id: WindowId; bounds: LogicalBounds | null } } | { screen: { id: DisplayId } } | { area: { screen: DisplayId; bounds: LogicalBounds } } | "camera"
 export type CursorAnimationStyle = "slow" | "smooth" | "mellow" | "fast" | "custom"
-export type CursorConfiguration = { hide: boolean; hideWhenIdle: boolean; hideWhenIdleDelay: number; size: number; type: CursorType; animationStyle: CursorAnimationStyle; tension: number; mass: number; friction: number; raw: boolean; motionBlur: number; useSvg: boolean; rotationAmount?: number; baseRotation?: number; clickSpring?: ClickSpringConfig | null; stopMovementInLastSeconds?: number | null }
+export type CursorConfiguration = { hide: boolean; hideWhenIdle: boolean; hideWhenIdleDelay: number; size: number; type: CursorType; animationStyle: CursorAnimationStyle; tension: number; mass: number; friction: number; raw: boolean; motionBlur: number; useSvg: boolean; rotationAmount?: number; baseRotation?: number; clickSpring?: ClickSpringConfig | null; stopMovementInLastSeconds?: number | null; ripple?: CursorRippleConfig }
 export type CursorMeta = { imagePath: string; hotspot: XY<number>; shape?: string | null }
-export type CursorType = "auto" | "pointer" | "circle"
+export type CursorRippleConfig = { enabled: boolean; color: [number, number, number]; strength: number; size: number; duration: number }
+export type CursorType = "auto" | "pointer" | "circle" | "macos" | "tahoe" | "windows"
 export type Cursors = { [key in string]: string } | { [key in string]: CursorMeta }
 export type DeviceOrModelID = { DeviceID: string } | { ModelID: ModelIDType }
 export type DevicesUpdated = { cameras: CameraInfo[]; microphones: string[]; permissions: OSPermissionsCheck }
+export type DiagnosticOptions = { includeSyncTest: boolean;
+/**
+ * `studio`, `instant` or `both`.
+ */
+mode: string; durationSecs: number | null; includeMicrophone: boolean; micName: string | null; skipExport: boolean }
+/**
+ * `phase` is `sync-test`, `collecting` or `done`; `stage`/`mode` are only set
+ * for `sync-test` and carry the CLI's stage names verbatim.
+ */
+export type DiagnosticProgress = { phase: string; stage: string | null; mode: string | null }
+export type DiagnosticRunResult = { reportPath: string; verdict: string | null; summary: string | null; syncTestError: string | null; reportJson: string }
 export type DisplayId = string
 export type DisplayInformation = { name: string | null; physical_size: PhysicalSize | null; logical_size: LogicalSize | null; logical_bounds: LogicalBounds | null; refresh_rate: string }
+/**
+ * Where the recording device's physical notch sits within the captured video.
+ *
+ * macOS captures the pixels behind the notch, so without this the recording
+ * shows an unbroken menu bar where the recorder saw a cutout. Fractions of the
+ * captured frame rather than of the display, so area recordings, which are
+ * cropped at capture time, need no extra context to interpret.
+ */
+export type DisplayNotch = {
+/**
+ * Distance from the left edge of the video to the notch.
+ */
+x: number; width: number; height: number }
 export type DownloadProgress = { progress: number; message: string }
 export type EditorPreviewQuality = "quarter" | "half" | "full"
 export type EditorRecordingAdded = { editor_path: string; recording_path: string }
@@ -725,11 +981,11 @@ export type ExportProfile = { format: ExportFormat; fps?: number; resolutionBase
 export type ExportSettings = ({ format: "Mp4" } & Mp4ExportSettings) | ({ format: "Gif" } & GifExportSettings) | ({ format: "Mov" } & MovExportSettings)
 export type FileType = "recording" | "screenshot"
 export type Flags = { captions: boolean }
-export type FrameConfiguration = { style: FrameStyle; theme: FrameTheme; 
+export type FrameConfiguration = { style: FrameStyle; theme: FrameTheme;
 /**
  * Text shown in the browser style's URL pill.
  */
-url: string; 
+url: string;
 /**
  * Text shown in the macOS window style's title bar.
  */
@@ -745,48 +1001,60 @@ export type FrameLayoutEvent = { display: [number, number, number, number]; came
  * chrome; the framed card as a whole follows padding / position / zoom
  * exactly like the bare video does today.
  */
-export type FrameStyle = 
+export type FrameStyle =
 /**
  * No frame: the video renders bare, exactly as before this feature.
  */
-"none" | 
+"none" |
 /**
  * A macOS window title bar with traffic-light buttons.
  */
-"macOS" | 
+"macOS" |
 /**
  * A Windows 11 window title bar with minimize/maximize/close controls.
  */
-"windows" | 
+"windows" |
 /**
  * A browser toolbar: traffic lights plus a centered URL pill.
  */
-"browser" | 
+"browser" |
 /**
  * A MacBook mockup: black bezel, aluminum body and deck.
  */
 "macbook"
 export type FrameTheme = "dark" | "light"
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
-export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; captureKeyboardEvents?: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number; defaultProjectNameTemplate?: string | null; crashRecoveryRecording?: boolean; maxFps?: number; transcriptionHints?: string[]; editorPreviewQuality?: EditorPreviewQuality; studioRecordingQuality?: StudioRecordingQuality; mainWindowPosition?: WindowPosition | null; cameraWindowPosition?: WindowPosition | null; cameraWindowPositionsByMonitorName?: { [key in string]: WindowPosition }; hasCompletedOnboarding?: boolean; enableTelemetry?: boolean; outOfProcessMuxer?: boolean; recordingsPath?: string | null; 
+export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; defaultZoomAmount?: number | null;
+/**
+ * `None` until [`init`] seeds it from whether this machine has a notched
+ * display. From then on it is the user's preference and nothing re-reads
+ * the hardware, so moving between machines can't silently flip it.
+ */
+macbookNotchOverlay?: boolean | null; captureKeyboardEvents?: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number; defaultProjectNameTemplate?: string | null; crashRecoveryRecording?: boolean; maxFps?: number; transcriptionHints?: string[]; editorPreviewQuality?: EditorPreviewQuality; studioRecordingQuality?: StudioRecordingQuality; mainWindowPosition?: WindowPosition | null; cameraWindowPosition?: WindowPosition | null; cameraWindowPositionsByMonitorName?: { [key in string]: WindowPosition }; hasCompletedOnboarding?: boolean; enableTelemetry?: boolean; outOfProcessMuxer?: boolean; recordingsPath?: string | null;
 /**
  * Custom recordings folders that were used before; recordings left in
  * them stay visible in the library. Most recent last.
  */
-previousRecordingsPaths?: string[]; 
+previousRecordingsPaths?: string[];
 /**
  * App version at which camera background blur was disabled after a crash
  * was attributed to the blur pipeline; `None` means blur is allowed.
  * Cleared automatically when the app version changes (one retry per
  * update, since a new ort/wgpu/driver stack may have fixed the crash).
  */
-cameraBlurDisabledByCrash?: string | null; updateChannel?: UpdateChannel }
+cameraBlurDisabledByCrash?: string | null; updateChannel?: UpdateChannel;
+/**
+ * Run the experimental gpui-native app (`cap-gpui`) *instead of* this one:
+ * while enabled, startup hands off to it and exits, and the native app's
+ * own Experimental page hands back. See `gpui_app.rs`.
+ */
+enableGpuiApp?: boolean }
 export type GifExportSettings = { fps: number; resolution_base: XY<number>; quality: GifQuality | null }
-export type GifQuality = { 
+export type GifQuality = {
 /**
  * Encoding quality from 1-100 (default: 90)
  */
-quality: number | null; 
+quality: number | null;
 /**
  * Whether to prioritize speed over quality (default: false)
  */
@@ -799,7 +1067,7 @@ export type HotkeyAction = "startStudioRecording" | "startInstantRecording" | "s
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type ImportStage = "Probing" | "Converting" | "Finalizing" | "Complete" | "Failed"
-export type ImportedAudioTrack = { 
+export type ImportedAudioTrack = {
 /**
  * Path relative to the project directory, e.g. `assets/audio/<file>`.
  */
@@ -831,17 +1099,28 @@ export type ModelDownloadStatus = { state: ModelDownloadState; progress: number;
 export type ModelIDType = string
 export type MovExportSettings = { fps: number; resolution_base: XY<number>; cursor_only?: boolean }
 export type Mp4ExportSettings = { fps: number; resolution_base: XY<number>; compression: ExportCompression; custom_bpp: number | null; force_ffmpeg_decoder?: boolean; optimize_filesize?: boolean }
-export type MultipleSegment = { display: VideoMeta; camera?: VideoMeta | null; mic?: AudioMeta | null; system_audio?: AudioMeta | null; cursor?: string | null; keyboard?: string | null }
+export type MultipleSegment = { display: VideoMeta; camera?: VideoMeta | null; mic?: AudioMeta | null; system_audio?: AudioMeta | null; cursor?: string | null; keyboard?: string | null; display_notch?: DisplayNotch | null }
 export type MultipleSegments = { segments: MultipleSegment[]; cursors: Cursors; status?: StudioRecordingStatus | null }
 export type NewNotification = { title: string; body: string; is_error: boolean }
 export type NewScreenshotAdded = { path: string }
 export type NewStudioRecordingAdded = { path: string }
+/**
+ * Draws a MacBook notch over the recording. Nothing here is inferred from the
+ * video: a finished recording carries no evidence of the panel it came from.
+ */
+export type NotchConfiguration = { enabled: boolean;
+/**
+ * Manual placement, as fractions of the video. Each `None` falls back to
+ * the geometry measured at capture time, else [`DEFAULT_MACBOOK_NOTCH`].
+ */
+x: number | null; width: number | null; height: number | null }
 export type OSPermission = "screenRecording" | "camera" | "microphone" | "accessibility"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type OnEscapePress = null
 export type Organization = { id: string; name: string; ownerId: string; role?: string; canEditBrand?: boolean; iconUrl?: string | null; brandColors?: OrganizationBrandColors }
 export type OrganizationBrandColors = { primary: string | null; secondary: string | null; accent: string | null; background: string | null }
+export type Phase = "awaitingShortcut" | "starting" | "recording" | "pausing" | "paused" | "resuming" | "resumeFailed" | "restarting" | "stopping" | "restoring"
 export type PhysicalSize = { width: number; height: number }
 export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
 export type Platform = "MacOS" | "Windows" | "Linux"
@@ -849,7 +1128,13 @@ export type PostDeletionBehaviour = "doNothing" | "reopenRecordingWindow"
 export type PostStudioRecordingBehaviour = "openEditor" | "showOverlay"
 export type Preset = { name: string; config: ProjectConfiguration }
 export type PresetsStore = { presets: Preset[]; default: number | null }
-export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline: TimelineConfiguration | null; captions: CaptionsData | null; keyboard: KeyboardData | null; clips: ClipConfiguration[]; annotations: Annotation[]; screenMotionBlur?: number; screenMovementSpring?: ScreenMovementSpring; 
+export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline: TimelineConfiguration | null; captions: CaptionsData | null; keyboard: KeyboardData | null; clips: ClipConfiguration[]; annotations: Annotation[]; screenMotionBlur?: number; screenMovementSpring?: ScreenMovementSpring;
+/**
+ * Per-layer cinematic color grades. Field-level default keeps old
+ * project files (and old saved presets) deserializing to the identity
+ * grade.
+ */
+colorCorrection?: ColorCorrectionConfiguration;
 /**
  * How text segment font sizes are interpreted. 0 (legacy): the renderer
  * multiplied `font_size` by `size.y / 0.2`, coupling glyph size to the
@@ -858,7 +1143,14 @@ export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background
  * `font_size`. The field-level default keeps old files at 0 while
  * `Default::default()` produces the current version.
  */
-textSizeVersion?: number }
+textSizeVersion?: number;
+/**
+ * 0 (legacy): text segments animate with the single symmetric
+ * `fade_duration`. 1: the enter/exit animation fields drive timing;
+ * legacy configs are migrated on load by seeding both animation
+ * durations from `fade_duration`.
+ */
+textAnimVersion?: number }
 export type ProjectRecordingsMeta = { segments: SegmentRecordings[] }
 export type RecordingAction = "Started" | "InvalidAuthentication" | "UpgradeRequired"
 export type RecordingDeleted = { path: string }
@@ -884,7 +1176,7 @@ export type RequestScrollToSettingsSection = { section: string }
 export type RequestSetTargetMode = { target_mode: RecordingTargetMode | null; display_id: string | null }
 export type RequestStartRecording = { mode: RecordingMode }
 export type S3UploadMeta = { id: string }
-export type SceneMode = "default" | "cameraOnly" | "hideCamera" | "splitScreen" | 
+export type SceneMode = "default" | "cameraOnly" | "hideCamera" | "splitScreen" |
 /**
  * Like [`SceneMode::SplitScreen`], but the screen and camera render as
  * padded, rounded, shadowed cards floating over the background instead
@@ -902,13 +1194,20 @@ export type ScreenshotProjectExport = { imageBytes: number[]; config: ProjectCon
 export type ScreenshotProjectShareState = { config: ProjectConfiguration; sharing: ScreenshotSharingState | null }
 export type ScreenshotSharingState = { link: string; contentHash: string | null }
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
-export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string }
+export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string;
+/**
+ * Notch geometry the overlay uses when the project sets no manual
+ * placement: this recording's own measurements where the recorder took
+ * them, else a stock MacBook notch for the editor to start from.
+ */
+notchBase: DisplayNotch }
 export type SerializedScreenshotEditorInstance = { framesSocketUrl: string; path: string; config: ProjectConfiguration | null; prettyName: string; imageWidth: number; imageHeight: number }
 export type SetCaptureAreaPending = boolean
 export type ShadowConfiguration = { size: number; opacity: number; blur: number }
 export type SharingMeta = { id: string; link: string; content_hash?: string | null }
 export type ShowCapWindow = { Main: { init_target_mode: RecordingTargetMode | null } } | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: DisplayId } } | { TargetSelectOverlay: { display_id: DisplayId; target_mode: RecordingTargetMode | null } } | { CaptureArea: { screen_id: DisplayId } } | { Camera: { centered: boolean } } | { InProgressRecording: { countdown: number | null; capture_target?: ScreenCaptureTarget | null } } | "Upgrade" | "ModeSelect" | { ScreenshotEditor: { path: string } } | "Onboarding"
 export type SingleSegment = { display: VideoMeta; camera?: VideoMeta | null; audio?: AudioMeta | null; cursor?: string | null }
+export type Snapshot = { generation: number; phase: Phase | null; mode: RecordingMode | null; shortcut: string | null; error: string | null }
 export type SplitLayout = { screenZoom: number; screenPosition: XY<number>; cameraZoom: number; cameraPosition: XY<number> }
 export type StartRecordingInputs = { capture_target: ScreenCaptureTarget; capture_system_audio?: boolean; mode: RecordingMode; organization_id?: string | null }
 export type StereoMode = "stereo" | "monoL" | "monoR"
@@ -917,8 +1216,46 @@ export type StudioRecordingQuality = "compatibility" | "balanced" | "ultra"
 export type StudioRecordingStatus = { status: "InProgress" } | { status: "NeedsRemux" } | { status: "Failed"; error: string } | { status: "Complete" }
 export type SystemDiagnostics = { macosVersion: MacOSVersionInfo | null; availableEncoders: string[]; screenCaptureSupported: boolean; metalSupported: boolean; gpuName: string | null }
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
-export type TextSegment = { start: number; end: number; track?: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; fadeDuration?: number }
-export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[] }
+export type TextAlign = "left" | "center" | "right"
+export type TextAnimation = "none" | "fade" | "slideUp" | "slideDown" | "pop" | "typewriter"
+/**
+ * How a text segment shares the frame with the display recording. The
+ * variants name where the TEXT sits; the display card makes room for it.
+ */
+export type TextLayout =
+/**
+ * Text draws over the untouched display (the original behavior).
+ */
+"overlay" |
+/**
+ * The display card shrinks and fades away; text owns the frame.
+ */
+"fullscreen" |
+/**
+ * Text in the left half, display card contained in the right half.
+ */
+"splitLeft" |
+/**
+ * Text in the right half, display card contained in the left half.
+ */
+"splitRight"
+export type TextSegment = { start: number; end: number; track?: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; backgroundColor?: string | null;
+/**
+ * Legacy symmetric fade. Superseded by the animation fields below; kept
+ * so configs written by new builds still fade in old builds. The
+ * `text_anim_version` migration seeds the animation durations from it.
+ */
+fadeDuration?: number; align?: TextAlign;
+/**
+ * Px at the 1080p reference height, like `font_size`.
+ */
+letterSpacing?: number; lineHeight?: number; opacity?: number; shadow?: number; animationIn?: TextAnimation; animationOut?: TextAnimation; animationInDuration?: number; animationOutDuration?: number; layout?: TextLayout;
+/**
+ * Seconds the display card takes to morph aside (and back) at the
+ * segment edges when `layout` is not `Overlay`.
+ */
+layoutTransition?: number }
+export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[]; camera3dSegments?: Camera3DSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null; speedAudioMode?: ClipSpeedAudioMode | null }
 export type TranscriptionEngine = "Whisper" | "Parakeet"
 export type Trigger = "screenshotTaken" | "studioRecordingFinished" | "instantRecordingFinished" | "recordingStarted" | "uploadCompleted" | "videoImported" | "recordingDeleted"

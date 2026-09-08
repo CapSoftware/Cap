@@ -13,6 +13,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(unix)]
+pub mod appimage;
+
 const CAP_DIR_NAME: &str = ".cap";
 const BIN_DIR_NAME: &str = "bin";
 const CLI_BINARY_STEM: &str = "cap-cli";
@@ -83,6 +86,11 @@ fn shim_path() -> Result<PathBuf, String> {
 }
 
 fn target_path() -> Result<PathBuf, String> {
+    #[cfg(target_os = "linux")]
+    if let Some(path) = appimage::current_path() {
+        return Ok(path);
+    }
+
     let exe = env::current_exe().map_err(|e| format!("Could not locate Cap executable: {e}"))?;
     // When `cap` runs through the installed shim (a symlink), macOS `current_exe()` returns the
     // symlink path; resolve it to the real binary so the sibling `cap-cli` resolves to the bundled
@@ -215,14 +223,20 @@ fn shim_points_to(shim_path: &Path, target_path: &Path) -> Result<bool, String> 
         // current_exe spells differently; compare the resolved paths too so a Cap-managed shim is still
         // recognized by status/install/uninstall.
         Ok(link) => Ok(link == target_path || same_file(&link, target_path)),
-        // A non-symlink regular file (read_link → InvalidInput) or a missing path is simply not a
-        // Cap-managed shim — let the caller report that as a conflict rather than surfacing a raw error.
-        Err(err)
-            if matches!(
-                err.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput
-            ) =>
-        {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
+            #[cfg(target_os = "linux")]
+            {
+                if !shim_path.is_file() {
+                    return Ok(false);
+                }
+                let contents = fs::read(shim_path)
+                    .map_err(|error| format!("Could not read AppImage CLI launcher: {error}"))?;
+                Ok(appimage::shim_target(&contents)
+                    .is_some_and(|target| target == target_path || same_file(&target, target_path)))
+            }
+
+            #[cfg(not(target_os = "linux"))]
             Ok(false)
         }
         Err(err) => Err(format!("Could not read CLI shim: {err}")),
@@ -257,6 +271,17 @@ fn shim_is_cap_managed(shim_path: &Path) -> bool {
         Ok(link) => link
             .file_name()
             .is_some_and(cli_binary_file_name_is_cap_managed),
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
+            #[cfg(target_os = "linux")]
+            return shim_path.is_file()
+                && fs::read(shim_path)
+                    .ok()
+                    .and_then(|contents| appimage::shim_target(&contents))
+                    .is_some();
+
+            #[cfg(not(target_os = "linux"))]
+            false
+        }
         Err(_) => false,
     }
 }
@@ -438,6 +463,11 @@ pub fn status() -> Result<CliInstallStatus, String> {
 
 #[cfg(unix)]
 fn write_shim(shim_path: &Path, target_path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if appimage::current_path().as_deref() == Some(target_path) {
+        return appimage::write_shim(shim_path, target_path);
+    }
+
     std::os::unix::fs::symlink(target_path, shim_path)
         .map_err(|e| format!("Could not create CLI symlink: {e}"))
 }
@@ -628,16 +658,52 @@ pub fn uninstall() -> Result<CliInstallStatus, String> {
     let shim_path = shim_path()?;
     let target_path = target_path()?;
 
-    if shim_points_to(&shim_path, &target_path)? {
-        fs::remove_file(&shim_path).map_err(|e| format!("Could not remove CLI shim: {e}"))?;
-    }
-
+    uninstall_shim(&shim_path, &target_path)?;
     status()
+}
+
+fn uninstall_shim(shim: &Path, target: &Path) -> Result<(), String> {
+    let removable = shim_points_to(shim, target)?;
+    #[cfg(target_os = "linux")]
+    let removable = removable
+        || (fs::symlink_metadata(shim).is_ok_and(|metadata| metadata.is_file())
+            && fs::read(shim)
+                .ok()
+                .and_then(|contents| appimage::shim_target(&contents))
+                .is_some_and(|previous| !path_is_present(&previous)));
+
+    if removable {
+        fs::remove_file(shim).map_err(|error| format!("Could not remove CLI shim: {error}"))?;
+    }
+    Ok(())
 }
 
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn uninstall_handles_moved_appimages_without_removing_other_installations() {
+        let directory = tempfile::tempdir().unwrap();
+        let shim = directory.path().join("cap");
+        let previous = directory.path().join("previous.AppImage");
+        let current = directory.path().join("current.AppImage");
+        appimage::write_shim(&shim, &previous).unwrap();
+        uninstall_shim(&shim, &current).unwrap();
+        assert!(!path_is_present(&shim));
+
+        fs::write(&previous, b"another installed AppImage").unwrap();
+        appimage::write_shim(&shim, &previous).unwrap();
+        uninstall_shim(&shim, &current).unwrap();
+        assert!(path_is_present(&shim));
+        uninstall_shim(&shim, &previous).unwrap();
+        assert!(!path_is_present(&shim));
+
+        fs::write(&shim, b"#!/bin/sh\necho user script\n").unwrap();
+        uninstall_shim(&shim, &current).unwrap();
+        assert_eq!(fs::read(&shim).unwrap(), b"#!/bin/sh\necho user script\n");
+    }
 
     #[test]
     fn shell_profile_selection() {
@@ -699,6 +765,25 @@ mod tests {
         // A missing path is not Cap-managed.
         fs::remove_file(&shim).unwrap();
         assert!(!shim_is_cap_managed(&shim));
+
+        fs::create_dir(&shim).unwrap();
+        let target = Path::new("/home/u/Cap.AppImage");
+        assert!(!shim_is_cap_managed(&shim));
+        assert!(!shim_points_to(&shim, target).unwrap());
+        uninstall_shim(&shim, target).unwrap();
+        assert!(shim.is_dir());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_shims_remain_managed_when_the_application_moves() {
+        let directory = tempfile::tempdir().unwrap();
+        let shim = directory.path().join(SHIM_NAME);
+        let target = Path::new("/home/u/Cap.AppImage");
+        appimage::write_shim(&shim, target).unwrap();
+        assert!(shim_is_cap_managed(&shim));
+        assert!(shim_points_to(&shim, target).unwrap());
+        assert!(!shim_points_to(&shim, Path::new("/home/u/New.Cap.AppImage")).unwrap());
     }
 
     #[test]

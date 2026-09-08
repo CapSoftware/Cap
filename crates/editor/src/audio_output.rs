@@ -188,7 +188,6 @@ struct ActiveSource<T: FromSampleBytes> {
     generation: u64,
     buffer: PrerenderedAudioBuffer<T>,
     playhead_rx: watch::Receiver<f64>,
-    last_video_playhead: f64,
     ack: Option<std_mpsc::Sender<()>>,
     #[cfg(not(target_os = "windows"))]
     latency_corrector: LatencyCorrector,
@@ -277,15 +276,14 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
 ) {
     if source.playhead_rx.has_changed().unwrap_or(false) {
         let video_playhead = *source.playhead_rx.borrow_and_update();
-        let jump = (video_playhead - source.last_video_playhead).abs();
         let audible_playhead = source.buffer.current_audible_playhead(latency_secs);
         let drift = (video_playhead - audible_playhead).abs();
 
-        if jump > 0.05 || drift > 0.04 {
+        // Normal frame updates coalesce on this watch too; only audible drift
+        // establishes whether the audio needs to move to the latest target.
+        if drift > 0.04 {
             source.buffer.set_playhead(video_playhead + latency_secs);
         }
-
-        source.last_video_playhead = video_playhead;
     }
 
     source.buffer.fill(buffer);
@@ -372,7 +370,6 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
             generation,
             buffer,
             playhead_rx,
-            last_video_playhead: start_playhead_secs,
             ack: Some(ack),
             #[cfg(not(target_os = "windows"))]
             latency_corrector,
@@ -560,6 +557,14 @@ fn ensure_stream(state: &mut Option<StreamState>) -> bool {
     }
 }
 
+fn playback_output_info(config: &cpal::SupportedStreamConfig) -> AudioInfo {
+    // ALSA's supported maximum is not the queue size used by BufferSize::Default.
+    let buffer_size = cfg!(target_os = "linux").then_some(1024);
+    let mut info = AudioInfo::from_stream_config_with_buffer(config, buffer_size);
+    info.sample_format = info.sample_format.packed();
+    info.for_ffmpeg_output()
+}
+
 fn build_stream<T>(
     device: cpal::Device,
     supported_config: cpal::SupportedStreamConfig,
@@ -568,12 +573,9 @@ fn build_stream<T>(
 where
     T: FromSampleBytes + cpal::SizedSample + cpal::FromSample<f32>,
 {
-    let mut output_info = AudioInfo::from_stream_config(&supported_config);
-    output_info.sample_format = output_info.sample_format.packed();
+    let output_info = playback_output_info(&supported_config);
     // Clamp for FFmpeg compatibility (max 8 channels); the stream config must
     // match what the pre-render buffer produces.
-    output_info = output_info.for_ffmpeg_output();
-
     let mut config = supported_config.config();
     config.channels = output_info.channels as u16;
 
@@ -632,4 +634,116 @@ where
         install,
         remove,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(sample_rate: u32) -> (ActiveSource<f32>, watch::Sender<f64>) {
+        source_with_info(
+            AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, sample_rate, 2),
+            false,
+        )
+    }
+
+    fn source_with_info(
+        output_info: AudioInfo,
+        use_device_latency_hint: bool,
+    ) -> (ActiveSource<f32>, watch::Sender<f64>) {
+        ffmpeg::init().unwrap();
+        let (playhead_tx, playhead_rx) = watch::channel(0.0);
+        let (install_tx, install_rx) = std_mpsc::channel();
+        let (ack_tx, _ack_rx) = std_mpsc::channel();
+        install_source(
+            Box::new(PlaySpec {
+                segments: Vec::new(),
+                music: MusicTracks::new(),
+                project: ProjectConfiguration::default(),
+                duration_secs: 2.0,
+                start_playhead_secs: 0.0,
+                playhead_rx,
+            }),
+            0,
+            ack_tx,
+            output_info,
+            use_device_latency_hint,
+            &install_tx,
+        )
+        .unwrap();
+        let SourceCommand::Install(source) = install_rx.recv().unwrap() else {
+            panic!("expected installed audio source");
+        };
+        (*source, playhead_tx)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn supported_buffer_maximum_does_not_skip_the_start_of_playback() {
+        for sample_rate in [44_100, 48_000] {
+            let config = cpal::SupportedStreamConfig::new(
+                2,
+                cpal::SampleRate(sample_rate),
+                cpal::SupportedBufferSize::Range {
+                    min: 1,
+                    max: 4_194_304,
+                },
+                SampleFormat::F32,
+            );
+            let (source, _) = source_with_info(playback_output_info(&config), true);
+            let playhead = source.buffer.current_playhead_secs();
+            assert!(
+                (playhead - 0.03).abs() < 1.0 / f64::from(sample_rate),
+                "sample_rate={sample_rate}, playhead={playhead}"
+            );
+        }
+    }
+
+    #[test]
+    fn coalesced_video_updates_preserve_synchronized_audio_position() {
+        for sample_rate in [44_100, 48_000] {
+            for latency_secs in [0.0, 0.025, 0.15] {
+                let (mut source, playhead_tx) = source(sample_rate);
+                let mut elapsed = vec![0.0; sample_rate as usize / 4 * 2];
+                render_source_block(&mut source, &mut elapsed, latency_secs);
+                let before = source.buffer.current_playhead_secs();
+                let audible = source.buffer.current_audible_playhead(latency_secs);
+                playhead_tx.send(audible - 0.02).unwrap();
+                playhead_tx.send(audible - 0.002).unwrap();
+
+                let mut block = [0.0; 512 * 2];
+                render_source_block(&mut source, &mut block, latency_secs);
+
+                let expected = before + 512.0 / f64::from(sample_rate);
+                let actual = source.buffer.current_playhead_secs();
+                assert!(
+                    (actual - expected).abs() < 1.0 / f64::from(sample_rate),
+                    "sample_rate={sample_rate}, latency={latency_secs}, expected={expected}, actual={actual}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn video_drift_reseats_audio_for_forward_and_backward_seeks() {
+        for sample_rate in [44_100, 48_000] {
+            for latency_secs in [0.0, 0.025, 0.15] {
+                let (mut source, playhead_tx) = source(sample_rate);
+                let mut elapsed = vec![0.0; sample_rate as usize / 4 * 2];
+                render_source_block(&mut source, &mut elapsed, latency_secs);
+                let mut block = [0.0; 512 * 2];
+
+                for target in [0.03, 0.6, 0.1] {
+                    playhead_tx.send(target).unwrap();
+                    render_source_block(&mut source, &mut block, latency_secs);
+                    let expected = target + latency_secs + 512.0 / f64::from(sample_rate);
+                    let actual = source.buffer.current_playhead_secs();
+                    assert!(
+                        (actual - expected).abs() <= 1.0 / f64::from(sample_rate),
+                        "sample_rate={sample_rate}, latency={latency_secs}, target={target}, expected={expected}, actual={actual}"
+                    );
+                }
+            }
+        }
+    }
 }

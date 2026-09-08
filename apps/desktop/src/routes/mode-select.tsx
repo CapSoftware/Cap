@@ -1,25 +1,14 @@
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import { onCleanup, onMount } from "solid-js";
+import { onMount } from "solid-js";
 import ModeSelect from "~/components/ModeSelect";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
-import { initializeTitlebar } from "~/utils/titlebar-state";
 
 const ModeSelectWindow = () => {
-	let unlistenResize: UnlistenFn | undefined;
 	const isWindows = ostype() === "windows";
 
 	onMount(async () => {
 		const window = getCurrentWindow();
-
-		if (isWindows) {
-			try {
-				unlistenResize = await initializeTitlebar();
-			} catch (error) {
-				console.error("Failed to initialize titlebar:", error);
-			}
-		}
 
 		try {
 			const currentSize = await window.innerSize();
@@ -30,10 +19,6 @@ const ModeSelectWindow = () => {
 		} catch (error) {
 			console.error("Failed to set window size:", error);
 		}
-	});
-
-	onCleanup(() => {
-		unlistenResize?.();
 	});
 
 	return (

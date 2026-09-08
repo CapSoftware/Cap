@@ -4,8 +4,12 @@ import { serverEnv } from "@cap/env";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { FatalError } from "workflow";
+import { FatalError, sleep } from "workflow";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import {
+	createMediaServerCapacityError,
+	isMediaServerCapacityError,
+} from "@/lib/media-server-backpressure";
 import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -42,12 +46,24 @@ export async function processVideoWorkflow(
 	try {
 		await validateProcessingRequest(videoId, rawFileKey);
 
-		const result = await processVideoOnMediaServer(
-			videoId,
-			userId,
-			rawFileKey,
-			bucketId,
-		);
+		let result: MediaServerProcessResult;
+		let capacityRetryCount = 0;
+		while (true) {
+			try {
+				result = await processVideoOnMediaServer(
+					videoId,
+					userId,
+					rawFileKey,
+					bucketId,
+				);
+				break;
+			} catch (error) {
+				if (!isMediaServerCapacityError(error)) throw error;
+				await markVideoWaitingForCapacity(videoId);
+				await sleep(`${Math.min(120, 15 + capacityRetryCount * 15)}s`);
+				capacityRetryCount++;
+			}
+		}
 
 		await saveMetadataAndComplete(videoId, result.metadata);
 
@@ -117,8 +133,8 @@ interface MediaServerProcessResult {
 	};
 }
 
-const MEDIA_SERVER_START_MAX_ATTEMPTS = 6;
-const MEDIA_SERVER_START_RETRY_BASE_MS = 2000;
+const MEDIA_SERVER_START_MAX_ATTEMPTS = 2;
+const MEDIA_SERVER_START_RETRY_BASE_MS = 250;
 const MEDIA_SERVER_COMPLETION_MAX_ATTEMPTS = 720;
 const MEDIA_SERVER_COMPLETION_POLL_INTERVAL_MS = 5000;
 const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
@@ -217,6 +233,14 @@ async function startMediaServerProcessJob(
 		if (shouldRetry && attempt < MEDIA_SERVER_START_MAX_ATTEMPTS - 1) {
 			await waitForRetry(MEDIA_SERVER_START_RETRY_BASE_MS * 2 ** attempt);
 			continue;
+		}
+
+		if (shouldRetry) {
+			throw createMediaServerCapacityError({
+				response,
+				message: errorMessage,
+				videoId: body.videoId,
+			});
 		}
 
 		throw new Error(errorMessage);
@@ -519,6 +543,19 @@ async function setProcessingError(
 			processingProgress: 0,
 			processingMessage: "Video processing failed",
 			processingError: errorMessage,
+			updatedAt: new Date(),
+		})
+		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+}
+
+async function markVideoWaitingForCapacity(videoId: string): Promise<void> {
+	"use step";
+
+	await db()
+		.update(videoUploads)
+		.set({
+			processingMessage: "Queued for video processing...",
+			processingError: null,
 			updatedAt: new Date(),
 		})
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));

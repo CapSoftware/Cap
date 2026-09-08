@@ -30,6 +30,7 @@
 	--track-mask: #d2444b; /* red */
 	--track-scene: #975cfa; /* purple */
 	--track-audio: var(--jade-9); /* green */
+	--track-3d: #7c6ff0; /* violet */
 }
 
 :root {

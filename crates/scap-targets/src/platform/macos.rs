@@ -19,6 +19,7 @@ use core_graphics::{
     },
 };
 
+use crate::NotchGeometry;
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
 
 #[derive(Clone, Copy)]
@@ -154,6 +155,45 @@ impl DisplayImpl {
             }
 
             None
+        })
+    }
+
+    pub fn notch(&self) -> Option<NotchGeometry> {
+        use cocoa::appkit::NSScreen;
+        use cocoa::foundation::NSRect;
+        use objc::runtime::YES;
+        use objc::{msg_send, *};
+
+        objc::rc::autoreleasepool(|| unsafe {
+            let screen = self.as_ns_screen()?;
+
+            let responds: runtime::BOOL =
+                msg_send![screen, respondsToSelector: sel!(auxiliaryTopLeftArea)];
+            if responds != YES {
+                return None;
+            }
+
+            let frame = NSScreen::frame(screen);
+            if frame.size.width <= 0.0 || frame.size.height <= 0.0 {
+                return None;
+            }
+
+            let left: NSRect = msg_send![screen, auxiliaryTopLeftArea];
+            let right: NSRect = msg_send![screen, auxiliaryTopRightArea];
+
+            // Both auxiliary rects are NSZeroRect on displays with no camera
+            // housing, which makes `height` zero and rejects them below.
+            let width = frame.size.width - left.size.width - right.size.width;
+            let height = left.size.height;
+            if width <= 0.0 || height <= 0.0 {
+                return None;
+            }
+
+            Some(NotchGeometry {
+                x: left.size.width / frame.size.width,
+                width: width / frame.size.width,
+                height: height / frame.size.height,
+            })
         })
     }
 
@@ -470,7 +510,7 @@ impl WindowImpl {
 
     pub fn app_icon(&self) -> Option<Vec<u8>> {
         use cocoa::base::{id, nil};
-        use cocoa::foundation::{NSArray, NSAutoreleasePool, NSString};
+        use cocoa::foundation::{NSArray, NSAutoreleasePool, NSPoint, NSRect, NSSize, NSString};
         use objc::{class, msg_send, sel, sel_impl};
 
         let owner_name = self.owner_name()?;
@@ -509,16 +549,24 @@ impl WindowImpl {
                     return None;
                 }
 
-                let tiff_data: id = msg_send![icon, TIFFRepresentation];
-                if tiff_data.is_null() {
+                let mut bounds = NSRect::new(NSPoint::new(0., 0.), NSSize::new(128., 128.));
+                let image: *mut std::ffi::c_void = msg_send![
+                    icon,
+                    CGImageForProposedRect: &mut bounds
+                    context: nil
+                    hints: nil
+                ];
+                if image.is_null() {
                     return None;
                 }
 
                 let bitmap_rep_class = class!(NSBitmapImageRep);
-                let bitmap_rep: id = msg_send![bitmap_rep_class, imageRepWithData: tiff_data];
+                let bitmap_rep: id = msg_send![bitmap_rep_class, alloc];
+                let bitmap_rep: id = msg_send![bitmap_rep, initWithCGImage: image];
                 if bitmap_rep.is_null() {
                     return None;
                 }
+                let bitmap_rep: id = msg_send![bitmap_rep, autorelease];
 
                 let png_data: id = msg_send![
                     bitmap_rep,

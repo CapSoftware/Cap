@@ -869,6 +869,23 @@ impl YuvToRgbaConverter {
         queue: &wgpu::Queue,
         image_buf: &cv::ImageBuf,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("NV12 IOSurface Conversion Encoder"),
+        });
+
+        self.convert_nv12_from_iosurface_to_encoder(device, &mut encoder, image_buf)?;
+        queue.submit(std::iter::once(encoder.finish()));
+
+        Ok(self.current_output_view())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn convert_nv12_from_iosurface_to_encoder(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        image_buf: &cv::ImageBuf,
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
         if self.iosurface_cache.is_none() {
             return Err(IOSurfaceTextureError::NoMetalDevice.into());
         }
@@ -929,21 +946,15 @@ impl YuvToRgbaConverter {
             ],
         });
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("NV12 IOSurface Conversion Encoder"),
-        });
-
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("NV12 IOSurface Conversion Pass"),
+                label: Some("NV12 IOSurface Conversion Pass (Batched)"),
                 ..Default::default()
             });
             compute_pass.set_pipeline(&self.pipelines.nv12_pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
-
-        queue.submit(std::iter::once(encoder.finish()));
 
         Ok(self.current_output_view())
     }

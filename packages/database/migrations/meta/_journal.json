@@ -267,6 +267,48 @@
 			"when": 1785452585612,
 			"tag": "0037_integration_installations",
 			"breakpoints": true
+		},
+		{
+			"idx": 38,
+			"version": "5",
+			"when": 1785892430217,
+			"tag": "0038_mean_ozymandias",
+			"breakpoints": true
+		},
+		{
+			"idx": 39,
+			"version": "5",
+			"when": 1787096888361,
+			"tag": "0039_magical_vermin",
+			"breakpoints": true
+		},
+		{
+			"idx": 40,
+			"version": "5",
+			"when": 1788366318415,
+			"tag": "0040_recording_jobs",
+			"breakpoints": true
+		},
+		{
+			"idx": 41,
+			"version": "5",
+			"when": 1788384021541,
+			"tag": "0041_saml_sso",
+			"breakpoints": true
+		},
+		{
+			"idx": 42,
+			"version": "5",
+			"when": 1788437051131,
+			"tag": "0042_perf_indexes",
+			"breakpoints": true
+		},
+		{
+			"idx": 43,
+			"version": "5",
+			"when": 1788695529193,
+			"tag": "0043_flimsy_caretaker",
+			"breakpoints": true
 		}
 	]
 }

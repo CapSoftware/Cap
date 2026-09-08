@@ -29,6 +29,7 @@ import { useRouter } from "next/navigation";
 import Script from "next/script";
 import { type JSX, useId, useState } from "react";
 import { LoomMark } from "@/components/icons/LoomMark";
+import { PRICING } from "@/data/pricing";
 
 const IMPORT_HREF = "/dashboard/import/loom";
 
@@ -45,7 +46,10 @@ const comparisonTable: {
 	rows: [
 		[
 			"Pricing",
-			{ text: "from $8.16/mo per user", status: "positive" },
+			{
+				text: `from $${PRICING.pro.annualPerMonth}/mo per user`,
+				status: "positive",
+			},
 			{ text: "$18/mo per user", status: "warning" },
 		],
 		[
@@ -99,8 +103,7 @@ const features = [
 	{
 		icon: BadgeDollarSign,
 		title: "Half the price of Loom",
-		description:
-			"Cap Pro starts at just $8.16/month per user versus Loom's $18. A genuinely generous free plan is included, with Studio mode free for personal use.",
+		description: `Cap Pro starts at just $${PRICING.pro.annualPerMonth}/month per user versus Loom's $18. A genuinely generous free plan is included, with Studio mode free for personal use.`,
 	},
 	{
 		icon: ShieldCheck,
@@ -168,8 +171,7 @@ const faqs = [
 	},
 	{
 		question: "Is migrating from Loom free?",
-		answer:
-			"Creating a Cap account is free, and you can try Cap with no credit card. The built-in Loom importer is a Cap Pro feature, which starts at just $8.16/month per user, less than half the price of Loom.",
+		answer: `Creating a Cap account is free, and you can try Cap with no credit card. The built-in Loom importer is a Cap Pro feature, which starts at just $${PRICING.pro.annualPerMonth}/month per user, less than half the price of Loom.`,
 	},
 	{
 		question: "Will I keep ownership of my recordings?",

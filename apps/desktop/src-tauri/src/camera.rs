@@ -24,7 +24,7 @@ use std::{
     },
     thread,
 };
-use tauri::{LogicalPosition, LogicalSize, PhysicalSize, WebviewWindow};
+use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow};
 use tokio::{
     runtime::Runtime,
     sync::{broadcast, oneshot},
@@ -392,6 +392,7 @@ impl CameraPreviewManager {
         window: WebviewWindow,
         actor: ActorRef<CameraFeed>,
     ) -> anyhow::Result<()> {
+        let reveal_generation = crate::clean_capture::generation(window.app_handle());
         if let Some(preview) = &mut self.preview {
             CameraPreviewSender::from_tx(preview.camera_tx.clone())
                 .attach(&actor)
@@ -411,7 +412,7 @@ impl CameraPreviewManager {
                 .run_on_main_thread({
                     let window = window.clone();
                     move || {
-                        let _ = window.show();
+                        let _ = crate::clean_capture::reveal_now(&window, reveal_generation);
                     }
                 })
                 .ok();
@@ -447,7 +448,7 @@ impl CameraPreviewManager {
             .run_on_main_thread({
                 let window = window.clone();
                 move || {
-                    let _ = window.show();
+                    let _ = crate::clean_capture::reveal_now(&window, reveal_generation);
                 }
             })
             .ok();

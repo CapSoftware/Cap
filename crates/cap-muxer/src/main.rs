@@ -103,6 +103,7 @@ fn resolve_queue_capacity() -> usize {
 struct FrameQueueInner {
     frames: VecDeque<Frame>,
     bytes: usize,
+    cancelled: bool,
     reader_done: bool,
     reader_err: Option<ProtocolError>,
     capacity_bytes: usize,
@@ -120,6 +121,7 @@ impl FrameQueue {
             state: Mutex::new(FrameQueueInner {
                 frames: VecDeque::with_capacity(256),
                 bytes: 0,
+                cancelled: false,
                 reader_done: false,
                 reader_err: None,
                 capacity_bytes,
@@ -129,19 +131,36 @@ impl FrameQueue {
         }
     }
 
-    fn push(&self, frame: Frame) {
+    fn push(&self, frame: Frame) -> bool {
         let frame_bytes = frame_size_hint(&frame);
         let mut guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        while guard.bytes + frame_bytes > guard.capacity_bytes && !guard.frames.is_empty() {
+        while !guard.cancelled
+            && guard.bytes + frame_bytes > guard.capacity_bytes
+            && !guard.frames.is_empty()
+        {
             guard = self
                 .space_cv
                 .wait(guard)
                 .unwrap_or_else(PoisonError::into_inner);
         }
+        if guard.cancelled {
+            return false;
+        }
         guard.bytes = guard.bytes.saturating_add(frame_bytes);
         guard.frames.push_back(frame);
         drop(guard);
         self.data_cv.notify_one();
+        true
+    }
+
+    fn cancel(&self) {
+        let mut guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        guard.cancelled = true;
+        guard.frames.clear();
+        guard.bytes = 0;
+        drop(guard);
+        self.data_cv.notify_all();
+        self.space_cv.notify_all();
     }
 
     fn mark_reader_done(&self, err: Option<ProtocolError>) {
@@ -164,6 +183,9 @@ impl FrameQueue {
                 drop(guard);
                 self.space_cv.notify_one();
                 return PopResult::Frame(frame);
+            }
+            if guard.cancelled {
+                return PopResult::Drained;
             }
             if guard.reader_done {
                 let err = guard.reader_err.take();
@@ -203,6 +225,11 @@ fn frame_size_hint(frame: &Frame) -> usize {
     }
 }
 
+fn cancel_reader(queue: &FrameQueue, reader_handle: std::thread::JoinHandle<()>) {
+    queue.cancel();
+    drop(reader_handle);
+}
+
 fn run() -> Result<(), MuxerError> {
     ffmpeg::init().map_err(|e| MuxerError::Init(anyhow::Error::from(e)))?;
 
@@ -222,7 +249,11 @@ fn run() -> Result<(), MuxerError> {
                 let mut reader = BufReader::with_capacity(1024 * 1024, stdin.lock());
                 loop {
                     match read_frame(&mut reader) {
-                        Ok(frame) => queue.push(frame),
+                        Ok(frame) => {
+                            if !queue.push(frame) {
+                                return;
+                            }
+                        }
                         Err(ProtocolError::Io(ref ioe))
                             if ioe.kind() == io::ErrorKind::UnexpectedEof =>
                         {
@@ -265,9 +296,8 @@ fn run() -> Result<(), MuxerError> {
         }
     }
 
+    cancel_reader(&queue, reader_handle);
     let finish_result = state.finish();
-
-    let _ = reader_handle.join();
 
     result?;
     finish_result?;
@@ -795,6 +825,8 @@ fn write_ready_packet(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::time::Duration;
 
     fn packet(stream_index: u8, pts: i64, dts: i64, duration: u64) -> Packet {
         Packet {
@@ -861,5 +893,67 @@ mod tests {
         };
 
         assert_eq!(nominal_audio_duration_input_tb(&init), Some(1_024));
+    }
+
+    #[test]
+    fn cancellation_releases_producer_blocked_by_full_queue() {
+        let queue = Arc::new(FrameQueue::new(frame_size_hint(&Frame::Finish)));
+        assert!(queue.push(Frame::Finish));
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let producer = {
+            let queue = Arc::clone(&queue);
+            std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                result_tx.send(queue.push(Frame::Finish)).unwrap();
+            })
+        };
+
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            result_rx.recv_timeout(Duration::from_millis(50)),
+            Err(RecvTimeoutError::Timeout)
+        ));
+
+        queue.cancel();
+
+        assert!(!result_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        producer.join().unwrap();
+        assert!(matches!(queue.pop(), PopResult::Drained));
+    }
+
+    #[test]
+    fn cancellation_rejects_late_pushes() {
+        let queue = FrameQueue::new(frame_size_hint(&Frame::Finish));
+
+        queue.cancel();
+
+        assert!(!queue.push(Frame::Finish));
+        assert!(matches!(queue.pop(), PopResult::Drained));
+    }
+
+    #[test]
+    fn cancellation_does_not_wait_for_reader_input_to_close() {
+        let queue = Arc::new(FrameQueue::new(frame_size_hint(&Frame::Finish)));
+        let (input_closed_tx, input_closed_rx) = mpsc::channel();
+        let reader_handle = std::thread::spawn(move || {
+            let _ = input_closed_rx.recv();
+        });
+        let (shutdown_done_tx, shutdown_done_rx) = mpsc::channel();
+        let shutdown_thread = {
+            let queue = Arc::clone(&queue);
+            std::thread::spawn(move || {
+                cancel_reader(&queue, reader_handle);
+                shutdown_done_tx.send(()).unwrap();
+            })
+        };
+
+        shutdown_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        input_closed_tx.send(()).unwrap();
+        shutdown_thread.join().unwrap();
     }
 }

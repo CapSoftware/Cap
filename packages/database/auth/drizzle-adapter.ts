@@ -1,4 +1,5 @@
-import { STRIPE_AVAILABLE, stripe } from "@cap/utils";
+import { createHash } from "node:crypto";
+import { isProSubscription, STRIPE_AVAILABLE, stripe } from "@cap/utils";
 import { type ImageUpload, Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import type { MySql2Database } from "drizzle-orm/mysql2";
@@ -14,6 +15,7 @@ import {
 	users,
 	verificationTokens,
 } from "../schema.ts";
+import type { ValidatedSsoIdentity } from "./sso.ts";
 
 type CreateUserData = Parameters<NonNullable<Adapter["createUser"]>>[0];
 type LinkAccountData = Parameters<NonNullable<Adapter["linkAccount"]>>[0];
@@ -68,12 +70,27 @@ async function hasLinkedAccount(db: MySql2Database, userId: User.UserId) {
 	return !!linkedAccount;
 }
 
-export function DrizzleAdapter(db: MySql2Database): Adapter {
+export function DrizzleAdapter(
+	db: MySql2Database,
+	options?: { getSsoIdentity: () => ValidatedSsoIdentity | null },
+): Adapter {
 	return {
 		async createUser(userData: CreateUserData) {
 			const normalizedEmail = userData.email.toLowerCase();
+			const ssoIdentity = options?.getSsoIdentity();
+			if (ssoIdentity && ssoIdentity.email !== normalizedEmail) {
+				throw new Error("The user does not match the verified SSO identity.");
+			}
 			let userId = User.UserId.make(nanoId());
 			await db.transaction(async (tx) => {
+				if (ssoIdentity) {
+					const [organization] = await tx
+						.select({ id: organizations.id })
+						.from(organizations)
+						.where(eq(organizations.id, ssoIdentity.organizationId))
+						.for("update");
+					if (!organization) throw new Error("SSO organization not found.");
+				}
 				const [existingUser] = await tx
 					.select()
 					.from(users)
@@ -115,7 +132,7 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 					)
 					.limit(1);
 
-				await tx.insert(users).values({
+				const insertUser = tx.insert(users).values({
 					id: userId,
 					email: normalizedEmail,
 					emailVerified: userData.emailVerified,
@@ -123,8 +140,22 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 					image: userData.image as ImageUpload.ImageUrlOrKey | null,
 					activeOrganizationId: Organisation.OrganisationId.make(""),
 				});
+				if (ssoIdentity) {
+					await insertUser.onDuplicateKeyUpdate({
+						set: { email: normalizedEmail },
+					});
+					const [createdUser] = await tx
+						.select({ id: users.id })
+						.from(users)
+						.where(eq(users.email, normalizedEmail))
+						.limit(1);
+					if (!createdUser) throw new Error("User was not created.");
+					userId = createdUser.id;
+				} else {
+					await insertUser;
+				}
 
-				if (pendingInvite) {
+				if (pendingInvite || ssoIdentity) {
 					return;
 				}
 
@@ -160,7 +191,7 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 			let row = rows[0];
 			if (!row) throw new Error("User not found");
 
-			if (STRIPE_AVAILABLE()) {
+			if (STRIPE_AVAILABLE() && !ssoIdentity) {
 				const existingCustomers = await stripe().customers.list({
 					email: normalizedEmail,
 					limit: 1,
@@ -191,7 +222,8 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 					limit: 100,
 				});
 
-				const inviteQuota = subscriptions.data.reduce((total, sub) => {
+				const proSubscriptions = subscriptions.data.filter(isProSubscription);
+				const inviteQuota = proSubscriptions.reduce((total, sub) => {
 					return (
 						total +
 						sub.items.data.reduce(
@@ -201,7 +233,7 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 					);
 				}, 0);
 
-				const mostRecentSubscription = subscriptions.data[0];
+				const mostRecentSubscription = proSubscriptions[0];
 
 				await db
 					.update(users)
@@ -295,6 +327,54 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 			await db.delete(users).where(eq(users.id, User.UserId.make(userId)));
 		},
 		async linkAccount(account: LinkAccountData) {
+			if (account.provider === "workos") {
+				const identity = options?.getSsoIdentity();
+				if (!identity || identity.profileId !== account.providerAccountId) {
+					throw new Error("The SSO identity has not been verified.");
+				}
+				await db.transaction(async (tx) => {
+					await tx
+						.select({ id: organizations.id })
+						.from(organizations)
+						.where(eq(organizations.id, identity.organizationId))
+						.for("update");
+					const [user] = await tx
+						.select({ email: users.email })
+						.from(users)
+						.where(eq(users.id, User.UserId.make(account.userId)))
+						.for("update");
+					if (user?.email.toLowerCase() !== identity.email) {
+						throw new Error("The SSO account belongs to a different user.");
+					}
+					const linked = await tx
+						.selectDistinct({ userId: accounts.userId })
+						.from(accounts)
+						.where(
+							and(
+								eq(accounts.provider, "workos"),
+								eq(accounts.providerAccountId, identity.profileId),
+							),
+						)
+						.limit(2);
+					if (linked.some((row) => row.userId !== account.userId)) {
+						throw new Error(
+							"The SSO identity is already linked to another account.",
+						);
+					}
+					if (linked.length > 0) return;
+					await tx.insert(accounts).values({
+						id: createHash("sha256")
+							.update(`workos:${identity.profileId}`)
+							.digest("base64url")
+							.slice(0, 15),
+						userId: account.userId,
+						type: account.type,
+						provider: "workos",
+						providerAccountId: identity.profileId,
+					});
+				});
+				return;
+			}
 			await db.insert(accounts).values({
 				id: User.UserId.make(nanoId()),
 				userId: account.userId,

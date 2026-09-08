@@ -2,6 +2,7 @@
 
 import { Clapperboard, Zap } from "lucide-react";
 import Script from "next/script";
+import { PRICING } from "@/data/pricing";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 import type { SeoPageContent } from "../../seo/types";
 
@@ -28,8 +29,7 @@ export const loomAlternativeContent: SeoPageContent = {
 		},
 		{
 			title: "Half the Price of Loom",
-			description:
-				"Cap starts from just $8.16/month per user, compared to Loom's $18/month per user. Plus, Cap offers a generous free plan that includes Studio mode for personal use.",
+			description: `Cap starts from just $${PRICING.pro.annualPerMonth}/month per user, compared to Loom's $18/month per user. Plus, Cap offers a generous free plan that includes Studio mode for personal use.`,
 		},
 		{
 			title: "High-Quality Recordings",
@@ -125,8 +125,7 @@ export const loomAlternativeContent: SeoPageContent = {
 		},
 		{
 			question: "How does Cap compare in pricing with Loom?",
-			answer:
-				"Cap is significantly more affordable at just $8.16/month per user when billed annually, compared to Loom's $18/month per user. Cap also has a more generous free plan that includes Studio mode for personal use and the ability to record shareable links up to 5 minutes in 4K quality.",
+			answer: `Cap is significantly more affordable at just $${PRICING.pro.annualPerMonth}/month per user when billed annually, compared to Loom's $18/month per user. Cap also has a more generous free plan that includes Studio mode for personal use and the ability to record shareable links up to 5 minutes in 4K quality.`,
 		},
 		{
 			question: "Can I keep full ownership of my recordings with Cap?",
@@ -156,7 +155,10 @@ export const loomAlternativeContent: SeoPageContent = {
 			],
 			[
 				"Pricing",
-				{ text: "from $8.16/month per user", status: "positive" },
+				{
+					text: `from $${PRICING.pro.annualPerMonth}/month per user`,
+					status: "positive",
+				},
 				{ text: "$18/month per user", status: "warning" },
 			],
 			[

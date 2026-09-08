@@ -1,6 +1,9 @@
+"use client";
+
 import { Button } from "@cap/ui";
 import { faDownload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useCapChromeExtension } from "hooks/useCapChromeExtension";
 import { ChromeRecorderButton } from "@/components/ChromeRecorderButton";
 import { CHROME_EXTENSION_BUTTON_CLASS } from "@/lib/chrome-extension";
 import { useRive } from "@/lib/rive";
@@ -14,6 +17,8 @@ interface EmptyCapStateProps {
 
 export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
 	const { theme } = useTheme();
+	const { isChromeBrowser, isInstalled } = useCapChromeExtension();
+	const showChromeButton = isChromeBrowser || isInstalled;
 	const { RiveComponent: EmptyCap } = useRive({
 		src: "/rive/main.riv",
 		artboard: theme === "light" ? "empty" : "darkempty",
@@ -44,10 +49,14 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
 					</Button>
 					<p className="text-sm text-gray-10">or</p>
 					<WebRecorderDialog />
-					<p className="text-sm text-gray-10">or</p>
-					<ChromeRecorderButton
-						className={`${CHROME_EXTENSION_BUTTON_CLASS} font-medium`}
-					/>
+					{showChromeButton && (
+						<>
+							<p className="text-sm text-gray-10">or</p>
+							<ChromeRecorderButton
+								className={`${CHROME_EXTENSION_BUTTON_CLASS} font-medium`}
+							/>
+						</>
+					)}
 					<p className="text-sm text-gray-10">or</p>
 					<UploadCapButton />
 				</div>

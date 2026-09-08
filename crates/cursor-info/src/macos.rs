@@ -1,10 +1,11 @@
 use strum::{EnumString, IntoStaticStr};
 
-use crate::{CursorShape, ResolvedCursor};
+use crate::{CursorShape, CursorShapeWindows, ResolvedCursor};
 
 /// macOS Cursors
 /// https://developer.apple.com/documentation/appkit/nscursor
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumString, IntoStaticStr)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 pub enum CursorShapeMacOS {
     /// https://developer.apple.com/documentation/appkit/nscursor/arrow
     Arrow,
@@ -335,5 +336,80 @@ impl CursorShapeMacOS {
 impl From<CursorShapeMacOS> for CursorShape {
     fn from(value: CursorShapeMacOS) -> Self {
         CursorShape::MacOS(value)
+    }
+}
+
+impl CursorShapeMacOS {
+    pub(crate) fn is_tahoe(self) -> bool {
+        self.to_classic() != self
+    }
+
+    /// The pre-Tahoe variant of a shape; identity for shapes that already are
+    /// one, and `Arrow` for the Tahoe-only additions.
+    pub(crate) fn to_classic(self) -> Self {
+        match self {
+            Self::TahoeArrow => Self::Arrow,
+            Self::TahoeContextualMenu => Self::ContextualMenu,
+            Self::TahoeClosedHand => Self::ClosedHand,
+            Self::TahoeCrosshair => Self::Crosshair,
+            Self::TahoeDisappearingItem => Self::DisappearingItem,
+            Self::TahoeDragCopy => Self::DragCopy,
+            Self::TahoeDragLink => Self::DragLink,
+            Self::TahoeIBeam => Self::IBeam,
+            Self::TahoeOpenHand => Self::OpenHand,
+            Self::TahoeOperationNotAllowed => Self::OperationNotAllowed,
+            Self::TahoePointingHand => Self::PointingHand,
+            Self::TahoeResizeDown => Self::ResizeDown,
+            Self::TahoeResizeLeft => Self::ResizeLeft,
+            Self::TahoeResizeLeftRight => Self::ResizeLeftRight,
+            Self::TahoeResizeRight => Self::ResizeRight,
+            Self::TahoeResizeUp => Self::ResizeUp,
+            Self::TahoeResizeUpDown => Self::ResizeUpDown,
+            Self::TahoeIBeamVerticalForVerticalLayout => Self::IBeamVerticalForVerticalLayout,
+            Self::TahoeZoomIn | Self::TahoeZoomOut => Self::Arrow,
+            other => other,
+        }
+    }
+
+    /// The Tahoe variant of a shape; identity for shapes that already are one.
+    pub(crate) fn to_tahoe(self) -> Self {
+        match self {
+            Self::Arrow => Self::TahoeArrow,
+            Self::ContextualMenu => Self::TahoeContextualMenu,
+            Self::ClosedHand => Self::TahoeClosedHand,
+            Self::Crosshair => Self::TahoeCrosshair,
+            Self::DisappearingItem => Self::TahoeDisappearingItem,
+            Self::DragCopy => Self::TahoeDragCopy,
+            Self::DragLink => Self::TahoeDragLink,
+            Self::IBeam => Self::TahoeIBeam,
+            Self::OpenHand => Self::TahoeOpenHand,
+            Self::OperationNotAllowed => Self::TahoeOperationNotAllowed,
+            Self::PointingHand => Self::TahoePointingHand,
+            Self::ResizeDown => Self::TahoeResizeDown,
+            Self::ResizeLeft => Self::TahoeResizeLeft,
+            Self::ResizeLeftRight => Self::TahoeResizeLeftRight,
+            Self::ResizeRight => Self::TahoeResizeRight,
+            Self::ResizeUp => Self::TahoeResizeUp,
+            Self::ResizeUpDown => Self::TahoeResizeUpDown,
+            Self::IBeamVerticalForVerticalLayout => Self::TahoeIBeamVerticalForVerticalLayout,
+            other => other,
+        }
+    }
+
+    /// The closest Windows counterpart. Only meaningful for classic variants;
+    /// call `to_classic` first.
+    pub(crate) fn to_windows(self) -> CursorShapeWindows {
+        match self {
+            Self::IBeam | Self::IBeamVerticalForVerticalLayout => CursorShapeWindows::IBeam,
+            Self::PointingHand => CursorShapeWindows::Hand,
+            Self::Crosshair => CursorShapeWindows::Cross,
+            Self::OperationNotAllowed => CursorShapeWindows::No,
+            Self::ResizeLeft | Self::ResizeRight | Self::ResizeLeftRight => {
+                CursorShapeWindows::SizeWE
+            }
+            Self::ResizeUp | Self::ResizeDown | Self::ResizeUpDown => CursorShapeWindows::SizeNS,
+            Self::OpenHand | Self::ClosedHand => CursorShapeWindows::SizeAll,
+            _ => CursorShapeWindows::Arrow,
+        }
     }
 }

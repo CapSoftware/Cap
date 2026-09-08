@@ -61,13 +61,182 @@ const READBACK_READY_ERR: u8 = 2;
 
 enum ReadbackState {
     Idle,
-    InFlight(Arc<AtomicU8>),
+    InFlight {
+        status: Arc<AtomicU8>,
+        submitted_at: Instant,
+        dimensions: (u32, u32),
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlurMode {
     Light,
     Heavy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlurFailure {
+    Inference(String),
+    Readback(String),
+    InvalidMask {
+        expected_samples: usize,
+        actual_samples: usize,
+    },
+    NonFiniteMask,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlurMaskReceipt {
+    pub generation: u64,
+    /// Processing submission time, not the camera's original capture timestamp.
+    pub input_submitted_at: Instant,
+    pub inference_completed_at: Instant,
+    pub input_dimensions: (u32, u32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlurMaskStatus {
+    Pending,
+    Ready(BlurMaskReceipt),
+    Failed(BlurFailure),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlurOutputStatus {
+    pub mode: BlurMode,
+    pub output_sequence: u64,
+    pub output_dimensions: (u32, u32),
+    pub mask: BlurMaskStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppliedBlur {
+    pub mode: BlurMode,
+    pub output_sequence: u64,
+    pub output_dimensions: (u32, u32),
+    pub mask: BlurMaskReceipt,
+    pub mask_age: Duration,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlurOutputUnavailable {
+    Pending,
+    Failed(BlurFailure),
+    Stale {
+        mask_age: Duration,
+        max_mask_age: Duration,
+    },
+    MaskGeometryMismatch,
+    InvalidTimestamp,
+}
+
+impl BlurOutputStatus {
+    pub fn applied_at(
+        &self,
+        now: Instant,
+        max_mask_age: Duration,
+    ) -> Result<AppliedBlur, BlurOutputUnavailable> {
+        let mask = match &self.mask {
+            BlurMaskStatus::Pending => return Err(BlurOutputUnavailable::Pending),
+            BlurMaskStatus::Failed(error) => {
+                return Err(BlurOutputUnavailable::Failed(error.clone()));
+            }
+            BlurMaskStatus::Ready(mask) => *mask,
+        };
+        if mask.input_dimensions != self.output_dimensions {
+            return Err(BlurOutputUnavailable::MaskGeometryMismatch);
+        }
+        if mask.input_submitted_at > mask.inference_completed_at
+            || now < mask.inference_completed_at
+        {
+            return Err(BlurOutputUnavailable::InvalidTimestamp);
+        }
+        let mask_age = now.saturating_duration_since(mask.input_submitted_at);
+        if mask_age > max_mask_age {
+            return Err(BlurOutputUnavailable::Stale {
+                mask_age,
+                max_mask_age,
+            });
+        }
+        Ok(AppliedBlur {
+            mode: self.mode,
+            output_sequence: self.output_sequence,
+            output_dimensions: self.output_dimensions,
+            mask,
+            mask_age,
+        })
+    }
+}
+
+struct MaskStatusTracker {
+    generation: u64,
+    failure_revision: u64,
+    status: BlurMaskStatus,
+}
+
+impl Default for MaskStatusTracker {
+    fn default() -> Self {
+        Self {
+            generation: 0,
+            failure_revision: 0,
+            status: BlurMaskStatus::Pending,
+        }
+    }
+}
+
+impl MaskStatusTracker {
+    fn reset(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.failure_revision = self.failure_revision.wrapping_add(1);
+        self.status = BlurMaskStatus::Pending;
+    }
+
+    fn fail(&mut self, failure: BlurFailure) {
+        self.failure_revision = self.failure_revision.wrapping_add(1);
+        self.status = BlurMaskStatus::Failed(failure);
+    }
+
+    fn complete(
+        &mut self,
+        failure_revision: u64,
+        submitted_at: Instant,
+        dimensions: (u32, u32),
+        now: Instant,
+    ) {
+        if self.failure_revision != failure_revision {
+            return;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.status = BlurMaskStatus::Ready(BlurMaskReceipt {
+            generation: self.generation,
+            input_submitted_at: submitted_at,
+            inference_completed_at: now,
+            input_dimensions: dimensions,
+        });
+    }
+}
+
+fn validate_mask_samples(mask: &[f32], expected_samples: usize) -> Result<(), BlurFailure> {
+    if mask.len() < expected_samples {
+        return Err(BlurFailure::InvalidMask {
+            expected_samples,
+            actual_samples: mask.len(),
+        });
+    }
+    if mask
+        .iter()
+        .take(expected_samples)
+        .any(|value| !value.is_finite())
+    {
+        return Err(BlurFailure::NonFiniteMask);
+    }
+    Ok(())
+}
+
+struct ReadbackFrame {
+    pixels: Vec<u8>,
+    submitted_at: Instant,
+    dimensions: (u32, u32),
 }
 
 const SEGMENTATION_SIZE: u32 = 256;
@@ -77,6 +246,12 @@ const MASK_SHRINK_ALPHA: f32 = 0.12;
 const MASK_STABILITY_EPSILON: f32 = 0.025;
 const MASK_EDGE_CONTRAST: f32 = 4.0;
 const INITIAL_MASK_VALUE: f32 = 1.0;
+
+fn reset_mask_buffers(buffers: [&mut [f32]; 4]) {
+    for buffer in buffers {
+        buffer.fill(INITIAL_MASK_VALUE);
+    }
+}
 
 pub struct BlurProcessor {
     model: SegmentationModel,
@@ -95,9 +270,13 @@ pub struct BlurProcessor {
     readback_bytes_per_row: u32,
     readback_state: ReadbackState,
     inference_interval: Duration,
+    inference_requested: bool,
     mask_initialized: bool,
     mask_dirty: bool,
     output_generation: u64,
+    output_sequence: u64,
+    mask_status: MaskStatusTracker,
+    last_output_status: Option<BlurOutputStatus>,
     // Keep last: must drop after every other field (see BlurSessionHandle).
     _blur_session: BlurSessionHandle,
 }
@@ -264,9 +443,13 @@ impl BlurProcessor {
             readback_bytes_per_row,
             readback_state: ReadbackState::Idle,
             inference_interval: DEFAULT_INFERENCE_INTERVAL,
+            inference_requested: false,
             mask_initialized: false,
             mask_dirty: true,
             output_generation: 0,
+            output_sequence: 0,
+            mask_status: MaskStatusTracker::default(),
+            last_output_status: None,
             _blur_session: blur_session,
         })
     }
@@ -275,8 +458,32 @@ impl BlurProcessor {
         self.inference_interval = interval;
     }
 
+    /// Call between outputs after submitting prior work; discard queued output readbacks too.
+    pub fn reset_mask_history(&mut self) {
+        if matches!(self.readback_state, ReadbackState::InFlight { .. }) {
+            self.readback_buffer.unmap();
+        }
+        self.readback_state = ReadbackState::Idle;
+        reset_mask_buffers([
+            &mut self.mask_data,
+            &mut self.smoothed_mask,
+            &mut self.mask_scratch,
+            &mut self.mask_upload,
+        ]);
+        self.mask_initialized = false;
+        self.mask_dirty = true;
+        self.inference_requested = true;
+        self.mask_status.reset();
+        self.last_output_status = None;
+    }
+
     pub fn output_generation(&self) -> u64 {
         self.output_generation
+    }
+
+    /// Describes encoded work; the caller must complete its GPU submission before using the output.
+    pub fn output_status(&self) -> Option<BlurOutputStatus> {
+        self.last_output_status.clone()
     }
 
     pub fn output_view(&self) -> Option<&wgpu::TextureView> {
@@ -319,7 +526,8 @@ impl BlurProcessor {
         self.ensure_textures(device, width, height);
         let input_view = input_texture.create_view(&Default::default());
 
-        if self.last_inference.elapsed() >= self.inference_interval {
+        if self.inference_requested || self.last_inference.elapsed() >= self.inference_interval {
+            self.inference_requested = false;
             let mask_updated = self.run_segmentation(device, queue, input_texture);
             self.last_inference = Instant::now();
             if mask_updated {
@@ -368,6 +576,13 @@ impl BlurProcessor {
             &textures.mask_view,
             &textures.output_view,
         );
+        self.output_sequence = self.output_sequence.wrapping_add(1);
+        self.last_output_status = Some(BlurOutputStatus {
+            mode,
+            output_sequence: self.output_sequence,
+            output_dimensions: (width, height),
+            mask: self.mask_status.status.clone(),
+        });
     }
 
     pub fn process_returning_output(&mut self) -> Option<&wgpu::Texture> {
@@ -444,15 +659,20 @@ impl BlurProcessor {
         queue: &wgpu::Queue,
         input_texture: &wgpu::Texture,
     ) -> bool {
+        let failure_revision = self.mask_status.failure_revision;
         let rgba_256 =
             match self.readback_downsampled(device, queue, input_texture, !self.mask_initialized) {
                 Some(data) => data,
                 None => return false,
             };
 
-        match self.model.run_inference(&rgba_256) {
+        match self.model.run_inference(&rgba_256.pixels) {
             Ok(new_mask) => {
                 let pixel_count = (SEGMENTATION_SIZE * SEGMENTATION_SIZE) as usize;
+                let mask_validation = validate_mask_samples(new_mask, pixel_count);
+                if let Err(error) = &mask_validation {
+                    self.mask_status.fail(error.clone());
+                }
                 if new_mask.len() >= pixel_count {
                     for (i, &raw) in new_mask.iter().take(pixel_count).enumerate() {
                         let v = refine_mask_value(raw);
@@ -465,12 +685,26 @@ impl BlurProcessor {
                     self.mask_data
                         .copy_from_slice(&self.smoothed_mask[..pixel_count]);
                     self.mask_initialized = true;
+                    let smoothed_validation = validate_mask_samples(&self.mask_data, pixel_count);
+                    if let Err(error) = &smoothed_validation {
+                        self.mask_status.fail(error.clone());
+                    }
+                    if mask_validation.is_ok() && smoothed_validation.is_ok() {
+                        self.mask_status.complete(
+                            failure_revision,
+                            rgba_256.submitted_at,
+                            rgba_256.dimensions,
+                            Instant::now(),
+                        );
+                    }
                     return true;
                 }
                 false
             }
             Err(e) => {
                 tracing::warn!("Segmentation inference failed: {e:#}");
+                self.mask_status
+                    .fail(BlurFailure::Inference(format!("{e:#}")));
                 false
             }
         }
@@ -482,7 +716,7 @@ impl BlurProcessor {
         queue: &wgpu::Queue,
         input_texture: &wgpu::Texture,
         wait_for_result: bool,
-    ) -> Option<Vec<u8>> {
+    ) -> Option<ReadbackFrame> {
         let mut completed = self.take_completed_readback(device, wgpu::PollType::Poll);
 
         if matches!(self.readback_state, ReadbackState::Idle) {
@@ -550,6 +784,7 @@ impl BlurProcessor {
                 },
             );
 
+            let submitted_at = Instant::now();
             queue.submit(std::iter::once(encoder.finish()));
 
             let status = Arc::new(AtomicU8::new(READBACK_PENDING));
@@ -565,7 +800,11 @@ impl BlurProcessor {
                     status_cb.store(code, Ordering::Release);
                 });
 
-            self.readback_state = ReadbackState::InFlight(status);
+            self.readback_state = ReadbackState::InFlight {
+                status,
+                submitted_at,
+                dimensions: (input_texture.width(), input_texture.height()),
+            };
 
             if wait_for_result {
                 completed = self
@@ -581,9 +820,20 @@ impl BlurProcessor {
         &mut self,
         device: &wgpu::Device,
         poll_type: wgpu::PollType,
-    ) -> Option<Vec<u8>> {
-        if let ReadbackState::InFlight(status) = &self.readback_state {
-            let _ = device.poll(poll_type);
+    ) -> Option<ReadbackFrame> {
+        if let ReadbackState::InFlight {
+            status,
+            submitted_at,
+            dimensions,
+        } = &self.readback_state
+        {
+            let submitted_at = *submitted_at;
+            let dimensions = *dimensions;
+            if let Err(error) = device.poll(poll_type) {
+                self.mask_status.fail(BlurFailure::Readback(format!(
+                    "GPU polling failed: {error}"
+                )));
+            }
             match status.load(Ordering::Acquire) {
                 READBACK_READY_OK => {
                     let slice = self.readback_buffer.slice(..);
@@ -598,10 +848,17 @@ impl BlurProcessor {
                     drop(data);
                     self.readback_buffer.unmap();
                     self.readback_state = ReadbackState::Idle;
-                    Some(out)
+                    Some(ReadbackFrame {
+                        pixels: out,
+                        submitted_at,
+                        dimensions,
+                    })
                 }
                 READBACK_READY_ERR => {
                     self.readback_state = ReadbackState::Idle;
+                    self.mask_status.fail(BlurFailure::Readback(
+                        "GPU mask readback failed".to_string(),
+                    ));
                     None
                 }
                 _ => None,
@@ -730,3 +987,218 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(src_tex, src_sampler, in.uv);
 }
 ";
+
+#[cfg(test)]
+mod blur_status_tests {
+    use super::*;
+
+    #[test]
+    fn reset_invalidates_ready_and_failed_masks_until_new_inference() {
+        let now = Instant::now();
+        let mut tracker = MaskStatusTracker::default();
+        tracker.complete(0, now, (640, 480), now);
+        let previous_generation = tracker.generation;
+        tracker.reset();
+        assert_eq!(tracker.status, BlurMaskStatus::Pending);
+        assert!(tracker.generation > previous_generation);
+        tracker.complete(0, now, (640, 480), now);
+        assert_eq!(tracker.status, BlurMaskStatus::Pending);
+        tracker.complete(tracker.failure_revision, now, (640, 480), now);
+        assert!(matches!(tracker.status, BlurMaskStatus::Ready(_)));
+        tracker.fail(BlurFailure::NonFiniteMask);
+        tracker.reset();
+        assert_eq!(tracker.status, BlurMaskStatus::Pending);
+    }
+
+    #[test]
+    fn reset_erases_smoothing_without_reallocating_cpu_buffers() {
+        let mut data = vec![0.0, 0.5, f32::NAN];
+        let mut smoothed = vec![0.2, 0.8];
+        let mut scratch = vec![f32::INFINITY, 0.4];
+        let mut upload = vec![0.1];
+        let pointers = [
+            data.as_ptr(),
+            smoothed.as_ptr(),
+            scratch.as_ptr(),
+            upload.as_ptr(),
+        ];
+        reset_mask_buffers([&mut data, &mut smoothed, &mut scratch, &mut upload]);
+        for (index, buffer) in [&data, &smoothed, &scratch, &upload]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(buffer.as_ptr(), pointers[index]);
+            assert!(buffer.iter().all(|value| *value == INITIAL_MASK_VALUE));
+        }
+    }
+
+    const DIMS: (u32, u32) = (640, 360);
+    const MAX_AGE: Duration = Duration::from_millis(300);
+
+    fn output(tracker: &MaskStatusTracker, mode: BlurMode, sequence: u64) -> BlurOutputStatus {
+        BlurOutputStatus {
+            mode,
+            output_sequence: sequence,
+            output_dimensions: DIMS,
+            mask: tracker.status.clone(),
+        }
+    }
+
+    #[test]
+    fn initial_default_mask_is_pending_not_applied() {
+        let tracker = MaskStatusTracker::default();
+        assert_eq!(INITIAL_MASK_VALUE, 1.0);
+        assert_eq!(
+            output(&tracker, BlurMode::Heavy, 1).applied_at(Instant::now(), MAX_AGE),
+            Err(BlurOutputUnavailable::Pending)
+        );
+    }
+
+    #[test]
+    fn successful_mask_binds_exact_output_mode_sequence_and_generation() {
+        let start = Instant::now();
+        let completed = start + Duration::from_millis(20);
+        let mut tracker = MaskStatusTracker::default();
+        tracker.complete(0, start, DIMS, completed);
+        for (mode, sequence) in [(BlurMode::Light, 3), (BlurMode::Heavy, 4)] {
+            let applied = output(&tracker, mode, sequence)
+                .applied_at(completed, MAX_AGE)
+                .unwrap();
+            assert_eq!(applied.mode, mode);
+            assert_eq!(applied.output_sequence, sequence);
+            assert_eq!(applied.output_dimensions, DIMS);
+            assert_eq!(applied.mask.generation, 1);
+            assert_eq!(applied.mask.input_submitted_at, start);
+            assert_eq!(applied.mask.inference_completed_at, completed);
+        }
+        tracker.complete(0, completed, DIMS, completed);
+        assert_eq!(
+            output(&tracker, BlurMode::Light, 5)
+                .applied_at(completed, MAX_AGE)
+                .unwrap()
+                .mask
+                .generation,
+            2
+        );
+    }
+
+    #[test]
+    fn reused_mask_expires_from_input_submission_not_inference_completion() {
+        let start = Instant::now();
+        let completed = start + Duration::from_millis(290);
+        let mut tracker = MaskStatusTracker::default();
+        tracker.complete(0, start, DIMS, completed);
+        let status = output(&tracker, BlurMode::Light, 2);
+        let boundary = status.applied_at(start + MAX_AGE, MAX_AGE).unwrap();
+        assert_eq!(boundary.mask_age, MAX_AGE);
+        assert_eq!(boundary.mask.generation, 1);
+        let expired_age = MAX_AGE + Duration::from_millis(1);
+        assert_eq!(
+            status.applied_at(start + expired_age, MAX_AGE),
+            Err(BlurOutputUnavailable::Stale {
+                mask_age: expired_age,
+                max_mask_age: MAX_AGE,
+            })
+        );
+    }
+
+    #[test]
+    fn inference_and_readback_failures_invalidate_previous_valid_mask() {
+        let now = Instant::now();
+        for failure in [
+            BlurFailure::Inference("inference failed".into()),
+            BlurFailure::Readback("readback failed".into()),
+            BlurFailure::InvalidMask {
+                expected_samples: 4,
+                actual_samples: 2,
+            },
+            BlurFailure::NonFiniteMask,
+        ] {
+            let mut tracker = MaskStatusTracker::default();
+            tracker.complete(0, now, DIMS, now);
+            tracker.fail(failure.clone());
+            assert_eq!(
+                output(&tracker, BlurMode::Heavy, 2).applied_at(now, MAX_AGE),
+                Err(BlurOutputUnavailable::Failed(failure))
+            );
+        }
+    }
+
+    #[test]
+    fn completed_old_readback_cannot_hide_new_readback_failure() {
+        let now = Instant::now();
+        let mut tracker = MaskStatusTracker::default();
+        let revision = tracker.failure_revision;
+        let failure = BlurFailure::Readback("poll failed".into());
+        tracker.fail(failure.clone());
+        tracker.complete(revision, now, DIMS, now);
+        assert_eq!(tracker.status, BlurMaskStatus::Failed(failure));
+        assert_eq!(tracker.generation, 0);
+        tracker.complete(tracker.failure_revision, now, DIMS, now);
+        assert!(
+            output(&tracker, BlurMode::Heavy, 3)
+                .applied_at(now, MAX_AGE)
+                .is_ok()
+        );
+        assert_eq!(tracker.generation, 1);
+    }
+
+    #[test]
+    fn resized_output_cannot_claim_old_geometry_mask() {
+        let now = Instant::now();
+        let mut tracker = MaskStatusTracker::default();
+        tracker.complete(0, now, DIMS, now);
+        let mut status = output(&tracker, BlurMode::Heavy, 1);
+        status.output_dimensions = (320, 180);
+        assert_eq!(
+            status.applied_at(now, MAX_AGE),
+            Err(BlurOutputUnavailable::MaskGeometryMismatch)
+        );
+    }
+
+    #[test]
+    fn future_or_inverted_mask_timestamps_are_rejected() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(1);
+        for (submitted, completed) in [(later, now), (now, later)] {
+            let mut tracker = MaskStatusTracker::default();
+            tracker.complete(0, submitted, DIMS, completed);
+            assert_eq!(
+                output(&tracker, BlurMode::Light, 1).applied_at(now, MAX_AGE),
+                Err(BlurOutputUnavailable::InvalidTimestamp)
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_masks_fail_but_real_uniform_segmentation_is_valid() {
+        assert_eq!(
+            validate_mask_samples(&[1.0], 2),
+            Err(BlurFailure::InvalidMask {
+                expected_samples: 2,
+                actual_samples: 1,
+            })
+        );
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(
+                validate_mask_samples(&[0.5, value], 2),
+                Err(BlurFailure::NonFiniteMask)
+            );
+        }
+        for mask in [[0.0; 2], [1.0; 2]] {
+            assert_eq!(validate_mask_samples(&mask, 2), Ok(()));
+        }
+        assert_eq!(validate_mask_samples(&[0.0, 1.0, f32::NAN], 2), Ok(()));
+    }
+
+    #[test]
+    fn valid_new_inference_cannot_certify_nan_contaminated_smoothed_mask() {
+        let next = refine_mask_value(0.5);
+        assert_eq!(validate_mask_samples(&[next], 1), Ok(()));
+        let smoothed = smooth_mask_value(f32::NAN, next);
+        assert_eq!(
+            validate_mask_samples(&[smoothed], 1),
+            Err(BlurFailure::NonFiniteMask)
+        );
+    }
+}

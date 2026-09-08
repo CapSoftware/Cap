@@ -13,6 +13,10 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::base::EncoderBase;
 use crate::video::h264_packet::H264PacketEncoder;
+#[cfg(target_os = "macos")]
+use crate::video::videotoolbox_hw::VideoToolboxHwFrames;
+#[cfg(target_os = "macos")]
+use std::sync::Arc;
 
 fn is_420(format: ffmpeg::format::Pixel) -> bool {
     format
@@ -47,12 +51,16 @@ pub enum H264EncoderError {
     FFmpeg(#[from] ffmpeg::Error),
     #[error("Codec not found")]
     CodecNotFound,
+    #[error("Failed to configure RGB conversion for BT.709 limited-range video: {0}")]
+    ColorConversion(ffmpeg::Error),
     #[error("Pixel format {0:?} not supported")]
     PixFmtNotSupported(Pixel),
     #[error("Invalid output dimensions {width}x{height}; expected non-zero even width and height")]
     InvalidOutputDimensions { width: u32, height: u32 },
     #[error("Hardware encoder self-test failed: {0}")]
     SelfTest(String),
+    #[error("VideoToolbox hardware input unavailable: {0}")]
+    VideoToolboxHwInput(String),
 }
 
 fn is_hardware_h264(codec_name: &str) -> bool {
@@ -291,6 +299,141 @@ impl H264EncoderBuilder {
             input_width,
             input_height,
             converted_frame_pool,
+            #[cfg(target_os = "macos")]
+            videotoolbox_hw: None,
+        })
+    }
+
+    /// Builds an `h264_videotoolbox` encoder that consumes IOSurface-backed
+    /// NV12 CVPixelBuffers directly (`AV_PIX_FMT_VIDEOTOOLBOX`), skipping the
+    /// per-frame CPU plane copy a software-input encoder requires. Frames are
+    /// queued through [`H264Encoder::wrap_videotoolbox_pixel_buffer`].
+    ///
+    /// Fails (so the caller can fall back to the software-input path) when
+    /// the input is not NV12, scaling is requested, the target frame rate
+    /// exceeds VideoToolbox's estimated capability, or the hardware contexts
+    /// cannot be created.
+    #[cfg(target_os = "macos")]
+    pub fn build_videotoolbox_hw_input(
+        self,
+        output: &mut format::context::Output,
+    ) -> Result<H264Encoder, H264EncoderError> {
+        let input_config = self.input_config;
+
+        if input_config.pixel_format != ffmpeg::format::Pixel::NV12 {
+            return Err(H264EncoderError::VideoToolboxHwInput(format!(
+                "input pixel format {:?} is not NV12",
+                input_config.pixel_format
+            )));
+        }
+        if let Some((width, height)) = self.output_size
+            && (width != input_config.width || height != input_config.height)
+        {
+            return Err(H264EncoderError::VideoToolboxHwInput(format!(
+                "scaling {}x{} -> {}x{} requires the software input path",
+                input_config.width, input_config.height, width, height
+            )));
+        }
+        let output_width = input_config.width;
+        let output_height = input_config.height;
+        if !output_width.is_multiple_of(2) || !output_height.is_multiple_of(2) {
+            return Err(H264EncoderError::InvalidOutputDimensions {
+                width: output_width,
+                height: output_height,
+            });
+        }
+        if force_software_encoder()
+            || requires_software_encoder(&input_config, self.preset, self.is_export)
+        {
+            return Err(H264EncoderError::VideoToolboxHwInput(
+                "software encoder required for this resolution/frame rate".to_string(),
+            ));
+        }
+        if self.crf.is_some() {
+            return Err(H264EncoderError::VideoToolboxHwInput(
+                "CRF encoding uses libx264".to_string(),
+            ));
+        }
+
+        let codec =
+            encoder::find_by_name("h264_videotoolbox").ok_or(H264EncoderError::CodecNotFound)?;
+        let encoder_options = get_codec_and_options(
+            &input_config,
+            self.preset,
+            Some(&["h264_videotoolbox"]),
+            self.is_export,
+            None,
+        )
+        .into_iter()
+        .next()
+        .map(|(_, options)| options)
+        .ok_or(H264EncoderError::CodecNotFound)?;
+
+        let hw_frames = VideoToolboxHwFrames::new(output_width, output_height)
+            .map_err(|e| H264EncoderError::VideoToolboxHwInput(e.to_string()))?;
+
+        let thread_count = thread::available_parallelism()
+            .map(|v| v.get())
+            .unwrap_or(1);
+
+        let encoder = {
+            let mut encoder_ctx = context::Context::new_with_codec(codec);
+            encoder_ctx.set_threading(Config::count(thread_count));
+            let mut encoder = encoder_ctx.encoder().video()?;
+
+            encoder.set_width(output_width);
+            encoder.set_height(output_height);
+            encoder.set_format(ffmpeg::format::Pixel::VIDEOTOOLBOX);
+            encoder.set_time_base(input_config.time_base);
+            encoder.set_frame_rate(Some(input_config.frame_rate));
+            encoder.set_colorspace(color::Space::BT709);
+            encoder.set_color_range(color::Range::MPEG);
+            unsafe {
+                (*encoder.as_mut_ptr()).color_primaries =
+                    ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
+                (*encoder.as_mut_ptr()).color_trc =
+                    ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
+            }
+
+            let bitrate = get_bitrate(
+                output_width,
+                output_height,
+                input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
+                self.bpp,
+            );
+            encoder.set_bit_rate(bitrate);
+            encoder.set_max_bit_rate(bitrate * 3 / 2);
+
+            unsafe { hw_frames.attach_to_encoder(encoder.as_mut_ptr()) };
+
+            encoder.open_as_with(codec, encoder_options)?
+        };
+
+        let mut output_stream = output.add_stream(codec)?;
+        let stream_index = output_stream.index();
+        output_stream.set_time_base((1, H264Encoder::TIME_BASE));
+        output_stream.set_rate(input_config.frame_rate);
+        output_stream.set_parameters(&encoder);
+
+        info!(
+            width = output_width,
+            height = output_height,
+            fps = input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32,
+            "Selected hardware H264 encoder with zero-copy VideoToolbox input"
+        );
+
+        Ok(H264Encoder {
+            base: EncoderBase::new(stream_index),
+            encoder,
+            converter: None,
+            output_format: ffmpeg::format::Pixel::VIDEOTOOLBOX,
+            output_width,
+            output_height,
+            input_format: input_config.pixel_format,
+            input_width: input_config.width,
+            input_height: input_config.height,
+            converted_frame_pool: None,
+            videotoolbox_hw: Some(Arc::new(hw_frames)),
         })
     }
 
@@ -476,6 +619,44 @@ pub(crate) fn open_video_encoder_with_flags(
     )
 }
 
+fn is_rgb(format: format::Pixel) -> bool {
+    format.descriptor().is_some_and(|descriptor| unsafe {
+        (*descriptor.as_ptr()).flags & ffmpeg::ffi::AV_PIX_FMT_FLAG_RGB as u64 != 0
+    })
+}
+
+fn configure_rgb_converter(
+    converter: &mut ffmpeg::software::scaling::Context,
+    input: format::Pixel,
+    output: format::Pixel,
+) -> Result<(), H264EncoderError> {
+    if !is_rgb(input) || is_rgb(output) {
+        return Ok(());
+    }
+
+    // swscale defaults to BT.601 even though the encoder declares BT.709.
+    // RGB input is full range; the encoded YUV contract below is limited range.
+    let result = unsafe {
+        let coefficients = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
+        ffmpeg::ffi::sws_setColorspaceDetails(
+            converter.as_mut_ptr(),
+            coefficients,
+            1,
+            coefficients,
+            0,
+            0,
+            1 << 16,
+            1 << 16,
+        )
+    };
+    if result < 0 {
+        return Err(H264EncoderError::ColorConversion(ffmpeg::Error::from(
+            result,
+        )));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn open_video_encoder_inner(
     codec: Codec,
@@ -558,7 +739,8 @@ fn open_video_encoder_inner(
             output_height,
             flags,
         ) {
-            Ok(context) => {
+            Ok(mut context) => {
+                configure_rgb_converter(&mut context, input_config.pixel_format, output_format)?;
                 debug!(
                     encoder = %codec.name(),
                     src_format = ?input_config.pixel_format,
@@ -668,6 +850,8 @@ pub struct H264Encoder {
     input_width: u32,
     input_height: u32,
     converted_frame_pool: Option<frame::Video>,
+    #[cfg(target_os = "macos")]
+    videotoolbox_hw: Option<Arc<VideoToolboxHwFrames>>,
 }
 
 pub struct ConversionRequirements {
@@ -693,6 +877,35 @@ impl H264Encoder {
 
     pub fn builder(input_config: VideoInfo) -> H264EncoderBuilder {
         H264EncoderBuilder::new(input_config)
+    }
+
+    /// Whether this encoder was built with
+    /// [`H264EncoderBuilder::build_videotoolbox_hw_input`] and expects
+    /// wrapped CVPixelBuffer frames instead of software frames.
+    #[cfg(target_os = "macos")]
+    pub fn is_videotoolbox_hw_input(&self) -> bool {
+        self.videotoolbox_hw.is_some()
+    }
+
+    /// Wraps an IOSurface-backed NV12 `CVPixelBufferRef` as a frame this
+    /// encoder can queue directly. Only available on encoders built with
+    /// [`H264EncoderBuilder::build_videotoolbox_hw_input`].
+    ///
+    /// # Safety
+    /// `pixel_buffer` must be a valid `CVPixelBufferRef` matching the
+    /// encoder's dimensions with a biplanar 4:2:0 pixel format.
+    #[cfg(target_os = "macos")]
+    pub unsafe fn wrap_videotoolbox_pixel_buffer(
+        &self,
+        pixel_buffer: *mut std::ffi::c_void,
+    ) -> Result<frame::Video, H264EncoderError> {
+        let hw_frames = self.videotoolbox_hw.as_ref().ok_or_else(|| {
+            H264EncoderError::VideoToolboxHwInput(
+                "encoder was not built for VideoToolbox hardware input".to_string(),
+            )
+        })?;
+        unsafe { hw_frames.wrap_pixel_buffer(pixel_buffer) }
+            .map_err(|e| H264EncoderError::VideoToolboxHwInput(e.to_string()))
     }
 
     pub fn conversion_requirements(&self) -> ConversionRequirements {
@@ -905,6 +1118,15 @@ fn requires_software_encoder(config: &VideoInfo, preset: H264Preset, is_export: 
     false
 }
 
+#[cfg(target_os = "linux")]
+fn linux_encoder_priority(nvidia_device_available: bool) -> &'static [&'static str] {
+    if nvidia_device_available {
+        &["h264_nvenc", "libx264"]
+    } else {
+        &["libx264"]
+    }
+}
+
 fn get_default_encoder_priority(_config: &VideoInfo) -> &'static [&'static str] {
     #[cfg(target_os = "macos")]
     {
@@ -936,7 +1158,12 @@ fn get_default_encoder_priority(_config: &VideoInfo) -> &'static [&'static str] 
         }
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        linux_encoder_priority(std::path::Path::new("/dev/nvidiactl").exists())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         &["libx264"]
     }
@@ -1141,14 +1368,14 @@ fn get_codec_and_options(
 /// candidate is rejected and encoder selection falls through to the next one
 /// (terminating at libx264, which never takes this path).
 ///
-/// Windows-only: that is where the multi-vendor encoder/driver matrix
-/// (nvenc/amf/qsv/mf) lives and where zeroed-output reports come from.
-/// VideoToolbox is a single-vendor OS stack, and measured session creation
-/// alone costs ~1.6s — too much to add to recording start for a failure mode
-/// never observed there. Results are cached per everything that shapes the
-/// encode path (encoder, resolution, input pixel format, frame rate, bitrate
-/// inputs, and the full option set) so the cost is one-time per process, and
-/// `CAP_DISABLE_ENCODER_SELF_TEST=1` bypasses the check as an escape hatch.
+/// The Windows multi-vendor encoder/driver matrix (nvenc/amf/qsv/mf) and
+/// Linux NVIDIA encoders are preflight-tested. VideoToolbox is a single-vendor
+/// OS stack, and measured session creation alone costs ~1.6s — too much to
+/// add to recording start for a failure mode never observed there. Results
+/// are cached per everything that shapes the encode path (encoder, resolution,
+/// input pixel format, frame rate, bitrate inputs, and the full option set)
+/// so the cost is one-time per process, and `CAP_DISABLE_ENCODER_SELF_TEST=1`
+/// bypasses the check as an escape hatch.
 fn cached_hardware_self_test(
     codec: Codec,
     encoder_options: &Dictionary<'static>,
@@ -1164,7 +1391,8 @@ fn cached_hardware_self_test(
         sync::{Mutex, OnceLock},
     };
 
-    if !cfg!(target_os = "windows") {
+    if !(cfg!(target_os = "windows") || (cfg!(target_os = "linux") && codec.name() == "h264_nvenc"))
+    {
         return Ok(());
     }
 
@@ -1458,5 +1686,384 @@ mod self_test_tests {
         let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 160, 120, 30);
         hardware_encoder_self_test(codec, options, &config, 160, 120, 0.3, None)
             .expect("healthy encoder passes the round trip");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_nvidia_device_prefers_nvenc_and_keeps_software_fallback() {
+        assert_eq!(linux_encoder_priority(true), &["h264_nvenc", "libx264"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_without_nvidia_preserves_software_encoder() {
+        assert_eq!(linux_encoder_priority(false), &["libx264"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_high_throughput_preserves_software_encoder() {
+        let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 160, 120, 30);
+
+        assert_eq!(
+            get_encoder_priority_with_override(
+                &config,
+                H264Preset::HighThroughput,
+                Some(linux_encoder_priority(true)),
+                false,
+            ),
+            &["libx264"],
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_crf_preserves_software_encoder() {
+        ffmpeg::init().ok();
+        let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 160, 120, 30);
+        let codecs = get_codec_and_options(
+            &config,
+            H264Preset::Ultrafast,
+            Some(linux_encoder_priority(true)),
+            true,
+            Some(23),
+        );
+
+        assert_eq!(codecs.len(), 1);
+        assert_eq!(codecs[0].0.name(), "libx264");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_nvenc_self_test_decodes_real_gray_frames_when_available() {
+        if !std::path::Path::new("/dev/nvidiactl").exists() {
+            return;
+        }
+
+        ffmpeg::init().ok();
+        let Some(codec) = encoder::find_by_name("h264_nvenc") else {
+            return;
+        };
+        let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 160, 120, 30);
+        let options = get_codec_and_options(
+            &config,
+            H264Preset::Ultrafast,
+            Some(&["h264_nvenc", "libx264"]),
+            false,
+            None,
+        )
+        .into_iter()
+        .find(|(candidate, _)| candidate.name() == "h264_nvenc")
+        .expect("available NVENC encoder is configured")
+        .1;
+
+        cached_hardware_self_test(codec, &options, &config, 160, 120, 0.3, None)
+            .expect("real NVIDIA hardware preserves neutral gray through encode and decode");
+    }
+}
+
+#[cfg(test)]
+mod rgb_color_tests {
+    use super::*;
+
+    const COLORS: [[u8; 3]; 6] = [
+        [255, 0, 0],
+        [0, 255, 0],
+        [0, 0, 255],
+        [0, 0, 0],
+        [255, 255, 255],
+        [128, 128, 128],
+    ];
+
+    fn open(input: format::Pixel, scale: u32, external: bool) -> OpenedVideoEncoder {
+        ffmpeg::init().unwrap();
+        let config = VideoInfo::from_raw_ffmpeg(input, 192, 64, 30);
+        let mut options = Dictionary::new();
+        options.set("preset", "ultrafast");
+        options.set("tune", "zerolatency");
+        options.set("crf", "18");
+        open_video_encoder(
+            encoder::find_by_name("libx264").expect("libx264 available"),
+            options,
+            &config,
+            192 / scale,
+            64 / scale,
+            0.3,
+            external,
+            Some(18),
+        )
+        .unwrap()
+    }
+
+    fn rgb_bars(format: format::Pixel) -> frame::Video {
+        let mut frame = frame::Video::new(format, 192, 64);
+        let stride = frame.stride(0);
+        let channels = if format == format::Pixel::RGB24 { 3 } else { 4 };
+        for y in 0..64 {
+            for x in 0..192 {
+                let [red, green, blue] = COLORS[x / 32];
+                let offset = y * stride + x * channels;
+                let bytes = frame.data_mut(0);
+                match format {
+                    format::Pixel::RGB24 => {
+                        bytes[offset..offset + 3].copy_from_slice(&[red, green, blue]);
+                    }
+                    format::Pixel::RGBA => {
+                        bytes[offset..offset + 4].copy_from_slice(&[red, green, blue, 255]);
+                    }
+                    format::Pixel::BGRA | format::Pixel::BGRZ => {
+                        bytes[offset..offset + 4].copy_from_slice(&[blue, green, red, 255]);
+                    }
+                    _ => panic!("unexpected test RGB format"),
+                }
+            }
+        }
+        frame
+    }
+
+    fn receive_packets(encoder: &mut encoder::Video, packets: &mut Vec<ffmpeg::Packet>) {
+        loop {
+            let mut packet = ffmpeg::Packet::empty();
+            match encoder.receive_packet(&mut packet) {
+                Ok(()) => packets.push(packet),
+                Err(ffmpeg::Error::Eof) => break,
+                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => break,
+                Err(error) => panic!("receive encoded packet: {error}"),
+            }
+        }
+    }
+
+    fn receive_frames(decoder: &mut ffmpeg::decoder::Video, frames: &mut Vec<frame::Video>) {
+        loop {
+            let mut frame = frame::Video::empty();
+            match decoder.receive_frame(&mut frame) {
+                Ok(()) => frames.push(frame),
+                Err(ffmpeg::Error::Eof) => break,
+                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => break,
+                Err(error) => panic!("receive decoded frame: {error}"),
+            }
+        }
+    }
+
+    fn decoded_rgb(opened: &mut OpenedVideoEncoder, input: &frame::Video) -> frame::Video {
+        let mut yuv = frame::Video::empty();
+        opened
+            .converter
+            .as_mut()
+            .unwrap()
+            .run(input, &mut yuv)
+            .unwrap();
+        assert_eq!(yuv.format(), format::Pixel::YUV420P);
+        let expected_luma = [63u8, 173, 32, 16, 235, 126];
+        for (index, expected) in expected_luma.into_iter().enumerate() {
+            let x = (index * 2 + 1) * yuv.width() as usize / 12;
+            let y = yuv.height() as usize / 2;
+            let actual = yuv.data(0)[y * yuv.stride(0) + x];
+            assert!(
+                actual.abs_diff(expected) <= 2,
+                "limited BT709 luma patch {index}: {actual} vs {expected}"
+            );
+        }
+        yuv.set_pts(Some(0));
+        opened.encoder.send_frame(&yuv).unwrap();
+        let mut packets = Vec::new();
+        receive_packets(&mut opened.encoder, &mut packets);
+        opened.encoder.send_eof().unwrap();
+        receive_packets(&mut opened.encoder, &mut packets);
+        assert!(!packets.is_empty());
+
+        let codec = ffmpeg::decoder::find(ffmpeg::codec::Id::H264).unwrap();
+        let mut decoder = context::Context::new_with_codec(codec)
+            .decoder()
+            .video()
+            .unwrap();
+        let mut frames = Vec::new();
+        for packet in packets {
+            decoder.send_packet(&packet).unwrap();
+            receive_frames(&mut decoder, &mut frames);
+        }
+        decoder.send_eof().unwrap();
+        receive_frames(&mut decoder, &mut frames);
+        assert_eq!(frames.len(), 1);
+        let decoded = frames.pop().unwrap();
+        assert_eq!(decoded.color_space(), color::Space::BT709);
+        assert_eq!(decoded.color_range(), color::Range::MPEG);
+        let mut converter = ffmpeg::software::scaling::Context::get(
+            decoded.format(),
+            decoded.width(),
+            decoded.height(),
+            format::Pixel::RGB24,
+            decoded.width(),
+            decoded.height(),
+            ffmpeg::software::scaling::Flags::BILINEAR,
+        )
+        .unwrap();
+        unsafe {
+            let coefficients = ffmpeg::ffi::sws_getCoefficients(ffmpeg::ffi::SWS_CS_ITU709);
+            assert!(
+                ffmpeg::ffi::sws_setColorspaceDetails(
+                    converter.as_mut_ptr(),
+                    coefficients,
+                    0,
+                    coefficients,
+                    1,
+                    0,
+                    1 << 16,
+                    1 << 16,
+                ) >= 0
+            );
+        }
+        let mut rgb = frame::Video::empty();
+        converter.run(&decoded, &mut rgb).unwrap();
+        rgb
+    }
+
+    #[test]
+    fn rgb_software_conversion_matches_declared_bt709_through_encode_decode() {
+        for format in [
+            format::Pixel::RGB24,
+            format::Pixel::RGBA,
+            format::Pixel::BGRA,
+            format::Pixel::BGRZ,
+        ] {
+            for scale in [1, 2] {
+                let mut opened = open(format, scale, false);
+                let decoded = decoded_rgb(&mut opened, &rgb_bars(format));
+                for (index, expected) in COLORS.iter().enumerate() {
+                    let x = (index * 2 + 1) * decoded.width() as usize / 12;
+                    let y = decoded.height() as usize / 2;
+                    let offset = y * decoded.stride(0) + x * 3;
+                    for (actual, expected) in
+                        decoded.data(0)[offset..offset + 3].iter().zip(expected)
+                    {
+                        assert!(
+                            actual.abs_diff(*expected) <= 4,
+                            "RGB round trip {format:?} scale {scale} patch {index}: {actual} vs {expected}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn external_rgb_conversion_still_skips_internal_scaler() {
+        let opened = open(format::Pixel::BGRA, 1, true);
+        assert_eq!(opened.output_format, format::Pixel::YUV420P);
+        assert!(opened.converter.is_none());
+        assert!(opened.converted_frame_pool.is_none());
+    }
+
+    #[test]
+    fn rgb_software_nv12_conversion_uses_bt709_limited_luma() {
+        ffmpeg::init().unwrap();
+        let mut converter = ffmpeg::software::scaling::Context::get(
+            format::Pixel::BGRA,
+            192,
+            64,
+            format::Pixel::NV12,
+            192,
+            64,
+            ffmpeg::software::scaling::Flags::FAST_BILINEAR,
+        )
+        .unwrap();
+        configure_rgb_converter(&mut converter, format::Pixel::BGRA, format::Pixel::NV12).unwrap();
+        let mut output = frame::Video::empty();
+        converter
+            .run(&rgb_bars(format::Pixel::BGRA), &mut output)
+            .unwrap();
+        for (index, expected) in [63u8, 173, 32, 16, 235, 126].into_iter().enumerate() {
+            let actual = output.data(0)[32 * output.stride(0) + index * 32 + 16];
+            assert!(actual.abs_diff(expected) <= 2);
+        }
+    }
+
+    #[test]
+    fn rgb_to_rgb_conversion_preserves_channel_values() {
+        ffmpeg::init().unwrap();
+        let mut converter = ffmpeg::software::scaling::Context::get(
+            format::Pixel::BGRA,
+            192,
+            64,
+            format::Pixel::RGB24,
+            192,
+            64,
+            ffmpeg::software::scaling::Flags::FAST_BILINEAR,
+        )
+        .unwrap();
+        configure_rgb_converter(&mut converter, format::Pixel::BGRA, format::Pixel::RGB24).unwrap();
+        let mut output = frame::Video::empty();
+        converter
+            .run(&rgb_bars(format::Pixel::BGRA), &mut output)
+            .unwrap();
+        for (index, expected) in COLORS.iter().enumerate() {
+            let offset = 32 * output.stride(0) + (index * 32 + 16) * 3;
+            assert_eq!(&output.data(0)[offset..offset + 3], expected);
+        }
+    }
+
+    #[test]
+    fn existing_yuv_input_selection_and_scaling_are_unchanged() {
+        let opened = open(format::Pixel::YUV420P, 1, false);
+        assert_eq!(opened.output_format, format::Pixel::YUV420P);
+        assert!(opened.converter.is_none());
+        let mut scaled = open(format::Pixel::YUV420P, 2, false);
+        assert_eq!(scaled.output_format, format::Pixel::YUV420P);
+        let mut original = ffmpeg::software::scaling::Context::get(
+            format::Pixel::YUV420P,
+            192,
+            64,
+            format::Pixel::YUV420P,
+            96,
+            32,
+            ffmpeg::software::scaling::Flags::BICUBIC,
+        )
+        .unwrap();
+        let mut input = frame::Video::new(format::Pixel::YUV420P, 192, 64);
+        for plane in 0..input.planes() {
+            for (index, byte) in input.data_mut(plane).iter_mut().enumerate() {
+                *byte = ((index + plane * 37) % 256) as u8;
+            }
+        }
+        let mut expected = frame::Video::empty();
+        let mut actual = frame::Video::empty();
+        original.run(&input, &mut expected).unwrap();
+        scaled
+            .converter
+            .as_mut()
+            .unwrap()
+            .run(&input, &mut actual)
+            .unwrap();
+        for plane in 0..actual.planes() {
+            let width = actual.plane_width(plane) as usize;
+            for row in 0..actual.plane_height(plane) as usize {
+                let actual_offset = row * actual.stride(plane);
+                let expected_offset = row * expected.stride(plane);
+                assert_eq!(
+                    &actual.data(plane)[actual_offset..actual_offset + width],
+                    &expected.data(plane)[expected_offset..expected_offset + width],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rgb_classification_does_not_treat_yuv_or_hardware_as_rgb() {
+        for format in [
+            format::Pixel::RGB24,
+            format::Pixel::BGRA,
+            format::Pixel::BGRZ,
+        ] {
+            assert!(is_rgb(format));
+        }
+        for format in [
+            format::Pixel::YUV420P,
+            format::Pixel::NV12,
+            format::Pixel::GRAY8,
+            format::Pixel::CUDA,
+            format::Pixel::None,
+        ] {
+            assert!(!is_rgb(format));
+        }
     }
 }

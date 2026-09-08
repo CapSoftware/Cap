@@ -32,7 +32,6 @@ const THUMBNAIL_SIZE: u32 = 32;
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
 enum LinuxTrayIcon {
-    Default,
     Instant,
     Screenshot,
     Studio,
@@ -43,7 +42,6 @@ enum LinuxTrayIcon {
 impl LinuxTrayIcon {
     fn name(self) -> &'static str {
         match self {
-            Self::Default => "so.cap.desktop-tray-default-symbolic",
             Self::Instant => "so.cap.desktop-tray-instant-symbolic",
             Self::Screenshot => "so.cap.desktop-tray-screenshot-symbolic",
             Self::Studio => "so.cap.desktop-tray-studio-symbolic",
@@ -53,9 +51,6 @@ impl LinuxTrayIcon {
 
     fn svg(self) -> &'static str {
         match self {
-            Self::Default => {
-                include_str!("../icons/linux/so.cap.desktop-tray-default-symbolic.svg")
-            }
             Self::Instant => {
                 include_str!("../icons/linux/so.cap.desktop-tray-instant-symbolic.svg")
             }
@@ -787,7 +782,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             move |app: &AppHandle, event| match TrayItem::try_from(event.id) {
                 Ok(TrayItem::OpenCap) => {
                     let app = app.clone();
-                    tokio::spawn(async move {
+                    tauri::async_runtime::spawn(async move {
                         let _ = ShowCapWindow::Main {
                             init_target_mode: None,
                         }
@@ -1122,4 +1117,38 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     });
 
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn clean_stop_icon() -> Result<cap_utils::linux_recording_stop::StopTrayIcon, String> {
+    let image = image::load_from_memory(include_bytes!("../icons/tray-stop-icon.png"))
+        .map_err(|error| error.to_string())?
+        .resize_exact(32, 32, image::imageops::FilterType::Triangle)
+        .into_rgba8();
+    cap_utils::linux_recording_stop::StopTrayIcon::from_rgba(32, 32, image.as_raw())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn set_clean_stop_mode(
+    app: &AppHandle,
+    generation: u32,
+    active: bool,
+) -> Result<(), String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let result = if crate::clean_capture::wayland_generation(&handle) != Some(generation) {
+            Err("Recording tray transition was superseded".to_string())
+        } else if let Some(tray) = handle.tray_by_id("tray") {
+            tray.set_visible(!active).map_err(|error| error.to_string())
+        } else {
+            Ok(())
+        };
+        let _ = tx.send(result);
+    })
+    .map_err(|error| error.to_string())?;
+    tokio::time::timeout(std::time::Duration::from_secs(2), rx)
+        .await
+        .map_err(|_| "Recording tray transition timed out".to_string())?
+        .map_err(|_| "Recording tray transition was lost".to_string())?
 }

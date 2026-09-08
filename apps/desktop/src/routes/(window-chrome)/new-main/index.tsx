@@ -19,7 +19,6 @@ import {
 	PhysicalPosition,
 } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
-import { relaunch } from "@tauri-apps/plugin-process";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
@@ -55,6 +54,7 @@ import {
 	type MicrophoneWithDetails,
 } from "~/utils/devices";
 import { clientEnv } from "~/utils/env";
+import { hideCurrentWindow } from "~/utils/hide-window";
 import {
 	importImageFromPicker,
 	importVideoFromPicker,
@@ -62,14 +62,17 @@ import {
 } from "~/utils/importMedia";
 import {
 	createCameraMutation,
+	createCleanCaptureQuery,
 	createCurrentRecordingQuery,
 	createLicenseQuery,
+	createMicrophoneMutation,
 	getPermissions,
 	listDisplaysWithThumbnails,
 	listRecordings,
 	listScreens,
 	listWindows,
 	listWindowsWithThumbnails,
+	revealRecordingWindow,
 } from "~/utils/queries";
 import {
 	type CaptureDisplay,
@@ -86,6 +89,7 @@ import {
 	type UploadProgress,
 } from "~/utils/tauri";
 import { openTeleprompter } from "~/utils/teleprompter";
+import { restartAfterUpdate } from "~/utils/updater";
 import {
 	describeUploadHealth,
 	getUploadHealthStatus,
@@ -126,6 +130,7 @@ import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
 import useRequestPermission from "./useRequestPermission";
+import { getPostResizeWindowPosition } from "./window-geometry";
 
 const MAIN_WINDOW_SIZE = {
 	compact: { width: 330, height: 395 },
@@ -148,6 +153,9 @@ const findCamera = (cameras: CameraWithDetails[], id: DeviceOrModelID) => {
 			: id.ModelID === c.model_id;
 	});
 };
+
+const findMicrophone = (microphones: MicrophoneWithDetails[], name: string) =>
+	microphones.find((microphone) => microphone.name === name);
 
 type WindowListItem = Pick<
 	CaptureWindow,
@@ -198,9 +206,6 @@ const listScreenshotsQuery = queryOptions<ScreenshotWithPath[]>({
 const nextAnimationFrame = () =>
 	new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-const clamp = (value: number, minimum: number, maximum: number) =>
-	Math.min(Math.max(value, minimum), maximum);
-
 async function resizeMainWindow(expanded: boolean, animate: boolean) {
 	const currentWindow = getCurrentWindow();
 	const [physicalSize, outerSize, scaleFactor, physicalPosition, monitor] =
@@ -247,36 +252,6 @@ async function resizeMainWindow(expanded: boolean, animate: boolean) {
 	const reduceMotion = window.matchMedia(
 		"(prefers-reduced-motion: reduce)",
 	).matches;
-
-	if (monitor && physicalPosition) {
-		const padding = MAIN_WINDOW_SCREEN_PADDING * scaleFactor;
-		const workArea = monitor.workArea;
-		const targetPhysicalWidth = (targetWidth + frameWidth) * scaleFactor;
-		const targetPhysicalHeight = (targetHeight + frameHeight) * scaleFactor;
-		const minimumX = workArea.position.x + padding;
-		const minimumY = workArea.position.y + padding;
-		const maximumX = Math.max(
-			minimumX,
-			workArea.position.x + workArea.size.width - targetPhysicalWidth - padding,
-		);
-		const maximumY = Math.max(
-			minimumY,
-			workArea.position.y +
-				workArea.size.height -
-				targetPhysicalHeight -
-				padding,
-		);
-		const targetX = clamp(physicalPosition.x, minimumX, maximumX);
-		const targetY = clamp(physicalPosition.y, minimumY, maximumY);
-
-		if (targetX !== physicalPosition.x || targetY !== physicalPosition.y) {
-			await currentWindow
-				.setPosition(
-					new PhysicalPosition(Math.round(targetX), Math.round(targetY)),
-				)
-				.catch(() => undefined);
-		}
-	}
 
 	if (Math.abs(widthDelta) > 0.5 || Math.abs(heightDelta) > 0.5) {
 		if (!animate || reduceMotion) {
@@ -325,6 +300,36 @@ async function resizeMainWindow(expanded: boolean, animate: boolean) {
 			await resizeWorker;
 			if (resizeFailed) throw resizeError;
 		}
+	}
+
+	if (monitor && physicalPosition) {
+		// AppKit keeps the bottom edge fixed while growing an NSWindow, so restore
+		// the intended top-left position only after the resize finishes.
+		const positionAfterResize = await currentWindow
+			.outerPosition()
+			.catch(() => null);
+		if (!positionAfterResize) return;
+
+		const targetPosition = getPostResizeWindowPosition(
+			physicalPosition,
+			positionAfterResize,
+			{
+				width: (targetWidth + frameWidth) * scaleFactor,
+				height: (targetHeight + frameHeight) * scaleFactor,
+			},
+			monitor.workArea,
+			MAIN_WINDOW_SCREEN_PADDING * scaleFactor,
+		);
+		if (!targetPosition) return;
+
+		await currentWindow
+			.setPosition(
+				new PhysicalPosition(
+					Math.round(targetPosition.x),
+					Math.round(targetPosition.y),
+				),
+			)
+			.catch(() => undefined);
 	}
 }
 
@@ -1735,6 +1740,7 @@ export default function () {
 }
 
 let hasChecked = false;
+const [installingUpdate, setInstallingUpdate] = createSignal(false);
 function createUpdateCheck() {
 	if (import.meta.env.DEV) return;
 
@@ -1793,17 +1799,21 @@ function createUpdateReadyToast() {
 					<div class="flex gap-2 items-center">
 						<button
 							type="button"
-							class="px-2.5 py-1 text-xs font-medium rounded-lg transition-colors bg-blue-9 text-white hover:bg-blue-10"
+							disabled={installingUpdate()}
+							class="px-2.5 py-1 text-xs font-medium rounded-lg transition-colors bg-blue-9 text-white hover:bg-blue-10 disabled:cursor-not-allowed disabled:opacity-60"
 							onClick={() => {
-								toast.dismiss(t.id);
-								const install = update.installed
-									? Promise.resolve(null)
-									: commands.updatesDownloadAndInstall();
-								// On Windows the NSIS installer restarts Cap itself, so the
-								// relaunch call is unreachable there; that matches update.tsx.
-								install
-									.then(() => relaunch())
-									.catch((e) => console.error("Failed to install update:", e));
+								if (installingUpdate()) return;
+								setInstallingUpdate(true);
+								restartAfterUpdate()
+									.catch((error) => {
+										console.error("Failed to install update:", error);
+										toast.error(
+											typeof error === "string"
+												? error
+												: "Unable to restart Cap safely.",
+										);
+									})
+									.finally(() => setInstallingUpdate(false));
 							}}
 						>
 							{update.installed ? "Restart now" : "Install and restart"}
@@ -1888,6 +1898,7 @@ function Page() {
 	const queryClient = useQueryClient();
 	const { rawOptions, setOptions } = useRecordingOptions();
 	const currentRecording = createCurrentRecordingQuery();
+	const cleanCapture = createCleanCaptureQuery();
 	const [isExpanded, setIsExpanded] = createSignal(false);
 	const [isWindowFocused, setIsWindowFocused] = createSignal(false);
 	const [isWindowResizing, setIsWindowResizing] = createSignal(false);
@@ -2121,7 +2132,7 @@ function Page() {
 		if (pickerActive && !hasHidden && !recording) {
 			setHasHiddenMainWindowForPicker(true);
 			setShouldRevealMainWindowAfterPicker(!editorPicker);
-			void getCurrentWindow().hide();
+			void hideCurrentWindow();
 		} else if (pickerActive && hasHidden) {
 			setShouldRevealMainWindowAfterPicker(!editorPicker);
 		} else if (recording) {
@@ -2147,9 +2158,7 @@ function Page() {
 				dismissal === "screenshot" ||
 				dismissal === "recordingInstant";
 			if (shouldRevealMainWindow && dismissalReveals) {
-				const currentWindow = getCurrentWindow();
-				void currentWindow.show();
-				void currentWindow.setFocus();
+				void revealRecordingWindow();
 			}
 		}
 	});
@@ -2164,11 +2173,11 @@ function Page() {
 			rawOptions.targetMode != null &&
 			!currentRecording.data
 		)
-			void getCurrentWindow().show();
+			void revealRecordingWindow();
 	});
 
 	const handleMouseEnter = () => {
-		getCurrentWindow().setFocus();
+		void revealRecordingWindow();
 	};
 
 	const [displayMenuOpen, setDisplayMenuOpen] = createSignal(false);
@@ -2272,9 +2281,7 @@ function Page() {
 	// in a hidden webview and the failure is invisible again.
 	createTauriEventListener(events.recordingEvent, (payload) => {
 		if (payload.variant === "StartFailed") {
-			const currentWindow = getCurrentWindow();
-			void currentWindow.show();
-			void currentWindow.setFocus();
+			void revealRecordingWindow();
 			toast.error(payload.error);
 		}
 	});
@@ -2565,19 +2572,7 @@ function Page() {
 		closeAllMenuPanels();
 	});
 
-	const setMicInput = createMutation(() => ({
-		mutationFn: async (name: string | null) => {
-			const previous = rawOptions.micName ?? null;
-			if (previous !== name) setOptions("micName", name);
-			try {
-				await commands.setMicInput(name);
-			} catch (error) {
-				if (previous !== name) setOptions("micName", previous);
-				throw error;
-			}
-		},
-	}));
-
+	const setMicInput = createMicrophoneMutation();
 	const setCamera = createCameraMutation();
 
 	createUpdateCheck();
@@ -2612,8 +2607,7 @@ function Page() {
 				targetModeSource: null,
 				targetModeDismissal: "cancelled",
 			});
-			await currentWindow.show();
-			await currentWindow.setFocus();
+			await revealRecordingWindow();
 			setIsWindowFocused(true);
 			void commands.closeTargetSelectOverlays().catch((error) => {
 				console.error("Failed to close target select overlays:", error);
@@ -2762,7 +2756,7 @@ function Page() {
 	createEffect(() => {
 		if (!microphoneMenuOpen() || !openMicrophoneSettingsWhenReady()) return;
 		const mic = rawOptions.micName
-			? devices.microphones.find((m) => m.name === rawOptions.micName)
+			? findMicrophone(devices.microphones, rawOptions.micName)
 			: undefined;
 		if (!mic) return;
 		setMicrophoneInitialSettings(mic);
@@ -2800,7 +2794,20 @@ function Page() {
 			return findCamera(devices.cameras, rawOptions.cameraID);
 		},
 		micName: () =>
-			devices.microphones.find((m) => m.name === rawOptions.micName),
+			rawOptions.micName != null
+				? findMicrophone(devices.microphones, rawOptions.micName)
+				: undefined,
+		// Selected-but-unplugged devices (e.g. undocked laptop): the selection is
+		// remembered, the row shows "Not connected", and the effects below
+		// re-apply the device when it reappears.
+		cameraDisconnected: () =>
+			rawOptions.cameraID != null &&
+			!devices.isPending &&
+			!findCamera(devices.cameras, rawOptions.cameraID),
+		micDisconnected: () =>
+			rawOptions.micName != null &&
+			!devices.isPending &&
+			!findMicrophone(devices.microphones, rawOptions.micName),
 		target: (): ScreenCaptureTarget | undefined => {
 			switch (rawOptions.captureTarget.variant) {
 				case "display": {
@@ -2827,6 +2834,53 @@ function Page() {
 			}
 		},
 	};
+
+	// Re-apply a remembered device when it reappears (e.g. plugging back into a
+	// dock). The mount-time restore quick-fails while the device is away, so
+	// without this the row would claim a device the backend isn't using.
+	let micPresence: { name: string; present: boolean } | undefined;
+	createEffect(() => {
+		const name = rawOptions.micName;
+		if (name == null || devices.isPending) {
+			micPresence = undefined;
+			return;
+		}
+		const matched = findMicrophone(devices.microphones, name);
+		// Mid-recording device changes are the backend watcher's job; keep the
+		// last idle observation so the reclaim runs once the recording ends.
+		if (isRecording()) return;
+		const previous = micPresence;
+		micPresence = { name, present: !!matched };
+		const reappeared = previous?.present === false && previous.name === name;
+		if (matched && reappeared) {
+			commands
+				.setMicInput(name)
+				.catch((error) =>
+					console.error("Failed to restore reconnected microphone:", error),
+				);
+		}
+	});
+
+	let cameraPresence: { key: string; present: boolean } | undefined;
+	createEffect(() => {
+		const id = rawOptions.cameraID;
+		if (id == null || devices.isPending) {
+			cameraPresence = undefined;
+			return;
+		}
+		const key = JSON.stringify(id);
+		const present = !!findCamera(devices.cameras, id);
+		if (isRecording()) return;
+		const previous = cameraPresence;
+		cameraPresence = { key, present };
+		if (present && previous?.present === false && previous.key === key) {
+			commands
+				.setCameraInput(id, false)
+				.catch((error) =>
+					console.error("Failed to restore reconnected camera:", error),
+				);
+		}
+	});
 
 	const toggleTargetMode = async (
 		mode: "display" | "window" | "area" | "camera",
@@ -2950,7 +3004,7 @@ function Page() {
 			await shell.open(link);
 		}
 
-		await getCurrentWindow().hide();
+		await hideCurrentWindow();
 	};
 
 	const openScreenshot = async (screenshot: ScreenshotWithPath) => {
@@ -2985,6 +3039,7 @@ function Page() {
 					value={options.camera() ?? null}
 					selectedLabel={rawOptions.cameraLabel}
 					isSelected={rawOptions.cameraID != null}
+					disconnected={options.cameraDisconnected()}
 					onChange={(c) => {
 						if (!c) {
 							setOptions("cameraLabel", null);
@@ -3013,6 +3068,7 @@ function Page() {
 					disabled={enableDeviceQueries() && devices.isPending}
 					options={devices.microphones.map((m) => m.name)}
 					value={rawOptions.micName ?? null}
+					disconnected={options.micDisconnected()}
 					onChange={(v) => setMicInput.mutate(v)}
 					permissions={currentPermissions()}
 					onOpen={() => openMicrophoneMenu(null)}
@@ -3189,6 +3245,7 @@ function Page() {
 	);
 
 	const startSignInCleanup = listen("start-sign-in", async () => {
+		const revealGeneration = (await commands.getCleanCaptureState()).generation;
 		const abort = new AbortController();
 		for (const win of await getAllWebviewWindows()) {
 			if (win.label.startsWith("target-select-overlay")) {
@@ -3202,7 +3259,7 @@ function Page() {
 		for (const win of await getAllWebviewWindows()) {
 			if (win.label.startsWith("target-select-overlay")) {
 				await win.setIgnoreCursorEvents(false);
-				await win.show();
+				await commands.revealCaptureWindow(revealGeneration, win.label);
 			}
 		}
 	});
@@ -3213,6 +3270,39 @@ function Page() {
 			onMouseEnter={handleMouseEnter}
 			class="flex relative flex-col px-[13px] gap-2 pb-[8px] h-full min-h-0 text-(--text-primary)"
 		>
+			<Show when={cleanCapture.data?.phase === "awaitingShortcut"}>
+				<div
+					class="absolute inset-0 z-50 flex flex-col justify-center gap-4 p-5 bg-gray-2"
+					role="dialog"
+					aria-label={
+						cleanCapture.data?.mode === "instant"
+							? "Clean Instant recording"
+							: "Clean Studio recording"
+					}
+				>
+					<strong>Record without Cap's preview and controls</strong>
+					<p class="text-sm">
+						{cleanCapture.data?.mode === "instant"
+							? "Any selected camera will be included in the video with its preview appearance. Cap's preview and controls will hide."
+							: "Any selected camera will keep recording as a separate editable track. Cap's preview and controls will hide."}
+					</p>
+					<p class="text-sm">
+						Press <strong>{cleanCapture.data?.shortcut}</strong> to start, then
+						use it to stop.{" "}
+						{cleanCapture.data?.mode === "instant"
+							? "Open Cap to stop and show controls."
+							: "Open Cap to pause and show controls."}
+					</p>
+					<button
+						type="button"
+						class="rounded-lg border border-gray-5 px-4 py-2"
+						disabled={stopRecording.isPending}
+						onClick={() => stopRecording.mutate()}
+					>
+						Cancel
+					</button>
+				</div>
+			</Show>
 			<WindowChromeHeader
 				maximized={isExpanded()}
 				onMaximize={() => void toggleMainWindowExpanded()}
@@ -3250,7 +3340,7 @@ function Page() {
 								type="button"
 								onClick={async () => {
 									await commands.showWindow({ Settings: { page: "general" } });
-									getCurrentWindow().hide();
+									hideCurrentWindow();
 								}}
 								class="flex items-center justify-center size-5 focus:outline-hidden"
 							>
@@ -3320,6 +3410,14 @@ function Page() {
 					</div>
 				</div>
 			</WindowChromeHeader>
+			<Show when={!isActivelyRecording() && cleanCapture.data?.error}>
+				<div
+					role="alert"
+					class="max-h-20 shrink-0 overflow-auto rounded-lg bg-red-3 p-2 text-sm text-red-11"
+				>
+					{cleanCapture.data?.error}
+				</div>
+			</Show>
 			<Show when={!activeMenu()}>
 				<div class="flex items-center justify-between mt-[16px] mb-[6px]">
 					<div class="flex items-center space-x-1">
@@ -3438,7 +3536,7 @@ function Page() {
 										await commands.showWindow({
 											Settings: { page: "recordings" },
 										});
-										getCurrentWindow().hide();
+										hideCurrentWindow();
 									}}
 									uploadProgress={uploadProgress}
 									reuploadingPaths={reuploadingPaths()}
@@ -3462,7 +3560,7 @@ function Page() {
 										await commands.showWindow({
 											Settings: { page: "screenshots" },
 										});
-										getCurrentWindow().hide();
+										hideCurrentWindow();
 									}}
 								/>
 							) : variant === "camera" ? (
@@ -3548,6 +3646,32 @@ function Page() {
 			<Show when={isActivelyRecording()}>
 				<div class="absolute inset-0 z-10 flex flex-col justify-end bg-gray-1/80 px-6 pb-8 backdrop-blur-xs">
 					<div class="pointer-events-auto">
+						<Show when={cleanCapture.data?.phase === "paused"}>
+							<div class="mb-3 flex items-center justify-between gap-2 rounded-lg bg-gray-3 p-2 text-sm">
+								<div class="min-w-0">
+									<Show when={cleanCapture.data?.error}>
+										<p
+											role="alert"
+											class="mb-1 max-h-20 overflow-auto text-red-11"
+										>
+											{cleanCapture.data?.error}
+										</p>
+									</Show>
+									<span>Recording paused. Cap will hide before resuming.</span>
+								</div>
+								<button
+									type="button"
+									class="rounded-md border border-gray-5 px-3 py-1"
+									onClick={() =>
+										void commands
+											.resumeRecording()
+											.catch((error: unknown) => toast.error(String(error)))
+									}
+								>
+									Resume
+								</button>
+							</div>
+						</Show>
 						<button
 							type="button"
 							disabled={stopRecording.isPending}

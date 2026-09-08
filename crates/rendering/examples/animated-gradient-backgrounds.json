@@ -1,0 +1,20 @@
+[
+	{
+		"name": "animated-default",
+		"source": { "type": "animatedGradient", "config": {} }
+	},
+	{
+		"name": "animated-detailed",
+		"source": {
+			"type": "animatedGradient",
+			"config": { "detail": 6, "flowScale": 5, "grainAmount": 30 }
+		}
+	},
+	{
+		"name": "animated-frozen",
+		"source": {
+			"type": "animatedGradient",
+			"config": { "motionSpeed": 0 }
+		}
+	}
+]

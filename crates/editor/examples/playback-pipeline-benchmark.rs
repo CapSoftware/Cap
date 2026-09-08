@@ -314,6 +314,7 @@ async fn load_recording(
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
             });
         }
     }

@@ -38,9 +38,22 @@ export async function sendDownloadLink(email: string) {
 		headers: headersList,
 	});
 
-	const { rateLimited } = await checkRateLimit("rl_send_download_link", {
-		request,
-	});
+	let rateLimited = false;
+	try {
+		const result = await checkRateLimit("rl_send_download_link", {
+			request,
+		});
+		rateLimited = result.rateLimited;
+	} catch (error) {
+		// Fail closed: this action is unauthenticated and the rate limit is its
+		// only outbound-email guard, and a caller can force checkRateLimit to
+		// throw with oversized headers (494).
+		rateLimited = true;
+		console.error(
+			'Rate limit check failed for "rl_send_download_link":',
+			error,
+		);
+	}
 
 	if (rateLimited) {
 		return {
