@@ -36,7 +36,10 @@ import {
 	createOptionsQuery,
 	revealRecordingWindow,
 } from "~/utils/queries";
-import { handleRecordingResult } from "~/utils/recording";
+import {
+	handleRecordingResult,
+	runRecordingStopRequest,
+} from "~/utils/recording";
 import type {
 	CameraInfo,
 	CurrentRecording,
@@ -534,20 +537,19 @@ function InProgressRecordingInner() {
 			};
 			stopRequest = request;
 			setStopRequested(true);
-			try {
-				await commands.stopRecording();
-			} catch (error) {
-				if (stopRequest === request) {
+			await runRecordingStopRequest({
+				stop: () => commands.stopRecording(),
+				isCurrent: () => stopRequest === request,
+				onError: (error) => {
 					stopErrorRequest = request;
 					setStopError(error instanceof Error ? error.message : String(error));
 					setIssuePanelVisible(true);
-				}
-			} finally {
-				if (stopRequest === request) {
+				},
+				onSettled: () => {
 					stopRequest = undefined;
 					setStopRequested(false);
-				}
-			}
+				},
+			});
 		},
 	}));
 

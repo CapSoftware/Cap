@@ -78,6 +78,7 @@ import {
 	isRecordingStartCancelled,
 	recordingMetaNeedsRecovery,
 	recordingOpenErrorMessage,
+	runRecordingStopRequest,
 } from "~/utils/recording";
 import {
 	type CaptureDisplay,
@@ -2907,14 +2908,18 @@ function Page() {
 			};
 			stopRequest = request;
 			setStopRequested(true);
-			try {
-				await commands.stopRecording();
-			} catch (error) {
-				await dialog.message(
-					error instanceof Error ? error.message : String(error),
-					{ title: "Stop Recording", kind: "error" },
-				);
-			}
+			await runRecordingStopRequest({
+				stop: () => commands.stopRecording(),
+				isCurrent: () => stopRequest === request,
+				onError: (error) => {
+					stopErrorRequest = request;
+					setStopError(error instanceof Error ? error.message : String(error));
+				},
+				onSettled: () => {
+					stopRequest = undefined;
+					setStopRequested(false);
+				},
+			});
 		},
 	}));
 

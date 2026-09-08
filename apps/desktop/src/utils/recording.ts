@@ -39,6 +39,21 @@ export function recordingOpenErrorMessage(
 	return error instanceof Error ? error.message : String(error);
 }
 
+export async function runRecordingStopRequest(options: {
+	stop: () => Promise<unknown>;
+	isCurrent: () => boolean;
+	onError: (error: unknown) => void;
+	onSettled: () => void;
+}) {
+	try {
+		await options.stop();
+	} catch (error) {
+		if (options.isCurrent()) options.onError(error);
+	} finally {
+		if (options.isCurrent()) options.onSettled();
+	}
+}
+
 export function isRecordingStartCancelled(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : error;
 	return message === "Recording cancelled before starting.";
