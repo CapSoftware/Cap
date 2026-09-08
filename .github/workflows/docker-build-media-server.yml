@@ -78,6 +78,11 @@ jobs:
           MEDIA_IMAGE: ${{ github.event_name == 'pull_request' && 'cap-media-server:verification' || format('ghcr.io/{0}/cap-media-server@{1}', env.REPOSITORY_OWNER, steps.build.outputs.digest) }}
         run: |
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
+            src/__tests__/lib/audio-quality-policy.test.ts \
+            src/__tests__/lib/audio-quality.integration.test.ts \
+            src/__tests__/lib/audio-quality-formats.integration.test.ts \
+            src/__tests__/lib/audio-quality-benchmark.test.ts
+          docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/lib/recording-verification.integration.test.ts \
             src/__tests__/lib/job-manager.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
