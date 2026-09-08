@@ -1,11 +1,34 @@
-use std::{path::Path, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+fn git_executable() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("CAP_BUILD_GIT") {
+        let path = PathBuf::from(path);
+        return (path.is_absolute() && path.is_file()).then_some(path);
+    }
+    #[cfg(windows)]
+    let mut candidates = ["ProgramFiles", "ProgramFiles(x86)"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(|directory| PathBuf::from(directory).join("Git/cmd/git.exe"));
+    #[cfg(not(windows))]
+    let mut candidates = ["/usr/bin/git", "/bin/git"].into_iter().map(PathBuf::from);
+    candidates.find(|path| path.is_absolute() && path.is_file())
+}
 
 pub fn emit() {
+    println!("cargo:rerun-if-env-changed=CAP_BUILD_GIT");
+    println!("cargo:rerun-if-changed=src");
+    let Some(executable) = git_executable() else {
+        return;
+    };
     let Ok(directory) = std::env::var("CARGO_MANIFEST_DIR") else {
         return;
     };
     let git = |args: &[&str]| {
-        Command::new("git")
+        Command::new(&executable)
             .args(args)
             .current_dir(&directory)
             .output()
@@ -40,5 +63,4 @@ pub fn emit() {
             );
         }
     }
-    println!("cargo:rerun-if-changed=src");
 }
