@@ -14,6 +14,7 @@ import { defaultCamera3DTracks } from "./three-d";
 import {
 	deleteClipAndRippleAllTracks,
 	rippleDeleteAllTracks,
+	rippleDeleteFromTrack,
 } from "./timeline-utils";
 
 function keyboardSegment(
@@ -101,6 +102,33 @@ describe("keyboard output timing", () => {
 		});
 	});
 
+	it("leaves a keyboard segment ending at a transition boundary unchanged", () => {
+		const segments = [keyboardSegment(4, 5, "a", [0])];
+
+		rippleKeyboardTrack(segments, 5, -1);
+
+		expect(segments[0]).toMatchObject({
+			start: 4,
+			end: 5,
+			keys: [{ timeOffset: 0 }],
+		});
+	});
+
+	it("maps a retained right tail to the shifted cut end", () => {
+		const segments = [keyboardSegment(5.5, 8, "a", [500])];
+		const overlays = [{ start: 5.5, end: 8 }];
+
+		rippleDeleteKeyboardTrack(segments, 5, 6, 0.5);
+		rippleDeleteFromTrack(overlays, 5, 6, 0.5);
+
+		expect(segments[0]).toMatchObject({
+			start: 5.5,
+			end: 7.5,
+			keys: [{ timeOffset: 0 }],
+		});
+		expect(overlays).toEqual([{ start: 5.5, end: 7.5 }]);
+	});
+
 	it("whole-clip deletion removes holds and uses the actual transition duration", () => {
 		const timeline = {
 			segments: [
@@ -113,10 +141,11 @@ describe("keyboard output timing", () => {
 				{ segmentIndex: 2, type: "cross-fade" as const, duration: 1 },
 			],
 			textSegments: [
-				{ start: 4, end: 6, enabled: true, layout: "fullscreen" as const },
+				{ start: 4, end: 5, enabled: true, layout: "fullscreen" as const },
+				{ start: 7, end: 8, enabled: true, layout: "fullscreen" as const },
 			],
 			zoomSegments: [{ start: 10, end: 11 }],
-			keyboardSegments: [keyboardSegment(10, 11, "a", [250])],
+			keyboardSegments: [keyboardSegment(3, 9, "abc", [500, 2500, 5500])],
 			audioSegments: [{ start: 5, end: 10, trimStart: 2, fadeIn: 1 }],
 			maskSegments: [
 				{
@@ -143,26 +172,82 @@ describe("keyboard output timing", () => {
 		expect(deleteClipAndRippleAllTracks(timeline, 1)).toBe(true);
 		expect(timeline.segments).toHaveLength(2);
 		expect(timeline.transitions).toEqual([]);
-		expect(timeline.textSegments).toEqual([]);
-		expect(timeline.zoomSegments).toEqual([{ start: 6, end: 7 }]);
-		expect(timeline.keyboardSegments[0]).toMatchObject({
-			start: 6,
-			end: 7,
-			keys: [{ timeOffset: 250 }],
-		});
-		expect(timeline.audioSegments).toEqual([
-			{ start: 3, end: 6, trimStart: 6, fadeIn: 0 },
+		expect(timeline.textSegments).toEqual([
+			{ start: 4, end: 5, enabled: true, layout: "fullscreen" },
 		]);
-		expect(timeline.maskSegments[0]).toMatchObject({
+		expect(timeline.zoomSegments).toEqual([{ start: 7, end: 8 }]);
+		expect(timeline.keyboardSegments[0]).toMatchObject({
 			start: 3,
 			end: 6,
+			displayText: "ac",
+			keys: [{ timeOffset: 500 }, { timeOffset: 2500 }],
+		});
+		expect(timeline.audioSegments).toEqual([
+			{ start: 4, end: 7, trimStart: 4, fadeIn: 0 },
+		]);
+		expect(timeline.maskSegments[0]).toMatchObject({
+			start: 4,
+			end: 7,
 			keyframes: { position: [{ time: 2 }, { time: 2.5 }] },
 		});
 		expect(timeline.camera3dSegments).toHaveLength(1);
 		expect(timeline.camera3dSegments[0]).toMatchObject({
-			start: 6,
-			end: 10,
+			start: 7,
+			end: 11,
 			tracks: { zoom: [{ time: 2, value: 1 }] },
+		});
+	});
+
+	it("cuts camera keyframes without rescaling retained source timing", () => {
+		const tracks = defaultCamera3DTracks();
+		tracks.zoom = [
+			{
+				time: 2,
+				value: 2,
+				outEasing: [0, 0],
+				inEasing: null,
+			},
+			{
+				time: 5,
+				value: 5,
+				outEasing: [0, 0],
+				inEasing: [1, 1],
+			},
+			{
+				time: 8,
+				value: 8,
+				outEasing: null,
+				inEasing: [1, 1],
+			},
+		];
+		const timeline = {
+			segments: [{ start: 0, end: 10, timescale: 1 }],
+			camera3dSegments: [
+				{
+					start: 0,
+					end: 10,
+					tracks,
+					transitionIn: 0.2,
+					transitionOut: 0.3,
+				},
+			],
+		};
+
+		rippleDeleteAllTracks(timeline, 3, 6);
+
+		expect(timeline.camera3dSegments[0]).toMatchObject({
+			start: 0,
+			end: 7,
+			transitionIn: 0.2,
+			transitionOut: 0.3,
+			tracks: {
+				zoom: [
+					{ time: 2, value: 2, outEasing: [0, 0], inEasing: null },
+					{ time: 3, value: 3, outEasing: null, inEasing: [1, 1] },
+					{ time: 3, value: 6, outEasing: [0, 0], inEasing: null },
+					{ time: 5, value: 8, outEasing: null, inEasing: [1, 1] },
+				],
+			},
 		});
 	});
 
@@ -185,19 +270,24 @@ describe("keyboard output timing", () => {
 		const generated = keyboardSegment(10, 13, "abc", [0, 1000, 2000]);
 		const generatedParts = splitKeyboardSegment(generated, 11, "keyboard-2");
 		expect(generatedParts?.[0]).toMatchObject({
+			id: "kb-edit-keyboard-1",
 			end: 11,
 			displayText: "a",
 			keys: [{ timeOffset: 0 }],
 		});
 		expect(generatedParts?.[1]).toMatchObject({
-			id: "keyboard-2",
+			id: "kb-edit-keyboard-2",
 			start: 11,
 			displayText: "bc",
 			keys: [{ timeOffset: 0 }, { timeOffset: 1000 }],
 		});
 
 		const manual = keyboardSegment(10, 13, "Custom", []);
-		const manualParts = splitKeyboardSegment(manual, 11, "keyboard-3");
+		const manualParts = splitKeyboardSegment(manual, 11, "kb-edit-keyboard-3");
+		expect(manualParts?.map((part) => part.id)).toEqual([
+			"kb-edit-keyboard-1",
+			"kb-edit-keyboard-3",
+		]);
 		expect(manualParts?.map((part) => part.displayText)).toEqual([
 			"Custom",
 			"Custom",

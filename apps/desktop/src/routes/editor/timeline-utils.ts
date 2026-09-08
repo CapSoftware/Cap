@@ -4,11 +4,16 @@ import {
 	clipDuration,
 	clipTimelineDuration,
 	clipTimelineOffsets,
+	getClipTransition,
 	transitionsAfterClipDelete,
 	transitionsAfterClipSplit,
 } from "./clip-transitions";
 import { rippleDeleteKeyboardTrack } from "./keyboard-timing";
-import { type Camera3DTracks, scaleKeyframeTimes } from "./three-d";
+import {
+	CAMERA3D_TRACK_KEYS,
+	type Camera3DTracks,
+	sampleTrack,
+} from "./three-d";
 import {
 	effectiveToOutput,
 	effectiveToOutputEnd,
@@ -69,7 +74,7 @@ export function rippleDeleteFromTrack(
 		} else if (seg.start < cutStart) {
 			seg.end = cutStart;
 		} else {
-			seg.start = cutStart;
+			seg.start = cutEnd - shiftDuration;
 			seg.end = Math.max(seg.start, seg.end - shiftDuration);
 		}
 	}
@@ -138,6 +143,105 @@ function rippleDeleteAudioTrack(
 		}
 	}
 	rippleDeleteFromTrack(segments, cutStart, cutEnd, shift);
+}
+
+type RippleCamera3DSegment = {
+	start: number;
+	end: number;
+	tracks: Camera3DTracks;
+	transitionIn?: number;
+	transitionOut?: number;
+};
+
+function rippleDeleteCamera3DTrack(
+	segments: RippleCamera3DSegment[],
+	cutStart: number,
+	cutEnd: number,
+	shift: number,
+) {
+	for (
+		let segmentIndex = segments.length - 1;
+		segmentIndex >= 0;
+		segmentIndex--
+	) {
+		const segment = segments[segmentIndex];
+		if (segment.end <= cutStart) continue;
+		if (segment.start >= cutEnd) {
+			segment.start -= shift;
+			segment.end -= shift;
+			continue;
+		}
+		if (segment.start >= cutStart && segment.end <= cutEnd) {
+			segments.splice(segmentIndex, 1);
+			continue;
+		}
+
+		const oldStart = segment.start;
+		const oldEnd = segment.end;
+		const keepsLeft = oldStart < cutStart;
+		const keepsRight = oldEnd > cutEnd;
+		const newStart = keepsLeft ? oldStart : cutEnd - shift;
+		const newEnd = keepsRight ? oldEnd - shift : cutStart;
+		const leftCutTime = cutStart - oldStart;
+		const rightCutTime = cutEnd - oldStart;
+
+		for (const trackKey of CAMERA3D_TRACK_KEYS) {
+			const keyframes = segment.tracks[trackKey];
+			if (keyframes.length === 0) continue;
+			const before = keepsLeft
+				? keyframes
+						.filter((keyframe) => keyframe.time < leftCutTime)
+						.map((keyframe) => ({ ...keyframe }))
+				: [];
+			const after = keepsRight
+				? keyframes
+						.filter((keyframe) => keyframe.time > rightCutTime)
+						.map((keyframe) => ({
+							...keyframe,
+							time: oldStart + keyframe.time - shift - newStart,
+						}))
+				: [];
+			const nextKeyframe = keyframes.find(
+				(keyframe) => keyframe.time >= leftCutTime,
+			);
+			const previousKeyframe = [...keyframes]
+				.reverse()
+				.find((keyframe) => keyframe.time <= rightCutTime);
+			segment.tracks[trackKey] = [
+				...before,
+				...(keepsLeft
+					? [
+							{
+								time: cutStart - newStart,
+								value: sampleTrack(0, keyframes, leftCutTime),
+								outEasing: null,
+								inEasing: nextKeyframe?.inEasing ?? null,
+							},
+						]
+					: []),
+				...(keepsRight
+					? [
+							{
+								time: cutEnd - shift - newStart,
+								value: sampleTrack(0, keyframes, rightCutTime),
+								outEasing: previousKeyframe?.outEasing ?? null,
+								inEasing: null,
+							},
+						]
+					: []),
+				...after,
+			];
+		}
+
+		segment.start = newStart;
+		segment.end = Math.max(newStart, newEnd);
+		if (keepsLeft && !keepsRight && segment.transitionOut !== undefined) {
+			segment.transitionOut = 0;
+		}
+		if (!keepsLeft && keepsRight && segment.transitionIn !== undefined) {
+			segment.transitionIn = 0;
+		}
+	}
 }
 
 export function cutClipSegmentsForRange(
@@ -231,15 +335,16 @@ export function rippleDeleteAllTracks(
 		captionSegments?: Array<{ start: number; end: number }> | null;
 		keyboardSegments?: KeyboardTrackSegment[] | null;
 		audioSegments?: RippleAudioSegment[] | null;
-		camera3dSegments?: Array<{
-			start: number;
-			end: number;
-			tracks: Camera3DTracks;
-		}> | null;
+		camera3dSegments?: RippleCamera3DSegment[] | null;
 	},
 	cutStart: number,
 	cutEnd: number,
 	requestedSegmentIndex?: number,
+	trackCutRange?: {
+		start: number;
+		end: number;
+		removeHoldAtStart?: boolean;
+	},
 ) {
 	// The clip cut below works in the gapless recording-flow domain, but the
 	// overlay tracks live in output time, which includes fullscreen-text
@@ -247,8 +352,12 @@ export function rippleDeleteAllTracks(
 	// time inside the cut leave with the text segments it belongs to (they
 	// sit inside the converted range, so the overlay pass deletes them).
 	const holds = holdWindows(timeline.textSegments);
-	const overlayCutStart = effectiveToOutput(holds, cutStart);
-	const overlayCutEnd = effectiveToOutputEnd(holds, cutEnd);
+	const trackCutStart = trackCutRange?.start ?? cutStart;
+	const trackCutEnd = trackCutRange?.end ?? cutEnd;
+	const overlayCutStart = trackCutRange?.removeHoldAtStart
+		? effectiveToOutputEnd(holds, trackCutStart)
+		: effectiveToOutput(holds, trackCutStart);
+	const overlayCutEnd = effectiveToOutputEnd(holds, trackCutEnd);
 
 	const durationBefore = clipTimelineDuration(
 		timeline.segments,
@@ -295,7 +404,8 @@ export function rippleDeleteAllTracks(
 		durationBefore - clipTimelineDuration(timeline.segments, nextTransitions),
 	);
 	const overlayShift =
-		shiftDuration + (overlayCutEnd - overlayCutStart - (cutEnd - cutStart));
+		shiftDuration +
+		(overlayCutEnd - overlayCutStart - (trackCutEnd - trackCutStart));
 	if (timeline.zoomSegments)
 		rippleDeleteFromTrack(
 			timeline.zoomSegments,
@@ -346,25 +456,12 @@ export function rippleDeleteAllTracks(
 			overlayShift,
 		);
 	if (timeline.camera3dSegments) {
-		const previousDurations = new Map(
-			timeline.camera3dSegments.map((segment) => [
-				segment,
-				segment.end - segment.start,
-			]),
-		);
-		rippleDeleteFromTrack(
+		rippleDeleteCamera3DTrack(
 			timeline.camera3dSegments,
 			overlayCutStart,
 			overlayCutEnd,
 			overlayShift,
 		);
-		for (const segment of timeline.camera3dSegments) {
-			const previousDuration = previousDurations.get(segment);
-			if (previousDuration === undefined) continue;
-			const nextDuration = segment.end - segment.start;
-			if (previousDuration <= 0 || previousDuration === nextDuration) continue;
-			scaleKeyframeTimes(segment.tracks, nextDuration / previousDuration);
-		}
 	}
 }
 
@@ -378,12 +475,24 @@ export function deleteClipAndRippleAllTracks(
 		timeline.segments,
 		timeline.transitions ?? [],
 	)[segmentIndex];
-	rippleDeleteAllTracks(
-		timeline,
-		start,
-		start + clipDuration(segment),
-		segmentIndex,
-	);
+	const incomingDuration =
+		getClipTransition(
+			timeline.segments,
+			timeline.transitions ?? [],
+			segmentIndex,
+		)?.duration ?? 0;
+	const outgoingDuration =
+		getClipTransition(
+			timeline.segments,
+			timeline.transitions ?? [],
+			segmentIndex + 1,
+		)?.duration ?? 0;
+	const end = start + clipDuration(segment);
+	rippleDeleteAllTracks(timeline, start, end, segmentIndex, {
+		start: start + incomingDuration,
+		end: end - outgoingDuration,
+		removeHoldAtStart: true,
+	});
 	return true;
 }
 

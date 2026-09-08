@@ -187,6 +187,19 @@ fn ripple_track<T: TrackSegmentOps>(track: &mut [T], boundary: f64, shift: f64) 
     }
 }
 
+fn ripple_keyboard_track(
+    track: &mut [cap_project::KeyboardTrackSegment],
+    boundary: f64,
+    shift: f64,
+) {
+    for segment in track {
+        if segment.end <= boundary {
+            continue;
+        }
+        segment.remap_times(|time| if time >= boundary { time + shift } else { time });
+    }
+}
+
 /// `moveClip` (`ClipsSidebar.tsx:639-690`): reorder `timeline.segments`,
 /// remapping the transitions that survive and -- for each one that does not --
 /// rippling every other track across the boundary the removed overlap used to
@@ -225,16 +238,16 @@ pub(crate) fn move_clip(
             .copied()
             .unwrap_or(0.)
             + effective.duration;
+        let boundary = edits::effective_to_output(&timeline.hold_windows(), boundary);
         timeline
             .transitions
             .retain(|candidate| candidate.segment_index != transition.segment_index);
-        // The source ripples these seven tracks and no others (`:672-682`).
         ripple_track(&mut timeline.zoom_segments, boundary, effective.duration);
         ripple_track(&mut timeline.scene_segments, boundary, effective.duration);
         ripple_track(&mut timeline.mask_segments, boundary, effective.duration);
         ripple_track(&mut timeline.text_segments, boundary, effective.duration);
         ripple_track(&mut timeline.caption_segments, boundary, effective.duration);
-        ripple_track(
+        ripple_keyboard_track(
             &mut timeline.keyboard_segments,
             boundary,
             effective.duration,
@@ -3791,12 +3804,57 @@ mod tests {
             edge_snap_ratio: 0.25,
         }];
 
+        config.text_segments = serde_json::from_value(serde_json::json!([{
+            "start": 10.0,
+            "end": 12.0,
+            "track": 0,
+            "content": "Hold",
+            "layout": "fullscreen"
+        }]))
+        .unwrap();
+        config.keyboard_segments = serde_json::from_value(serde_json::json!([
+            {
+                "id": "before-boundary",
+                "start": 11.0,
+                "end": 12.0,
+                "displayText": "a",
+                "keys": [{ "key": "a", "timeOffset": 500.0 }]
+            },
+            {
+                "id": "spanning-boundary",
+                "start": 11.0,
+                "end": 13.0,
+                "displayText": "bc",
+                "keys": [
+                    { "key": "b", "timeOffset": 500.0 },
+                    { "key": "c", "timeOffset": 1500.0 }
+                ]
+            }
+        ]))
+        .unwrap();
         // Moving clip 0 to the end separates the 0|1 pair, dropping the 1s
         // transition whose boundary sat at offset(1) + 1.0 = 10.0.
         assert!(move_clip(&mut config, 0, 3));
         assert!(config.transitions.is_empty());
         assert_eq!(config.zoom_segments[0].start, 16.0);
         assert_eq!(config.zoom_segments[0].end, 19.0);
+        assert_eq!(
+            (
+                config.keyboard_segments[0].start,
+                config.keyboard_segments[0].end,
+                config.keyboard_segments[0].keys[0].time_offset,
+            ),
+            (11.0, 12.0, 500.0)
+        );
+        assert_eq!(
+            (
+                config.keyboard_segments[1].start,
+                config.keyboard_segments[1].end,
+            ),
+            (11.0, 14.0)
+        );
+        assert_eq!(config.keyboard_segments[1].keys[0].time_offset, 500.0);
+        assert_eq!(config.keyboard_segments[1].keys[1].time_offset, 2500.0);
     }
 
     /// `computeDropIndex` (`:692-703`): the insertion point is after every

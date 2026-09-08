@@ -50,9 +50,12 @@ export function rippleKeyboardTrack(
 	boundary: number,
 	shift: number,
 ) {
-	mapKeyboardTrackTimes(segments, (time) =>
-		time >= boundary ? time + shift : time,
-	);
+	for (const segment of segments) {
+		if (segment.end <= boundary) continue;
+		rebaseKeys(segment, segment.start, (time) =>
+			time >= boundary ? time + shift : time,
+		);
+	}
 }
 
 export function rippleDeleteKeyboardTrack(
@@ -98,7 +101,7 @@ export function rippleDeleteKeyboardTrack(
 		} else if (segment.start < cutStart) {
 			segment.end = cutStart;
 		} else {
-			segment.start = cutStart;
+			segment.start = cutEnd - shift;
 			segment.end = Math.max(segment.start, segment.end - shift);
 		}
 
@@ -130,8 +133,9 @@ export function splitKeyboardSegment(
 
 	const left = structuredClone(segment);
 	const right = structuredClone(segment);
+	if (!left.id.startsWith("kb-edit-")) left.id = `kb-edit-${left.id}`;
 	left.end = at;
-	right.id = rightId;
+	right.id = rightId.startsWith("kb-edit-") ? rightId : `kb-edit-${rightId}`;
 	right.start = at;
 
 	if (!segment.keys?.length) return [left, right];
