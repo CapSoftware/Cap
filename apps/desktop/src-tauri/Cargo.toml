@@ -189,6 +189,7 @@ nix = { version = "0.29.0", features = ["fs"] }
 
 [dev-dependencies]
 tauri = { workspace = true, features = ["test"] }
+tokio = { workspace = true, features = ["test-util"] }
 wgpu = { workspace = true, features = ["noop"] }
 
 [[test]]
