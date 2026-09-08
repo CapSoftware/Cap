@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { logger } from "hono/logger";
 import audio from "./routes/audio";
+import audioLevels from "./routes/audio-levels";
 import health from "./routes/health";
 import video from "./routes/video";
 
@@ -10,6 +11,7 @@ app.use("*", logger());
 
 app.route("/health", health);
 app.route("/audio", audio);
+app.route("/audio", audioLevels);
 app.route("/video", video);
 
 app.get("/", (c) => {
