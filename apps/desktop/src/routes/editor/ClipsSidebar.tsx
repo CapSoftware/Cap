@@ -65,6 +65,9 @@ import {
 	useEditorContext,
 } from "./context";
 import { getExistingRecordingPickerOptions } from "./existing-recording-picker";
+import { rippleKeyboardTrack } from "./keyboard-timing";
+import { scaleKeyframeTimes } from "./three-d";
+import { effectiveToOutput, holdWindows } from "./timeline-holds";
 import { Input } from "./ui";
 
 const findCamera = (cameras: CameraInfo[], id?: DeviceOrModelID | null) => {
@@ -662,12 +665,18 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 						transition.segmentIndex,
 					);
 					if (!effective) continue;
-					const boundary =
+					const boundary = effectiveToOutput(
+						holdWindows(timeline.textSegments),
 						clipTimelineOffsets(timeline.segments, timeline.transitions)[
 							transition.segmentIndex
-						] + effective.duration;
+						] + effective.duration,
+					);
 					timeline.transitions = timeline.transitions.filter(
 						(candidate) => candidate.segmentIndex !== transition.segmentIndex,
+					);
+					const camera3dSegments = timeline.camera3dSegments ?? [];
+					const previousCamera3dDurations = camera3dSegments.map(
+						(segment) => segment.end - segment.start,
 					);
 					for (const track of [
 						timeline.zoomSegments,
@@ -675,10 +684,23 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 						timeline.maskSegments,
 						timeline.textSegments,
 						timeline.captionSegments ?? [],
-						timeline.keyboardSegments ?? [],
 						timeline.audioSegments ?? [],
+						camera3dSegments,
 					]) {
 						rippleTimelineTrack(track, boundary, effective.duration);
+					}
+					rippleKeyboardTrack(
+						timeline.keyboardSegments ?? [],
+						boundary,
+						effective.duration,
+					);
+					for (let index = 0; index < camera3dSegments.length; index++) {
+						const segment = camera3dSegments[index];
+						const previousDuration = previousCamera3dDurations[index];
+						const nextDuration = segment.end - segment.start;
+						if (previousDuration <= 0 || previousDuration === nextDuration)
+							continue;
+						scaleKeyframeTimes(segment.tracks, nextDuration / previousDuration);
 					}
 				}
 

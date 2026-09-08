@@ -254,7 +254,9 @@ impl RecordingMeta {
         let captions_path = self.project_path.join("captions.json");
         debug!("Checking for captions at: {:?}", captions_path);
 
-        if let Ok(captions_str) = std::fs::read_to_string(&captions_path) {
+        if config.captions.is_none()
+            && let Ok(captions_str) = std::fs::read_to_string(&captions_path)
+        {
             debug!("Found captions.json, attempting to parse");
             if let Ok(captions_data) = serde_json::from_str::<CaptionsData>(&captions_str) {
                 info!(
@@ -265,7 +267,7 @@ impl RecordingMeta {
             } else {
                 warn!("Failed to parse captions.json");
             }
-        } else {
+        } else if config.captions.is_none() {
             debug!("No captions.json found");
         }
 
@@ -807,6 +809,44 @@ mod metadata_save_tests {
                 .to_string_lossy()
                 .starts_with(".recording-meta-")
         }));
+    }
+
+    #[test]
+    fn saved_caption_master_takes_precedence_over_legacy_sidecar() {
+        let directory = tempfile::tempdir().unwrap();
+        let meta = recording(directory.path());
+        let captions = |text: &str| CaptionsData {
+            source_timed: true,
+            segments: vec![crate::CaptionSegment {
+                id: "caption".into(),
+                start: 1.0,
+                end: 2.0,
+                text: text.into(),
+                words: Vec::new(),
+            }],
+            ..Default::default()
+        };
+        let config = ProjectConfiguration {
+            captions: Some(captions("edited")),
+            ..Default::default()
+        };
+        config.write(directory.path()).unwrap();
+        std::fs::write(
+            directory.path().join("captions.json"),
+            serde_json::to_vec(&captions("stale")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            meta.project_config().captions.unwrap().segments[0].text,
+            "edited"
+        );
+        ProjectConfiguration::default()
+            .write(directory.path())
+            .unwrap();
+        assert_eq!(
+            meta.project_config().captions.unwrap().segments[0].text,
+            "stale"
+        );
     }
 
     #[test]

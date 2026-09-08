@@ -24,7 +24,8 @@ use cap_project::CaptionsData;
 use cap_project::{
     BackgroundBlurConfig, BackgroundBlurMode, CameraShape, CameraXPosition, CameraYPosition,
     CaptionSegment, CaptionSettings, CornerStyle, CursorAnimationStyle, CursorRippleConfig,
-    KeyboardData, KeyboardSettings, ProjectConfiguration, ShadowConfiguration, StereoMode,
+    KeyboardData, KeyboardSettings, ProjectConfiguration, RecordingMeta, ShadowConfiguration,
+    StereoMode,
 };
 use gpui::{
     AnyElement, Bounds, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -526,6 +527,15 @@ pub fn keyboard_settings(project: &ProjectConfiguration) -> KeyboardSettings {
         .as_ref()
         .map(|keyboard| keyboard.settings.clone())
         .unwrap_or_default()
+}
+
+fn keyboard_generation_settings_fingerprint(settings: &KeyboardSettings) -> (u64, u32, bool, bool) {
+    (
+        settings.grouping_threshold_ms.to_bits(),
+        settings.linger_duration.to_bits(),
+        settings.show_modifiers,
+        settings.show_special_keys,
+    )
 }
 
 /// `updateCaptionSetting` (`CaptionsTab.tsx:321-338`): a settings write is a
@@ -1825,6 +1835,116 @@ impl EditorWindow {
 
     // -- Keyboard ------------------------------------------------------------
 
+    fn generate_keyboard_segments_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.generating_keyboard {
+            return;
+        }
+        let Some(timeline) = self.project.timeline.clone() else {
+            self.keyboard_generation_message = Some("The project timeline is unavailable.".into());
+            cx.notify();
+            return;
+        };
+        let Ok(timeline_fingerprint) = serde_json::to_vec(&timeline) else {
+            self.keyboard_generation_message =
+                Some("The project timeline could not be read.".into());
+            cx.notify();
+            return;
+        };
+        let settings = keyboard_settings(&self.project);
+        let settings_fingerprint = keyboard_generation_settings_fingerprint(&settings);
+        let path = self.project_path.clone();
+        self.generating_keyboard = true;
+        self.keyboard_generation_message = None;
+        cx.notify();
+        window.refresh();
+
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let meta = RecordingMeta::load_for_project(&path)
+                        .map_err(|error| format!("Failed to load recording data: {error}"))?;
+                    cap_project::generate_project_keyboard_segments(&meta, &timeline, &settings)
+                })
+                .await;
+
+            this.update_in(cx, |this, window, cx| {
+                this.generating_keyboard = false;
+                let segments = match result {
+                    Ok(segments) => segments,
+                    Err(error) => {
+                        tracing::error!("keyboard generation failed: {error}");
+                        this.keyboard_generation_message = Some(error);
+                        cx.notify();
+                        window.refresh();
+                        return;
+                    }
+                };
+                let timeline_unchanged = this
+                    .project
+                    .timeline
+                    .as_ref()
+                    .and_then(|timeline| serde_json::to_vec(timeline).ok())
+                    .is_some_and(|fingerprint| fingerprint == timeline_fingerprint);
+                let settings_unchanged =
+                    keyboard_generation_settings_fingerprint(&keyboard_settings(&this.project))
+                        == settings_fingerprint;
+                if !timeline_unchanged || !settings_unchanged {
+                    this.keyboard_generation_message = Some(
+                        "The timeline or keyboard settings changed during generation. Try again."
+                            .into(),
+                    );
+                    cx.notify();
+                    window.refresh();
+                    return;
+                }
+                let has_segments = !segments.is_empty();
+                let already_empty = this
+                    .project
+                    .timeline
+                    .as_ref()
+                    .is_none_or(|timeline| timeline.keyboard_segments.is_empty());
+                if !has_segments && already_empty {
+                    this.keyboard_generation_message =
+                        Some("No recorded keyboard presses were found.".into());
+                    cx.notify();
+                    window.refresh();
+                    return;
+                }
+
+                if has_segments {
+                    this.tracks.keyboard = true;
+                }
+                this.edit_project("keyboard-generate", window, cx, move |project| {
+                    if has_segments {
+                        let keyboard = project.keyboard.get_or_insert_with(KeyboardData::default);
+                        keyboard.settings.enabled = true;
+                    }
+                    let Some(timeline) = project.timeline.as_mut() else {
+                        return false;
+                    };
+                    timeline.keyboard_segments = segments;
+                    true
+                });
+                if has_segments {
+                    this.keyboard_generation_message = None;
+                } else {
+                    if this.selection.as_ref().is_some_and(|selection| {
+                        selection.track == crate::editor_timeline::TrackKind::Keyboard
+                    }) {
+                        this.set_selection(None, cx);
+                    }
+                    this.keyboard_generation_message =
+                        Some("No recorded keyboard presses were found.".into());
+                    cx.notify();
+                    window.refresh();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// `KeyboardTab` (`KeyboardTab.tsx:128-553`).
     pub(crate) fn render_keyboard_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
@@ -2034,9 +2154,6 @@ impl EditorWindow {
                             ),
                     ),
             )
-            // `Generate Keyboard Segments` -- `commands.generateKeyboardSegments`
-            // reads the recording's own key log through a Tauri command this
-            // app does not have, so the button renders and says so.
             .child(
                 div().pt(px(8.)).child(
                     ui::Button::plain(
@@ -2045,15 +2162,27 @@ impl EditorWindow {
                         ui::ButtonVariant::Primary,
                         ui::ButtonSize::Md,
                     )
-                    .label(if has_segments {
+                    .label(if self.generating_keyboard {
+                        "Generating Keyboard Segments..."
+                    } else if has_segments {
                         "Regenerate Keyboard Segments"
                     } else {
                         "Generate Keyboard Segments"
                     })
                     .full_width()
-                    .disabled(true),
+                    .disabled(self.generating_keyboard || self.project.timeline.is_none())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.generate_keyboard_segments_clicked(window, cx);
+                    })),
                 ),
             )
+            .children(self.keyboard_generation_message.as_ref().map(|message| {
+                div()
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.gray_10))
+                    .child(message.clone())
+                    .into_any_element()
+            }))
             .children((!has_segments).then(|| {
                 div()
                     .py(px(16.))

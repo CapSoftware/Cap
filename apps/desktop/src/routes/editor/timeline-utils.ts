@@ -1,10 +1,14 @@
+import type { KeyboardTrackSegment } from "~/utils/tauri";
 import {
 	type ClipTransition,
+	clipDuration,
 	clipTimelineDuration,
 	clipTimelineOffsets,
 	transitionsAfterClipDelete,
 	transitionsAfterClipSplit,
 } from "./clip-transitions";
+import { rippleDeleteKeyboardTrack } from "./keyboard-timing";
+import { type Camera3DTracks, scaleKeyframeTimes } from "./three-d";
 import {
 	effectiveToOutput,
 	effectiveToOutputEnd,
@@ -71,6 +75,71 @@ export function rippleDeleteFromTrack(
 	}
 }
 
+type RippleMaskSegment = {
+	start: number;
+	end: number;
+	keyframes?: {
+		position?: Array<{ time: number }>;
+		size?: Array<{ time: number }>;
+		intensity?: Array<{ time: number }>;
+	};
+};
+
+function rippleDeleteMaskTrack(
+	segments: RippleMaskSegment[],
+	cutStart: number,
+	cutEnd: number,
+	shift: number,
+) {
+	const previousStarts = new Map(
+		segments.map((segment) => [segment, segment.start]),
+	);
+	rippleDeleteFromTrack(segments, cutStart, cutEnd, shift);
+	for (const segment of segments) {
+		const oldStart = previousStarts.get(segment);
+		if (oldStart === undefined || !segment.keyframes) continue;
+		const duration = segment.end - segment.start;
+		const rebase = <T extends { time: number }>(keyframes: T[] | undefined) =>
+			keyframes?.flatMap((keyframe) => {
+				const absolute = oldStart + keyframe.time;
+				if (absolute >= cutStart && absolute < cutEnd) return [];
+				const mapped = absolute >= cutEnd ? absolute - shift : absolute;
+				const time = mapped - segment.start;
+				return time >= 0 && time <= duration ? [{ ...keyframe, time }] : [];
+			});
+		segment.keyframes.position = rebase(segment.keyframes.position);
+		segment.keyframes.size = rebase(segment.keyframes.size);
+		segment.keyframes.intensity = rebase(segment.keyframes.intensity);
+	}
+}
+
+type RippleAudioSegment = {
+	start: number;
+	end: number;
+	trimStart?: number;
+	fadeIn?: number;
+};
+
+function rippleDeleteAudioTrack(
+	segments: RippleAudioSegment[],
+	cutStart: number,
+	cutEnd: number,
+	shift: number,
+) {
+	for (const segment of segments) {
+		if (
+			segment.start >= cutStart &&
+			segment.start < cutEnd &&
+			segment.end > cutEnd &&
+			segment.trimStart !== undefined
+		) {
+			segment.trimStart += cutEnd - segment.start;
+			if (segment.fadeIn !== undefined) segment.fadeIn = 0;
+		}
+	}
+	rippleDeleteFromTrack(segments, cutStart, cutEnd, shift);
+}
+
 export function cutClipSegmentsForRange(
 	segments: Array<{
 		timescale: number;
@@ -121,6 +190,7 @@ export function cutClipSegmentsForRange(
 			newSegs.push({ ...seg, start: afterStart });
 		}
 
+		if (segments.length === 1 && newSegs.length === 0) return transitions;
 		segments.splice(startSegIdx, 1, ...newSegs);
 		if (newSegs.length === 2) {
 			return transitionsAfterClipSplit(transitions, startSegIdx);
@@ -156,11 +226,16 @@ export function rippleDeleteAllTracks(
 		transitions?: ClipTransition[] | null;
 		zoomSegments?: Array<{ start: number; end: number }> | null;
 		sceneSegments?: Array<{ start: number; end: number }> | null;
-		maskSegments?: Array<{ start: number; end: number }> | null;
+		maskSegments?: RippleMaskSegment[] | null;
 		textSegments?: Array<HoldSourceSegment> | null;
 		captionSegments?: Array<{ start: number; end: number }> | null;
-		keyboardSegments?: Array<{ start: number; end: number }> | null;
-		audioSegments?: Array<{ start: number; end: number }> | null;
+		keyboardSegments?: KeyboardTrackSegment[] | null;
+		audioSegments?: RippleAudioSegment[] | null;
+		camera3dSegments?: Array<{
+			start: number;
+			end: number;
+			tracks: Camera3DTracks;
+		}> | null;
 	},
 	cutStart: number,
 	cutEnd: number,
@@ -179,17 +254,45 @@ export function rippleDeleteAllTracks(
 		timeline.segments,
 		timeline.transitions ?? [],
 	);
-	timeline.transitions = cutClipSegmentsForRange(
+	const previousSegments = timeline.segments.map((segment) => ({ ...segment }));
+	const previousTransitions = (timeline.transitions ?? []).map(
+		(transition) => ({
+			...transition,
+		}),
+	);
+	const nextTransitions = cutClipSegmentsForRange(
 		timeline.segments,
 		timeline.transitions ?? [],
 		cutStart,
 		cutEnd,
 		requestedSegmentIndex,
 	);
+	timeline.transitions = nextTransitions;
+	const clipChanged =
+		previousSegments.length !== timeline.segments.length ||
+		previousSegments.some((segment, index) => {
+			const current = timeline.segments[index];
+			return (
+				!current ||
+				segment.start !== current.start ||
+				segment.end !== current.end ||
+				segment.timescale !== current.timescale
+			);
+		}) ||
+		previousTransitions.length !== nextTransitions.length ||
+		previousTransitions.some((transition, index) => {
+			const current = nextTransitions[index];
+			return (
+				!current ||
+				transition.segmentIndex !== current.segmentIndex ||
+				transition.type !== current.type ||
+				transition.duration !== current.duration
+			);
+		});
+	if (!clipChanged) return;
 	const shiftDuration = Math.max(
 		0,
-		durationBefore -
-			clipTimelineDuration(timeline.segments, timeline.transitions),
+		durationBefore - clipTimelineDuration(timeline.segments, nextTransitions),
 	);
 	const overlayShift =
 		shiftDuration + (overlayCutEnd - overlayCutStart - (cutEnd - cutStart));
@@ -208,7 +311,7 @@ export function rippleDeleteAllTracks(
 			overlayShift,
 		);
 	if (timeline.maskSegments)
-		rippleDeleteFromTrack(
+		rippleDeleteMaskTrack(
 			timeline.maskSegments,
 			overlayCutStart,
 			overlayCutEnd,
@@ -229,19 +332,59 @@ export function rippleDeleteAllTracks(
 			overlayShift,
 		);
 	if (timeline.keyboardSegments)
-		rippleDeleteFromTrack(
+		rippleDeleteKeyboardTrack(
 			timeline.keyboardSegments,
 			overlayCutStart,
 			overlayCutEnd,
 			overlayShift,
 		);
 	if (timeline.audioSegments)
-		rippleDeleteFromTrack(
+		rippleDeleteAudioTrack(
 			timeline.audioSegments,
 			overlayCutStart,
 			overlayCutEnd,
 			overlayShift,
 		);
+	if (timeline.camera3dSegments) {
+		const previousDurations = new Map(
+			timeline.camera3dSegments.map((segment) => [
+				segment,
+				segment.end - segment.start,
+			]),
+		);
+		rippleDeleteFromTrack(
+			timeline.camera3dSegments,
+			overlayCutStart,
+			overlayCutEnd,
+			overlayShift,
+		);
+		for (const segment of timeline.camera3dSegments) {
+			const previousDuration = previousDurations.get(segment);
+			if (previousDuration === undefined) continue;
+			const nextDuration = segment.end - segment.start;
+			if (previousDuration <= 0 || previousDuration === nextDuration) continue;
+			scaleKeyframeTimes(segment.tracks, nextDuration / previousDuration);
+		}
+	}
+}
+
+export function deleteClipAndRippleAllTracks(
+	timeline: Parameters<typeof rippleDeleteAllTracks>[0],
+	segmentIndex: number,
+) {
+	const segment = timeline.segments[segmentIndex];
+	if (!segment || timeline.segments.length < 2) return false;
+	const start = clipTimelineOffsets(
+		timeline.segments,
+		timeline.transitions ?? [],
+	)[segmentIndex];
+	rippleDeleteAllTracks(
+		timeline,
+		start,
+		start + clipDuration(segment),
+		segmentIndex,
+	);
+	return true;
 }
 
 if (import.meta.vitest) {
@@ -259,7 +402,15 @@ if (import.meta.vitest) {
 			// Covers recording content 3.5..4.5 — entirely before the cut.
 			zoomSegments: [{ start: 5.5, end: 6.5 }],
 			// Covers recording content 6..7 — entirely after the cut.
-			keyboardSegments: [{ start: 8, end: 9 }],
+			keyboardSegments: [
+				{
+					id: "keyboard-1",
+					start: 8,
+					end: 9,
+					displayText: "a",
+					keys: [{ key: "a", timeOffset: 0 }],
+				},
+			],
 		};
 
 		// Delete recording content [5,6], which plays at output [7,8].
@@ -272,7 +423,15 @@ if (import.meta.vitest) {
 		// Before the fix the gapless cut range [5,6] was compared against
 		// these output-time positions and mangled the zoom to [5,5.5].
 		expect(timeline.zoomSegments).toEqual([{ start: 5.5, end: 6.5 }]);
-		expect(timeline.keyboardSegments).toEqual([{ start: 7, end: 8 }]);
+		expect(timeline.keyboardSegments).toEqual([
+			{
+				id: "keyboard-1",
+				start: 7,
+				end: 8,
+				displayText: "a",
+				keys: [{ key: "a", timeOffset: 0 }],
+			},
+		]);
 		expect(timeline.textSegments).toHaveLength(1);
 	});
 

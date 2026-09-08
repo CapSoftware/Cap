@@ -1349,6 +1349,8 @@ pub struct EditorWindow {
     auto_zoom_message: Option<&'static str>,
     zoom_prompt_dismissed: bool,
     hovering_generate_zoom: bool,
+    pub(crate) generating_keyboard: bool,
+    pub(crate) keyboard_generation_message: Option<String>,
     clip_speed: Option<ClipSpeedMenu>,
     timeline_scroll: gpui::ScrollHandle,
     minimap_drag: Option<timeline::MinimapDrag>,
@@ -1462,11 +1464,7 @@ pub struct EditorWindow {
     /// exactly as the Solid dialogs replace the dropdown.
     presets_menu: Option<PresetsMenu>,
     preset_dialog: Option<PresetDialog>,
-    /// The last caption-projection signature -- clip list, transitions, text
-    /// holds and the caption source master -- so `project_changed` only
-    /// re-derives `timeline.captionSegments` when one of those moved, the
-    /// same inputs the Solid effect keys on (`ED/context.ts:1630-1661`).
-    caption_track_sig: Option<u64>,
+    caption_sync_signature: Option<u64>,
     pub(crate) export: Option<ExportUi>,
     /// The Clips layout mode (`ClipsSidebar.tsx`): while open, the config
     /// sidebar's column draws the clips sidebar instead.
@@ -1710,6 +1708,8 @@ impl EditorWindow {
             auto_zoom_message: None,
             zoom_prompt_dismissed: false,
             hovering_generate_zoom: false,
+            generating_keyboard: false,
+            keyboard_generation_message: None,
             clip_speed: None,
             timeline_scroll: gpui::ScrollHandle::new(),
             minimap_drag: None,
@@ -1756,7 +1756,7 @@ impl EditorWindow {
             timeline_resize: None,
             presets_menu: None,
             preset_dialog: None,
-            caption_track_sig: None,
+            caption_sync_signature: None,
             poster: None,
             export: None,
             clips: crate::editor_clips::ClipsState::default(),
@@ -1851,6 +1851,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         self.project = config;
+        self.synchronize_caption_track(true);
         self.history = ProjectHistory::new(self.project.clone());
         self.tracks = TrackLanes::from_project(&self.project, self.has_camera);
         self.rebuild_timeline();
@@ -1919,6 +1920,19 @@ impl EditorWindow {
     /// * **the disk** -- `scheduleProjectConfigSave`'s 250ms debounce
     ///   (`ED/context.ts:1235-1244`), so a drag writes once rather than sixty
     ///   times.
+    fn edit_caption_project(
+        &mut self,
+        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !change(&mut self.project) {
+            return false;
+        }
+        self.project_changed(window, cx);
+        true
+    }
+
     fn edit(
         &mut self,
         change: impl FnOnce(&mut TimelineConfiguration) -> bool,
@@ -1980,9 +1994,7 @@ impl EditorWindow {
         if !self.project_ready() {
             return;
         }
-        // Before `history.record`, so the re-projected caption track is part
-        // of the same undo entry as the edit that moved it.
-        self.rederive_caption_track();
+        self.synchronize_caption_track(false);
         self.history.record(&self.project);
         self.rebuild_timeline();
         self.publish_project();
@@ -1995,52 +2007,27 @@ impl EditorWindow {
         if !self.project_ready() {
             return;
         }
+        self.synchronize_caption_track(false);
         self.publish_project();
         cx.notify();
     }
 
-    /// The Solid effect at `ED/context.ts:1630-1704`: whenever the clip list,
-    /// transitions, text holds or the caption source master move, re-project
-    /// `timeline.captionSegments` through the edit list so captions follow
-    /// trims, deletes, reorders and inserts with no re-transcription.
-    fn rederive_caption_track(&mut self) {
-        let Some(sig) = self.caption_projection_signature() else {
-            self.caption_track_sig = None;
-            return;
-        };
-        if self.caption_track_sig == Some(sig) {
+    fn synchronize_caption_track(&mut self, force: bool) {
+        let signature = self.caption_projection_signature();
+        if !force && self.caption_sync_signature == signature {
             return;
         }
-        self.caption_track_sig = Some(sig);
-        let Some(summary) = self.summary() else {
-            return;
-        };
-        let durations = summary.clip_display_durations.clone();
-        let Some(captions) = self.project.captions.as_ref() else {
-            return;
-        };
-        let segments = captions.segments.clone();
-        if let Some(timeline) = self.project.timeline.as_mut() {
-            timeline.caption_segments = crate::transcription::derive_caption_track_segments(
-                &segments, timeline, &durations,
-            );
-        }
+        cap_project::synchronize_captions(&mut self.project, &self.clip_display_durations);
+        self.caption_sync_signature = self.caption_projection_signature();
     }
 
-    /// The effect's dependency signature (`ED/context.ts:1632-1661`): caption
-    /// sources, clip segments, transitions and hold windows. `None` when
-    /// there is nothing to project -- no captions, legacy non-source-timed
-    /// data, or no timeline.
     fn caption_projection_signature(&self) -> Option<u64> {
         use std::hash::{Hash, Hasher};
 
         let captions = self.project.captions.as_ref()?;
-        if !captions.source_timed || captions.segments.is_empty() {
-            return None;
-        }
         let timeline = self.project.timeline.as_ref()?;
-
         let mut hasher = std::hash::DefaultHasher::new();
+        captions.source_timed.hash(&mut hasher);
         for segment in &captions.segments {
             segment.id.hash(&mut hasher);
             segment.start.to_bits().hash(&mut hasher);
@@ -2145,6 +2132,7 @@ impl EditorWindow {
             || crate::editor_sidebar::is_none_background(&self.project)
                 != crate::editor_sidebar::is_none_background(&config);
         self.project = config;
+        self.synchronize_caption_track(false);
         self.rebuild_timeline();
         if self.animated_gradient_config().is_some() {
             self.sidebar.source_tab = crate::editor_sidebar::initial_source_tab(&self.project);
@@ -3854,6 +3842,175 @@ pub(crate) struct Camera3DSetup {
 
 type GhostClipLayout = (Vec<(f64, f64)>, Option<(f64, f64)>);
 
+fn caption_text_from_words(words: &[cap_project::CaptionWord]) -> String {
+    let mut text = String::new();
+    for word in words {
+        let value = word.text.trim();
+        if value.is_empty() {
+            continue;
+        }
+        let attaches = value.chars().next().is_some_and(|value| {
+            matches!(
+                value,
+                ',' | '.'
+                    | '!'
+                    | '?'
+                    | ';'
+                    | ':'
+                    | '%'
+                    | ')'
+                    | ']'
+                    | '}'
+                    | '\''
+                    | '’'
+                    | '、'
+                    | '。'
+                    | '！'
+                    | '？'
+                    | '；'
+                    | '：'
+                    | '，'
+            )
+        });
+        if !text.is_empty() && !attaches {
+            text.push(' ');
+        }
+        text.push_str(value);
+    }
+    text
+}
+
+fn fresh_caption_source_id(project: &ProjectConfiguration) -> String {
+    use std::hash::{BuildHasher, Hasher};
+
+    loop {
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_millis())
+            .unwrap_or_default();
+        let random = std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish();
+        let id = format!("cap-split-{millis}-{random:x}");
+        if project
+            .captions
+            .as_ref()
+            .is_none_or(|captions| captions.segments.iter().all(|segment| segment.id != id))
+        {
+            return id;
+        }
+    }
+}
+
+fn split_caption_segment(
+    project: &mut ProjectConfiguration,
+    index: usize,
+    at: f64,
+    recording_durations: &[f64],
+) -> bool {
+    let Some(timeline) = project.timeline.as_ref() else {
+        return false;
+    };
+    let Some(track) = timeline.caption_segments.get(index) else {
+        return false;
+    };
+    let source_id = cap_project::source_caption_id(&track.id);
+    let Some((source_index, source)) = project
+        .captions
+        .as_ref()
+        .and_then(|captions| {
+            captions
+                .segments
+                .iter()
+                .enumerate()
+                .find(|(_, segment)| segment.id == source_id)
+        })
+        .map(|(index, segment)| (index, segment.clone()))
+    else {
+        return false;
+    };
+    let split_output = track.start + at;
+    let source_range = Some((f64::from(source.start), f64::from(source.end)));
+    let Some(split_source) = crate::transcription::map_edited_time_to_source(
+        split_output,
+        timeline,
+        recording_durations,
+        source_range,
+    ) else {
+        return false;
+    };
+    if split_source <= f64::from(source.start) || split_source >= f64::from(source.end) {
+        return false;
+    }
+    let tail_id = fresh_caption_source_id(project);
+    let Some(timeline) = project.timeline.as_mut() else {
+        return false;
+    };
+    if !edits::split_segment(timeline, TrackKind::Caption, index, at) {
+        return false;
+    }
+    timeline.caption_segments[index + 1].id.clone_from(&tail_id);
+
+    let split_source = split_source as f32;
+    let mut head = source.clone();
+    let mut tail = source;
+    head.end = split_source;
+    tail.id = tail_id;
+    tail.start = split_source;
+    if !head.words.is_empty() {
+        let words = std::mem::take(&mut head.words);
+        tail.words.clear();
+        for word in words {
+            if word.start < split_source {
+                let mut value = word.clone();
+                value.end = value.end.min(split_source);
+                if value.end > value.start {
+                    head.words.push(value);
+                }
+            }
+            if word.end > split_source {
+                let mut value = word;
+                value.start = value.start.max(split_source);
+                if value.end > value.start {
+                    tail.words.push(value);
+                }
+            }
+        }
+        head.text = caption_text_from_words(&head.words);
+        tail.text = caption_text_from_words(&tail.words);
+    }
+    let Some(captions) = project.captions.as_mut() else {
+        return false;
+    };
+    captions
+        .segments
+        .splice(source_index..=source_index, [head, tail]);
+    true
+}
+
+fn delete_caption_segments(project: &mut ProjectConfiguration, indices: &[usize]) -> bool {
+    let Some(timeline) = project.timeline.as_ref() else {
+        return false;
+    };
+    let source_ids = indices
+        .iter()
+        .filter_map(|index| timeline.caption_segments.get(*index))
+        .map(|segment| cap_project::source_caption_id(&segment.id).to_string())
+        .collect::<Vec<_>>();
+    let Some(timeline) = project.timeline.as_mut() else {
+        return false;
+    };
+    if !edits::delete_segments(timeline, TrackKind::Caption, indices) {
+        return false;
+    }
+    if let Some(captions) = project.captions.as_mut() {
+        captions
+            .segments
+            .retain(|segment| !source_ids.contains(&segment.id));
+    }
+    true
+}
+
 impl EditorWindow {
     fn clamp_timeline_height(&self, value: f32, viewport_height: f32) -> f32 {
         let available = (viewport_height - HEADER_HEIGHT - 8.).max(MIN_TIMELINE_HEIGHT);
@@ -4577,6 +4734,17 @@ impl EditorWindow {
             self.seek_to_time(drag.press_time, cx);
         }
 
+        if drag.moved && drag.track == TrackKind::Caption {
+            crate::transcription::write_caption_edit_to_source(
+                &mut self.project,
+                drag.index,
+                &self.clip_display_durations,
+            );
+            self.synchronize_caption_track(false);
+            self.rebuild_timeline();
+            self.publish_project();
+        }
+
         if drag.paused {
             let config = self.project.clone();
             self.history.resume(&config);
@@ -4758,11 +4926,21 @@ impl EditorWindow {
             return;
         }
         let local = ((x - left) / width) * (segment.end - segment.start);
-        if self.edit(
-            |timeline| edits::split_segment(timeline, kind, index, local),
-            window,
-            cx,
-        ) {
+        let split = if kind == TrackKind::Caption {
+            let recording_durations = self.clip_display_durations.clone();
+            self.edit_caption_project(
+                |project| split_caption_segment(project, index, local, &recording_durations),
+                window,
+                cx,
+            )
+        } else {
+            self.edit(
+                |timeline| edits::split_segment(timeline, kind, index, local),
+                window,
+                cx,
+            )
+        };
+        if split {
             self.note_edit("split", Some(kind));
         }
     }
@@ -4778,11 +4956,19 @@ impl EditorWindow {
         let Some(selection) = self.selection.clone() else {
             return;
         };
-        let deleted = self.edit(
-            |timeline| edits::delete_segments(timeline, selection.track, &selection.indices),
-            window,
-            cx,
-        );
+        let deleted = if selection.track == TrackKind::Caption {
+            self.edit_caption_project(
+                |project| delete_caption_segments(project, &selection.indices),
+                window,
+                cx,
+            )
+        } else {
+            self.edit(
+                |timeline| edits::delete_segments(timeline, selection.track, &selection.indices),
+                window,
+                cx,
+            )
+        };
         if deleted {
             self.set_selection(None, cx);
             self.note_edit("delete", Some(selection.track));
@@ -9248,6 +9434,178 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 mod tests {
     use super::*;
 
+    #[test]
+    fn caption_split_and_delete_update_the_source_master() {
+        let words = vec![
+            cap_project::CaptionWord {
+                text: "hello".into(),
+                start: 1.0,
+                end: 2.0,
+            },
+            cap_project::CaptionWord {
+                text: "world".into(),
+                start: 3.0,
+                end: 4.0,
+            },
+        ];
+        let track = cap_project::CaptionTrackSegment {
+            id: "spoken".into(),
+            start: 1.0,
+            end: 4.0,
+            text: "hello world".into(),
+            words: words.clone(),
+            fade_duration_override: None,
+            linger_duration_override: None,
+            position_override: None,
+            color_override: None,
+            background_color_override: None,
+            font_size_override: None,
+        };
+        let mut project = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                segments: vec![cap_project::TimelineSegment {
+                    recording_clip: 0,
+                    start: 0.0,
+                    end: 10.0,
+                    timescale: 1.0,
+                    name: None,
+                    speed_audio_mode: None,
+                }],
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: vec![track],
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+            }),
+            captions: Some(cap_project::CaptionsData {
+                segments: vec![cap_project::CaptionSegment {
+                    id: "spoken".into(),
+                    start: 1.0,
+                    end: 4.0,
+                    text: "hello world".into(),
+                    words,
+                }],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert!(split_caption_segment(&mut project, 0, 1.5, &[10.0]));
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+        let captions = project.captions.as_ref().unwrap();
+        assert_eq!(captions.segments.len(), 2);
+        assert_eq!(captions.segments[0].text, "hello");
+        assert_eq!(captions.segments[1].text, "world");
+        assert_eq!(project.timeline.as_ref().unwrap().caption_segments.len(), 2);
+
+        assert!(delete_caption_segments(&mut project, &[1]));
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+        assert_eq!(project.captions.as_ref().unwrap().segments.len(), 1);
+        assert_eq!(project.timeline.as_ref().unwrap().caption_segments.len(), 1);
+    }
+
+    #[test]
+    fn caption_split_delete_survives_a_repeated_trimmed_edl() {
+        let mut project = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                segments: vec![
+                    cap_project::TimelineSegment {
+                        recording_clip: 0,
+                        start: 0.5,
+                        end: 4.5,
+                        timescale: 1.0,
+                        name: None,
+                        speed_audio_mode: None,
+                    },
+                    cap_project::TimelineSegment {
+                        recording_clip: 0,
+                        start: 0.5,
+                        end: 4.5,
+                        timescale: 1.0,
+                        name: None,
+                        speed_audio_mode: None,
+                    },
+                ],
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+            }),
+            captions: Some(cap_project::CaptionsData {
+                segments: vec![cap_project::CaptionSegment {
+                    id: "spoken".into(),
+                    start: 1.0,
+                    end: 4.0,
+                    text: "hello world".into(),
+                    words: vec![
+                        cap_project::CaptionWord {
+                            text: "hello".into(),
+                            start: 1.0,
+                            end: 2.0,
+                        },
+                        cap_project::CaptionWord {
+                            text: "world".into(),
+                            start: 3.0,
+                            end: 4.0,
+                        },
+                    ],
+                }],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+        assert_eq!(
+            project.timeline.as_ref().unwrap().caption_segments[0].id,
+            "spoken::edl0"
+        );
+
+        assert!(split_caption_segment(&mut project, 0, 1.5, &[10.0]));
+        let tail_source_id = project.captions.as_ref().unwrap().segments[1].id.clone();
+        assert_ne!(tail_source_id, "spoken");
+        assert_eq!(
+            cap_project::source_caption_id(&tail_source_id),
+            tail_source_id
+        );
+        assert_eq!(
+            project.timeline.as_ref().unwrap().caption_segments[1].id,
+            tail_source_id
+        );
+
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+        assert_eq!(project.timeline.as_ref().unwrap().caption_segments.len(), 4);
+        let tail_index = project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .position(|segment| cap_project::source_caption_id(&segment.id) == tail_source_id)
+            .unwrap();
+        assert!(delete_caption_segments(&mut project, &[tail_index]));
+        cap_project::synchronize_captions(&mut project, &[10.0]);
+
+        assert_eq!(project.captions.as_ref().unwrap().segments.len(), 1);
+        assert_eq!(project.captions.as_ref().unwrap().segments[0].id, "spoken");
+        let remaining = &project.timeline.as_ref().unwrap().caption_segments;
+        assert_eq!(remaining.len(), 2);
+        assert!(
+            remaining
+                .iter()
+                .all(|segment| cap_project::source_caption_id(&segment.id) == "spoken")
+        );
+    }
     fn open_sidebar_menu_for_test(
         kind: crate::editor_tabs::SidebarMenu,
     ) -> Option<crate::editor_tabs::OpenMenu> {

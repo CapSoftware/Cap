@@ -1505,12 +1505,22 @@ async fn generate_export_preview_inner(
         return Err("Cannot preview non-studio recordings".to_string());
     };
 
-    let project_config =
+    let mut project_config =
         export_project_config(recording_meta.project_config(), settings.cursor_only);
 
     let recordings = Arc::new(
         ProjectRecordingsMeta::new(&recording_meta.project_path, studio_meta)
             .map_err(|e| format!("Failed to load recordings: {e}"))?,
+    );
+
+    synchronize_preview_timing(
+        &recording_meta,
+        &mut project_config,
+        &recordings
+            .segments
+            .iter()
+            .map(|segment| segment.display.duration)
+            .collect::<Vec<_>>(),
     );
 
     let render_constants = Arc::new(
@@ -1747,6 +1757,39 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn export_preview_projects_captions_after_a_cut() {
+        let directory = tempdir().unwrap();
+        let mut meta: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name":"preview", "segments":[], "cursors":{}
+        }))
+        .unwrap();
+        meta.project_path = directory.path().to_path_buf();
+        let config: cap_project::ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments":[
+                    {"start":0.0,"end":5.0,"timescale":1.0},
+                    {"start":6.0,"end":10.0,"timescale":1.0}
+                ], "zoomSegments":[]
+            },
+            "captions": {
+                "sourceTimed":true, "settings":{},
+                "segments":[{"id":"word","text":"retained","start":8.0,"end":8.5,"words":[]}]
+            }
+        }))
+        .unwrap();
+        config.write(directory.path()).unwrap();
+        let mut preview = export_project_config(config.clone(), false);
+        synchronize_preview_timing(&meta, &mut preview, &[10.0]);
+        let caption = &preview.timeline.as_ref().unwrap().caption_segments[0];
+        assert_eq!(caption.start, 7.0);
+        assert_eq!(caption.end, 7.5);
+        assert_eq!(caption.text, "retained");
+        let mut cursor_only = export_project_config(config, true);
+        synchronize_preview_timing(&meta, &mut cursor_only, &[10.0]);
+        assert!(cursor_only.captions.is_none());
+    }
+
+    #[test]
     fn export_estimates_use_source_duration_without_a_timeline() {
         assert_eq!(
             export_estimate_duration(&cap_project::ProjectConfiguration::default(), 361.0),
@@ -1883,6 +1926,14 @@ pub async fn generate_export_preview_fast(
     }
 }
 
+fn synchronize_preview_timing(
+    meta: &RecordingMeta,
+    project: &mut cap_project::ProjectConfiguration,
+    display_durations: &[f64],
+) {
+    cap_project::synchronize_legacy_keyboard(meta, project);
+    cap_project::synchronize_captions(project, display_durations);
+}
 #[instrument(skip_all)]
 async fn generate_export_preview_fast_inner(
     editor: WindowEditorInstance,
@@ -1898,10 +1949,26 @@ async fn generate_export_preview_fast_inner(
 
     let _preview_guard = ExportPreviewActiveGuard::try_new(&editor.export_preview_active)?;
 
-    let project_config = export_project_config(
+    let mut project_config = export_project_config(
         editor.project_config.1.borrow().clone(),
         settings.cursor_only,
     );
+    let meta = editor.meta().clone();
+    let recordings = editor.recordings.clone();
+    let project_config = tokio::task::spawn_blocking(move || {
+        synchronize_preview_timing(
+            &meta,
+            &mut project_config,
+            &recordings
+                .segments
+                .iter()
+                .map(|segment| segment.display.duration)
+                .collect::<Vec<_>>(),
+        );
+        project_config
+    })
+    .await
+    .map_err(|error| format!("Failed to synchronize export preview timing: {error}"))?;
     let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
         if timeline.transitions.is_empty() {
             return None;

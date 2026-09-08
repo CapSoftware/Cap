@@ -20,7 +20,7 @@ import {
 	onMount,
 } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
-
+import toast from "solid-toast";
 import { generalSettingsStore } from "~/store";
 import {
 	type EditorCaptionSettings,
@@ -72,10 +72,16 @@ import {
 	normalizeClipTransitions,
 	rippleTimelineTrack,
 	timelineShiftAfterClipDurationChange,
-	transitionsAfterClipDelete,
 	transitionsAfterClipSplit,
 } from "./clip-transitions";
 import { normalizeColorCorrection } from "./colorCorrection";
+import {
+	generateForStableKeyboardTimeline,
+	keyboardTimelineSignature,
+	mapKeyboardTrackTimes,
+	rippleKeyboardTrack,
+	splitKeyboardSegment,
+} from "./keyboard-timing";
 import type { MaskSegment } from "./masks";
 import type { SnapGuide } from "./snapping";
 import type { TextSegment } from "./text";
@@ -94,10 +100,12 @@ import {
 	setMotion,
 } from "./three-d";
 import {
+	effectiveToOutput,
 	heldTimeBefore,
 	holdWindows,
 	totalHeldDuration,
 } from "./timeline-holds";
+import { deleteClipAndRippleAllTracks } from "./timeline-utils";
 import {
 	getUsedTrackCount,
 	normalizeTrackSegments,
@@ -383,9 +391,11 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					const duration = transition
 						? clampTransitionDuration(transition.duration, previous, segment)
 						: 0;
-					const boundary =
+					const boundary = effectiveToOutput(
+						holdWindows(timeline.textSegments),
 						clipTimelineOffsets(timeline.segments, transitions)[segmentIndex] +
-						oldDuration;
+							oldDuration,
+					);
 					const shift = oldDuration - duration;
 
 					timeline.transitions = transitions.filter(
@@ -413,13 +423,13 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						timeline.maskSegments,
 						timeline.textSegments,
 						timeline.captionSegments ?? [],
-						timeline.keyboardSegments ?? [],
 						timeline.audioSegments ?? [],
 						camera3dSegments,
 					];
 					for (const track of tracks) {
 						rippleTimelineTrack(track, boundary, shift);
 					}
+					rippleKeyboardTrack(timeline.keyboardSegments ?? [], boundary, shift);
 					for (let index = 0; index < camera3dSegments.length; index++) {
 						const camera3dSegment = camera3dSegments[index];
 						const previousDuration = previousCamera3dDurations[index];
@@ -580,19 +590,14 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			},
 			deleteClipSegment: (segmentIndex: number) => {
 				if (!project.timeline) return;
-				const segment = project.timeline.segments[segmentIndex];
-				if (!segment || project.timeline.segments.length < 2) return;
+				if (project.timeline.segments.length < 2) return;
 
 				batch(() => {
 					setProject(
 						produce((project) => {
 							const timeline = project.timeline;
 							if (!timeline) return;
-							timeline.segments.splice(segmentIndex, 1);
-							timeline.transitions = transitionsAfterClipDelete(
-								timeline.transitions ?? [],
-								segmentIndex,
-							);
+							deleteClipAndRippleAllTracks(timeline, segmentIndex);
 						}),
 					);
 					setEditorState("timeline", "selection", null);
@@ -981,14 +986,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						const duration = segment.end - segment.start;
 						const remaining = duration - time;
 						if (time < 0.3 || remaining < 0.3) return;
-
-						segments.splice(index + 1, 0, {
-							...segment,
-							id: `kb-split-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-							start: segment.start + time,
-							end: segment.end,
-						});
-						segments[index].end = segment.start + time;
+						const parts = splitKeyboardSegment(
+							structuredClone(unwrap(segment)),
+							segment.start + time,
+							`kb-split-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+						);
+						if (parts) segments.splice(index, 1, ...parts);
 					}),
 				);
 			},
@@ -1101,6 +1104,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 							timeline.segments,
 							timeline.transitions ?? [],
 						);
+						const oldHolds = holdWindows(timeline.textSegments);
 						const incomingDuration =
 							getClipTransition(
 								timeline.segments,
@@ -1133,47 +1137,51 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 								oldNextBoundary,
 								newNextBoundary,
 							);
+						const mapOutputTime = (value: number) => {
+							const held = heldTimeBefore(oldHolds, value);
+							return value + diff(value - held);
+						};
 
 						for (const zoomSegment of timeline.zoomSegments) {
-							zoomSegment.start += diff(zoomSegment.start);
-							zoomSegment.end += diff(zoomSegment.end);
+							zoomSegment.start = mapOutputTime(zoomSegment.start);
+							zoomSegment.end = mapOutputTime(zoomSegment.end);
 						}
 
 						for (const sceneSegment of timeline.sceneSegments ?? []) {
-							sceneSegment.start += diff(sceneSegment.start);
-							sceneSegment.end += diff(sceneSegment.end);
+							sceneSegment.start = mapOutputTime(sceneSegment.start);
+							sceneSegment.end = mapOutputTime(sceneSegment.end);
 						}
 
 						for (const maskSegment of timeline.maskSegments) {
-							maskSegment.start += diff(maskSegment.start);
-							maskSegment.end += diff(maskSegment.end);
+							maskSegment.start = mapOutputTime(maskSegment.start);
+							maskSegment.end = mapOutputTime(maskSegment.end);
 						}
 
 						for (const textSegment of timeline.textSegments) {
-							textSegment.start += diff(textSegment.start);
-							textSegment.end += diff(textSegment.end);
+							textSegment.start = mapOutputTime(textSegment.start);
+							textSegment.end = mapOutputTime(textSegment.end);
 						}
 
 						for (const audioSegment of timeline.audioSegments ?? []) {
-							audioSegment.start += diff(audioSegment.start);
-							audioSegment.end += diff(audioSegment.end);
+							audioSegment.start = mapOutputTime(audioSegment.start);
+							audioSegment.end = mapOutputTime(audioSegment.end);
 						}
 
 						for (const captionSegment of timeline.captionSegments ?? []) {
-							captionSegment.start += diff(captionSegment.start);
-							captionSegment.end += diff(captionSegment.end);
+							captionSegment.start = mapOutputTime(captionSegment.start);
+							captionSegment.end = mapOutputTime(captionSegment.end);
 						}
 
-						for (const keyboardSegment of timeline.keyboardSegments ?? []) {
-							keyboardSegment.start += diff(keyboardSegment.start);
-							keyboardSegment.end += diff(keyboardSegment.end);
-						}
+						mapKeyboardTrackTimes(
+							timeline.keyboardSegments ?? [],
+							mapOutputTime,
+						);
 
 						for (const camera3dSegment of timeline.camera3dSegments ?? []) {
 							const previousDuration =
 								camera3dSegment.end - camera3dSegment.start;
-							camera3dSegment.start += diff(camera3dSegment.start);
-							camera3dSegment.end += diff(camera3dSegment.end);
+							camera3dSegment.start = mapOutputTime(camera3dSegment.start);
+							camera3dSegment.end = mapOutputTime(camera3dSegment.end);
 							// Keyframe times are relative to the segment start, so they
 							// have to follow the segment's new length rather than the
 							// absolute shift the other tracks use.
@@ -1203,53 +1211,48 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 		};
 
 		let projectSaveTimeout: number | undefined;
-		let saveInFlight = false;
-		let shouldResave = false;
-		let hasPendingProjectSave = false;
+		let saveInFlight: ReturnType<typeof commands.setProjectConfig> | undefined;
+		let persistedProject: string | undefined;
 
 		const flushProjectConfig = async () => {
-			if (!hasPendingProjectSave && !saveInFlight) return;
-			if (saveInFlight) {
-				if (hasPendingProjectSave) {
-					shouldResave = true;
-				}
-				return;
+			if (projectSaveTimeout !== undefined) {
+				clearTimeout(projectSaveTimeout);
+				projectSaveTimeout = undefined;
 			}
-			saveInFlight = true;
-			shouldResave = false;
-			hasPendingProjectSave = false;
-			try {
+			while (true) {
+				if (saveInFlight) {
+					await saveInFlight;
+					continue;
+				}
 				const config = serializeProjectConfiguration(project);
-				await commands.setProjectConfig(config);
-			} catch (error) {
-				console.error("Failed to persist project config", error);
-			} finally {
-				saveInFlight = false;
-				if (shouldResave) {
-					shouldResave = false;
-					void flushProjectConfig();
+				const serialized = JSON.stringify(config);
+				if (serialized === persistedProject) return;
+				const saving = commands.setProjectConfig(config);
+				saveInFlight = saving;
+				try {
+					await saving;
+					persistedProject = serialized;
+				} finally {
+					if (saveInFlight === saving) saveInFlight = undefined;
 				}
 			}
+		};
+
+		const saveProjectConfig = () => {
+			void flushProjectConfig().catch((error) =>
+				console.error("Failed to persist project config", error),
+			);
 		};
 
 		const scheduleProjectConfigSave = () => {
-			hasPendingProjectSave = true;
-			if (projectSaveTimeout) {
-				clearTimeout(projectSaveTimeout);
-			}
-			projectSaveTimeout = window.setTimeout(() => {
-				projectSaveTimeout = undefined;
-				void flushProjectConfig();
-			}, PROJECT_SAVE_DEBOUNCE_MS);
+			if (projectSaveTimeout !== undefined) clearTimeout(projectSaveTimeout);
+			projectSaveTimeout = window.setTimeout(
+				saveProjectConfig,
+				PROJECT_SAVE_DEBOUNCE_MS,
+			);
 		};
 
-		onCleanup(() => {
-			if (projectSaveTimeout) {
-				clearTimeout(projectSaveTimeout);
-				projectSaveTimeout = undefined;
-			}
-			void flushProjectConfig();
-		});
+		onCleanup(saveProjectConfig);
 
 		createEffect(
 			on(
@@ -1562,13 +1565,25 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 
 			void (async () => {
 				try {
-					const segments = await commands.generateKeyboardSegments(
-						defaultKeyboardSettings.groupingThresholdMs,
-						defaultKeyboardSettings.lingerDuration * 1000,
-						defaultKeyboardSettings.showModifiers,
-						defaultKeyboardSettings.showSpecialKeys,
+					const segments = await generateForStableKeyboardTimeline(
+						() => keyboardTimelineSignature(project.timeline),
+						async () => {
+							await flushProjectConfig();
+							return commands.generateKeyboardSegments(
+								defaultKeyboardSettings.groupingThresholdMs,
+								defaultKeyboardSettings.lingerDuration * 1000,
+								defaultKeyboardSettings.showModifiers,
+								defaultKeyboardSettings.showSpecialKeys,
+							);
+						},
 					);
 
+					if (!segments) {
+						toast.error(
+							"The timeline changed while keyboard events were generated. Try again.",
+						);
+						return;
+					}
 					if (segments.length < 1) return;
 
 					batch(() => {
@@ -1581,6 +1596,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					});
 				} catch (error) {
 					console.error("Failed to initialize keyboard segments", error);
+					toast.error("Unable to generate keyboard events");
 				}
 			})();
 		});
@@ -1604,6 +1620,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						timeline.transitions ?? [],
 						undefined,
 						"incoming",
+						timeline.textSegments,
 					);
 				const inverted = segments.flatMap((segment) => {
 					const start = toSource(segment.start);
@@ -1709,6 +1726,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 
 		return {
 			...editorInstanceContext,
+			flushProjectConfig,
 			meta() {
 				return props.meta();
 			},
