@@ -295,8 +295,16 @@ export async function createAudioQualityCandidate(
 			return { status: "unchanged", reason: "source-timeline-discontinuous" };
 		if (
 			videoStreams.length &&
-			(!Number.isFinite(videoDuration) ||
-				Math.abs(videoDuration - input.duration) > 0.1)
+			(!Number.isFinite(videoDuration) || videoDuration <= 0)
+		)
+			return { status: "unchanged", reason: "unknown-video-duration" };
+		if (videoDuration > (options.maxDurationSeconds ?? 3600))
+			return { status: "unchanged", reason: "duration" };
+		// Capture tracks can stop independently; level correction preserves each original timeline.
+		if (
+			options.profile === "voice" &&
+			videoStreams.length &&
+			Math.abs(videoDuration - input.duration) > 0.1
 		)
 			return { status: "unchanged", reason: "source-duration-mismatch" };
 		directory = await mkdtemp(join(tmpdir(), "cap-audio-quality-"));

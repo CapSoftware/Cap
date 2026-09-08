@@ -132,7 +132,7 @@ describe("audio level correction recording formats", () => {
 			name: "mismatched-duration.mp4",
 			inputs: [...video, ...audio(undefined, 48000, 4)],
 			output: [...h264, ...aac],
-			expected: "unchanged",
+			expected: "shadow-candidate",
 		},
 		{
 			name: "browser.webm",
