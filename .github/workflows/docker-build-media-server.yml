@@ -25,6 +25,8 @@ on:
       - "scripts/test-audio-intelligibility.py"
       - ".github/workflows/docker-build-media-server.yml"
 
+permissions: {}
+
 concurrency:
   group: media-server-${{ github.head_ref || github.ref_name }}-${{ inputs.tag || 'latest' }}
   cancel-in-progress: true
