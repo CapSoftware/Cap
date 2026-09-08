@@ -184,6 +184,8 @@ export async function measureAudioQuality(
 			"-hide_banner",
 			"-nostdin",
 			"-nostats",
+			"-filter_threads",
+			"1",
 			"-threads",
 			"1",
 			...localInputOptions,
@@ -240,6 +242,7 @@ export async function createAudioQualityCandidate(
 		speechOnlyConfirmed?: boolean;
 		abortSignal?: AbortSignal;
 		timeoutMs?: number;
+		maxDurationSeconds?: number;
 	},
 ): Promise<AudioQualityResult> {
 	if (options.mode !== "shadow")
@@ -270,6 +273,8 @@ export async function createAudioQualityCandidate(
 		if (audioStreams[0]?.codec_name !== "aac")
 			return { status: "unchanged", reason: "unsupported-audio-codec" };
 		const input = await measureAudioQuality(sourcePath, signal);
+		if (input.duration > (options.maxDurationSeconds ?? 3600))
+			return { status: "unchanged", reason: "duration" };
 		const plan = planAudioQuality(input, options);
 		if (plan.kind === "skip")
 			return { status: "unchanged", reason: plan.reason };
@@ -305,6 +310,8 @@ export async function createAudioQualityCandidate(
 			"error",
 			"-n",
 			"-copyts",
+			"-threads",
+			"1",
 			...localInputOptions,
 			"-i",
 			sourcePath,
@@ -357,11 +364,15 @@ export async function createAudioQualityCandidate(
 				"error",
 				"-xerror",
 				"-nostdin",
+				"-filter_threads",
+				"1",
 				"-threads",
 				"1",
 				...localInputOptions,
 				"-i",
 				path,
+				"-map",
+				"0:a:0",
 				"-f",
 				"null",
 				"-",
