@@ -112,6 +112,7 @@ import {
 	sortTrackSegments,
 } from "./timelineTracks";
 import { createProgressBar } from "./utils";
+import { splitZoomSegmentAt } from "./zoom-segments";
 
 export type ModalDialog =
 	| { type: "createPreset" }
@@ -604,26 +605,33 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				});
 			},
 			splitZoomSegment: (index: number, time: number) => {
+				const segments = project.timeline?.zoomSegments;
+				const segment = segments?.[index];
+				if (!segment) return;
+
+				const newLengths = [segment.end - segment.start - time, time];
+				if (newLengths.some((l) => l < 1)) return;
+
+				let newSegmentIndex: number | null = null;
 				setProject(
 					"timeline",
 					"zoomSegments",
-					produce((segments) => {
-						const segment = segments[index];
-						if (!segment) return;
-
-						const newLengths = [segment.end - segment.start - time, time];
-
-						if (newLengths.some((l) => l < 1)) return;
-
-						segments.splice(index + 1, 0, {
-							...segment,
-							start: segment.start + time,
-							end: segment.end,
-						});
-						segments[index].end = segment.start + time;
-						sortTrackSegments(segments);
+					produce((zoomSegments) => {
+						const result = splitZoomSegmentAt(zoomSegments, index, time);
+						if (!result) return;
+						newSegmentIndex = result.newSegmentIndex;
 					}),
 				);
+
+				// The split + sort reorders the array, so the previously selected
+				// index can now point at the other half. Keep the user's selection
+				// on the new piece — the segment they were editing when they split it.
+				if (newSegmentIndex !== null)
+					setEditorState("timeline", "selection", {
+						type: "zoom",
+						indices: [newSegmentIndex],
+					});
+				else setEditorState("timeline", "selection", null);
 			},
 			deleteZoomSegments: (segmentIndices: number[]) => {
 				batch(() => {
