@@ -894,10 +894,10 @@ function ConfigSidebarContent() {
 							<CursorRippleSection />
 							<Field inline name="Hide When Idle">
 								<Toggle
-									checked={!project.cursor.hide}
-									onChange={(v) => {
-										setProject("cursor", "hide", !v);
-									}}
+									checked={project.cursor.hideWhenIdle}
+									onChange={(value) =>
+										setProject("cursor", "hideWhenIdle", value)
+									}
 								/>
 							</Field>
 							<Show when={project.cursor.hideWhenIdle}>
@@ -951,10 +951,10 @@ function ConfigSidebarContent() {
 							<KCollapsible open={!project.cursor.raw}>
 								<Field inline name="Smooth Movement">
 									<Toggle
-										checked={project.cursor.hideWhenIdle}
-										onChange={(value) =>
-											setProject("cursor", "hideWhenIdle", value)
-										}
+										checked={!project.cursor.raw}
+										onChange={(value) => {
+											setProject("cursor", "raw", !value);
+										}}
 									/>
 								</Field>
 								<KCollapsible.Content class="overflow-hidden border-b opacity-0 transition-opacity border-gray-3 animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
@@ -2796,8 +2796,8 @@ function BackgroundConfig(props: {
 					value={`${project.background.rounding.toFixed(1)}%`}
 				>
 					<Slider
-						value={[project.background.blur]}
-						onChange={(v) => setProject("background", "blur", v[0])}
+						value={[project.background.rounding]}
+						onChange={(v) => setBackgroundDimension("rounding", v[0])}
 						minValue={0}
 						maxValue={100}
 						step={0.1}
@@ -3407,10 +3407,10 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 					value={`${(project.camera.rounding ?? 0).toFixed(1)}%`}
 				>
 					<Slider
-						value={[project.camera.size]}
-						onChange={(v) => setProject("camera", "size", v[0])}
-						minValue={20}
-						maxValue={80}
+						value={[project.camera.rounding ?? 0]}
+						onChange={(v) => setProject("camera", "rounding", v[0])}
+						minValue={0}
+						maxValue={100}
 						step={0.1}
 						formatTooltip="%"
 					/>
@@ -3427,10 +3427,10 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 					value={`${(project.camera.shadow ?? 0).toFixed(1)}%`}
 				>
 					<Slider
-						value={[project.camera.zoomSize ?? 60]}
-						onChange={(v) => setProject("camera", "zoomSize", v[0])}
-						minValue={10}
-						maxValue={60}
+						value={[project.camera.shadow ?? 0]}
+						onChange={(v) => setProject("camera", "shadow", v[0])}
+						minValue={0}
+						maxValue={100}
 						step={0.1}
 						formatTooltip="%"
 					/>
