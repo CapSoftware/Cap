@@ -1205,6 +1205,148 @@ fn build_initial_prompt(transcription_hints: &[String]) -> Option<String> {
 }
 
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+/// The Parakeet TDT model has a hard sequence-length ceiling. Upstream's own example
+/// warns "you must split into chunks (e.g., 5-minute segments)" and altunenes/parakeet-rs#61
+/// reproduces the failure at 401 seconds of input: ONNX Runtime throws
+/// `Non-zero status code returned while running Add node. Name:'/layers.0/self_attn/Add_2'`.
+/// `transcribe_file` does no chunking of its own, so calling it on a whole recording
+/// meant every capture longer than ~6m40s failed to caption at all.
+const PARAKEET_MAX_CHUNK_SECONDS: f64 = 300.0;
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+/// Overlap so a word spanning a boundary is spoken in full inside at least one chunk;
+/// duplicates are dropped on merge.
+const PARAKEET_CHUNK_OVERLAP_SECONDS: f64 = 2.0;
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+struct ParakeetAudio {
+    samples: Vec<f32>,
+    sample_rate: u32,
+    channels: u16,
+    /// `samples.len() == frame_count * channels`
+    frame_count: usize,
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+impl ParakeetAudio {
+    fn duration_seconds(&self) -> f64 {
+        if self.sample_rate == 0 {
+            return 0.0;
+        }
+        self.frame_count as f64 / self.sample_rate as f64
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+struct ParakeetChunk {
+    start_frame: usize,
+    end_frame: usize,
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn read_wav_for_parakeet(audio_path: &std::path::Path) -> Result<ParakeetAudio, String> {
+    let mut reader = hound::WavReader::open(audio_path)
+        .map_err(|e| format!("Failed to open audio for transcription: {e}"))?;
+    let spec = reader.spec();
+
+    if spec.channels == 0 || spec.sample_rate == 0 {
+        return Err(format!(
+            "Audio has an unusable format: {} channel(s) at {}Hz",
+            spec.channels, spec.sample_rate
+        ));
+    }
+
+    let samples: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => reader
+            .samples::<f32>()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read float audio samples: {e}"))?,
+        hound::SampleFormat::Int => {
+            let bits = spec.bits_per_sample.clamp(1, 32);
+            let scale = 1.0 / (1i64 << (bits - 1)) as f32;
+            reader
+                .samples::<i32>()
+                .map(|s| s.map(|v| v as f32 * scale))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("Failed to read integer audio samples: {e}"))?
+        }
+    };
+
+    let frame_count = samples.len() / spec.channels as usize;
+
+    Ok(ParakeetAudio {
+        samples,
+        sample_rate: spec.sample_rate,
+        channels: spec.channels,
+        frame_count,
+    })
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn parakeet_chunk_plan(frame_count: usize, sample_rate: u32) -> Vec<ParakeetChunk> {
+    if frame_count == 0 || sample_rate == 0 {
+        return Vec::new();
+    }
+
+    let chunk_frames = (PARAKEET_MAX_CHUNK_SECONDS * sample_rate as f64) as usize;
+    if chunk_frames == 0 || frame_count <= chunk_frames {
+        return vec![ParakeetChunk {
+            start_frame: 0,
+            end_frame: frame_count,
+        }];
+    }
+
+    let overlap_frames = (PARAKEET_CHUNK_OVERLAP_SECONDS * sample_rate as f64) as usize;
+    // Guarantee forward progress even if the constants are ever edited badly.
+    let step = chunk_frames.saturating_sub(overlap_frames).max(1);
+
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    while start < frame_count {
+        let end = (start + chunk_frames).min(frame_count);
+        chunks.push(ParakeetChunk {
+            start_frame: start,
+            end_frame: end,
+        });
+        if end == frame_count {
+            break;
+        }
+        start += step;
+    }
+    chunks
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn merge_parakeet_chunk(
+    collected: &mut Vec<CaptionWord>,
+    tokens: &[parakeet_rs::TimedToken],
+    offset_seconds: f32,
+) {
+    for token in tokens {
+        let text = token.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+
+        let start = token.start + offset_seconds;
+        let end = token.end + offset_seconds;
+
+        // A word starting before the previous one ended is the overlap repeating itself.
+        if let Some(last) = collected.last()
+            && start < last.end - 1e-3
+        {
+            continue;
+        }
+
+        collected.push(CaptionWord {
+            text: text.to_string(),
+            start,
+            end,
+        });
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn process_with_parakeet(
     audio_path: &std::path::Path,
     model_dir: &str,
@@ -1248,30 +1390,59 @@ fn process_with_parakeet(
         }
     };
 
-    let result = {
+    let audio = read_wav_for_parakeet(audio_path)?;
+    let chunks = parakeet_chunk_plan(audio.frame_count, audio.sample_rate);
+
+    tracing::info!(
+        "Parakeet input: {:.1}s at {}Hz, {} channel(s) -> {} chunk(s)",
+        audio.duration_seconds(),
+        audio.sample_rate,
+        audio.channels,
+        chunks.len()
+    );
+
+    let mut collected: Vec<CaptionWord> = Vec::new();
+    {
         let mut parakeet = model_arc
             .lock()
             .map_err(|e| format!("Failed to lock Parakeet model: {e}"))?;
-        parakeet
-            .transcribe_file(audio_path, Some(TimestampMode::Words))
-            .map_err(|e| format!("Parakeet transcription failed: {e}"))?
-    };
 
-    tracing::info!("Transcription text: {}", result.text);
-    tracing::info!("Got {} timed tokens", result.tokens.len());
+        for (index, chunk) in chunks.iter().enumerate() {
+            let offset = chunk.start_frame as f64 / audio.sample_rate as f64;
+            let start = chunk.start_frame * audio.channels as usize;
+            let end = chunk.end_frame * audio.channels as usize;
+            let samples = audio.samples[start..end].to_vec();
 
-    let words = normalize_caption_words(
-        result
-            .tokens
-            .iter()
-            .filter(|t| !t.text.trim().is_empty())
-            .map(|t| CaptionWord {
-                text: t.text.trim().to_string(),
-                start: t.start,
-                end: t.end,
-            })
-            .collect(),
-    );
+            tracing::info!(
+                "Transcribing chunk {}/{} ({:.1}s -> {:.1}s)",
+                index + 1,
+                chunks.len(),
+                offset,
+                chunk.end_frame as f64 / audio.sample_rate as f64
+            );
+
+            let result = parakeet
+                .transcribe_samples(
+                    samples,
+                    audio.sample_rate,
+                    audio.channels,
+                    Some(TimestampMode::Words),
+                )
+                .map_err(|e| {
+                    format!(
+                        "Parakeet transcription failed on chunk {}/{}: {e}",
+                        index + 1,
+                        chunks.len()
+                    )
+                })?;
+
+            merge_parakeet_chunk(&mut collected, &result.tokens, offset as f32);
+        }
+    }
+
+    tracing::info!("Got {} timed tokens across all chunks", collected.len());
+
+    let words = normalize_caption_words(collected);
 
     if words.is_empty() {
         tracing::warn!("Parakeet produced no words");
@@ -2737,6 +2908,128 @@ mod tests {
         normalize_caption_words, resolve_audio_extraction_source, resolve_path_with_base,
     };
     use tempfile::tempdir;
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    mod parakeet_chunking {
+        use crate::captions::{
+            CaptionWord, PARAKEET_MAX_CHUNK_SECONDS, merge_parakeet_chunk, parakeet_chunk_plan,
+        };
+
+        const RATE: u32 = 16_000;
+
+        fn frames(seconds: f64) -> usize {
+            (seconds * RATE as f64) as usize
+        }
+
+        #[test]
+        fn short_audio_stays_a_single_chunk() {
+            let plan = parakeet_chunk_plan(frames(120.0), RATE);
+            assert_eq!(plan.len(), 1);
+            assert_eq!(plan[0].start_frame, 0);
+            assert_eq!(plan[0].end_frame, frames(120.0));
+        }
+
+        #[test]
+        fn audio_at_the_ceiling_stays_a_single_chunk() {
+            let plan = parakeet_chunk_plan(frames(PARAKEET_MAX_CHUNK_SECONDS), RATE);
+            assert_eq!(plan.len(), 1);
+        }
+
+        #[test]
+        fn the_436_second_recording_that_reproduced_the_bug_is_split() {
+            let total = frames(436.9);
+            let plan = parakeet_chunk_plan(total, RATE);
+
+            assert!(
+                plan.len() > 1,
+                "436.9s must be split, it is past the ceiling"
+            );
+            assert_eq!(plan[0].start_frame, 0);
+            assert_eq!(plan.last().unwrap().end_frame, total);
+
+            for chunk in &plan {
+                let seconds = (chunk.end_frame - chunk.start_frame) as f64 / RATE as f64;
+                assert!(
+                    seconds <= PARAKEET_MAX_CHUNK_SECONDS,
+                    "chunk of {seconds}s exceeds the model ceiling"
+                );
+            }
+        }
+
+        #[test]
+        fn chunks_overlap_and_cover_the_whole_timeline() {
+            let total = frames(1_500.0);
+            let plan = parakeet_chunk_plan(total, RATE);
+
+            for pair in plan.windows(2) {
+                assert!(
+                    pair[1].start_frame < pair[0].end_frame,
+                    "consecutive chunks must overlap so no word is cut in half"
+                );
+                assert!(pair[1].start_frame > pair[0].start_frame, "must advance");
+            }
+            assert_eq!(plan.last().unwrap().end_frame, total);
+        }
+
+        #[test]
+        fn empty_or_malformed_audio_produces_no_chunks() {
+            assert!(parakeet_chunk_plan(0, RATE).is_empty());
+            assert!(parakeet_chunk_plan(frames(10.0), 0).is_empty());
+        }
+
+        fn token(text: &str, start: f32, end: f32) -> parakeet_rs::TimedToken {
+            parakeet_rs::TimedToken {
+                text: text.to_string(),
+                start,
+                end,
+            }
+        }
+
+        #[test]
+        fn merging_offsets_timings_onto_the_recording_timeline() {
+            let mut words: Vec<CaptionWord> = Vec::new();
+            merge_parakeet_chunk(&mut words, &[token("hello", 0.5, 1.0)], 0.0);
+            merge_parakeet_chunk(&mut words, &[token("world", 0.25, 0.75)], 298.0);
+
+            assert_eq!(words.len(), 2);
+            assert!((words[1].start - 298.25).abs() < 1e-3);
+            assert!((words[1].end - 298.75).abs() < 1e-3);
+        }
+
+        #[test]
+        fn merging_drops_words_the_overlap_already_covered() {
+            let mut words: Vec<CaptionWord> = Vec::new();
+            merge_parakeet_chunk(
+                &mut words,
+                &[token("the", 297.0, 297.4), token("end", 297.5, 298.0)],
+                0.0,
+            );
+            merge_parakeet_chunk(
+                &mut words,
+                &[
+                    token("end", 0.0, 0.5),
+                    token("of", 0.6, 0.9),
+                    token("it", 1.0, 1.4),
+                ],
+                297.5,
+            );
+
+            let text: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
+            assert_eq!(text, vec!["the", "end", "of", "it"]);
+        }
+
+        #[test]
+        fn merging_skips_blank_tokens() {
+            let mut words: Vec<CaptionWord> = Vec::new();
+            merge_parakeet_chunk(
+                &mut words,
+                &[token("  ", 0.0, 0.1), token("real", 0.2, 0.4)],
+                0.0,
+            );
+            assert_eq!(words.len(), 1);
+            assert_eq!(words[0].text, "real");
+        }
+    }
 
     fn word(text: &str, index: usize) -> CaptionWord {
         CaptionWord {
