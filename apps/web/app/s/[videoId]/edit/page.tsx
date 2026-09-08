@@ -5,12 +5,14 @@ import { userIsPro } from "@cap/utils";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
+import { isEditSourceKey } from "@/lib/video-edit-processing";
 import {
 	areEditSpecsEquivalent,
 	createIdentityEditSpec,
 } from "@/lib/video-edits";
 import { EditUpgradeGate } from "./EditUpgradeGate";
 import { EditVideoClient } from "./EditVideoClient";
+import { EditRecovery } from "./edit-recovery";
 
 function isMp4BackedVideo(source: typeof videos.$inferSelect.source) {
 	return source.type === "desktopMP4" || source.type === "webMP4";
@@ -37,6 +39,7 @@ export default async function EditVideoPage(props: {
 			isScreenshot: videos.isScreenshot,
 			transcriptionStatus: videos.transcriptionStatus,
 			uploadPhase: videoUploads.phase,
+			rawFileKey: videoUploads.rawFileKey,
 		})
 		.from(videos)
 		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
@@ -57,6 +60,16 @@ export default async function EditVideoPage(props: {
 		return <EditUpgradeGate />;
 	}
 
+	if (
+		video.uploadPhase &&
+		isEditSourceKey({
+			ownerId: video.ownerId,
+			videoId,
+			rawFileKey: video.rawFileKey,
+		})
+	) {
+		return <EditRecovery videoId={videoId} />;
+	}
 	if (
 		video.uploadPhase &&
 		["uploading", "processing", "generating_thumbnail"].includes(

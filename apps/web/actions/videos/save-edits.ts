@@ -5,6 +5,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import type { VideoEditSpec } from "@cap/database/types";
+import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
@@ -12,12 +13,13 @@ import { eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { revalidatePath } from "next/cache";
 import { start } from "workflow/api";
+import { assertLegacyEditsQuiescent } from "@/lib/legacy-video-edit-recovery";
 import { runPromise } from "@/lib/server";
 import {
 	clearPendingEdit,
 	type EditOperation,
 } from "@/lib/video-edit-operation";
-import { getEditSourceKey } from "@/lib/video-edit-processing";
+import { getEditSourceKey, isEditSourceKey } from "@/lib/video-edit-processing";
 import {
 	areEditSpecsEquivalent,
 	composeEditSpecs,
@@ -84,10 +86,12 @@ async function markEditProcessing({
 	video,
 	sourceKey,
 	previousSpec,
+	legacyUpload,
 }: {
 	video: typeof videos.$inferSelect;
 	sourceKey: string;
 	previousSpec: VideoEditSpec;
+	legacyUpload?: typeof videoUploads.$inferSelect;
 }): Promise<EditOperation> {
 	const startedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
 	const operation = { token: randomUUID(), startedAt: startedAt.toISOString() };
@@ -111,7 +115,17 @@ async function markEditProcessing({
 			.from(videoUploads)
 			.where(eq(videoUploads.videoId, video.id))
 			.for("update");
-		if (upload || (current.metadata && "editProcessing" in current.metadata)) {
+		if (
+			legacyUpload &&
+			upload &&
+			!current.metadata?.editProcessing &&
+			upload.rawFileKey === legacyUpload.rawFileKey &&
+			upload.startedAt.getTime() === legacyUpload.startedAt.getTime() &&
+			upload.updatedAt.getTime() === legacyUpload.updatedAt.getTime() &&
+			upload.phase === legacyUpload.phase
+		) {
+			await tx.delete(videoUploads).where(eq(videoUploads.videoId, video.id));
+		} else if (upload || current.metadata?.editProcessing) {
 			throw new Error("Video is already uploading or processing");
 		}
 		const [currentEdit] = await tx
@@ -160,7 +174,10 @@ async function markEditProcessing({
 	return operation;
 }
 
-async function loadEditableVideo(videoId: Video.VideoId) {
+async function loadEditableVideo(
+	videoId: Video.VideoId,
+	recoverLegacy = false,
+) {
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");
 	if (!userIsPro(user)) throw new Error("Cap Pro is required to edit videos");
@@ -182,6 +199,25 @@ async function loadEditableVideo(videoId: Video.VideoId) {
 		.from(videoUploads)
 		.where(eq(videoUploads.videoId, videoId));
 
+	if (
+		recoverLegacy &&
+		activeUpload &&
+		!video.metadata?.editProcessing &&
+		isEditSourceKey({
+			ownerId: video.ownerId,
+			videoId,
+			rawFileKey: activeUpload.rawFileKey,
+		})
+	) {
+		if (
+			!("workflowId" in editVideoWorkflow) ||
+			typeof editVideoWorkflow.workflowId !== "string"
+		) {
+			throw new Error("The edit recovery runtime is unavailable");
+		}
+		await assertLegacyEditsQuiescent(editVideoWorkflow.workflowId);
+		return { user, video, legacyUpload: activeUpload };
+	}
 	if (activeUpload && ACTIVE_UPLOAD_PHASES.has(activeUpload.phase)) {
 		const message =
 			activeUpload.phase === "complete"
@@ -192,7 +228,7 @@ async function loadEditableVideo(videoId: Video.VideoId) {
 		throw new Error(message);
 	}
 
-	return { user, video };
+	return { user, video, legacyUpload: undefined };
 }
 
 export async function saveVideoEdits(
@@ -259,6 +295,7 @@ export async function saveVideoEdits(
 			},
 		]);
 	} catch (error) {
+		await clearPendingEdit(videoId, sourceKey, operation);
 		throw error instanceof Error
 			? error
 			: new Error("Video edit could not start");
@@ -272,34 +309,67 @@ export async function saveVideoEdits(
 }
 
 export async function restoreVideoToOriginal(videoId: Video.VideoId) {
-	const { user, video } = await loadEditableVideo(videoId);
+	const { user, video, legacyUpload } = await loadEditableVideo(videoId, true);
 
 	const [existingEdit] = await db()
 		.select()
 		.from(videoEdits)
 		.where(eq(videoEdits.videoId, videoId));
 
-	if (!existingEdit) {
+	if (!existingEdit && !legacyUpload) {
 		revalidatePath(`/s/${videoId}/edit`);
 		return { success: true, skipped: true };
 	}
 
-	const previousSpec = existingEdit.editSpec;
-	const restoredSpec = createIdentityEditSpec(previousSpec.sourceDuration);
-
-	if (getEditSpecOutputDuration(restoredSpec) <= 0) {
-		throw new Error("Original video is no longer available");
-	}
-
-	if (areEditSpecsEquivalent(previousSpec, restoredSpec)) {
-		revalidatePath(`/s/${videoId}/edit`);
-		return { success: true, skipped: true };
-	}
-
-	const sourceKey = existingEdit.sourceKey;
+	const sourceKey =
+		existingEdit?.sourceKey ?? getEditSourceKey(video.ownerId, video.id);
 	const bucket = await getVideoBucket(video);
-	if (!(await objectExists(bucket, sourceKey))) {
+	if (!(await objectExists(bucket, sourceKey)))
 		throw new Error("Original video is no longer available");
+	let sourceDuration =
+		existingEdit?.editSpec.sourceDuration ?? video.duration ?? 0;
+	if (legacyUpload) {
+		const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
+		if (!mediaServerUrl)
+			throw new Error("Video recovery is temporarily unavailable");
+		const sourceUrl = await bucket
+			.getInternalSignedObjectUrl(sourceKey, { expiresIn: 300 })
+			.pipe(runPromise);
+		const response = await fetch(`${mediaServerUrl}/video/probe`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"x-media-server-secret": serverEnv().MEDIA_SERVER_WEBHOOK_SECRET ?? "",
+			},
+			body: JSON.stringify({ videoUrl: sourceUrl }),
+			signal: AbortSignal.timeout(30_000),
+		});
+		const result: unknown = await response.json();
+		if (
+			!response.ok ||
+			!result ||
+			typeof result !== "object" ||
+			!("metadata" in result) ||
+			!result.metadata ||
+			typeof result.metadata !== "object" ||
+			!("duration" in result.metadata) ||
+			typeof result.metadata.duration !== "number" ||
+			!Number.isFinite(result.metadata.duration) ||
+			result.metadata.duration <= 0
+		) {
+			throw new Error("The original video could not be verified for recovery");
+		}
+		sourceDuration = result.metadata.duration;
+	}
+	const previousSpec =
+		existingEdit?.editSpec ??
+		createIdentityEditSpec(video.duration ?? sourceDuration);
+	const restoredSpec = createIdentityEditSpec(sourceDuration);
+	if (getEditSpecOutputDuration(restoredSpec) <= 0)
+		throw new Error("Original video is no longer available");
+	if (!legacyUpload && areEditSpecsEquivalent(previousSpec, restoredSpec)) {
+		revalidatePath(`/s/${videoId}/edit`);
+		return { success: true, skipped: true };
 	}
 
 	const aiGenerationEnabled = await isAiGenerationEnabled(user);
@@ -308,6 +378,7 @@ export async function restoreVideoToOriginal(videoId: Video.VideoId) {
 		video,
 		sourceKey,
 		previousSpec,
+		legacyUpload,
 	});
 
 	try {
@@ -324,6 +395,7 @@ export async function restoreVideoToOriginal(videoId: Video.VideoId) {
 			},
 		]);
 	} catch (error) {
+		await clearPendingEdit(videoId, sourceKey, operation);
 		throw error instanceof Error
 			? error
 			: new Error("Video restore could not start");

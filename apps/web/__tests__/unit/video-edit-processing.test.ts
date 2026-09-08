@@ -114,6 +114,9 @@ vi.mock("@/app/s/[videoId]/edit/EditUpgradeGate", () => ({}));
 vi.mock("@/app/s/[videoId]/edit/EditVideoClient", () => ({
 	EditVideoClient: () => null,
 }));
+vi.mock("@/app/s/[videoId]/edit/edit-recovery", () => ({
+	EditRecovery: () => null,
+}));
 
 describe("viewing a recording during an edit", () => {
 	beforeEach(() => {
@@ -152,11 +155,12 @@ describe("viewing a recording during an edit", () => {
 			const edit = EditVideoPage({
 				params: Promise.resolve({ videoId: "video123" }),
 			});
-			if (phase === "processing" || phase === "generating_thumbnail") {
-				await expect(edit).rejects.toThrow("NEXT_NOT_FOUND");
-			} else {
-				expect(isValidElement(await edit)).toBe(true);
-			}
+			const element = await edit;
+			const { EditRecovery } = await import(
+				"@/app/s/[videoId]/edit/edit-recovery"
+			);
+			expect(isValidElement(element)).toBe(true);
+			expect(element.type).toBe(EditRecovery);
 
 			expect(database.state.upload).toBe(upload);
 			expect(database.remove).not.toHaveBeenCalled();
