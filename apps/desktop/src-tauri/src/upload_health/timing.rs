@@ -35,7 +35,9 @@ pub(super) fn upload_elapsed_after_rtt(
     };
 
     match total_elapsed.checked_sub(rtt_elapsed) {
-        Some(adjusted_elapsed) if adjusted_elapsed >= Duration::from_millis(50) => adjusted_elapsed,
+        Some(adjusted_elapsed) if !adjusted_elapsed.is_zero() => {
+            adjusted_elapsed.max(Duration::from_millis(50))
+        }
         _ => total_elapsed,
     }
 }
@@ -148,7 +150,7 @@ mod tests {
 
     #[test]
     fn keeps_total_elapsed_when_rtt_would_overcorrect() {
-        for rtt in [500, 520, 600] {
+        for rtt in [520, 600] {
             assert_eq!(
                 upload_elapsed_after_rtt(
                     Duration::from_millis(520),
@@ -157,6 +159,21 @@ mod tests {
                 Duration::from_millis(520)
             );
         }
+    }
+
+    #[test]
+    fn faster_valid_uploads_do_not_report_lower_throughput_at_the_sample_floor() {
+        let rtt = Some(Duration::from_millis(100));
+        let faster = upload_elapsed_after_rtt(Duration::from_millis(149), rtt);
+        let at_floor = upload_elapsed_after_rtt(Duration::from_millis(150), rtt);
+        let slower = upload_elapsed_after_rtt(Duration::from_millis(151), rtt);
+
+        assert_eq!(faster, Duration::from_millis(50));
+        assert_eq!(at_floor, Duration::from_millis(50));
+        assert_eq!(slower, Duration::from_millis(51));
+        assert!(
+            upload_mbps_for_bytes(256 * 1024, faster) >= upload_mbps_for_bytes(256 * 1024, slower)
+        );
     }
 
     #[test]
