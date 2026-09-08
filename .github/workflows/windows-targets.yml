@@ -26,6 +26,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 2
       - uses: dtolnay/rust-toolchain@688313b0823df1393bcebb1b4add0438a6d36884
         with:
           components: clippy
