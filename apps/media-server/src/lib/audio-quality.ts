@@ -357,6 +357,8 @@ export async function createAudioQualityCandidate(
 				"error",
 				"-xerror",
 				"-nostdin",
+				"-threads",
+				"1",
 				...localInputOptions,
 				"-i",
 				path,
