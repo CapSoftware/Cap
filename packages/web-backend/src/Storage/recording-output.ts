@@ -56,3 +56,9 @@ export function getPublishedRecordingCopyKeys(video: RecordingVideo) {
 			.filter((key) => resolveRecordingObjectKey(video, key) !== key),
 	];
 }
+
+export function getPublishedRecordingThumbnailKey(video: RecordingVideo) {
+	const canonical = `${video.ownerId}/${video.id}/screenshot/screen-capture.jpg`;
+	const resolved = resolveRecordingObjectKey(video, canonical);
+	return resolved === canonical ? undefined : resolved;
+}
