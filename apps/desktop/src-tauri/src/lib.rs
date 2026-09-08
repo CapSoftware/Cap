@@ -4313,39 +4313,23 @@ async fn generate_keyboard_segments(
     show_modifiers: bool,
     show_special_keys: bool,
 ) -> Result<Vec<cap_project::KeyboardTrackSegment>, String> {
-    let meta = editor_instance.meta();
-
-    let RecordingMetaInner::Studio(studio_meta) = &meta.inner else {
-        return Ok(vec![]);
+    let project = editor_instance.project_config.1.borrow().clone();
+    let Some(timeline) = project.timeline else {
+        return Ok(Vec::new());
     };
-
-    let segments = match studio_meta.as_ref() {
-        StudioRecordingMeta::MultipleSegments { inner, .. } => &inner.segments,
-        _ => return Ok(vec![]),
-    };
-
-    let mut all_events = cap_project::KeyboardEvents { presses: vec![] };
-
-    for segment in segments {
-        let events = segment.keyboard_events(meta);
-        all_events.presses.extend(events.presses);
-    }
-
-    all_events.presses.sort_by(|a, b| {
-        a.time_ms
-            .partial_cmp(&b.time_ms)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let grouped = cap_project::group_key_events(
-        &all_events,
+    let settings = cap_project::KeyboardSettings {
         grouping_threshold_ms,
-        linger_duration_ms,
+        linger_duration: (linger_duration_ms / 1000.0) as f32,
         show_modifiers,
         show_special_keys,
-    );
-
-    Ok(grouped)
+        ..Default::default()
+    };
+    let meta = editor_instance.meta().clone();
+    tokio::task::spawn_blocking(move || {
+        cap_project::generate_project_keyboard_segments(&meta, &timeline, &settings)
+    })
+    .await
+    .map_err(|error| format!("Keyboard generation failed: {error}"))?
 }
 
 #[tauri::command]

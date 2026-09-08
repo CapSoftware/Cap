@@ -2,6 +2,7 @@ import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { cx } from "cva";
 import { batch, createMemo, createSignal, Show } from "solid-js";
+import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
 import {
 	defaultKeyboardSettings,
@@ -12,6 +13,10 @@ import { commands } from "~/utils/tauri";
 import IconCapChevronDown from "~icons/cap/chevron-down";
 import IconCapCircleCheck from "~icons/cap/circle-check";
 import { useEditorContext } from "./context";
+import {
+	generateForStableKeyboardTimeline,
+	keyboardTimelineSignature,
+} from "./keyboard-timing";
 import {
 	FONT_OPTIONS,
 	getTextWeightLabel,
@@ -33,8 +38,13 @@ import {
 export function KeyboardTab(props: {
 	brandColorSwatches: OrganizationBrandColorSwatch[];
 }) {
-	const { project, setProject, editorState, setEditorState } =
-		useEditorContext();
+	const {
+		project,
+		setProject,
+		editorState,
+		setEditorState,
+		flushProjectConfig,
+	} = useEditorContext();
 
 	const getSetting = <K extends keyof KeyboardSettings>(
 		key: K,
@@ -88,24 +98,50 @@ export function KeyboardTab(props: {
 	};
 
 	const generateSegments = async () => {
+		if (!project.timeline || isGenerating()) return;
 		setIsGenerating(true);
 		try {
-			const segments = await commands.generateKeyboardSegments(
-				getSetting("groupingThresholdMs"),
-				getSetting("lingerDuration") * 1000,
-				getSetting("showModifiers"),
-				getSetting("showSpecialKeys"),
+			const segments = await generateForStableKeyboardTimeline(
+				() => {
+					const timeline = keyboardTimelineSignature(project.timeline);
+					if (timeline === null) return null;
+					return [
+						timeline,
+						getSetting("groupingThresholdMs"),
+						getSetting("lingerDuration"),
+						getSetting("showModifiers"),
+						getSetting("showSpecialKeys"),
+					].join("@@");
+				},
+				async () => {
+					await flushProjectConfig();
+					return commands.generateKeyboardSegments(
+						getSetting("groupingThresholdMs"),
+						getSetting("lingerDuration") * 1000,
+						getSetting("showModifiers"),
+						getSetting("showSpecialKeys"),
+					);
+				},
 			);
 
-			if (segments.length > 0) {
-				batch(() => {
-					ensureKeyboardSettings(true);
-					setProject("timeline", "keyboardSegments", segments);
-					setEditorState("timeline", "tracks", "keyboard", true);
-				});
+			if (!segments) {
+				toast.error(
+					"The timeline changed while keyboard events were generated. Try again.",
+				);
+				return;
 			}
+			batch(() => {
+				setProject("timeline", "keyboardSegments", segments);
+				if (segments.length > 0) {
+					ensureKeyboardSettings(true);
+					setEditorState("timeline", "tracks", "keyboard", true);
+				} else if (editorState.timeline.selection?.type === "keyboard") {
+					setEditorState("timeline", "selection", null);
+				}
+			});
 		} catch (e) {
 			console.error("Failed to generate keyboard segments:", e);
+			toast.error("Unable to generate keyboard events");
 		} finally {
 			setIsGenerating(false);
 		}

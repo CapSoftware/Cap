@@ -494,6 +494,16 @@ impl EditorInstance {
             )?),
         };
 
+        cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project);
+        cap_project::synchronize_captions(
+            &mut project,
+            &recordings
+                .segments
+                .iter()
+                .map(|segment| segment.display.duration)
+                .collect::<Vec<_>>(),
+        );
+
         let render_constants = if let Some(shared) = shared_device {
             let rc = RenderVideoConstants::new_with_device(
                 shared,

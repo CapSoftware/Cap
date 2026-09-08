@@ -159,6 +159,16 @@ impl ExporterBuilder {
             }
         }
 
+        cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project_config);
+        cap_project::synchronize_captions(
+            &mut project_config,
+            &recordings
+                .segments
+                .iter()
+                .map(|segment| segment.display.duration)
+                .collect::<Vec<_>>(),
+        );
+
         let output_path = self
             .output_path
             .unwrap_or_else(|| recording_meta.output_path());
