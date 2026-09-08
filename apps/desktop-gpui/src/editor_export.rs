@@ -590,10 +590,20 @@ impl EditorWindow {
                     "mp4"
                 };
                 let default = format!("{pretty_name}.{ext}");
-                let chosen = std::env::var_os("CAP_GPUI_AUTO_EXPORT")
-                    .map(PathBuf::from)
-                    .or_else(|| platform::save_file_panel(&default, &[ext]));
-                if chosen.is_none() {
+                let chosen: Result<Option<PathBuf>, String> = match std::env::var_os("CAP_GPUI_AUTO_EXPORT") {
+                    Some(path) => Ok(Some(PathBuf::from(path))),
+                    None => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            platform::try_save_file_panel(&default, &[ext])
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            Ok(platform::save_file_panel(&default, &[ext]))
+                        }
+                    }
+                };
+                if matches!(chosen, Ok(None)) {
                     let _ = this.update(cx, |this, cx| {
                         if let Some(ui) = this.export.as_mut() {
                             ui.phase = ExportPhase::Idle;
@@ -605,7 +615,13 @@ impl EditorWindow {
                     });
                     return;
                 }
-                chosen
+                match chosen {
+                    Ok(path) => path,
+                    Err(error) => {
+                        tracing::warn!(error, "Save dialog unavailable; keeping the export in its project output folder");
+                        None
+                    }
+                }
             } else {
                 None
             };

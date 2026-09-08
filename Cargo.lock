@@ -1457,6 +1457,7 @@ dependencies = [
  "async-stream",
  "axum",
  "base64 0.22.1",
+ "block2 0.6.1",
  "bytemuck",
  "bytes",
  "cap-audio",

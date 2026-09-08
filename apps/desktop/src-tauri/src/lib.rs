@@ -30,6 +30,8 @@ mod http_client;
 mod import;
 pub mod linux_instant_camera;
 mod logging;
+#[cfg(target_os = "macos")]
+mod macos_save_panel;
 mod notifications;
 mod panel_manager;
 mod permissions;
@@ -4728,6 +4730,7 @@ async fn save_file_dialog_inner(
     file_name: String,
     file_type: String,
 ) -> Result<Option<String>, String> {
+    #[cfg(not(target_os = "macos"))]
     use tauri_plugin_dialog::DialogExt;
 
     info!(file_name, file_type, "Save file dialog requested");
@@ -4742,6 +4745,8 @@ async fn save_file_dialog_inner(
         "gif" => ("GIF Image", "gif"),
         "mov" => ("MOV Video", "mov"),
         "screenshot" | "png" => ("PNG Image", "png"),
+        "srt" => ("SubRip Subtitle", "srt"),
+        "vtt" => ("WebVTT", "vtt"),
         _ => {
             warn!(file_type, "Invalid save file dialog type");
             return Err("Invalid file type".to_string());
@@ -4750,40 +4755,55 @@ async fn save_file_dialog_inner(
 
     info!(file_name, name, extension, "Showing save file dialog");
 
-    // Use `tokio::sync::oneshot` so the async runtime worker yields while the native dialog
-    // is open instead of being parked by a synchronous `std::sync::mpsc` receive. The
-    // previous version blocked a runtime worker for the lifetime of the dialog which, in
-    // release builds with fewer/active workers, could starve other tasks and let an unrelated
-    // exit event slip through before the export session guard incremented.
-    let (tx, rx) = tokio::sync::oneshot::channel();
+    #[cfg(target_os = "macos")]
+    let path = export::show_macos_save_dialog(&app, file_name, extension).await?;
+    #[cfg(not(target_os = "macos"))]
+    let path = {
+        // Use `tokio::sync::oneshot` so the async runtime worker yields while the native dialog
+        // is open instead of being parked by a synchronous `std::sync::mpsc` receive. The
+        // previous version blocked a runtime worker for the lifetime of the dialog which, in
+        // release builds with fewer/active workers, could starve other tasks and let an unrelated
+        // exit event slip through before the export session guard incremented.
+        let (tx, rx) = tokio::sync::oneshot::channel();
 
-    app.dialog()
-        .file()
-        .set_title("Save File")
-        .set_file_name(file_name)
-        .add_filter(name, &[extension])
-        .save_file(move |path| {
-            let _ = tx.send(
-                path.as_ref()
-                    .and_then(|p| p.as_path())
-                    .map(|p| p.to_string_lossy().to_string()),
-            );
-        });
+        app.dialog()
+            .file()
+            .set_title("Save File")
+            .set_file_name(file_name)
+            .add_filter(name, &[extension])
+            .save_file(move |path| {
+                let _ = tx.send(
+                    path.as_ref()
+                        .and_then(|p| p.as_path())
+                        .map(std::path::PathBuf::from),
+                );
+            });
 
-    match rx.await {
-        Ok(result) => {
-            info!(path = ?result, "Save file dialog completed");
-            Ok(result)
+        match rx.await {
+            Ok(result) => {
+                info!(path = ?result, "Save file dialog completed");
+                result
+            }
+            Err(e) => {
+                warn!(error = %e, "Save file dialog failed");
+                notifications::send_notification(
+                    &app,
+                    notifications::NotificationType::VideoSaveFailed,
+                );
+                return Err(e.to_string());
+            }
         }
-        Err(e) => {
-            warn!(error = %e, "Save file dialog failed");
-            notifications::send_notification(
-                &app,
-                notifications::NotificationType::VideoSaveFailed,
-            );
-            Err(e.to_string())
+    };
+    if let Some(path) = &path {
+        use tauri_plugin_fs::FsExt;
+        if let Some(scope) = app.try_fs_scope() {
+            scope.allow_file(path).map_err(|error| error.to_string())?;
         }
+        app.state::<tauri::scope::Scopes>()
+            .allow_file(path)
+            .map_err(|error| error.to_string())?;
     }
+    Ok(path.map(|path| path.to_string_lossy().into_owned()))
 }
 
 #[derive(Serialize, specta::Type)]

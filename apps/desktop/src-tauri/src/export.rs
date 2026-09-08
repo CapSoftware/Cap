@@ -23,6 +23,7 @@ use std::{
     },
 };
 use tauri::Manager;
+#[cfg(not(target_os = "macos"))]
 use tauri_plugin_dialog::DialogExt;
 use tokio::io::AsyncBufReadExt;
 use tokio_util::sync::CancellationToken;
@@ -178,6 +179,29 @@ impl ExportWorkerMode {
 
 #[derive(Clone)]
 struct ExportProgress(tauri::ipc::Channel<FramesRendered>);
+
+#[derive(Debug, PartialEq, Eq)]
+enum ExportSaveDestination {
+    Selected(PathBuf),
+    #[cfg(any(target_os = "macos", test))]
+    Default,
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn resolve_macos_export_destination(
+    result: Result<Option<PathBuf>, String>,
+) -> Option<ExportSaveDestination> {
+    match result {
+        Ok(path) => path.map(ExportSaveDestination::Selected),
+        Err(error) => {
+            warn!(
+                error,
+                "Save dialog unavailable; keeping the export in its project output folder"
+            );
+            Some(ExportSaveDestination::Default)
+        }
+    }
+}
 
 struct ExportSaveDialogRequest {
     app: tauri::AppHandle,
@@ -1147,12 +1171,16 @@ async fn export_video_to_file_inner(
         return Err("Save dialog cancelled".to_string());
     };
 
-    info!(path = %save_path.display(), "Export save path selected");
-
     let output_path =
         export_video_inner(project_path, settings, editor, progress, cancel_token).await?;
-    copy_export_to_path(&output_path, &save_path).await?;
-    Ok(save_path)
+    match save_path {
+        ExportSaveDestination::Selected(path) => {
+            copy_export_to_path(&output_path, &path).await?;
+            Ok(path)
+        }
+        #[cfg(any(target_os = "macos", test))]
+        ExportSaveDestination::Default => Ok(output_path),
+    }
 }
 
 async fn export_video_inner(
@@ -1270,7 +1298,7 @@ async fn show_export_save_dialog(
     app: &tauri::AppHandle,
     file_name: String,
     file_type: String,
-) -> Result<Option<PathBuf>, String> {
+) -> Result<Option<ExportSaveDestination>, String> {
     info!(file_name, file_type, "Save file dialog requested");
 
     let (name, extension) = match file_type.as_str() {
@@ -1285,19 +1313,46 @@ async fn show_export_save_dialog(
 
     info!(file_name, name, extension, "Showing save file dialog");
 
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_title("Save File")
-        .set_file_name(file_name)
-        .add_filter(name, &[extension])
-        .save_file(move |path| {
-            let _ = tx.send(path.and_then(|p| p.as_path().map(PathBuf::from)));
-        });
+    #[cfg(target_os = "macos")]
+    let result = Ok(resolve_macos_export_destination(
+        show_macos_save_dialog(app, file_name, extension).await,
+    ));
+    #[cfg(not(target_os = "macos"))]
+    let result = {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.dialog()
+            .file()
+            .set_title("Save File")
+            .set_file_name(file_name)
+            .add_filter(name, &[extension])
+            .save_file(move |path| {
+                let _ = tx.send(path.and_then(|p| p.as_path().map(PathBuf::from)));
+            });
 
-    rx.await.map_err(|e| e.to_string()).inspect(|result| {
+        rx.await
+            .map_err(|e| e.to_string())
+            .map(|path| path.map(ExportSaveDestination::Selected))
+    };
+    result.inspect(|result| {
         info!(path = ?result, "Save file dialog completed");
     })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) async fn show_macos_save_dialog(
+    app: &tauri::AppHandle,
+    file_name: String,
+    extension: &'static str,
+) -> Result<Option<PathBuf>, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        crate::macos_save_panel::show(&file_name, &[extension], move |result| {
+            let _ = tx.send(result);
+        });
+    })
+    .map_err(|error| format!("Unable to show save dialog: {error}"))?;
+    rx.await
+        .map_err(|error| format!("Save dialog stopped before completing: {error}"))?
 }
 
 async fn copy_export_to_path(src: &Path, dst: &Path) -> Result<(), String> {
@@ -1745,6 +1800,28 @@ async fn generate_export_preview_inner(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn native_save_failure_uses_the_rendered_project_output() {
+        assert_eq!(
+            resolve_macos_export_destination(Err("NSSavePanel unavailable".to_string())),
+            Some(ExportSaveDestination::Default),
+        );
+    }
+
+    #[test]
+    fn cancelling_a_native_save_dialog_does_not_export() {
+        assert_eq!(resolve_macos_export_destination(Ok(None)), None);
+    }
+
+    #[test]
+    fn native_save_selection_keeps_the_requested_destination() {
+        let path = PathBuf::from("selected.mp4");
+        assert_eq!(
+            resolve_macos_export_destination(Ok(Some(path.clone()))),
+            Some(ExportSaveDestination::Selected(path)),
+        );
+    }
 
     #[test]
     fn export_estimates_use_source_duration_without_a_timeline() {

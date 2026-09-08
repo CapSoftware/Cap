@@ -1,6 +1,5 @@
 import { createEventListener } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
-import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { cx } from "cva";
 import {
@@ -243,15 +242,10 @@ export function TranscriptPanel() {
 
 		setExportingFormat(format);
 		try {
-			const path = await save({
-				defaultPath: captionExportDefaultPath(meta().prettyName, format),
-				filters: [
-					{
-						name: format === "srt" ? "SubRip Subtitle" : "WebVTT",
-						extensions: [format],
-					},
-				],
-			});
+			const path = await commands.saveFileDialog(
+				captionExportDefaultPath(meta().prettyName, format),
+				format,
+			);
 			if (!path) return;
 
 			await writeTextFile(path, formatCaptionCues(cues, format));
