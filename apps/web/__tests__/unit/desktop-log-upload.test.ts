@@ -133,11 +133,11 @@ describe("desktop diagnostic reconstruction", () => {
 		);
 		expect(analysis.counts.returnedOk).toBe(1);
 		expect(analysis.counts.noTerminalRecord).toBe(0);
-		expect(analysis.operations[0].elapsedMs).toBe(500);
+		expect(analysis.operations[0]?.elapsedMs).toBe(500);
 		expect(
-			analysis.operations[0].stages.map((stage) => stage.revision),
+			analysis.operations[0]?.stages.map((stage) => stage.revision),
 		).toEqual([1, 2, 3]);
-		expect(analysis.operations[0].stages[1]).toEqual({
+		expect(analysis.operations[0]?.stages[1]).toEqual({
 			revision: 2,
 			stage: "rendering",
 			elapsedMs: 600,
@@ -176,9 +176,9 @@ describe("desktop diagnostic reconstruction", () => {
 		);
 		expect(analysis.counts.returnedError).toBe(1);
 		expect(analysis.counts.noTerminalRecord).toBe(1);
-		expect(analysis.operations[1].parentId).toBe(analysis.operations[0].id);
-		expect(analysis.operations[1].fields.requested_fps).toBe(60);
-		expect(analysis.operations[1].app?.version).toBe("test-build");
+		expect(analysis.operations[1]?.parentId).toBe(analysis.operations[0]?.id);
+		expect(analysis.operations[1]?.fields.requested_fps).toBe(60);
+		expect(analysis.operations[1]?.app?.version).toBe("test-build");
 	});
 
 	it("exposes corrupt, unsupported and lost data without inventing a crash", () => {
