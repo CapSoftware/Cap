@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { createAudioQualityCandidate } from "../src/lib/audio-quality";
+import { retainAudioQualityBenchmarkResult } from "../src/lib/audio-quality-benchmark";
 
 const [root, split, label, profile] = process.argv.slice(2);
 if (
@@ -71,15 +72,11 @@ async function worker() {
 					speechOnlyConfirmed: profile === "voice",
 				},
 			);
-			if (result.status === "shadow-candidate") {
-				try {
-					await copyFile(result.path, join(destination, `${row.id}.mp4`), 1);
-					const { cleanup: _cleanup, path: _path, ...evidence } = result;
-					receipt = { id: row.id, ...evidence, codeHash };
-				} finally {
-					await result.cleanup();
-				}
-			} else receipt = { id: row.id, ...result, codeHash };
+			const evidence = await retainAudioQualityBenchmarkResult(
+				result,
+				join(destination, `${row.id}.mp4`),
+			);
+			receipt = { id: row.id, ...evidence, codeHash };
 		} catch (error) {
 			receipt = {
 				id: row.id,
