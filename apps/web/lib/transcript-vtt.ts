@@ -244,3 +244,45 @@ export const parseVTT = (vttContent: string): TranscriptEntry[] => {
 	const sortedEntries = entries.sort((a, b) => a.startTime - b.startTime);
 	return sortedEntries;
 };
+
+function getTranslationCueStructure(content: string) {
+	const blocks = content
+		.trim()
+		.replace(/\r\n?/g, "\n")
+		.split(/\n[\t ]*\n/);
+	if (blocks.shift() !== "WEBVTT" || blocks.length === 0) return null;
+	const cues: { id: string; timing: string; voices: string[] }[] = [];
+	for (const block of blocks) {
+		const [id, timing, ...payload] = block.split("\n");
+		if (
+			!id ||
+			!/^\d+$/.test(id) ||
+			!timing ||
+			!/^\d{2,}:\d{2}:\d{2}\.\d{3} --> \d{2,}:\d{2}:\d{2}\.\d{3}(?:[ \t].*)?$/.test(
+				timing,
+			)
+		)
+			return null;
+		const text = payload.join("\n");
+		if (!parseVttCueText(text).text) return null;
+		cues.push({
+			id,
+			timing,
+			voices: text.match(/<\/?v(?:[.\s][^>]*)?>/g) ?? [],
+		});
+	}
+	return cues;
+}
+
+export function isValidTranscriptTranslation(
+	source: string,
+	translated: string,
+): boolean {
+	const sourceCues = getTranslationCueStructure(source);
+	const translatedCues = getTranslationCueStructure(translated);
+	return (
+		sourceCues !== null &&
+		translatedCues !== null &&
+		JSON.stringify(sourceCues) === JSON.stringify(translatedCues)
+	);
+}
