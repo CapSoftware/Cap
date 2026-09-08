@@ -47,6 +47,7 @@ use tokio_util::io::ReaderStream;
 use tracing::{Span, debug, error, info, info_span, instrument, trace, warn};
 
 pub(crate) mod lifecycle;
+pub(crate) mod preparation;
 pub(crate) mod resume;
 use tracing_futures::Instrument;
 
@@ -1337,6 +1338,12 @@ impl SegmentUploader {
         })?;
 
         let state = Arc::new(Mutex::new(SegmentUploadState::new()));
+        let preparation = preparation::start(
+            app.clone(),
+            video_id.clone(),
+            state.clone(),
+            session.clone(),
+        );
         let semaphore = Arc::new(tokio::sync::Semaphore::new(6));
         let read_semaphore = Arc::new(tokio::sync::Semaphore::new(12));
         let consecutive_failures = Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -1666,6 +1673,7 @@ impl SegmentUploader {
         }
 
         drain_segment_upload_tasks(&state, &mut in_flight).await;
+        preparation.stop().await;
 
         if bridge_handle.join().is_err() {
             state

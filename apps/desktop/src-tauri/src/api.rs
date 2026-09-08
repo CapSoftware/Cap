@@ -329,6 +329,42 @@ pub struct Organization {
     pub brand_colors: OrganizationBrandColors,
 }
 
+pub(crate) async fn prepare_recording_segments(
+    app: &AppHandle,
+    video_id: &str,
+    segments: &[crate::upload::preparation::Segment],
+) -> Result<Option<Vec<crate::upload::preparation::Segment>>, AuthedApiError> {
+    #[derive(Deserialize)]
+    struct Response {
+        version: u32,
+        prepared: Vec<crate::upload::preparation::Segment>,
+    }
+
+    let response = app
+        .authed_api_request("/api/recording/prepare", |client, url| {
+            client
+                .post(url)
+                .timeout(std::time::Duration::from_secs(20))
+                .json(&serde_json::json!({ "videoId": video_id, "segments": segments }))
+        })
+        .await?;
+    if matches!(response.status().as_u16(), 404 | 405) {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Err(format!(
+            "Optional recording preparation unavailable ({})",
+            response.status()
+        )
+        .into());
+    }
+    let response: Response = crate::upload::lifecycle::cancellable(response.json()).await??;
+    if response.version != 1 || response.prepared.len() > 32 {
+        return Ok(None);
+    }
+    Ok(Some(response.prepared))
+}
+
 pub async fn verify_recording_complete(
     app: &AppHandle,
     video_id: &str,

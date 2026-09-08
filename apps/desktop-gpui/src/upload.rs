@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use cap_enc_ffmpeg::segmented_stream::{SegmentCompletedEvent, SegmentMediaType};
 use cap_project::{RecordingMeta, S3UploadMeta, SharingMeta, UploadMeta, VideoUploadInfo};
+use cap_recording::upload_preparation::{Preparation, Segment};
 use futures_util::{StreamExt as _, stream::FuturesUnordered};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -517,6 +518,13 @@ async fn run_segment_upload(
 }
 
 trait SegmentTransport: Send + Sync {
+    fn prepare(
+        &self,
+        _video_id: &str,
+        _segments: Vec<Segment>,
+    ) -> impl Future<Output = Result<Option<Vec<Segment>>, String>> + Send {
+        std::future::ready(Ok(None))
+    }
     fn prefetch(
         &self,
         video_id: &str,
@@ -545,6 +553,41 @@ trait SegmentTransport: Send + Sync {
 
 struct LiveSegmentTransport;
 impl SegmentTransport for LiveSegmentTransport {
+    async fn prepare(
+        &self,
+        video_id: &str,
+        segments: Vec<Segment>,
+    ) -> Result<Option<Vec<Segment>>, String> {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            #[derive(Deserialize)]
+            struct Response {
+                version: u32,
+                prepared: Vec<Segment>,
+            }
+            let response = auth::authed_request(
+                reqwest::Method::POST,
+                "/api/recording/prepare",
+                Some(json!({ "videoId": video_id, "segments": segments })),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            let status = response.status();
+            if status == StatusCode::NOT_FOUND || status == StatusCode::METHOD_NOT_ALLOWED {
+                return Ok(None);
+            }
+            if !status.is_success() {
+                return Err(format!("Recording preparation returned {status}"));
+            }
+            let response = response
+                .json::<Response>()
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok((response.version == 1 && response.prepared.len() <= 32)
+                .then_some(response.prepared))
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
     async fn prefetch(
         &self,
         video_id: &str,
@@ -589,6 +632,12 @@ async fn upload_segments(
     let mut uploads = FuturesUnordered::new();
     let mut events_closed = false;
     let mut last_manifest_upload: Option<Instant> = None;
+    let mut preparation = Preparation::default();
+    let mut preparation_enabled = true;
+    let mut preparation_batch = Vec::new();
+    let mut preparation_interval = tokio::time::interval(Duration::from_secs(30));
+    preparation_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut preparation_request = None;
     let mut next_prefetch = SEGMENT_URL_PREFETCH + 1;
     let prefetched = checked_segment_step(&cancel, || async {
         Ok(transport.prefetch(video_id, 1, SEGMENT_URL_PREFETCH).await)
@@ -612,6 +661,21 @@ async fn upload_segments(
             None => (None, None),
         };
         tokio::select! {
+            _ = preparation_interval.tick(), if preparation_enabled && preparation_request.is_none() => {
+                preparation_batch = preparation.next_batch(manifest.video_segments.iter().map(|segment| segment.index), manifest.audio_segments.iter().map(|segment| segment.index));
+                if !preparation_batch.is_empty() {
+                    preparation_request = Some(Box::pin(transport.prepare(video_id, preparation_batch.clone())));
+                }
+            }
+            response = async { preparation_request.as_mut().unwrap().await }, if preparation_request.is_some() => {
+                preparation_request = None;
+                match response {
+                    Ok(Some(prepared)) => preparation.acknowledge(&preparation_batch, &prepared),
+                    Ok(None) => preparation_enabled = false,
+                    Err(error) => tracing::debug!(%error, "Optional recording preparation unavailable"),
+                }
+                if preparation.exhausted() { preparation_enabled = false; }
+            }
             permission = async { permission.unwrap().await }, if !authorized => {
                 permission.map_err(|_| "Instant completion was not authorized".to_string())?;
                 authorized = true;
@@ -667,6 +731,7 @@ async fn upload_segments(
         }
     }
 
+    drop(preparation_request);
     if cancel.load(Ordering::Acquire) {
         return Err("Instant recording upload cancelled".to_string());
     }
@@ -2354,6 +2419,9 @@ mod tests {
     }
     #[derive(Default)]
     struct FakeSegmentTransport {
+        delay_preparation: AtomicBool,
+        preparation_started: tokio::sync::Notify,
+        preparation_dropped: AtomicBool,
         manifests: Mutex<Vec<bool>>,
         completed: std::sync::atomic::AtomicUsize,
         uploaded: std::sync::atomic::AtomicUsize,
@@ -2367,6 +2435,20 @@ mod tests {
         prefetch_response: tokio::sync::Notify,
     }
     impl SegmentTransport for FakeSegmentTransport {
+        async fn prepare(&self, _: &str, _: Vec<Segment>) -> Result<Option<Vec<Segment>>, String> {
+            if !self.delay_preparation.load(Ordering::Acquire) {
+                return Ok(None);
+            }
+            struct Finish<'a>(&'a AtomicBool);
+            impl Drop for Finish<'_> {
+                fn drop(&mut self) {
+                    self.0.store(true, Ordering::Release);
+                }
+            }
+            let _finish = Finish(&self.preparation_dropped);
+            self.preparation_started.notify_one();
+            std::future::pending().await
+        }
         async fn prefetch(
             &self,
             _: &str,
@@ -2412,6 +2494,40 @@ mod tests {
             Ok(())
         }
     }
+    #[tokio::test]
+    async fn stopped_upload_drops_optional_preparation_without_waiting_for_it() {
+        let transport = FakeSegmentTransport::default();
+        transport.delay_preparation.store(true, Ordering::Release);
+        let (sender, events) = flume::unbounded();
+        sender
+            .send(segment_event(0, 0.0, true, SegmentMediaType::Video))
+            .unwrap();
+        sender
+            .send(segment_event(1, 1.0, false, SegmentMediaType::Video))
+            .unwrap();
+        let upload = upload_segments(
+            &transport,
+            "preparation",
+            events,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        );
+        tokio::pin!(upload);
+        tokio::select! {
+            _ = transport.preparation_started.notified() => {}
+            result = &mut upload => panic!("Upload ended before preparation: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_secs(35)) => panic!("Preparation did not start"),
+        }
+        drop(sender);
+        tokio::time::timeout(Duration::from_secs(1), upload)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(transport.preparation_dropped.load(Ordering::Acquire));
+        assert_eq!(transport.completed.load(Ordering::Acquire), 1);
+        assert_eq!(transport.manifests.lock().unwrap().last(), Some(&true));
+    }
+
     fn closed_segment_events() -> flume::Receiver<SegmentCompletedEvent> {
         let (sender, receiver) = flume::unbounded();
         sender
