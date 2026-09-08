@@ -44,6 +44,13 @@ export function shouldDeferPlaybackSource(
 	);
 }
 
+export function isRecordingUpload(
+	uploadProgress: UploadProgress | null,
+	recordingStopped: boolean,
+): boolean {
+	return !recordingStopped && uploadProgress?.status === "uploading";
+}
+
 export function shouldReloadPlaybackAfterUploadCompletes(
 	previousUploadProgress: UploadProgress | null,
 	uploadProgress: UploadProgress | null,

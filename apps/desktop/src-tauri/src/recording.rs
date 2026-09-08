@@ -3534,16 +3534,6 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     };
 
     let recording_dir = current_recording.recording_dir().clone();
-    if let InProgressRecording::Instant {
-        video_upload_info, ..
-    } = &current_recording
-    {
-        let _ = open_external_link(
-            app.clone(),
-            recording_stopped_share_url(&video_upload_info.link),
-        );
-    }
-
     let recording_outcome = match current_recording.stop().await {
         Ok(completed) => Ok(completed),
         Err((e, ctx)) => {
@@ -4618,6 +4608,12 @@ async fn handle_recording_finish(
                 return Ok(false);
             }
 
+            AppSounds::StopRecording.play();
+            let _ = open_external_link(
+                app.clone(),
+                recording_stopped_share_url(&video_upload_info.link),
+            );
+
             let app = app.clone();
             let is_camera_only =
                 matches!(recording.display_source, ScreenCaptureTarget::CameraOnly);
@@ -4743,10 +4739,8 @@ async fn handle_recording_finish(
         );
         editor_took_foreground =
             apply_post_studio_editor_behaviour(app, recording_dir, duration).await;
+        AppSounds::StopRecording.play();
     }
-
-    // Play sound to indicate recording has stopped
-    AppSounds::StopRecording.play();
 
     Ok(editor_took_foreground)
 }

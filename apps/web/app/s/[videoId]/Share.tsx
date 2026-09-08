@@ -463,6 +463,7 @@ export const Share = ({
 	const initialSeekDone = useRef(false);
 
 	useEffect(() => {
+		if (data.source.type === "desktopSegments") return;
 		if (!searchParams.has("recordingStopped")) return;
 
 		const url = new URL(window.location.href);
@@ -472,7 +473,7 @@ export const Share = ({
 			"",
 			`${url.pathname}${url.search}${url.hash}`,
 		);
-	}, [searchParams]);
+	}, [data.source.type, searchParams]);
 
 	const handleSeek = useCallback((time: number) => {
 		const v =
