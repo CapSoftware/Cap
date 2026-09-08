@@ -182,6 +182,25 @@ describe("audio derivative publication", () => {
 		).resolves.toBeUndefined();
 		expect(writes).toHaveLength(0);
 	});
+	it.each([899.999, 900])(
+		"enhances eligible recordings lasting %s seconds",
+		async (duration) => {
+			current.duration = duration;
+			await enhanceRecordingAudio("video", "owner");
+			expect(mocks.fetch).toHaveBeenCalledTimes(1);
+			expect(writes).toHaveLength(1);
+		},
+	);
+	it.each([900.001, 901, 1800])(
+		"skips recordings lasting %s seconds before accessing storage",
+		async (duration) => {
+			current.duration = duration;
+			await enhanceRecordingAudio("video", "owner");
+			expect(mocks.access).not.toHaveBeenCalled();
+			expect(mocks.fetch).not.toHaveBeenCalled();
+			expect(writes).toHaveLength(0);
+		},
+	);
 	it("does not enhance unverified, legacy or already enhanced recordings", async () => {
 		jobState = "processing";
 		await enhanceRecordingAudio("video", "owner");
