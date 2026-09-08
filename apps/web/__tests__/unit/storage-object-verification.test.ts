@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
 		source: { type: "desktopMP4" } as {
 			type: string;
 			outputKey?: string;
+			audioLevelSourceKey?: string;
+			audioLevelOutputKey?: string;
 			thumbnailKey?: string;
 			previewKey?: string;
 		},
@@ -325,6 +327,21 @@ describe("recording verification object reads", () => {
 		);
 		expect(response.status).toBe(404);
 		expect(mocks.read).not.toHaveBeenCalled();
+	});
+
+	it("allows only an audio derivative bound to the current original", async () => {
+		const source = "owner/video/.recording/outputs/generation/original.mp4";
+		const key = "owner/video/.recording/outputs/audio-quality-v3/published.mp4";
+		mocks.token = null;
+		mocks.video.source = {
+			type: "desktopMP4",
+			outputKey: source,
+			audioLevelSourceKey: source,
+			audioLevelOutputKey: key,
+		};
+		expect((await request({}, key)).status).toBe(206);
+		mocks.video.source.audioLevelSourceKey = "stale";
+		expect((await request({}, key)).status).toBe(404);
 	});
 
 	it.each(["outputKey", "thumbnailKey", "previewKey"] as const)(

@@ -168,6 +168,7 @@ export async function GET(request: NextRequest) {
 				video.source.type === "desktopMP4" &&
 				[
 					key === video.source.outputKey,
+					key === Video.getAudioLevelOutputKey(video),
 					key === video.source.thumbnailKey,
 					key === video.source.previewKey,
 				].some(Boolean)

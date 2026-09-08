@@ -6,6 +6,8 @@ type RecordingVideo = {
 	source: {
 		type: string;
 		outputKey?: string;
+		audioLevelSourceKey?: string;
+		audioLevelOutputKey?: string;
 		thumbnailKey?: string;
 		previewKey?: string;
 	};
@@ -42,7 +44,9 @@ export function resolveRecordingObjectKey(video: RecordingVideo, key: string) {
 		return asset;
 	}
 	return key === `${video.ownerId}/${video.id}/result.mp4`
-		? (getPublishedRecordingOutputKey(video) ?? key)
+		? (Video.getAudioLevelOutputKey(video) ??
+				getPublishedRecordingOutputKey(video) ??
+				key)
 		: key;
 }
 
