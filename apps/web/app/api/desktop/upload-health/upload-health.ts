@@ -23,7 +23,7 @@ export async function readUploadHealthProbeBytes(
 
 			receivedBytes += value.byteLength;
 			if (receivedBytes > maxBytes) {
-				await reader.cancel();
+				await reader.cancel().catch(() => undefined);
 				throw new UploadHealthProbeTooLargeError();
 			}
 		}
