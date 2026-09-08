@@ -151,7 +151,8 @@ IMPORTANT RULES:
 4. Only translate the actual text content on each line
 5. Preserve all newlines and formatting
 6. Do not add any explanations or comments
-7. Return ONLY the translated VTT content
+7. Preserve all <v Speaker ...> and </v> voice tags exactly, including speaker labels; translate only the spoken text inside them
+8. Return ONLY the translated VTT content
 
 VTT content to translate:
 
