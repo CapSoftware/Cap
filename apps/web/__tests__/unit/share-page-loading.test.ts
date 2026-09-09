@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	select: vi.fn(),
 	policy: vi.fn(),
-	reconcile: vi.fn(),
 	playbackUrl: vi.fn(),
 	quota: vi.fn(),
 	user: vi.fn(),
@@ -87,11 +86,6 @@ vi.mock("@/lib/transcribe", () => ({ transcribeVideo: vi.fn() }));
 vi.mock("@/lib/video-download-permissions", () => ({
 	canUserDownloadVideo: async () => false,
 }));
-vi.mock("@/lib/video-edit-processing", () => ({
-	isEditSourceKey: ({ rawFileKey }: { rawFileKey: string | null }) =>
-		rawFileKey === "owner/video/source/original.mp4",
-	reconcileStaleEditUpload: mocks.reconcile,
-}));
 vi.mock("@/utils/flags", () => ({ isAiGenerationEnabled: async () => false }));
 vi.mock("@/app/s/[videoId]/_components/PasswordOverlay", () => ({
 	PasswordOverlay: () => null,
@@ -168,7 +162,6 @@ async function renderAuthorizedContent() {
 describe("share page loading", () => {
 	beforeEach(() => {
 		mocks.policy.mockReturnValue(Effect.void);
-		mocks.reconcile.mockResolvedValue(false);
 		mocks.playbackUrl.mockResolvedValue("https://media.example.com/result.mp4");
 		mocks.quota.mockResolvedValue(false);
 		mocks.user.mockResolvedValue(null);
@@ -196,49 +189,61 @@ describe("share page loading", () => {
 	it("loads ordinary recordings once and authorizes the exact loaded row", async () => {
 		await renderPage();
 		expect(mocks.select).toHaveBeenCalledOnce();
-		expect(mocks.reconcile).not.toHaveBeenCalled();
 		expect(mocks.policy).toHaveBeenCalledExactlyOnceWith(
 			createVideo(),
 			Option.none(),
 		);
 	});
 
-	it("retains stale edit recovery and reloads the row after recovery changes it", async () => {
-		arrangeRows([
-			{
-				...createVideo(),
-				activeUploadRawFileKey: "owner/video/source/original.mp4",
-			},
-		]);
-		mocks.reconcile.mockImplementation(async () => {
-			arrangeRows([createVideo()]);
-			return true;
-		});
+	it("loads an active edit once and authorizes the current row", async () => {
+		const video = {
+			...createVideo(),
+			hasActiveUpload: true,
+			activeUploadRawFileKey: "owner/video/source/original.mp4",
+		};
+		arrangeRows([video]);
 		await renderPage();
-		expect(mocks.select).toHaveBeenCalledTimes(2);
-		expect(mocks.policy).toHaveBeenCalledExactlyOnceWith(
-			createVideo(),
-			Option.none(),
-		);
+		expect(mocks.select).toHaveBeenCalledOnce();
+		expect(mocks.policy).toHaveBeenCalledExactlyOnceWith(video, Option.none());
 	});
 
-	it("does not sign playback URLs before private-video authorization succeeds", async () => {
-		mocks.policy.mockReturnValue(Effect.fail({ _tag: "PolicyDenied" }));
-		await renderPage();
-		expect(mocks.playbackUrl).not.toHaveBeenCalled();
-	});
+	it.each([null, "owner/video/source/original.mp4"])(
+		"does not sign playback URLs before authorization succeeds with upload %s",
+		async (activeUploadRawFileKey) => {
+			arrangeRows([
+				{
+					...createVideo(),
+					hasActiveUpload: Boolean(activeUploadRawFileKey),
+					activeUploadRawFileKey,
+				},
+			]);
+			mocks.policy.mockReturnValue(Effect.fail({ _tag: "PolicyDenied" }));
+			await renderPage();
+			expect(mocks.playbackUrl).not.toHaveBeenCalled();
+		},
+	);
 
-	it("keeps password-protected videos behind the password overlay", async () => {
-		mocks.policy.mockReturnValue(
-			Effect.fail({ _tag: "VerifyVideoPasswordError" }),
-		);
-		const page = (await renderPage()) as ReactElement<{
-			children: [ReactElement<{ isOpen: boolean }>, boolean];
-		}>;
-		expect(page.props.children[0].props.isOpen).toBe(true);
-		expect(page.props.children[1]).toBe(false);
-		expect(mocks.playbackUrl).not.toHaveBeenCalled();
-	});
+	it.each([null, "owner/video/source/original.mp4"])(
+		"keeps password-protected videos behind the password overlay with upload %s",
+		async (activeUploadRawFileKey) => {
+			arrangeRows([
+				{
+					...createVideo(),
+					hasActiveUpload: Boolean(activeUploadRawFileKey),
+					activeUploadRawFileKey,
+				},
+			]);
+			mocks.policy.mockReturnValue(
+				Effect.fail({ _tag: "VerifyVideoPasswordError" }),
+			);
+			const page = (await renderPage()) as ReactElement<{
+				children: [ReactElement<{ isOpen: boolean }>, boolean];
+			}>;
+			expect(page.props.children[0].props.isOpen).toBe(true);
+			expect(page.props.children[1]).toBe(false);
+			expect(mocks.playbackUrl).not.toHaveBeenCalled();
+		},
+	);
 
 	it("streams the authorized MP4 URL without waiting for signing to finish", async () => {
 		mocks.playbackUrl.mockReturnValue(new Promise(() => {}));
