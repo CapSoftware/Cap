@@ -28,7 +28,10 @@ import { getOrganizationSSOData } from "@/actions/organization/get-organization-
 import { trackEvent } from "@/app/utils/analytics";
 import { usePublicEnv } from "@/utils/public-env";
 import { getEmailCodeCooldownSeconds, requestEmailCode } from "../auth-email";
-import { rememberOnboardingNextPath } from "../onboarding-next";
+import {
+	clearOnboardingNextPath,
+	rememberOnboardingNextPath,
+} from "../onboarding-next";
 import { getSafeNextPath } from "../safe-next";
 import { SsoErrorNotice } from "../sso-error-notice";
 
@@ -71,6 +74,7 @@ export function SignupForm() {
 	useEffect(() => {
 		const nextPath = getNextPath();
 		if (nextPath) rememberOnboardingNextPath(nextPath);
+		else clearOnboardingNextPath();
 	}, [getNextPath]);
 
 	useEffect(() => {

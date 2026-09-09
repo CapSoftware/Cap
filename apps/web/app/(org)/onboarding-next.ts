@@ -13,10 +13,14 @@ export const rememberOnboardingNextPath = (path: string) => {
 	});
 };
 
+export const clearOnboardingNextPath = () => {
+	Cookies.remove(COOKIE_NAME, { path: "/" });
+};
+
 export const consumeOnboardingNextPath = (fallback: string) => {
 	const value = Cookies.get(COOKIE_NAME);
 	if (value === undefined) return fallback;
-	Cookies.remove(COOKIE_NAME, { path: "/" });
+	clearOnboardingNextPath();
 	const path = getSafeNextPath(value, window.location.origin);
 	return path === "/dashboard" ? fallback : path;
 };
