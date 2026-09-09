@@ -25,6 +25,7 @@ import {
 	listRecoverableSegmentJobs,
 	SourceCommitPendingError,
 } from "@/lib/desktop-recording-jobs";
+import { readCompletedRecordingManifest } from "@/lib/desktop-recording-verification";
 import {
 	type DesktopSegmentsFinalizationStatus,
 	queueDesktopSegmentsFinalization,
@@ -80,6 +81,7 @@ type LoadedDesktopSegmentsManifest =
 			status: "loaded";
 			video: typeof videos.$inferSelect;
 			manifest: Video.SegmentManifestType;
+			manifestJson: string;
 	  }
 	| { status: "already-finalized" }
 	| { status: "not-found" }
@@ -128,7 +130,7 @@ async function loadDesktopSegmentsManifest({
 		)
 			.pipe(Effect.mapError(getErrorMessage))
 			.pipe(runPromise);
-		return { status: "loaded", video, manifest };
+		return { status: "loaded", video, manifest, manifestJson: json };
 	} catch (error) {
 		return { status: "invalid-manifest", error: getErrorMessage(error) };
 	}
@@ -159,6 +161,11 @@ export async function completeDesktopSegmentsManifestAndQueue({
 		return { status: "manifest-changed" };
 	}
 	if (!loaded.manifest.is_complete) return { status: "source-incomplete" };
+	try {
+		readCompletedRecordingManifest(loaded.manifestJson);
+	} catch {
+		return { status: "source-incomplete" };
+	}
 	try {
 		const status = await queueDesktopSegmentsFinalization({
 			videoId,

@@ -120,6 +120,28 @@ beforeEach(() => {
 });
 
 describe("committed source recovery", () => {
+	it.each([
+		{ video_segments: [2, 3] },
+		{ video_segments: [1, 3] },
+		{ audio_init_uploaded: true, audio_segments: [] },
+		{ audio_init_uploaded: false, audio_segments: [1] },
+		{ audio_init_uploaded: true, audio_segments: [1, 3] },
+	])(
+		"does not queue a completed manifest with missing source declarations: %j",
+		async (invalid) => {
+			mocks.get.mockReturnValue(
+				Effect.succeed(
+					Option.some(JSON.stringify({ ...manifest, ...invalid })),
+				),
+			);
+			expect(
+				await completeDesktopSegmentsManifestAndQueue({ videoId, userId }),
+			).toEqual({ status: "source-incomplete" });
+			expect(mocks.queue).not.toHaveBeenCalled();
+			expect(mocks.put).not.toHaveBeenCalled();
+		},
+	);
+
 	it("never marks an inactive but unfinished manifest complete", async () => {
 		const incomplete = { ...manifest, is_complete: false };
 		mocks.get.mockReturnValue(
