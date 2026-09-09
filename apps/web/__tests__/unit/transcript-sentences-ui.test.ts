@@ -46,6 +46,8 @@ vi.mock("@/app/s/[videoId]/_components/CaptionContext", () => ({
 	}),
 }));
 
+const originalContent = mocks.content;
+
 const data = {
 	id: "sentence-test",
 	owner: { id: "owner" },
@@ -80,6 +82,7 @@ describe("sentence transcript reading and editing", () => {
 		mocks.edit.mockClear();
 		mocks.copy.mockClear();
 		mocks.language = "original";
+		mocks.content = originalContent;
 		mocks.live = false;
 		container = document.createElement("div");
 		document.body.append(container);
@@ -128,6 +131,22 @@ describe("sentence transcript reading and editing", () => {
 		await click("Done editing");
 		expect(button("00:00Speaker AFirst, then second.")).toBeDefined();
 	});
+
+	it.each(["original", "ar"])(
+		"keeps Arabic questions separate in %s view",
+		async (language) => {
+			mocks.language = language;
+			mocks.content =
+				"WEBVTT\n\n1\n00:00:00.125 --> 00:00:01.000\nكيف حالك؟\n\n2\n00:00:02.125 --> 00:00:03.000\nأين أنت؟\n\n";
+			const seek = vi.fn();
+			await act(async () =>
+				root.render(createElement(Transcript, { data, onSeek: seek })),
+			);
+			expect(button("00:00كيف حالك؟")).toBeDefined();
+			await click("00:02أين أنت؟");
+			expect(seek).toHaveBeenCalledWith(2.125);
+		},
+	);
 
 	it("groups translated and provisional live captions", async () => {
 		mocks.language = "ru";
