@@ -90,6 +90,16 @@ jobs:
       - name: Test workspace tooling
         run: node --test scripts/bun-scripts.test.mjs scripts/check-tauri-plugin-versions.test.mjs apps/web-cluster/scripts/deploy.test.mjs
 
+      - name: Test web React compatibility
+        run: >-
+          bun run --cwd apps/web test
+          __tests__/unit/embed-video-playback-chrome.test.ts
+          __tests__/unit/homepage-demo-accessibility.test.ts
+          __tests__/unit/linkified-text.test.ts
+          __tests__/unit/signed-baa-card.test.ts
+          __tests__/unit/summary-editor.test.ts
+          __tests__/unit/sso-login-pages.test.ts
+
       - name: Typecheck
         run: bun run typecheck
 

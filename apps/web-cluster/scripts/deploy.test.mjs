@@ -162,3 +162,27 @@ test("omitted optional package links do not break an otherwise complete deployme
 	);
 	assert.equal(module.value, 42);
 });
+
+test("hoisted workspace and external dependencies load after relocation", async (t) => {
+	const f = await fixture(t);
+	const modules = path.join(f.dependenciesRoot, "node_modules");
+	await rm(path.join(f.dependenciesRoot, "apps/web-cluster/node_modules"), {
+		recursive: true,
+	});
+	await rm(path.join(f.dependenciesRoot, "packages/runtime/node_modules"), {
+		recursive: true,
+	});
+	await mkdir(path.join(modules, "@cap"));
+	await symlink("../../packages/runtime", path.join(modules, "@cap/runtime"));
+	await symlink(
+		".bun/external@1.0.0/node_modules/external",
+		path.join(modules, "external"),
+	);
+	await deployCluster(f);
+	const relocated = path.join(f.root, "relocated");
+	await rename(f.outputRoot, relocated);
+	const module = await import(
+		pathToFileURL(path.join(relocated, "apps/web-cluster/src/index.js"))
+	);
+	assert.equal(module.value, 42);
+});

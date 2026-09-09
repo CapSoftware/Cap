@@ -1,5 +1,5 @@
 [install]
-linker = "isolated"
+linker = "hoisted"
 
 [run]
 bun = false

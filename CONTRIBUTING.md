@@ -33,6 +33,8 @@ Before anything else, make sure you have the following installed:
 
 ### General Setup
 
+Keep the root `react` and `react-dom` development dependencies aligned with `apps/mobile`. They keep Expo native dependencies deduplicated under Bun’s hoisted linker, while the web app retains its separately resolved React version.
+
 Run `bun install`, then run `bun run env-setup` to generate a `.env` file configured for your environment.
 It will ask you which apps you intend to run, whether you'd like to use Docker to run S3 (MinIO) and MySQL locally,
 and allow you to provide overrides as needed.

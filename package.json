@@ -60,7 +60,9 @@
 		"mysql2": "^3.15.2",
 		"tsdown": "^0.15.6",
 		"turbo": "^2.3.4",
-		"typescript": "^5.8.3"
+		"typescript": "^5.8.3",
+		"react": "19.2.0",
+		"react-dom": "19.2.0"
 	},
 	"packageManager": "bun@1.4.0",
 	"name": "cap",

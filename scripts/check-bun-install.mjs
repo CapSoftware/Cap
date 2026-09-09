@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
-const root = fileURLToPath(new URL("../", import.meta.url));
+const root = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const manifest = JSON.parse(
 	readFileSync(path.join(root, "package.json"), "utf8"),
 );
@@ -26,12 +26,19 @@ for (const [directory, workspace] of Object.entries(lock.workspaces)) {
 		...workspace.devDependencies,
 	};
 	for (const name of Object.keys(dependencies)) {
-		const installed = JSON.parse(
-			readFileSync(
-				path.join(root, directory, "node_modules", name, "package.json"),
-				"utf8",
-			),
-		);
+		let location = path.join(root, directory);
+		let packageFile;
+		while (true) {
+			packageFile = path.join(location, "node_modules", name, "package.json");
+			if (existsSync(packageFile)) break;
+			assert.notEqual(
+				location,
+				root,
+				`Missing installed ${directory}: ${name}`,
+			);
+			location = path.dirname(location);
+		}
+		const installed = JSON.parse(readFileSync(packageFile, "utf8"));
 		const entry =
 			lock.packages[`${workspace.name}/${name}`] ?? lock.packages[name];
 		assert.ok(entry, `Missing lockfile resolution for ${directory}: ${name}`);
@@ -53,10 +60,20 @@ const nativeRequire = createRequire(
 	mobileRequire.resolve("react-native/package.json"),
 );
 assert.equal(
-	nativeRequire("react/package.json").version,
-	mobileRequire("react/package.json").version,
-	"React Native must resolve the mobile React version",
+	nativeRequire.resolve("react"),
+	mobileRequire.resolve("react"),
+	"React Native must resolve the mobile React instance",
 );
+for (const require of [webRequire, mobileRequire]) {
+	const rendererRequire = createRequire(
+		require.resolve("react-dom/package.json"),
+	);
+	assert.equal(
+		rendererRequire.resolve("react"),
+		require.resolve("react"),
+		"React DOM must resolve its application's React instance",
+	);
+}
 const ffmpeg = webRequire("ffmpeg-static");
 assert.equal(
 	typeof ffmpeg,

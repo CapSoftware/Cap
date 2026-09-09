@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import {
 	cp,
 	lstat,
@@ -63,9 +64,19 @@ export async function deployCluster({
 			...manifest.optionalDependencies,
 		})) {
 			if (!range.startsWith("workspace:")) continue;
-			const installed = await realpath(
-				path.join(dependenciesRoot, directory, "node_modules", name),
-			);
+			let parent = path.join(dependenciesRoot, directory);
+			let installedPath;
+			while (true) {
+				installedPath = path.join(parent, "node_modules", name);
+				if (existsSync(installedPath)) break;
+				assert.notEqual(
+					parent,
+					dependenciesRoot,
+					`Missing runtime workspace ${name}`,
+				);
+				parent = path.dirname(parent);
+			}
+			const installed = await realpath(installedPath);
 			await visit(inside(dependenciesRoot, installed));
 		}
 	}
@@ -120,10 +131,10 @@ export async function deployCluster({
 			path.join(buildRoot, directory, content),
 			path.join(destination, content),
 		);
-		await copy(
-			path.join(dependenciesRoot, directory, "node_modules"),
-			path.join(destination, "node_modules"),
-		);
+		const modules = path.join(dependenciesRoot, directory, "node_modules");
+		if (existsSync(modules)) {
+			await copy(modules, path.join(destination, "node_modules"));
+		}
 		const published = { ...manifest, ...manifest.publishConfig };
 		delete published.devDependencies;
 		delete published.publishConfig;
