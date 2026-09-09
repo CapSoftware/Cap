@@ -5,7 +5,7 @@ use tauri_specta::Event;
 
 use crate::{RequestSetTargetMode, recording_settings::RecordingTargetMode};
 
-pub const SCRIPT: &str = include_str!("picker_benchmark.js");
+pub const SCRIPT: &str = include_str!("picker-benchmark.js");
 
 pub fn enabled() -> bool {
     std::env::var_os("CAP_PICKER_BENCHMARK_OUTPUT").is_some()
