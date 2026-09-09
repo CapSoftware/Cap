@@ -36,7 +36,7 @@ import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
 	type ChangeEvent,
 	type DragEvent,
@@ -256,6 +256,10 @@ export const ImportLoomPage = ({
 }) => {
 	const { user, activeOrganization, spacesData } = useDashboardContext();
 	const router = useRouter();
+	const searchParams = useSearchParams();
+	const prefilledLoomUrl = searchParams?.get("url")?.trim() ?? "";
+	const prefilledMode: Mode =
+		searchParams?.get("mode") === "csv" ? "csv" : "single";
 
 	const currentMember = activeOrganization?.members.find(
 		(member) => member.userId === user?.id,
@@ -267,7 +271,7 @@ export const ImportLoomPage = ({
 	});
 	const canUseCsvImport = canManageOrganizationSettings(currentRole);
 
-	const [mode, setMode] = useState<Mode>("single");
+	const [mode, setMode] = useState<Mode>(prefilledMode);
 	const activeMode = canUseCsvImport ? mode : "single";
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(!user?.isPro);
 
@@ -310,7 +314,7 @@ export const ImportLoomPage = ({
 		: rootLabel;
 	const importPageHref = loomImportPageHref(destination);
 
-	const [loomUrl, setLoomUrl] = useState("");
+	const [loomUrl, setLoomUrl] = useState(prefilledLoomUrl);
 	const [isImporting, setIsImporting] = useState(false);
 
 	const inputRef = useRef<HTMLInputElement>(null);
