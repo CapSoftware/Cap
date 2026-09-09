@@ -3,9 +3,6 @@ import { cx } from "cva";
 import { createSignal, For, Show } from "solid-js";
 import { produce } from "solid-js/store";
 import { Toggle } from "~/components/Toggle";
-import IconLucideGrip from "~icons/lucide/grip";
-import IconLucideMousePointer2 from "~icons/lucide/mouse-pointer-2";
-import IconLucideSlidersHorizontal from "~icons/lucide/sliders-horizontal";
 import {
 	COLOR_CORRECTION_PRESETS,
 	COLOR_PRESET_CUSTOM,
@@ -16,7 +13,7 @@ import {
 	type ColorPresetDefinition,
 } from "./colorCorrection";
 import { useEditorContext } from "./context";
-import { Field, Slider } from "./ui";
+import { Field, Section, Slider } from "./ui";
 
 const ADJUST_SLIDERS: {
 	key: keyof ColorCorrectionValues;
@@ -123,10 +120,7 @@ export function ColorCorrectionSection(props: {
 
 	return (
 		<>
-			<Field
-				name="Color Correction"
-				icon={<IconLucideSlidersHorizontal class="size-4" />}
-			>
+			<Section name="Color correction">
 				<div class="grid grid-cols-3 gap-2">
 					<For each={COLOR_CORRECTION_PRESETS}>
 						{(preset) => (
@@ -135,22 +129,22 @@ export function ColorCorrectionSection(props: {
 								title={preset.description}
 								onClick={() => applyPreset(preset)}
 								class={cx(
-									"flex flex-col gap-1.5 rounded-lg border p-1.5 text-left transition-colors",
+									"flex flex-col gap-1.5 rounded-lg p-1.5 text-left transition-shadow duration-150",
 									grade().preset === preset.id
-										? "border-blue-9 ring-1 ring-blue-9"
-										: "border-gray-3 hover:border-gray-5",
+										? "ring-2 ring-ed-accent ring-offset-2 ring-offset-ed-card"
+										: "ring-1 ring-ed-line hover:ring-ed-line-strong",
 								)}
 							>
 								<ColorPresetPreview preset={preset} />
-								<span class="px-0.5 text-xs font-medium text-gray-12">
+								<span class="px-0.5 text-[11px] text-ed-text-2">
 									{preset.label}
 								</span>
 							</button>
 						)}
 					</For>
 				</div>
-			</Field>
-			<Field name="Grain" icon={<IconLucideGrip class="size-4" />}>
+			</Section>
+			<Field inline name="Grain" value={`${(grade().grain * 100).toFixed(1)}%`}>
 				<Slider
 					value={[grade().grain * 100]}
 					onChange={(v) => setValue("grain", v[0] / 100, true)}
@@ -161,30 +155,30 @@ export function ColorCorrectionSection(props: {
 				/>
 			</Field>
 			<Show when={props.target === "screen"}>
-				<Field
-					name="Apply to cursor"
-					icon={<IconLucideMousePointer2 class="size-4" />}
-					value={
-						<Toggle
-							checked={project.colorCorrection.gradeCursor}
-							onChange={(gradeCursor) =>
-								setProject("colorCorrection", "gradeCursor", gradeCursor)
-							}
-						/>
-					}
-				/>
+				<Field inline name="Apply to cursor">
+					<Toggle
+						checked={project.colorCorrection.gradeCursor}
+						onChange={(gradeCursor) =>
+							setProject("colorCorrection", "gradeCursor", gradeCursor)
+						}
+					/>
+				</Field>
 			</Show>
 			<div class="w-full">
 				<KCollapsible open={adjustOpen()} onOpenChange={handleAdjustToggle}>
-					<KCollapsible.Trigger class="flex gap-1 items-center w-full text-sm font-medium text-left group text-gray-12 hover:text-gray-10 transition duration-200 outline-hidden">
+					<KCollapsible.Trigger class="flex gap-1 items-center w-full text-[12px] font-medium text-left group text-ed-text-2 hover:text-ed-text-1 transition-colors duration-200 outline-hidden">
 						Fine-tune colors
-						<IconCapChevronDown class="transition-transform duration-200 size-5 group-data-expanded:rotate-180" />
+						<IconCapChevronDown class="transition-transform duration-200 size-3.5 text-ed-text-3 group-data-expanded:rotate-180" />
 					</KCollapsible.Trigger>
 					<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
-						<div class="mt-4 space-y-6 font-medium">
+						<div class="flex flex-col mt-2">
 							<For each={ADJUST_SLIDERS}>
 								{(slider) => (
-									<Field name={slider.label}>
+									<Field
+										inline
+										name={slider.label}
+										value={`${Math.round(grade()[slider.key] * 100).toFixed(1)}%`}
+									>
 										<Slider
 											value={[Math.round(grade()[slider.key] * 100)]}
 											onChange={(v) =>

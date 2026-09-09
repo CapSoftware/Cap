@@ -84,7 +84,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "bg-blur.svg",
     "laptop.svg",
     "wind.svg",
-    "image-off.svg",
     "shuffle.svg",
     "gift.svg",
     "history.svg",
@@ -162,27 +161,18 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "align-right.svg",
     "arrow-left-right.svg",
     "download.svg",
-    "ease-curve.svg",
     "flip-vertical-2.svg",
-    "grid.svg",
-    "grip.svg",
     "italic.svg",
     "maximize.svg",
-    "moon.svg",
     "mouse-pointer-2.svg",
-    "mouse-pointer-click.svg",
     "move.svg",
     "move-right.svg",
     "palette.svg",
-    "rabbit.svg",
     "ratio.svg",
     "refresh-cw.svg",
     "rotate-ccw.svg",
     "rotate-cw.svg",
-    "sliders-horizontal.svg",
-    "sparkles.svg",
     "timer.svg",
-    "volume-2.svg",
     "volume-x.svg",
     "diamond.svg",
     "x-mark.svg",
@@ -239,22 +229,6 @@ const IMAGES: &[(&str, &[u8])] = assets!("images":
     "dark.jpg",
 );
 
-/// The background-source tiles' fallback art, copied from
-/// `apps/desktop/src/assets/illustrations/`. Full-colour, so `img()` not
-/// `svg()`, and webp because that is what the app ships -- 4 KB for the pair,
-/// against 25 MB if the wallpapers themselves were embedded (see the README).
-///
-/// **Two of `BACKGROUND_ICONS`' four are dead in the shipping app.**
-/// `renderBackgroundSourceIcon` returns a live swatch for `color` and a live
-/// gradient for `gradient` before it ever reaches the map
-/// (`ConfigSidebar.tsx:2076-2089`), so `colorBg` and `gradientBg` are imported
-/// and never drawn; only `imageBg` (desktop and wallpaper) and
-/// `transparentBg` (image) are.
-const ILLUSTRATIONS: &[(&str, &[u8])] = assets!("illustrations":
-    "image.webp",
-    "transparent.webp",
-);
-
 const ONBOARDING: &[(&str, &[u8])] = &[
     ("onboarding/cloud-1.png", include_bytes!("../../desktop/src/assets/illustrations/cloud-1.png")),
     ("onboarding/cloud-2.png", include_bytes!("../../desktop/src/assets/illustrations/cloud-2.png")),
@@ -276,7 +250,6 @@ impl Assets {
             .iter()
             .chain(ICONS.iter())
             .chain(IMAGES.iter())
-            .chain(ILLUSTRATIONS.iter())
             .chain(ONBOARDING.iter())
     }
 }
@@ -333,6 +306,7 @@ mod tests {
         include_str!("teleprompter_window.rs"),
         include_str!("editor_window.rs"),
         include_str!("editor_window/frame.rs"),
+        include_str!("editor_window/scenes.rs"),
         // The timeline's nine track glyphs and its scene-mode icons are named
         // in the strip's own module, not in the window that hosts it.
         include_str!("editor_timeline.rs"),
@@ -453,42 +427,6 @@ mod tests {
         );
     }
 
-    /// And for the background-source tiles' art, which resolves through the
-    /// same `AssetSource` and fails just as silently.
-    #[test]
-    fn every_referenced_illustration_is_embedded_and_vice_versa() {
-        let source = ICON_SOURCES.concat();
-        let source = source.as_str();
-
-        let referenced: Vec<&str> = source
-            .match_indices("\"illustrations/")
-            .filter_map(|(start, _)| source[start + 1..].split('"').next())
-            .collect();
-        assert!(
-            !referenced.is_empty(),
-            "found no illustration references to check"
-        );
-
-        let missing: Vec<&str> = referenced
-            .into_iter()
-            .filter(|path| Assets.load(path).unwrap().is_none())
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "illustrations referenced but not embedded: {missing:?}"
-        );
-
-        let unused: Vec<&str> = ILLUSTRATIONS
-            .iter()
-            .map(|(path, _)| *path)
-            .filter(|path| !source.contains(path))
-            .collect();
-        assert!(
-            unused.is_empty(),
-            "illustrations embedded but never drawn: {unused:?}"
-        );
-    }
-
     #[test]
     fn fonts_and_icons_resolve() {
         assert!(Assets.load("fonts/Geist.ttf").unwrap().is_some());
@@ -498,10 +436,5 @@ mod tests {
         assert_eq!(Assets.list("fonts").unwrap().len(), FONTS.len());
         assert_eq!(Assets.list("icons").unwrap().len(), ICONS.len());
         assert_eq!(Assets.list("images").unwrap().len(), IMAGES.len());
-        assert!(Assets.load("illustrations/image.webp").unwrap().is_some());
-        assert_eq!(
-            Assets.list("illustrations").unwrap().len(),
-            ILLUSTRATIONS.len()
-        );
     }
 }

@@ -1,4 +1,7 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex},
+};
 
 use cap_project::{ClickSpringConfig, CursorClickEvent, CursorEvents, CursorMoveEvent, XY};
 
@@ -324,10 +327,18 @@ fn interpolate_raw_cursor(
     })
 }
 
+const CURSOR_VARIANT_CACHE_CAPACITY: usize = 2;
+
+struct CursorTimelineVariant {
+    settings: [u32; 6],
+    timeline: Arc<PrecomputedCursorTimeline>,
+}
+
 pub struct PrecomputedCursorTimeline {
     timeline: Vec<SmoothedCursorEvent>,
     raw_cursor: CursorEvents,
     has_smoothing: bool,
+    variants: Mutex<Vec<CursorTimelineVariant>>,
 }
 
 impl PrecomputedCursorTimeline {
@@ -341,6 +352,7 @@ impl PrecomputedCursorTimeline {
                 timeline: vec![],
                 raw_cursor: cursor.clone(),
                 has_smoothing: false,
+                variants: Mutex::new(Vec::new()),
             };
         }
 
@@ -358,7 +370,41 @@ impl PrecomputedCursorTimeline {
             timeline,
             raw_cursor: CursorEvents::default(),
             has_smoothing: true,
+            variants: Mutex::new(Vec::new()),
         }
+    }
+
+    pub(crate) fn cached_variant(
+        &self,
+        cursor: &CursorEvents,
+        smoothing: SpringMassDamperSimulationConfig,
+        click_spring: ClickSpringConfig,
+    ) -> Arc<Self> {
+        let settings = [
+            smoothing.tension.to_bits(),
+            smoothing.mass.to_bits(),
+            smoothing.friction.to_bits(),
+            click_spring.tension.to_bits(),
+            click_spring.mass.to_bits(),
+            click_spring.friction.to_bits(),
+        ];
+        let mut variants = self.variants.lock().unwrap();
+        if let Some(index) = variants.iter().position(|entry| entry.settings == settings) {
+            let entry = variants.remove(index);
+            let timeline = Arc::clone(&entry.timeline);
+            variants.push(entry);
+            return timeline;
+        }
+
+        let timeline = Arc::new(Self::new(cursor, Some(smoothing), Some(click_spring)));
+        if variants.len() == CURSOR_VARIANT_CACHE_CAPACITY {
+            variants.remove(0);
+        }
+        variants.push(CursorTimelineVariant {
+            settings,
+            timeline: Arc::clone(&timeline),
+        });
+        timeline
     }
 
     pub fn interpolate(&self, time_secs: f32) -> Option<InterpolatedCursorPosition> {
@@ -1157,6 +1203,143 @@ mod tests {
                 timeline.interpolate(time_secs),
             );
         }
+    }
+
+    #[test]
+    fn style_cursor_variants_preserve_motion_and_click_spring_output() {
+        let cursor = dense_cursor(3);
+        let base = PrecomputedCursorTimeline::new(
+            &cursor,
+            Some(DEFAULT_CLICK_SPRING),
+            Some(ClickSpringConfig::default()),
+        );
+        for changed in 0..6 {
+            let mut smoothing = DEFAULT_CLICK_SPRING;
+            let mut click = ClickSpringConfig::default();
+            match changed {
+                0 => smoothing.tension += 100.0,
+                1 => smoothing.mass += 0.5,
+                2 => smoothing.friction += 10.0,
+                3 => click.tension += 100.0,
+                4 => click.mass += 0.5,
+                _ => click.friction += 10.0,
+            }
+            let variant = base.cached_variant(&cursor, smoothing, click);
+            for time in [-0.1, 0.0, 0.175, 0.5, 1.0, 1.5, 2.9, 3.5] {
+                assert_position_bits(
+                    interpolate_cursor_with_click_spring(
+                        &cursor,
+                        time,
+                        Some(smoothing),
+                        Some(click),
+                    ),
+                    variant.interpolate(time),
+                );
+            }
+            let reused = base.cached_variant(&cursor, smoothing, click);
+            assert!(Arc::ptr_eq(&variant, &reused));
+        }
+        assert!(base.raw_cursor.moves.is_empty());
+        assert!(base.raw_cursor.clicks.is_empty());
+    }
+
+    #[test]
+    fn style_cursor_variant_cache_evicts_unused_history_and_preserves_base() {
+        let cursor = dense_cursor(2);
+        let base = PrecomputedCursorTimeline::new(&cursor, Some(DEFAULT_CLICK_SPRING), None);
+        let original = base.interpolate(0.8);
+        let click = ClickSpringConfig::default();
+        let a = DEFAULT_CLICK_SPRING;
+        let b = SpringMassDamperSimulationConfig {
+            tension: 800.0,
+            ..a
+        };
+        let c = SpringMassDamperSimulationConfig {
+            tension: 1100.0,
+            ..a
+        };
+        let first = base.cached_variant(&cursor, a, click);
+        let second = base.cached_variant(&cursor, b, click);
+        let old_second = Arc::downgrade(&second);
+        drop(second);
+        assert!(Arc::ptr_eq(&first, &base.cached_variant(&cursor, a, click)));
+        let third = base.cached_variant(&cursor, c, click);
+        assert!(old_second.upgrade().is_none());
+        assert_eq!(
+            base.variants.lock().unwrap().len(),
+            CURSOR_VARIANT_CACHE_CAPACITY
+        );
+        assert!(Arc::ptr_eq(&third, &base.cached_variant(&cursor, c, click)));
+        assert_position_bits(original, base.interpolate(0.8));
+        let first_output = first.interpolate(0.8);
+        let weak_first = Arc::downgrade(&first);
+        drop(base.cached_variant(&cursor, b, click));
+        assert_eq!(Arc::strong_count(&first), 1);
+        assert_position_bits(first_output, first.interpolate(0.8));
+        drop(first);
+        assert!(weak_first.upgrade().is_none());
+        drop(third);
+        drop(base);
+    }
+
+    #[test]
+    fn style_cursor_variants_are_scoped_to_their_recording_source() {
+        let first = dense_cursor(2);
+        let mut second = first.clone();
+        for event in &mut second.moves {
+            event.x = 1.0 - event.x;
+        }
+        let a = PrecomputedCursorTimeline::new(&first, Some(DEFAULT_CLICK_SPRING), None);
+        let b = PrecomputedCursorTimeline::new(&second, Some(DEFAULT_CLICK_SPRING), None);
+        let smoothing = SpringMassDamperSimulationConfig {
+            tension: 700.0,
+            ..DEFAULT_CLICK_SPRING
+        };
+        let click = ClickSpringConfig::default();
+        let av = a.cached_variant(&first, smoothing, click);
+        let bv = b.cached_variant(&second, smoothing, click);
+        assert!(!Arc::ptr_eq(&av, &bv));
+        for time in [0.0, 0.2, 1.0, 1.9] {
+            assert_position_bits(
+                interpolate_cursor_with_click_spring(&first, time, Some(smoothing), Some(click)),
+                av.interpolate(time),
+            );
+            assert_position_bits(
+                interpolate_cursor_with_click_spring(&second, time, Some(smoothing), Some(click)),
+                bv.interpolate(time),
+            );
+        }
+    }
+
+    #[test]
+    fn concurrent_style_cursor_queries_share_one_variant() {
+        let cursor = dense_cursor(3);
+        let base = PrecomputedCursorTimeline::new(&cursor, Some(DEFAULT_CLICK_SPRING), None);
+        let barrier = std::sync::Barrier::new(8);
+        let variants = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        base.cached_variant(
+                            &cursor,
+                            DEFAULT_CLICK_SPRING,
+                            ClickSpringConfig::default(),
+                        )
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert!(
+            variants
+                .iter()
+                .all(|variant| Arc::ptr_eq(variant, &variants[0]))
+        );
+        assert_eq!(base.variants.lock().unwrap().len(), 1);
     }
 
     #[test]

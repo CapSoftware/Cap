@@ -1,6 +1,6 @@
 import { ProgressCircle } from "@cap/ui-solid";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { ask, save } from "@tauri-apps/plugin-dialog";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
@@ -243,15 +243,10 @@ export default function TargetCard(props: TargetCardProps) {
 		const screenshot = screenshotTarget();
 		if (!screenshot) return;
 		try {
-			const path = await save({
-				defaultPath: `${screenshot.pretty_name}.png`,
-				filters: [
-					{
-						name: "Image",
-						extensions: ["png"],
-					},
-				],
-			});
+			const path = await commands.saveFileDialog(
+				`${screenshot.pretty_name}.png`,
+				"png",
+			);
 			if (!path) return;
 			await commands.copyFileToPath(screenshot.path, path);
 			toast.success("Screenshot saved");
@@ -297,9 +292,9 @@ export default function TargetCard(props: TargetCardProps) {
 		e.stopPropagation();
 		const recording = recordingTarget();
 		if (!recording) return;
-		commands.showWindow({
-			Editor: { project_path: recording.path },
-		});
+		if (e.currentTarget instanceof HTMLElement) {
+			e.currentTarget.closest("button")?.click();
+		}
 	};
 
 	const handleOpenRecordingLink = (e: MouseEvent) => {

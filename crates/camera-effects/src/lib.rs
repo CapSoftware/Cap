@@ -13,6 +13,10 @@ pub fn onnx_runtime_library_path() -> Option<std::path::PathBuf> {
     segmentation::onnx_runtime_library_path()
 }
 
+pub fn initialize_onnx_runtime() -> anyhow::Result<()> {
+    segmentation::init_runtime()
+}
+
 static BLUR_DISABLED: AtomicBool = AtomicBool::new(false);
 static BLUR_SESSION_OBSERVER: OnceLock<fn(bool)> = OnceLock::new();
 

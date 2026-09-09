@@ -1,19 +1,20 @@
-import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { createMutation } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
-import { createSignal, Show } from "solid-js";
+import { createSignal, onCleanup, Show } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import Tooltip from "~/components/Tooltip";
 import { createProgressBar } from "~/routes/editor/utils";
 import { authStore } from "~/store";
 import { exportVideo } from "~/utils/export";
 import { commands, type UploadProgress } from "~/utils/tauri";
+import IconLucideExternalLink from "~icons/lucide/external-link";
 import { useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import {
 	Dialog,
 	DialogContent,
+	EditorButton,
 	MenuItem,
 	MenuItemList,
 	PopperContent,
@@ -21,9 +22,19 @@ import {
 } from "./ui";
 
 function ShareButton() {
-	const { editorInstance, meta, customDomain, editorState, setEditorState } =
-		useEditorContext();
+	const {
+		editorInstance,
+		meta,
+		customDomain,
+		editorState,
+		setEditorState,
+		flushProjectConfig,
+	} = useEditorContext();
 	const projectPath = editorInstance.path;
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
+	});
 
 	const upload = createMutation(() => ({
 		mutationFn: async () => {
@@ -59,6 +70,9 @@ function ShareButton() {
 					);
 				}
 			}
+
+			await flushProjectConfig();
+			if (disposed) return;
 
 			const uploadChannel = new Channel<UploadProgress>((progress) => {
 				console.log("Upload progress:", progress);
@@ -131,6 +145,7 @@ function ShareButton() {
 			return result;
 		},
 		onError: (error) => {
+			if (disposed) return;
 			console.error(error);
 			commands.globalMessageDialog(
 				error instanceof Error ? error.message : "Failed to upload recording",
@@ -197,33 +212,29 @@ function ShareButton() {
 					};
 
 					return (
-						<div class="flex gap-3 items-center">
-							<Tooltip
-								content={
+						<div class="flex gap-1 items-center">
+							<EditorButton
+								disabled={upload.isPending}
+								tooltipText={
 									upload.isPending ? "Reuploading video" : "Reupload video"
 								}
-							>
-								<Button
-									disabled={upload.isPending}
-									onClick={() => {
-										if (editorState.timeline.selection) {
-											setEditorState("timeline", "selection", null);
-											return;
-										}
-										upload.mutate();
-									}}
-									variant="dark"
-									class="flex justify-center items-center size-[41px] px-0! py-0! space-x-1"
-								>
-									{upload.isPending ? (
-										<IconLucideLoaderCircle class="animate-spin size-4" />
+								onClick={() => {
+									if (editorState.timeline.selection) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+									upload.mutate();
+								}}
+								leftIcon={
+									upload.isPending ? (
+										<IconLucideLoaderCircle class="animate-spin" />
 									) : (
-										<IconLucideRotateCcw class="size-4" />
-									)}
-								</Button>
-							</Tooltip>
+										<IconLucideRotateCcw />
+									)
+								}
+							/>
 							<Tooltip content="Open link">
-								<div class="rounded-xl px-3 py-2 flex flex-row items-center gap-1.5 bg-gray-3 hover:bg-gray-4 transition-colors duration-100">
+								<div class="flex flex-row gap-1.5 items-center px-2.5 h-7 rounded-[7px] transition-colors duration-100 bg-ed-ctl hover:bg-ed-ctl-hover">
 									<a
 										href={
 											linkToDisplay() === customLink
@@ -232,9 +243,14 @@ function ShareButton() {
 										}
 										target="_blank"
 										rel="noreferrer"
-										class="w-full truncate max-w-[200px]"
+										title={linkToDisplay() ?? "Open link"}
+										aria-label="Open recording link"
+										class="w-full truncate max-w-[200px] max-[1400px]:w-4 max-[1400px]:shrink-0"
 									>
-										<span class="text-xs text-gray-12">{linkToDisplay()}</span>
+										<span class="text-xs text-ed-text-2 max-[1400px]:hidden">
+											{linkToDisplay()}
+										</span>
+										<IconLucideExternalLink class="hidden size-4 text-ed-text-2 max-[1400px]:block" />
 									</a>
 									{/** Dropdown */}
 									<Show
@@ -264,7 +280,7 @@ function ShareButton() {
 												placement="bottom-end"
 												gutter={4}
 											>
-												<KSelect.Trigger class="flex justify-center items-center transition-colors duration-200 rounded-lg size-[22px] text-gray-12 bg-gray-6 hover:bg-gray-7 group focus:outline-hidden focus-visible:outline-hidden">
+												<KSelect.Trigger class="flex justify-center items-center transition-colors duration-200 rounded-md size-5 text-ed-text-2 bg-ed-ctl-hover hover:bg-ed-ctl-active group focus:outline-hidden focus-visible:outline-hidden">
 													<KSelect.Icon>
 														<IconCapChevronDown class="size-4 transition-transform duration-200 group-data-expanded:rotate-180" />
 													</KSelect.Icon>
@@ -286,7 +302,7 @@ function ShareButton() {
 									{/** Copy button */}
 									<Tooltip content="Copy link">
 										<div
-											class="flex justify-center items-center transition-colors duration-200 rounded-lg size-[22px] text-gray-12 bg-gray-6 hover:bg-gray-7"
+											class="flex justify-center items-center transition-colors duration-200 rounded-md size-5 text-ed-text-2 bg-ed-ctl-hover hover:bg-ed-ctl-active"
 											onClick={copyLink}
 										>
 											{!copyPressed() ? (

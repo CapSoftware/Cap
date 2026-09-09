@@ -242,6 +242,8 @@ pub(crate) fn move_clip(
         timeline
             .transitions
             .retain(|candidate| candidate.segment_index != transition.segment_index);
+        ripple_track(&mut timeline.style_segments, boundary, effective.duration);
+        ripple_track(&mut timeline.image_segments, boundary, effective.duration);
         ripple_track(&mut timeline.zoom_segments, boundary, effective.duration);
         ripple_track(&mut timeline.scene_segments, boundary, effective.duration);
         ripple_track(&mut timeline.mask_segments, boundary, effective.duration);
@@ -412,19 +414,17 @@ impl EditorWindow {
     /// The Clips toggle (`Header.tsx:173-187`): `Button variant={open ?
     /// "white" : "gray"}` at `flex gap-1.5 justify-center h-[40px]`, clearing
     /// the timeline selection on every press.
-    pub(crate) fn render_clips_pill(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let variant = if self.clips.open {
-            ui::ButtonVariant::White
-        } else {
-            ui::ButtonVariant::Gray
-        };
-        ui::Button::plain(&self.theme, "clips-pill", variant, ui::ButtonSize::Md)
-            .icon("icons/clapperboard.svg")
-            .label("Clips")
+    pub(crate) fn render_clips_pill(
+        &self,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        ui::EditorButton::plain(&self.theme, "clips-pill")
+            .left_icon("icons/clapperboard.svg")
+            .when(!compact, |button| button.label("Clips"))
+            .tooltip(&self.theme, "Clips")
+            .pressed(self.clips.open)
             .disabled(!self.project_ready())
-            .height(px(40.))
-            .radius(px(12.))
-            .font_weight(FontWeight::MEDIUM)
             .on_click(cx.listener(|this, _, window, cx| this.toggle_clips(window, cx)))
     }
 
@@ -727,21 +727,16 @@ impl EditorWindow {
     // -- The sidebar ------------------------------------------------------------
 
     /// The whole clips column, drawn in the config sidebar's slot while the
-    /// mode is open. Same `ml-2 w-104` wrapper the config sidebar carries
-    /// (`Editor.tsx:728`); the card itself is `flex flex-col flex-1 min-h-0
-    /// rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3
-    /// overflow-hidden` (`ClipsSidebar.tsx:791-797`).
+    /// mode is open. Same `ml-2 w-104` wrapper the config sidebar carries, and
+    /// the same card.
     pub(crate) fn render_clips_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         self.request_clip_thumbnails(cx);
-        let theme = self.theme;
 
         div()
-            .ml(px(8.))
             .w(px(crate::editor_window::SIDEBAR_WIDTH))
             .flex_none()
             .flex()
             .min_h_0()
-            .overflow_hidden()
             .child(
                 div()
                     .flex()
@@ -751,8 +746,9 @@ impl EditorWindow {
                     .overflow_hidden()
                     .rounded(px(12.))
                     .border_1()
-                    .border_color(Hsla::from(theme.gray_3))
+                    .border_color(self.card_line())
                     .bg(self.panel_bg())
+                    .shadow(self.theme.editor.card_shadow())
                     .child(self.render_clips_back_header(cx))
                     .child(self.render_clips_body(cx)),
             )
@@ -769,22 +765,23 @@ impl EditorWindow {
             .flex_row()
             .items_center()
             .gap(px(8.))
-            .px(px(16.))
+            .px(px(12.))
             .w_full()
-            .h(px(64.))
+            .h(px(crate::editor_window::SIDEBAR_TAB_BAR_HEIGHT))
             .rounded_t(px(11.))
             .border_b_1()
-            .border_color(Hsla::from(theme.gray_3))
-            .text_size(px(14.))
+            .border_color(Hsla::from(theme.editor.line))
+            .text_size(px(13.))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(Hsla::from(theme.gray_12))
-            .hover(move |style| style.bg(Hsla::from(theme.gray_3)))
+            .text_color(Hsla::from(theme.editor.text_1))
+            .cursor_pointer()
+            .hover(move |style| style.bg(Hsla::from(theme.editor.ctl)))
             .child(
                 svg()
                     .path("icons/move-left.svg")
                     .size(px(16.))
                     .flex_shrink_0()
-                    .text_color(Hsla::from(theme.gray_11)),
+                    .text_color(Hsla::from(theme.editor.text_2)),
             )
             .child("Back to editor")
             .on_click(cx.listener(|this, _, window, cx| this.close_clips(window, cx)))
@@ -1492,7 +1489,7 @@ impl EditorWindow {
         cx.spawn_in(window, async move |this, cx| {
             // Blocking modal, so from a spawned task with no borrow held --
             // the `save_file_panel` rule.
-            let Some(path) = pick_existing_recording_path() else {
+            let Some(path) = pick_existing_recording_path(cx).await else {
                 return;
             };
             this.update_in(cx, |this, window, cx| {
@@ -1510,7 +1507,10 @@ impl EditorWindow {
         cx.spawn_in(window, async move |this, cx| {
             #[cfg(target_os = "macos")]
             let source = crate::platform::open_image_panel(&["mp4"]);
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "linux")]
+            let source =
+                crate::platform::open_file_panel_async(&[("MP4 Video", &["mp4"])], None, cx).await;
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             let source = rfd::FileDialog::new()
                 .add_filter("MP4 Video", &["mp4"])
                 .pick_file();
@@ -1998,12 +1998,21 @@ impl PreparedMp4Import {
 /// a `.cap` filter on macOS (bundles are packages there), a directory picker
 /// on Windows, both rooted at the recordings directory where the dialog
 /// supports one.
-fn pick_existing_recording_path() -> Option<PathBuf> {
+async fn pick_existing_recording_path(_cx: &mut gpui::AsyncWindowContext) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         crate::platform::open_image_panel(&["cap"])
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::platform::open_file_panel_async(
+            &[("Cap Recording", &["cap"])],
+            Some(crate::recording::recordings_dir()),
+            _cx,
+        )
+        .await
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         rfd::FileDialog::new()
             .set_directory(crate::recording::recordings_dir())
@@ -2378,6 +2387,8 @@ fn ensure_project_timeline<'a>(
             keyboard_segments: Vec::new(),
             audio_segments: Vec::new(),
             camera3d_segments: Vec::new(),
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
         });
     }
 
@@ -3804,6 +3815,17 @@ mod tests {
             edge_snap_ratio: 0.25,
         }];
 
+        config.style_segments.push(cap_project::StyleSegment {
+            start: 15.,
+            end: 18.,
+            ..Default::default()
+        });
+        config.image_segments.push(cap_project::ImageSegment {
+            start: 15.,
+            end: 18.,
+            path: "content/images/retained.png".into(),
+            ..Default::default()
+        });
         config.text_segments = serde_json::from_value(serde_json::json!([{
             "start": 10.0,
             "end": 12.0,
@@ -3838,6 +3860,14 @@ mod tests {
         assert!(config.transitions.is_empty());
         assert_eq!(config.zoom_segments[0].start, 16.0);
         assert_eq!(config.zoom_segments[0].end, 19.0);
+        assert_eq!(
+            (config.style_segments[0].start, config.style_segments[0].end),
+            (16., 19.)
+        );
+        assert_eq!(
+            (config.image_segments[0].start, config.image_segments[0].end),
+            (16., 19.)
+        );
         assert_eq!(
             (
                 config.keyboard_segments[0].start,

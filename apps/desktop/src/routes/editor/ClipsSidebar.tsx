@@ -59,11 +59,7 @@ import {
 	rippleTimelineTrack,
 	transitionsAfterClipMove,
 } from "./clip-transitions";
-import {
-	type EditorTimelineSegment,
-	serializeProjectConfiguration,
-	useEditorContext,
-} from "./context";
+import { type EditorTimelineSegment, useEditorContext } from "./context";
 import { getExistingRecordingPickerOptions } from "./existing-recording-picker";
 import { rippleKeyboardTrack } from "./keyboard-timing";
 import { scaleKeyframeTimes } from "./three-d";
@@ -269,6 +265,7 @@ export function ClipsSidebar(props: { open: boolean; class?: string }) {
 function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 	const {
 		project,
+		flushProjectConfig,
 		setProject,
 		projectActions,
 		editorInstance,
@@ -443,7 +440,7 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 		if (previousMode === null) previousMode = rawOptions.mode;
 		setOptions("mode", "studio");
 		await commands.setRecordingMode("studio");
-		await commands.setProjectConfig(serializeProjectConfiguration(project));
+		await flushProjectConfig();
 		await commands.setEditorRecordingTarget(editorInstance.path);
 	};
 
@@ -512,7 +509,7 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 				await commands.stopPlayback();
 				setEditorState("playing", false);
 			}
-			await commands.setProjectConfig(serializeProjectConfiguration(project));
+			await flushProjectConfig();
 			const count = await commands.addExistingRecordingToEditor(sourcePath);
 			toast.success(count === 1 ? "Clip imported" : `${count} clips imported`, {
 				id: toastId,
@@ -679,6 +676,8 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 						(segment) => segment.end - segment.start,
 					);
 					for (const track of [
+						timeline.styleSegments,
+						timeline.imageSegments,
 						timeline.zoomSegments,
 						timeline.sceneSegments ?? [],
 						timeline.maskSegments,
@@ -813,16 +812,16 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 	return (
 		<div
 			class={cx(
-				"flex flex-col flex-1 min-h-0 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3 overflow-hidden",
+				"flex overflow-hidden flex-col flex-1 min-h-0 rounded-xl bg-ed-card shadow-ed-card",
 				props.class,
 			)}
 		>
 			<button
 				type="button"
 				onClick={backToEditor}
-				class="flex flex-none gap-2 items-center px-4 w-full h-16 text-sm font-medium border-b transition-colors text-gray-12 border-gray-3 hover:bg-gray-3"
+				class="flex flex-none gap-2 items-center px-4 w-full h-[46px] text-[13px] font-medium border-b transition-colors text-ed-text-1 border-ed-line hover:bg-ed-ctl"
 			>
-				<IconCapMoveLeft class="size-4 text-gray-11" />
+				<IconCapMoveLeft class="size-4 text-ed-text-2" />
 				Back to editor
 			</button>
 

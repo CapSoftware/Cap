@@ -22,7 +22,9 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
+#[cfg(not(target_os = "linux"))]
 use tauri::Manager;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 use tauri_plugin_dialog::DialogExt;
 use tokio::io::AsyncBufReadExt;
 use tokio_util::sync::CancellationToken;
@@ -179,8 +181,36 @@ impl ExportWorkerMode {
 #[derive(Clone)]
 struct ExportProgress(tauri::ipc::Channel<FramesRendered>);
 
+#[derive(Debug, PartialEq, Eq)]
+enum ExportSaveDestination {
+    Selected(PathBuf),
+    #[cfg(any(target_os = "macos", test))]
+    Default,
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn resolve_macos_export_destination(
+    result: Result<Option<PathBuf>, String>,
+) -> Option<ExportSaveDestination> {
+    match result {
+        Ok(path) => path.map(ExportSaveDestination::Selected),
+        Err(error) => {
+            warn!(
+                error,
+                "Save dialog unavailable; keeping the export in its project output folder"
+            );
+            Some(ExportSaveDestination::Default)
+        }
+    }
+}
+
 struct ExportSaveDialogRequest {
+    #[cfg(not(target_os = "linux"))]
     app: tauri::AppHandle,
+    #[cfg(target_os = "linux")]
+    parent: tauri::Window,
+    #[cfg(target_os = "linux")]
+    cancel_token: CancellationToken,
     file_name: String,
     file_type: String,
 }
@@ -530,10 +560,51 @@ async fn run_out_of_process_export_attempt(
     mode: ExportWorkerMode,
     cancel_token: CancellationToken,
 ) -> Result<PathBuf, String> {
+    use cap_utils::operation_diagnostics::{Field, Operation};
+    let mut diagnostic = Operation::start(
+        "export_worker",
+        &[
+            Field::identifier(
+                "resource",
+                cap_utils::operation_diagnostics::resource_id(project_path),
+            ),
+            Field::number("requested_fps", settings.fps() as u64),
+            Field::flag("software_safe", mode.is_software_safe()),
+            Field::flag(
+                "force_ffmpeg_decoder",
+                mode.force_ffmpeg_decoder(force_ffmpeg),
+            ),
+        ],
+    );
+    let result = run_out_of_process_export_attempt_inner(
+        project_path,
+        settings,
+        progress,
+        force_ffmpeg,
+        mode,
+        cancel_token,
+        &mut diagnostic,
+    )
+    .await;
+    diagnostic.finish(result.is_ok());
+    result
+}
+
+async fn run_out_of_process_export_attempt_inner(
+    project_path: &Path,
+    settings: &ExportSettings,
+    progress: ExportProgress,
+    force_ffmpeg: bool,
+    mode: ExportWorkerMode,
+    cancel_token: CancellationToken,
+    diagnostic: &mut cap_utils::operation_diagnostics::Operation,
+) -> Result<PathBuf, String> {
+    use cap_utils::operation_diagnostics::Field;
     if cancel_token.is_cancelled() {
         return Err("Export cancelled".to_string());
     }
 
+    diagnostic.stage("resolving_worker");
     let bin_path = resolve_exporter_binary()?;
     let settings_json = serde_json::to_string(settings)
         .map_err(|e| format!("Failed to serialize settings: {e}"))?;
@@ -558,6 +629,9 @@ async fn run_out_of_process_export_attempt(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    if let Ok(parent) = serde_json::to_string(&diagnostic.id()) {
+        command.env("CAP_DIAGNOSTIC_PARENT", parent);
+    }
     command.arg("--progress-json");
 
     if force_ffmpeg_decoder {
@@ -579,6 +653,10 @@ async fn run_out_of_process_export_attempt(
         )
     })?;
 
+    if let Some(process_id) = child.id() {
+        diagnostic.field(Field::number("worker_process", process_id as u64));
+    }
+    diagnostic.stage("waiting_for_progress");
     let stdout = child
         .stdout
         .take()
@@ -590,6 +668,7 @@ async fn run_out_of_process_export_attempt(
     let stderr_task = tokio::spawn(collect_exporter_stderr_tail(stderr));
 
     let mut completed_path = None;
+    let mut next_diagnostic_frame = 0;
     let mut stdout_lines = tokio::io::BufReader::new(stdout).lines();
 
     while let Some(line) = tokio::select! {
@@ -600,6 +679,7 @@ async fn run_out_of_process_export_attempt(
             let _ = child.kill().await;
             let _ = child.wait().await;
             let _ = stderr_task.await;
+            diagnostic.stage("cancelled");
             return Err("Export cancelled".to_string());
         }
     } {
@@ -608,12 +688,22 @@ async fn run_out_of_process_export_attempt(
                 rendered_count,
                 total_frames,
             }) => {
+                if rendered_count >= next_diagnostic_frame {
+                    diagnostic.field(Field::number("rendered_frames", rendered_count as u64));
+                    diagnostic.field(Field::number("expected_frames", total_frames as u64));
+                    diagnostic.stage("rendering");
+                    next_diagnostic_frame =
+                        rendered_count.saturating_add((total_frames / 10).max(1));
+                }
                 if !progress_forwarder.send(rendered_count, total_frames) {
                     let _ = child.kill().await;
+                    diagnostic.stage("cancelled");
                     return Err("Export cancelled".to_string());
                 }
             }
             Ok(ExportSidecarMessage::Completed { path }) => {
+                diagnostic.field(Field::flag("worker_reported_completion", true));
+                diagnostic.stage("waiting_for_worker_exit");
                 completed_path = Some(path);
             }
             Err(e) => {
@@ -634,9 +724,25 @@ async fn run_out_of_process_export_attempt(
             let _ = child.kill().await;
             let _ = child.wait().await;
             let _ = stderr_task.await;
+            diagnostic.stage("cancelled");
             return Err("Export cancelled".to_string());
         }
     };
+    diagnostic.field(Field::flag("worker_exit_success", status.success()));
+    if let Some(code) = status.code() {
+        diagnostic.field(Field::number(
+            "worker_exit_code_bits",
+            u64::from(code as u32),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            diagnostic.field(Field::number("worker_signal", signal as u64));
+        }
+    }
+    diagnostic.stage("worker_exited");
     let stderr_tail = stderr_task.await.unwrap_or_default();
 
     if !status.success() {
@@ -669,6 +775,9 @@ async fn collect_exporter_stderr_tail(stderr: tokio::process::ChildStderr) -> Ve
     loop {
         match lines.next_line().await {
             Ok(Some(line)) => {
+                if cap_utils::operation_diagnostics::relay_worker_record(&line) {
+                    continue;
+                }
                 if cfg!(debug_assertions) {
                     info!(line = %line, "Export worker stderr");
                 }
@@ -932,7 +1041,7 @@ fn export_project_config(
     if cursor_only {
         make_cursor_only_project(project_config)
     } else {
-        project_config
+        cap_export::prepare_project_for_export(project_config)
     }
 }
 
@@ -1105,6 +1214,7 @@ pub async fn export_video_to_file(
     file_type: String,
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
+    #[cfg(not(target_os = "linux"))]
     let app = window.app_handle().clone();
     let window_label = window.label().to_string();
     Box::pin(run_export_command(move || async move {
@@ -1118,7 +1228,12 @@ pub async fn export_video_to_file(
             editor,
             ExportProgress(progress),
             ExportSaveDialogRequest {
+                #[cfg(not(target_os = "linux"))]
                 app,
+                #[cfg(target_os = "linux")]
+                parent: window,
+                #[cfg(target_os = "linux")]
+                cancel_token: cancellation_guard.token(),
                 file_name,
                 file_type,
             },
@@ -1138,21 +1253,20 @@ async fn export_video_to_file_inner(
     cancel_token: CancellationToken,
 ) -> Result<PathBuf, String> {
     let _session_guard = ExportSessionGuard::new();
-    let ExportSaveDialogRequest {
-        app,
-        file_name,
-        file_type,
-    } = save_dialog;
-    let Some(save_path) = show_export_save_dialog(&app, file_name, file_type).await? else {
+    let Some(save_path) = show_export_save_dialog(save_dialog).await? else {
         return Err("Save dialog cancelled".to_string());
     };
 
-    info!(path = %save_path.display(), "Export save path selected");
-
     let output_path =
         export_video_inner(project_path, settings, editor, progress, cancel_token).await?;
-    copy_export_to_path(&output_path, &save_path).await?;
-    Ok(save_path)
+    match save_path {
+        ExportSaveDestination::Selected(path) => {
+            copy_export_to_path(&output_path, &path).await?;
+            Ok(path)
+        }
+        #[cfg(any(target_os = "macos", test))]
+        ExportSaveDestination::Default => Ok(output_path),
+    }
 }
 
 async fn export_video_inner(
@@ -1267,10 +1381,18 @@ async fn export_video_inner(
 }
 
 async fn show_export_save_dialog(
-    app: &tauri::AppHandle,
-    file_name: String,
-    file_type: String,
-) -> Result<Option<PathBuf>, String> {
+    request: ExportSaveDialogRequest,
+) -> Result<Option<ExportSaveDestination>, String> {
+    let ExportSaveDialogRequest {
+        #[cfg(not(target_os = "linux"))]
+        app,
+        #[cfg(target_os = "linux")]
+        parent,
+        #[cfg(target_os = "linux")]
+        cancel_token,
+        file_name,
+        file_type,
+    } = request;
     info!(file_name, file_type, "Save file dialog requested");
 
     let (name, extension) = match file_type.as_str() {
@@ -1285,19 +1407,157 @@ async fn show_export_save_dialog(
 
     info!(file_name, name, extension, "Showing save file dialog");
 
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_title("Save File")
-        .set_file_name(file_name)
-        .add_filter(name, &[extension])
-        .save_file(move |path| {
-            let _ = tx.send(path.and_then(|p| p.as_path().map(PathBuf::from)));
-        });
-
-    rx.await.map_err(|e| e.to_string()).inspect(|result| {
+    #[cfg(target_os = "linux")]
+    let result = show_linux_save_dialog(parent, cancel_token, file_name, name, extension)
+        .await
+        .map(|path| path.map(ExportSaveDestination::Selected));
+    #[cfg(target_os = "macos")]
+    let result = Ok(resolve_macos_export_destination(
+        show_macos_save_dialog(&app, file_name, extension).await,
+    ));
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let result = {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.dialog()
+            .file()
+            .set_title("Save File")
+            .set_file_name(file_name)
+            .add_filter(name, &[extension])
+            .save_file(move |path| {
+                let _ = tx.send(path.and_then(|p| p.as_path().map(PathBuf::from)));
+            });
+        rx.await
+            .map_err(|error| error.to_string())
+            .map(|path| path.map(ExportSaveDestination::Selected))
+    };
+    result.inspect(|result| {
         info!(path = ?result, "Save file dialog completed");
     })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) async fn show_macos_save_dialog(
+    app: &tauri::AppHandle,
+    file_name: String,
+    extension: &'static str,
+) -> Result<Option<PathBuf>, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        crate::macos_save_panel::show(&file_name, &[extension], move |result| {
+            let _ = tx.send(result);
+        });
+    })
+    .map_err(|error| format!("Unable to show save dialog: {error}"))?;
+    rx.await
+        .map_err(|error| format!("Save dialog stopped before completing: {error}"))?
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn show_linux_save_dialog(
+    parent: tauri::Window,
+    cancel_token: CancellationToken,
+    file_name: String,
+    name: &'static str,
+    extension: &'static str,
+) -> Result<Option<PathBuf>, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let window = parent.clone();
+    parent
+        .run_on_main_thread(move || {
+            use gtk::prelude::*;
+
+            let prepared = window
+                .gtk_window()
+                .map_err(|error| format!("Export window is unavailable: {error}"))
+                .map(|parent| parent.upcast::<gtk::Window>())
+                .and_then(|parent| {
+                    create_linux_export_save_dialog(&parent, &file_name, name, extension)
+                        .map(|dialog| (parent, dialog))
+                });
+            match prepared {
+                Ok((parent, dialog)) => {
+                    run_linux_export_save_dialog(parent, dialog, cancel_token, tx);
+                }
+                Err(error) => {
+                    let _ = tx.send(Err(error));
+                }
+            }
+        })
+        .map_err(|error| format!("Unable to show export save dialog: {error}"))?;
+    rx.await.map_err(|error| error.to_string())?
+}
+
+#[cfg(target_os = "linux")]
+fn create_linux_export_save_dialog(
+    parent: &gtk::Window,
+    file_name: &str,
+    filter_name: &str,
+    extension: &str,
+) -> Result<gtk::FileChooserNative, String> {
+    use gtk::prelude::*;
+
+    if parent.in_destruction() || !parent.is_mapped() {
+        return Err("Export window is no longer available".to_string());
+    }
+
+    // rfd's GTK backend discards its parent, so tiled compositors can clip the save controls.
+    let dialog = gtk::FileChooserNative::new(
+        Some("Save File"),
+        Some(parent),
+        gtk::FileChooserAction::Save,
+        None,
+        None,
+    );
+    dialog.set_do_overwrite_confirmation(true);
+    if !file_name.contains('\0') {
+        dialog.set_current_name(file_name);
+    }
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some(filter_name));
+    filter.add_pattern(&format!("*.{extension}"));
+    dialog.add_filter(filter);
+    Ok(dialog)
+}
+
+#[cfg(target_os = "linux")]
+fn run_linux_export_save_dialog(
+    parent: gtk::Window,
+    dialog: gtk::FileChooserNative,
+    cancel_token: CancellationToken,
+    mut result_tx: tokio::sync::oneshot::Sender<Result<Option<PathBuf>, String>>,
+) {
+    use gtk::prelude::*;
+
+    let (destroy_tx, destroyed) = tokio::sync::oneshot::channel();
+    let destroy_tx = std::cell::Cell::new(Some(destroy_tx));
+    let parent_destroyed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let destroyed_flag = parent_destroyed.clone();
+    let destroy_handler = parent.connect_destroy(move |_| {
+        destroyed_flag.set(true);
+        if let Some(sender) = destroy_tx.take() {
+            let _ = sender.send(());
+        }
+    });
+    std::mem::drop(gtk::glib::MainContext::default().spawn_local(async move {
+        let result = tokio::select! {
+            biased;
+            _ = cancel_token.cancelled() => Err("Export cancelled".to_string()),
+            _ = result_tx.closed() => Err("Export cancelled".to_string()),
+            _ = destroyed => Err("Export window was closed".to_string()),
+            response = dialog.run_future() => {
+                Ok(if response == gtk::ResponseType::Accept {
+                    dialog.filename()
+                } else {
+                    None
+                })
+            }
+        };
+        if !parent_destroyed.get() {
+            parent.disconnect(destroy_handler);
+        }
+        dialog.destroy();
+        let _ = result_tx.send(result);
+    }));
 }
 
 async fn copy_export_to_path(src: &Path, dst: &Path) -> Result<(), String> {
@@ -1757,7 +2017,89 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn export_preview_projects_captions_after_a_cut() {
+    fn native_save_failure_uses_the_rendered_project_output() {
+        assert_eq!(
+            resolve_macos_export_destination(Err("NSSavePanel unavailable".to_string())),
+            Some(ExportSaveDestination::Default),
+        );
+    }
+
+    #[test]
+    fn cancelling_a_native_save_dialog_does_not_export() {
+        assert_eq!(resolve_macos_export_destination(Ok(None)), None);
+    }
+
+    #[test]
+    fn native_save_selection_keeps_the_requested_destination() {
+        let path = PathBuf::from("selected.mp4");
+        assert_eq!(
+            resolve_macos_export_destination(Ok(Some(path.clone()))),
+            Some(ExportSaveDestination::Selected(path)),
+        );
+    }
+
+    #[tokio::test]
+    async fn export_preview_reads_saved_caption_choice_after_stale_live_preview_update() {
+        for export_with_subtitles in [false, true] {
+            let dir = tempdir().unwrap();
+            let mut saved = cap_project::ProjectConfiguration {
+                captions: Some(cap_project::CaptionsData {
+                    settings: cap_project::CaptionSettings {
+                        enabled: true,
+                        export_with_subtitles,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            saved.write(dir.path()).unwrap();
+            let (sender, receiver) = tokio::sync::watch::channel(saved.clone());
+            saved
+                .captions
+                .as_mut()
+                .unwrap()
+                .settings
+                .export_with_subtitles = !export_with_subtitles;
+            saved.captions.as_mut().unwrap().settings.enabled = false;
+            sender.send(saved).unwrap();
+
+            let preview = load_export_preview_config(dir.path().to_path_buf(), false)
+                .await
+                .unwrap();
+            let settings = preview.captions.unwrap().settings;
+            assert_eq!(settings.enabled, export_with_subtitles);
+            assert_eq!(settings.export_with_subtitles, export_with_subtitles);
+            assert!(
+                !receiver
+                    .borrow()
+                    .captions
+                    .as_ref()
+                    .unwrap()
+                    .settings
+                    .enabled
+            );
+            let persisted = cap_project::ProjectConfiguration::load(dir.path()).unwrap();
+            assert!(persisted.captions.as_ref().unwrap().settings.enabled);
+        }
+    }
+
+    #[tokio::test]
+    async fn export_preview_reports_missing_or_malformed_saved_config() {
+        let dir = tempdir().unwrap();
+        let missing = load_export_preview_config(dir.path().to_path_buf(), false)
+            .await
+            .unwrap_err();
+        assert!(missing.contains("Failed to read saved project config"));
+        std::fs::write(dir.path().join("project-config.json"), "{not valid json").unwrap();
+        let malformed = load_export_preview_config(dir.path().to_path_buf(), false)
+            .await
+            .unwrap_err();
+        assert!(malformed.contains("Failed to read saved project config"));
+    }
+
+    #[tokio::test]
+    async fn saved_export_preview_projects_captions_after_a_cut() {
         let directory = tempdir().unwrap();
         let mut meta: RecordingMeta = serde_json::from_value(serde_json::json!({
             "pretty_name":"preview", "segments":[], "cursors":{}
@@ -1778,15 +2120,61 @@ mod tests {
         }))
         .unwrap();
         config.write(directory.path()).unwrap();
-        let mut preview = export_project_config(config.clone(), false);
+        let mut preview = load_export_preview_config(directory.path().to_path_buf(), false)
+            .await
+            .unwrap();
         synchronize_preview_timing(&meta, &mut preview, &[10.0]);
         let caption = &preview.timeline.as_ref().unwrap().caption_segments[0];
         assert_eq!(caption.start, 7.0);
         assert_eq!(caption.end, 7.5);
         assert_eq!(caption.text, "retained");
-        let mut cursor_only = export_project_config(config, true);
+        let mut cursor_only = load_export_preview_config(directory.path().to_path_buf(), true)
+            .await
+            .unwrap();
         synchronize_preview_timing(&meta, &mut cursor_only, &[10.0]);
         assert!(cursor_only.captions.is_none());
+    }
+
+    #[test]
+    fn export_preview_rejects_unloaded_incoming_and_outgoing_media() {
+        let medias = ["first", "second"];
+        assert_eq!(export_preview_media(&medias, 0).unwrap(), &"first");
+        assert_eq!(export_preview_media(&medias, 1).unwrap(), &"second");
+        assert!(export_preview_media(&medias, 2).is_err());
+        assert!(export_preview_media(&medias, u32::MAX).is_err());
+        assert!(export_preview_media::<()>(&[], 0).is_err());
+    }
+
+    #[test]
+    fn export_preview_caption_policy_preserves_editor_and_cursor_only_states() {
+        for enabled in [false, true] {
+            for export in [false, true] {
+                for cursor_only in [false, true] {
+                    let editor = cap_project::ProjectConfiguration {
+                        captions: Some(cap_project::CaptionsData {
+                            settings: cap_project::CaptionSettings {
+                                enabled,
+                                export_with_subtitles: export,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    };
+                    let original = serde_json::to_value(&editor).unwrap();
+                    let preview = export_project_config(editor.clone(), cursor_only);
+                    if cursor_only {
+                        assert!(preview.captions.is_none());
+                    } else {
+                        assert_eq!(
+                            preview.captions.unwrap().settings.enabled,
+                            enabled && export
+                        );
+                    }
+                    assert_eq!(serde_json::to_value(editor).unwrap(), original);
+                }
+            }
+        }
     }
 
     #[test]
@@ -1926,6 +2314,21 @@ pub async fn generate_export_preview_fast(
     }
 }
 
+async fn load_export_preview_config(
+    project_path: PathBuf,
+    cursor_only: bool,
+) -> Result<cap_project::ProjectConfiguration, String> {
+    tokio::task::spawn_blocking(move || {
+        cap_project::ProjectConfiguration::load(&project_path)
+            .map(|config| export_project_config(config, cursor_only))
+            .map_err(|error| {
+                format!("Failed to read saved project config for export preview: {error}")
+            })
+    })
+    .await
+    .map_err(|error| format!("Failed to load export preview config: {error}"))?
+}
+
 fn synchronize_preview_timing(
     meta: &RecordingMeta,
     project: &mut cap_project::ProjectConfiguration,
@@ -1934,6 +2337,15 @@ fn synchronize_preview_timing(
     cap_project::synchronize_legacy_keyboard(meta, project);
     cap_project::synchronize_captions(project, display_durations);
 }
+
+fn export_preview_media<T>(medias: &[T], recording_clip: u32) -> Result<&T, String> {
+    medias.get(recording_clip as usize).ok_or_else(|| {
+        format!(
+            "Recording clip {recording_clip} is unavailable in this editor. Reopen the project before exporting."
+        )
+    })
+}
+
 #[instrument(skip_all)]
 async fn generate_export_preview_fast_inner(
     editor: WindowEditorInstance,
@@ -1949,10 +2361,8 @@ async fn generate_export_preview_fast_inner(
 
     let _preview_guard = ExportPreviewActiveGuard::try_new(&editor.export_preview_active)?;
 
-    let mut project_config = export_project_config(
-        editor.project_config.1.borrow().clone(),
-        settings.cursor_only,
-    );
+    let mut project_config =
+        load_export_preview_config(editor.project_path.clone(), settings.cursor_only).await?;
     let meta = editor.meta().clone();
     let recordings = editor.recordings.clone();
     let project_config = tokio::task::spawn_blocking(move || {
@@ -1988,7 +2398,7 @@ async fn generate_export_preview_fast_inner(
         return Err("Frame time is outside video duration".to_string());
     };
 
-    let segment_media = &editor.segment_medias[segment.recording_clip as usize];
+    let segment_media = export_preview_media(&editor.segment_medias, segment.recording_clip)?;
     let clip_config = project_config
         .clips
         .iter()
@@ -2043,7 +2453,8 @@ async fn generate_export_preview_fast_inner(
     );
 
     let frame = if let Some((outgoing, kind, progress)) = transition_mapping {
-        let outgoing_media = &editor.segment_medias[outgoing.segment.recording_clip as usize];
+        let outgoing_media =
+            export_preview_media(&editor.segment_medias, outgoing.segment.recording_clip)?;
         let outgoing_offsets = project_config
             .clips
             .iter()

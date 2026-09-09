@@ -11,6 +11,10 @@
 //! The indicator does not slide (no transform in this gpui rev); the selected
 //! item paints the `size-9 rounded-lg bg-gray-3` box itself, which is what the
 //! editor window has always done.
+//!
+//! Each tab is exactly one element -- the pill. A wrapper carrying the hit box,
+//! the tooltip anchor or a focus ring would paint its own square corners around
+//! the pill's radius, which is what the first pass shipped.
 
 use gpui::{
     App, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
@@ -22,14 +26,23 @@ use crate::theme::Theme;
 #[derive(Debug, Clone)]
 pub struct TabRailItem {
     pub icon: SharedString,
+    /// The tab's name. It is not drawn -- the rail is icon-only -- so it is
+    /// carried as the tooltip instead.
+    pub label: SharedString,
     pub selected: bool,
     pub disabled: bool,
 }
 
 impl TabRailItem {
-    pub fn new(icon: impl Into<SharedString>, selected: bool, disabled: bool) -> Self {
+    pub fn new(
+        icon: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        selected: bool,
+        disabled: bool,
+    ) -> Self {
         Self {
             icon: icon.into(),
+            label: label.into(),
             selected,
             disabled,
         }
@@ -46,19 +59,21 @@ pub struct TabRail {
     items: Vec<TabRailItem>,
     height: Pixels,
     box_size: Pixels,
+    box_width: Pixels,
     icon_size: Pixels,
     bg: Hsla,
     border: Hsla,
     indicator: Hsla,
+    hover: Hsla,
     selected_icon: Hsla,
     idle_icon: Hsla,
+    theme: Theme,
     on_select: Option<TabHandler>,
 }
 
 impl TabRail {
-    /// The editor's config sidebar rail: an `h-16` bar over `bg-gray-1
-    /// dark:bg-gray-2` with a `border-b border-gray-3`, `size-9` boxes and
-    /// `text-lg` (18px) icons.
+    /// The editor's config sidebar rail: a 46px bar on the card surface under
+    /// an `ed-line` hairline, with 40x30 tab boxes and 16px icons.
     pub fn editor(
         theme: &Theme,
         id: impl Into<ElementId>,
@@ -68,14 +83,17 @@ impl TabRail {
         Self {
             id: id.into(),
             items,
-            height: px(64.),
-            box_size: px(36.),
-            icon_size: px(18.),
+            height: px(46.),
+            box_size: px(30.),
+            box_width: px(40.),
+            icon_size: px(16.),
             bg: panel_bg,
-            border: Hsla::from(theme.gray_3),
-            indicator: Hsla::from(theme.gray_3),
-            selected_icon: Hsla::from(theme.gray_12),
-            idle_icon: Hsla::from(theme.gray_11),
+            border: Hsla::from(theme.editor.line),
+            indicator: Hsla::from(theme.editor.ctl_hover),
+            hover: Hsla::from(theme.editor.ctl),
+            selected_icon: Hsla::from(theme.editor.text_1),
+            idle_icon: Hsla::from(theme.editor.text_2),
+            theme: *theme,
             on_select: None,
         }
     }
@@ -100,12 +118,15 @@ impl RenderOnce for TabRail {
             items,
             height,
             box_size,
+            box_width,
             icon_size,
             bg,
             border,
             indicator,
+            hover,
             selected_icon,
             idle_icon,
+            theme,
             on_select,
         } = self;
 
@@ -124,6 +145,8 @@ impl RenderOnce for TabRail {
             .h(height)
             .flex_none()
             .overflow_hidden()
+            .justify_around()
+            .px(px(10.))
             .border_b_1()
             .border_color(border)
             .bg(bg)
@@ -131,36 +154,29 @@ impl RenderOnce for TabRail {
                 let handler = handler.clone();
                 let selected = item.selected;
                 let disabled = item.disabled;
+                let label = item.label.clone();
 
-                // Trigger: `flex relative z-10 flex-1 justify-center
-                // items-center px-4 py-2`.
                 div()
                     .id(SharedString::from(format!("{prefix}-{index}")))
-                    .tab_index(0)
-                    .relative()
                     .flex()
-                    .flex_1()
-                    .justify_center()
+                    .flex_none()
                     .items_center()
-                    .px(px(16.))
-                    .py(px(8.))
-                    .when(disabled, |this| this.opacity(0.5))
+                    .justify_center()
+                    .h(box_size)
+                    .w(box_width)
+                    .rounded(px(9.))
+                    .when(disabled, |this| this.opacity(0.6))
+                    .when(selected, |this| this.bg(indicator))
+                    .when(!selected && !disabled, |this| {
+                        this.cursor_pointer().hover(move |style| style.bg(hover))
+                    })
+                    .tooltip_show_delay(crate::ui::TOOLTIP_SHOW_DELAY)
+                    .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, label.clone()).view(cx))
                     .child(
-                        // The icon box and, under it, the selection pill: both
-                        // `size-9`, the pill `rounded-lg bg-gray-3`.
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(box_size)
-                            .rounded(px(8.))
-                            .when(selected, |this| this.bg(indicator))
-                            .child(
-                                svg()
-                                    .path(item.icon)
-                                    .size(icon_size)
-                                    .text_color(if selected { selected_icon } else { idle_icon }),
-                            ),
+                        svg()
+                            .path(item.icon)
+                            .size(icon_size)
+                            .text_color(if selected { selected_icon } else { idle_icon }),
                     )
                     .when_some(handler.filter(|_| !disabled), |this, handler| {
                         this.on_click(move |_, window, cx| handler(&index, window, cx))

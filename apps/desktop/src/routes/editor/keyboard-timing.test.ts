@@ -144,6 +144,7 @@ describe("keyboard output timing", () => {
 				{ start: 4, end: 5, enabled: true, layout: "fullscreen" as const },
 				{ start: 7, end: 8, enabled: true, layout: "fullscreen" as const },
 			],
+			styleSegments: [{ start: 10, end: 11 }],
 			zoomSegments: [{ start: 10, end: 11 }],
 			keyboardSegments: [keyboardSegment(3, 9, "abc", [500, 2500, 5500])],
 			audioSegments: [{ start: 5, end: 10, trimStart: 2, fadeIn: 1 }],
@@ -175,6 +176,7 @@ describe("keyboard output timing", () => {
 		expect(timeline.textSegments).toEqual([
 			{ start: 4, end: 5, enabled: true, layout: "fullscreen" },
 		]);
+		expect(timeline.styleSegments).toEqual([{ start: 7, end: 8 }]);
 		expect(timeline.zoomSegments).toEqual([{ start: 7, end: 8 }]);
 		expect(timeline.keyboardSegments[0]).toMatchObject({
 			start: 3,

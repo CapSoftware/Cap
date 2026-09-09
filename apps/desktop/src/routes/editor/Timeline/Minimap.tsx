@@ -99,7 +99,7 @@ export function Minimap() {
 		<div
 			ref={setBarRef}
 			class={cx(
-				"relative w-full h-full overflow-hidden rounded-full border border-gray-4 bg-gray-3/80 transition-opacity duration-200",
+				"relative w-full h-full overflow-hidden rounded-[2px] bg-ed-ctl-active transition-opacity duration-200",
 				zoomedIn() ? "opacity-100" : "pointer-events-none opacity-0",
 			)}
 			onMouseDown={handleBarMouseDown}
@@ -111,13 +111,16 @@ export function Minimap() {
 			<For each={clipBoundaries()}>
 				{(offset) => (
 					<div
-						class="absolute inset-y-0 w-px bg-gray-6/50"
-						style={{ left: `${(offset / total()) * 100}%` }}
+						class="absolute inset-y-0 w-px opacity-50"
+						style={{
+							left: `${(offset / total()) * 100}%`,
+							background: "var(--track-clip)",
+						}}
 					/>
 				)}
 			</For>
 			<div
-				class="absolute inset-y-0 rounded-full border border-gray-7/80 bg-gray-6/70 transition-colors duration-150 cursor-grab hover:bg-gray-7/70 active:cursor-grabbing"
+				class="absolute inset-y-0 rounded-[2px] bg-ed-text-3/50 transition-colors duration-150 cursor-grab hover:bg-ed-text-3/75 active:cursor-grabbing"
 				style={{ left: `${chipLeft()}px`, width: `${chipWidth()}px` }}
 				onMouseDown={(e) => beginDrag(e, "move")}
 			>

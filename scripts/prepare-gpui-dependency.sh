@@ -11,18 +11,29 @@ patch_files=(
 base_revision="5d1f83d9f27a19bec1fb241dc33b42238af9cf8d"
 remote="https://github.com/wingleeio/zed.git"
 
-verify_checkout() {
+verify_checkout() (
 	if ! git -C "$zed_dir" merge-base --is-ancestor "$base_revision" HEAD; then
 		echo "error: $zed_dir does not contain GPUI base $base_revision" >&2
 		exit 1
 	fi
-	for patch_file in "${patch_files[@]}"; do
-		if ! git -C "$zed_dir" apply --reverse --check --unidiff-zero "$patch_file"; then
+	verification_dir="$(mktemp -d "${TMPDIR:-/tmp}/cap-gpui-verify.XXXXXX")"
+	trap 'rm -rf -- "$verification_dir"' EXIT
+	git init --quiet "$verification_dir"
+	git -C "$zed_dir" apply --numstat -z "${patch_files[@]}" > "$verification_dir/patch-paths"
+	while IFS=$'\t' read -r -d '' added removed patched_path; do
+		if [[ -e "$zed_dir/$patched_path" ]]; then
+			mkdir -p "$verification_dir/$(dirname "$patched_path")"
+			cp -p "$zed_dir/$patched_path" "$verification_dir/$patched_path"
+		fi
+	done < "$verification_dir/patch-paths"
+	for ((patch_index=${#patch_files[@]}-1; patch_index>=0; patch_index--)); do
+		patch_file="${patch_files[patch_index]}"
+		if ! git -C "$verification_dir" apply --reverse --unidiff-zero "$patch_file"; then
 			echo "error: $zed_dir does not contain Cap's pinned GPUI patch: $patch_file" >&2
 			exit 1
 		fi
 	done
-}
+)
 
 if [[ -e "$zed_dir/.git" ]]; then
 	verify_checkout

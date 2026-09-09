@@ -11,7 +11,9 @@ use crate::{
     capture_pipeline::{
         MakeCapturePipeline, ScreenCaptureMethod, Stop, target_to_display_and_crop,
     },
-    cursor::{CursorActor, Cursors, IncrementalCaptureOutputs, spawn_cursor_recorder},
+    cursor::{
+        CursorActor, CursorActorResponse, Cursors, IncrementalCaptureOutputs, spawn_cursor_recorder,
+    },
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer},
     output_pipeline::{
@@ -108,6 +110,47 @@ fn studio_capture_stopped(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.downcast_ref::<StudioCaptureStoppedError>().is_some())
+}
+
+fn accumulate_finalization_error(failure: &mut Option<anyhow::Error>, result: anyhow::Result<()>) {
+    if let Err(error) = result {
+        *failure = Some(match failure.take() {
+            Some(previous) => previous.context(format!("{error:#}")),
+            None => error,
+        });
+    }
+}
+
+fn persist_segment_input_events(
+    response: CursorActorResponse,
+    cursor_path: Option<&Path>,
+    keyboard_path: Option<&Path>,
+    failure: &mut Option<anyhow::Error>,
+) -> (Cursors, u32) {
+    if let Some(path) = cursor_path {
+        let result = serde_json::to_string_pretty(&CursorEvents {
+            clicks: response.clicks,
+            moves: response.moves,
+        })
+        .map_err(anyhow::Error::from)
+        .and_then(|events| std::fs::write(path, events).map_err(anyhow::Error::from))
+        .with_context(|| format!("Could not save cursor events to {}", path.display()));
+        accumulate_finalization_error(failure, result);
+    }
+
+    if !response.keyboard_presses.is_empty()
+        && let Some(path) = keyboard_path
+    {
+        let result = KeyboardEvents {
+            presses: response.keyboard_presses,
+        }
+        .write_to_file(path)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("Could not save keyboard events to {}", path.display()));
+        accumulate_finalization_error(failure, result);
+    }
+
+    (response.cursors, response.next_cursor_id)
 }
 
 fn minimum_segment_stop_deadline(discard: bool, segment_start: Instant) -> Option<Instant> {
@@ -291,6 +334,7 @@ pub struct ActorHandle {
 
 #[derive(kameo::Actor)]
 pub struct Actor {
+    diagnostic: Option<cap_utils::operation_diagnostics::Operation>,
     #[cfg(target_os = "linux")]
     lifetime: StudioLifetimeOwner,
     recording_dir: PathBuf,
@@ -358,9 +402,10 @@ impl Actor {
         let stopped = stopped.map_err(|error| self.preserve_windows_stop_failure(error));
         let PipelineStopOutcome {
             mut pipeline,
-            media_error,
+            mut media_error,
             all_tracks_stopped,
         } = stopped?;
+        self.all_tracks_stopped &= all_tracks_stopped;
 
         tracing::info!("pipeline shutdown");
 
@@ -388,27 +433,12 @@ impl Actor {
             None
         };
         let cursors = if let Some((cursor, res)) = cursor_result {
-            if let Some(output_path) = cursor.output_path.as_ref() {
-                std::fs::write(
-                    output_path,
-                    serde_json::to_string_pretty(&CursorEvents {
-                        clicks: res.clicks,
-                        moves: res.moves,
-                    })?,
-                )?;
-            }
-
-            if !res.keyboard_presses.is_empty()
-                && let Some(keyboard_output_path) = cursor.keyboard_output_path.as_ref()
-            {
-                KeyboardEvents {
-                    presses: res.keyboard_presses,
-                }
-                .write_to_file(keyboard_output_path)
-                .map_err(anyhow::Error::msg)?;
-            }
-
-            (res.cursors, res.next_cursor_id)
+            persist_segment_input_events(
+                res,
+                cursor.output_path.as_deref(),
+                cursor.keyboard_output_path.as_deref(),
+                &mut media_error,
+            )
         } else {
             (Default::default(), 0)
         };
@@ -423,8 +453,6 @@ impl Actor {
             camera_device_id,
             mic_device_id,
         });
-        self.all_tracks_stopped &= all_tracks_stopped;
-
         if let Some(error) = media_error {
             if self.all_tracks_stopped {
                 return Err(anyhow::Error::new(StudioCaptureStoppedError::new(error)));
@@ -484,6 +512,25 @@ impl Actor {
     }
 
     async fn handle_stop(
+        &mut self,
+        discard: bool,
+        ctx: &mut Context<Self, anyhow::Result<CompletedRecording>>,
+    ) -> anyhow::Result<CompletedRecording> {
+        if let Some(diagnostic) = &mut self.diagnostic {
+            diagnostic.stage(if discard { "discarding" } else { "finalizing" });
+        }
+        let result = self.handle_stop_inner(discard, ctx).await;
+        if let Some(mut diagnostic) = self.diagnostic.take() {
+            diagnostic.field(cap_utils::operation_diagnostics::Field::number(
+                "segments",
+                self.segments.len() as u64,
+            ));
+            diagnostic.finish(result.is_ok());
+        }
+        result
+    }
+
+    async fn handle_stop_inner(
         &mut self,
         discard: bool,
         ctx: &mut Context<Self, anyhow::Result<CompletedRecording>>,
@@ -636,6 +683,9 @@ impl Message<Pause> for Actor {
                 index,
                 ..
             }) => {
+                if let Some(diagnostic) = &mut self.diagnostic {
+                    diagnostic.stage("pausing");
+                }
                 let stopped = self
                     .stop_pipeline(pipeline, segment_start_time)
                     .await
@@ -647,6 +697,9 @@ impl Message<Pause> for Actor {
                             cursors,
                             next_cursor_id,
                         });
+                        if let Some(diagnostic) = &mut self.diagnostic {
+                            diagnostic.stage("paused");
+                        }
                     }
                     Ok(_) => {
                         let error = anyhow!(UNCONFIRMED_CAPTURE_CLEANUP);
@@ -819,6 +872,9 @@ impl Message<ResumeFinished> for Actor {
                         segment_start_time: current_time_f64(),
                         segment_start_instant: Instant::now(),
                     });
+                    if let Some(diagnostic) = &mut self.diagnostic {
+                        diagnostic.stage("recording");
+                    }
                     attempt.reply(Ok(()));
                 } else {
                     let cleanup =
@@ -917,6 +973,9 @@ impl Message<Resume> for Actor {
         };
         let ready = attempt.ready_future();
         self.resume_attempt = Some(attempt);
+        if let Some(diagnostic) = &mut self.diagnostic {
+            diagnostic.stage("resuming");
+        }
         let actor = ctx.actor_ref().clone();
         drop(tokio::spawn(async move {
             let prepared = std::panic::AssertUnwindSafe(prepare_resume_pipeline(
@@ -971,6 +1030,9 @@ impl Message<Resume> for Actor {
                 cursors,
                 next_cursor_id,
             }) => {
+                if let Some(diagnostic) = &mut self.diagnostic {
+                    diagnostic.stage("resuming");
+                }
                 let pipeline = self
                     .segment_factory
                     .create_next(cursors, next_cursor_id)
@@ -979,6 +1041,9 @@ impl Message<Resume> for Actor {
                 let pipeline = pipeline.map_err(|error| self.preserve_windows_stop_failure(error));
                 let pipeline = pipeline?;
 
+                if let Some(diagnostic) = &mut self.diagnostic {
+                    diagnostic.stage("recording");
+                }
                 let new_segment_start_time = current_time_f64();
 
                 Some(ActorState::Recording {
@@ -1001,6 +1066,9 @@ impl Message<Cancel> for Actor {
     type Reply = anyhow::Result<()>;
 
     async fn handle(&mut self, _: Cancel, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        if let Some(diagnostic) = &mut self.diagnostic {
+            diagnostic.stage("cancelling");
+        }
         #[cfg(target_os = "linux")]
         self.cancel_resume().await?;
         if let Some(failure) = self.terminal_stop_failure.as_ref() {
@@ -1049,6 +1117,9 @@ impl Message<Cancel> for Actor {
         #[cfg(windows)]
         if let Some(error) = self.windows_failure() {
             return Err(self.preserve_windows_stop_failure(anyhow!(error)));
+        }
+        if let Some(diagnostic) = self.diagnostic.take() {
+            diagnostic.finish(true);
         }
         Ok(())
     }
@@ -2085,6 +2156,49 @@ async fn spawn_studio_recording_actor(
     max_fps: u32,
     quality: crate::StudioQuality,
 ) -> anyhow::Result<ActorHandle> {
+    use cap_utils::operation_diagnostics::{Field, Operation};
+    let mut diagnostic = Operation::start(
+        "studio_recording",
+        &[
+            Field::identifier(
+                "resource",
+                cap_utils::operation_diagnostics::resource_id(&recording_dir),
+            ),
+            Field::number("requested_fps", max_fps as u64),
+            Field::flag("system_audio", base_inputs.capture_system_audio),
+            Field::flag("microphone", base_inputs.mic_feed.is_some()),
+            Field::flag("camera", base_inputs.camera_feed.is_some()),
+            Field::flag("fragmented", fragmented),
+            Field::flag("out_of_process_muxer", use_oop_muxer),
+            Field::flag("custom_cursor", custom_cursor_capture),
+        ],
+    );
+    if let Some(microphone) = &base_inputs.mic_feed {
+        let info = microphone.audio_info();
+        diagnostic.field(Field::number(
+            "microphone_sample_rate",
+            info.sample_rate as u64,
+        ));
+        diagnostic.field(Field::number("microphone_channels", info.channels as u64));
+        diagnostic.field(Field::flag(
+            "microphone_wireless",
+            info.is_wireless_transport,
+        ));
+    }
+    if let Some(camera) = &base_inputs.camera_feed {
+        let info = camera.video_info();
+        diagnostic.field(Field::number("camera_width", info.width as u64));
+        diagnostic.field(Field::number("camera_height", info.height as u64));
+        diagnostic.field(Field::number(
+            "camera_fps_numerator",
+            info.frame_rate.0 as u64,
+        ));
+        diagnostic.field(Field::number(
+            "camera_fps_denominator",
+            info.frame_rate.1 as u64,
+        ));
+    }
+    diagnostic.stage("initializing_capture");
     ensure_dir(&recording_dir)?;
 
     trace!("creating recording actor");
@@ -2140,7 +2254,9 @@ async fn spawn_studio_recording_actor(
 
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     let actor_recording_dir = recording_dir.clone();
+    diagnostic.stage("recording");
     let actor_ref = Actor::spawn(Actor {
+        diagnostic: Some(diagnostic),
         #[cfg(target_os = "linux")]
         lifetime,
         #[cfg(windows)]
@@ -2497,6 +2613,8 @@ async fn stop_recording(
             transitions: Vec::new(),
             zoom_segments: Vec::new(),
             scene_segments: Vec::new(),
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
             mask_segments: Vec::new(),
             text_segments: Vec::new(),
             caption_segments: Vec::new(),
@@ -3222,6 +3340,134 @@ mod tests {
         ChannelVideoSourceConfig, Muxer, SetupCtx, TaskPool, VideoFrame, VideoMuxer,
     };
 
+    fn sidecar_response() -> CursorActorResponse {
+        CursorActorResponse {
+            cursors: [(
+                42,
+                crate::cursor::Cursor {
+                    file_name: "cursor.png".into(),
+                    id: 7,
+                    hotspot: cap_project::XY { x: 0.25, y: 0.75 },
+                    shape: None,
+                },
+            )]
+            .into(),
+            next_cursor_id: 8,
+            moves: Vec::new(),
+            clicks: Vec::new(),
+            keyboard_presses: vec![cap_project::KeyPressEvent {
+                key: "a".into(),
+                key_code: "KeyA".into(),
+                time_ms: 125.0,
+                down: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn sidecar_cursor_failure_still_saves_keyboard_and_keeps_cursor_registry() {
+        let temp = tempfile::tempdir().unwrap();
+        let keyboard = temp.path().join("keyboard.bin");
+        let response = sidecar_response();
+        let expected_keys = response.keyboard_presses.clone();
+        let mut failure = None;
+        let (cursors, next_id) = persist_segment_input_events(
+            response,
+            Some(temp.path()),
+            Some(&keyboard),
+            &mut failure,
+        );
+
+        assert!(format!("{:#}", failure.unwrap()).contains("Could not save cursor events"));
+        assert_eq!(
+            KeyboardEvents::load_from_file(&keyboard).unwrap().presses,
+            expected_keys
+        );
+        assert_eq!(cursors.get(&42).unwrap().id, 7);
+        assert_eq!(next_id, 8);
+    }
+
+    #[test]
+    fn sidecar_keyboard_failure_preserves_cursor_file_and_media_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let cursor = temp.path().join("cursor.json");
+        let mut failure = Some(anyhow!("encoder media failed"));
+        persist_segment_input_events(
+            sidecar_response(),
+            Some(&cursor),
+            Some(temp.path()),
+            &mut failure,
+        );
+
+        let saved: CursorEvents = serde_json::from_slice(&std::fs::read(cursor).unwrap()).unwrap();
+        assert!(saved.clicks.is_empty() && saved.moves.is_empty());
+        let error = format!("{:#}", failure.unwrap());
+        assert!(error.contains("Could not save keyboard events"));
+        assert!(error.contains("encoder media failed"));
+    }
+
+    #[test]
+    fn sidecar_failures_aggregate_without_losing_disk_full_or_stop_acknowledgement() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut failure = Some(anyhow::Error::from(std::io::Error::from_raw_os_error(
+            libc::ENOSPC,
+        )));
+        persist_segment_input_events(
+            sidecar_response(),
+            Some(temp.path()),
+            Some(temp.path()),
+            &mut failure,
+        );
+        let error = anyhow::Error::new(StudioCaptureStoppedError::new(failure.unwrap()));
+        assert!(studio_capture_stopped(&error));
+        let message = format!("{error:#}");
+        assert!(message.contains("Could not save cursor events"));
+        assert!(message.contains("Could not save keyboard events"));
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.raw_os_error() == Some(libc::ENOSPC))
+        }));
+    }
+
+    #[test]
+    fn sidecar_success_preserves_existing_json_and_keyboard_formats() {
+        let temp = tempfile::tempdir().unwrap();
+        let cursor = temp.path().join("cursor.json");
+        let keyboard = temp.path().join("keyboard.bin");
+        let response = sidecar_response();
+        let expected_cursor = serde_json::to_string_pretty(&CursorEvents {
+            moves: response.moves.clone(),
+            clicks: response.clicks.clone(),
+        })
+        .unwrap();
+        let expected_keyboard = temp.path().join("expected.bin");
+        KeyboardEvents {
+            presses: response.keyboard_presses.clone(),
+        }
+        .write_to_file(&expected_keyboard)
+        .unwrap();
+        let mut failure = None;
+        persist_segment_input_events(response, Some(&cursor), Some(&keyboard), &mut failure);
+        assert!(failure.is_none());
+        assert_eq!(std::fs::read_to_string(cursor).unwrap(), expected_cursor);
+        assert_eq!(
+            std::fs::read(keyboard).unwrap(),
+            std::fs::read(expected_keyboard).unwrap()
+        );
+    }
+
+    #[test]
+    fn sidecar_disabled_paths_and_empty_keyboard_do_not_write_or_clear_failures() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut response = sidecar_response();
+        response.keyboard_presses.clear();
+        let mut failure = Some(anyhow!("retained media error"));
+        persist_segment_input_events(response, None, Some(temp.path()), &mut failure);
+        assert_eq!(failure.unwrap().to_string(), "retained media error");
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
     #[test]
     fn media_failure_requires_every_producer_stop_to_be_confirmed() {
         let error = classify_pipeline_stop_errors(
@@ -3279,6 +3525,7 @@ mod tests {
             completion_tx.clone(),
         );
         let mut actor = Actor {
+            diagnostic: None,
             recording_dir: path.to_path_buf(),
             state: None,
             all_tracks_stopped: true,
@@ -3374,6 +3621,7 @@ mod tests {
         );
         let timestamps = Timestamps::now();
         let actor_ref = Actor::spawn(Actor {
+            diagnostic: None,
             recording_dir: path.to_path_buf(),
             state: Some(ActorState::Paused {
                 next_index: 1,
@@ -3549,6 +3797,7 @@ mod tests {
                 lifecycle: lifecycle.clone(),
                 recording_dir: path.to_path_buf(),
                 actor_ref: Actor::spawn(Actor {
+                    diagnostic: None,
                     lifetime: StudioLifetimeOwner {
                         lifecycle,
                         armed: true,
@@ -4999,6 +5248,7 @@ mod tests {
         );
         (
             Actor {
+                diagnostic: None,
                 recording_dir: recording_dir.to_owned(),
                 cancel_error: None,
                 state: Some(ActorState::Recording {
@@ -5242,6 +5492,7 @@ mod windows_cancel_tests {
             completion_tx.clone(),
         );
         Actor {
+            diagnostic: None,
             recording_dir: PathBuf::new(),
             state: None,
             all_tracks_stopped: true,

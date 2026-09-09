@@ -335,9 +335,6 @@ pub(crate) struct PagesState {
     // License (license.tsx)
     license_input: Entity<ui::TextInputState>,
     license_draft: String,
-    /// `isCommercialAnnual`, default true.
-    license_annual: bool,
-    license_checkout_pending: bool,
     license_activating: bool,
     license_error: Option<String>,
 
@@ -437,8 +434,6 @@ impl PagesState {
             changelog: None,
             license_input,
             license_draft: String::new(),
-            license_annual: true,
-            license_checkout_pending: false,
             license_activating: false,
             license_error: None,
             integrations_view: IntegrationsView::Index,
@@ -511,8 +506,6 @@ impl SettingsWindow {
             Page::Changelog => self.changelog_fetch(window, cx),
             Page::License => {
                 self.pages.license_draft.clear();
-                self.pages.license_annual = true;
-                self.pages.license_checkout_pending = false;
                 self.pages.license_activating = false;
                 self.pages.license_error = None;
                 let input = self.pages.license_input.clone();
@@ -3697,44 +3690,6 @@ fn markdown_paragraphs(content: &str) -> Vec<MarkdownParagraph> {
 const LICENSE_API_BASE: &str = "https://l.cap.so/api";
 
 impl SettingsWindow {
-    /// `createCommercialCheckoutUrl`, opened externally.
-    fn license_checkout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pages.license_checkout_pending {
-            return;
-        }
-        self.pages.license_checkout_pending = true;
-        let kind = if self.pages.license_annual {
-            "yearly"
-        } else {
-            "lifetime"
-        };
-        let url = format!("{LICENSE_API_BASE}/commercial/checkout");
-        self.spawn_tokio(
-            window,
-            cx,
-            async move {
-                http_json(
-                    reqwest::Method::POST,
-                    url,
-                    Vec::new(),
-                    Vec::new(),
-                    None,
-                    HttpBody::Json(json!({ "type": kind })),
-                    None,
-                )
-                .await
-            },
-            |this, result, _window, cx| {
-                this.pages.license_checkout_pending = false;
-                if let Ok((200, body)) = result
-                    && let Some(url) = body.get("url").and_then(Value::as_str)
-                {
-                    cx.open_url(url);
-                }
-            },
-        );
-    }
-
     /// `activateCommercialLicense`: key and instance id go as headers, and a
     /// 200 writes `general_settings.commercialLicense` in the exact shape
     /// license.tsx's `onActivated` writes.
@@ -3805,66 +3760,55 @@ impl SettingsWindow {
     pub(crate) fn render_license(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let theme = self.theme;
         let auth = store::auth_snapshot();
-
-        // `createLicenseQuery`: pro from the auth plan, else commercial from
-        // the store, else the purchase/activate pair.
-        if auth.plan_upgraded {
-            return vec![
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .w_full()
-                    .pt(px(96.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .gap(px(12.))
-                            .w_full()
-                            .max_w(px(448.))
-                            .p(px(24.))
-                            .rounded(px(24.))
-                            .border_1()
-                            .border_color(theme.settings_border())
-                            .bg(theme.settings_card_bg())
-                            .child(
-                                div()
-                                    .text_size(px(24.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Cap Pro License"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .line_height(px(20.))
-                                    .text_color(theme.settings_muted())
-                                    .child(
-                                        "Your account is upgraded to Cap Pro and already \
-                                         includes a commercial license.",
-                                    ),
-                            ),
-                    )
-                    .into_any_element(),
-            ];
+        let pro = auth.is_upgraded();
+        let license = store::commercial_license();
+        let (name, description) = if pro {
+            (
+                "Cap Pro",
+                "Your account includes cloud sharing, Pro features and a desktop license for commercial use.",
+            )
+        } else if license.is_some() {
+            (
+                "Desktop License",
+                "Your desktop license covers commercial recording and editing. Cap Pro adds cloud sharing and collaboration features.",
+            )
+        } else {
+            (
+                "Cap Free",
+                "Record and edit locally for personal use. Choose a paid plan for commercial use or more cloud features.",
+            )
+        };
+        let mut content = vec![
+            self.section("Plan & license", Some("Your Cap plan and desktop license, in one place."), None, vec![]).into_any_element(),
+            self.section("Your plan", None, None, vec![self.card(true).child(
+                div().flex().flex_col().gap(px(8.))
+                    .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child(name))
+                    .child(div().text_size(px(12.)).line_height(px(18.)).text_color(theme.settings_muted()).child(description))
+                    .when(auth.signed_in(), |this| this.child(
+                        div().flex().flex_col().items_start().gap(px(8.)).child(self.button(
+                            "refresh-plan", (ui::ButtonVariant::Gray, None),
+                            if self.plan_refresh_pending { "Checking…" } else { "Refresh plan" },
+                            self.plan_refresh_pending, cx, |this, window, cx| this.refresh_plan(window, cx),
+                        )).when(self.plan_refresh_failed, |this| this.child(div().text_size(px(12.)).text_color(theme.settings_muted()).child("Couldn't refresh your plan. Please try again.")))
+                    ))
+                    .when(!auth.signed_in(), |this| this.child(div().text_size(px(12.)).line_height(px(18.)).text_color(theme.settings_muted()).child("Already have Cap Pro? Sign in with your account from the sidebar.")))
+            ).into_any_element()]).into_any_element(),
+            self.section("Explore plans", Some("Compare current pricing and everything included on our website."), None, vec![self.card(true).child(
+                div().flex().flex_col().items_start().gap(px(12.))
+                    .child(div().text_size(px(12.)).line_height(px(18.)).child("Desktop License · Commercial use of the desktop recorder and editor."))
+                    .child(div().text_size(px(12.)).line_height(px(18.)).child("Cap Pro · A desktop license, plus cloud sharing, AI features and collaboration."))
+                    .child(ui::Button::settings(&theme, "license-pricing", ui::ButtonVariant::Dark, ui::ButtonSize::Sm).label("View plans & pricing ↗").on_click(|_, _, cx| cx.open_url(crate::auth::PRICING_URL)))
+                    .child(div().text_size(px(12.)).text_color(theme.settings_muted()).child("Opens cap.so/pricing in your browser."))
+            ).into_any_element()]).into_any_element(),
+        ];
+        if !pro {
+            content.push(if let Some(license) = license {
+                self.render_license_active(license, cx)
+            } else {
+                self.render_license_activate(cx).into_any_element()
+            });
         }
-
-        if let Some(license) = store::commercial_license() {
-            return vec![self.render_license_active(license, cx)];
-        }
-
-        vec![
-            div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(12.))
-                .w_full()
-                .child(self.render_license_purchase(cx))
-                .child(self.render_license_activate(cx))
-                .into_any_element(),
-        ]
+        content
     }
 
     /// The activated-commercial card.
@@ -3903,7 +3847,7 @@ impl SettingsWindow {
                             div()
                                 .text_size(px(24.))
                                 .font_weight(FontWeight::MEDIUM)
-                                .child("Commercial License"),
+                                .child("Desktop license"),
                         ),
                     )
                     .child(
@@ -3957,168 +3901,6 @@ impl SettingsWindow {
                     ))),
             )
             .into_any_element()
-    }
-
-    /// `CommercialLicensePurchase`'s pricing card. The Rive card-stack
-    /// animation has no gpui equivalent and is omitted.
-    fn render_license_purchase(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let annual = self.pages.license_annual;
-        let pending = self.pages.license_checkout_pending;
-
-        let left = div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(16.))
-            .p(px(20.))
-            .flex_1()
-            .min_w_0()
-            .rounded_l(px(12.))
-            .border_1()
-            .border_color(theme.settings_border())
-            .bg(theme.settings_fill())
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap(px(4.))
-                    .child(
-                        div()
-                            .text_size(px(24.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Commercial License"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(theme.settings_muted())
-                            .child("For commercial use"),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .mt(px(20.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_end()
-                            .child(div().text_size(px(36.)).child(if annual {
-                                "$29"
-                            } else {
-                                "$58"
-                            }))
-                            .child(
-                                div()
-                                    .text_size(px(16.))
-                                    .text_color(theme.settings_muted())
-                                    .child(".00 /"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.settings_muted())
-                            .child(if annual {
-                                "billed annually"
-                            } else {
-                                "one-time payment"
-                            }),
-                    ),
-            )
-            .child(
-                div()
-                    .id("license-billing-toggle")
-                    .px(px(12.))
-                    .py(px(8.))
-                    .rounded_full()
-                    .bg(theme.settings_selection())
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme.settings_fill()))
-                    .child(div().text_size(px(12.)).child(format!(
-                        "Switch to {}: {}",
-                        if annual { "lifetime" } else { "yearly" },
-                        if annual { "$58" } else { "$29" }
-                    )))
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.pages.license_annual = !this.pages.license_annual;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                div().w_full().mt(px(40.)).child(
-                    ui::Button::settings(
-                        &theme,
-                        "license-purchase",
-                        ui::ButtonVariant::Dark,
-                        ui::ButtonSize::Lg,
-                    )
-                    .label(if pending {
-                        "Loading..."
-                    } else {
-                        "Purchase License"
-                    })
-                    .radius(px(24.))
-                    .height(px(48.))
-                    .full_width()
-                    .font_weight(FontWeight::MEDIUM)
-                    .disabled_settings(&theme, pending)
-                    .on_click(cx.listener(|this, _, window, cx| this.license_checkout(window, cx))),
-                ),
-            );
-
-        let features = [
-            "Commercial Use of Cap Recorder + Editor",
-            "Community Support",
-            "Local-only features",
-            "Perpetual license option",
-        ];
-        let right = div()
-            .flex()
-            .flex_col()
-            .justify_center()
-            .items_center()
-            .gap(px(16.))
-            .p(px(20.))
-            .flex_1()
-            .min_w_0()
-            .rounded_r(px(12.))
-            .border_1()
-            .border_color(theme.settings_border())
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .children(features.into_iter().map(|feature| {
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(4.))
-                            .child(
-                                svg()
-                                    .path("icons/check.svg")
-                                    .size(px(16.))
-                                    .flex_shrink_0()
-                                    .text_color(theme.settings_text()),
-                            )
-                            .child(div().text_size(px(14.)).child(feature))
-                    })),
-            );
-
-        div()
-            .w_full()
-            .max_w(px(700.))
-            .rounded(px(12.))
-            .bg(theme.settings_card_bg())
-            .child(div().flex().flex_row().child(left).child(right))
     }
 
     /// `LicenseKeyActivate`.
@@ -4507,7 +4289,6 @@ impl SettingsWindow {
             "{}/api/desktop/storage/google-drive/connect",
             self.settings.server_url
         );
-        let server = self.settings.server_url.clone();
         self.spawn_tokio(
             window,
             cx,
@@ -4532,9 +4313,7 @@ impl SettingsWindow {
                             this.gdrive_wait_for_connection(window, cx);
                         }
                     }
-                    // `showWindow("Upgrade")` has no gpui equivalent; the
-                    // pricing page is the closest external destination.
-                    Ok((403, _)) => cx.open_url(&format!("{server}/pricing")),
+                    Ok((403, _)) => cx.open_url(crate::auth::PRICING_URL),
                     Ok(_) => {
                         this.pages.gdrive.error =
                             Some("Failed to start Google Drive connection".to_string())
@@ -4782,7 +4561,6 @@ impl SettingsWindow {
             .as_ref()
             .and_then(|storage| storage.managed_by_organization.as_ref())
             .map(|organization| organization.name.clone());
-        let server = self.settings.server_url.clone();
 
         let apps: [(&'static str, &'static str, &'static str, IntegrationsView); 2] = [
             (
@@ -4820,7 +4598,6 @@ impl SettingsWindow {
                             "Configure"
                         };
                         let managed_here = managed.is_some();
-                        let server = server.clone();
                         self.card(true)
                             .flex()
                             .flex_col()
@@ -4859,9 +4636,7 @@ impl SettingsWindow {
                                                 return;
                                             }
                                             if !store::auth_snapshot().plan_upgraded {
-                                                // `showWindow("Upgrade")` in the Tauri
-                                                // app; no upgrade window exists here.
-                                                cx.open_url(&format!("{server}/pricing"));
+                                                cx.open_url(crate::auth::PRICING_URL);
                                                 return;
                                             }
                                             match view {

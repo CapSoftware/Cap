@@ -64,6 +64,21 @@ impl StopTrayIcon {
             argb,
         })
     }
+
+    fn with_visible_template_color(mut self) -> Self {
+        // StatusNotifier hosts render pixmaps literally; the macOS black template
+        // otherwise disappears on dark panels. This red contrasts on light and dark.
+        if self
+            .argb
+            .chunks_exact(4)
+            .all(|pixel| pixel[0] == 0 || pixel[1..] == [0, 0, 0])
+        {
+            for pixel in self.argb.chunks_exact_mut(4) {
+                pixel[1..].copy_from_slice(&[220, 38, 38]);
+            }
+        }
+        self
+    }
 }
 
 struct ActivationState {
@@ -235,7 +250,7 @@ impl StopTray {
         }));
         let item = StopItem {
             generation,
-            icon,
+            icon: icon.with_visible_template_color(),
             events: sender.clone(),
             state: state.clone(),
         };
@@ -440,6 +455,43 @@ mod tests {
         ] {
             assert!(StopTrayIcon::from_rgba(width, height, data).is_err());
         }
+    }
+
+    #[test]
+    fn black_stop_template_is_visible_on_dark_and_light_panels() {
+        let icon = StopTrayIcon::from_rgba(
+            2,
+            2,
+            &[0, 0, 0, 255, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 255],
+        )
+        .unwrap()
+        .with_visible_template_color();
+        let linear = |value: u8| {
+            let value = f64::from(value) / 255.;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let pixel = &icon.argb[..4];
+        let luminance =
+            0.2126 * linear(pixel[1]) + 0.7152 * linear(pixel[2]) + 0.0722 * linear(pixel[3]);
+        assert!((luminance + 0.05) / 0.05 > 3.);
+        assert!(1.05 / (luminance + 0.05) > 3.);
+        assert_eq!(
+            icon.argb.iter().step_by(4).copied().collect::<Vec<_>>(),
+            [255, 128, 0, 255]
+        );
+    }
+
+    #[test]
+    fn colored_stop_icons_preserve_their_pixels() {
+        let original = StopTrayIcon::from_rgba(1, 1, &[10, 20, 30, 40]).unwrap();
+        assert_eq!(
+            original.clone().with_visible_template_color().argb,
+            original.argb
+        );
     }
 
     #[test]

@@ -11,6 +11,7 @@ pub const MAX_FONT_SIZE: f32 = 480.0;
 
 #[derive(Debug, Clone)]
 pub struct PreparedText {
+    pub track: u32,
     pub content: String,
     pub bounds: [f32; 4],
     pub color: [f32; 4],
@@ -192,7 +193,9 @@ pub fn prepare_texts(
         output_size.y as f32 / REFERENCE_HEIGHT
     };
 
-    for (i, segment) in segments.iter().enumerate() {
+    let mut ordered = segments.iter().enumerate().collect::<Vec<_>>();
+    ordered.sort_by_key(|(index, segment)| (segment.track, *index));
+    for (i, segment) in ordered {
         if !segment.enabled || hidden_indices.contains(&i) {
             continue;
         }
@@ -248,6 +251,7 @@ pub fn prepare_texts(
         }
 
         prepared.push(PreparedText {
+            track: segment.track,
             content,
             bounds: [left, top, right, bottom],
             color: parse_color(&segment.color),
@@ -314,6 +318,40 @@ mod tests {
         prepare_texts(XY::new(1920, 1080), time, &[seg], &[])
             .into_iter()
             .next()
+    }
+
+    #[test]
+    fn text_layer_order_preserves_hidden_segment_identity() {
+        let mut front = segment(TextAnimation::None, TextAnimation::None);
+        front.track = 2;
+        front.content = "Front".into();
+        let mut back = front.clone();
+        back.track = 0;
+        back.content = "Back".into();
+        let mut middle = front.clone();
+        middle.track = 1;
+        middle.content = "Middle".into();
+        let segments = [front, back, middle];
+        let prepared = prepare_texts(XY::new(1920, 1080), 5.0, &segments, &[]);
+        assert_eq!(
+            prepared
+                .iter()
+                .map(|text| text.content.as_str())
+                .collect::<Vec<_>>(),
+            ["Back", "Middle", "Front"]
+        );
+        assert_eq!(
+            prepared.iter().map(|text| text.track).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        let hidden = prepare_texts(XY::new(1920, 1080), 5.0, &segments, &[0]);
+        assert_eq!(
+            hidden
+                .iter()
+                .map(|text| text.content.as_str())
+                .collect::<Vec<_>>(),
+            ["Back", "Middle"]
+        );
     }
 
     #[test]

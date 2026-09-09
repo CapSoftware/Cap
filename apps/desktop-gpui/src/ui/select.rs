@@ -74,28 +74,23 @@ impl Select {
         }
     }
 
-    /// The editor's `KSelect.Trigger`: `flex items-center gap-2 h-9 px-3
-    /// rounded-lg border border-gray-3 bg-gray-2 dark:bg-gray-3 text-sm
-    /// text-gray-12`.
+    /// The editor's `KSelect.Trigger`: a borderless `ed-ctl` pill.
     pub fn plain(theme: &Theme, id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
         Self {
-            padding_x: px(12.),
+            padding_x: px(10.),
             padding_y: px(0.),
-            height: Some(px(36.)),
-            text_size: px(14.),
+            height: Some(px(30.)),
+            radius: px(7.),
+            text_size: px(13.),
             // `KSelect.Value` is `text-sm ... font-normal`, which opts out of
             // `body`'s Medium (`ConfigSidebar.tsx:740`, `:3121`, `:3173`,
             // `:3369`, `:5283`, `:5380`).
             weight: FontWeight::NORMAL,
-            bg: Some(if theme.is_dark() {
-                Hsla::from(theme.gray_3)
-            } else {
-                Hsla::from(theme.gray_2)
-            }),
-            border: Some(Hsla::from(theme.gray_3)),
-            text: Hsla::from(theme.gray_12),
-            chevron: Hsla::from(theme.gray_11),
-            chevron_size: px(16.),
+            bg: Some(Hsla::from(theme.editor.ctl)),
+            border: None,
+            text: Hsla::from(theme.editor.text_1),
+            chevron: Hsla::from(theme.editor.text_3),
+            chevron_size: px(12.),
             gap: px(8.),
             ..Self::settings(theme, id, label)
         }
@@ -165,6 +160,7 @@ impl RenderOnce for Select {
             .rounded(radius)
             .when_some(border, |this, border| this.border_1().border_color(border))
             .when_some(bg, |this, bg| this.bg(bg))
+            .when(!disabled, |this| this.cursor_pointer())
             .text_size(text_size)
             // The label is the only text under here -- the chevron is an svg.
             .font_weight(weight)
