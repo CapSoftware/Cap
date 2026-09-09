@@ -184,6 +184,7 @@ type TranscriptionStatus =
 
 interface ShareProps {
 	data: VideoData;
+	initialPlaybackUrl?: Promise<string | null>;
 	comments: MaybePromise<CommentWithAuthor[]>;
 	views: MaybePromise<number>;
 	screenshotImageUrl?: string | null;
@@ -319,6 +320,7 @@ const useVideoStatus = (
 
 export const Share = ({
 	data,
+	initialPlaybackUrl,
 	comments,
 	views,
 	screenshotImageUrl,
@@ -959,6 +961,7 @@ export const Share = ({
 													/>
 												) : (
 													<ShareVideo
+														initialPlaybackUrl={initialPlaybackUrl}
 														data={shareVideoData}
 														comments={comments}
 														areChaptersDisabled={areChaptersDisabled}

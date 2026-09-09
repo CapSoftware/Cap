@@ -93,6 +93,7 @@ interface CaptionOption {
 
 interface Props {
 	videoSrc: string;
+	initialPlaybackUrl?: Promise<string | null>;
 	rawFallbackSrc?: string;
 	videoId: Video.VideoId;
 	chaptersSrc: string;
@@ -141,6 +142,7 @@ interface Props {
 
 export function CapVideoPlayer({
 	videoSrc,
+	initialPlaybackUrl,
 	rawFallbackSrc,
 	videoId,
 	chaptersSrc,
@@ -191,6 +193,9 @@ export function CapVideoPlayer({
 		null,
 	);
 	const queryClient = useQueryClient();
+	const initialPlaybackUrlUsed = useRef<Promise<string | null> | undefined>(
+		undefined,
+	);
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -240,13 +245,22 @@ export function CapVideoPlayer({
 		],
 		queryFn: shouldDeferResolvedSource
 			? skipToken
-			: () =>
-					resolvePlaybackSource({
+			: async () => {
+					const useInitialUrl =
+						preferredSource === "mp4" &&
+						initialPlaybackUrl !== initialPlaybackUrlUsed.current;
+					if (useInitialUrl)
+						initialPlaybackUrlUsed.current = initialPlaybackUrl;
+					return resolvePlaybackSource({
 						videoSrc,
+						initialUrl: useInitialUrl
+							? await initialPlaybackUrl?.catch(() => null)
+							: undefined,
 						rawFallbackSrc,
 						enableCrossOrigin,
 						preferredSource,
-					}),
+					});
+				},
 		refetchOnWindowFocus: false,
 		staleTime: Number.POSITIVE_INFINITY,
 		retry: false,
