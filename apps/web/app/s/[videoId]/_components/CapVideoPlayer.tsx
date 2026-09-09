@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
 import CommentStamp from "./CommentStamp";
 import { bindCaptionTrackCueText } from "./caption-tracks";
+import { resolveInitialPlaybackUrl } from "./initial-playback-url";
 import {
 	AVC_LEVEL_IOS_HARDWARE_CEILING,
 	createLevelPatchedMp4ObjectUrl,
@@ -254,7 +255,7 @@ export function CapVideoPlayer({
 					return resolvePlaybackSource({
 						videoSrc,
 						initialUrl: useInitialUrl
-							? await initialPlaybackUrl?.catch(() => null)
+							? await resolveInitialPlaybackUrl(initialPlaybackUrl)
 							: undefined,
 						rawFallbackSrc,
 						enableCrossOrigin,
@@ -712,6 +713,13 @@ export function CapVideoPlayer({
 			)}
 			<VideoPreviewGif
 				videoId={videoId}
+				preload={
+					!disablePreviewGif &&
+					!hasActiveUpload &&
+					!hasPlayedOnce &&
+					!showUploadFailureOverlay &&
+					!showPlaybackResolutionError
+				}
 				visible={
 					!disablePreviewGif &&
 					videoLoaded &&
