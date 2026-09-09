@@ -16,6 +16,7 @@ vi.mock("@cap/database/schema", () => ({
 		videoId: "upload.videoId",
 		phase: "upload.phase",
 		updatedAt: "upload.updatedAt",
+		startedAt: "upload.startedAt",
 	},
 	videoProcessingJobs: { videoId: "job.videoId" },
 }));
@@ -26,6 +27,7 @@ vi.mock("drizzle-orm", () => ({
 	inArray: (left: unknown, right: unknown) => ({ in: [left, right] }),
 	isNull: (value: unknown) => ({ null: value }),
 	lte: (left: unknown, right: unknown) => ({ lte: [left, right] }),
+	gte: (left: unknown, right: unknown) => ({ gte: [left, right] }),
 	sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
 		strings: [...strings],
 		values,
@@ -159,6 +161,38 @@ describe("committed source recovery", () => {
 });
 
 describe("durable recovery scheduling", () => {
+	it("does not create a durable job for an unfinished legacy upload", async () => {
+		const now = new Date("2026-09-09T20:00:00Z");
+		const legacy = selectChain([{ videoId, ownerId: userId }]);
+		mocks.db.mockReturnValueOnce(legacy).mockReturnValue(selectChain([video]));
+		mocks.get.mockReturnValue(
+			Effect.succeed(
+				Option.some(JSON.stringify({ ...manifest, is_complete: false })),
+			),
+		);
+		const result = await recoverStaleDesktopSegments({ now });
+		expect(result.statuses).toEqual({ "source-incomplete": 1 });
+		expect(mocks.queue).not.toHaveBeenCalled();
+		expect(mocks.put).not.toHaveBeenCalled();
+		expect(JSON.stringify(legacy.where.mock.calls)).toContain(
+			"2026-09-02T20:00:00.000Z",
+		);
+	});
+
+	it("continues inspecting legacy uploads after a storage failure", async () => {
+		const legacy = selectChain([
+			{ videoId, ownerId: userId },
+			{ videoId: "second", ownerId: userId },
+		]);
+		mocks.db.mockReturnValueOnce(legacy).mockReturnValue(selectChain([video]));
+		mocks.get.mockReturnValueOnce(
+			Effect.fail(new Error("storage unavailable")),
+		);
+		const result = await recoverStaleDesktopSegments();
+		expect(result.statuses).toEqual({ failed: 1, queued: 1 });
+		expect(mocks.queue).toHaveBeenCalledTimes(1);
+	});
+
 	it("recovers old retry and expired processing jobs without a recording-age cutoff", async () => {
 		mocks.db.mockReturnValue(selectChain([]));
 		mocks.recoverable.mockResolvedValue([
@@ -192,14 +226,14 @@ describe("durable recovery scheduling", () => {
 
 	it("adopts stranded legacy processing rows without assuming their inventory is complete", async () => {
 		const chain = selectChain([{ videoId, ownerId: userId }]);
-		mocks.db.mockReturnValue(chain);
+		mocks.db.mockReturnValueOnce(chain).mockReturnValue(selectChain([video]));
 		mocks.queue.mockRejectedValue(new SourceCommitPendingError());
 		const result = await recoverStaleDesktopSegments();
 		expect(result.statuses).toEqual({ "source-committing": 1 });
 		const query = JSON.stringify(chain.where.mock.calls);
 		expect(query).toContain('"processing"');
 		expect(query).not.toContain("28 HOUR");
-		expect(query).not.toContain("startedAt");
+		expect(query).toContain("startedAt");
 		expect(mocks.put).not.toHaveBeenCalled();
 	});
 
@@ -231,7 +265,7 @@ describe("durable recovery scheduling", () => {
 				ownerId: userId,
 			})),
 		);
-		mocks.db.mockReturnValue(legacy);
+		mocks.db.mockReturnValueOnce(legacy).mockReturnValue(selectChain([video]));
 		const result = await recoverStaleDesktopSegments();
 		expect(mocks.recoverable).toHaveBeenCalledWith(
 			expect.objectContaining({ limit: 15 }),

@@ -6,7 +6,7 @@ import {
 } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import { type User, Video } from "@cap/web-domain";
-import { and, asc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
 import {
 	DesktopRecordingSourceBlockedError,
@@ -23,6 +23,8 @@ import { decodeStorageVideo } from "@/lib/video-storage";
 
 export const DESKTOP_SEGMENTS_RECOVERY_MIN_AGE_MS = 60 * 60 * 1_000;
 export const DESKTOP_SEGMENTS_RECOVERY_BATCH_SIZE = 20;
+export const DESKTOP_SEGMENTS_LEGACY_RECOVERY_MAX_AGE_MS =
+	7 * 24 * 60 * 60 * 1_000;
 
 const RECOVERABLE_UPLOAD_PHASES = [
 	"uploading",
@@ -244,6 +246,10 @@ export async function recoverStaleDesktopSegments({
 			and(
 				inArray(videoUploads.phase, RECOVERABLE_UPLOAD_PHASES),
 				lte(videoUploads.updatedAt, staleBefore),
+				gte(
+					videoUploads.startedAt,
+					new Date(now.getTime() - DESKTOP_SEGMENTS_LEGACY_RECOVERY_MAX_AGE_MS),
+				),
 				isNull(videoProcessingJobs.videoId),
 				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'desktopSegments'`,
 			),
@@ -251,13 +257,22 @@ export async function recoverStaleDesktopSegments({
 		.orderBy(asc(videoUploads.updatedAt), asc(videoUploads.videoId))
 		.limit(remaining);
 	for (const candidate of legacy) {
-		record(
-			candidate.videoId,
-			await recoverRecording({
+		try {
+			const result = await completeDesktopSegmentsManifestAndQueue({
 				videoId: candidate.videoId,
 				userId: candidate.ownerId,
-			}),
-		);
+			});
+			record(candidate.videoId, result.status);
+		} catch (error) {
+			console.error(
+				"[desktop-segments-recovery] Legacy source inspection failed",
+				{
+					videoId: candidate.videoId,
+					error,
+				},
+			);
+			record(candidate.videoId, "failed");
+		}
 	}
 	return summary;
 }

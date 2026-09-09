@@ -895,6 +895,29 @@ describe("retained-source retry policy", () => {
 });
 
 describe("recovery admission", () => {
+	it("keeps an inspected missing source paused until a completion request resumes it", async () => {
+		const attempt = await createAttempt();
+		const paused = {
+			...attempt,
+			state: "source-blocked" as const,
+			source: null,
+			leaseExpiresAt: null,
+			errorCode: "source-reupload-required",
+			nextRetryAt: now,
+		};
+		rows.jobs = [paused];
+		expect(isDesktopRecordingJobRecoverable(paused, now)).toBe(false);
+		expect(await listRecoverableSegmentJobs({ now })).toEqual([]);
+		const resumed = await ensureSegmentProcessingJob({
+			videoId,
+			userId,
+			verification,
+			now,
+		});
+		expect(resumed.job).toMatchObject({ state: "committing", errorCode: null });
+		expect(isDesktopRecordingJobRecoverable(resumed.job, now)).toBe(true);
+	});
+
 	it("prioritizes interrupted new recordings over an older missing-source backlog", async () => {
 		await createAttempt();
 		const current = {
@@ -928,6 +951,7 @@ describe("recovery admission", () => {
 		};
 		rows.jobs = [
 			"processing-retry-exhausted",
+			"source-reupload-required",
 			"output-replaced",
 			"video-deleting",
 		].map((errorCode) => ({ ...current, videoId: errorCode, errorCode }));
