@@ -17,6 +17,7 @@ import {
 	Index,
 	type JSX,
 	Match,
+	on,
 	onCleanup,
 	onMount,
 	Show,
@@ -69,6 +70,7 @@ import { TimelineContextProvider, useTimelineContext } from "./context";
 import { type KeyboardSegmentDragState, KeyboardTrack } from "./KeyboardTrack";
 import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
 import { Minimap } from "./Minimap";
+import { PlaybackFollow } from "./playback-follow";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
 import { type ThreeDSegmentDragState, ThreeDTrack } from "./ThreeDTrack";
@@ -216,6 +218,65 @@ export function Timeline(props: {
 	const timelineBounds = createElementBounds(timelineRef);
 
 	const secsPerPixel = () => transform().zoom / (timelineBounds.width ?? 1);
+	const playbackFollow = new PlaybackFollow();
+	const playbackDuration = createMemo(totalDuration);
+	let followRafId: number | null = null;
+	let timelinePointerDown = false;
+
+	createEventListener(
+		window,
+		"mousedown",
+		(event) => {
+			if (event.button === 0 && event.target instanceof Node) {
+				timelinePointerDown =
+					timelineContainerRef()?.contains(event.target) ?? false;
+			}
+		},
+		{ capture: true },
+	);
+	createEventListenerMap(window, {
+		mouseup: () => {
+			timelinePointerDown = false;
+		},
+		blur: () => {
+			timelinePointerDown = false;
+		},
+	});
+
+	function cancelPlaybackFollow() {
+		if (followRafId !== null) cancelAnimationFrame(followRafId);
+		followRafId = null;
+		playbackFollow.reset();
+	}
+
+	createEffect(
+		on(
+			[() => editorState.playing, () => editorState.playbackTime],
+			([playing]) => {
+				if (!playing) {
+					cancelPlaybackFollow();
+					return;
+				}
+				if (followRafId !== null) return;
+				followRafId = requestAnimationFrame(() => {
+					followRafId = null;
+					if (!editorState.playing || !timelineBounds.width) return;
+					const viewport = transform();
+					const position = playbackFollow.update(
+						viewport,
+						editorState.playbackTime,
+						playbackDuration(),
+						performance.now(),
+						timelinePointerDown,
+					);
+					if (position !== viewport.position) {
+						setEditorState("timeline", "transform", "position", position);
+					}
+				});
+			},
+		),
+	);
+	onCleanup(cancelPlaybackFollow);
 
 	const openAudioPicker = (laneIndex: number) => {
 		batch(() => {

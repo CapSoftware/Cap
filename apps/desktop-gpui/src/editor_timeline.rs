@@ -33,6 +33,10 @@
 
 use std::sync::Arc;
 
+mod playback_follow;
+
+pub use playback_follow::PlaybackFollow;
+
 use cap_project::{
     Camera3DSegment, CaptionTrackSegment, MaskKind, OverlayTrack, OverlayTrackKind,
     ProjectConfiguration, SceneMode, TextLayout, TimelineConfiguration, ZoomMode,
