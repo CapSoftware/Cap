@@ -385,18 +385,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 				.leftJoin(organizations, eq(videos.orgId, organizations.id))
 				.where(eq(videos.id, videoId));
-		let [row] = yield* Effect.promise(loadVideo);
-		if (
-			row &&
-			isEditSourceKey({
-				ownerId: row.ownerId,
-				videoId,
-				rawFileKey: row.activeUploadRawFileKey,
-			}) &&
-			(yield* Effect.promise(() => reconcileStaleEditUpload(videoId)))
-		) {
-			[row] = yield* Effect.promise(loadVideo);
-		}
+		const [row] = yield* Effect.promise(loadVideo);
 
 		if (row) {
 			yield* videosPolicy.canViewLoaded(row, Option.fromNullable(row.password));
