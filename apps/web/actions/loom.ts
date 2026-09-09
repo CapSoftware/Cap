@@ -5,8 +5,10 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import {
+	folders,
 	importedVideos,
 	organizationMembers,
+	sharedVideos,
 	spaceMembers,
 	spaces,
 	spaceVideos,
@@ -24,14 +26,17 @@ import {
 	type User,
 	Video,
 } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { start } from "workflow/api";
 import {
 	getOrganizationAccess,
 	requireOrganizationAccess,
+	requireOrganizationSettingsManager,
 } from "@/actions/organization/authorization";
+import { requireSpaceManager } from "@/actions/organization/space-authorization";
+import type { LoomImportDestination } from "@/lib/loom-import-destination";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import { canManageOrganizationSettings } from "@/lib/permissions/roles";
 import { runPromise } from "@/lib/server";
@@ -294,10 +299,12 @@ async function importLoomVideoForOwner({
 	loomUrl,
 	orgId,
 	ownerId,
+	destination = {},
 }: {
 	loomUrl: string;
 	orgId: Organisation.OrganisationId;
 	ownerId: User.UserId;
+	destination?: LoomImportDestination;
 }): Promise<LoomImportResult> {
 	const loomVideoId = extractLoomVideoId(loomUrl.trim());
 	if (!loomVideoId) {
@@ -387,13 +394,13 @@ async function importLoomVideoForOwner({
 		videoName ||
 		`Loom Import - ${new Date().toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" })}`;
 
-	await db()
-		.insert(videos)
-		.values({
+	await db().transaction(async (tx) => {
+		await tx.insert(videos).values({
 			id: videoId,
 			name,
 			ownerId,
 			orgId,
+			folderId: destination.spaceId ? undefined : destination.folderId,
 			source: { type: "webMP4" as const },
 			bucket: Option.getOrNull(writable.bucketId),
 			storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
@@ -403,18 +410,37 @@ async function importLoomVideoForOwner({
 			...(oembedMeta?.height ? { height: oembedMeta.height } : {}),
 		});
 
-	await db().insert(videoUploads).values({
-		videoId,
-		phase: "uploading",
-		processingProgress: 0,
-		processingMessage: "Importing from Loom...",
-	});
+		await tx.insert(videoUploads).values({
+			videoId,
+			phase: "uploading",
+			processingProgress: 0,
+			processingMessage: "Importing from Loom...",
+		});
 
-	await db().insert(importedVideos).values({
-		id: videoId,
-		orgId,
-		source: "loom",
-		sourceId: loomVideoId,
+		await tx.insert(importedVideos).values({
+			id: videoId,
+			orgId,
+			source: "loom",
+			sourceId: loomVideoId,
+		});
+
+		if (destination.spaceId === orgId) {
+			await tx.insert(sharedVideos).values({
+				id: nanoId(),
+				videoId,
+				organizationId: orgId,
+				sharedByUserId: ownerId,
+				folderId: destination.folderId,
+			});
+		} else if (destination.spaceId) {
+			await tx.insert(spaceVideos).values({
+				id: nanoId(),
+				videoId,
+				spaceId: destination.spaceId,
+				addedById: ownerId,
+				folderId: destination.folderId,
+			});
+		}
 	});
 
 	const rawFileKey = `${ownerId}/${videoId}/raw-upload.mp4`;
@@ -440,17 +466,69 @@ async function importLoomVideoForOwner({
 	]);
 
 	revalidatePath("/dashboard/caps");
+	if (destination.folderId) revalidatePath("/dashboard/folder/[id]", "page");
+	if (destination.spaceId) {
+		revalidatePath("/dashboard/spaces/[spaceId]", "page");
+		revalidatePath("/dashboard/spaces/[spaceId]/folder/[folderId]", "page");
+	}
 
 	return { success: true, videoId };
+}
+
+async function requireLoomImportLocationAccess(
+	userId: User.UserId,
+	orgId: Organisation.OrganisationId,
+	spaceId?: Space.SpaceIdOrOrganisationId,
+) {
+	await requireOrganizationAccess(userId, orgId);
+	if (!spaceId) return;
+	if (spaceId === orgId) {
+		await requireOrganizationSettingsManager(userId, orgId);
+		return;
+	}
+	const access = await requireSpaceManager(userId, spaceId);
+	if (access.organizationId !== orgId) throw new Error("Space not found");
+}
+
+function loomImportFolderScope(
+	userId: User.UserId,
+	orgId: Organisation.OrganisationId,
+	spaceId?: Space.SpaceIdOrOrganisationId,
+) {
+	return and(
+		eq(folders.organizationId, orgId),
+		spaceId
+			? eq(folders.spaceId, spaceId)
+			: and(isNull(folders.spaceId), eq(folders.createdById, userId)),
+	);
+}
+
+export async function getLoomImportFolders({
+	orgId,
+	spaceId,
+}: {
+	orgId: Organisation.OrganisationId;
+	spaceId?: Space.SpaceIdOrOrganisationId;
+}) {
+	const user = await getCurrentUser();
+	if (!user) throw new Error("Unauthorized");
+	await requireLoomImportLocationAccess(user.id, orgId, spaceId);
+	return db()
+		.select({ id: folders.id, name: folders.name, parentId: folders.parentId })
+		.from(folders)
+		.where(loomImportFolderScope(user.id, orgId, spaceId))
+		.orderBy(asc(folders.name));
 }
 
 export async function importFromLoom({
 	loomUrl,
 	orgId,
+	folderId,
+	spaceId,
 }: {
 	loomUrl: string;
 	orgId: Organisation.OrganisationId;
-}): Promise<LoomImportResult> {
+} & LoomImportDestination): Promise<LoomImportResult> {
 	const user = await getCurrentUser();
 	if (!user) return { success: false, error: "Unauthorized" };
 
@@ -461,12 +539,31 @@ export async function importFromLoom({
 		};
 	}
 
-	await requireOrganizationAccess(user.id, orgId);
+	await requireLoomImportLocationAccess(user.id, orgId, spaceId);
+	if (folderId) {
+		const [folder] = await db()
+			.select({ id: folders.id })
+			.from(folders)
+			.where(
+				and(
+					eq(folders.id, folderId),
+					loomImportFolderScope(user.id, orgId, spaceId),
+				),
+			)
+			.limit(1);
+		if (!folder)
+			return {
+				success: false,
+				error:
+					"Destination folder not found. Choose another folder and try again.",
+			};
+	}
 
 	return importLoomVideoForOwner({
 		loomUrl,
 		orgId,
 		ownerId: user.id,
+		destination: { folderId, spaceId },
 	});
 }
 
