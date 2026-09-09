@@ -24,6 +24,7 @@ vi.mock("@cap/database/schema", () => ({
 		rawFileKey: "rawFileKey",
 	},
 	videoEdits: { table: "edits" },
+	videoProcessingJobs: { table: "jobs", videoId: "videoId" },
 	comments: { table: "comments" },
 }));
 vi.mock("drizzle-orm", () => ({ and: vi.fn(), eq: vi.fn() }));
@@ -76,6 +77,7 @@ import {
 import { saveMetadataAndComplete } from "@/workflows/admin-reprocess-video";
 import {
 	saveEditResultAndComplete,
+	startMediaServerEditJob,
 	verifyRenderedEditOutput,
 } from "@/workflows/edit-video";
 
@@ -96,6 +98,13 @@ let video: {
 };
 let events: string[];
 let updates: Record<string, unknown>[];
+let reorderSourceKeys: boolean;
+const operation = {
+	token: "11111111-1111-4111-8111-111111111111",
+	startedAt: "2026-09-08T12:00:00.000Z",
+};
+const sourceKey = "user/video/edit-original.mp4";
+let upload: Record<string, unknown>;
 const metadata = { duration: 5, width: 320, height: 180, fps: 30 };
 const editSpec: VideoEditSpec = {
 	version: 1,
@@ -109,10 +118,15 @@ function createClient() {
 			return {
 				from: (table: { table: string }) => ({
 					where: () => {
-						const rows = table.table === "comments" ? [] : [video];
+						const rows =
+							table.table === "comments"
+								? []
+								: table.table === "uploads"
+									? [upload]
+									: [video];
 						return Object.assign(Promise.resolve(rows), {
 							for: async () => {
-								events.push("lock-video");
+								events.push(table.table === "jobs" ? "lock-job" : "lock-video");
 								return rows;
 							},
 						});
@@ -128,6 +142,11 @@ function createClient() {
 						if (table.table === "videos") {
 							updates.push(values);
 							Object.assign(video, values);
+							if (values.source && reorderSourceKeys) {
+								video.source = Object.fromEntries(
+									Object.entries(video.source).reverse(),
+								) as typeof video.source;
+							}
 						}
 						return [{ affectedRows: 1 }];
 					},
@@ -160,6 +179,7 @@ function createClient() {
 }
 
 beforeEach(() => {
+	reorderSourceKeys = false;
 	video = {
 		id: "video",
 		ownerId: "user",
@@ -176,6 +196,11 @@ beforeEach(() => {
 			customCreatedAt: "2020-01-01T00:00:00Z",
 			summary: "old summary",
 		},
+	};
+	upload = {
+		phase: "complete",
+		startedAt: new Date(operation.startedAt),
+		rawFileKey: sourceKey,
 	};
 	events = [];
 	updates = [];
@@ -221,7 +246,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("edited recording publication", () => {
-	it.each(["edit", "reprocess", "replace"])(
+	it.each(["reprocess", "replace"])(
 		"clears a browser audio derivative after %s",
 		async (operation) => {
 			video.source = {
@@ -230,18 +255,53 @@ describe("edited recording publication", () => {
 				audioLevelOutputKey:
 					"user/video/.recording/outputs/audio-quality-v3/test.mp4",
 			};
-			if (operation === "edit")
-				await saveEditResultAndComplete(
-					"video",
-					"user/video/edit-original.mp4",
-					editSpec,
-					editSpec,
-					metadata,
-				);
-			else if (operation === "reprocess")
+			if (operation === "reprocess")
 				await saveMetadataAndComplete("video", metadata);
 			else await invalidateVideoCache("video");
 			expect(video.source).toEqual({ type: "webMP4" });
+		},
+	);
+	it.each(["desktopMP4", "webMP4"])(
+		"clears the previous audio derivative when publishing a %s edit",
+		async (type) => {
+			video.source = {
+				type,
+				...(type === "desktopMP4"
+					? {
+							outputKey: "user/video/.recording/outputs/generation/attempt.mp4",
+						}
+					: {}),
+				audioLevelSourceKey:
+					type === "desktopMP4"
+						? "user/video/.recording/outputs/generation/attempt.mp4"
+						: "user/video/result.mp4",
+				audioLevelOutputKey:
+					"user/video/.recording/outputs/audio-quality-v3/test.mp4",
+			};
+			video.metadata.editProcessing = {
+				...operation,
+				ownerId: video.ownerId,
+				bucket: video.bucket,
+				storageIntegrationId: video.storageIntegrationId,
+				sourceKey,
+				source: JSON.stringify(video.source),
+				dispatch: "accepted",
+			};
+			await saveEditResultAndComplete(
+				"video",
+				sourceKey,
+				editSpec,
+				editSpec,
+				metadata,
+				operation,
+			);
+			expect(video.source).toEqual({
+				type,
+				outputKey: `user/video/.recording/outputs/edit-${operation.token}/result.mp4`,
+				thumbnailKey: `user/video/.recording/outputs/edit-${operation.token}/thumbnail.jpg`,
+				previewKey: `user/video/.recording/outputs/edit-${operation.token}/preview.gif`,
+			});
+			expect(video.metadata.completedVideoEdit).toMatchObject(operation);
 		},
 	);
 	it("verifies the newly rendered canonical output instead of the old published immutable recording", async () => {
@@ -259,24 +319,71 @@ describe("edited recording publication", () => {
 		);
 	});
 
-	it("switches a completed edit to canonical output and retires old upload proof atomically", async () => {
-		await saveEditResultAndComplete(
+	it("verifies the current edit output independently of the published video", async () => {
+		await verifyRenderedEditOutput(
 			"video",
-			"user/video/edit-original.mp4",
-			editSpec,
+			"user",
 			editSpec,
 			metadata,
+			operation,
 		);
-		expect(video.source).toEqual({ type: "desktopMP4" });
-		expect(video.metadata).not.toHaveProperty("desktopRecordingUpload");
-		expect(video.metadata.customCreatedAt).toBe("2020-01-01T00:00:00Z");
-		expect(events.indexOf("retire-job")).toBeLessThan(
-			events.indexOf("lock-video"),
-		);
-		expect(events.indexOf("lock-video")).toBeLessThan(
-			events.indexOf("update-videos"),
+		expect(mocks.fetch).toHaveBeenCalledWith(
+			"https://media.test/video/probe",
+			expect.objectContaining({
+				body: JSON.stringify({
+					videoUrl: `https://storage.test/canonical/user/video/.recording/outputs/edit-${operation.token}/result.mp4`,
+				}),
+			}),
 		);
 	});
+
+	it.each([false, true])(
+		"publishes a completed edit atomically with reordered JSON keys: %s",
+		async (reorder) => {
+			reorderSourceKeys = reorder;
+			video.metadata.editProcessing = {
+				...operation,
+				ownerId: video.ownerId,
+				bucket: video.bucket,
+				storageIntegrationId: video.storageIntegrationId,
+				sourceKey,
+				source: JSON.stringify(video.source),
+				dispatch: "accepted",
+			};
+			await saveEditResultAndComplete(
+				"video",
+				"user/video/edit-original.mp4",
+				editSpec,
+				editSpec,
+				metadata,
+				operation,
+			);
+			expect(video.source).toEqual({
+				type: "desktopMP4",
+				outputKey: `user/video/.recording/outputs/edit-${operation.token}/result.mp4`,
+				thumbnailKey: `user/video/.recording/outputs/edit-${operation.token}/thumbnail.jpg`,
+				previewKey: `user/video/.recording/outputs/edit-${operation.token}/preview.gif`,
+			});
+			expect(video.metadata).not.toHaveProperty("desktopRecordingUpload");
+			expect(video.metadata.customCreatedAt).toBe("2020-01-01T00:00:00Z");
+			expect(events.indexOf("lock-job")).toBeLessThan(
+				events.indexOf("lock-video"),
+			);
+			expect(events.indexOf("lock-video")).toBeLessThan(
+				events.indexOf("update-videos"),
+			);
+			const before = events.length;
+			await saveEditResultAndComplete(
+				"video",
+				sourceKey,
+				editSpec,
+				editSpec,
+				metadata,
+				operation,
+			);
+			expect(events).toHaveLength(before);
+		},
+	);
 
 	it("checks a reprocessed canonical object before clearing its previous immutable publication", async () => {
 		await saveMetadataAndComplete("video", metadata);
@@ -349,5 +456,39 @@ describe("intentional administrator replacements", () => {
 			expect.any(Object),
 		);
 		expect(mocks.retire).not.toHaveBeenCalled();
+	});
+});
+
+describe("edit dispatch acceptance", () => {
+	it("retries only an explicit capacity rejection", async () => {
+		mocks.fetch.mockResolvedValue(
+			Response.json({ code: "SERVER_BUSY" }, { status: 503 }),
+		);
+		await expect(
+			startMediaServerEditJob("https://media.test", { videoId: "video" }),
+		).resolves.toEqual({ status: "capacity" });
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+	});
+	it("treats proxy failures as uncertain acceptance", async () => {
+		mocks.fetch.mockResolvedValue(
+			Response.json({ error: "Gateway timeout" }, { status: 504 }),
+		);
+		await expect(
+			startMediaServerEditJob("https://media.test", { videoId: "video" }),
+		).rejects.toThrow("uncertain");
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+	});
+	it("does not resend a request after a lost response", async () => {
+		mocks.fetch.mockRejectedValue(new Error("Connection reset"));
+		await expect(
+			startMediaServerEditJob("https://media.test", { videoId: "video" }),
+		).rejects.toThrow("Connection reset");
+		expect(mocks.fetch).toHaveBeenCalledOnce();
+	});
+	it("accepts only responses containing the worker identity", async () => {
+		mocks.fetch.mockResolvedValue(Response.json({ jobId: "worker-1" }));
+		await expect(
+			startMediaServerEditJob("https://media.test", { videoId: "video" }),
+		).resolves.toEqual({ status: "accepted", jobId: "worker-1" });
 	});
 });

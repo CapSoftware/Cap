@@ -6,7 +6,9 @@
 //! `.dark`). The overridden ones are marked below -- they are *not* stock Radix,
 //! so regenerating this from a Radix crate would silently change the palette.
 
-use gpui::{App, Context, Global, Hsla, Rgba, Window, WindowAppearance, rgb, rgba};
+use gpui::{
+    App, BoxShadow, Context, Global, Hsla, Rgba, Window, WindowAppearance, point, px, rgb, rgba,
+};
 
 use crate::platform::{self, ForcedAppearance, MaterialKind};
 use crate::store::AppTheme;
@@ -419,6 +421,209 @@ pub struct Theme {
 
     /// `--text-primary`, the root text colour. Slightly translucent by design.
     pub text_primary: Rgba,
+
+    /// The editor's layered surface system (`--ed-*` in `theme.css`).
+    pub editor: EditorPalette,
+}
+
+/// Editor surfaces, transcribed from the `--ed-*` custom properties in
+/// `apps/desktop/src/styles/theme.css`. A layered, low-contrast system
+/// (window < card < control) with one accent; change both files together.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EditorPalette {
+    pub window: Rgba,
+    pub card: Rgba,
+    pub card_2: Rgba,
+    pub stage: Rgba,
+    pub line: Rgba,
+    pub line_strong: Rgba,
+    pub text_1: Rgba,
+    pub text_2: Rgba,
+    pub text_3: Rgba,
+    pub ctl: Rgba,
+    pub ctl_hover: Rgba,
+    pub ctl_active: Rgba,
+    pub accent: Rgba,
+    pub accent_2: Rgba,
+    pub playhead: Rgba,
+    pub thumb: Rgba,
+    /// `--ed-seg-tint`: how much of a track colour a segment fill carries.
+    pub seg_tint: f32,
+    /// `--ed-seg-line`: the segment border's alpha.
+    pub seg_line: f32,
+    /// `--ed-seg-label-base` / `--ed-seg-label-mix`: segment text is the
+    /// track colour pulled this far toward black (light) or white (dark).
+    pub seg_label_base: Rgba,
+    pub seg_label_mix: f32,
+    /// `--ed-card-shadow` / `--ed-pop-shadow`: how black each surface's drop
+    /// shadow is. A card lifts barely at all on white and much more on the dark
+    /// window, where the hairline alone is invisible.
+    pub card_shadow_alpha: f32,
+    pub pop_shadow_alpha: f32,
+    pub pop_shadow_offset: f32,
+    pub pop_shadow_blur: f32,
+}
+
+impl EditorPalette {
+    pub fn light() -> Self {
+        Self {
+            window: rgb(0xf1f1f3),
+            card: rgb(0xffffff),
+            card_2: rgb(0xf6f6f7),
+            stage: rgb(0xe9e9ec),
+            line: rgba(0x00000013),
+            line_strong: rgba(0x0000001f),
+            text_1: rgb(0x1c1c1e),
+            text_2: rgb(0x6e6e75),
+            text_3: rgb(0xa0a0a8),
+            ctl: rgba(0x0000000b),
+            ctl_hover: rgba(0x00000013),
+            ctl_active: rgba(0x0000001c),
+            accent: rgb(0x007aff),
+            accent_2: rgb(0x2b8cff),
+            playhead: rgb(0xff3b30),
+            thumb: rgb(0xffffff),
+            seg_tint: 0.13,
+            seg_line: 0.34,
+            seg_label_base: rgb(0x000000),
+            seg_label_mix: 0.58,
+            card_shadow_alpha: 0.04,
+            pop_shadow_alpha: 0.25,
+            pop_shadow_offset: 12.,
+            pop_shadow_blur: 32.,
+        }
+    }
+
+    pub fn dark() -> Self {
+        Self {
+            window: rgb(0x131315),
+            card: rgb(0x1b1b1e),
+            card_2: rgb(0x202024),
+            stage: rgb(0x121214),
+            line: rgba(0xffffff14),
+            line_strong: rgba(0xffffff21),
+            text_1: rgb(0xf4f4f5),
+            text_2: rgb(0x9a9aa3),
+            text_3: rgb(0x62626a),
+            ctl: rgba(0xffffff0f),
+            ctl_hover: rgba(0xffffff17),
+            ctl_active: rgba(0xffffff21),
+            accent: rgb(0x0a84ff),
+            accent_2: rgb(0x3d9bff),
+            playhead: rgb(0xff453a),
+            thumb: rgb(0xe8e8ea),
+            seg_tint: 0.20,
+            seg_line: 0.42,
+            seg_label_base: rgb(0xffffff),
+            seg_label_mix: 0.55,
+            card_shadow_alpha: 0.30,
+            pop_shadow_alpha: 0.60,
+            pop_shadow_offset: 16.,
+            pop_shadow_blur: 40.,
+        }
+    }
+
+    /// `color-mix(in srgb, color <tint>, card)`: the segment fill.
+    pub fn seg_fill(&self, color: Rgba) -> Rgba {
+        mix(self.card, color, self.seg_tint)
+    }
+
+    /// A selected segment: the tint plus ten points.
+    pub fn seg_fill_selected(&self, color: Rgba) -> Rgba {
+        mix(self.card, color, self.seg_tint + 0.10)
+    }
+
+    /// The segment's 1px inset border.
+    pub fn seg_border(&self, color: Rgba) -> Rgba {
+        rgba_alpha(color, self.seg_line)
+    }
+
+    /// Segment label text.
+    pub fn seg_label(&self, color: Rgba) -> Rgba {
+        mix(self.seg_label_base, color, self.seg_label_mix)
+    }
+
+    /// Segment secondary text (durations, amounts): the label colour at 45%
+    /// toward `text_3`.
+    pub fn seg_muted(&self, color: Rgba) -> Rgba {
+        mix(self.text_3, color, 0.45)
+    }
+
+    /// The track gutter's icon tile: `color 16%` over transparent.
+    pub fn tile_bg(&self, color: Rgba) -> Rgba {
+        rgba_alpha(color, 0.16)
+    }
+
+    /// The tile's glyph: the track colour pulled 62% toward the label base.
+    pub fn tile_fg(&self, color: Rgba) -> Rgba {
+        mix(self.seg_label_base, color, 0.62)
+    }
+
+    /// Trim handles: the colour at 70% toward the label base.
+    pub fn seg_handle(&self, color: Rgba) -> Rgba {
+        mix(self.seg_label_base, color, 0.70)
+    }
+
+    /// `--ed-card-shadow`: `0 1px 2px` under every editor card.
+    pub fn card_shadow(&self) -> Vec<BoxShadow> {
+        vec![BoxShadow {
+            color: gpui::hsla(0., 0., 0., self.card_shadow_alpha),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(2.),
+            spread_radius: px(0.),
+            inset: false,
+        }]
+    }
+
+    /// `--ed-pop-shadow`: the lift under a menu, popover or dialog.
+    pub fn pop_shadow(&self) -> Vec<BoxShadow> {
+        vec![BoxShadow {
+            color: gpui::hsla(0., 0., 0., self.pop_shadow_alpha),
+            offset: point(px(0.), px(self.pop_shadow_offset)),
+            blur_radius: px(self.pop_shadow_blur),
+            spread_radius: px(-12.),
+            inset: false,
+        }]
+    }
+}
+
+/// The drop shadow under the stage's letterboxed preview. The stage is nearly
+/// black in both themes, so this one does not vary with the appearance.
+pub fn preview_shadow() -> Vec<BoxShadow> {
+    vec![BoxShadow {
+        color: gpui::hsla(0., 0., 0., 0.35),
+        offset: point(px(0.), px(12.)),
+        blur_radius: px(32.),
+        spread_radius: px(-8.),
+        inset: false,
+    }]
+}
+
+/// The drop shadow under a slider knob.
+pub fn thumb_shadow() -> Vec<BoxShadow> {
+    vec![BoxShadow {
+        color: gpui::hsla(0., 0., 0., 0.25),
+        offset: point(px(0.), px(1.)),
+        blur_radius: px(3.),
+        spread_radius: px(0.),
+        inset: false,
+    }]
+}
+
+/// `color-mix(in srgb, b <t>, a)`: straight sRGB interpolation, which is what
+/// the CSS side does.
+pub fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
+    let t = t.clamp(0.0, 1.0);
+    Rgba {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    }
+}
+
+pub fn rgba_alpha(color: Rgba, alpha: f32) -> Rgba {
+    Rgba { a: alpha, ..color }
 }
 
 impl Theme {
@@ -462,6 +667,7 @@ impl Theme {
         Self {
             appearance: Appearance::Light,
             material: None,
+            editor: EditorPalette::light(),
 
             gray_1: rgb(0xfcfcfc),
             gray_2: rgb(0xf9f9f9),
@@ -516,6 +722,7 @@ impl Theme {
         Self {
             appearance: Appearance::Dark,
             material: None,
+            editor: EditorPalette::dark(),
 
             // gray 1-6 and 11 are the theme.css overrides, not stock Radix.
             gray_1: rgb(0x111111),

@@ -56,6 +56,7 @@ import { getPublicShareVideo } from "@/lib/public-share-video";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
+import { getSharePlaybackUrl } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { resolveShareWebUrl } from "@/lib/share-web-url";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
@@ -66,10 +67,7 @@ import {
 } from "@/lib/social-crawlers";
 import { transcribeVideo } from "@/lib/transcribe";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
-import {
-	isEditSourceKey,
-	reconcileStaleEditUpload,
-} from "@/lib/video-edit-processing";
+import { isEditSourceKey } from "@/lib/video-edit-processing";
 import {
 	areEditSpecsEquivalent,
 	createIdentityEditSpec,
@@ -180,7 +178,10 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 		});
 	});
 
-	return sharedSpaces;
+	return {
+		sharedSpaces,
+		sharedOrganizations: orgSharing.map(({ id, name }) => ({ id, name })),
+	};
 }
 
 function PolicyDeniedView({ reason }: { reason?: string }) {
@@ -328,12 +329,9 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const awaitRecording =
 		isValidVideoIdParam(videoId) && hasRecordingStoppedParam(searchParams);
 
-	await reconcileStaleEditUpload(videoId);
-
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
-
-		const [row] = yield* Effect.promise(() =>
+		const loadVideo = () =>
 			db()
 				.select({
 					id: videos.id,
@@ -386,13 +384,9 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 				.innerJoin(users, eq(videos.ownerId, users.id))
 				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 				.leftJoin(organizations, eq(videos.orgId, organizations.id))
-				.where(eq(videos.id, videoId)),
-		);
+				.where(eq(videos.id, videoId));
+		const [row] = yield* Effect.promise(loadVideo);
 
-		// The access decision runs on the row already loaded above instead of
-		// re-reading it, and stays ahead of the tombstone check so a denied or
-		// password-gated video on a deleted org still resolves the way it did
-		// when the policy ran before the select.
 		if (row) {
 			yield* videosPolicy.canViewLoaded(row, Option.fromNullable(row.password));
 		}
@@ -486,17 +480,16 @@ async function AuthorizedContent({
 		!hasActiveUpload &&
 		Date.now() - video.updatedAt.getTime() >= VIEW_NOTIFICATION_DELAY_MS;
 
-	if (user && video && user.id !== video.owner.id && canRegisterView) {
-		try {
-			await createNotification({
-				type: "view",
-				videoId: video.id,
-				authorId: user.id,
-			});
-		} catch (error) {
-			console.warn("Failed to create view notification:", error);
-		}
-	}
+	const viewNotificationPromise =
+		user && user.id !== video.owner.id && canRegisterView
+			? createNotification({
+					type: "view",
+					videoId: video.id,
+					authorId: user.id,
+				}).catch((error) => {
+					console.warn("Failed to create view notification:", error);
+				})
+			: Promise.resolve();
 
 	const userId = user?.id;
 	const commentId = optionFromTOrFirst(searchParams.comment).pipe(
@@ -536,8 +529,30 @@ async function AuthorizedContent({
 				);
 				return false;
 			});
+	const initialPlaybackUrlPromise =
+		!video.isScreenshot &&
+		!hasActiveUpload &&
+		(video.source.type === "desktopMP4" || video.source.type === "webMP4")
+			? overShareLimitPromise.then((overLimit) =>
+					overLimit ? null : getSharePlaybackUrl(video),
+				)
+			: undefined;
 
 	const aiGenerationEnabledPromise = isAiGenerationEnabled(video.owner);
+	const imagesPromise = Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+		const resolveImage = (
+			image: ImageUpload.ImageUrlOrKey | null | undefined,
+		) => (image ? imageUploads.resolveImageUrl(image) : Effect.succeed(null));
+		return yield* Effect.all(
+			{
+				owner: resolveImage(video.owner.image),
+				organization: resolveImage(video.organizationIconUrl),
+				shareableLink: resolveImage(video.shareableLinkIconUrl),
+			},
+			{ concurrency: 3 },
+		);
+	}).pipe(runPromise);
 
 	const screenshotImageUrlPromise = video.isScreenshot
 		? Effect.flatMap(Videos, (videos) => videos.getThumbnailURL(videoId)).pipe(
@@ -547,7 +562,7 @@ async function AuthorizedContent({
 		: Promise.resolve(null);
 
 	const customDomainPromise = (async () => {
-		if (!user) {
+		if (!user || user.id !== video.owner.id) {
 			return { customDomain: null, domainVerified: false };
 		}
 		const activeOrganizationId = user.activeOrganizationId;
@@ -575,12 +590,6 @@ async function AuthorizedContent({
 		}
 		return { customDomain: null, domainVerified: false };
 	})();
-
-	const sharedOrganizationsPromise = db()
-		.select({ id: sharedVideos.organizationId, name: organizations.name })
-		.from(sharedVideos)
-		.innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
-		.where(eq(sharedVideos.videoId, videoId));
 
 	const userOrganizationsPromise = (async () => {
 		if (!userId) return [];
@@ -759,17 +768,17 @@ async function AuthorizedContent({
 
 	const [
 		spacesData,
-		sharedSpaces,
+		{ sharedSpaces, sharedOrganizations },
 		aiGenerationEnabled,
 		screenshotImageUrl,
 		membersList,
 		userOrganizations,
-		sharedOrganizations,
 		{ customDomain, domainVerified },
 		canManageSharePageBranding,
 		canDownloadVideo,
 		videoHasEdits,
 		ownerIsOverShareLimit,
+		resolvedImages,
 	] = await Promise.all([
 		spacesDataPromise,
 		sharedSpacesPromise,
@@ -777,12 +786,13 @@ async function AuthorizedContent({
 		screenshotImageUrlPromise,
 		membersListPromise,
 		userOrganizationsPromise,
-		sharedOrganizationsPromise,
 		customDomainPromise,
 		canManageSharePageBrandingPromise,
 		canDownloadVideoPromise,
 		videoHasEditsPromise,
 		overShareLimitPromise,
+		imagesPromise,
+		viewNotificationPromise,
 	]);
 
 	const rules = resolveEffectiveVideoRules({
@@ -827,42 +837,32 @@ async function AuthorizedContent({
 		aiGenerationStatus,
 	};
 
-	const videoWithOrganizationInfo = await Effect.gen(function* () {
-		const imageUploads = yield* ImageUploads;
-
-		return {
-			...video,
-			hasActiveUpload,
-			ownerIsOverShareLimit,
-			owner: {
-				id: video.owner.id,
-				name: video.owner.name,
-				isPro: ownerIsPro,
-				image: video.owner.image
-					? yield* imageUploads.resolveImageUrl(video.owner.image)
-					: null,
-			},
-			organization: {
-				organizationMembers: membersList.map((member) => member.userId),
-				organizationId: video.sharedOrganization?.organizationId ?? undefined,
-			},
-			sharedOrganizations: sharedOrganizations,
-			password: null,
-			folderId: null,
-			orgSettings: video.orgSettings || null,
-			organizationName: video.organizationName,
-			organizationIconUrl: video.organizationIconUrl
-				? yield* imageUploads.resolveImageUrl(video.organizationIconUrl)
-				: null,
-			shareableLinkIconUrl: video.shareableLinkIconUrl
-				? yield* imageUploads.resolveImageUrl(video.shareableLinkIconUrl)
-				: null,
-			settings: rules.settings,
-			hasInheritedPassword: rules.hasInheritedPassword,
-			inheritedPasswordSources: rules.inheritedPasswordSources,
-			inheritedSpaceSettings: rules.inheritedSettings,
-		};
-	}).pipe(runPromise);
+	const videoWithOrganizationInfo = {
+		...video,
+		hasActiveUpload,
+		ownerIsOverShareLimit,
+		owner: {
+			id: video.owner.id,
+			name: video.owner.name,
+			isPro: ownerIsPro,
+			image: resolvedImages.owner,
+		},
+		organization: {
+			organizationMembers: membersList.map((member) => member.userId),
+			organizationId: video.sharedOrganization?.organizationId ?? undefined,
+		},
+		sharedOrganizations: sharedOrganizations,
+		password: null,
+		folderId: null,
+		orgSettings: video.orgSettings || null,
+		organizationName: video.organizationName,
+		organizationIconUrl: resolvedImages.organization,
+		shareableLinkIconUrl: resolvedImages.shareableLink,
+		settings: rules.settings,
+		hasInheritedPassword: rules.hasInheritedPassword,
+		inheritedPasswordSources: rules.inheritedPasswordSources,
+		inheritedSpaceSettings: rules.inheritedSettings,
+	};
 	const isEditProcessing =
 		isEditSourceKey({
 			ownerId: video.owner.id,
@@ -919,6 +919,7 @@ async function AuthorizedContent({
 					/>
 				}
 				data={videoWithOrganizationInfo}
+				initialPlaybackUrl={initialPlaybackUrlPromise}
 				screenshotImageUrl={screenshotImageUrl}
 				videoSettings={videoWithOrganizationInfo.settings}
 				comments={commentsPromise}

@@ -11,6 +11,10 @@ pub use audio::{AudioRenderer, MusicTracks};
 pub use audio_output::{
     AudioOutput, HEADLESS_BLOCK_FRAMES, HEADLESS_CHANNELS, HEADLESS_SAMPLE_RATE, HeadlessAudioTap,
 };
+pub use cap_audio::{
+    TranscriptionAudioSource, TranscriptionAudioTake, append_transcription_audio,
+    assemble_transcription_audio,
+};
 pub use cap_rendering::FrameLayout;
 pub use editor::{
     EditorFrameCallback, EditorFrameFormat, EditorFrameOutput, Renderer, RendererHandle,

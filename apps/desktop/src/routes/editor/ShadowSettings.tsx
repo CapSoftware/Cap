@@ -39,20 +39,20 @@ const ShadowSettings = (props: Props) => {
 			<button
 				type="button"
 				onClick={handleToggle}
-				class="flex gap-1 items-center w-full font-medium text-left transition duration-200 text-gray-12 hover:text-gray-10"
+				class="flex gap-1 items-center w-full text-left transition-colors duration-200 outline-hidden text-ed-text-2 hover:text-ed-text-1"
 			>
-				<span class="text-sm">Advanced shadow settings</span>
+				<span class="text-[12px] font-medium">Advanced shadow settings</span>
 				<IconCapChevronDown
 					class={cx(
-						"size-5",
-						isOpen() ? "transition-transform rotate-180" : "",
+						"size-3.5 text-ed-text-3 transition-transform duration-200",
+						isOpen() && "rotate-180",
 					)}
 				/>
 			</button>
 			<KCollapsible open={isOpen()}>
 				<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
-					<div class="mt-4 space-y-6 font-medium">
-						<Field name="Size">
+					<div class="flex flex-col mt-2">
+						<Field inline name="Size" value={props.size.value[0]?.toFixed(1)}>
 							<Slider
 								value={props.size.value}
 								onChange={props.size.onChange}
@@ -61,7 +61,11 @@ const ShadowSettings = (props: Props) => {
 								step={0.1}
 							/>
 						</Field>
-						<Field name="Opacity">
+						<Field
+							inline
+							name="Opacity"
+							value={props.opacity.value[0]?.toFixed(1)}
+						>
 							<Slider
 								value={props.opacity.value}
 								onChange={props.opacity.onChange}
@@ -70,7 +74,7 @@ const ShadowSettings = (props: Props) => {
 								step={0.1}
 							/>
 						</Field>
-						<Field name="Blur">
+						<Field inline name="Blur" value={props.blur.value[0]?.toFixed(1)}>
 							<Slider
 								value={props.blur.value}
 								onChange={props.blur.onChange}

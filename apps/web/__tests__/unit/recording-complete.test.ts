@@ -76,14 +76,14 @@ describe("recording completion acknowledgement", () => {
 	});
 
 	it.each([false, true])(
-		"returns a retryable non-2xx until the source is secured (proof: %s)",
+		"keeps uncommitted sources pending without acknowledging legacy uploads (proof: %s)",
 		async (hasProof) => {
 			mocks.queue.mockRejectedValueOnce(new SourceCommitPendingError());
 			const response = await request({
 				videoId: "recording",
 				...(hasProof ? { verification } : {}),
 			});
-			expect(response.status).toBe(503);
+			expect(response.status).toBe(hasProof ? 202 : 503);
 			expect(response.headers.get("Retry-After")).toBe("5");
 			expect(await response.json()).toMatchObject({
 				success: false,
@@ -113,7 +113,7 @@ describe("recording completion acknowledgement", () => {
 				videoId: "recording",
 				...(hasProof ? { verification } : {}),
 			});
-			expect(response.status).toBe(503);
+			expect(response.status).toBe(hasProof ? 202 : 503);
 			expect(mocks.queue).toHaveBeenCalledOnce();
 		},
 	);

@@ -21,6 +21,40 @@ impl MovExportSettings {
     pub async fn export(
         self,
         base: ExporterBase,
+        on_progress: impl FnMut(u32) -> bool + Send + 'static,
+    ) -> Result<PathBuf, String> {
+        use cap_utils::operation_diagnostics::{Field, observe};
+        observe(
+            "export_mov",
+            &[
+                Field::number("requested_fps", self.fps as u64),
+                Field::number("requested_width", self.resolution_base.x as u64),
+                Field::number("requested_height", self.resolution_base.y as u64),
+                Field::identifier(
+                    "resource",
+                    cap_utils::operation_diagnostics::resource_id(&base.project_path),
+                ),
+                Field::number(
+                    "source_width",
+                    base.render_constants.options.screen_size.x as u64,
+                ),
+                Field::number(
+                    "source_height",
+                    base.render_constants.options.screen_size.y as u64,
+                ),
+                Field::number("source_segments", base.segments.len() as u64),
+                Field::number("clips", base.project_config.clips.len() as u64),
+                Field::flag("captions", base.project_config.captions.is_some()),
+                Field::flag("streaming_audio", base.streaming_audio.is_some()),
+            ],
+            self.export_inner(base, on_progress),
+        )
+        .await
+    }
+
+    async fn export_inner(
+        self,
+        base: ExporterBase,
         mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
         let meta = &base.studio_meta;

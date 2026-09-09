@@ -435,6 +435,9 @@ export const videos = mysqlTable(
 				| { type: "desktopSegments" }
 				| {
 						type: "webMP4";
+						outputKey?: string;
+						thumbnailKey?: string;
+						previewKey?: string;
 						audioLevelOutputKey?: string;
 						audioLevelSourceKey?: string;
 				  }

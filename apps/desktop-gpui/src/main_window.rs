@@ -235,7 +235,7 @@ impl gpui::RenderOnce for ModeHoverCard {
                 "No rendering required — uploads on the fly so you can share the link the moment you stop."
             }
             Mode::Studio => {
-                "Records at the highest quality for local rendering later. Opens the Cap editor when you're done."
+                "Saves to your computer and opens the editor when you stop. Choose recording quality in settings."
             }
             Mode::Screenshot => "Capture and annotate stills.",
         };
@@ -345,6 +345,109 @@ impl TargetType {
 pub enum DeviceMenu {
     Camera,
     Microphone,
+}
+
+fn camera_format_choices(
+    formats: Result<Vec<devices::CameraFormat>, String>,
+) -> (Vec<DeviceFormat>, Option<String>) {
+    let mut choices = vec![DeviceFormat::Camera(Default::default())];
+    match formats {
+        Ok(formats) => {
+            choices.extend(
+                formats
+                    .into_iter()
+                    .map(|format| DeviceFormat::Camera(format.settings())),
+            );
+            (choices, None)
+        }
+        Err(error) => (choices, Some(error)),
+    }
+}
+
+#[cfg(test)]
+mod camera_format_choice_tests {
+    use super::*;
+
+    #[test]
+    fn failed_probe_keeps_automatic_available() {
+        let (choices, notice) = camera_format_choices(Err("Camera access denied".into()));
+        assert_eq!(choices, vec![DeviceFormat::Camera(Default::default())]);
+        assert_eq!(notice.as_deref(), Some("Camera access denied"));
+    }
+
+    #[test]
+    fn empty_formats_keep_automatic_available() {
+        let (choices, notice) = camera_format_choices(Ok(Vec::new()));
+        assert_eq!(choices, vec![DeviceFormat::Camera(Default::default())]);
+        assert!(notice.is_none());
+    }
+
+    #[test]
+    fn successful_retry_adds_current_formats_and_clears_error() {
+        let format = devices::CameraFormat {
+            width: 1280,
+            height: 720,
+            frame_rate: 60.0,
+        };
+        let (choices, notice) = camera_format_choices(Ok(vec![format]));
+        assert_eq!(
+            choices,
+            vec![
+                DeviceFormat::Camera(Default::default()),
+                DeviceFormat::Camera(format.settings())
+            ]
+        );
+        assert!(notice.is_none());
+    }
+}
+
+fn input_refresh_is_current(
+    current_generation: u64,
+    current_menu: Option<DeviceMenu>,
+    generation: u64,
+    menu: DeviceMenu,
+) -> bool {
+    current_generation == generation && current_menu == Some(menu)
+}
+
+fn input_refresh_scan_allowed(current: bool, visible_idle_and_owned: bool) -> Option<bool> {
+    current.then_some(visible_idle_and_owned)
+}
+
+#[cfg(test)]
+mod input_refresh_tests {
+    use super::{DeviceMenu, input_refresh_is_current, input_refresh_scan_allowed};
+
+    #[test]
+    fn hidden_or_busy_picker_pauses_and_resumes_without_a_scan() {
+        assert_eq!(input_refresh_scan_allowed(true, false), Some(false));
+        assert_eq!(input_refresh_scan_allowed(true, true), Some(true));
+        assert_eq!(input_refresh_scan_allowed(false, true), None);
+        assert_eq!(input_refresh_scan_allowed(false, false), None);
+    }
+
+    #[test]
+    fn late_refresh_cannot_replace_a_reopened_picker() {
+        assert!(input_refresh_is_current(
+            2,
+            Some(DeviceMenu::Camera),
+            2,
+            DeviceMenu::Camera
+        ));
+        assert!(!input_refresh_is_current(
+            3,
+            Some(DeviceMenu::Camera),
+            2,
+            DeviceMenu::Camera
+        ));
+        assert!(!input_refresh_is_current(2, None, 2, DeviceMenu::Camera));
+        assert!(!input_refresh_is_current(
+            2,
+            Some(DeviceMenu::Microphone),
+            2,
+            DeviceMenu::Camera
+        ));
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -676,6 +779,9 @@ pub struct MainWindow {
     /// The `staleTime: 5_000` re-read of the cheap target list that runs while
     /// a target panel is open, and nothing else. Dropped by `close_panel`.
     target_poll_task: Option<gpui::Task<()>>,
+    input_poll_task: Option<gpui::Task<()>>,
+    input_poll_generation: u64,
+    input_enumeration_gate: devices::InputEnumerationGate,
     /// `scheduleTargetListPrewarm` (`new-main/index.tsx:1897-1965`).
     prewarm_task: Option<gpui::Task<()>>,
 }
@@ -885,6 +991,9 @@ impl MainWindow {
             display_thumbnail_task: None,
             window_thumbnail_task: None,
             target_poll_task: None,
+            input_poll_task: None,
+            input_poll_generation: 0,
+            input_enumeration_gate: devices::InputEnumerationGate::default(),
             prewarm_task: None,
         }
     }
@@ -1233,6 +1342,86 @@ impl MainWindow {
 
                 cx.background_executor()
                     .timer(target_thumbnails::LIST_STALE_TIME)
+                    .await;
+            }
+        }));
+    }
+
+    fn start_input_poll(&mut self, menu: DeviceMenu, window: &mut Window, cx: &mut Context<Self>) {
+        let generation = self.input_poll_generation;
+        let gate = self.input_enumeration_gate.clone();
+        self.input_poll_task = Some(cx.spawn_in(window, async move |this, cx| {
+            loop {
+                let Ok(allowed) = this.update_in(cx, |this, window, cx| {
+                    let current_menu = match this.panel {
+                        Some(Panel::Device(menu)) => Some(menu),
+                        _ => None,
+                    };
+                    input_refresh_scan_allowed(
+                        input_refresh_is_current(
+                            this.input_poll_generation,
+                            current_menu,
+                            generation,
+                            menu,
+                        ),
+                        !this.device_restore_suspended && this.target_prewarm_allowed(window, cx),
+                    )
+                    .map(|allowed| {
+                        let cameras = if allowed && menu == DeviceMenu::Camera {
+                            this.devices.cameras.clone()
+                        } else {
+                            Vec::new()
+                        };
+                        (allowed, cameras)
+                    })
+                }) else {
+                    return;
+                };
+                let Some((allowed, previous_cameras)) = allowed else {
+                    return;
+                };
+                if allowed && let Some(permit) = gate.try_enter() {
+                    let snapshot = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let _permit = permit;
+                            match menu {
+                                DeviceMenu::Camera => {
+                                    devices::InputSnapshot::cameras(&previous_cameras)
+                                }
+                                DeviceMenu::Microphone => devices::InputSnapshot::microphones(),
+                            }
+                        })
+                        .await;
+                    let Ok(current) = this.update_in(cx, |this, window, cx| {
+                        let current_menu = match this.panel {
+                            Some(Panel::Device(menu)) => Some(menu),
+                            _ => None,
+                        };
+                        if !input_refresh_is_current(
+                            this.input_poll_generation,
+                            current_menu,
+                            generation,
+                            menu,
+                        ) {
+                            return false;
+                        }
+                        if !this.device_restore_suspended
+                            && this.target_prewarm_allowed(window, cx)
+                            && snapshot.install(&mut this.devices)
+                        {
+                            cx.notify();
+                        }
+                        true
+                    }) else {
+                        return;
+                    };
+                    if !current {
+                        return;
+                    }
+                }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
                     .await;
             }
         }));
@@ -3610,6 +3799,8 @@ impl MainWindow {
     }
 
     fn close_panel(&mut self, cx: &mut Context<Self>) {
+        self.input_poll_task = None;
+        self.input_poll_generation = self.input_poll_generation.wrapping_add(1);
         self.device_format_target = None;
         self.device_formats = None;
         self.device_format_generation += 1;
@@ -3663,6 +3854,8 @@ impl MainWindow {
     }
 
     pub fn open_panel(&mut self, panel: Panel, window: &mut Window, cx: &mut Context<Self>) {
+        self.input_poll_task = None;
+        self.input_poll_generation = self.input_poll_generation.wrapping_add(1);
         self.clear_mode_hover();
         self.device_format_target = None;
         self.device_formats = None;
@@ -3689,6 +3882,9 @@ impl MainWindow {
         match panel {
             Panel::Target(kind) => self.start_target_poll(kind, window, cx),
             _ => self.target_poll_task = None,
+        }
+        if let Panel::Device(menu) = panel {
+            self.start_input_poll(menu, window, cx);
         }
         cx.notify();
     }
@@ -4552,8 +4748,12 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        cx.spawn_in(window, async move |_this, _cx| {
-            let dest = crate::platform::save_file_panel(&format!("{name}.png"), &["png"]);
+        cx.spawn_in(window, async move |this, cx| {
+            let dest =
+                crate::platform::save_file_panel_async(&format!("{name}.png"), &["png"], cx).await;
+            if this.update_in(cx, |_, _, _| ()).is_err() {
+                return;
+            }
             let Some(dest) = dest else {
                 return;
             };
@@ -4800,6 +5000,10 @@ impl MainWindow {
         });
         self.device_format_target = Some(target.clone());
         self.device_format_notice = None;
+        let should_query = match &target {
+            DeviceFormatTarget::Camera(camera) => camera.formats.is_empty(),
+            DeviceFormatTarget::Microphone(_) => true,
+        };
         self.device_formats = match &target {
             DeviceFormatTarget::Camera(camera) => Some(Ok(std::iter::once(DeviceFormat::Camera(
                 Default::default(),
@@ -4811,18 +5015,29 @@ impl MainWindow {
                     .map(|format| DeviceFormat::Camera(format.settings())),
             )
             .collect())),
-            DeviceFormatTarget::Microphone(_) => None,
+            _ => None,
         };
-        if let DeviceFormatTarget::Microphone(name) = target {
+        if should_query {
             cx.spawn(async move |this, cx| {
-                let formats = cx
+                let (formats, camera_formats, notice) = cx
                     .background_executor()
                     .spawn(async move {
-                        devices::microphone_formats(&name).map(|formats| {
-                            std::iter::once(DeviceFormat::Microphone(Default::default()))
-                                .chain(formats.into_iter().map(DeviceFormat::Microphone))
-                                .collect()
-                        })
+                        match target {
+                            DeviceFormatTarget::Camera(camera) => {
+                                let formats = devices::camera_formats(&camera.device_id);
+                                let metadata = formats.as_ref().ok().cloned();
+                                let (choices, notice) = camera_format_choices(formats);
+                                (Ok(choices), metadata, notice)
+                            }
+                            DeviceFormatTarget::Microphone(name) => {
+                                let formats = devices::microphone_formats(&name).map(|formats| {
+                                    std::iter::once(DeviceFormat::Microphone(Default::default()))
+                                        .chain(formats.into_iter().map(DeviceFormat::Microphone))
+                                        .collect()
+                                });
+                                (formats, None, None)
+                            }
+                        }
                     })
                     .await;
                 this.update(cx, |this, cx| {
@@ -4831,6 +5046,17 @@ impl MainWindow {
                     {
                         return;
                     }
+                    if let Some(formats) = camera_formats
+                        && let Some(DeviceFormatTarget::Camera(camera)) = &this.device_format_target
+                        && !this.devices.update_camera_formats(camera, formats)
+                    {
+                        this.device_formats = Some(Err(
+                            "Camera changed or disconnected. Reopen its format settings.".into(),
+                        ));
+                        cx.notify();
+                        return;
+                    }
+                    this.device_format_notice = notice;
                     this.device_formats = Some(formats);
                     cx.notify();
                 })
@@ -5509,11 +5735,6 @@ impl MainWindow {
     /// border-gray-5 px-1 py-0.5 bg-gray-3 hover:bg-gray-5`, a button; Pro and
     /// Commercial are a non-interactive span on `--blue-400`. Which one
     /// applies is [`PlanBadge::current`], the license query's resolution.
-    ///
-    /// Personal opens the pricing page -- the Tauri button opens the Upgrade
-    /// window (950x850), which has no gpui twin yet, and the integrations
-    /// page's upgrade affordance already goes to `/pricing` for the same
-    /// reason.
     fn render_plan_badge(&self) -> impl IntoElement {
         let theme = self.theme;
 
@@ -5537,8 +5758,7 @@ impl MainWindow {
                 .child("Personal")
                 .hover(|style| style.bg(theme.body_hover_fill(5)))
                 .on_click(|_, _, cx| {
-                    let url = format!("{}/pricing", crate::auth::server_url());
-                    cx.open_url(&url);
+                    cx.open_url(crate::auth::PRICING_URL);
                 }),
             PlanBadge::Pro | PlanBadge::Commercial => badge
                 .bg(theme.blue_9)

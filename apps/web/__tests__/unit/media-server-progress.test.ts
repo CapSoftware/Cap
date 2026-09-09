@@ -183,7 +183,7 @@ function databaseFixture(initial: DesktopRecordingJob | null = fixture().job) {
 	};
 	const mutations: Mutation[] = [];
 	const rows = (table: unknown) => {
-		if (table === mocks.tables.videos) return [structuredClone(video)];
+		if (table === mocks.tables.videos) return [{ ...video }];
 		if (table === mocks.tables.jobs)
 			return current ? [structuredClone(current)] : [];
 		if (table === mocks.tables.uploads) return [{ rawFileKey }];
@@ -297,6 +297,27 @@ describe("media-server recording progress webhook", () => {
 		expect(mocks.audio).not.toHaveBeenCalled();
 		expect(await (await request(body)).json()).toEqual({ status: "prepared" });
 		expect(mocks.audio).toHaveBeenCalledExactlyOnceWith(body);
+	});
+	it("keeps stale edit callbacks out of recording and audio publication", async () => {
+		const database = databaseFixture();
+		const response = await POST(
+			new NextRequest(
+				"https://cap.so/api/webhooks/media-server/progress?editOperation=old-edit&editStartedAt=2026-09-08T12%3A00%3A00.000Z",
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"x-media-server-secret": "media-secret",
+					},
+					body: JSON.stringify(fixture().payload),
+				},
+			),
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ success: true });
+		expect(database.mutations).toEqual([]);
+		expect(mocks.audio).not.toHaveBeenCalled();
+		expect(mocks.transcribe).not.toHaveBeenCalled();
 	});
 
 	it.each([null, "wrong-secret", "éééééééééééé"])(

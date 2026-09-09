@@ -168,6 +168,8 @@ export function ExportPage() {
 		exportState,
 		meta,
 		refetchMeta,
+		flushProjectConfig,
+		projectRevision,
 	} = useEditorContext();
 
 	const projectPath = editorInstance.path;
@@ -283,6 +285,7 @@ export function ExportPage() {
 	const [previewUrl, setPreviewUrl] = createSignal<string | null>(null);
 	const [previewLoading, setPreviewLoading] = createSignal(false);
 	const [previewUnavailable, setPreviewUnavailable] = createSignal(false);
+	const [previewError, setPreviewError] = createSignal<string | null>(null);
 	const [renderEstimate, setRenderEstimate] = createSignal<{
 		frameRenderTimeMs: number;
 		totalFrames: number;
@@ -343,30 +346,71 @@ export function ExportPage() {
 	);
 
 	type PreviewRequest = {
+		projectRevision: number;
 		frameTime: number;
 		fps: number;
 		resWidth: number;
 		resHeight: number;
 		bpp: number;
+		mode: "video" | "gif" | "cursor";
 	};
 
+	let previewDisposed = false;
 	let previewInFlight = false;
+	let latestPreviewRequest: PreviewRequest | null = null;
 	let pendingPreviewRequest: PreviewRequest | null = null;
+	let cancelPreviewRetry: (() => void) | null = null;
+	let ownedPreviewUrl: string | null = null;
+	const [previewDimensions, setPreviewDimensions] = createSignal<{
+		request: PreviewRequest;
+		width: number;
+		height: number;
+	} | null>(null);
+
+	const previewMode = () =>
+		isMovCursorOnlyExport() ? "cursor" : shouldUseGifMode() ? "gif" : "video";
+	const matchesPreviewSettings = (request: PreviewRequest) =>
+		request.projectRevision === projectRevision() &&
+		request.fps === settings.fps &&
+		request.resWidth === settings.resolution.width &&
+		request.resHeight === settings.resolution.height &&
+		request.bpp === compressionBpp() &&
+		request.mode === previewMode();
+	const isPreviewCurrent = (request: PreviewRequest) =>
+		!previewDisposed &&
+		latestPreviewRequest === request &&
+		matchesPreviewSettings(request);
+	const outputDimensions = () => {
+		const dimensions = previewDimensions();
+		return dimensions && matchesPreviewSettings(dimensions.request)
+			? dimensions
+			: settings.resolution;
+	};
 
 	const runPreviewRequest = async (request: PreviewRequest, retryCount = 0) => {
-		const { frameTime, fps, resWidth, resHeight, bpp } = request;
-		const cacheKey = getEstimateCacheKey(
-			fps,
-			resWidth,
-			resHeight,
-			bpp,
-			isMovCursorOnlyExport() ? "cursor" : shouldUseGifMode() ? "gif" : "video",
-		);
+		if (!isPreviewCurrent(request)) return;
+		const { frameTime, fps, resWidth, resHeight, bpp, mode } = request;
+		const cacheKey = getEstimateCacheKey(fps, resWidth, resHeight, bpp, mode);
 		const cachedEstimate = estimateCache.get(cacheKey);
 
 		if (cachedEstimate) {
 			setRenderEstimate(cachedEstimate);
 		}
+
+		try {
+			await flushProjectConfig();
+		} catch (error) {
+			if (!isPreviewCurrent(request)) return;
+			if (ownedPreviewUrl) URL.revokeObjectURL(ownedPreviewUrl);
+			ownedPreviewUrl = null;
+			setPreviewUrl(null);
+			setPreviewDimensions(null);
+			setRenderEstimate(null);
+			setPreviewError(error instanceof Error ? error.message : String(error));
+			setPreviewUnavailable(true);
+			return;
+		}
+		if (!isPreviewCurrent(request)) return;
 
 		const maxRetries = 2;
 
@@ -375,17 +419,23 @@ export function ExportPage() {
 				fps,
 				resolution_base: { x: resWidth, y: resHeight },
 				compression_bpp: bpp,
-				cursor_only: cursorOnly(),
+				cursor_only: mode === "cursor",
 			});
-
-			const oldUrl = previewUrl();
-			if (oldUrl) URL.revokeObjectURL(oldUrl);
+			if (!isPreviewCurrent(request)) return;
 
 			const byteArray = Uint8Array.from(atob(result.jpeg_base64), (c) =>
 				c.charCodeAt(0),
 			);
 			const blob = new Blob([byteArray], { type: "image/jpeg" });
-			setPreviewUrl(URL.createObjectURL(blob));
+			const nextUrl = URL.createObjectURL(blob);
+			if (ownedPreviewUrl) URL.revokeObjectURL(ownedPreviewUrl);
+			ownedPreviewUrl = nextUrl;
+			setPreviewUrl(nextUrl);
+			setPreviewDimensions({
+				request,
+				width: result.actual_width,
+				height: result.actual_height,
+			});
 
 			const newEstimate = {
 				frameRenderTimeMs: result.frame_render_time_ms,
@@ -399,51 +449,82 @@ export function ExportPage() {
 			setPreviewUnavailable(false);
 			setRenderEstimate(newEstimate);
 		} catch (e) {
+			if (!isPreviewCurrent(request)) return;
 			console.error("Failed to generate preview:", e);
 			if (retryCount < maxRetries) {
-				await new Promise((resolve) =>
-					setTimeout(resolve, 200 * (retryCount + 1)),
-				);
+				await new Promise<void>((resolve) => {
+					const timeout = setTimeout(
+						() => {
+							cancelPreviewRetry = null;
+							resolve();
+						},
+						200 * (retryCount + 1),
+					);
+					cancelPreviewRetry = () => {
+						clearTimeout(timeout);
+						cancelPreviewRetry = null;
+						resolve();
+					};
+				});
+				if (!isPreviewCurrent(request)) return;
 				return runPreviewRequest(request, retryCount + 1);
 			}
 			setPreviewUnavailable(true);
 		}
 	};
 
-	const fetchPreview = async (
-		frameTime: number,
-		fps: number,
-		resWidth: number,
-		resHeight: number,
-		bpp: number,
-	) => {
+	const fetchPreview = async (request: PreviewRequest) => {
+		if (!isPreviewCurrent(request)) return;
 		setPreviewUnavailable(false);
-		pendingPreviewRequest = { frameTime, fps, resWidth, resHeight, bpp };
+		pendingPreviewRequest = request;
 		if (previewInFlight) return;
 
 		previewInFlight = true;
+		let completedRequest: PreviewRequest | null = null;
 		try {
-			while (pendingPreviewRequest) {
+			while (!previewDisposed && pendingPreviewRequest) {
 				const request = pendingPreviewRequest;
 				pendingPreviewRequest = null;
 				await runPreviewRequest(request);
+				completedRequest = request;
 			}
 		} finally {
 			previewInFlight = false;
-			setPreviewLoading(false);
+			if (completedRequest && isPreviewCurrent(completedRequest))
+				setPreviewLoading(false);
 		}
 	};
 
 	const debouncedFetchPreview = debounce(fetchPreview, 300);
+	const requestPreview = (debounced = false) => {
+		if (previewDisposed) return;
+		const request: PreviewRequest = {
+			projectRevision: projectRevision(),
+			frameTime: editorState.playbackTime ?? 0,
+			fps: settings.fps,
+			resWidth: settings.resolution.width,
+			resHeight: settings.resolution.height,
+			bpp: compressionBpp(),
+			mode: previewMode(),
+		};
+		if (
+			previewDimensions()?.request.projectRevision !== request.projectRevision
+		) {
+			if (ownedPreviewUrl) URL.revokeObjectURL(ownedPreviewUrl);
+			ownedPreviewUrl = null;
+			setPreviewUrl(null);
+			setPreviewDimensions(null);
+		}
+		setPreviewError(null);
+		latestPreviewRequest = request;
+		pendingPreviewRequest = null;
+		cancelPreviewRetry?.();
+		setPreviewLoading(true);
+		if (debounced) debouncedFetchPreview(request);
+		else void fetchPreview(request);
+	};
 
-	setPreviewLoading(true);
-	fetchPreview(
-		editorState.playbackTime ?? 0,
-		settings.fps,
-		settings.resolution.width,
-		settings.resolution.height,
-		compressionBpp(),
-	);
+	requestPreview();
 
 	createEffect(
 		on(
@@ -454,25 +535,23 @@ export function ExportPage() {
 				() => settings.resolution.height,
 				cursorOnly,
 				compressionBpp,
+				projectRevision,
 			],
-			() => {
-				const frameTime = editorState.playbackTime ?? 0;
-				setPreviewLoading(true);
-				debouncedFetchPreview(
-					frameTime,
-					settings.fps,
-					settings.resolution.width,
-					settings.resolution.height,
-					compressionBpp(),
-				);
-			},
+			() => requestPreview(true),
 			{ defer: true },
 		),
 	);
 
 	onCleanup(() => {
-		const url = previewUrl();
-		if (url) URL.revokeObjectURL(url);
+		previewDisposed = true;
+		latestPreviewRequest = null;
+		pendingPreviewRequest = null;
+		debouncedFetchPreview.clear();
+		cancelPreviewRetry?.();
+		if (ownedPreviewUrl) {
+			URL.revokeObjectURL(ownedPreviewUrl);
+			ownedPreviewUrl = null;
+		}
 	});
 
 	let cancelCurrentExport: (() => void) | null = null;
@@ -482,7 +561,7 @@ export function ExportPage() {
 		cancelCurrentExport = null;
 	});
 
-	const exportWithSettings = (
+	const exportWithSettings = async (
 		onProgress: (progress: FramesRendered) => void,
 	) => {
 		const customBpp = advancedMode() && isCustomBpp() ? compressionBpp() : null;
@@ -492,6 +571,8 @@ export function ExportPage() {
 			customBpp,
 			forceFfmpegDecoder(),
 		);
+		await flushProjectConfig();
+		if (previewDisposed || isCancelled()) throw new SilentError("Cancelled");
 		const { promise, cancel } = createExportTask(
 			projectPath,
 			exportSettings,
@@ -565,6 +646,7 @@ export function ExportPage() {
 			}
 		},
 		onError: (error) => {
+			if (previewDisposed) return;
 			if (isCancelled() || isCancellationError(error)) {
 				setExportState(reconcile({ type: "idle" }));
 				return;
@@ -575,6 +657,7 @@ export function ExportPage() {
 			setExportState(reconcile({ type: "idle" }));
 		},
 		onSuccess() {
+			if (previewDisposed) return;
 			setExportState({ type: "done" });
 			toast.success(`${exportedAssetLabel()} exported to clipboard`);
 		},
@@ -593,6 +676,9 @@ export function ExportPage() {
 				customBpp,
 				forceFfmpegDecoder(),
 			);
+			setExportState(reconcile({ action: "save", type: "starting" }));
+			await flushProjectConfig();
+			if (previewDisposed || isCancelled()) throw new SilentError("Cancelled");
 			const task = createExportToFileTask(
 				projectPath,
 				exportSettings,
@@ -620,6 +706,7 @@ export function ExportPage() {
 			setExportState({ type: "done" });
 		},
 		onError: (error) => {
+			if (previewDisposed) return;
 			if (isCancelled() || isCancellationError(error)) {
 				setExportState({ type: "idle" });
 				return;
@@ -632,6 +719,7 @@ export function ExportPage() {
 			setExportState({ type: "idle" });
 		},
 		onSuccess() {
+			if (previewDisposed) return;
 			toast.success(`${exportedAssetLabel()} exported to file`);
 		},
 	}));
@@ -667,6 +755,13 @@ export function ExportPage() {
 					}
 				}
 
+				await exportWithSettings((progress) => {
+					if (isCancelled()) throw new SilentError("Cancelled");
+					setExportState({ type: "rendering", progress });
+				});
+
+				if (isCancelled()) throw new SilentError("Cancelled");
+
 				const uploadChannel = new Channel<UploadProgress>((progress) => {
 					console.log("Upload progress:", progress);
 					setExportState(
@@ -677,13 +772,6 @@ export function ExportPage() {
 						}),
 					);
 				});
-
-				await exportWithSettings((progress) => {
-					if (isCancelled()) throw new SilentError("Cancelled");
-					setExportState({ type: "rendering", progress });
-				});
-
-				if (isCancelled()) throw new SilentError("Cancelled");
 
 				setExportState({ type: "uploading", progress: 0 });
 
@@ -715,9 +803,11 @@ export function ExportPage() {
 		},
 		onSuccess: async () => {
 			await refetchMeta();
+			if (previewDisposed) return;
 			setExportState({ type: "done" });
 		},
 		onError: (error) => {
+			if (previewDisposed) return;
 			if (isCancelled() || isCancellationError(error)) {
 				setExportState(reconcile({ type: "idle" }));
 				return;
@@ -783,10 +873,11 @@ export function ExportPage() {
 										fallback={
 											<div class="flex flex-col items-center gap-3 text-gray-10">
 												<IconLucideImage class="size-12 text-gray-8" />
-												<span class="text-sm">
-													{previewUnavailable()
-														? "Preview unavailable"
-														: "Generating preview..."}
+												<span class="max-w-full px-4 text-center text-sm break-words">
+													{previewError() ??
+														(previewUnavailable()
+															? "Preview unavailable"
+															: "Generating preview...")}
 												</span>
 											</div>
 										}
@@ -870,7 +961,7 @@ export function ExportPage() {
 									<span class="flex items-center gap-1.5">
 										<IconLucideMonitor class="size-3.5" />
 										<span class="min-w-20">
-											{settings.resolution.width}×{settings.resolution.height}
+											{outputDimensions().width}×{outputDimensions().height}
 										</span>
 									</span>
 									<span class="flex items-center gap-1.5">
@@ -1448,7 +1539,7 @@ export function ExportPage() {
 					</div>
 					<div class="flex justify-between text-sm text-gray-11 mt-4">
 						<span>
-							{settings.resolution.width}×{settings.resolution.height}
+							{outputDimensions().width}×{outputDimensions().height}
 						</span>
 						<Show when={renderEstimate()}>
 							{(est) => {

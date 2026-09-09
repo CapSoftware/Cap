@@ -161,6 +161,21 @@ async function prepare(overrides: Record<string, unknown> = {}) {
 }
 
 describe("audio derivative publication", () => {
+	it("rejects a late browser correction for a source replaced by an edit", async () => {
+		current.source = {
+			type: "webMP4",
+			outputKey:
+				"owner/video/.recording/outputs/edit-11111111-1111-4111-8111-111111111111/result.mp4",
+		};
+		expect(
+			await handleAudioLevelPublication({
+				...request,
+				sourceKey: "owner/video/result.mp4",
+			}),
+		).toEqual({ status: "unchanged", reason: "ineligible" });
+		expect(mocks.access).not.toHaveBeenCalled();
+		expect(writes).toHaveLength(0);
+	});
 	it.each([
 		{ inputLufs: -50.48, outputLufs: -22.49, truePeak: -3.04 },
 		{ inputLufs: -55, outputLufs: -27, truePeak: -10 },

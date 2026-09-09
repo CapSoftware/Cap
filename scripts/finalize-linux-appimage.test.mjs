@@ -14,6 +14,7 @@ import {
 	symlink,
 	writeFile,
 } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -21,6 +22,7 @@ import {
 	finalizeLinuxAppImage,
 	findConflictingLibraries,
 	preserveAppImageWorkingDirectory,
+	selectAppImageGtkBackend,
 } from "./finalize-linux-appimage.mjs";
 
 const runtimeSize = 64;
@@ -54,6 +56,147 @@ async function fixture(t) {
 	return { root, image, plugin, originalRuntime };
 }
 
+const upstreamGtkHook =
+	"export GDK_BACKEND=x11 # Crash with Wayland backend on Wayland - We tested it without it and ended up with this: https://github.com/tauri-apps/tauri/issues/8541\n";
+
+async function gtkHook(appDir, source = upstreamGtkHook) {
+	const hook = path.join(appDir, "apprun-hooks/linuxdeploy-plugin-gtk.sh");
+	await mkdir(path.dirname(hook), { recursive: true });
+	await writeFile(hook, source, { mode: 0o755 });
+	return hook;
+}
+
+test("GTK hook backend selection follows the capture environment and preserves explicit overrides", async (t) => {
+	const { root } = await fixture(t);
+	const socketDirectory = await mkdtemp(path.join(tmpdir(), "cap-wl-"));
+	t.after(() => rm(socketDirectory, { recursive: true, force: true }));
+	const socket = path.join(socketDirectory, "wl socket");
+	const server = createServer();
+	await new Promise((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(socket, resolve);
+	});
+	t.after(() => new Promise((resolve) => server.close(resolve)));
+	const hook = await gtkHook(root);
+	await selectAppImageGtkBackend(root);
+	const patched = await readFile(hook, "utf8");
+	await selectAppImageGtkBackend(root);
+	assert.equal(await readFile(hook, "utf8"), patched);
+	assert.equal((await stat(hook)).mode & 0o777, 0o755);
+	const inherited = { ...process.env };
+	for (const key of [
+		"GDK_BACKEND",
+		"WAYLAND_DISPLAY",
+		"DISPLAY",
+		"XDG_SESSION_TYPE",
+		"XDG_RUNTIME_DIR",
+	])
+		delete inherited[key];
+	const wayland = {
+		WAYLAND_DISPLAY: "wl socket",
+		XDG_RUNTIME_DIR: socketDirectory,
+	};
+	const cases = [
+		[
+			"normal Wayland",
+			{ ...wayland, DISPLAY: ":0", XDG_SESSION_TYPE: "wayland" },
+			"wayland",
+		],
+		[
+			"case insensitive session",
+			{ ...wayland, DISPLAY: ":0", XDG_SESSION_TYPE: "WaYlAnD" },
+			"wayland",
+		],
+		["pure Wayland without session", wayland, "wayland"],
+		["absolute Wayland socket", { WAYLAND_DISPLAY: socket }, "wayland"],
+		["X11", { DISPLAY: ":0", XDG_SESSION_TYPE: "x11" }, "x11"],
+		["mixed without session", { ...wayland, DISPLAY: ":0" }, "x11"],
+		[
+			"mixed explicit X11",
+			{ ...wayland, DISPLAY: ":0", XDG_SESSION_TYPE: "x11" },
+			"x11",
+		],
+		[
+			"stale socket in X11",
+			{ WAYLAND_DISPLAY: "gone", DISPLAY: ":0", XDG_SESSION_TYPE: "x11" },
+			"x11",
+		],
+		["absent Wayland variable", { XDG_SESSION_TYPE: "wayland" }, "x11"],
+		["empty DISPLAY remains present", { ...wayland, DISPLAY: "" }, "x11"],
+		["empty Wayland with X11", { WAYLAND_DISPLAY: "", DISPLAY: ":0" }, "x11"],
+		["explicit X11 override", { ...wayland, GDK_BACKEND: "x11" }, "x11"],
+		[
+			"explicit ordered override",
+			{ GDK_BACKEND: "wayland,x11" },
+			"wayland,x11",
+		],
+		[
+			"empty override selects backend",
+			{ ...wayland, GDK_BACKEND: "" },
+			"wayland",
+		],
+	];
+	for (const [name, environment, expected] of cases) {
+		const result = spawnSync(
+			"/bin/sh",
+			["-c", '. "$1"; printf "%s" "$GDK_BACKEND"', "cap-hook-test", hook],
+			{ env: { ...inherited, ...environment }, encoding: "utf8" },
+		);
+		assert.equal(result.status, 0, `${name}: ${result.stderr}`);
+		assert.equal(result.stdout, expected, name);
+	}
+	await writeFile(path.join(socketDirectory, "regular-file"), "not a socket");
+	for (const [name, environment] of [
+		["empty advertised display", { WAYLAND_DISPLAY: "" }],
+		["relative display without runtime", { WAYLAND_DISPLAY: "wl socket" }],
+		[
+			"relative runtime",
+			{ WAYLAND_DISPLAY: "wl socket", XDG_RUNTIME_DIR: "." },
+		],
+		["missing socket", { ...wayland, WAYLAND_DISPLAY: "gone" }],
+		["regular file", { ...wayland, WAYLAND_DISPLAY: "regular-file" }],
+		[
+			"mixed Wayland missing socket",
+			{
+				...wayland,
+				WAYLAND_DISPLAY: "gone",
+				DISPLAY: ":0",
+				XDG_SESSION_TYPE: "wayland",
+			},
+		],
+	]) {
+		const result = spawnSync(
+			"/bin/sh",
+			["-c", '. "$1"; printf "unreachable"', "cap-hook-test", hook],
+			{ env: { ...inherited, ...environment }, encoding: "utf8" },
+		);
+		assert.equal(result.status, 1, name);
+		assert.equal(result.stdout, "", name);
+		assert.match(result.stderr, /advertised Wayland socket/, name);
+	}
+});
+
+test("GTK hook rejects unknown or duplicated assignments without writing", async (t) => {
+	const { root } = await fixture(t);
+	for (const source of [
+		"export GDK_BACKEND=wayland\n",
+		"export GDK_BACKEND=x11\n",
+		upstreamGtkHook + upstreamGtkHook,
+		`${upstreamGtkHook}GDK_BACKEND=wayland\n`,
+		"export GDK_BACKEND=x11\nexport GDK_BACKEND=x11\n",
+		"export GDK_BACKEND=x11\nGDK_BACKEND=wayland\n",
+		"export GDK_BACKEND=x11 # changed upstream\n",
+		"printf unchanged\n",
+	]) {
+		const hook = await gtkHook(root, source);
+		await assert.rejects(
+			selectAppImageGtkBackend(root),
+			/Unrecognized AppImage GTK backend hook/,
+		);
+		assert.equal(await readFile(hook, "utf8"), source);
+	}
+});
+
 for (const failureAt of [1, 2]) {
 	test(`replacement failure ${failureAt} preserves the original artifact`, async (t) => {
 		const { root, image, plugin } = await fixture(t);
@@ -70,6 +213,7 @@ for (const failureAt of [1, 2]) {
 				}
 				const appDir = path.join(options.cwd, "squashfs-root");
 				await mkdir(appDir);
+				await gtkHook(appDir);
 				await writeFile(path.join(appDir, "AppRun"), "launcher", {
 					mode: 0o755,
 				});
@@ -167,6 +311,7 @@ for (const failure of [false, true]) {
 				assert.deepEqual(args, ["--appimage-extract"]);
 				const libraries = path.join(options.cwd, "squashfs-root/usr/lib");
 				await mkdir(libraries, { recursive: true });
+				await gtkHook(path.join(options.cwd, "squashfs-root"));
 				await writeFile(
 					path.join(libraries, "libwayland-client.so.0"),
 					"client",
@@ -365,6 +510,7 @@ test("runtime changes from the output plugin are rejected before signing", async
 					}
 					const appDir = path.join(options.cwd, "squashfs-root");
 					await mkdir(appDir);
+					await gtkHook(appDir);
 					await writeFile(path.join(appDir, "AppRun"), "launcher", {
 						mode: 0o755,
 					});

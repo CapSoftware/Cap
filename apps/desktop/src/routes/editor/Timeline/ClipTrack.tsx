@@ -290,16 +290,15 @@ function WaveformCanvas(props: {
 			ctx.restore();
 		};
 
-		drawWaveform(
-			props.micWaveform,
-			"rgba(255,255,255,0.4)",
-			project.audio.micVolumeDb,
-		);
+		const trackColor = getComputedStyle(canvas).color;
+		ctx.globalAlpha = 0.55;
+		drawWaveform(props.micWaveform, trackColor, project.audio.micVolumeDb);
 		drawWaveform(
 			props.systemWaveform,
-			"rgba(255,150,0,0.5)",
+			trackColor,
 			project.audio.systemVolumeDb,
 		);
+		ctx.globalAlpha = 1;
 	};
 
 	createEffect(() => {
@@ -343,8 +342,8 @@ function WaveformCanvas(props: {
 			ref={(el) => {
 				canvas = el;
 			}}
-			class="absolute top-0 h-full pointer-events-none"
-			style={{ left: "0px" }}
+			class="absolute bottom-0 h-[18px] pointer-events-none"
+			style={{ left: "0px", color: "var(--track-clip)" }}
 			height={CANVAS_HEIGHT}
 		/>
 	);
@@ -371,7 +370,7 @@ function ClipSpeedControl(props: {
 		>
 			<Popover.Trigger
 				class={cx(
-					"pointer-events-auto flex items-center gap-0.5 rounded-full bg-black/30 px-1.5 py-0.5 text-[10px] font-medium text-white transition-colors hover:bg-black/50",
+					"pointer-events-auto flex items-center gap-0.5 rounded-full bg-ed-ctl-active px-1.5 py-0.5 text-[10px] font-medium text-ed-text-2 transition-colors hover:bg-ed-ctl-hover hover:text-ed-text-1",
 					props.triggerClass,
 				)}
 				aria-label={`Clip speed: ${props.timescale}x`}
@@ -383,7 +382,7 @@ function ClipSpeedControl(props: {
 			<Popover.Portal>
 				<Popover.Content
 					onMouseDown={(event) => event.stopPropagation()}
-					class="z-50 flex w-max flex-col gap-1.5 rounded-xl border border-gray-3 bg-gray-1 p-2 text-gray-12 shadow-xl outline-hidden animate-in fade-in slide-in-from-bottom-2"
+					class="z-50 flex w-max flex-col gap-1.5 rounded-xl bg-ed-card p-2 text-ed-text-1 shadow-ed-pop outline-hidden animate-in fade-in slide-in-from-bottom-2"
 				>
 					<div class="flex items-center gap-1 rounded-lg bg-gray-2 p-1">
 						{[0.25, 0.5, 1, 1.5, 2, 4, 8].map((mult) => (
@@ -818,11 +817,8 @@ export function ClipTrack(
 							</Show>
 							<SegmentRoot
 								segColor="var(--track-clip)"
-								class={cx(
-									"border transition-colors duration-200 group",
-									isSelected() ? "border-gray-12" : "border-transparent",
-								)}
-								innerClass="ring-blue-9"
+								class="group"
+								selected={isSelected()}
 								title={clipTitle()}
 								segment={relativeSegment()}
 								onMouseMove={(e) => {
@@ -969,28 +965,34 @@ export function ClipTrack(
 										return (
 											<div
 												class={cx(
-													"absolute inset-y-0 z-[3] flex items-center justify-center gap-1 overflow-hidden bg-black/45 backdrop-saturate-50 border-x transition-colors",
-													causeSelected() ? "border-blue-9" : "border-white/25",
+													"absolute inset-y-0 z-[3] flex items-center justify-center gap-1 overflow-hidden bg-ed-card/75 backdrop-saturate-50 border-x transition-colors",
+													causeSelected()
+														? "border-ed-accent"
+														: "border-ed-line-strong",
 												)}
 												style={{
 													left: `${(hold[0] - relativeSegment().start) / secsPerPixel()}px`,
 													width: `${holdWidth()}px`,
 													"background-image":
-														"repeating-linear-gradient(-45deg, rgba(255,255,255,0.07) 0px, rgba(255,255,255,0.07) 4px, transparent 4px, transparent 8px)",
+														"repeating-linear-gradient(-45deg, rgba(127,127,127,0.12) 0px, rgba(127,127,127,0.12) 4px, transparent 4px, transparent 8px)",
 												}}
 												title="Video paused while the fullscreen text is shown"
 											>
 												<IconLucidePause
 													class={cx(
 														"size-3 shrink-0",
-														causeSelected() ? "text-blue-9" : "text-white/70",
+														causeSelected()
+															? "text-ed-accent"
+															: "text-ed-text-3",
 													)}
 												/>
 												<Show when={holdWidth() >= 64}>
 													<span
 														class={cx(
 															"text-[10px] font-medium whitespace-nowrap",
-															causeSelected() ? "text-blue-9" : "text-white/70",
+															causeSelected()
+																? "text-ed-accent"
+																: "text-ed-text-3",
 														)}
 													>
 														Paused
@@ -1005,7 +1007,7 @@ export function ClipTrack(
 									<button
 										type="button"
 										data-transition
-										class="absolute inset-y-0 left-0 z-[4] grid w-4 -translate-x-1/2 place-items-center bg-blue-9/40 text-xs text-white opacity-0 transition-opacity hover:bg-blue-9/60 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-blue-9"
+										class="absolute inset-y-0 left-0 z-[4] grid w-4 -translate-x-1/2 place-items-center bg-ed-accent/40 text-xs text-white opacity-0 transition-opacity hover:bg-ed-accent/60 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ed-accent"
 										aria-label={`Add transition before clip ${i() + 1}`}
 										onClick={(event) => {
 											event.stopPropagation();
@@ -1043,11 +1045,11 @@ export function ClipTrack(
 											<Popover.Trigger
 												data-transition
 												class={cx(
-													"absolute inset-y-0 left-0 z-[5] overflow-hidden border-x border-blue-7/80 bg-blue-9/25 text-white transition-colors hover:bg-blue-9/40",
+													"absolute inset-y-0 left-0 z-[5] overflow-hidden border-x border-ed-accent/60 bg-ed-accent/20 transition-colors hover:bg-ed-accent/35",
 													editorState.timeline.selection?.type ===
 														"transition" &&
 														editorState.timeline.selection.index === i() &&
-														"bg-blue-9/50 ring-1 ring-inset ring-blue-10",
+														"bg-ed-accent/45 ring-1 ring-inset ring-ed-accent",
 												)}
 												style={{
 													width: `${transition().duration / secsPerPixel()}px`,
@@ -1062,7 +1064,7 @@ export function ClipTrack(
 											<Popover.Portal>
 												<Popover.Content
 													onMouseDown={(event) => event.stopPropagation()}
-													class="z-50 flex w-64 flex-col gap-3 rounded-xl border border-gray-3 bg-gray-1 p-3 text-gray-12 shadow-xl outline-hidden"
+													class="z-50 flex w-64 flex-col gap-3 rounded-xl bg-ed-card p-3 text-ed-text-1 shadow-ed-pop outline-hidden"
 												>
 													<div class="flex items-center justify-between">
 														<span class="text-sm font-medium">
@@ -1134,7 +1136,6 @@ export function ClipTrack(
 								<SegmentHandle
 									position="start"
 									data-clip-handle
-									class="opacity-0 group-hover:opacity-100"
 									onMouseDown={(downEvent) => {
 										if (split()) return;
 										const seg = segment();
@@ -1231,7 +1232,7 @@ export function ClipTrack(
 										});
 									}}
 								/>
-								<SegmentContent class="relative justify-center items-center">
+								<SegmentContent class="relative items-center">
 									{(() => {
 										const seg = segment();
 
@@ -1254,19 +1255,20 @@ export function ClipTrack(
 										return (
 											<SegmentLabel
 												full={() => (
-													<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-12">
-														<span class="text-white/70">{clipName()}</span>
-														<div class="flex gap-1 items-center text-md dark:text-gray-12 text-gray-1">
-															<IconLucideClock class="size-3.5" />{" "}
+													<div class="cap-seg-labels">
+														<span class="cap-seg-label truncate">
+															{clipName()}
+														</span>
+														<span class="cap-seg-sublabel">
 															{formatTime(seg.end - seg.start)}
-															{speedControl()}
-														</div>
+														</span>
+														{speedControl("shrink-0")}
 													</div>
 												)}
 												compact={() => (
-													<div class="flex gap-1 items-center text-[10px] whitespace-nowrap dark:text-gray-12 text-gray-1">
+													<div class="cap-seg-labels">
 														{speedControl("shrink-0")}
-														<span class="truncate">
+														<span class="cap-seg-sublabel truncate">
 															{formatTime(seg.end - seg.start)}
 														</span>
 													</div>
@@ -1283,7 +1285,6 @@ export function ClipTrack(
 								<SegmentHandle
 									position="end"
 									data-clip-handle
-									class="opacity-0 group-hover:opacity-100"
 									onMouseDown={(downEvent) => {
 										const seg = segment();
 										const end = seg.end;
@@ -1467,7 +1468,7 @@ function Markings(props: {
 						style={{
 							transform: `translateX(${translateX()}px)`,
 						}}
-						class="absolute z-10 w-px h-12 bg-linear-to-b from-transparent to-transparent via-white-transparent-40 dark:via-black-transparent-60"
+						class="absolute inset-y-0 z-10 w-px bg-linear-to-b from-transparent to-transparent via-ed-line-strong"
 					/>
 				);
 			}}

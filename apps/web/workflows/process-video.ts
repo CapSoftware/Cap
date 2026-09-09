@@ -13,6 +13,11 @@ import {
 import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
+import {
+	type ProcessedVideoMetadata,
+	VideoProcessingFailedError,
+	waitForVideoProcessing,
+} from "./video-processing-status";
 
 interface ProcessVideoWorkflowPayload {
 	videoId: string;
@@ -46,26 +51,41 @@ export async function processVideoWorkflow(
 	try {
 		await validateProcessingRequest(videoId, rawFileKey);
 
-		let result: MediaServerProcessResult;
-		let capacityRetryCount = 0;
-		while (true) {
+		let metadata: ProcessedVideoMetadata;
+		for (let processingAttempt = 0; ; processingAttempt++) {
+			let capacityRetryCount = 0;
+			while (true) {
+				try {
+					await processVideoOnMediaServer(
+						videoId,
+						userId,
+						rawFileKey,
+						bucketId,
+					);
+					break;
+				} catch (error) {
+					if (!isMediaServerCapacityError(error)) throw error;
+					await markVideoWaitingForCapacity(videoId);
+					await sleep(`${Math.min(120, 15 + capacityRetryCount * 15)}s`);
+					capacityRetryCount++;
+				}
+			}
 			try {
-				result = await processVideoOnMediaServer(
-					videoId,
-					userId,
-					rawFileKey,
-					bucketId,
-				);
+				metadata = await waitForVideoProcessing(videoId);
 				break;
 			} catch (error) {
-				if (!isMediaServerCapacityError(error)) throw error;
+				if (
+					!(error instanceof VideoProcessingFailedError) ||
+					processingAttempt >= 2
+				) {
+					throw error;
+				}
 				await markVideoWaitingForCapacity(videoId);
-				await sleep(`${Math.min(120, 15 + capacityRetryCount * 15)}s`);
-				capacityRetryCount++;
+				await sleep(15_000 * (processingAttempt + 1));
 			}
 		}
 
-		await saveMetadataAndComplete(videoId, result.metadata);
+		await saveMetadataAndComplete(videoId, metadata);
 
 		const outputKey = `${userId}/${videoId}/result.mp4`;
 		if (rawFileKey !== outputKey) {
@@ -77,7 +97,7 @@ export async function processVideoWorkflow(
 		return {
 			success: true,
 			message: "Video processing completed",
-			metadata: result.metadata,
+			metadata,
 		};
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
@@ -124,25 +144,10 @@ async function validateProcessingRequest(
 	}
 }
 
-interface MediaServerProcessResult {
-	metadata: {
-		duration: number;
-		width: number;
-		height: number;
-		fps: number;
-	};
-}
-
 const MEDIA_SERVER_START_MAX_ATTEMPTS = 2;
 const MEDIA_SERVER_START_RETRY_BASE_MS = 250;
-const MEDIA_SERVER_COMPLETION_MAX_ATTEMPTS = 720;
-const MEDIA_SERVER_COMPLETION_POLL_INTERVAL_MS = 5000;
 const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
 const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
-
-function isPositiveNumber(value: number | null): value is number {
-	return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
 
 function getInputExtension(rawFileKey: string): string {
 	const parts = rawFileKey.split(".");
@@ -255,7 +260,7 @@ async function processVideoOnMediaServer(
 	userId: string,
 	rawFileKey: string,
 	_bucketId: string | null,
-): Promise<MediaServerProcessResult> {
+): Promise<void> {
 	"use step";
 
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
@@ -346,104 +351,6 @@ async function processVideoOnMediaServer(
 		webhookSecret: webhookSecret || undefined,
 		inputExtension: getInputExtension(rawFileKey),
 	});
-
-	return await waitForProcessingCompletion(videoId);
-}
-
-function getMetadataFromVideoRow(
-	video:
-		| {
-				duration: number | null;
-				width: number | null;
-				height: number | null;
-				fps: number | null;
-		  }
-		| undefined,
-): MediaServerProcessResult["metadata"] | null {
-	if (
-		!video ||
-		!isPositiveNumber(video.width) ||
-		!isPositiveNumber(video.height) ||
-		!isPositiveNumber(video.fps)
-	) {
-		return null;
-	}
-
-	return {
-		duration: isPositiveNumber(video.duration) ? video.duration : 0,
-		width: video.width,
-		height: video.height,
-		fps: video.fps,
-	};
-}
-
-async function getCompletedMetadata(
-	videoId: string,
-): Promise<MediaServerProcessResult["metadata"] | null> {
-	const [video] = await db()
-		.select({
-			duration: videos.duration,
-			width: videos.width,
-			height: videos.height,
-			fps: videos.fps,
-		})
-		.from(videos)
-		.where(eq(videos.id, videoId as Video.VideoId));
-
-	return getMetadataFromVideoRow(video);
-}
-
-async function waitForProcessingCompletion(
-	videoId: string,
-): Promise<MediaServerProcessResult> {
-	let lastStatus = "processing";
-
-	for (
-		let attempt = 0;
-		attempt < MEDIA_SERVER_COMPLETION_MAX_ATTEMPTS;
-		attempt++
-	) {
-		await waitForRetry(MEDIA_SERVER_COMPLETION_POLL_INTERVAL_MS);
-
-		const [upload] = await db()
-			.select({
-				phase: videoUploads.phase,
-				processingProgress: videoUploads.processingProgress,
-				processingMessage: videoUploads.processingMessage,
-				processingError: videoUploads.processingError,
-			})
-			.from(videoUploads)
-			.where(eq(videoUploads.videoId, videoId as Video.VideoId));
-
-		if (!upload || upload.phase === "complete") {
-			const metadata = await getCompletedMetadata(videoId);
-			if (!metadata) {
-				throw new Error("Processing completed but video metadata is missing");
-			}
-
-			return { metadata };
-		}
-
-		if (upload.processingError) {
-			throw new Error(upload.processingError);
-		}
-
-		if (upload.phase === "error") {
-			throw new Error(upload.processingMessage || "Video processing failed");
-		}
-
-		lastStatus = [
-			upload.phase,
-			typeof upload.processingProgress === "number"
-				? `${upload.processingProgress}%`
-				: null,
-			upload.processingMessage,
-		]
-			.filter(Boolean)
-			.join(" ");
-	}
-
-	throw new Error(`Video processing timed out while ${lastStatus}`);
 }
 
 async function saveMetadataAndComplete(

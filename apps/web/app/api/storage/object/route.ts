@@ -166,7 +166,8 @@ export async function GET(request: NextRequest) {
 			!(tokenPayload?.videoId === videoIdParam && tokenPayload.key === key) &&
 			!(
 				key === Video.getAudioLevelOutputKey(video) ||
-				(video.source.type === "desktopMP4" &&
+				((video.source.type === "desktopMP4" ||
+					video.source.type === "webMP4") &&
 					[
 						key === video.source.outputKey,
 						key === video.source.thumbnailKey,

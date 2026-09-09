@@ -5,13 +5,12 @@ import { createMemo, For, Show } from "solid-js";
 import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";
 import type { CursorRippleConfig, CursorType } from "~/utils/tauri";
-import IconLucideMousePointerClick from "~icons/lucide/mouse-pointer-click";
 import macArrow from "../../../../../crates/cursor-info/assets/mac/arrow.svg?raw";
 import tahoeArrow from "../../../../../crates/cursor-info/assets/mac/tahoe/default.svg?raw";
 import windowsArrow from "../../../../../crates/cursor-info/assets/windows/arrow.svg?raw";
 import { RgbInput } from "./color-utils";
 import { type TransformedMeta, useEditorContext } from "./context";
-import { Field, Slider } from "./ui";
+import { Field, Section, Slider } from "./ui";
 
 export type CursorFamily = "macos" | "tahoe" | "windows";
 type CursorStyle = CursorFamily | "circle";
@@ -84,7 +83,7 @@ function CursorStyleCard(props: { style: CursorStyle; recorded: boolean }) {
 		props.style === "circle" ? "Circle" : CURSOR_FAMILIES[props.style].label;
 
 	const tile = () => (
-		<div class="flex h-[60px] w-full items-center justify-center rounded-[10px] border border-gray-3 bg-gray-2 transition-colors group-hover:border-gray-5 group-data-checked:border-blue-8 group-data-checked:bg-blue-3/40 group-data-checked:ring-1 group-data-checked:ring-blue-8 group-has-[input:focus-visible]:ring-2 group-has-[input:focus-visible]:ring-blue-8">
+		<div class="flex justify-center items-center w-full h-[60px] rounded-[10px] transition-shadow bg-ed-card-2 ring-1 ring-ed-line group-hover:ring-ed-line-strong group-data-checked:ring-2 group-data-checked:ring-ed-accent group-data-checked:ring-offset-2 group-data-checked:ring-offset-ed-card group-has-[input:focus-visible]:ring-2 group-has-[input:focus-visible]:ring-ed-accent">
 			<Show
 				when={props.style !== "circle" && props.style}
 				fallback={<CircleCursor />}
@@ -103,7 +102,7 @@ function CursorStyleCard(props: { style: CursorStyle; recorded: boolean }) {
 						{tile()}
 					</Tooltip>
 				</Show>
-				<span class="max-w-full truncate text-[11px] font-medium leading-none text-gray-11 transition-colors group-hover:text-gray-12 group-data-checked:text-gray-12">
+				<span class="max-w-full text-[11px] font-medium leading-none truncate transition-colors text-ed-text-2 group-hover:text-ed-text-1 group-data-checked:text-ed-text-1">
 					{label()}
 				</span>
 			</KRadioGroup.ItemLabel>
@@ -123,7 +122,7 @@ export function CursorStylePicker() {
 	});
 
 	return (
-		<Field name="Cursor Style" icon={<IconCapCursor />}>
+		<Section name="Cursor style">
 			<KRadioGroup
 				class="grid grid-cols-4 gap-2"
 				value={selected()}
@@ -135,7 +134,7 @@ export function CursorStylePicker() {
 					)}
 				</For>
 			</KRadioGroup>
-		</Field>
+		</Section>
 	);
 }
 
@@ -148,25 +147,25 @@ export function CursorRippleSection() {
 
 	return (
 		<KCollapsible open={ripple().enabled}>
-			<Field
-				name="Click Ripple"
-				icon={<IconLucideMousePointerClick class="size-4" />}
-				value={
-					<Toggle
-						checked={ripple().enabled}
-						onChange={(value) => updateRipple({ enabled: value })}
-					/>
-				}
-			/>
-			<KCollapsible.Content class="overflow-hidden border-b opacity-0 transition-opacity border-gray-3 animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
-				<div class="flex flex-col gap-4 pt-4 pb-6">
+			<Field name="Click Ripple" inline>
+				<Toggle
+					checked={ripple().enabled}
+					onChange={(value) => updateRipple({ enabled: value })}
+				/>
+			</Field>
+			<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
+				<div class="flex flex-col gap-2 pt-1 pb-3.5">
 					<Field name="Color">
 						<RgbInput
 							value={ripple().color}
 							onChange={(color) => updateRipple({ color })}
 						/>
 					</Field>
-					<Field name="Strength">
+					<Field
+						name="Strength"
+						inline
+						value={`${Math.round(ripple().strength * 100)}%`}
+					>
 						<Slider
 							value={[Math.round(ripple().strength * 100)]}
 							onChange={(v) => updateRipple({ strength: v[0] / 100 })}
@@ -176,7 +175,11 @@ export function CursorRippleSection() {
 							formatTooltip={(v) => `${Math.round(v)}%`}
 						/>
 					</Field>
-					<Field name="Size">
+					<Field
+						name="Size"
+						inline
+						value={`${Math.round(ripple().size * 100)}%`}
+					>
 						<Slider
 							value={[Math.round(ripple().size * 100)]}
 							onChange={(v) => updateRipple({ size: v[0] / 100 })}
@@ -186,7 +189,11 @@ export function CursorRippleSection() {
 							formatTooltip={(v) => `${Math.round(v)}%`}
 						/>
 					</Field>
-					<Field name="Duration">
+					<Field
+						name="Duration"
+						inline
+						value={`${ripple().duration.toFixed(2)}s`}
+					>
 						<Slider
 							value={[ripple().duration]}
 							onChange={(v) => updateRipple({ duration: v[0] })}
@@ -197,6 +204,7 @@ export function CursorRippleSection() {
 						/>
 					</Field>
 				</div>
+				<div class="w-full border-t border-ed-line" />
 			</KCollapsible.Content>
 		</KCollapsible>
 	);

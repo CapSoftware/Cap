@@ -28,6 +28,57 @@ pub type MicrophonesMap = IndexMap<String, (Device, SupportedStreamConfig)>;
 type StreamReadyFuture =
     BoxFuture<'static, Result<(SupportedStreamConfig, Option<u32>), SetInputError>>;
 
+pub const SETUP_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_CONCURRENT_SETUPS: usize = 2;
+
+fn bounded_stream_ready(
+    ready: StreamReadyFuture,
+    cancel: tokio_util::sync::CancellationToken,
+    timeout: Duration,
+) -> StreamReadyFuture {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let cancel_on_drop = cancel.clone().drop_guard();
+    async move {
+        let _cancel_on_drop = cancel_on_drop;
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(SetInputError::SetupCancelled),
+            result = tokio::time::timeout_at(deadline, ready) => {
+                result.unwrap_or_else(|_| {
+                    cancel.cancel();
+                    Err(SetInputError::SetupTimedOut)
+                })
+            }
+        }
+    }
+    .boxed()
+}
+
+async fn spawn_setup_worker(
+    name: String,
+    slots: Arc<tokio::sync::Semaphore>,
+    cancel: tokio_util::sync::CancellationToken,
+    worker: impl FnOnce(tokio::sync::OwnedSemaphorePermit) + Send + 'static,
+) -> Result<(), SetInputError> {
+    let permit = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(SetInputError::SetupCancelled),
+        permit = slots.acquire_owned() => permit.map_err(|error| {
+            SetInputError::BuildStream(format!("Microphone setup is unavailable: {error}"))
+        })?,
+    };
+    if cancel.is_cancelled() {
+        return Err(SetInputError::SetupCancelled);
+    }
+    std::thread::Builder::new()
+        .name(name)
+        .spawn(move || worker(permit))
+        .map(drop)
+        .map_err(|error| {
+            SetInputError::BuildStream(format!("Could not start microphone worker: {error}"))
+        })
+}
+
 const SAMPLE_RATE_ESTIMATE_MIN_INTERVALS: u32 = 4;
 const SAMPLE_RATE_ESTIMATE_MIN_DELTA: Duration = Duration::from_millis(2);
 const SAMPLE_RATE_ESTIMATE_MAX_DELTA: Duration = Duration::from_millis(250);
@@ -551,6 +602,7 @@ impl RecordingSourceHealth {
         state.pending = None;
     }
 
+    #[cfg(test)]
     fn fail_current(&self, generation: u64, id: u32, error: String) {
         let mut state = self.0.lock().unwrap();
         if state.generation == generation && state.current.id == id {
@@ -780,6 +832,7 @@ impl WindowsReconnect {
         let done_tx = self.done_tx.clone();
         ConnectingState {
             id,
+            _cancel_setup: None,
             ready: self
                 .ready
                 .clone()
@@ -799,6 +852,7 @@ impl WindowsReconnect {
 
 #[derive(Actor)]
 pub struct MicrophoneFeed {
+    setup_slots: Arc<tokio::sync::Semaphore>,
     #[cfg(windows)]
     selection_generation: u64,
     #[cfg(windows)]
@@ -942,6 +996,7 @@ impl OpenState {
 
 struct ConnectingState {
     id: u32,
+    _cancel_setup: Option<tokio_util::sync::DropGuard>,
     ready: BoxFuture<'static, Result<InputConnected, SetInputError>>,
 }
 
@@ -1054,6 +1109,7 @@ fn list_input_device_names() -> Vec<String> {
 impl MicrophoneFeed {
     pub fn new(error_sender: flume::Sender<StreamError>) -> Self {
         Self {
+            setup_slots: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SETUPS)),
             #[cfg(target_os = "linux")]
             pulse_input_role: crate::sources::screen_capture::PulseInputRole::Microphone,
             #[cfg(target_os = "linux")]
@@ -1130,6 +1186,32 @@ impl MicrophoneFeed {
         device_map
     }
 
+    fn device_with_settings(
+        label: &str,
+        settings: Option<&MicrophoneDeviceSettings>,
+    ) -> Option<(Device, SupportedStreamConfig)> {
+        let host = cpal::default_host();
+        let configure = |device| {
+            get_usable_device(device, settings).map(|(_, device, config)| (device, config))
+        };
+        if let Some(device) = configure_named_device(
+            host.default_input_device(),
+            label,
+            |device| device.name().ok(),
+            configure,
+        ) {
+            return Some(device);
+        }
+        let devices = match host.devices() {
+            Ok(devices) => devices,
+            Err(error) => {
+                error!("Could not access audio input devices: {error}");
+                return None;
+            }
+        };
+        configure_named_device(devices, label, |device| device.name().ok(), configure)
+    }
+
     fn spawn_input_stream(params: StreamSpawnParams) -> (StreamReadyFuture, SyncSender<()>) {
         let StreamSpawnParams {
             #[cfg(any(target_os = "linux", windows))]
@@ -1140,58 +1222,59 @@ impl MicrophoneFeed {
             system_stream_cancel,
             id,
             label,
-            device,
-            config,
-            stream_config,
-            buffer_size_frames,
-            sample_format,
+            settings,
+            setup_cancel,
+            setup_slots,
+            previous_input,
             actor_ref,
             error_sender,
             dropped_message_count,
             log_action,
         } = params;
 
-        let (ready_tx, ready_rx) = oneshot::channel::<Result<Option<u32>, SetInputError>>();
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let (started_tx, started_rx) = oneshot::channel();
         let (done_tx, done_rx) = mpsc::sync_channel(0);
 
-        let ready = {
-            let config_for_ready = config.clone();
-            ready_rx
-                .map(move |v| {
-                    let config = config_for_ready.clone();
-                    v.map_err(|_| SetInputError::BuildStreamCrashed)
-                        .and_then(|inner| inner)
-                        .map(|buffer_size| (config, buffer_size))
-                })
-                .boxed()
-        };
+        let ready = bounded_stream_ready(
+            async move {
+                started_rx
+                    .await
+                    .unwrap_or(Err(SetInputError::BuildStreamCrashed))?;
+                ready_rx
+                    .await
+                    .unwrap_or(Err(SetInputError::BuildStreamCrashed))
+            }
+            .boxed(),
+            setup_cancel.clone(),
+            SETUP_TIMEOUT,
+        );
 
-        std::thread::spawn({
-            let stream_config = stream_config.clone();
-            let config = config.clone();
-            let actor_ref = actor_ref.clone();
-            let error_sender = error_sender.clone();
-            let dropped_message_count = dropped_message_count.clone();
-            move || {
+        tokio::spawn(async move {
+            let worker = spawn_setup_worker(
+                format!("microphone-input-{id}"),
+                setup_slots,
+                setup_cancel.clone(),
+                move |setup_permit| {
                 #[cfg(windows)]
                 let mut exit_health = StreamExitHealth {
                     health: health.clone(),
                     expected: false,
                 };
-                let device_name_for_log = device.name().ok();
-
-                if let Some(ref name) = device_name_for_log {
-                    info!("Device '{}' available configs:", name);
-                    for config in device.supported_input_configs().into_iter().flatten() {
-                        info!(
-                            "  Format: {:?}, Min rate: {}, Max rate: {}, Sample size: {}",
-                            config.sample_format(),
-                            config.min_sample_rate().0,
-                            config.max_sample_rate().0,
-                            config.sample_format().sample_size()
-                        );
-                    }
+                if setup_cancel.is_cancelled() || ready_tx.is_canceled() {
+                    return;
                 }
+                let Some((device, config)) = Self::device_with_settings(&label, settings.as_ref())
+                else {
+                    let _ = ready_tx.send(Err(SetInputError::DeviceNotFound));
+                    return;
+                };
+                if setup_cancel.is_cancelled() || ready_tx.is_canceled() {
+                    return;
+                }
+                let sample_format = config.sample_format();
+                let (stream_config, buffer_size_frames) =
+                    stream_config_with_latency(&config, Some(&label));
 
                 let buffer_size_description = match &stream_config.buffer_size {
                     BufferSize::Default => "default".to_string(),
@@ -1203,11 +1286,10 @@ impl MicrophoneFeed {
                 };
 
                 info!(
-                    "🎤 {} stream (id {}, label '{}') for '{:?}' with config: rate={}, channels={}, format={:?}, buffer_size={}",
+                    "🎤 {} stream (id {}, label '{}') with config: rate={}, channels={}, format={:?}, buffer_size={}",
                     log_action.verb(),
                     id,
                     label,
-                    device_name_for_log,
                     config.sample_rate().0,
                     config.channels(),
                     sample_format,
@@ -1262,6 +1344,12 @@ impl MicrophoneFeed {
                 #[cfg(target_os = "linux")]
                 let routed_at = Arc::new(std::sync::OnceLock::<cap_timestamp::Timestamps>::new());
 
+                if setup_cancel.is_cancelled() || ready_tx.is_canceled() {
+                    return;
+                }
+                if let Some(previous_input) = previous_input {
+                    let _ = previous_input.send(());
+                }
                 let stream = match device.build_input_stream_raw(
                     &stream_config,
                     sample_format,
@@ -1395,6 +1483,9 @@ impl MicrophoneFeed {
                     }
                 };
 
+                if setup_cancel.is_cancelled() || ready_tx.is_canceled() {
+                    return;
+                }
                 if let Err(e) = stream.play() {
                     let _ = ready_tx.send(Err(SetInputError::PlayStream(e.to_string())));
                     return;
@@ -1417,7 +1508,10 @@ impl MicrophoneFeed {
                     return;
                 }
 
-                let _ = ready_tx.send(Ok(buffer_size_frames));
+                if ready_tx.send(Ok((config, buffer_size_frames))).is_err() {
+                    return;
+                }
+                drop(setup_permit);
 
                 match done_rx.recv() {
                     Ok(_) => debug!("Microphone actor shut down, ending stream"),
@@ -1427,11 +1521,27 @@ impl MicrophoneFeed {
                 {
                     exit_health.expected = true;
                 }
-            }
+                },
+            )
+            .await;
+            let _ = started_tx.send(worker);
         });
 
         (ready, done_tx)
     }
+}
+
+fn configure_named_device<T, C>(
+    devices: impl IntoIterator<Item = T>,
+    label: &str,
+    mut name: impl FnMut(&T) -> Option<String>,
+    mut configure: impl FnMut(T) -> Option<C>,
+) -> Option<C> {
+    devices.into_iter().find_map(|device| {
+        (name(&device).as_deref() == Some(label))
+            .then(|| configure(device))
+            .flatten()
+    })
 }
 
 fn get_usable_device(
@@ -1795,9 +1905,7 @@ struct InputConnected {
 }
 
 struct LockedInputReconnected {
-    #[cfg(any(target_os = "linux", windows))]
     previous_id: u32,
-    #[cfg(any(target_os = "linux", windows))]
     generation: u64,
     id: u32,
     label: String,
@@ -1856,11 +1964,10 @@ struct StreamSpawnParams {
     system_stream_cancel: tokio_util::sync::CancellationToken,
     id: u32,
     label: String,
-    device: Device,
-    config: SupportedStreamConfig,
-    stream_config: cpal::StreamConfig,
-    buffer_size_frames: Option<u32>,
-    sample_format: SampleFormat,
+    settings: Option<MicrophoneDeviceSettings>,
+    setup_cancel: tokio_util::sync::CancellationToken,
+    setup_slots: Arc<tokio::sync::Semaphore>,
+    previous_input: Option<SyncSender<()>>,
     actor_ref: ActorRef<MicrophoneFeed>,
     error_sender: flume::Sender<StreamError>,
     dropped_message_count: Arc<AtomicU64>,
@@ -1881,6 +1988,10 @@ pub enum SetInputError {
     DeviceNotFound,
     #[error("BuildStreamCrashed")]
     BuildStreamCrashed,
+    #[error("Microphone setup was cancelled by a newer selection")]
+    SetupCancelled,
+    #[error("Timed out opening the microphone. Reconnect it or choose another microphone.")]
+    SetupTimedOut,
     // we use strings for these as the cpal errors aren't Clone
     #[error("BuildStream: {0}")]
     BuildStream(String),
@@ -1912,11 +2023,6 @@ impl MicrophoneFeed {
                 self.input_id_counter += 1;
 
                 let label = msg.label.clone();
-                let Some((device, config)) =
-                    Self::list_with_settings(msg.settings.as_ref()).swap_remove(&label)
-                else {
-                    return Err(SetInputError::DeviceNotFound);
-                };
 
                 #[cfg(target_os = "linux")]
                 if self.pulse_input_role
@@ -1930,11 +2036,8 @@ impl MicrophoneFeed {
                     self.selection_generation = self.selection_generation.wrapping_add(1);
                     self.recording_reconnect = None;
                 }
-                let sample_format = config.sample_format();
-                let (stream_config, buffer_size_frames) =
-                    stream_config_with_latency(&config, Some(&label));
-
                 let actor_ref = actor_ref.clone();
+                let setup_cancel = tokio_util::sync::CancellationToken::new();
                 #[cfg(any(target_os = "linux", windows))]
                 let health = {
                     let health = Arc::new(StreamHealth::new(id));
@@ -1952,11 +2055,10 @@ impl MicrophoneFeed {
                     system_stream_cancel: self.system_stream_cancel.clone(),
                     id,
                     label: label.clone(),
-                    device,
-                    config,
-                    stream_config,
-                    buffer_size_frames,
-                    sample_format,
+                    settings: msg.settings,
+                    setup_cancel: setup_cancel.clone(),
+                    setup_slots: self.setup_slots.clone(),
+                    previous_input: None,
                     actor_ref: actor_ref.clone(),
                     error_sender: self.error_sender.clone(),
                     dropped_message_count: self.dropped_message_count.clone(),
@@ -1966,6 +2068,7 @@ impl MicrophoneFeed {
 
                 state.connecting = Some(ConnectingState {
                     id,
+                    _cancel_setup: Some(setup_cancel.drop_guard()),
                     ready: {
                         let done_tx = done_tx.clone();
                         ready
@@ -2050,30 +2153,11 @@ impl MicrophoneFeed {
                 }
 
                 let label = msg.label.clone();
-                let Some((device, config)) =
-                    Self::list_with_settings(msg.settings.as_ref()).swap_remove(&label)
-                else {
-                    #[cfg(target_os = "linux")]
-                    if let Some(recording) = &self.recording_health {
-                        recording.fail_current(
-                            self.lock_generation,
-                            inner.id,
-                            "Requested audio device unavailable during reconnect".into(),
-                        );
-                    }
-                    return Err(SetInputError::DeviceNotFound);
-                };
-
-                let sample_format = config.sample_format();
-                let (stream_config, buffer_size_frames) =
-                    stream_config_with_latency(&config, Some(&label));
 
                 let new_id = self.input_id_counter;
                 self.input_id_counter += 1;
 
-                #[cfg(any(target_os = "linux", windows))]
                 let previous_id = inner.id;
-                #[cfg(any(target_os = "linux", windows))]
                 let generation = self.lock_generation;
                 #[cfg(target_os = "linux")]
                 if self.pulse_input_role
@@ -2082,8 +2166,6 @@ impl MicrophoneFeed {
                     self.system_stream_cancel.cancel();
                     self.system_stream_cancel = tokio_util::sync::CancellationToken::new();
                 }
-                let _ = inner.done_tx.send(());
-
                 #[cfg(any(target_os = "linux", windows))]
                 let health = {
                     let health = Arc::new(StreamHealth::new(new_id));
@@ -2107,11 +2189,10 @@ impl MicrophoneFeed {
                     system_stream_cancel: self.system_stream_cancel.clone(),
                     id: new_id,
                     label: label.clone(),
-                    device,
-                    config,
-                    stream_config,
-                    buffer_size_frames,
-                    sample_format,
+                    settings: msg.settings,
+                    setup_cancel: tokio_util::sync::CancellationToken::new(),
+                    setup_slots: self.setup_slots.clone(),
+                    previous_input: Some(inner.done_tx.clone()),
                     actor_ref: actor_ref.clone(),
                     error_sender: self.error_sender.clone(),
                     dropped_message_count: self.dropped_message_count.clone(),
@@ -2171,9 +2252,7 @@ impl MicrophoneFeed {
                             Ok((config, buffer_size_frames)) => {
                                 let _ = actor
                                     .tell(LockedInputReconnected {
-                                        #[cfg(any(target_os = "linux", windows))]
                                         previous_id,
-                                        #[cfg(any(target_os = "linux", windows))]
                                         generation,
                                         id: new_id,
                                         label,
@@ -2553,7 +2632,13 @@ impl Message<Lock> for MicrophoneFeed {
 
         if let Some(connecting) = &mut state.connecting {
             let ready = &mut connecting.ready;
-            let data = ready.await?;
+            let data = match ready.await {
+                Ok(data) => data,
+                Err(error) => {
+                    connecting.ready = futures::future::ready(Err(error.clone())).boxed();
+                    return Err(error.into());
+                }
+            };
 
             state.handle_input_connected(data);
         }
@@ -2709,6 +2794,13 @@ fn recording_reconnect_is_current(
 
 impl MicrophoneFeed {
     fn handle_locked_input_reconnected(&mut self, msg: LockedInputReconnected) {
+        #[cfg(target_os = "macos")]
+        if self.lock_generation != msg.generation
+            || !matches!(&self.state, State::Locked { inner, token }
+                if inner.id == msg.previous_id && inner.label == msg.label && token.strong_count() > 0)
+        {
+            return;
+        }
         #[cfg(windows)]
         {
             let current = match &self.state {
@@ -2966,6 +3058,356 @@ impl Message<Unlock> for MicrophoneFeed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn dropping_microphone_readiness_cancels_queued_native_work() {
+        let slots = Arc::new(tokio::sync::Semaphore::new(0));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let ready = bounded_stream_ready(
+            futures::future::pending().boxed(),
+            cancel.clone(),
+            SETUP_TIMEOUT,
+        );
+        let (started_tx, started_rx) = flume::bounded(1);
+        let queued = tokio::spawn(spawn_setup_worker(
+            "test-dropped-readiness".into(),
+            slots.clone(),
+            cancel,
+            move |_| started_tx.send(()).unwrap(),
+        ));
+        tokio::task::yield_now().await;
+        drop(ready);
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), queued)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(SetInputError::SetupCancelled)
+        ));
+        slots.add_permits(1);
+        assert!(started_rx.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stuck_microphone_setups_bound_workers_and_cancel_queued_selections() {
+        let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SETUPS));
+        let (started_tx, started_rx) = flume::bounded(MAX_CONCURRENT_SETUPS + 1);
+        let (stopped_tx, stopped_rx) = flume::bounded(MAX_CONCURRENT_SETUPS);
+        let mut release = Vec::new();
+        for index in 0..MAX_CONCURRENT_SETUPS {
+            let (release_tx, release_rx) = mpsc::channel();
+            release.push(release_tx);
+            let started = started_tx.clone();
+            let stopped = stopped_tx.clone();
+            spawn_setup_worker(
+                format!("test-stuck-microphone-{index}"),
+                slots.clone(),
+                tokio_util::sync::CancellationToken::new(),
+                move |permit| {
+                    started.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    drop(permit);
+                    stopped.send(()).unwrap();
+                },
+            )
+            .await
+            .unwrap();
+        }
+        for _ in 0..MAX_CONCURRENT_SETUPS {
+            started_rx.recv_async().await.unwrap();
+        }
+        assert_eq!(slots.available_permits(), 0);
+        for _ in 0..32 {
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let started = started_tx.clone();
+            let queued = tokio::spawn(spawn_setup_worker(
+                "test-cancelled-microphone".into(),
+                slots.clone(),
+                cancel.clone(),
+                move |_| started.send(()).unwrap(),
+            ));
+            tokio::task::yield_now().await;
+            cancel.cancel();
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(1), queued)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                Err(SetInputError::SetupCancelled)
+            ));
+        }
+        assert!(started_rx.is_empty());
+        release[0].send(()).unwrap();
+        stopped_rx.recv_async().await.unwrap();
+        spawn_setup_worker(
+            "test-healthy-microphone".into(),
+            slots,
+            tokio_util::sync::CancellationToken::new(),
+            move |_| started_tx.send(()).unwrap(),
+        )
+        .await
+        .unwrap();
+        started_rx.recv_async().await.unwrap();
+        for release in &release[1..] {
+            release.send(()).unwrap();
+            stopped_rx.recv_async().await.unwrap();
+        }
+        assert!(started_rx.is_empty());
+    }
+
+    #[test]
+    fn selecting_a_microphone_does_not_configure_unrelated_devices() {
+        let mut configured = Vec::new();
+        let selected = configure_named_device(
+            ["slow unrelated microphone", "requested microphone", "other"],
+            "requested microphone",
+            |name| Some((*name).to_string()),
+            |name| {
+                configured.push(name);
+                Some(name)
+            },
+        );
+        assert_eq!(selected, Some("requested microphone"));
+        assert_eq!(configured, ["requested microphone"]);
+    }
+
+    #[test]
+    fn named_microphone_selection_preserves_first_usable_duplicate() {
+        let mut configured = Vec::new();
+        let selected = configure_named_device(
+            [
+                ("requested", 0),
+                ("other", 1),
+                ("requested", 2),
+                ("requested", 3),
+            ],
+            "requested",
+            |(name, _)| Some((*name).to_string()),
+            |(_, index)| {
+                configured.push(index);
+                (index != 0).then_some(index)
+            },
+        );
+        assert_eq!(selected, Some(2));
+        assert_eq!(configured, [0, 2]);
+    }
+
+    #[tokio::test]
+    async fn stalled_microphone_setup_releases_lock_mailbox_and_native_readiness() {
+        let (error_tx, _error_rx) = flume::bounded(1);
+        let (native_tx, native_rx) = oneshot::channel();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let ready = bounded_stream_ready(
+            async move { native_rx.await.unwrap() }.boxed(),
+            cancel.clone(),
+            Duration::from_millis(20),
+        );
+        let (done_tx, _done_rx) = mpsc::sync_channel(1);
+        let mut microphone = MicrophoneFeed::new(error_tx);
+        microphone.state = State::Open(OpenState {
+            connecting: Some(ConnectingState {
+                id: 1,
+                _cancel_setup: Some(cancel.drop_guard()),
+                ready: ready
+                    .map(move |result| {
+                        result.map(|(config, buffer_size_frames)| InputConnected {
+                            id: 1,
+                            label: "requested".into(),
+                            config,
+                            buffer_size_frames,
+                            done_tx,
+                        })
+                    })
+                    .boxed(),
+            }),
+            attached: None,
+        });
+        let actor = MicrophoneFeed::spawn(microphone);
+        let locked = tokio::time::timeout(Duration::from_secs(1), actor.ask(Lock))
+            .await
+            .expect("microphone setup blocked the actor mailbox");
+        assert!(matches!(
+            locked,
+            Err(kameo::error::SendError::HandlerError(
+                LockFeedError::InitializeFailed(SetInputError::SetupTimedOut)
+            ))
+        ));
+        assert!(native_tx.is_canceled());
+        actor.ask(RemoveInput).await.unwrap();
+        assert!(matches!(
+            actor.ask(Lock).await,
+            Err(kameo::error::SendError::HandlerError(
+                LockFeedError::NoInput
+            ))
+        ));
+        actor.kill();
+        actor.wait_for_stop().await;
+    }
+
+    #[tokio::test]
+    async fn queued_locks_keep_setup_failure_without_locking_the_previous_microphone() {
+        let (error_tx, _error_rx) = flume::bounded(1);
+        let (native_tx, native_rx) = oneshot::channel();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let ready = bounded_stream_ready(
+            async move { native_rx.await.unwrap() }.boxed(),
+            cancel.clone(),
+            Duration::from_millis(20),
+        )
+        .shared();
+        let (previous_tx, _previous_rx) = mpsc::sync_channel(1);
+        let (done_tx, _done_rx) = mpsc::sync_channel(1);
+        let mut microphone = MicrophoneFeed::new(error_tx);
+        microphone.state = State::Open(OpenState {
+            connecting: Some(ConnectingState {
+                id: 2,
+                _cancel_setup: Some(cancel.drop_guard()),
+                ready: ready
+                    .map(move |result| {
+                        result.map(|(config, buffer_size_frames)| InputConnected {
+                            id: 2,
+                            label: "requested".into(),
+                            config,
+                            buffer_size_frames,
+                            done_tx,
+                        })
+                    })
+                    .boxed(),
+            }),
+            attached: Some(AttachedState {
+                id: 1,
+                label: "previous".into(),
+                config: SupportedStreamConfig::new(
+                    1,
+                    cpal::SampleRate(48_000),
+                    cpal::SupportedBufferSize::Unknown,
+                    SampleFormat::F32,
+                ),
+                buffer_size_frames: None,
+                done_tx: previous_tx,
+            }),
+        });
+        let actor = MicrophoneFeed::spawn(microphone);
+        let results = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(actor.ask(Lock), actor.ask(Lock), actor.ask(Lock))
+        })
+        .await
+        .expect("repeated microphone locks blocked the actor mailbox");
+        for result in [results.0, results.1, results.2] {
+            assert!(matches!(
+                result,
+                Err(kameo::error::SendError::HandlerError(
+                    LockFeedError::InitializeFailed(SetInputError::SetupTimedOut)
+                ))
+            ));
+        }
+        assert!(native_tx.is_canceled());
+        assert_eq!(actor.ask(GetDroppedMessageCount).await.unwrap(), 0);
+        actor.ask(InputConnectFailed { id: 2 }).await.unwrap();
+        let previous = actor.ask(Lock).await.unwrap();
+        assert_eq!(previous.device_name(), "previous");
+        drop(previous);
+        actor.kill();
+        actor.wait_for_stop().await;
+    }
+
+    #[tokio::test]
+    async fn deselecting_pending_microphone_cancels_all_readiness_waiters() {
+        let (error_tx, _error_rx) = flume::bounded(1);
+        let (native_tx, native_rx) = oneshot::channel();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let ready = bounded_stream_ready(
+            async move { native_rx.await.unwrap() }.boxed(),
+            cancel.clone(),
+            SETUP_TIMEOUT,
+        )
+        .shared();
+        let (done_tx, _done_rx) = mpsc::sync_channel(1);
+        let mut microphone = MicrophoneFeed::new(error_tx);
+        microphone.state = State::Open(OpenState {
+            connecting: Some(ConnectingState {
+                id: 1,
+                _cancel_setup: Some(cancel.drop_guard()),
+                ready: ready
+                    .clone()
+                    .map(move |result| {
+                        result.map(|(config, buffer_size_frames)| InputConnected {
+                            id: 1,
+                            label: "requested".into(),
+                            config,
+                            buffer_size_frames,
+                            done_tx,
+                        })
+                    })
+                    .boxed(),
+            }),
+            attached: None,
+        });
+        let actor = MicrophoneFeed::spawn(microphone);
+        actor.ask(RemoveInput).await.unwrap();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), ready)
+                .await
+                .expect("deselection left setup running"),
+            Err(SetInputError::SetupCancelled)
+        ));
+        assert!(native_tx.is_canceled());
+        assert_eq!(actor.ask(GetDroppedMessageCount).await.unwrap(), 0);
+        actor.kill();
+        actor.wait_for_stop().await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reconnect_requires_the_original_live_recording_and_stream() {
+        for (generation, previous_id, live, accepted) in [
+            (7, 41, true, false),
+            (8, 40, true, false),
+            (8, 41, false, false),
+            (8, 41, true, true),
+        ] {
+            let (error_tx, _error_rx) = flume::bounded(1);
+            let (original_tx, _original_rx) = mpsc::sync_channel(1);
+            let (replacement_tx, replacement_rx) = mpsc::sync_channel(1);
+            let config = SupportedStreamConfig::new(
+                1,
+                cpal::SampleRate(48_000),
+                cpal::SupportedBufferSize::Unknown,
+                SampleFormat::F32,
+            );
+            let mut token = Some(Arc::new(()));
+            let mut microphone = MicrophoneFeed::new(error_tx);
+            microphone.lock_generation = 8;
+            microphone.state = State::Locked {
+                inner: AttachedState {
+                    id: 41,
+                    label: "requested".into(),
+                    config: config.clone(),
+                    buffer_size_frames: None,
+                    done_tx: original_tx,
+                },
+                token: Arc::downgrade(token.as_ref().unwrap()),
+            };
+            if !live {
+                drop(token.take());
+            }
+            microphone.handle_locked_input_reconnected(LockedInputReconnected {
+                previous_id,
+                generation,
+                id: 42,
+                label: "requested".into(),
+                config,
+                buffer_size_frames: None,
+                done_tx: replacement_tx,
+            });
+            assert!(matches!(&microphone.state, State::Locked { inner, .. }
+                if inner.id == if accepted { 42 } else { 41 }));
+            assert_eq!(
+                matches!(replacement_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                accepted,
+            );
+        }
+    }
 
     #[test]
     fn repeated_stream_errors_are_coalesced_while_a_notification_is_pending() {
@@ -3363,6 +3805,7 @@ mod tests {
         microphone.state = State::Open(OpenState {
             connecting: Some(ConnectingState {
                 id: 1,
+                _cancel_setup: None,
                 ready: futures::future::ready(Ok(InputConnected {
                     id: 1,
                     label: "test microphone".to_string(),
@@ -4208,7 +4651,11 @@ mod recording_subscription_tests {
         let ready: BoxFuture<'static, Result<InputConnected, SetInputError>> =
             futures::future::pending().boxed();
         feed.state = State::Open(OpenState {
-            connecting: Some(ConnectingState { id: 9, ready }),
+            connecting: Some(ConnectingState {
+                id: 9,
+                _cancel_setup: None,
+                ready,
+            }),
             attached: None,
         });
         let actor = MicrophoneFeed::spawn(feed);

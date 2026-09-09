@@ -57,6 +57,12 @@ type WorkflowResult = {
 		| "media-server-unconfigured";
 };
 
+type SourceCommitResult =
+	| "progress"
+	| "ready"
+	| "source-blocked"
+	| "superseded";
+
 type DesktopSegmentsOutputUpload =
 	| { type: "put"; url: string; ifNoneMatch: "*" }
 	| {
@@ -77,6 +83,8 @@ const COMPLETION_POLL_INTERVAL_MS = 15_000;
 const ATTEMPT_MAX_DURATION_MS = 6 * 60 * 60 * 1_000;
 const PRESIGNED_EXPIRES_SECONDS = 6 * 60 * 60;
 const MULTIPART_OUTPUT_PART_SIZE_BYTES = 64 * 1024 * 1024;
+const SOURCE_COMMIT_BATCH_MAX_CHECKPOINTS = 32;
+const SOURCE_COMMIT_BATCH_DURATION_MS = 15_000;
 
 function getErrorMessage(error: unknown) {
 	return error instanceof Error ? error.message : String(error);
@@ -257,9 +265,34 @@ export async function acquireDesktopRecordingAttempt({
 
 export async function commitDesktopRecordingAttempt(
 	attempt: DesktopRecordingAttempt,
-): Promise<"progress" | "ready" | "source-blocked" | "superseded"> {
+): Promise<SourceCommitResult> {
 	"use step";
 
+	const startedAt = Date.now();
+	for (let index = 0; index < SOURCE_COMMIT_BATCH_MAX_CHECKPOINTS; index++) {
+		try {
+			const result = await advanceDesktopRecordingAttempt(attempt);
+			if (result !== "progress") return result;
+		} catch (error) {
+			if (index === 0) throw error;
+			// Saved pages must not consume the next checkpoint's durable retry budget.
+			console.warn("[commitDesktopRecordingAttempt] Resuming saved progress", {
+				videoId: attempt.videoId,
+				generation: attempt.generation,
+				attemptId: attempt.attemptId,
+				error: getErrorMessage(error),
+			});
+			return "progress";
+		}
+		if (Date.now() - startedAt >= SOURCE_COMMIT_BATCH_DURATION_MS)
+			return "progress";
+	}
+	return "progress";
+}
+
+async function advanceDesktopRecordingAttempt(
+	attempt: DesktopRecordingAttempt,
+): Promise<SourceCommitResult> {
 	const current = await getProcessingState(attempt);
 	if (!current || current.attemptId !== attempt.attemptId) return "superseded";
 	if (current.source) return "ready";

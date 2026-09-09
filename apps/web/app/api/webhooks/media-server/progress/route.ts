@@ -20,6 +20,7 @@ import {
 	shouldQueueTranscriptionAfterMediaComplete,
 } from "@/lib/queue-video-transcription";
 import { isEditSourceKey } from "@/lib/video-edit-processing";
+import { applyEditProgress } from "@/lib/video-edit-progress";
 
 interface ProgressWebhookPayload {
 	manifestSha256?: string;
@@ -110,6 +111,15 @@ export async function POST(request: NextRequest) {
 		)
 			return NextResponse.json(await handleAudioLevelPublication(body));
 		const payload = body as ProgressWebhookPayload;
+		if (
+			await applyEditProgress(
+				payload,
+				request.nextUrl.searchParams.get("editOperation"),
+				request.nextUrl.searchParams.get("editStartedAt"),
+			)
+		) {
+			return NextResponse.json({ success: true });
+		}
 		const recordingProgress = await applyDesktopRecordingProgress(payload);
 		if (recordingProgress.handled) {
 			if (recordingProgress.published) {

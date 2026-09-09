@@ -438,6 +438,60 @@ fn new_health_channel() -> (HealthSender, HealthReceiver) {
 }
 
 pub fn emit_health(tx: &HealthSender, event: PipelineHealthEvent) {
+    use cap_utils::operation_diagnostics::{Field, health_event};
+    match &event {
+        PipelineHealthEvent::FrameDropRateHigh { rate_pct, .. } => health_event(
+            0,
+            "high_frame_drop_rate",
+            &[Field::number(
+                "drop_rate_basis_points",
+                (rate_pct * 100.0).max(0.0) as u64,
+            )],
+        ),
+        PipelineHealthEvent::AudioGapDetected { gap_ms } => {
+            health_event(1, "audio_gap", &[Field::number("gap_ms", *gap_ms)])
+        }
+        PipelineHealthEvent::AudioDegradedToVideoOnly { .. } => {
+            health_event(2, "audio_degraded_to_video_only", &[])
+        }
+        PipelineHealthEvent::SourceRestarting => health_event(3, "source_restarting", &[]),
+        PipelineHealthEvent::SourceRestarted => health_event(4, "source_restarted", &[]),
+        PipelineHealthEvent::Stalled { waited_ms, .. } => health_event(
+            5,
+            "pipeline_stalled",
+            &[Field::number("waited_ms", *waited_ms)],
+        ),
+        PipelineHealthEvent::MuxerCrashed { .. } => health_event(6, "muxer_crashed", &[]),
+        PipelineHealthEvent::DiskSpaceLow {
+            bytes_remaining, ..
+        } => health_event(
+            7,
+            "disk_space_low",
+            &[Field::number("bytes_remaining", *bytes_remaining)],
+        ),
+        PipelineHealthEvent::DiskSpaceExhausted { bytes_remaining } => health_event(
+            8,
+            "disk_space_exhausted",
+            &[Field::number("bytes_remaining", *bytes_remaining)],
+        ),
+        PipelineHealthEvent::DeviceLost { .. } => health_event(9, "device_lost", &[]),
+        PipelineHealthEvent::EncoderRebuilt { attempt, .. } => health_event(
+            10,
+            "encoder_rebuilt",
+            &[Field::number("attempt", *attempt as u64)],
+        ),
+        PipelineHealthEvent::SourceAudioReset { starvation_ms, .. } => health_event(
+            11,
+            "source_audio_reset",
+            &[Field::number("starvation_ms", *starvation_ms)],
+        ),
+        PipelineHealthEvent::RecoveryFragmentCorrupt { .. } => {
+            health_event(12, "recovery_fragment_corrupt", &[])
+        }
+        PipelineHealthEvent::CaptureTargetLost { .. } => {
+            health_event(13, "capture_target_lost", &[])
+        }
+    }
     let _ = tx.try_send(event);
 }
 

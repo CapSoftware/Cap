@@ -87,13 +87,16 @@ function decodeToken(token: string, secret: string) {
 }
 
 function originalKey(video: typeof videos.$inferSelect) {
-	if (video.source.type === "webMP4")
-		return `${video.ownerId}/${video.id}/result.mp4`;
-	if (video.source.type === "desktopMP4")
-		return Video.getRetainedRecordingOutputKey(
-			video.ownerId,
-			video.id,
-			video.source.outputKey,
+	if (video.source.type === "desktopMP4" || video.source.type === "webMP4")
+		return (
+			Video.getRetainedRecordingOutputKey(
+				video.ownerId,
+				video.id,
+				video.source.outputKey,
+			) ??
+			(video.source.type === "webMP4"
+				? `${video.ownerId}/${video.id}/result.mp4`
+				: undefined)
 		);
 }
 

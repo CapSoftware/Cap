@@ -22,6 +22,67 @@ const desktopDirectory = fileURLToPath(
 	new URL("../apps/desktop/", import.meta.url),
 );
 
+const upstreamGtkBackendAssignment =
+	"export GDK_BACKEND=x11 # Crash with Wayland backend on Wayland - We tested it without it and ended up with this: https://github.com/tauri-apps/tauri/issues/8541";
+
+// The upstream X11 workaround otherwise conflicts with Cap's Wayland recording fence.
+const gtkBackendSelection = `if [ -z "\${GDK_BACKEND:-}" ]; then
+	cap_uses_wayland=0
+	if [ "\${WAYLAND_DISPLAY+x}" = x ]; then
+		if [ "\${DISPLAY+x}" != x ]; then
+			cap_uses_wayland=1
+		else
+			case "\${XDG_SESSION_TYPE:-}" in
+				[wW][aA][yY][lL][aA][nN][dD]) cap_uses_wayland=1 ;;
+			esac
+		fi
+	fi
+	if [ "$cap_uses_wayland" = 1 ]; then
+		case "\${WAYLAND_DISPLAY:-}" in
+			/*) cap_wayland_socket="$WAYLAND_DISPLAY" ;;
+			?*)
+				case "\${XDG_RUNTIME_DIR:-}" in
+					/*) cap_wayland_socket="$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ;;
+					*) cap_wayland_socket= ;;
+				esac
+				;;
+			*) cap_wayland_socket= ;;
+		esac
+		if [ -z "$cap_wayland_socket" ] || [ ! -S "$cap_wayland_socket" ]; then
+			printf '%s\\n' 'Cap cannot connect to the advertised Wayland socket. Start Cap from the active desktop session or correct WAYLAND_DISPLAY and XDG_RUNTIME_DIR.' >&2
+			exit 1
+		fi
+		export GDK_BACKEND=wayland
+	else
+		export GDK_BACKEND=x11
+	fi
+	unset cap_uses_wayland cap_wayland_socket
+fi`;
+
+export async function selectAppImageGtkBackend(appDir) {
+	const hook = path.join(appDir, "apprun-hooks/linuxdeploy-plugin-gtk.sh");
+	const source = await readFile(hook, "utf8");
+	const restored = source.replace(
+		gtkBackendSelection,
+		upstreamGtkBackendAssignment,
+	);
+	const assignments = restored.match(/^.*\bGDK_BACKEND\s*=.*$/gm) ?? [];
+	if (
+		assignments.length !== 1 ||
+		assignments[0] !== upstreamGtkBackendAssignment ||
+		restored.includes(gtkBackendSelection)
+	) {
+		throw new Error(
+			"Unrecognized AppImage GTK backend hook; refusing to replace it",
+		);
+	}
+	if (source !== restored) return;
+	await writeFile(
+		hook,
+		source.replace(upstreamGtkBackendAssignment, gtkBackendSelection),
+	);
+}
+
 // The sentinel preserves directory names ending in newlines through shell substitution.
 const appRunWrapper = `#!/bin/sh
 unset OWD
@@ -224,6 +285,7 @@ export async function finalizeLinuxAppImage(
 		const excluded = await findConflictingLibraries(appDir);
 		// Host Mesa and ALSA plugins require their matching Wayland and PipeWire ABIs.
 		for (const library of excluded) await rm(library);
+		await selectAppImageGtkBackend(appDir);
 		await preserveAppImageWorkingDirectory(appDir);
 		const output = path.join(work, path.basename(image));
 		await run(

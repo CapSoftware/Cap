@@ -1,6 +1,5 @@
-import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
-import { createSignal } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import { unwrap } from "solid-js/store";
 import toast from "solid-toast";
 import { commands } from "~/utils/tauri";
@@ -29,6 +28,10 @@ function withWhiteBackground(source: HTMLCanvasElement): HTMLCanvasElement {
 
 export function useScreenshotExport() {
 	const editorCtx = useScreenshotEditorContext();
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
+	});
 	const {
 		latestFrame,
 		annotations,
@@ -137,8 +140,9 @@ export function useScreenshotExport() {
 	};
 
 	const exportImage = async (destination: "file" | "clipboard" | "share") => {
-		if (isExporting()) return;
+		if (disposed || isExporting()) return;
 
+		const owner = editorCtx.editorInstance();
 		setIsExporting(true);
 		let toastId: string | undefined;
 		let shareContext: { projectPath: string; contentHash: string } | null =
@@ -200,10 +204,12 @@ export function useScreenshotExport() {
 			if (destination === "file") {
 				const buffer = await blob.arrayBuffer();
 				const uint8Array = new Uint8Array(buffer);
-				const savePath = await save({
-					filters: [{ name: "PNG Image", extensions: ["png"] }],
-					defaultPath: `${editorCtx.prettyName}.png`,
-				});
+				if (disposed || editorCtx.editorInstance() !== owner) return;
+				const savePath = await commands.saveFileDialog(
+					`${editorCtx.prettyName}.png`,
+					"png",
+				);
+				if (disposed || editorCtx.editorInstance() !== owner) return;
 				if (savePath) {
 					await writeFile(savePath, uint8Array);
 					toast.success("Screenshot saved!");

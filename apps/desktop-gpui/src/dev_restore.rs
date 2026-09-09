@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use gpui::{App, Window};
+use gpui::{App, Bounds, Pixels, Point, Size, Window, point, px};
 use serde::{Deserialize, Serialize};
 
 use crate::app_windows::{self, AppWindows};
@@ -74,26 +74,86 @@ fn state_path() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-pub fn init(cx: &mut App) {
-    let Some(path) = state_path() else {
-        return;
-    };
-    match std::fs::read_to_string(&path) {
+pub struct DevRestore {
+    path: PathBuf,
+    state: Option<DevState>,
+}
+
+pub fn load() -> Option<DevRestore> {
+    let path = state_path()?;
+    let state = match std::fs::read_to_string(&path) {
         Ok(raw) => match serde_json::from_str::<DevState>(&raw) {
-            Ok(state) => restore(state, cx),
+            Ok(state) => Some(state),
             Err(error) => {
                 tracing::warn!(%error, "dev-restore state unreadable; starting fresh");
+                None
             }
         },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => tracing::warn!(%error, "dev-restore state unreadable; starting fresh"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            tracing::warn!(%error, "dev-restore state unreadable; starting fresh");
+            None
+        }
+    };
+    Some(DevRestore { path, state })
+}
+
+impl DevRestore {
+    /// Where the main window opens: the saved origin under the app's own
+    /// collapsed size, so it never moves after its first frame.
+    ///
+    /// Only the origin is restored. The size is the app's to decide, and
+    /// re-asserting a saved frame over it once shrank the window under its
+    /// content (a 396pt frame from an older layout against the 432pt
+    /// collapsed size): the body scrolled, and the poller kept re-saving the
+    /// shrunken frame, so every relaunch inherited it. Bottom-left anchoring
+    /// matches `setContentSize:`, which is what `window.resize` uses on
+    /// macOS, so an expanded restore grows back into the exact saved frame.
+    pub fn main_window_bounds(&self, size: Size<Pixels>, cx: &App) -> Option<Bounds<Pixels>> {
+        let (x, y, width, height) = self.state.as_ref()?.main.frame?;
+        if !platform::frame_is_on_screen(x, y, width, height) {
+            tracing::info!(
+                x,
+                y,
+                width,
+                height,
+                "saved main window frame is off every connected display; opening centred"
+            );
+            return None;
+        }
+        let primary_height = cx.primary_display()?.bounds().size.height;
+        Some(Bounds {
+            origin: opening_origin((x, y), size, primary_height),
+            size,
+        })
     }
-    spawn_poller(path, cx);
+
+    pub fn init(self, cx: &mut App) {
+        if let Some(state) = self.state {
+            restore(state, cx);
+        }
+        spawn_poller(self.path, cx);
+    }
+}
+
+/// gpui's macOS open path takes a top-left origin measured down from the top
+/// of the primary display (`MacWindow::open` adds the primary display height
+/// and calls `setFrameTopLeftPoint:`); an AppKit frame origin is the
+/// bottom-left, measured up from that display's bottom.
+fn opening_origin(
+    appkit_origin: (f64, f64),
+    size: Size<Pixels>,
+    primary_height: Pixels,
+) -> Point<Pixels> {
+    let (x, y) = appkit_origin;
+    let top = px(y as f32) + size.height;
+    point(px(x as f32), primary_height - top)
 }
 
 fn restore(state: DevState, cx: &mut App) {
     tracing::info!(
         expanded = state.main.expanded,
+        main_frame = ?state.main.frame,
         settings = state.settings.as_ref().map(|s| s.page.as_str()),
         editors = state.editors.len(),
         teleprompter = state.teleprompter,
@@ -131,8 +191,8 @@ fn restore(state: DevState, cx: &mut App) {
     }
 
     cx.spawn(async move |cx| {
-        // Let the centred first frames and the expand animation land before
-        // the frames are re-asserted.
+        // Let the first frames and the expand animation land before the
+        // frames are re-asserted.
         cx.background_executor()
             .timer(Duration::from_millis(600))
             .await;
@@ -155,11 +215,13 @@ fn restore(state: DevState, cx: &mut App) {
                 }
             };
         cx.update(|cx| {
+            // The main window already opened at its saved origin
+            // (`DevRestore::main_window_bounds`); only its ordering is left.
             collect(
                 main.update(cx, |_, window, _| platform::native_window(window))
                     .ok()
                     .flatten(),
-                state.main.frame,
+                None,
                 state.main.visible,
             );
             if let (Some(handle), Some(saved)) = (settings, &state.settings) {
@@ -350,4 +412,24 @@ fn write_atomic(path: &Path, contents: &str) -> bool {
         tracing::debug!(%error, "dev-restore state write failed");
     }
     result.is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::opening_origin;
+    use gpui::{point, px, size};
+
+    #[test]
+    fn saved_origin_is_kept_under_the_current_collapsed_size() {
+        let origin = opening_origin((1035., 857.), size(px(330.), px(432.)), px(1440.));
+        assert_eq!(origin, point(px(1035.), px(151.)));
+    }
+
+    #[test]
+    fn expanded_frame_restores_to_the_same_bottom_left() {
+        let collapsed = opening_origin((1035., 857.), size(px(330.), px(432.)), px(1440.));
+        let expanded = opening_origin((1035., 857.), size(px(600.), px(672.)), px(1440.));
+        assert_eq!(collapsed.x, expanded.x);
+        assert_eq!(collapsed.y - expanded.y, px(672. - 432.));
+    }
 }

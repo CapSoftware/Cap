@@ -1247,6 +1247,7 @@ dependencies = [
  "tokio-util",
  "toml_edit 0.23.10+spec-1.0.0",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
  "url",
  "uuid",
@@ -1342,6 +1343,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "libloading 0.9.0",
  "ndarray 0.16.1",
  "ort",
  "tracing",
@@ -1457,6 +1459,7 @@ dependencies = [
  "async-stream",
  "axum",
  "base64 0.22.1",
+ "block2 0.6.1",
  "bytemuck",
  "bytes",
  "cap-audio",
@@ -1585,6 +1588,7 @@ dependencies = [
  "cap-media-info",
  "cap-project",
  "cap-rendering",
+ "cap-utils",
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "ffmpeg-next",
  "flume",
@@ -1593,6 +1597,7 @@ dependencies = [
  "ringbuf",
  "sentry",
  "serde",
+ "serde_json",
  "specta",
  "tempfile",
  "tokio",
@@ -2036,6 +2041,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-appender",
  "uuid",
  "windows 0.58.0",
  "windows-sys 0.52.0",
@@ -9005,10 +9011,14 @@ dependencies = [
  "core-graphics 0.24.0",
  "image 0.24.9",
  "objc",
+ "rustix 1.1.2",
  "serde",
  "specta",
  "tokio",
  "tracing",
+ "uuid",
+ "wayland-client",
+ "wayland-protocols",
  "windows 0.60.0",
  "workspace-hack",
  "x11rb",
@@ -9583,6 +9593,12 @@ dependencies = [
  "cpufeatures 0.2.17",
  "digest",
 ]
+
+[[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sha2"
@@ -12041,6 +12057,7 @@ dependencies = [
  "getrandom 0.3.3",
  "js-sys",
  "serde",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

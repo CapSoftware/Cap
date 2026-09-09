@@ -236,19 +236,23 @@ beforeAll(async () => {
 	]);
 	for (const kind of ["video", "audio"] as const) {
 		const path = join(tempDir, `${kind}-fragmented.mp4`);
-		execFileSync("ffmpeg", [
-			"-v",
-			"error",
-			"-i",
-			TEST_VIDEO_WITH_AUDIO,
-			"-map",
-			kind === "video" ? "0:v:0" : "0:a:0",
-			"-c",
-			"copy",
-			"-movflags",
-			"+empty_moov+frag_keyframe+default_base_moof",
-			path,
-		]);
+		execFileSync(
+			"ffmpeg",
+			[
+				"-v",
+				"error",
+				"-i",
+				TEST_VIDEO_WITH_AUDIO,
+				"-map",
+				kind === "video" ? "0:v:0" : "0:a:0",
+				"-c",
+				"copy",
+				"-movflags",
+				"+empty_moov+frag_keyframe+default_base_moof",
+				path,
+			],
+			{ stdio: "inherit" },
+		);
 		const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
 		const view = new DataView(bytes.buffer);
 		let split = 0;
@@ -1285,6 +1289,80 @@ describe("media routes real-world integration tests", () => {
 			thumbnail.mockRestore();
 		}
 	}, 15_000);
+
+	test("imports a real video and preserves the original bytes before processing", async () => {
+		const response = await app.fetch(
+			mediaPostRequest("/video/import", {
+				videoId: "direct-import",
+				userId: "import-owner",
+				videoUrl: fixtureUrl(),
+				sourcePresignedUrl: uploadUrl("import-original.mp4"),
+				outputPresignedUrl: uploadUrl("import-output.mp4"),
+				inputExtension: ".mp4",
+				maxWidth: 160,
+				maxHeight: 120,
+				preset: "ultrafast",
+			}),
+		);
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		try {
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("complete");
+			expect(uploadedBytes("/uploads/import-original.mp4")).toEqual(
+				new Uint8Array(await Bun.file(TEST_VIDEO_WITH_AUDIO).arrayBuffer()),
+			);
+			const metadata = await probeBytesAsMp4(
+				uploadedBytes("/uploads/import-output.mp4"),
+				"import-output.mp4",
+			);
+			expect(metadata.videoCodec).toBe("h264");
+			expect(metadata.audioCodec).toBe("aac");
+			expect(metadata.width).toBeLessThanOrEqual(160);
+			expect([...uploadedArtifacts.keys()]).toEqual([
+				"/uploads/import-original.mp4",
+				"/uploads/import-output.mp4",
+			]);
+		} finally {
+			deleteJob(jobId);
+		}
+	}, 90000);
+
+	test("fails an import when the original cannot be saved without processing it", async () => {
+		const process = spyOn(mediaVideo, "processVideo");
+		const response = await app.fetch(
+			mediaPostRequest("/video/import", {
+				videoId: "failed-import",
+				userId: "import-owner",
+				videoUrl: fixtureUrl(),
+				sourcePresignedUrl: `${baseUrl}/missing-original-destination`,
+				outputPresignedUrl: uploadUrl("failed-import-output.mp4"),
+				inputExtension: ".mp4",
+			}),
+		);
+		expect(response.status).toBe(200);
+		const { jobId } = (await response.json()) as { jobId: string };
+		try {
+			const job = await waitForTerminalJob(jobId);
+			expect(job.phase).toBe("error");
+			expect(process).not.toHaveBeenCalled();
+			expect(uploadedArtifacts.size).toBe(0);
+		} finally {
+			deleteJob(jobId);
+		}
+	}, 90000);
+
+	test("rejects imports that omit original storage", async () => {
+		const response = await app.fetch(
+			mediaPostRequest("/video/import", {
+				videoId: "unsafe-import",
+				userId: "import-owner",
+				videoUrl: fixtureUrl(),
+				outputPresignedUrl: uploadUrl("unsafe-import.mp4"),
+			}),
+		);
+		expect(response.status).toBe(400);
+	});
 
 	test("retries transient segment downloads and completes a real mux job", async () => {
 		const response = await app.fetch(

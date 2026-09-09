@@ -175,13 +175,10 @@ export function getAudioLevelOutputKey(video: {
 }) {
 	const { source } = video;
 	const originalKey =
-		source.type === "webMP4"
+		getRetainedRecordingOutputKey(video.ownerId, video.id, source.outputKey) ??
+		(source.type === "webMP4"
 			? `${video.ownerId}/${video.id}/result.mp4`
-			: getRetainedRecordingOutputKey(
-					video.ownerId,
-					video.id,
-					source.outputKey,
-				);
+			: undefined);
 	const key = getRetainedRecordingOutputKey(
 		video.ownerId,
 		video.id,
