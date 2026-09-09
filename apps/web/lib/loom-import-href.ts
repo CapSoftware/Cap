@@ -1,5 +1,8 @@
 export const LOOM_IMPORT_PATH = "/dashboard/import/loom";
 
+const LOOM_VIDEO_ROUTES = new Set(["share", "embed"]);
+const MIN_LOOM_VIDEO_ID_LENGTH = 10;
+
 export type LoomImportMode = "single" | "csv";
 
 export type LoomImportTarget = {
@@ -10,8 +13,16 @@ export type LoomImportTarget = {
 
 export const isLoomShareUrl = (value: string) => {
 	try {
-		const { hostname } = new URL(value.trim());
-		return hostname === "loom.com" || hostname.endsWith(".loom.com");
+		const { hostname, pathname } = new URL(value.trim());
+		if (hostname !== "loom.com" && !hostname.endsWith(".loom.com")) {
+			return false;
+		}
+		const [route, videoId] = pathname.split("/").filter(Boolean);
+		return (
+			route !== undefined &&
+			LOOM_VIDEO_ROUTES.has(route) &&
+			(videoId?.length ?? 0) >= MIN_LOOM_VIDEO_ID_LENGTH
+		);
 	} catch {
 		return false;
 	}
