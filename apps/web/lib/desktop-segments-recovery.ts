@@ -6,9 +6,21 @@ import {
 } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import { type User, Video } from "@cap/web-domain";
-import { and, asc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	eq,
+	gte,
+	inArray,
+	isNull,
+	lte,
+	notLike,
+	or,
+	sql,
+} from "drizzle-orm";
 import { Effect, Option, Schema } from "effect";
 import {
+	DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED,
 	DesktopRecordingSourceBlockedError,
 	listRecoverableSegmentJobs,
 	SourceCommitPendingError,
@@ -251,6 +263,13 @@ export async function recoverStaleDesktopSegments({
 					new Date(now.getTime() - DESKTOP_SEGMENTS_LEGACY_RECOVERY_MAX_AGE_MS),
 				),
 				isNull(videoProcessingJobs.videoId),
+				or(
+					isNull(videoUploads.processingError),
+					notLike(
+						videoUploads.processingError,
+						`${DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED}:%`,
+					),
+				),
 				sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.source}, '$.type')) = 'desktopSegments'`,
 			),
 		)

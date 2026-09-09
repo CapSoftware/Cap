@@ -17,11 +17,14 @@ vi.mock("@cap/database/schema", () => ({
 		phase: "upload.phase",
 		updatedAt: "upload.updatedAt",
 		startedAt: "upload.startedAt",
+		processingError: "upload.processingError",
 	},
 	videoProcessingJobs: { videoId: "job.videoId" },
 }));
 vi.mock("drizzle-orm", () => ({
 	and: (...args: unknown[]) => args,
+	or: (...args: unknown[]) => ({ or: args }),
+	notLike: (left: unknown, right: unknown) => ({ notLike: [left, right] }),
 	asc: (value: unknown) => value,
 	eq: (left: unknown, right: unknown) => ({ eq: [left, right] }),
 	inArray: (left: unknown, right: unknown) => ({ in: [left, right] }),
@@ -51,6 +54,7 @@ vi.mock("@/lib/desktop-segments-finalization", () => ({
 }));
 vi.mock("@/lib/desktop-recording-jobs", () => ({
 	listRecoverableSegmentJobs: mocks.recoverable,
+	DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED: "source-reupload-required",
 	SourceCommitPendingError: class SourceCommitPendingError extends Error {},
 	DesktopRecordingSourceBlockedError: class DesktopRecordingSourceBlockedError extends Error {
 		constructor(
@@ -234,6 +238,7 @@ describe("durable recovery scheduling", () => {
 		expect(query).toContain('"processing"');
 		expect(query).not.toContain("28 HOUR");
 		expect(query).toContain("startedAt");
+		expect(query).toContain("source-reupload-required:%");
 		expect(mocks.put).not.toHaveBeenCalled();
 	});
 
