@@ -743,6 +743,13 @@ export function HLSVideoPlayer({
 			</AnimatePresence>
 			<VideoPreviewGif
 				videoId={videoId}
+				preload={
+					!hasActiveUpload &&
+					!hasPlayedOnce &&
+					!hasFailedOrError &&
+					!isLiveSegments &&
+					!isBackgroundPreview
+				}
 				visible={
 					videoLoaded &&
 					!hasPlayedOnce &&
