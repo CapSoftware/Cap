@@ -1427,6 +1427,7 @@ pub struct EditorWindow {
     timeline: TimelineModel,
     /// The viewport, the hover ghost and the hovered track.
     view: TimelineView,
+    playback_follow: timeline::PlaybackFollow,
     /// `onMount`'s `checkBounds` runs once, when the timeline first has a
     /// width (`TL/index.tsx:689-703`). There is no mount hook here, so the
     /// first render that knows both the width and the duration does it.
@@ -1839,6 +1840,7 @@ impl EditorWindow {
             play_mark: None,
             timeline: TimelineModel::default(),
             view: TimelineView::default(),
+            playback_follow: timeline::PlaybackFollow::default(),
             fitted: false,
             zoom_slider_track: ui::SliderTrack::default(),
             zoom_slider_drag: false,
@@ -2460,6 +2462,7 @@ impl EditorWindow {
     /// effect, by prev/next, and by the clips sidebar's import path
     /// (`ClipsSidebar.tsx:508-511`).
     pub(crate) fn stop_playback(&mut self, cx: &mut Context<Self>) {
+        self.playback_follow.reset();
         if let Some(transport) = &self.transport {
             transport.pause();
         }
@@ -2489,6 +2492,7 @@ impl EditorWindow {
         let Some(transport) = &self.transport else {
             return;
         };
+        self.playback_follow.reset();
         // `Math.floor(editorState.playbackTime * FPS)`.
         let frame = (from.max(0.0) * EDITOR_PREVIEW_FPS as f64).floor() as u32;
         transport.play_from(frame);
@@ -8724,7 +8728,7 @@ impl EditorWindow {
     // -- Timeline ------------------------------------------------------------
 
     fn render_timeline(
-        &self,
+        &mut self,
         viewport_width: f32,
         _viewport_height: f32,
         cx: &mut Context<Self>,
@@ -8737,7 +8741,7 @@ impl EditorWindow {
         // since the last applied sample so the 60Hz ticker's redraws land
         // between events instead of on them -- but only once this play epoch
         // has actually produced a sample (`playhead_extrapolation`).
-        let playhead_view = {
+        let mut playhead_view = {
             let mut view = self.view;
             let ahead = playhead_extrapolation(
                 self.playing,
@@ -8749,6 +8753,22 @@ impl EditorWindow {
             }
             view
         };
+        if self.playing {
+            let interacting = self.scrub.is_some()
+                || self.drag.is_some()
+                || self.lane_reorder.is_some()
+                || self.minimap_drag.is_some()
+                || self.zoom_slider_drag;
+            let total = self.total_duration();
+            self.playback_follow.update(
+                &mut self.view.transform,
+                playhead_view.playhead,
+                total,
+                Instant::now(),
+                interacting,
+            );
+            playhead_view.transform = self.view.transform;
+        }
         let playhead_x = timeline::playhead_offset(playhead_view, content_width);
         let ghost_x = timeline::ghost_offset(self.view, content_width);
 
