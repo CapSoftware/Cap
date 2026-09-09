@@ -158,7 +158,7 @@ impl DeviceSnapshot {
     pub fn enumerate() -> Self {
         Self {
             cameras: list_cameras(),
-            microphones: list_microphones(),
+            microphones: list_microphone_names(),
             displays: list_displays(),
             windows: list_windows(),
         }
@@ -553,23 +553,24 @@ pub fn camera_formats(device_id: &str) -> Result<Vec<CameraFormat>, String> {
     .formats)
 }
 
-/// Mirrors `MicrophoneFeed::list_with_settings`: the default input device is
-/// inserted first so it heads the list, then every other input device is
-/// appended, deduped by name.
+fn list_microphone_names() -> Vec<MicrophoneOption> {
+    cap_recording::feeds::microphone::MicrophoneFeed::list_names()
+        .into_iter()
+        .map(|name| MicrophoneOption {
+            name,
+            sample_rate: None,
+            channels: None,
+        })
+        .collect()
+}
+
 fn list_microphones() -> Vec<MicrophoneOption> {
     // CPAL's configuration lookup opens an input AudioUnit and can prompt for consent.
     #[cfg(target_os = "macos")]
     if !crate::permissions::check_raw().is_some_and(|permissions| {
         permissions.microphone == crate::permissions::MediaAuthorization::Authorized
     }) {
-        return cap_recording::feeds::microphone::MicrophoneFeed::list_names()
-            .into_iter()
-            .map(|name| MicrophoneOption {
-                name,
-                sample_rate: None,
-                channels: None,
-            })
-            .collect();
+        return list_microphone_names();
     }
 
     let host = cpal::default_host();

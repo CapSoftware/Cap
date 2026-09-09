@@ -2583,8 +2583,8 @@ function Page() {
 		if (!targetMode) scheduleTargetListPrewarm();
 
 		if (rawOptions.micName) {
-			setMicInput
-				.mutateAsync(rawOptions.micName)
+			commands
+				.setMicInput(rawOptions.micName)
 				.catch((error) => console.error("Failed to set mic input:", error));
 		}
 
@@ -2598,7 +2598,7 @@ function Page() {
 					!cameraRestoreDisposed &&
 					getCameraRevision() === restoreRevision &&
 					JSON.stringify(rawOptions.cameraID) === cameraKey,
-				() => setCamera.mutateAsync({ model }),
+				() => setCamera.rawMutate(model),
 			).catch((error) =>
 				console.error("Failed to restore camera input:", error),
 			);

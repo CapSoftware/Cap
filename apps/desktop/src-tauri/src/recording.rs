@@ -1073,18 +1073,15 @@ pub fn get_microphone_info(name: String) -> Option<MicrophoneInfo> {
         return None;
     }
 
-    microphone::MicrophoneFeed::list()
-        .into_iter()
-        .find(|(n, _)| *n == name)
-        .map(|(name, (device, config))| {
-            let formats = microphone_format_infos(&device);
-            MicrophoneInfo {
-                name,
-                sample_rate: config.sample_rate().0,
-                channels: config.channels(),
-                formats,
-            }
-        })
+    microphone::MicrophoneFeed::device_with_settings(&name, None).map(|(device, config)| {
+        let formats = microphone_format_infos(&device);
+        MicrophoneInfo {
+            name,
+            sample_rate: config.sample_rate().0,
+            channels: config.channels(),
+            formats,
+        }
+    })
 }
 
 fn microphone_format_infos(device: &cpal::Device) -> Vec<MicrophoneFormatInfo> {

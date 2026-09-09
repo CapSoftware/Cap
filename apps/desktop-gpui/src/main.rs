@@ -45,6 +45,10 @@ mod onboarding_audio;
 mod onboarding_window;
 mod permissions;
 mod permissions_ui;
+#[cfg(test)]
+mod picker_benchmark;
+#[cfg(debug_assertions)]
+mod picker_ui_benchmark;
 mod platform;
 mod presets;
 mod recording;
@@ -644,6 +648,8 @@ fn main() {
         // the primary display and record for N seconds (or capture once). The
         // end-to-end check drives the recorder this way because unprivileged
         // synthetic clicks are dropped.
+        #[cfg(debug_assertions)]
+        picker_ui_benchmark::run(window_handle, cx);
         if let Ok(auto) = std::env::var("CAP_GPUI_AUTO_RECORD")
             && let Some((mode, secs)) = parse_auto_record(&auto)
         {

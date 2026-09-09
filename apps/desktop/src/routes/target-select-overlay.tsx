@@ -1934,30 +1934,36 @@ function RecordingControls(props: {
 	const permissions = createMemo(() => devices.data?.permissions);
 	const setMicInput = createMicrophoneMutation();
 	const setCamera = createCameraMutation();
+	const [restoringInputs, setRestoringInputs] = createSignal(true);
 
 	onMount(async () => {
-		if (rawOptions.micName) {
-			setMicInput
-				.mutateAsync(rawOptions.micName)
-				.catch((error) => console.error("Failed to set mic input:", error));
-		}
+		const restoreMicrophone = rawOptions.micName
+			? commands
+					.setMicInput(rawOptions.micName)
+					.catch((error) =>
+						console.error("Failed to restore mic input:", error),
+					)
+			: Promise.resolve();
 
 		const isCameraOnly = props.target.variant === "cameraOnly";
-		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
-			await setCamera.mutateAsync({
-				model: { ModelID: rawOptions.cameraID.ModelID },
-				skipCameraWindow: isCameraOnly,
-			});
-		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
-			await setCamera.mutateAsync({
-				model: { DeviceID: rawOptions.cameraID.DeviceID },
-				skipCameraWindow: isCameraOnly,
-			});
+		const restoreCamera = async () => {
+			if (rawOptions.cameraID) {
+				await setCamera.rawMutate({ ...rawOptions.cameraID }, isCameraOnly);
+			}
 
-		if (isCameraOnly) {
-			const win = await getCameraWindow();
-			if (win) win.close();
-		}
+			if (isCameraOnly) {
+				const win = await getCameraWindow();
+				if (win) await win.close();
+			}
+		};
+
+		await Promise.all([
+			restoreMicrophone,
+			restoreCamera().catch((error) =>
+				console.error("Failed to restore camera input:", error),
+			),
+		]);
+		if (!controlsDisposed) setRestoringInputs(false);
 	});
 
 	const selectedCamera = createMemo(() => {
@@ -2007,6 +2013,7 @@ function RecordingControls(props: {
 	const startLoading = () =>
 		devices.isPending ||
 		recordingStartSafety.isPending ||
+		restoringInputs() ||
 		setMicInput.isPending ||
 		setCamera.isPending;
 	const startDisabled = () => !!props.disabled || startLoading();
@@ -2309,7 +2316,6 @@ function RecordingControls(props: {
 											{(() => {
 												if (rawOptions.mode === "instant" && !auth.data)
 													return "Sign In To Use";
-												if (startLoading()) return "Preparing...";
 												if (rawOptions.mode === "screenshot")
 													return "Take Screenshot";
 												return "Start Recording";

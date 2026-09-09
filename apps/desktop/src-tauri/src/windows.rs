@@ -1989,6 +1989,12 @@ impl ShowCapWindow {
                         "window.__CAP__ = window.__CAP__ ?? {{}}; window.__CAP__.cameraWsPort = {camera_ws_port};"
                     ));
 
+                #[cfg(debug_assertions)]
+                if crate::picker_benchmark::enabled() {
+                    window_builder =
+                        window_builder.initialization_script(crate::picker_benchmark::SCRIPT);
+                }
+
                 #[cfg(target_os = "macos")]
                 {
                     let position = display.raw_handle().logical_position();
