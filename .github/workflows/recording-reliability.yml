@@ -9,7 +9,7 @@ on:
       - "packages/database/**"
       - "packages/web-*/**"
       - "crates/recording/**"
-      - "pnpm-lock.yaml"
+      - "bun.lock"
       - ".github/workflows/recording-reliability.yml"
   push:
     branches: [main]
@@ -19,7 +19,7 @@ on:
       - "packages/database/**"
       - "packages/web-*/**"
       - "crates/recording/**"
-      - "pnpm-lock.yaml"
+      - "bun.lock"
       - ".github/workflows/recording-reliability.yml"
 
 permissions:
@@ -40,7 +40,7 @@ jobs:
       - name: Verify recording contracts
         working-directory: apps/web
         run: |
-          pnpm exec vitest run \
+          bun run vitest run \
             __tests__/unit/desktop-recording-*.test.ts \
             __tests__/unit/desktop-segments-*.test.ts \
             __tests__/unit/finalize-desktop-recording.test.ts \

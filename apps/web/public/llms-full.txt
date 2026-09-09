@@ -199,7 +199,7 @@ Early-adopter pricing is locked in for the lifetime of the subscription. Trusted
 - Web: Next.js 16, React 19, TypeScript; Effect (`@effect/platform` HttpApi) and `@ts-rest/core` (no tRPC); Drizzle ORM on MySQL (PlanetScale); NextAuth + WorkOS auth; TanStack Query.
 - Media: native hardware encoders, FFmpeg, WGPU compositor, WebCodecs; HLS playback via Mux.
 - Infrastructure: AWS S3 + CloudFront + MediaConvert, Mux, PlanetScale, Vercel, Stripe, OpenPanel (self-hosted), Resend; AssemblyAI + Groq/OpenAI for AI.
-- Runtime: Node 20, pnpm 10.5.2, Rust 1.88+, Turborepo monorepo.
+- Runtime: Node 20, Bun 1.4.0, Rust 1.88+, Turborepo monorepo.
 
 ## Free Web Tools
 

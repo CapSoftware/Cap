@@ -18,7 +18,7 @@ const run = (command, args) => {
 	if (result.status !== 0) process.exit(result.status ?? 1);
 };
 
-run("pnpm", ["exec", "expo", "prebuild", "--platform", "ios", "--no-install"]);
+run("bun", ["run", "expo", "prebuild", "--platform", "ios", "--no-install"]);
 
 const podfileLockPath = join(process.cwd(), "ios", "Podfile.lock");
 const podfileLock = existsSync(podfileLockPath)

@@ -51,7 +51,8 @@ export function isTimestampSigningFailure(output) {
 		.filter(
 			(line) =>
 				line &&
-				!/^ELIFECYCLE\s+Command failed with exit code \d+\.$/.test(line),
+				!/^ELIFECYCLE\s+Command failed with exit code \d+\.$/.test(line) &&
+				!/^error: script "[^"]+" exited with code \d+$/.test(line),
 		);
 	const signingError =
 		/^(?:Error\s+)?failed to bundle project: failed to sign app$/;
@@ -91,7 +92,7 @@ export function executeMacosCommand(
 ) {
 	signal?.throwIfAborted();
 	return new Promise((resolve, reject) => {
-		const child = spawnProcess("pnpm", args, {
+		const child = spawnProcess("bun", ["run", ...args], {
 			cwd: desktopDirectory,
 			env,
 			detached: true,
@@ -181,12 +182,12 @@ export async function buildMacosPackages(
 			attempt === 0
 				? ["build:tauri", ...commandArguments]
 				: [
-						"exec",
 						"dotenv",
 						"-e",
 						"../../.env",
 						"--",
-						"pnpm",
+						"bun",
+						"run",
 						"tauri",
 						"bundle",
 						...commandArguments,

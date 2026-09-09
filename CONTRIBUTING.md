@@ -28,29 +28,29 @@ Before anything else, make sure you have the following installed:
 
 - Node Version 20+
 - Rust 1.88.0+
-- pnpm 10.5.2
+- Bun 1.4.0
 - Docker ([OrbStack](https://orbstack.dev/) recommended)
 
 ### General Setup
 
-Run `pnpm install`, then run `pnpm env-setup` to generate a `.env` file configured for your environment.
+Run `bun install`, then run `bun run env-setup` to generate a `.env` file configured for your environment.
 It will ask you which apps you intend to run, whether you'd like to use Docker to run S3 (MinIO) and MySQL locally,
 and allow you to provide overrides as needed.
 
-Then run `pnpm cap-setup` to install native dependencies such as FFmpeg.
+Then run `bun run cap-setup` to install native dependencies such as FFmpeg.
 
 On Windows, llvm, clang, and VCPKG must be installed.
 On MacOS, cmake must be installed.
-`pnpm cap-setup` does not yet install these dependencies for you.
+`bun run cap-setup` does not yet install these dependencies for you.
 
-To run both `@cap/desktop` and `@cap/web` together, use `pnpm dev`.
-To run only one of them, use `pnpm dev:desktop` or `pnpm dev:web` respectively.
+To run both `@cap/desktop` and `@cap/web` together, use `bun run dev`.
+To run only one of them, use `bun run dev:desktop` or `bun run dev:web` respectively.
 
 ### `@cap/desktop` (desktop app)
 
 When running `@cap/desktop` from a terminal on macOS,
 you will need to grant permissions (screen recording, microphone, etc.) to the terminal, not the Cap app.
-For example, if you run `pnpm dev:desktop` in the macOS `Terminal.app`,
+For example, if you run `bun run dev:desktop` in the macOS `Terminal.app`,
 you will need to grant permissions to it instead of `Cap - Development.app`.
 
 #### Where are my recordings stored?
@@ -60,5 +60,5 @@ and `%programfiles%/so.cap.desktop.dev/recordings` on Windows.
 
 ### `@cap/web` (cap.so website)
 
-When running `pnpm dev` or `pnpm dev:web`, a MySQL database and MinIO S3 server will also be using Docker.
-If you want to _only_ run the `@cap/web` NextJS app, `cd` into `./apps/web` and run `pnpm dev`.
+When running `bun run dev` or `bun run dev:web`, a MySQL database and MinIO S3 server will also be using Docker.
+If you want to _only_ run the `@cap/web` NextJS app, `cd` into `./apps/web` and run `bun run dev`.

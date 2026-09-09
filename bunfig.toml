@@ -1,0 +1,5 @@
+[install]
+linker = "isolated"
+
+[run]
+bun = false

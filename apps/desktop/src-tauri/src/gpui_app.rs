@@ -810,7 +810,7 @@ fn write_handoff_marker() {
 }
 
 /// The child must never inherit this process's stdio. The handoff exits this
-/// app, and whatever was reading those pipes (`pnpm tauri dev`'s tooling chain)
+/// app, and whatever was reading those pipes (`bun run tauri dev`'s tooling chain)
 /// goes with it; `cap-gpui`'s next log line then hits EPIPE, the write panics
 /// inside an ObjC run-loop callback, and the process aborts about a tenth of a
 /// second after launch. Its output goes to a file instead of `/dev/null`

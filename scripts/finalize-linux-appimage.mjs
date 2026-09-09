@@ -310,7 +310,7 @@ export async function finalizeLinuxAppImage(
 		}
 		await chmod(output, 0o755);
 		if (!unsigned) {
-			await run("pnpm", ["tauri", "signer", "sign", output], {
+			await run("bun", ["run", "tauri", "signer", "sign", output], {
 				cwd: desktopDirectory,
 				env: {
 					...env,

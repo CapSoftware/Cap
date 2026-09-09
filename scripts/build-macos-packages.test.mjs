@@ -176,7 +176,7 @@ test("caller configs cannot lower the validated build target in final bundle met
 	}
 });
 
-test("recognizes the observed Intel and ARM signing failures with pnpm and ANSI output", () => {
+test("recognizes the observed Intel and ARM signing failures with bun and ANSI output", () => {
 	assert.equal(isTimestampSigningFailure(intelTimestampFailure), true);
 	assert.equal(isTimestampSigningFailure(armTimestampFailure), true);
 	assert.equal(
@@ -239,12 +239,12 @@ test("timestamp retries only rebundle and preserve the target, config and signin
 		JSON.stringify({ bundle: { macOS: { minimumSystemVersion: "12.3" } } }),
 	];
 	const bundleArguments = [
-		"exec",
 		"dotenv",
 		"-e",
 		"../../.env",
 		"--",
-		"pnpm",
+		"bun",
+		"run",
 		"tauri",
 		"bundle",
 		"--target",
@@ -331,7 +331,7 @@ test("compiler, certificate, notarization and signal failures are terminal", asy
 
 test("launch failures propagate without retry", async () => {
 	const fixture = harness([]);
-	const error = new Error("spawn pnpm ENOENT");
+	const error = new Error("spawn bun ENOENT");
 	await assert.rejects(
 		buildMacosPackages(target, config, {
 			...fixture.options,
@@ -441,7 +441,7 @@ test("the executor cancels the child process group and waits for close", async (
 		signal: controller.signal,
 		onOutput: (stream, chunk) => output.push({ stream, chunk }),
 		spawnProcess: (command, _args, options) => {
-			assert.equal(command, "pnpm");
+			assert.equal(command, "bun");
 			assert.equal(options.detached, true);
 			return child;
 		},
@@ -468,7 +468,7 @@ test("the executor cancels the child process group and waits for close", async (
 	]);
 });
 
-test("unsupported platforms and arguments fail before executing pnpm", async () => {
+test("unsupported platforms and arguments fail before executing bun", async () => {
 	for (const [platform, buildTarget, args] of [
 		["win32", target, config],
 		["linux", target, config],
@@ -485,4 +485,14 @@ test("unsupported platforms and arguments fail before executing pnpm", async () 
 		);
 		assert.equal(fixture.calls.length, 0);
 	}
+});
+
+test("timestamp signing retries tolerate nested Bun script failure messages", () => {
+	const failure =
+		'/Applications/Cap.app: A timestamp was expected but was not found.\nError failed to bundle project: failed to sign app\nerror: script "tauri" exited with code 1\nerror: script "build:tauri" exited with code 1';
+	assert.equal(isTimestampSigningFailure(failure), true);
+	assert.equal(
+		isTimestampSigningFailure(`${failure}\nError unrelated packaging failure`),
+		false,
+	);
 });

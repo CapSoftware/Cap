@@ -2,8 +2,8 @@
 	"name": "@cap/desktop",
 	"type": "module",
 	"scripts": {
-		"dev": "pnpm -w cap-setup && pnpm build:sidecar && pnpm build:gpui:dev && dotenv -e ../../.env -- pnpm run preparescript && dotenv -e ../../.env -- node ../../scripts/dev-desktop.mjs",
-		"build:tauri": "pnpm build:sidecar && pnpm build:gpui && dotenv -e ../../.env -- pnpm run preparescript --release && node ../../scripts/verify-gpui-release-inputs.mjs && dotenv -e ../../.env -- pnpm tauri build",
+		"dev": "bun run --cwd ../.. cap-setup && bun run build:sidecar && bun run build:gpui:dev && dotenv -e ../../.env -- bun run preparescript && dotenv -e ../../.env -- node ../../scripts/dev-desktop.mjs",
+		"build:tauri": "bun run build:sidecar && bun run build:gpui && dotenv -e ../../.env -- bun run preparescript --release && node ../../scripts/verify-gpui-release-inputs.mjs && dotenv -e ../../.env -- bun run tauri build",
 		"build:sidecar": "node ../../scripts/build-desktop-binaries.mjs",
 		"build:gpui": "node ../../scripts/run-gpui-build.mjs release",
 		"build:gpui:dev": "dotenv -e ../../.env -- node ../../scripts/run-gpui-build.mjs debug",
@@ -87,6 +87,7 @@
 		"@types/dom-webcodecs": "^0.1.11",
 		"@types/uuid": "^9.0.8",
 		"@webgpu/types": "^0.1.44",
+		"autoprefixer": "^10.4.21",
 		"cross-env": "^7.0.3",
 		"solid-devtools": "^0.34.5",
 		"tailwind-scrollbar": "^3.1.0",

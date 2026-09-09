@@ -34,6 +34,7 @@ jobs:
             desktop:
               - '.gitattributes'
               - '.github/actions/install-desktop-deps/**'
+              - '.github/actions/setup-js/**'
               - '.github/workflows/ci.yml'
               - 'apps/cli/**'
               - 'apps/desktop/**'
@@ -52,7 +53,9 @@ jobs:
               - 'scripts/verify-gpui-release-inputs.mjs'
               - 'Cargo.toml'
               - 'Cargo.lock'
-              - 'pnpm-lock.yaml'
+              - 'bun.lock'
+              - 'bunfig.toml'
+              - 'package.json'
             rust:
               - '.cargo/**'
               - '.github/**'
@@ -64,7 +67,9 @@ jobs:
               - 'Cargo.lock'
             tauri-plugins:
               - 'Cargo.lock'
-              - 'pnpm-lock.yaml'
+              - 'bun.lock'
+              - 'scripts/check-tauri-plugin-versions*'
+              - 'apps/desktop/package.json'
 
       - name: Output branch name
         id: branch
@@ -80,10 +85,13 @@ jobs:
 
       - uses: ./.github/actions/setup-js
 
-      - run: pnpm web exec next typegen
+      - run: bun run --cwd apps/web next typegen
+
+      - name: Test workspace tooling
+        run: node --test scripts/bun-scripts.test.mjs scripts/check-tauri-plugin-versions.test.mjs apps/web-cluster/scripts/deploy.test.mjs
 
       - name: Typecheck
-        run: pnpm typecheck
+        run: bun run typecheck
 
   mobile:
     name: Mobile
@@ -97,19 +105,19 @@ jobs:
       - name: Check Expo dependencies
         env:
           EXPO_OFFLINE: "1"
-        run: pnpm --dir apps/mobile exec expo install --check
+        run: bun run --cwd apps/mobile expo install --check
 
       - name: Run Expo Doctor
         env:
           EXPO_OFFLINE: "1"
         working-directory: apps/mobile
-        run: pnpm dlx expo-doctor@1.20.1
+        run: bunx expo-doctor@1.20.1
 
       - name: Typecheck
-        run: pnpm --dir apps/mobile typecheck
+        run: bun run --cwd apps/mobile typecheck
 
       - name: Test
-        run: pnpm --dir apps/mobile test
+        run: bun run --cwd apps/mobile test
 
   format-biome:
     name: Format (Biome)
@@ -271,7 +279,7 @@ jobs:
 
       - name: Run cap-setup
         shell: bash
-        run: pnpm -w cap-setup
+        run: bun run cap-setup
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
 
@@ -284,7 +292,7 @@ jobs:
         shell: bash
         run: |
           node --test scripts/linux-bundle-config.test.mjs scripts/finalize-linux-appimage.test.mjs
-          pnpm --dir apps/desktop exec vitest run scripts/prepare.test.js
+          bun run --cwd apps/desktop vitest run scripts/prepare.test.js
           cargo test --locked -p cap-utils -p cap-cli-install --lib
           cargo test --locked -p cap --bin cap record::tests
           cargo test --locked -p cap-recording --lib -- --test-threads=1
@@ -317,7 +325,7 @@ jobs:
 
       - name: Build app
         working-directory: apps/desktop
-        run: pnpm tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
+        run: bun run tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
         env:
           LD_LIBRARY_PATH: ${{ runner.os == 'Linux' && format('{0}/target/native-deps/lib:{0}/target/debug:{0}/target/{1}/debug', github.workspace, matrix.settings.target) || '' }}
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
@@ -331,10 +339,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup node
-        uses: actions/setup-node@v3
-        with:
-          node-version: 20
+      - uses: ./.github/actions/setup-js
 
       - name: Run verify
         shell: bash

@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,46 +31,49 @@ function parseVersion(version) {
 	};
 }
 
-export function parseDesktopTauriVersions(pnpmLock, cargoLock) {
-	const versions = {};
-	let insideDesktop = false;
-	let currentPackage = null;
-
-	for (const line of pnpmLock.split("\n")) {
-		if (/^ {2}\S/.test(line)) {
-			if (insideDesktop) break;
-			insideDesktop = /^ {2}apps\/desktop:\s*$/.test(line);
-			currentPackage = null;
-			continue;
-		}
-		if (!insideDesktop) continue;
-
-		const packageMatch = line.match(
-			/^ {6}['"]?(@tauri-apps\/(?:api|cli))['"]?:\s*$/,
+export function parseDesktopTauriDependencies(bunLock) {
+	const parsed = ts.parseConfigFileTextToJson("bun.lock", bunLock);
+	if (parsed.error) {
+		throw new Error(
+			`Invalid bun.lock: ${ts.flattenDiagnosticMessageText(parsed.error.messageText, "\n")}`,
 		);
-		if (packageMatch) {
-			currentPackage = packageMatch[1];
-			continue;
-		}
-		if (!currentPackage) continue;
-
-		const versionMatch = line.match(/^ {8}version:\s*['"]?([^'"\s(]+)/);
-		if (versionMatch) {
-			versions[currentPackage] = versionMatch[1];
-			currentPackage = null;
-		}
 	}
+	const lock = parsed.config;
+	if (lock?.lockfileVersion !== 2) {
+		throw new Error("Unsupported bun.lock format; expected lockfileVersion 2");
+	}
+	const workspace = lock.workspaces?.["apps/desktop"];
+	if (!workspace?.name) throw new Error("Missing apps/desktop in bun.lock");
+	const dependencies = {
+		...workspace.dependencies,
+		...workspace.devDependencies,
+	};
+	const versions = {};
+	for (const name of Object.keys(dependencies)) {
+		if (!name.startsWith("@tauri-apps/")) continue;
+		const entry =
+			lock.packages?.[`${workspace.name}/${name}`] ?? lock.packages?.[name];
+		const resolution = entry?.[0];
+		if (typeof resolution !== "string" || !resolution.startsWith(`${name}@`)) {
+			throw new Error(`Missing resolved ${name} in apps/desktop bun.lock`);
+		}
+		const version = resolution.slice(name.length + 1);
+		parseVersion(version);
+		versions[name] = version;
+	}
+	for (const name of ["@tauri-apps/api", "@tauri-apps/cli"]) {
+		if (!versions[name])
+			throw new Error(`Missing ${name} in apps/desktop bun.lock`);
+	}
+	return versions;
+}
 
+export function parseDesktopTauriVersions(bunLock, cargoLock) {
+	const versions = parseDesktopTauriDependencies(bunLock);
 	const rustVersion = cargoLock.match(
 		/^name = "tauri"\r?\nversion = "([^"]+)"/m,
 	)?.[1];
-	for (const packageName of ["@tauri-apps/api", "@tauri-apps/cli"]) {
-		if (!versions[packageName]) {
-			throw new Error(`Missing ${packageName} in apps/desktop pnpm lockfile`);
-		}
-	}
 	if (!rustVersion) throw new Error('Missing "tauri" package in Cargo.lock');
-
 	return {
 		api: versions["@tauri-apps/api"],
 		cli: versions["@tauri-apps/cli"],
@@ -97,60 +101,6 @@ export function compareTauriRuntimeVersions(versions) {
 			matching: jsMajorMinor === rustMajorMinor,
 		};
 	});
-}
-
-// Parse pnpm-lock.yaml to extract Tauri plugin versions
-function parsePnpmLock(lockfilePath) {
-	const content = fs.readFileSync(lockfilePath, "utf8");
-	const plugins = {};
-
-	const lines = content.split("\n");
-	let currentPlugin = null;
-
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-
-		// Look for @tauri-apps/plugin- packages (with or without quotes)
-		const pluginMatch = line.match(
-			/^\s*['"]?(@tauri-apps\/plugin-[^'":\s]+)['"]?:\s*$/,
-		);
-		if (pluginMatch) {
-			currentPlugin = pluginMatch[1];
-			debug(`Found JS plugin: ${currentPlugin} at line ${i + 1}`);
-			continue;
-		}
-
-		// Look for version when we're tracking a plugin
-		if (currentPlugin) {
-			const versionMatch = line.match(/^\s*version:\s*['"]?([^'"]+)['"]?\s*$/);
-			if (versionMatch) {
-				plugins[currentPlugin] = versionMatch[1];
-				debug(`  Version: ${versionMatch[1]}`);
-				currentPlugin = null;
-			}
-
-			// Reset if we hit another top-level key
-			if (
-				line.match(/^\s*[^'":\s]+:\s*$/) &&
-				!line.match(/^\s*(specifier|version):/)
-			) {
-				currentPlugin = null;
-			}
-		}
-
-		// Also check for inline version specifications in dependency lists
-		const inlineMatch = line.match(/@tauri-apps\/plugin-([^@]+)@([^)]+)/);
-		if (inlineMatch) {
-			const pluginName = inlineMatch[1];
-			const version = inlineMatch[2];
-			plugins[`@tauri-apps/plugin-${pluginName}`] = version;
-			debug(
-				`Found inline JS plugin: @tauri-apps/plugin-${pluginName}@${version}`,
-			);
-		}
-	}
-
-	return plugins;
 }
 
 // Parse Cargo.lock to extract Tauri plugin versions
@@ -264,12 +214,12 @@ function compareVersions(jsPlugins, rustPlugins) {
 // Main function
 function main() {
 	const rootDir = path.resolve(__dirname, "..");
-	const pnpmLockPath = path.join(rootDir, "pnpm-lock.yaml");
+	const bunLockPath = path.join(rootDir, "bun.lock");
 	const cargoLockPath = path.join(rootDir, "Cargo.lock");
 
 	// Check if files exist
-	if (!fs.existsSync(pnpmLockPath)) {
-		console.error(`❌ Error: pnpm-lock.yaml not found at ${pnpmLockPath}`);
+	if (!fs.existsSync(bunLockPath)) {
+		console.error(`❌ Error: bun.lock not found at ${bunLockPath}`);
 		console.error("Please run this script from the project root directory.");
 		process.exit(1);
 	}
@@ -280,17 +230,21 @@ function main() {
 		process.exit(1);
 	}
 
-	debug(`Reading pnpm lockfile: ${pnpmLockPath}`);
+	debug(`Reading Bun lockfile: ${bunLockPath}`);
 	debug(`Reading Cargo lockfile: ${cargoLockPath}`);
 
 	console.log("🔍 Checking Tauri plugin version consistency...\n");
 
 	try {
 		// Parse both lockfiles
-		const jsPlugins = parsePnpmLock(pnpmLockPath);
+		const jsPlugins = Object.fromEntries(
+			Object.entries(
+				parseDesktopTauriDependencies(fs.readFileSync(bunLockPath, "utf8")),
+			).filter(([name]) => name.startsWith("@tauri-apps/plugin-")),
+		);
 		const rustPlugins = parseCargoLock(cargoLockPath);
 		const runtimeVersions = parseDesktopTauriVersions(
-			fs.readFileSync(pnpmLockPath, "utf8"),
+			fs.readFileSync(bunLockPath, "utf8"),
 			fs.readFileSync(cargoLockPath, "utf8"),
 		);
 
@@ -400,7 +354,7 @@ Description:
   Checks that all @tauri-apps/plugin-* packages have matching major.minor
   versions with their corresponding tauri-plugin-* crates.
 
-  The script reads pnpm-lock.yaml and Cargo.lock from the project root
+  The script reads bun.lock and Cargo.lock from the project root
   and compares versions to ensure compatibility.
 
 Exit codes:

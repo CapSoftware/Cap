@@ -191,10 +191,10 @@ async function main() {
 		JSON.stringify(allEnvs, null, 4),
 	);
 
-	const DESKTOP_MSG = "'pnpm dev:desktop' to start the desktop app";
+	const DESKTOP_MSG = "'bun run dev:desktop' to start the desktop app";
 	const WEB_DOCKER_MSG =
-		"'pnpm dev:web' to start the web app + Docker services";
-	const WEB_MSG = "'pnpm web dev' to start the web app";
+		"'bun run dev:web' to start the web app + Docker services";
+	const WEB_MSG = "'bun run web dev' to start the web app";
 
 	if (hasWeb) {
 		if (hasDesktop) {

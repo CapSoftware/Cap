@@ -3,7 +3,7 @@
 	"scripts": {
 		"build": "dotenv -e .env -- turbo run build",
 		"build:web": "turbo run build:web",
-		"build:web:docker": "pnpm run --filter=@cap/web build:docker",
+		"build:web:docker": "bun run --filter=@cap/web build:docker",
 		"cap-setup": "dotenv -e .env -- node scripts/setup.js",
 		"analytics:migrate-dub": "dotenv -e .env -- node scripts/analytics/migrate-dub-to-tinybird.js --dry-run",
 		"analytics:migrate-dub:apply": "dotenv -e .env -- node scripts/analytics/migrate-dub-to-tinybird.js --apply",
@@ -12,44 +12,45 @@
 		"analytics:check": "dotenv -e .env -- node scripts/analytics/check-analytics.js",
 		"analytics:delete-all": "dotenv -e .env -- node scripts/analytics/delete-all-data.js",
 		"analytics:populate-test": "dotenv -e .env -- node scripts/analytics/populate-test-data.js",
-		"db:generate": "dotenv -e .env -- pnpm --filter @cap/database db:generate",
-		"db:push": "dotenv -e .env -- pnpm --filter @cap/database db:push",
-		"db:studio": "dotenv -e .env -- pnpm --filter @cap/database db:studio",
-		"dev": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --env-mode=loose --ui tui",
-		"dev:desktop": "pnpm run --filter=@cap/desktop dev",
-		"dev:extension": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/chrome-extension --env-mode=loose --ui tui",
-		"dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --filter=!@cap/chrome-extension --no-cache --concurrency 1",
-		"dev:mobile": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && CAP_MOBILE_DISABLE_ASSOCIATED_DOMAINS=1 EXPO_PUBLIC_CAP_WEB_URL=${EXPO_PUBLIC_CAP_WEB_URL:-http://localhost:3000} dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/mobile --env-mode=loose --ui tui",
-		"dev:mobile:physical": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && CAP_MOBILE_DEVICE=physical CAP_MOBILE_DISABLE_ASSOCIATED_DOMAINS=1 dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/mobile --env-mode=loose --ui tui",
-		"dev:web": "pnpm dev --filter=!@cap/desktop --filter=!@cap/mobile",
-		"dev:windows": "start /b cmd /c \"pnpm run docker:up > nul\" && timeout /t 5 /nobreak > nul && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --filter=!@cap/mobile --env-mode=loose --ui tui",
+		"db:generate": "dotenv -e .env -- bun run --filter @cap/database db:generate",
+		"db:push": "dotenv -e .env -- bun run --filter @cap/database db:push",
+		"db:studio": "dotenv -e .env -- bun run --filter @cap/database db:studio",
+		"dev": "bun run docker:up && trap 'bun run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --env-mode=loose --ui tui",
+		"dev:desktop": "bun run --filter=@cap/desktop dev",
+		"dev:extension": "bun run docker:up && trap 'bun run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/chrome-extension --env-mode=loose --ui tui",
+		"dev:manual": "bun run docker:up && trap 'bun run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --no-cache --concurrency 1",
+		"dev:mobile": "bun run docker:up && trap 'bun run docker:stop' EXIT && CAP_MOBILE_DISABLE_ASSOCIATED_DOMAINS=1 EXPO_PUBLIC_CAP_WEB_URL=${EXPO_PUBLIC_CAP_WEB_URL:-http://localhost:3000} dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/mobile --env-mode=loose --ui tui",
+		"dev:mobile:physical": "bun run docker:up && trap 'bun run docker:stop' EXIT && CAP_MOBILE_DEVICE=physical CAP_MOBILE_DISABLE_ASSOCIATED_DOMAINS=1 dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/mobile --env-mode=loose --ui tui",
+		"dev:web": "bun run dev --filter=!@cap/desktop --filter=!@cap/mobile",
+		"dev:windows": "cmd /d /c \"scripts\\\\dev-windows.cmd\"",
 		"docker:clean": "turbo run docker:clean",
 		"docker:stop": "turbo run docker:stop",
 		"docker:up": "turbo run docker:up",
-		"format": "pnpm exec biome check --write",
-		"lint": "pnpm exec biome lint",
-		"tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop run build:tauri --config src-tauri/tauri.prod.conf.json --verbose",
-		"typecheck": "pnpm --dir apps/web exec next typegen && pnpm tsc -b",
+		"format": "bun run biome check --write",
+		"lint": "bun run biome lint",
+		"tauri:build": "dotenv -e .env -- bun run --cwd apps/desktop build:tauri --config src-tauri/tauri.prod.conf.json --verbose",
+		"typecheck": "bun run --cwd apps/web next typegen && bun run tsc -b",
 		"test": "turbo run test",
-		"test:web": "pnpm --filter=@cap/web test",
-		"test:discover": "pnpm with-env cargo run -p cap-test -- discover",
-		"test:matrix": "pnpm with-env cargo run -p cap-test -- matrix",
-		"test:matrix:quick": "pnpm with-env cargo run -p cap-test -- matrix --quick",
-		"test:matrix:exhaustive": "pnpm with-env cargo run -p cap-test -- matrix --exhaustive",
-		"test:synthetic": "pnpm with-env cargo run -p cap-test -- synthetic",
-		"test:benchmark": "pnpm with-env cargo run -p cap-test -- benchmark",
-		"test:suite:recording": "pnpm with-env cargo run -p cap-test -- suite recording",
-		"test:suite:encoding": "pnpm with-env cargo run -p cap-test -- suite encoding",
-		"test:suite:playback": "pnpm with-env cargo run -p cap-test -- suite playback",
-		"test:suite:sync": "pnpm with-env cargo run -p cap-test -- suite sync",
-		"test:desktop:memory": "pnpm --dir apps/desktop test:memory",
-		"test:desktop:memory:unit": "pnpm --dir apps/desktop test:memory:unit",
-		"web": "pnpm --filter=@cap/web",
+		"test:web": "bun run --filter=@cap/web test",
+		"test:discover": "bun run with-env cargo run -p cap-test -- discover",
+		"test:matrix": "bun run with-env cargo run -p cap-test -- matrix",
+		"test:matrix:quick": "bun run with-env cargo run -p cap-test -- matrix --quick",
+		"test:matrix:exhaustive": "bun run with-env cargo run -p cap-test -- matrix --exhaustive",
+		"test:synthetic": "bun run with-env cargo run -p cap-test -- synthetic",
+		"test:benchmark": "bun run with-env cargo run -p cap-test -- benchmark",
+		"test:suite:recording": "bun run with-env cargo run -p cap-test -- suite recording",
+		"test:suite:encoding": "bun run with-env cargo run -p cap-test -- suite encoding",
+		"test:suite:playback": "bun run with-env cargo run -p cap-test -- suite playback",
+		"test:suite:sync": "bun run with-env cargo run -p cap-test -- suite sync",
+		"test:desktop:memory": "bun run --cwd apps/desktop test:memory",
+		"test:desktop:memory:unit": "bun run --cwd apps/desktop test:memory:unit",
+		"web": "bun run --cwd apps/web",
 		"env-setup": "node scripts/env-cli.js",
 		"check-tauri-versions": "node scripts/check-tauri-plugin-versions.js",
 		"clean": "find . -name node_modules -o -name .next -o -name .output -o -name .turbo -o -name dist -type d -prune | xargs rm -rf",
 		"lgtm-otel": "docker run -p 3010:3000 -p 4317:4317 -p 4318:4318 --rm -it docker.io/grafana/otel-lgtm",
-		"with-env": "dotenv -e .env --"
+		"with-env": "dotenv -e .env --",
+		"check:bun": "node scripts/check-bun-install.mjs"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.2.0",
@@ -61,19 +62,32 @@
 		"turbo": "^2.3.4",
 		"typescript": "^5.8.3"
 	},
-	"pnpm": {
-		"overrides": {
-			"react-native-worklets": "0.7.4"
-		},
-		"peerDependencyRules": {
-			"allowedVersions": {
-				"next-auth>next": ">=16.0.0"
-			}
-		}
-	},
-	"packageManager": "pnpm@10.5.2",
+	"packageManager": "bun@1.4.0",
 	"name": "cap",
 	"engines": {
-		"node": ">=20"
-	}
+		"node": ">=20",
+		"bun": "1.4.0"
+	},
+	"overrides": {
+		"react-native-worklets": "0.7.4"
+	},
+	"workspaces": [
+		"apps/*",
+		"packages/*",
+		"crates/tauri-plugin-*",
+		"infra"
+	],
+	"trustedDependencies": [
+		"@parcel/watcher",
+		"@swc/core",
+		"cbor-extract",
+		"esbuild",
+		"ffmpeg-static",
+		"msgpackr-extract",
+		"node-av",
+		"protobufjs",
+		"sharp",
+		"unrs-resolver",
+		"workerd"
+	]
 }
