@@ -41,8 +41,6 @@ export default $config({
 				cloudflare: true,
 				aws: {},
 				planetscale: true,
-				awsx: "2.21.1",
-				random: true,
 			},
 		};
 	},
@@ -191,21 +189,8 @@ export default $config({
 			],
 		});
 
-		const workflowCluster =
-			stage.variant === "staging"
-				? await WorkflowCluster(recordingsBucket, secrets)
-				: null;
-
 		[
 			...vercelVariables,
-			workflowCluster && {
-				key: "WORKFLOWS_RPC_URL",
-				value: workflowCluster.api.url,
-			},
-			workflowCluster && {
-				key: "WORKFLOWS_RPC_SECRET",
-				value: secrets.WORKFLOWS_RPC_SECRET.result,
-			},
 			{ key: "VERCEL_AWS_ROLE_ARN", value: vercelAwsAccessRole.arn },
 		]
 			.filter(Boolean)
@@ -245,15 +230,8 @@ export default $config({
 function Secrets() {
 	return {
 		DATABASE_URL_MYSQL: new sst.Secret("DATABASE_URL_MYSQL"),
-		GITHUB_PAT:
-			$app.stage === "staging" ? new sst.Secret("GITHUB_PAT") : undefined,
-		WORKFLOWS_RPC_SECRET: new random.RandomString("WORKFLOWS_RPC_SECRET", {
-			length: 48,
-		}),
 	};
 }
-
-type Secrets = ReturnType<typeof Secrets>;
 
 // function DiscordBot() {
 // 	new sst.cloudflare.Worker("DiscordBotScript", {
@@ -281,204 +259,3 @@ type Secrets = ReturnType<typeof Secrets>;
 // 		},
 // 	});
 // }
-
-async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
-	const pulumi = await import("@pulumi/pulumi");
-
-	const vpc = new sst.aws.Vpc("Vpc", {
-		nat: "ec2",
-	});
-	const privateDnsNamespace = new aws.servicediscovery.PrivateDnsNamespace(
-		"WorkflowClusterPrivateDnsNamespace",
-		{
-			name: "effect-cluster.private",
-			description: "Private namespace for effect-cluster",
-			vpc: vpc.id,
-		},
-	);
-
-	function generateServiceHostname(serviceName: string) {
-		return $interpolate`${serviceName}.${$app.stage}.${$app.name}.${privateDnsNamespace.name}`;
-	}
-
-	const securityGroup = new aws.ec2.SecurityGroup(
-		"WorkflowClusterSecurityGroup",
-		{ vpcId: vpc.id, description: "Security group for effect-cluster" },
-	);
-	new aws.vpc.SecurityGroupEgressRule("allow_all_traffic_ipv4", {
-		securityGroupId: securityGroup.id,
-		cidrIpv4: "0.0.0.0/0",
-		ipProtocol: "-1",
-	});
-	// allow inbound from vpc
-	new aws.vpc.SecurityGroupIngressRule("allow_inbound_from_vpc", {
-		securityGroupId: securityGroup.id,
-		cidrIpv4: vpc.nodes.vpc.cidrBlock,
-		ipProtocol: "-1",
-	});
-	const cluster = new sst.aws.Cluster("EffectCluster", {
-		vpc: {
-			id: vpc.id,
-			securityGroups: [securityGroup.id],
-			containerSubnets: vpc.privateSubnets,
-			loadBalancerSubnets: vpc.publicSubnets,
-			cloudmapNamespaceId: privateDnsNamespace.id,
-			cloudmapNamespaceName: privateDnsNamespace.name,
-		},
-		transform: {
-			cluster: {
-				settings: [{ name: "containerInsights", value: "enhanced" }],
-			},
-		},
-	});
-
-	const db = new sst.aws.Aurora("AuroraDB", {
-		engine: "mysql",
-		vpc,
-		scaling: {
-			min: "0.5 ACU",
-			max: "4 ACU",
-		},
-	});
-
-	const commonEnvironment = {
-		CAP_AWS_REGION: bucket.region,
-		CAP_AWS_BUCKET: bucket.bucket,
-		SHARD_DATABASE_URL: $interpolate`mysql://${db.username}:${db.password}@${db.host}:${db.port}/${db.database}`,
-		DATABASE_URL: secrets.DATABASE_URL_MYSQL.value,
-		AXIOM_API_TOKEN,
-		AXIOM_DOMAIN: "api.axiom.co",
-		AXIOM_DATASET,
-		WORKFLOWS_RPC_SECRET: secrets.WORKFLOWS_RPC_SECRET.result,
-	};
-
-	const ghcrCredentialsSecret = new aws.secretsmanager.Secret(
-		"GHCRCredentialsSecret",
-	);
-
-	if (secrets.GITHUB_PAT)
-		new aws.secretsmanager.SecretVersion("GHCRCredentialsSecretVersion", {
-			secretId: ghcrCredentialsSecret.id,
-			secretString: secrets.GITHUB_PAT.value.apply((password) =>
-				JSON.stringify({
-					username: "brendonovich",
-					password,
-				}),
-			),
-		});
-
-	const ghcrCredentialsTransform = {
-		taskRole(args) {
-			args.inlinePolicies = pulumi
-				.all([args.inlinePolicies ?? [], ghcrCredentialsSecret.arn])
-				.apply(([policies, arn]) => {
-					policies.push({
-						policy: JSON.stringify({
-							Version: "2012-10-17",
-							Statement: [
-								{
-									Effect: "Allow",
-									Action: ["secretsmanager:GetSecretValue"],
-									Resource: [arn],
-								},
-							],
-						}),
-					});
-					return policies;
-				});
-		},
-		taskDefinition(args) {
-			args.containerDefinitions = pulumi
-				.all([$jsonParse(args.containerDefinitions), ghcrCredentialsSecret.arn])
-				.apply(([def, arn]) => {
-					for (const container of def) {
-						container.repositoryCredentials = { credentialsParameter: arn };
-					}
-					return JSON.stringify(def);
-				});
-		},
-	} satisfies sst.aws.ServiceArgs["transform"];
-
-	new sst.aws.Service("ShardManager", {
-		cluster,
-		architecture: "arm64",
-		containers: [
-			{
-				name: "shard-manager",
-				image: "ghcr.io/brendonovich/cap-web-cluster:latest",
-				command: ["src/shard-manager.ts"],
-				environment: {
-					...commonEnvironment,
-					SHARD_MANAGER_HOST: "0.0.0.0",
-				},
-			},
-		],
-		transform: ghcrCredentialsTransform,
-	});
-
-	const runner = new sst.aws.Service("Runner", {
-		cluster,
-		capacity: "spot",
-		cpu: "0.25 vCPU",
-		memory: "1 GB",
-		architecture: "arm64",
-		serviceRegistry: { port: 42169 },
-		image: "ghcr.io/brendonovich/cap-web-cluster:latest",
-		command: ["src/runner/index.ts"],
-		health: {
-			command: ["CMD", "deno", "run", "--allow-all", "src/health-check.ts"],
-		},
-		environment: {
-			...commonEnvironment,
-			SHARD_MANAGER_HOST: generateServiceHostname("ShardManager"),
-			PORT: "42069",
-			HEALTH_CHECK_PORT: "3000",
-		},
-		scaling: {
-			min: 2,
-			max: 16,
-			cpuUtilization: 70,
-			memoryUtilization: 70,
-		},
-		transform: {
-			...ghcrCredentialsTransform,
-			// Set a restart policy for all containers
-			// Not provided by the SST configs
-			taskDefinition: (args) => {
-				// "containerDefinitions" is a JSON string, parse first
-				let value = $jsonParse(args.containerDefinitions);
-
-				// Update "portMappings"
-				value = value.apply((containerDefinitions) => {
-					for (const container of containerDefinitions) {
-						container.restartPolicy = {
-							enabled: true,
-							restartAttemptPeriod: 60,
-						};
-					}
-					return containerDefinitions;
-				});
-
-				// Convert back to JSON string
-				args.containerDefinitions = $jsonStringify(value);
-
-				ghcrCredentialsTransform.taskDefinition(args);
-			},
-		},
-		permissions: [
-			{
-				actions: ["s3:*"],
-				resources: [bucket.arn, $interpolate`${bucket.arn}/*`],
-			},
-		],
-	});
-
-	const api = new sst.aws.ApiGatewayV2("MyApi", {
-		vpc,
-	});
-	api.routePrivate("$default", runner.nodes.cloudmapService.arn);
-
-	return {
-		api,
-	};
-}

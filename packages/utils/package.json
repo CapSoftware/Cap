@@ -10,11 +10,7 @@
 		"build": "tsdown"
 	},
 	"publishConfig": {
-		"main": "./dist/index.js",
-		"exports": {
-			".": "./dist/index.js",
-			"./helpers": "./dist/helpers.js"
-		}
+		"main": "./dist/index.js"
 	},
 	"devDependencies": {
 		"react": "^19.1.1",

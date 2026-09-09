@@ -88,7 +88,7 @@ jobs:
       - run: bun run --cwd apps/web next typegen
 
       - name: Test workspace tooling
-        run: node --test scripts/bun-scripts.test.mjs scripts/check-tauri-plugin-versions.test.mjs apps/web-cluster/scripts/deploy.test.mjs
+        run: node --test scripts/bun-scripts.test.mjs scripts/check-tauri-plugin-versions.test.mjs
 
       - name: Test web React compatibility
         run: >-
