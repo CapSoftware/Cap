@@ -135,6 +135,8 @@ struct AttachedState {
     id: DeviceOrModelID,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
+    settings: Option<CameraDeviceSettings>,
+    last_frame_at: Option<std::time::Instant>,
     done_tx: mpsc::SyncSender<()>,
     pending_release: Option<mpsc::SyncSender<()>>,
 }
@@ -145,6 +147,7 @@ impl AttachedState {
             done_tx,
             camera_info,
             video_info,
+            settings,
             ..
         } = data;
 
@@ -152,6 +155,8 @@ impl AttachedState {
             id,
             camera_info,
             video_info,
+            settings,
+            last_frame_at: None,
             done_tx,
             pending_release: None,
         }
@@ -162,12 +167,15 @@ impl AttachedState {
             done_tx,
             camera_info,
             video_info,
+            settings,
             ..
         } = data;
 
         self.id = id;
         self.camera_info = camera_info;
         self.video_info = video_info;
+        self.settings = settings;
+        self.last_frame_at = None;
         self.done_tx = done_tx;
     }
 
@@ -282,6 +290,11 @@ pub struct SetInput {
     pub settings: Option<CameraDeviceSettings>,
 }
 
+pub struct CheckInput {
+    pub id: DeviceOrModelID,
+    pub settings: Option<CameraDeviceSettings>,
+}
+
 pub struct RemoveInput;
 
 pub struct AddSender(pub flume::Sender<FFmpegVideoFrame>);
@@ -307,6 +320,7 @@ struct InputConnected {
     done_tx: SyncSender<()>,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
+    settings: Option<CameraDeviceSettings>,
 }
 
 type ReadyFuture = Shared<BoxFuture<'static, Result<InputConnected, SetInputError>>>;
@@ -328,6 +342,7 @@ struct LockedCameraInputReconnected {
     id: DeviceOrModelID,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
+    settings: Option<CameraDeviceSettings>,
     done_tx: SyncSender<()>,
 }
 
@@ -506,6 +521,7 @@ fn spawn_camera_setup(args: CameraSetupArgs) -> (ReadyFuture, SyncSender<()>) {
                             id: id.clone(),
                             camera_info: camera_info.clone(),
                             video_info,
+                            settings,
                             done_tx: done_tx_thread.clone(),
                         };
 
@@ -525,6 +541,7 @@ fn spawn_camera_setup(args: CameraSetupArgs) -> (ReadyFuture, SyncSender<()>) {
                                         id: id.clone(),
                                         camera_info,
                                         video_info,
+                                        settings,
                                         done_tx: done_tx_thread.clone(),
                                     })
                                     .await;
@@ -1176,6 +1193,26 @@ async fn setup_camera(
     })
 }
 
+impl Message<CheckInput> for CameraFeed {
+    type Reply = bool;
+
+    async fn handle(&mut self, msg: CheckInput, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        let State::Open(OpenState {
+            connecting: None,
+            attached: Some(attached),
+        }) = &self.state
+        else {
+            return false;
+        };
+        !self.setup_cancel.is_cancelled()
+            && attached.id == msg.id
+            && attached.settings == msg.settings
+            && attached
+                .last_frame_at
+                .is_some_and(|received| received.elapsed() < Duration::from_millis(250))
+    }
+}
+
 impl Message<SetInput> for CameraFeed {
     type Reply =
         Result<BoxFuture<'static, Result<(CameraInfo, VideoInfo), SetInputError>>, SetInputError>;
@@ -1511,6 +1548,13 @@ impl Message<NewFrame> for CameraFeed {
     type Reply = ();
 
     async fn handle(&mut self, msg: NewFrame, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        if let State::Open(OpenState {
+            connecting: None,
+            attached: Some(attached),
+        }) = &mut self.state
+        {
+            attached.last_frame_at = Some(std::time::Instant::now());
+        }
         let frame_num = CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         if send_frame_to_camera_senders(&mut self.senders, msg.0, frame_num, "Camera") {
@@ -1531,6 +1575,13 @@ impl Message<NewNativeFrame> for CameraFeed {
         msg: NewNativeFrame,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        if let State::Open(OpenState {
+            connecting: None,
+            attached: Some(attached),
+        }) = &mut self.state
+        {
+            attached.last_frame_at = Some(std::time::Instant::now());
+        }
         let frame_num =
             NATIVE_CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -1712,6 +1763,7 @@ impl Message<LockedCameraInputReconnected> for CameraFeed {
                     done_tx: msg.done_tx,
                     camera_info: msg.camera_info,
                     video_info: msg.video_info,
+                    settings: msg.settings,
                 },
             );
             true
@@ -1793,11 +1845,94 @@ mod tests {
             }))
             .unwrap(),
             video_info: VideoInfo::from_raw_ffmpeg(ffmpeg::format::Pixel::BGRA, 16, 16, 30),
+            settings: None,
         };
         (connection, done_rx)
     }
 
     struct AttachedCamera;
+
+    #[tokio::test]
+    async fn camera_reuse_requires_matching_settings_and_recent_frames() {
+        for (age, matching_id, matching_settings, cancelled, expected) in [
+            (Some(0), true, true, false, true),
+            (None, true, true, false, false),
+            (Some(500), true, true, false, false),
+            (Some(0), false, true, false, false),
+            (Some(0), true, false, false, false),
+            (Some(0), true, true, true, false),
+        ] {
+            let (connection, stopped) = test_camera_connection(1);
+            let id = connection.id.clone();
+            let mut attached = AttachedState::new(id.clone(), connection);
+            attached.last_frame_at = age
+                .and_then(|age| std::time::Instant::now().checked_sub(Duration::from_millis(age)));
+            let camera = CameraFeed {
+                state: State::Open(OpenState {
+                    connecting: None,
+                    attached: Some(attached),
+                }),
+                ..CameraFeed::default()
+            };
+            if cancelled {
+                camera.setup_cancel.cancel();
+            }
+            let feed = CameraFeed::spawn(camera);
+            let reusable = feed
+                .ask(CheckInput {
+                    id: if matching_id {
+                        id
+                    } else {
+                        DeviceOrModelID::DeviceID("different-camera".into())
+                    },
+                    settings: (!matching_settings).then_some(CameraDeviceSettings {
+                        width: Some(1280),
+                        height: Some(720),
+                        frame_rate: Some(30.0),
+                    }),
+                })
+                .await
+                .unwrap();
+            assert_eq!(reusable, expected);
+            assert!(matches!(stopped.try_recv(), Err(mpsc::TryRecvError::Empty)));
+            feed.kill();
+            feed.wait_for_stop().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn camera_reuse_does_not_bypass_a_pending_selection_or_recording_lock() {
+        for locked in [false, true] {
+            let (connection, _stopped) = test_camera_connection(1);
+            let id = connection.id.clone();
+            let mut attached = AttachedState::new(id.clone(), connection.clone());
+            attached.last_frame_at = Some(std::time::Instant::now());
+            let token = Arc::new(());
+            let state = if locked {
+                State::Locked {
+                    inner: attached,
+                    token: Arc::downgrade(&token),
+                }
+            } else {
+                State::Open(OpenState {
+                    connecting: Some(ConnectingState {
+                        id: id.clone(),
+                        generation: 2,
+                        ready: futures::future::pending().boxed(),
+                        done_tx: connection.done_tx,
+                    }),
+                    attached: Some(attached),
+                })
+            };
+            let feed = CameraFeed::spawn(CameraFeed {
+                state,
+                ..CameraFeed::default()
+            });
+            assert!(!feed.ask(CheckInput { id, settings: None }).await.unwrap());
+            feed.kill();
+            feed.wait_for_stop().await;
+        }
+    }
 
     impl Message<AttachedCamera> for CameraFeed {
         type Reply = Option<DeviceOrModelID>;
@@ -2268,6 +2403,7 @@ mod tests {
                     id: replacement.id,
                     camera_info: replacement.camera_info,
                     video_info: replacement.video_info,
+                    settings: replacement.settings,
                     done_tx: replacement.done_tx,
                 })
                 .await

@@ -154,7 +154,6 @@ pub struct MicrophoneDeviceSettings {
 
 #[derive(Clone)]
 pub struct MicrophoneSamples {
-    #[cfg(any(target_os = "linux", windows))]
     pub(crate) stream_id: u32,
     pub data: Vec<u8>,
     pub format: SampleFormat,
@@ -872,6 +871,7 @@ pub struct MicrophoneFeed {
     input_id_counter: u32,
     lock_generation: u64,
     state: State,
+    last_samples: Option<(u32, Instant)>,
     senders: Vec<MicrophoneFeedSender>,
     error_sender: flume::Sender<StreamError>,
     dropped_message_count: Arc<AtomicU64>,
@@ -1132,6 +1132,7 @@ impl MicrophoneFeed {
                 connecting: None,
                 attached: None,
             }),
+            last_samples: None,
             senders: Vec::new(),
             error_sender,
             dropped_message_count: Arc::new(AtomicU64::new(0)),
@@ -1186,7 +1187,7 @@ impl MicrophoneFeed {
         device_map
     }
 
-    fn device_with_settings(
+    pub fn device_with_settings(
         label: &str,
         settings: Option<&MicrophoneDeviceSettings>,
     ) -> Option<(Device, SupportedStreamConfig)> {
@@ -1413,7 +1414,6 @@ impl MicrophoneFeed {
                                 ),
                             );
                             let samples = MicrophoneSamples {
-                                #[cfg(any(target_os = "linux", windows))]
                                 stream_id: id,
                                 data: data.bytes().to_vec(),
                                 format: data.sample_format(),
@@ -1876,6 +1876,26 @@ impl Drop for MicrophoneFeedLock {
 pub struct SetInput {
     pub label: String,
     pub settings: Option<MicrophoneDeviceSettings>,
+}
+
+pub struct CheckInput(pub String);
+
+impl Message<CheckInput> for MicrophoneFeed {
+    type Reply = bool;
+
+    async fn handle(&mut self, msg: CheckInput, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        let State::Open(OpenState {
+            connecting: None,
+            attached: Some(attached),
+        }) = &self.state
+        else {
+            return false;
+        };
+        attached.label == msg.0
+            && self.last_samples.is_some_and(|(id, received)| {
+                id == attached.id && received.elapsed() < Duration::from_millis(250)
+            })
+    }
 }
 
 pub struct RemoveInput;
@@ -2562,6 +2582,7 @@ impl Message<MicrophoneSamples> for MicrophoneFeed {
     ) -> Self::Reply {
         let mut to_remove = vec![];
         let now = Instant::now();
+        self.last_samples = Some((msg.stream_id, now));
         let stall_emit_interval = Duration::from_secs(5);
 
         for (i, sender) in self.senders.iter_mut().enumerate() {
@@ -3169,6 +3190,46 @@ mod tests {
         );
         assert_eq!(selected, Some("requested microphone"));
         assert_eq!(configured, ["requested microphone"]);
+    }
+
+    #[tokio::test]
+    async fn microphone_reuse_requires_recent_samples_from_the_selected_stream() {
+        for (stream_id, age, label, expected) in [
+            (1, Some(0), "selected", true),
+            (2, Some(0), "selected", false),
+            (1, Some(500), "selected", false),
+            (1, None, "selected", false),
+            (1, Some(0), "different", false),
+        ] {
+            let (errors, _errors_rx) = flume::bounded(1);
+            let (done_tx, done_rx) = mpsc::sync_channel(1);
+            let mut microphone = MicrophoneFeed::new(errors);
+            microphone.state = State::Open(OpenState {
+                connecting: None,
+                attached: Some(AttachedState {
+                    id: 1,
+                    label: "selected".into(),
+                    config: SupportedStreamConfig::new(
+                        1,
+                        cpal::SampleRate(48_000),
+                        cpal::SupportedBufferSize::Unknown,
+                        SampleFormat::F32,
+                    ),
+                    buffer_size_frames: None,
+                    done_tx,
+                }),
+            });
+            microphone.last_samples = age.and_then(|age| {
+                Instant::now()
+                    .checked_sub(Duration::from_millis(age))
+                    .map(|received| (stream_id, received))
+            });
+            let feed = MicrophoneFeed::spawn(microphone);
+            assert_eq!(feed.ask(CheckInput(label.into())).await.unwrap(), expected);
+            assert!(matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+            feed.kill();
+            feed.wait_for_stop().await;
+        }
     }
 
     #[test]

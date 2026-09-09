@@ -35,6 +35,8 @@ mod macos_save_panel;
 mod notifications;
 mod panel_manager;
 mod permissions;
+#[cfg(debug_assertions)]
+mod picker_benchmark;
 mod platform;
 mod power_observer;
 mod presets;
@@ -1210,6 +1212,7 @@ pub(crate) struct RequestedInput<T> {
     revision: u64,
     pending: bool,
     error: Option<String>,
+    configuration: Option<serde_json::Value>,
 }
 
 impl<T: Clone> RequestedInput<T> {
@@ -1219,6 +1222,7 @@ impl<T: Clone> RequestedInput<T> {
             revision: 0,
             pending: false,
             error: None,
+            configuration: None,
         }
     }
 
@@ -1227,7 +1231,23 @@ impl<T: Clone> RequestedInput<T> {
         self.revision = self.revision.wrapping_add(1);
         self.pending = true;
         self.error = None;
+        self.configuration = None;
         self.revision
+    }
+
+    fn begin_or_join(&mut self, value: Option<T>, configuration: serde_json::Value) -> (u64, bool)
+    where
+        T: PartialEq,
+    {
+        if self.pending
+            && self.value == value
+            && self.configuration.as_ref() == Some(&configuration)
+        {
+            return (self.revision, true);
+        }
+        let revision = self.begin(value);
+        self.configuration = Some(configuration);
+        (revision, false)
     }
 
     fn finish(&mut self, revision: u64, result: &Result<(), String>) {
@@ -1259,6 +1279,29 @@ impl<T: Clone> RequestedInput<T> {
         }
         Ok(())
     }
+}
+
+async fn wait_for_existing_input<T: Clone>(
+    revision: u64,
+    kind: &str,
+    read: impl Fn() -> RequestedInput<T>,
+) -> Result<(), String> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let input = read();
+            if input.revision != revision {
+                return Err(format!(
+                    "{kind} selection was superseded by a newer request"
+                ));
+            }
+            if !input.pending {
+                return input.error.map_or(Ok(()), Err);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| format!("Timed out waiting for the selected {kind}"))?
 }
 
 #[derive(Clone)]
@@ -1360,6 +1403,7 @@ impl RequestedInputsState {
 struct AppliedMicrophoneInput {
     valid: bool,
     generation: u64,
+    settings: Option<microphone::MicrophoneDeviceSettings>,
 }
 
 impl AppliedMicrophoneInput {
@@ -1890,12 +1934,21 @@ async fn set_mic_input(
     label: Option<String>,
 ) -> Result<(), String> {
     let requested = app_handle.state::<RequestedInputsState>();
-    let revision = requested
+    let settings = label.as_ref().and_then(|label| {
+        recording_settings::RecordingSettingsStore::microphone_settings_for(&app_handle, label)
+    });
+    let (revision, joined) = requested
         .inner
         .lock()
         .unwrap()
         .microphone
-        .begin(label.clone());
+        .begin_or_join(label.clone(), serde_json::json!(settings));
+    if joined {
+        return wait_for_existing_input(revision, "Microphone", || {
+            requested.inner.lock().unwrap().microphone.clone()
+        })
+        .await;
+    }
     let result = async {
         check_requested_microphone_permission(
             label.as_deref(),
@@ -2060,7 +2113,35 @@ async fn apply_mic_input(
         permissions::check_microphone_access,
     )?;
 
-    let (mic_feed, studio_handle, app_handle, applied_generation) = {
+    let settings = desired_label.as_ref().and_then(|label| {
+        recording_settings::RecordingSettingsStore::microphone_settings_for(app_handle, label)
+    });
+    let reusable = {
+        let app = state.read().await;
+        (!matches!(app.recording_state, RecordingState::Active(_))
+            && app.applied_mic_input.valid
+            && app.applied_mic_input.settings == settings
+            && app.selected_mic_label == desired_label)
+            .then(|| (app.mic_feed.clone(), app.applied_mic_input.generation))
+    };
+    if let Some((feed, generation)) = reusable
+        && let Some(label) = &desired_label
+        && MicrophoneFeed::list_names().contains(label)
+        && feed
+            .ask(microphone::CheckInput(label.clone()))
+            .await
+            .unwrap_or(false)
+    {
+        let app = state.read().await;
+        if requested.mic_is_current(revision)
+            && app.applied_mic_input.valid
+            && app.applied_mic_input.generation == generation
+        {
+            return Ok(());
+        }
+    }
+
+    let (mic_feed, studio_handle, applied_generation) = {
         let mut app = state.write().await;
         if !requested.mic_is_current(revision) {
             return Err("Microphone selection was superseded by a newer request".into());
@@ -2096,7 +2177,6 @@ async fn apply_mic_input(
         (
             app.mic_feed.clone(),
             handle,
-            app.handle.clone(),
             app.applied_mic_input.generation,
         )
     };
@@ -2131,10 +2211,6 @@ async fn apply_mic_input(
                         "The Studio recording stopped while changing microphone input.".into(),
                     );
                 }
-                let settings = recording_settings::RecordingSettingsStore::microphone_settings_for(
-                    &app_handle,
-                    label,
-                );
                 wait_for_microphone_setup(async {
                     mic_feed
                         .ask(feeds::microphone::SetInput {
@@ -2214,6 +2290,7 @@ async fn apply_mic_input(
                     return;
                 }
                 confirmed = true;
+                app.applied_mic_input.settings = settings;
                 app.selected_mic_label = desired_label;
                 cleared = app
                     .disconnected_inputs
@@ -2261,7 +2338,19 @@ async fn set_camera_input(
     skip_camera_window: Option<bool>,
 ) -> Result<(), String> {
     let requested = app_handle.state::<RequestedInputsState>();
-    let revision = requested.inner.lock().unwrap().camera.begin(id.clone());
+    let settings = id.as_ref().and_then(|id| {
+        recording_settings::RecordingSettingsStore::camera_settings_for(&app_handle, id)
+    });
+    let (revision, joined) = requested.inner.lock().unwrap().camera.begin_or_join(
+        id.clone(),
+        serde_json::json!((settings, skip_camera_window.unwrap_or(false))),
+    );
+    if joined {
+        return wait_for_existing_input(revision, "Camera", || {
+            requested.inner.lock().unwrap().camera.clone()
+        })
+        .await;
+    }
     let result = async {
         check_requested_camera_permission(id.as_ref(), permissions::check_camera_access)?;
         let _operation = requested.operation.lock().await;
@@ -2358,6 +2447,31 @@ async fn apply_camera_input(
         ));
     }
 
+    let settings = id.as_ref().and_then(|id| {
+        recording_settings::RecordingSettingsStore::camera_settings_for(app_handle, id)
+    });
+    if !recording_active
+        && !skip_camera_window
+        && camera_in_use
+        && id == current_id
+        && let Some(id) = &id
+        && camera_feed
+            .ask(feeds::camera::CheckInput {
+                id: id.clone(),
+                settings,
+            })
+            .await
+            .unwrap_or(false)
+    {
+        if !requested.camera_is_current(revision) {
+            return Err("Camera selection was superseded by a newer request".into());
+        }
+        if !camera_window_is_visible {
+            show_requested_camera_window(app_handle, revision).await?;
+        }
+        return Ok(());
+    }
+
     if let Some(handle) = &studio_handle {
         handle
             .set_camera_feed(None)
@@ -2403,8 +2517,6 @@ async fn apply_camera_input(
             }) {
                 return Err("Camera selection was superseded by a newer request".into());
             }
-            let settings =
-                recording_settings::RecordingSettingsStore::camera_settings_for(app_handle, id);
             let (camera_ws_sender, camera_preview_sender, use_ws_preview) = {
                 let app = &mut *state.write().await;
                 let use_ws_preview = !(camera_window_is_visible
@@ -7098,6 +7210,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 move |_| {
                     app.state::<MainWindowReadyState>().set_ready(true);
                     tracing::info!("Main window frontend ready");
+                    #[cfg(debug_assertions)]
+                    picker_benchmark::run(app.clone());
                     gpu_context::prewarm_gpu();
                     tokio::task::spawn_blocking(cap_rendering::prewarm_fonts);
                     tokio::spawn(screenshot_editor::prewarm_screenshot_renderer());
@@ -9451,6 +9565,7 @@ mod applied_microphone_tests {
                 applied: AppliedMicrophoneInput {
                     valid: true,
                     generation: 0,
+                    settings: None,
                 },
                 selected: Some("A".into()),
                 actual: Some("A".into()),
@@ -9771,7 +9886,54 @@ mod microphone_permission_tests {
 
 #[cfg(test)]
 mod requested_inputs_tests {
-    use super::{RequestedInput, RequestedInputsState};
+    use super::{RequestedInput, RequestedInputsState, wait_for_existing_input};
+
+    #[test]
+    fn matching_pending_requests_share_setup_but_changed_configuration_supersedes_it() {
+        let mut input = RequestedInput::new(None::<String>);
+        let settings = serde_json::json!({ "sampleRate": 48_000 });
+        let (first, joined) = input.begin_or_join(Some("mic".into()), settings.clone());
+        assert!(!joined);
+        assert_eq!(
+            input.begin_or_join(Some("mic".into()), settings.clone()),
+            (first, true)
+        );
+        let (second, joined) = input.begin_or_join(
+            Some("mic".into()),
+            serde_json::json!({ "sampleRate": 44_100 }),
+        );
+        assert!(!joined);
+        assert_ne!(first, second);
+        input.finish(first, &Ok(()));
+        assert!(input.pending);
+        input.finish(second, &Err("disconnected".into()));
+        let (retry, joined) = input.begin_or_join(Some("mic".into()), settings);
+        assert!(!joined);
+        assert_ne!(retry, second);
+    }
+
+    #[tokio::test]
+    async fn joined_input_requests_report_completion_failure_and_supersession() {
+        for result in [Ok(()), Err("device unavailable".to_string())] {
+            let input = std::sync::Mutex::new(RequestedInput::new(None::<String>));
+            let revision = input.lock().unwrap().begin(Some("mic".into()));
+            let waiter =
+                wait_for_existing_input(revision, "Microphone", || input.lock().unwrap().clone());
+            let finish = async {
+                tokio::task::yield_now().await;
+                input.lock().unwrap().finish(revision, &result);
+            };
+            let (observed, ()) = tokio::join!(waiter, finish);
+            assert_eq!(observed, result);
+            input.lock().unwrap().begin(Some("different".into()));
+            assert!(
+                wait_for_existing_input(revision, "Microphone", || input.lock().unwrap().clone())
+                    .await
+                    .unwrap_err()
+                    .contains("superseded")
+            );
+        }
+    }
 
     #[test]
     fn persisted_intent_is_available_before_preview_setup() {
