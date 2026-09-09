@@ -58,6 +58,15 @@ describe("groupTranscriptSentences", () => {
 		]);
 	});
 
+	it.each([
+		["Arabic", ["كيف حالك؟", "أين أنت؟"]],
+		["quoted Arabic", ["«كيف حالك؟»", "«أين أنت؟»"]],
+		["Hindi", ["यह पहला वाक्य है।", "यह दूसरा वाक्य है।"]],
+	])("keeps separate %s sentences", (_language, texts) => {
+		const source = entries(texts);
+		expect(groupTranscriptSentences(source)).toEqual(source);
+	});
+
 	it("keeps abbreviations and hesitation ellipses with the following phrase", () => {
 		expect(
 			groupTranscriptSentences(

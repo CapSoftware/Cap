@@ -7,7 +7,7 @@ function endsSentence(text: string): boolean {
 		/(?:\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc)|\b[A-ZА-Я])\.$/iu.test(ending)
 	)
 		return false;
-	return /[.!?。！？]$/u.test(ending);
+	return /\p{Sentence_Terminal}$/u.test(ending);
 }
 
 export function groupTranscriptSentences(
