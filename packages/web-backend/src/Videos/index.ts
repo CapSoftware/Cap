@@ -415,7 +415,14 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						{
 							...video,
 							source:
-								publishedKeys.size > 0 ? { type: "desktopMP4" } : video.source,
+								publishedKeys.size > 0
+									? {
+											type:
+												video.source.type === "webMP4"
+													? "webMP4"
+													: "desktopMP4",
+										}
+									: video.source,
 							metadata: Option.map(video.metadata, (metadata) => {
 								const copied = { ...metadata };
 								delete copied.desktopRecordingUpload;

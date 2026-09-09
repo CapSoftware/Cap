@@ -20,6 +20,15 @@ export type AudioQualityPlan =
 			gainDb: number;
 	  };
 
+function levelGainDb(measurements: AudioQualityMeasurements): number {
+	return Math.min(
+		28,
+		Math.max(12, -22 - measurements.lufs),
+		-16 - measurements.lufs,
+		-2 - measurements.truePeak,
+	);
+}
+
 export function planAudioQuality(
 	measurements: AudioQualityMeasurements,
 	options: {
@@ -31,7 +40,7 @@ export function planAudioQuality(
 	if (options.mode !== "shadow") return { kind: "skip", reason: "disabled" };
 	if (
 		!Object.values(measurements).every(Number.isFinite) ||
-		measurements.lufs < -50 ||
+		measurements.lufs < (options.profile === "levels" ? -55 : -50) ||
 		measurements.lufs > 0 ||
 		measurements.lra < 0 ||
 		measurements.lra > 50 ||
@@ -51,11 +60,7 @@ export function planAudioQuality(
 	if (measurements.lufs >= -18) return { kind: "skip", reason: "already-loud" };
 	if (options.profile === "voice" && !options.speechOnlyConfirmed)
 		return { kind: "skip", reason: "unconfirmed-speech-only" };
-	const gainDb = Math.min(
-		12,
-		-16 - measurements.lufs,
-		-2 - measurements.truePeak,
-	);
+	const gainDb = levelGainDb(measurements);
 	if (options.profile === "levels" && gainDb < 1)
 		return { kind: "skip", reason: "insufficient-headroom" };
 	const preGain = Math.min(18, Math.max(0, -20 - measurements.lufs));
@@ -106,7 +111,9 @@ export function validateAudioQualityMeasurements(
 	if (output.truePeak > -1) failures.push("insufficient-peak-headroom");
 	if (output.lufs < input.lufs - 0.5 || output.lufs > -14)
 		failures.push("unexpected-loudness");
-	if (output.lufs - input.lufs > 18.75) failures.push("excessive-gain");
+	const maximumGain = profile === "levels" ? levelGainDb(input) : 18;
+	if (output.lufs - input.lufs > maximumGain + 0.75)
+		failures.push("excessive-gain");
 	if (profile === "levels" && Math.abs(output.lra - input.lra) > 1)
 		failures.push("dynamics-changed");
 	return failures;

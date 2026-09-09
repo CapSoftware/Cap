@@ -41,6 +41,9 @@ jobs:
         working-directory: apps/web
         run: |
           pnpm exec vitest run \
+            __tests__/unit/audio-level-publication.test.ts \
+            __tests__/unit/recording-output.test.ts \
+            __tests__/unit/recording-storage-lifecycle.test.ts \
             __tests__/unit/desktop-recording-*.test.ts \
             __tests__/unit/desktop-segments-*.test.ts \
             __tests__/unit/finalize-desktop-recording.test.ts \
@@ -50,6 +53,7 @@ jobs:
             __tests__/unit/share-page-loading.test.ts \
             __tests__/unit/media-player-store-refs.test.ts \
             __tests__/unit/video-edit-processing.test.ts \
+            __tests__/unit/video-edit-published-output.test.ts \
             __tests__/unit/upload-progress-playback.test.ts \
             __tests__/unit/recording-prepare.test.ts \
             __tests__/unit/s3-bucket-connections.test.ts

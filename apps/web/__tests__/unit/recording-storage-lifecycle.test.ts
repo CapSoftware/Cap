@@ -921,6 +921,27 @@ describe("recording storage lifecycle", () => {
 			},
 		]);
 	});
+	it("duplicates enhanced browser playback without retaining foreign audio pointers", async () => {
+		const audioKey = `${prefix}.recording/outputs/audio-quality-v3/selected.mp4`;
+		const database = databaseFixture(
+			recording({
+				type: "webMP4",
+				audioLevelSourceKey: `${prefix}result.mp4`,
+				audioLevelOutputKey: audioKey,
+			}),
+		);
+		const storage = await storageFixture([
+			[audioKey, "enhanced"],
+			[`${prefix}result.mp4`, "original"],
+		]);
+		const result = await runVideoOperation("duplicate");
+		expect(Exit.isSuccess(result)).toBe(true);
+		expect(storage.objects.get(`${newPrefix}result.mp4`)).toBe("enhanced");
+		expect(database.rows.get("duplicate-video")?.source).toEqual({
+			type: "webMP4",
+		});
+		expect(storage.objects.get(`${prefix}result.mp4`)).toBe("original");
+	});
 
 	it("does not duplicate source inventories, raw fragments, or comment attachments across pages", async () => {
 		const database = databaseFixture();

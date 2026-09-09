@@ -41,6 +41,22 @@ describe.each(["desktopMP4", "webMP4"])("published %s edit output", (type) => {
 			`${prefix}preview/animated-preview.gif`,
 		]);
 	});
+	it("ignores an audio derivative from before the current edit", () => {
+		const stale = {
+			...video,
+			source: {
+				...video.source,
+				audioLevelSourceKey:
+					type === "webMP4"
+						? `${prefix}result.mp4`
+						: `${prefix}.recording/outputs/generation/attempt.mp4`,
+				audioLevelOutputKey: `${prefix}.recording/outputs/audio-quality-v3/old.mp4`,
+			},
+		};
+		expect(resolveRecordingObjectKey(stale, `${prefix}result.mp4`)).toBe(
+			`${editPrefix}result.mp4`,
+		);
+	});
 	it("preserves original source reads", () => {
 		const original = `${prefix}source/original.mp4`;
 		expect(resolveRecordingObjectKey(video, original)).toBe(original);

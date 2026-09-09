@@ -91,6 +91,8 @@ let video: {
 		outputKey?: string;
 		thumbnailKey?: string;
 		previewKey?: string;
+		audioLevelOutputKey?: string;
+		audioLevelSourceKey?: string;
 	};
 	metadata: Record<string, unknown>;
 };
@@ -244,6 +246,64 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("edited recording publication", () => {
+	it.each(["reprocess", "replace"])(
+		"clears a browser audio derivative after %s",
+		async (operation) => {
+			video.source = {
+				type: "webMP4",
+				audioLevelSourceKey: "user/video/result.mp4",
+				audioLevelOutputKey:
+					"user/video/.recording/outputs/audio-quality-v3/test.mp4",
+			};
+			if (operation === "reprocess")
+				await saveMetadataAndComplete("video", metadata);
+			else await invalidateVideoCache("video");
+			expect(video.source).toEqual({ type: "webMP4" });
+		},
+	);
+	it.each(["desktopMP4", "webMP4"])(
+		"clears the previous audio derivative when publishing a %s edit",
+		async (type) => {
+			video.source = {
+				type,
+				...(type === "desktopMP4"
+					? {
+							outputKey: "user/video/.recording/outputs/generation/attempt.mp4",
+						}
+					: {}),
+				audioLevelSourceKey:
+					type === "desktopMP4"
+						? "user/video/.recording/outputs/generation/attempt.mp4"
+						: "user/video/result.mp4",
+				audioLevelOutputKey:
+					"user/video/.recording/outputs/audio-quality-v3/test.mp4",
+			};
+			video.metadata.editProcessing = {
+				...operation,
+				ownerId: video.ownerId,
+				bucket: video.bucket,
+				storageIntegrationId: video.storageIntegrationId,
+				sourceKey,
+				source: JSON.stringify(video.source),
+				dispatch: "accepted",
+			};
+			await saveEditResultAndComplete(
+				"video",
+				sourceKey,
+				editSpec,
+				editSpec,
+				metadata,
+				operation,
+			);
+			expect(video.source).toEqual({
+				type,
+				outputKey: `user/video/.recording/outputs/edit-${operation.token}/result.mp4`,
+				thumbnailKey: `user/video/.recording/outputs/edit-${operation.token}/thumbnail.jpg`,
+				previewKey: `user/video/.recording/outputs/edit-${operation.token}/preview.gif`,
+			});
+			expect(video.metadata.completedVideoEdit).toMatchObject(operation);
+		},
+	);
 	it("verifies the newly rendered canonical output instead of the old published immutable recording", async () => {
 		await verifyRenderedEditOutput("video", "user", editSpec, metadata);
 		expect(mocks.access).toHaveBeenCalledWith(video, {

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 	queue: vi.fn(),
 	transcribe: vi.fn(),
 	invalidateQuota: vi.fn(),
+	audio: vi.fn(),
 	tables: {
 		videos: {
 			id: "videos.id",
@@ -26,6 +27,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@cap/database", () => ({ db: mocks.db }));
+vi.mock("@/lib/audio-level-publication", () => ({
+	handleAudioLevelPublication: mocks.audio,
+}));
 vi.mock("@cap/database/schema", () => ({
 	videos: mocks.tables.videos,
 	videoProcessingJobs: mocks.tables.jobs,
@@ -267,6 +271,7 @@ function request(
 describe("media-server recording progress webhook", () => {
 	beforeEach(() => {
 		mocks.secret = "media-secret";
+		mocks.audio.mockReset().mockResolvedValue({ status: "prepared" });
 		mocks.storage.mockReturnValue(Effect.succeed([{ headObject: mocks.head }]));
 		mocks.head.mockImplementation((key: string) =>
 			key.endsWith(".mp4")
@@ -284,6 +289,35 @@ describe("media-server recording progress webhook", () => {
 		vi.spyOn(console, "log").mockImplementation(() => undefined);
 		vi.spyOn(console, "warn").mockImplementation(() => undefined);
 		vi.spyOn(console, "error").mockImplementation(() => undefined);
+	});
+
+	it("authenticates audio publication before dispatching it without ordinary progress updates", async () => {
+		const body = { kind: "audio-levels", action: "prepare" };
+		expect((await request(body, "wrong-secret")).status).toBe(401);
+		expect(mocks.audio).not.toHaveBeenCalled();
+		expect(await (await request(body)).json()).toEqual({ status: "prepared" });
+		expect(mocks.audio).toHaveBeenCalledExactlyOnceWith(body);
+	});
+	it("keeps stale edit callbacks out of recording and audio publication", async () => {
+		const database = databaseFixture();
+		const response = await POST(
+			new NextRequest(
+				"https://cap.so/api/webhooks/media-server/progress?editOperation=old-edit&editStartedAt=2026-09-08T12%3A00%3A00.000Z",
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"x-media-server-secret": "media-secret",
+					},
+					body: JSON.stringify(fixture().payload),
+				},
+			),
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ success: true });
+		expect(database.mutations).toEqual([]);
+		expect(mocks.audio).not.toHaveBeenCalled();
+		expect(mocks.transcribe).not.toHaveBeenCalled();
 	});
 
 	it.each([null, "wrong-secret", "éééééééééééé"])(

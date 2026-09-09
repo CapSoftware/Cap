@@ -831,6 +831,10 @@ export async function saveEditResultAndComplete(
 				...lockedVideo.source,
 				...getEditOutputKeys(lockedVideo.ownerId, videoId, operation),
 			};
+			if (source.type === "desktopMP4" || source.type === "webMP4") {
+				delete source.audioLevelSourceKey;
+				delete source.audioLevelOutputKey;
+			}
 			const nextMetadata = clearAiMetadata(lockedVideo.metadata);
 			delete nextMetadata.desktopRecordingUpload;
 			await tx

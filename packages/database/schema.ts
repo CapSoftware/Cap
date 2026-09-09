@@ -427,6 +427,8 @@ export const videos = mysqlTable(
 				| {
 						type: "desktopMP4";
 						outputKey?: string;
+						audioLevelOutputKey?: string;
+						audioLevelSourceKey?: string;
 						thumbnailKey?: string;
 						previewKey?: string;
 				  }
@@ -436,6 +438,8 @@ export const videos = mysqlTable(
 						outputKey?: string;
 						thumbnailKey?: string;
 						previewKey?: string;
+						audioLevelOutputKey?: string;
+						audioLevelSourceKey?: string;
 				  }
 			>()
 			.notNull()
