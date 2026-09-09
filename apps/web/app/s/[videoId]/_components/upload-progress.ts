@@ -51,6 +51,17 @@ export function isRecordingUpload(
 	return !recordingStopped && uploadProgress?.status === "uploading";
 }
 
+export function hasUnplayableRecordingSource(
+	uploadProgress: UploadProgress | null,
+): boolean {
+	return (
+		uploadProgress?.status === "error" &&
+		/^source-(?:incomplete|invalid|missing):/i.test(
+			uploadProgress.errorMessage ?? "",
+		)
+	);
+}
+
 export function shouldReloadPlaybackAfterUploadCompletes(
 	previousUploadProgress: UploadProgress | null,
 	uploadProgress: UploadProgress | null,

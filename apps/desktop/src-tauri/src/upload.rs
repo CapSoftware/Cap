@@ -35,7 +35,6 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Manager, ipc::Channel};
-use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
 use tokio::{
     fs::File,
@@ -782,8 +781,6 @@ impl InstantMultipartUpload {
         info!("Multipart upload complete for {video_id}.");
 
         emit_upload_complete(&app, &video_id);
-
-        let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
         Ok(metadata)
     }
@@ -1812,8 +1809,6 @@ impl SegmentUploader {
 
             await_upload_verification(&app, &video_id, &verification, &session).await?;
             emit_upload_complete(&app, &video_id);
-
-            let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
             let total_bytes = completion_state
                 .lock()
