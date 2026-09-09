@@ -6,23 +6,28 @@ export default defineConfig({
 		jsx: "automatic",
 	},
 	test: {
-		// Hoisted UI peers must use web React; Next CommonJS imports still need require in Node-based jsdom tests.
+		// Hoisted UI peers must use web React; CommonJS UI imports still need require in Node-based jsdom tests.
 		server: {
 			deps: {
 				inline: [
 					"framer-motion",
 					"motion",
+					"media-chrome",
 					/[/\\]node_modules[/\\]@radix-ui[/\\]/,
 					"@tanstack/react-query",
+					"@floating-ui/react-dom",
 				],
 			},
 		},
 		deps: {
 			optimizer: {
-				ssr: { enabled: true, include: ["next/link", "next/image"] },
+				ssr: {
+					enabled: true,
+					include: ["next/link", "next/image", "react-remove-scroll"],
+				},
 				web: {
 					enabled: true,
-					include: ["next/link", "next/image"],
+					include: ["next/link", "next/image", "react-remove-scroll"],
 					esbuildOptions: {
 						banner: {
 							js: `import { createRequire } from "node:module"; const require = createRequire(import.meta.url);`,
