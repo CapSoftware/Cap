@@ -290,9 +290,24 @@ export async function ensureSegmentProcessingJob({
 			verification !== undefined &&
 			(job.source !== null || job.verification !== null) &&
 			!sameArtifact(verification, job);
-		if (created || replacesArtifact) {
-			if (replacesArtifact) {
-				job = candidate;
+		const resumesReupload =
+			verification !== undefined &&
+			job.errorCode === DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED;
+		if (created || replacesArtifact || resumesReupload) {
+			if (replacesArtifact || resumesReupload) {
+				job =
+					resumesReupload && !replacesArtifact && verification
+						? {
+								...candidate,
+								verification: {
+									...verification,
+									requiredAudio:
+										verification.requiredAudio ||
+										job.verification?.requiredAudio === true ||
+										job.source?.requiredAudio === true,
+								},
+							}
+						: candidate;
 				await tx
 					.update(videoProcessingJobs)
 					.set(job)

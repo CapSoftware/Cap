@@ -895,6 +895,51 @@ describe("retained-source retry policy", () => {
 });
 
 describe("recovery admission", () => {
+	it.each([null, source])(
+		"gives a verified re-upload fresh attempts without reviving the old worker: %j",
+		async (retainedSource) => {
+			const old = await createAttempt();
+			rows.jobs = [
+				{
+					...old,
+					state: "source-blocked",
+					source: retainedSource,
+					attemptCount: 70,
+					leaseExpiresAt: null,
+					errorCode: "source-reupload-required",
+				},
+			];
+			const resumed = await ensureSegmentProcessingJob({
+				videoId,
+				userId,
+				verification: { ...verification, requiredAudio: false },
+			});
+			expect(resumed.created).toBe(true);
+			expect(resumed.job.generation).not.toBe(old.generation);
+			expect(resumed.job).toMatchObject({
+				state: "committing",
+				attemptCount: 0,
+				source: null,
+				verification: { requiredAudio: true },
+			});
+			expect(await heartbeatAttempt(old)).toBe(false);
+			expect(
+				await claimProcessingAttempt({
+					videoId,
+					generation: resumed.job.generation,
+				}),
+			).toMatchObject({ attemptCount: 1 });
+			const repeated = await ensureSegmentProcessingJob({
+				videoId,
+				userId,
+				verification,
+			});
+			expect(repeated.created).toBe(false);
+			expect(repeated.job.generation).toBe(resumed.job.generation);
+			expect(repeated.job.attemptCount).toBe(1);
+		},
+	);
+
 	it("keeps an inspected missing source paused until a completion request resumes it", async () => {
 		const attempt = await createAttempt();
 		const paused = {
