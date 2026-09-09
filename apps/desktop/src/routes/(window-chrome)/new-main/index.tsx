@@ -2582,7 +2582,6 @@ function Page() {
 		void emit("main-window-ready");
 		if (!targetMode) scheduleTargetListPrewarm();
 
-		// Background restoration must bypass mutation handlers, which open native error dialogs.
 		if (rawOptions.micName) {
 			commands
 				.setMicInput(rawOptions.micName)
