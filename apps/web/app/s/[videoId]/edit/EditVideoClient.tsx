@@ -1556,7 +1556,7 @@ export function EditVideoClient({
 
 	return (
 		<div className="flex min-h-screen flex-col bg-gray-1 text-gray-12">
-			<header className="sticky top-0 z-30 border-b border-gray-4 bg-white/85 backdrop-blur">
+			<header className="sticky top-0 z-30 border-b border-gray-4 bg-gray-1 backdrop-blur">
 				<div className="mx-auto flex h-14 w-full max-w-[1500px] items-center justify-between gap-2 px-3 sm:h-16 sm:px-5">
 					<div className="flex items-center gap-1.5">
 						<button

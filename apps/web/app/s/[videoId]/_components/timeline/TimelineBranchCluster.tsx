@@ -58,7 +58,7 @@ export const TimelineBranchCluster = memo(function TimelineBranchCluster({
 				title={label}
 				className={clsx(
 					NODE_BASE_CLASS,
-					"h-[30px] gap-0 rounded-full bg-white px-1.5 ring-1 ring-gray-5",
+					"h-[30px] gap-0 rounded-full bg-gray-1 px-1.5 ring-1 ring-gray-5",
 					"shadow-[0_1px_3px_rgba(18,22,31,0.10)]",
 				)}
 				style={{ top: stem }}

@@ -123,7 +123,7 @@ export const TimelineBranch = memo(function TimelineBranch({
 						: "shadow-[0_1px_3px_rgba(18,22,31,0.10)]",
 					glyph === "audio" ? "bg-blue-9 text-white" : null,
 					glyph === "text" || glyph === "video"
-						? "bg-white text-gray-12 ring-1 ring-gray-5"
+						? "bg-gray-1 text-gray-12 ring-1 ring-gray-5"
 						: null,
 					sending && "opacity-50",
 				)}

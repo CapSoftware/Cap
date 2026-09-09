@@ -28,6 +28,7 @@ import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data"
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { CaptionProvider } from "./_components/CaptionContext";
 import { PlaybackProvider } from "./_components/playback/PlaybackContext";
+import { ShareNavigation } from "./_components/ShareNavigation";
 import { ShareVideo } from "./_components/ShareVideo";
 import { type ShareView, ShareViewToggle } from "./_components/ShareViewToggle";
 import { Sidebar } from "./_components/Sidebar";
@@ -761,7 +762,7 @@ export const Share = ({
 				 */}
 				<div
 					className={clsx(
-						"shrink-0 border-b border-gray-5 bg-white px-4 lg:px-8",
+						"shrink-0 border-b border-gray-5 bg-gray-1 px-4 lg:px-8",
 						view === "timeline" && "hidden",
 					)}
 				>
@@ -801,8 +802,9 @@ export const Share = ({
 									// border), so the two read as one contained, rounded unit,
 									// centred at the same width. Classic view's toggle lives under
 									// the player instead.
-									<div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-3 rounded-t-xl border border-b-0 border-gray-5 bg-white px-5">
+									<div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-3 rounded-t-xl border border-b-0 border-gray-5 bg-gray-1 px-5">
 										<div className="flex min-w-0 items-center gap-3">
+											<ShareNavigation />
 											<SignedImageUrl
 												image={data.owner.image}
 												name={data.owner.name ?? "Someone"}
@@ -876,7 +878,7 @@ export const Share = ({
 										// on its own, so no overflow-clip — the shelf's cards must
 										// escape.
 										view === "timeline"
-											? "mx-auto w-full max-w-6xl gap-0 rounded-b-xl border border-t-0 border-gray-5 bg-white"
+											? "mx-auto w-full max-w-6xl gap-0 rounded-b-xl border border-t-0 border-gray-5 bg-gray-1"
 											: "gap-4",
 										// One column in both views: the comments rail left the grid to
 										// become a full-height pane beside it.
@@ -934,7 +936,7 @@ export const Share = ({
 												// the deck below the fold; the video pillarboxes inside.
 												view === "timeline"
 													? "rounded-none bg-[hsl(224,71.4%,4.1%)] w-full max-h-[65svh] lg:min-h-[280px] lg:max-h-[calc(100vh-340px)]"
-													: "rounded-2xl border border-gray-5 bg-white aspect-video",
+													: "rounded-2xl border border-gray-5 bg-gray-1 aspect-video",
 											)}
 											style={
 												view === "timeline"
@@ -1139,7 +1141,7 @@ export const Share = ({
 					{showRail && (
 						<aside
 							className={clsx(
-								"shrink-0 px-4 pb-8 lg:p-0 lg:h-full lg:border-l lg:border-gray-5 lg:bg-white lg:overflow-hidden",
+								"shrink-0 px-4 pb-8 lg:p-0 lg:h-full lg:border-l lg:border-gray-5 lg:bg-gray-1 lg:overflow-hidden",
 								reduceMotion
 									? undefined
 									: "lg:transition-[width] lg:duration-300 lg:ease-out",
@@ -1187,7 +1189,7 @@ export const Share = ({
 							onClick={toggleRail}
 							aria-label="Show comments"
 							title="Show comments"
-							className="hidden fixed right-0 top-1/2 z-30 items-center justify-center -translate-y-1/2 rounded-l-lg border border-r-0 border-gray-5 bg-white h-16 w-6 text-gray-10 shadow-sm transition-colors hover:text-gray-12 lg:flex"
+							className="hidden fixed right-0 top-1/2 z-30 items-center justify-center -translate-y-1/2 rounded-l-lg border border-r-0 border-gray-5 bg-gray-1 h-16 w-6 text-gray-10 shadow-sm transition-colors hover:text-gray-12 lg:flex"
 						>
 							<ChevronGlyph direction="left" />
 						</button>
