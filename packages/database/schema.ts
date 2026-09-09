@@ -431,7 +431,12 @@ export const videos = mysqlTable(
 						previewKey?: string;
 				  }
 				| { type: "desktopSegments" }
-				| { type: "webMP4" }
+				| {
+						type: "webMP4";
+						outputKey?: string;
+						thumbnailKey?: string;
+						previewKey?: string;
+				  }
 			>()
 			.notNull()
 			.default({ type: "MediaConvert" }),

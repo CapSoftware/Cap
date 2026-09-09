@@ -179,7 +179,7 @@ function databaseFixture(initial: DesktopRecordingJob | null = fixture().job) {
 	};
 	const mutations: Mutation[] = [];
 	const rows = (table: unknown) => {
-		if (table === mocks.tables.videos) return [structuredClone(video)];
+		if (table === mocks.tables.videos) return [{ ...video }];
 		if (table === mocks.tables.jobs)
 			return current ? [structuredClone(current)] : [];
 		if (table === mocks.tables.uploads) return [{ rawFileKey }];

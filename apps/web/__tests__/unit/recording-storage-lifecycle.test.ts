@@ -797,6 +797,29 @@ afterEach(() => {
 });
 
 describe("recording storage lifecycle", () => {
+	it.each(["desktopMP4", "webMP4"] as const)(
+		"uses the published %s thumbnail without discovering older objects",
+		async (type) => {
+			const editThumbnail = `${prefix}.recording/outputs/edit-11111111-1111-4111-8111-111111111111/thumbnail.jpg`;
+			databaseFixture(recording({ type, thumbnailKey: editThumbnail }));
+			const storage = await storageFixture([
+				[editThumbnail, "current-thumbnail"],
+				[`${prefix}screenshot/screen-capture.jpg`, "old-thumbnail"],
+			]);
+			const thumbnail = await Effect.runPromise(
+				Effect.flatMap(Videos, (videos) =>
+					videos.getThumbnailURL(videoId),
+				).pipe(
+					Effect.provide(Videos.Default),
+					Effect.provideService(CurrentUser, currentUser),
+				),
+			);
+			expect(Option.getOrNull(thumbnail)).toContain(editThumbnail);
+			expect(
+				storage.requests.filter(({ operation }) => operation === "list"),
+			).toEqual([]);
+		},
+	);
 	it.each([
 		"committing",
 		"queued",
