@@ -49,7 +49,7 @@ export const loomAlternativeContent: SeoPageContent = {
 		{
 			title: "Built-In Loom Video Importer",
 			description:
-				"Already using Loom? Cap's built-in video importer lets you seamlessly transfer your existing Loom recordings into Cap. No need to start from scratch — bring all your content with you when you switch. Just need the raw files? Our <a href='/tools/loom-downloader'>free Loom video downloader</a> saves any public Loom as an MP4 in one click.",
+				"Already using Loom? Cap's built-in video importer lets you <a href='/migrate-from-loom'>import your Loom videos into Cap</a> from a single share link or a CSV of your whole library. No need to start from scratch — bring all your content with you when you switch. Just need the raw files? Our <a href='/tools/loom-downloader'>free Loom video downloader</a> saves any public Loom as an MP4 in one click.",
 		},
 	],
 

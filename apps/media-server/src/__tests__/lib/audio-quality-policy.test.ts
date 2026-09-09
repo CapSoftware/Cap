@@ -33,7 +33,7 @@ describe("audio quality policy", () => {
 		const plan = planAudioQuality(input, { mode: "shadow", profile: "levels" });
 		expect(plan).toMatchObject({
 			kind: "candidate",
-			filter: "volume=12.000000dB",
+			filter: "volume=13.000000dB",
 		});
 		expect(
 			planAudioQuality(
@@ -44,10 +44,57 @@ describe("audio quality policy", () => {
 	});
 
 	test.each([
+		{ lufs: -33, truePeak: -25, gain: 12 },
+		{ lufs: -38, truePeak: -25, gain: 16 },
+		{ lufs: -50.48, truePeak: -31.03, gain: 28 },
+		{ lufs: -55, truePeak: -45, gain: 28 },
+		{ lufs: -50.48, truePeak: -4, gain: 2 },
+	])(
+		"bounds quiet correction by loudness and peaks: %j",
+		({ gain, ...levels }) => {
+			const quiet = { ...input, ...levels };
+			expect(
+				planAudioQuality(quiet, { mode: "shadow", profile: "levels" }),
+			).toMatchObject({
+				kind: "candidate",
+				filter: `volume=${gain.toFixed(6)}dB`,
+			});
+			expect(
+				validateAudioQualityMeasurements(
+					quiet,
+					{
+						...quiet,
+						lufs: quiet.lufs + gain,
+						truePeak: quiet.truePeak + gain,
+					},
+					"levels",
+				),
+			).toEqual([]);
+			expect(
+				validateAudioQualityMeasurements(
+					quiet,
+					{ ...quiet, lufs: quiet.lufs + gain + 1 },
+					"levels",
+				),
+			).toContain("excessive-gain");
+		},
+	);
+
+	test("retains the lower loudness bound for experimental voice processing", () => {
+		expect(
+			planAudioQuality(
+				{ ...input, lufs: -50.48, truePeak: -31.03 },
+				{ mode: "shadow", profile: "voice", speechOnlyConfirmed: true },
+			),
+		).toEqual({ kind: "skip", reason: "unsafe-levels" });
+	});
+
+	test.each([
 		{ lufs: Number.NEGATIVE_INFINITY },
 		{ truePeak: Number.NaN },
 		{ truePeak: 10.84 },
 		{ lufs: -65 },
+		{ lufs: -55.01 },
 		{ duration: 1 },
 		{ channels: 6 },
 		{ sampleRate: 8000 },

@@ -1,11 +1,12 @@
 "use client";
 
 import { useDetectPlatform } from "hooks/useDetectPlatform";
-import { ArrowDown } from "lucide-react";
+import { ArrowDown, ArrowRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRef } from "react";
 import { trackEvent } from "@/app/utils/analytics";
+import { LoomMark } from "@/components/icons/LoomMark";
 import { getDownloadUrl } from "@/utils/platform";
 import { CapRecorderWindow } from "./demo/CapRecorderWindow";
 import { LinkNotification } from "./demo/CapSurfaces";
@@ -174,7 +175,30 @@ export const Hero = () => {
 					</button>
 				</div>
 
-				<div className="mt-5 flex items-center gap-2 text-[14px] text-[rgba(17,17,17,0.5)]">
+				<Link
+					href="/migrate-from-loom"
+					onClick={() =>
+						trackEvent("loom_import_cta_clicked", {
+							source_page: "home_hero",
+							cta_location: "under_primary",
+						})
+					}
+					className="group mt-5 inline-flex items-center gap-2 rounded-[6px] text-[14px] text-[rgba(17,17,17,0.55)] transition-colors duration-200 hover:text-[#111111] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#111111] focus-visible:ring-offset-4 focus-visible:ring-offset-[#F8FAFC]"
+				>
+					<LoomMark
+						size={13}
+						className="opacity-70 transition-opacity duration-200 group-hover:opacity-100"
+					/>
+					<span>
+						Switching from Loom?{" "}
+						<span className="text-[#111111] underline decoration-[rgba(17,17,17,0.25)] underline-offset-[4px] transition-colors duration-200 group-hover:decoration-[#111111]">
+							Import your library
+						</span>
+					</span>
+					<ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />
+				</Link>
+
+				<div className="mt-3 flex items-center gap-2 text-[14px] text-[rgba(17,17,17,0.5)]">
 					<span>Also available on</span>
 					<span className="flex items-center gap-1">
 						{isWindows || isLinux ? (

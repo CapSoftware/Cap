@@ -176,6 +176,7 @@ async function startMediaServerProcessJob(
 		webhookUrl: string;
 		webhookSecret?: string;
 		inputExtension: string;
+		audioLevels?: boolean;
 	},
 ): Promise<string> {
 	for (let attempt = 0; attempt < MEDIA_SERVER_START_MAX_ATTEMPTS; attempt++) {
@@ -339,6 +340,7 @@ async function processVideoOnMediaServer(
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
 
 	await startMediaServerProcessJob(mediaServerUrl, {
+		audioLevels: video.source.type === "webMP4",
 		videoId,
 		userId,
 		videoUrl: rawVideoUrl,

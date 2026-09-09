@@ -9,6 +9,8 @@ const storageGetWritableAccessForUserMock = vi.hoisted(() => vi.fn());
 const checkRateLimitMock = vi.hoisted(() => vi.fn());
 const headersMock = vi.hoisted(() => vi.fn());
 const getOrganizationAccessMock = vi.hoisted(() => vi.fn());
+const requireSpaceManagerMock = vi.hoisted(() => vi.fn());
+const requireOrganizationSettingsManagerMock = vi.hoisted(() => vi.fn());
 
 const mockDb = {
 	select: vi.fn(() => mockDb),
@@ -39,6 +41,15 @@ vi.mock("@cap/database/helpers", () => ({
 }));
 
 vi.mock("@cap/database/schema", () => ({
+	folders: {
+		id: "folderId",
+		name: "folderName",
+		parentId: "folderParentId",
+		organizationId: "folderOrganizationId",
+		createdById: "folderCreatedById",
+		spaceId: "folderSpaceId",
+	},
+	sharedVideos: { id: "sharedVideoId" },
 	importedVideos: {
 		id: "id",
 		orgId: "orgId",
@@ -149,6 +160,7 @@ vi.mock("@cap/web-domain", () => ({
 }));
 
 vi.mock("drizzle-orm", () => ({
+	asc: vi.fn((field: unknown) => ({ field })),
 	and: vi.fn((...args: unknown[]) => args),
 	eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
 	isNull: vi.fn((field: unknown) => ({ field })),
@@ -174,6 +186,11 @@ vi.mock("@/lib/server", async () => {
 vi.mock("@/actions/organization/authorization", () => ({
 	getOrganizationAccess: getOrganizationAccessMock,
 	requireOrganizationAccess: vi.fn(),
+	requireOrganizationSettingsManager: requireOrganizationSettingsManagerMock,
+}));
+
+vi.mock("@/actions/organization/space-authorization", () => ({
+	requireSpaceManager: requireSpaceManagerMock,
 }));
 
 vi.mock("workflow/api", () => ({
@@ -198,6 +215,9 @@ describe("importFromLoom", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		whereMock.mockReset();
+		requireSpaceManagerMock.mockReset();
+		requireOrganizationSettingsManagerMock.mockReset();
+		requireSpaceManagerMock.mockResolvedValue({ organizationId: "org-1" });
 		valuesMock.mockReset();
 		mockDb.select.mockReturnValue(mockDb);
 		mockDb.insert.mockReturnValue(mockDb);
@@ -480,6 +500,206 @@ describe("importFromLoom", () => {
 		);
 		expect(startMock).toHaveBeenCalledTimes(1);
 		expect(revalidatePathMock).toHaveBeenCalledWith("/dashboard/caps");
+	});
+
+	function mockSuccessfulDownload() {
+		vi.mocked(fetch).mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes("/transcoded-url"))
+				return {
+					ok: true,
+					status: 200,
+					text: async () =>
+						JSON.stringify({ url: "https://cdn.loom.com/video.mp4" }),
+				} as Response;
+			if (url === "https://www.loom.com/graphql")
+				return {
+					ok: true,
+					json: async () => ({
+						data: { getVideo: { name: "Imported video" } },
+					}),
+				} as Response;
+			if (url.includes("/v1/oembed"))
+				return { ok: true, json: async () => ({ duration: 42 }) } as Response;
+			throw new Error(`Unexpected fetch: ${url}`);
+		});
+	}
+
+	it.each([
+		{
+			spaceId: undefined,
+			expectedPersonalFolder: "nested-folder",
+			sharing: null,
+		},
+		{
+			spaceId: "space-1",
+			expectedPersonalFolder: undefined,
+			sharing: {
+				spaceId: "space-1",
+				folderId: "nested-folder",
+				addedById: "user-123",
+			},
+		},
+		{
+			spaceId: "org-1",
+			expectedPersonalFolder: undefined,
+			sharing: {
+				organizationId: "org-1",
+				folderId: "nested-folder",
+				sharedByUserId: "user-123",
+			},
+		},
+	])(
+		"persists a nested folder before processing in $spaceId",
+		async ({ spaceId, expectedPersonalFolder, sharing }) => {
+			whereMock.mockReturnValueOnce(withLimit([{ id: "nested-folder" }]));
+			mockSuccessfulDownload();
+			const { importFromLoom } = await import("@/actions/loom");
+			const result = await importFromLoom({
+				loomUrl: "https://www.loom.com/share/loom-abc1234567",
+				orgId: "org-1" as never,
+				folderId: "nested-folder" as never,
+				spaceId: spaceId as never,
+			});
+			expect(result.success).toBe(true);
+			expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+			expect(valuesMock).toHaveBeenNthCalledWith(
+				1,
+				expect.objectContaining({
+					id: "video-123",
+					ownerId: "user-123",
+					folderId: expectedPersonalFolder,
+				}),
+			);
+			if (sharing)
+				expect(valuesMock).toHaveBeenLastCalledWith(
+					expect.objectContaining({ videoId: "video-123", ...sharing }),
+				);
+			expect(startMock.mock.invocationCallOrder[0]).toBeGreaterThan(
+				valuesMock.mock.invocationCallOrder.at(-1) ?? Infinity,
+			);
+			if (spaceId === "org-1")
+				expect(requireOrganizationSettingsManagerMock).toHaveBeenCalledWith(
+					"user-123",
+					"org-1",
+				);
+			else if (spaceId)
+				expect(requireSpaceManagerMock).toHaveBeenCalledWith(
+					"user-123",
+					spaceId,
+				);
+			else expect(requireSpaceManagerMock).not.toHaveBeenCalled();
+			expect(revalidatePathMock).toHaveBeenCalledWith(
+				"/dashboard/folder/[id]",
+				"page",
+			);
+			if (spaceId)
+				expect(revalidatePathMock).toHaveBeenCalledWith(
+					"/dashboard/spaces/[spaceId]/folder/[folderId]",
+					"page",
+				);
+		},
+	);
+
+	it("rejects a missing or foreign personal folder before fetching or writing", async () => {
+		whereMock.mockReturnValueOnce(withLimit([]));
+		const { importFromLoom } = await import("@/actions/loom");
+		const result = await importFromLoom({
+			loomUrl: "https://www.loom.com/share/loom-abc1234567",
+			orgId: "org-1" as never,
+			folderId: "foreign-folder" as never,
+		});
+		expect(result.success).toBe(false);
+		expect(result.error).toContain("Destination folder not found");
+		const conditions = JSON.stringify(whereMock.mock.calls[0]);
+		for (const required of [
+			"foreign-folder",
+			"folderOrganizationId",
+			"org-1",
+			"folderCreatedById",
+			"user-123",
+			"folderSpaceId",
+		])
+			expect(conditions).toContain(required);
+		expect(fetch).not.toHaveBeenCalled();
+		expect(valuesMock).not.toHaveBeenCalled();
+	});
+
+	it.each(["space-1", "org-1"])(
+		"rejects unauthorized shared destination %s",
+		async (spaceId) => {
+			requireSpaceManagerMock.mockRejectedValue(new Error("Forbidden"));
+			requireOrganizationSettingsManagerMock.mockRejectedValue(
+				new Error("Forbidden"),
+			);
+			const { importFromLoom } = await import("@/actions/loom");
+			await expect(
+				importFromLoom({
+					loomUrl: "https://www.loom.com/share/loom-abc1234567",
+					orgId: "org-1" as never,
+					folderId: "folder-1" as never,
+					spaceId: spaceId as never,
+				}),
+			).rejects.toThrow("Forbidden");
+			expect(fetch).not.toHaveBeenCalled();
+			expect(valuesMock).not.toHaveBeenCalled();
+		},
+	);
+
+	it("rejects a space from a different organization even for its manager", async () => {
+		requireSpaceManagerMock.mockResolvedValueOnce({
+			organizationId: "foreign-org",
+		});
+		const { importFromLoom } = await import("@/actions/loom");
+		await expect(
+			importFromLoom({
+				loomUrl: "https://www.loom.com/share/loom-abc1234567",
+				orgId: "org-1" as never,
+				spaceId: "foreign-space" as never,
+			}),
+		).rejects.toThrow("Space not found");
+		expect(fetch).not.toHaveBeenCalled();
+		expect(valuesMock).not.toHaveBeenCalled();
+	});
+
+	it("does not start processing when persisting a shared destination fails", async () => {
+		mockSuccessfulDownload();
+		valuesMock
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce(undefined)
+			.mockRejectedValueOnce(new Error("Could not save destination"));
+		const { importFromLoom } = await import("@/actions/loom");
+		await expect(
+			importFromLoom({
+				loomUrl: "https://www.loom.com/share/loom-abc1234567",
+				orgId: "org-1" as never,
+				spaceId: "space-1" as never,
+			}),
+		).rejects.toThrow("Could not save destination");
+		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+		expect(startMock).not.toHaveBeenCalled();
+	});
+
+	it("lists only the current user's personal folders in the requested organization", async () => {
+		const rows = [
+			{ id: "parent", name: "Course", parentId: null },
+			{ id: "child", name: "Live Calls", parentId: "parent" },
+		];
+		whereMock.mockReturnValueOnce({ orderBy: vi.fn().mockResolvedValue(rows) });
+		const { getLoomImportFolders } = await import("@/actions/loom");
+		expect(await getLoomImportFolders({ orgId: "org-1" as never })).toEqual(
+			rows,
+		);
+		const conditions = JSON.stringify(whereMock.mock.calls[0]);
+		for (const required of [
+			"folderOrganizationId",
+			"org-1",
+			"folderCreatedById",
+			"user-123",
+			"folderSpaceId",
+		])
+			expect(conditions).toContain(required);
 	});
 
 	it("rejects a CSV import when the current user is not an organization admin or owner", async () => {
@@ -904,7 +1124,7 @@ describe("importFromLoom", () => {
 			],
 			error: undefined,
 		});
-		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+		expect(mockDb.transaction).toHaveBeenCalledTimes(2);
 		expect(valuesMock).toHaveBeenCalledWith(
 			expect.objectContaining({
 				name: "Sales Team",

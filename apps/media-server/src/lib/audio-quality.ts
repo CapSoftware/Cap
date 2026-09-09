@@ -184,6 +184,8 @@ export async function measureAudioQuality(
 			"-hide_banner",
 			"-nostdin",
 			"-nostats",
+			"-filter_threads",
+			"1",
 			"-threads",
 			"1",
 			...localInputOptions,
@@ -240,6 +242,7 @@ export async function createAudioQualityCandidate(
 		speechOnlyConfirmed?: boolean;
 		abortSignal?: AbortSignal;
 		timeoutMs?: number;
+		maxDurationSeconds?: number;
 	},
 ): Promise<AudioQualityResult> {
 	if (options.mode !== "shadow")
@@ -270,6 +273,8 @@ export async function createAudioQualityCandidate(
 		if (audioStreams[0]?.codec_name !== "aac")
 			return { status: "unchanged", reason: "unsupported-audio-codec" };
 		const input = await measureAudioQuality(sourcePath, signal);
+		if (input.duration > (options.maxDurationSeconds ?? 3600))
+			return { status: "unchanged", reason: "duration" };
 		const plan = planAudioQuality(input, options);
 		if (plan.kind === "skip")
 			return { status: "unchanged", reason: plan.reason };
@@ -290,8 +295,16 @@ export async function createAudioQualityCandidate(
 			return { status: "unchanged", reason: "source-timeline-discontinuous" };
 		if (
 			videoStreams.length &&
-			(!Number.isFinite(videoDuration) ||
-				Math.abs(videoDuration - input.duration) > 0.1)
+			(!Number.isFinite(videoDuration) || videoDuration <= 0)
+		)
+			return { status: "unchanged", reason: "unknown-video-duration" };
+		if (videoDuration > (options.maxDurationSeconds ?? 3600))
+			return { status: "unchanged", reason: "duration" };
+		// Capture tracks can stop independently; level correction preserves each original timeline.
+		if (
+			options.profile === "voice" &&
+			videoStreams.length &&
+			Math.abs(videoDuration - input.duration) > 0.1
 		)
 			return { status: "unchanged", reason: "source-duration-mismatch" };
 		directory = await mkdtemp(join(tmpdir(), "cap-audio-quality-"));
@@ -305,6 +318,8 @@ export async function createAudioQualityCandidate(
 			"error",
 			"-n",
 			"-copyts",
+			"-threads",
+			"1",
 			...localInputOptions,
 			"-i",
 			sourcePath,
@@ -357,9 +372,15 @@ export async function createAudioQualityCandidate(
 				"error",
 				"-xerror",
 				"-nostdin",
+				"-filter_threads",
+				"1",
+				"-threads",
+				"1",
 				...localInputOptions,
 				"-i",
 				path,
+				"-map",
+				"0:a:0",
 				"-f",
 				"null",
 				"-",

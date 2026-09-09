@@ -571,6 +571,7 @@ export async function startDesktopRecordingJob(
 		}
 		path = "/video/mux-segments";
 		body = {
+			audioLevels: true,
 			...context,
 			...urls,
 			...(await buildDesktopSegmentsOutput({ video, attempt })),

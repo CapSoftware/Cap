@@ -2,7 +2,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAudioQualityCandidate } from "../../lib/audio-quality";
+import {
+	createAudioQualityCandidate,
+	measureAudioQuality,
+} from "../../lib/audio-quality";
 
 let directory: string;
 
@@ -21,9 +24,17 @@ async function fixture(
 	name: string,
 	rate = 48000,
 	channels = 1,
-	options: { silence?: boolean; offset?: number; gap?: boolean } = {},
+	options: {
+		silence?: boolean;
+		offset?: number;
+		gap?: boolean;
+		duration?: number;
+		videoDuration?: number;
+		scale?: number;
+	} = {},
 ) {
-	const samples = rate * 3;
+	const duration = options.duration ?? 3;
+	const samples = Math.round(rate * duration);
 	const bytes = samples * channels * 2;
 	const wav = Buffer.alloc(44 + bytes);
 	wav.write("RIFF", 0);
@@ -40,14 +51,15 @@ async function fixture(
 	wav.writeUInt32LE(bytes, 40);
 	for (let index = 0; index < samples; index++) {
 		const t = index / rate;
-		const envelope = [0.005, 0.15, 1.5, 2.99].reduce(
+		const envelope = [0.005, 0.15, 1.5, duration - 0.01].reduce(
 			(sum, center) => sum + Math.exp(-(((t - center) / 0.003) ** 2)),
 			0,
 		);
 		for (let channel = 0; channel < channels; channel++) {
 			const value = options.silence
 				? 0
-				: (0.005 + envelope * 0.055) *
+				: (options.scale ?? 1) *
+					(0.005 + envelope * 0.055) *
 					Math.cos(2 * Math.PI * (1000 + channel * 900) * t);
 			wav.writeInt16LE(
 				Math.round(value * 32767),
@@ -65,7 +77,7 @@ async function fixture(
 		"-f",
 		"lavfi",
 		"-i",
-		"testsrc2=size=160x90:rate=15:duration=3",
+		`testsrc2=size=160x90:rate=15:duration=${options.videoDuration ?? 3}`,
 		"-i",
 		wavPath,
 		"-c:v",
@@ -122,6 +134,75 @@ afterAll(async () => {
 });
 
 describe("audio quality derivative", () => {
+	test.each([3.8, 4.2])(
+		"corrects very quiet audio while preserving its %s-second timeline",
+		async (duration) => {
+			const source = await fixture(`quiet-tail-${duration}`, 48000, 1, {
+				duration,
+				videoDuration: 4,
+				scale: 0.4,
+			});
+			const before = await readFile(source);
+			const measured = await measureAudioQuality(
+				source,
+				AbortSignal.timeout(30_000),
+			);
+			expect(measured.lufs).toBeGreaterThanOrEqual(-55);
+			expect(measured.lufs).toBeLessThan(-50);
+			const result = await createAudioQualityCandidate(source, {
+				mode: "shadow",
+				profile: "levels",
+			});
+			expect(result).toMatchObject({ status: "shadow-candidate" });
+			if (result.status !== "shadow-candidate") return;
+			try {
+				expect(result.validationFailures).toEqual([]);
+				expect(result.input.lufs).toBeLessThan(-50);
+				expect(result.output.lufs - result.input.lufs).toBeGreaterThan(20);
+				expect(result.output.truePeak).toBeLessThanOrEqual(-1);
+				const original = await decode(source, 48000);
+				const processed = await decode(result.path, 48000);
+				for (const position of [0.005, 0.15, 1.5, duration - 0.01]) {
+					expect(
+						Math.abs(
+							peakPosition(original, position, 48000) -
+								peakPosition(processed, position, 48000),
+						),
+					).toBeLessThan(0.003);
+				}
+				expect(await readFile(source)).toEqual(before);
+			} finally {
+				await result.cleanup();
+			}
+		},
+		30_000,
+	);
+
+	test("enforces the duration limit when video outlasts audio", async () => {
+		const source = await fixture("longer-video-limit", 48000, 1, {
+			duration: 3.8,
+			videoDuration: 4,
+		});
+		expect(
+			await createAudioQualityCandidate(source, {
+				mode: "shadow",
+				profile: "levels",
+				maxDurationSeconds: 3.9,
+			}),
+		).toEqual({ status: "unchanged", reason: "duration" });
+	});
+
+	test("retains the duration mismatch gate for experimental voice processing", async () => {
+		const source = await fixture("voice-duration", 48000, 1, { duration: 4 });
+		expect(
+			await createAudioQualityCandidate(source, {
+				mode: "shadow",
+				profile: "voice",
+				speechOnlyConfirmed: true,
+			}),
+		).toEqual({ status: "unchanged", reason: "source-duration-mismatch" });
+	});
+
 	for (const rate of [44100, 48000]) {
 		for (const channels of [1, 2]) {
 			for (const profile of ["levels", "voice"] as const) {

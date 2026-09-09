@@ -17,6 +17,7 @@ import {
 	Videos,
 	VideosRepo,
 } from "@cap/web-backend";
+import { getPublishedRecordingThumbnailKey } from "@cap/web-backend/src/Storage/recording-output";
 import {
 	Comment,
 	CurrentUser,
@@ -389,6 +390,10 @@ const getMobileThumbnailUrl = Effect.fn("Mobile.getThumbnailUrl")(function* (
 
 	const [video] = maybeVideo.value;
 	const [bucket] = yield* storage.getAccessForVideo(video);
+	const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+	if (publishedThumbnail) {
+		return yield* bucket.getSignedObjectUrl(publishedThumbnail);
+	}
 	const response = yield* bucket.listObjects({
 		prefix: `${video.ownerId}/${video.id}/`,
 	});

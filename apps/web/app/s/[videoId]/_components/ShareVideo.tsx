@@ -79,6 +79,7 @@ export const ShareVideo = forwardRef<
 		data: VideoData & {
 			hasActiveUpload?: boolean;
 		};
+		initialPlaybackUrl?: Promise<string | null>;
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
 		areChaptersDisabled?: boolean;
@@ -102,6 +103,7 @@ export const ShareVideo = forwardRef<
 	(
 		{
 			data,
+			initialPlaybackUrl,
 			comments,
 			chapters = NO_CHAPTERS,
 			areCaptionsDisabled,
@@ -546,6 +548,7 @@ export const ShareVideo = forwardRef<
 							)}
 							videoSrc={videoSrc}
 							rawFallbackSrc={rawFallbackSrc}
+							initialPlaybackUrl={initialPlaybackUrl}
 							duration={data.duration}
 							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							showPlaybackStatusBadge={showPlaybackStatusBadge}
