@@ -96,6 +96,7 @@ let video: {
 };
 let events: string[];
 let updates: Record<string, unknown>[];
+let reorderSourceKeys: boolean;
 const operation = {
 	token: "11111111-1111-4111-8111-111111111111",
 	startedAt: "2026-09-08T12:00:00.000Z",
@@ -139,6 +140,11 @@ function createClient() {
 						if (table.table === "videos") {
 							updates.push(values);
 							Object.assign(video, values);
+							if (values.source && reorderSourceKeys) {
+								video.source = Object.fromEntries(
+									Object.entries(video.source).reverse(),
+								) as typeof video.source;
+							}
 						}
 						return [{ affectedRows: 1 }];
 					},
@@ -171,6 +177,7 @@ function createClient() {
 }
 
 beforeEach(() => {
+	reorderSourceKeys = false;
 	video = {
 		id: "video",
 		ownerId: "user",
@@ -270,49 +277,53 @@ describe("edited recording publication", () => {
 		);
 	});
 
-	it("publishes a completed edit from its own output and retires old upload proof atomically", async () => {
-		video.metadata.editProcessing = {
-			...operation,
-			ownerId: video.ownerId,
-			bucket: video.bucket,
-			storageIntegrationId: video.storageIntegrationId,
-			sourceKey,
-			source: JSON.stringify(video.source),
-			dispatch: "accepted",
-		};
-		await saveEditResultAndComplete(
-			"video",
-			"user/video/edit-original.mp4",
-			editSpec,
-			editSpec,
-			metadata,
-			operation,
-		);
-		expect(video.source).toEqual({
-			type: "desktopMP4",
-			outputKey: `user/video/.recording/outputs/edit-${operation.token}/result.mp4`,
-			thumbnailKey: `user/video/.recording/outputs/edit-${operation.token}/thumbnail.jpg`,
-			previewKey: `user/video/.recording/outputs/edit-${operation.token}/preview.gif`,
-		});
-		expect(video.metadata).not.toHaveProperty("desktopRecordingUpload");
-		expect(video.metadata.customCreatedAt).toBe("2020-01-01T00:00:00Z");
-		expect(events.indexOf("lock-job")).toBeLessThan(
-			events.indexOf("lock-video"),
-		);
-		expect(events.indexOf("lock-video")).toBeLessThan(
-			events.indexOf("update-videos"),
-		);
-		const before = events.length;
-		await saveEditResultAndComplete(
-			"video",
-			sourceKey,
-			editSpec,
-			editSpec,
-			metadata,
-			operation,
-		);
-		expect(events).toHaveLength(before);
-	});
+	it.each([false, true])(
+		"publishes a completed edit atomically with reordered JSON keys: %s",
+		async (reorder) => {
+			reorderSourceKeys = reorder;
+			video.metadata.editProcessing = {
+				...operation,
+				ownerId: video.ownerId,
+				bucket: video.bucket,
+				storageIntegrationId: video.storageIntegrationId,
+				sourceKey,
+				source: JSON.stringify(video.source),
+				dispatch: "accepted",
+			};
+			await saveEditResultAndComplete(
+				"video",
+				"user/video/edit-original.mp4",
+				editSpec,
+				editSpec,
+				metadata,
+				operation,
+			);
+			expect(video.source).toEqual({
+				type: "desktopMP4",
+				outputKey: `user/video/.recording/outputs/edit-${operation.token}/result.mp4`,
+				thumbnailKey: `user/video/.recording/outputs/edit-${operation.token}/thumbnail.jpg`,
+				previewKey: `user/video/.recording/outputs/edit-${operation.token}/preview.gif`,
+			});
+			expect(video.metadata).not.toHaveProperty("desktopRecordingUpload");
+			expect(video.metadata.customCreatedAt).toBe("2020-01-01T00:00:00Z");
+			expect(events.indexOf("lock-job")).toBeLessThan(
+				events.indexOf("lock-video"),
+			);
+			expect(events.indexOf("lock-video")).toBeLessThan(
+				events.indexOf("update-videos"),
+			);
+			const before = events.length;
+			await saveEditResultAndComplete(
+				"video",
+				sourceKey,
+				editSpec,
+				editSpec,
+				metadata,
+				operation,
+			);
+			expect(events).toHaveLength(before);
+		},
+	);
 
 	it("checks a reprocessed canonical object before clearing its previous immutable publication", async () => {
 		await saveMetadataAndComplete("video", metadata);

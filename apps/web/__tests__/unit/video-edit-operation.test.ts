@@ -96,6 +96,41 @@ beforeEach(() => {
 });
 
 describe("edit operation ownership", () => {
+	it("matches reordered source fields but rejects changed or malformed sources", () => {
+		const output = getEditOutputKeys("owner", "video", operation);
+		const published = { ...source, ...output };
+		const video = {
+			...storage,
+			source: {
+				...source,
+				previewKey: output.previewKey,
+				thumbnailKey: output.thumbnailKey,
+				outputKey: output.outputKey,
+			},
+			metadata: {
+				editProcessing: { ...state, source: JSON.stringify(published) },
+			},
+		};
+		const upload = {
+			rawFileKey: sourceKey,
+			startedAt: new Date(operation.startedAt),
+		};
+		expect(matchesEditOperation(video, upload, sourceKey, operation)).toBe(
+			true,
+		);
+		expect(
+			matchesEditOperation(
+				{ ...video, source: { ...video.source, outputKey: "different.mp4" } },
+				upload,
+				sourceKey,
+				operation,
+			),
+		).toBe(false);
+		video.metadata.editProcessing.source = "invalid JSON";
+		expect(matchesEditOperation(video, upload, sourceKey, operation)).toBe(
+			false,
+		);
+	});
 	it("matches both the original source and the precise operation", () => {
 		const video = { ...storage, source, metadata: { editProcessing: state } };
 		const upload = {

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { db } from "@cap/database";
 import {
 	videoProcessingJobs,
@@ -69,16 +70,22 @@ export function matchesEditOperation(
 	operation: EditOperation,
 ) {
 	const state = getEditProcessingState(video.metadata);
+	if (!state) return false;
+	let expectedSource: unknown;
+	try {
+		expectedSource = JSON.parse(state.source);
+	} catch {
+		return false;
+	}
 	return Boolean(
-		state &&
-			upload &&
+		upload &&
 			state.token === operation.token &&
 			state.startedAt === operation.startedAt &&
 			state.ownerId === video.ownerId &&
 			state.bucket === video.bucket &&
 			state.storageIntegrationId === video.storageIntegrationId &&
 			state.sourceKey === sourceKey &&
-			state.source === JSON.stringify(video.source) &&
+			isDeepStrictEqual(expectedSource, video.source) &&
 			upload.rawFileKey === sourceKey &&
 			upload.startedAt.toISOString() === operation.startedAt,
 	);
