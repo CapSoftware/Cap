@@ -1,6 +1,5 @@
 import "server-only";
 
-import { serverEnv } from "@cap/env";
 import {
 	AwsCredentials,
 	Database,
@@ -19,28 +18,16 @@ import {
 	Videos,
 	VideosPolicy,
 	VideosRepo,
-	Workflows,
 } from "@cap/web-backend";
 import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
 import {
 	FetchHttpClient,
-	Headers,
 	type HttpApi,
 	HttpApiBuilder,
 	HttpMiddleware,
 	HttpServer,
 } from "@effect/platform";
-import { RpcClient, RpcMiddleware } from "@effect/rpc";
-import {
-	Cause,
-	Config,
-	Effect,
-	Exit,
-	Layer,
-	ManagedRuntime,
-	Option,
-	Redacted,
-} from "effect";
+import { Cause, Effect, Exit, Layer, ManagedRuntime } from "effect";
 import { allowedOrigins } from "@/utils/cors";
 import { getVerifiedPasswordHashes } from "./password-cookie";
 import { layerTracer } from "./tracing";
@@ -50,58 +37,6 @@ const CookiePasswordAttachmentLive = Layer.effect(
 	Effect.gen(function* () {
 		const passwords = yield* Effect.promise(getVerifiedPasswordHashes);
 		return { passwords };
-	}),
-);
-
-class WorkflowRpcSecret extends Effect.Service<WorkflowRpcSecret>()(
-	"WorkflowRpcSecret",
-	{
-		sync: () => ({
-			authSecret: Option.fromNullable(serverEnv().WORKFLOWS_RPC_SECRET).pipe(
-				Option.map(Redacted.make),
-			),
-		}),
-	},
-) {}
-
-const WorkflowRpcLive = Layer.unwrapScoped(
-	Effect.gen(function* () {
-		const url = Option.getOrElse(
-			yield* Config.option(Config.string("WORKFLOWS_RPC_URL")),
-			() => "http://127.0.0.1:42169",
-		);
-
-		const { authSecret } = yield* WorkflowRpcSecret;
-
-		if (Option.isNone(authSecret)) return Layer.empty;
-
-		const authMiddleware = RpcMiddleware.layerClient(
-			Workflows.SecretAuthMiddleware,
-			({ request }) =>
-				Effect.gen(function* () {
-					return {
-						...request,
-						headers: Headers.set(
-							request.headers,
-							"authorization",
-							Redacted.value(authSecret.value),
-						),
-					};
-				}),
-		);
-
-		const client = yield* RpcClient.make(Workflows.RpcGroup).pipe(
-			Effect.provide(
-				Layer.mergeAll(
-					RpcClient.layerProtocolHttp({ url }).pipe(
-						Layer.provide(Workflows.RpcSerialization),
-					),
-					authMiddleware,
-				),
-			),
-		);
-
-		return Layer.succeed(Workflows.RpcClient, client);
 	}),
 );
 
@@ -121,16 +56,9 @@ export const Dependencies = Layer.mergeAll(
 	Organisations.Default,
 	AwsCredentials.Default,
 	ImageUploads.Default,
-	WorkflowRpcLive,
 	layerTracer,
 ).pipe(
-	Layer.provideMerge(
-		Layer.mergeAll(
-			Database.Default,
-			FetchHttpClient.layer,
-			WorkflowRpcSecret.Default,
-		),
-	),
+	Layer.provideMerge(Layer.mergeAll(Database.Default, FetchHttpClient.layer)),
 );
 
 // purposefully not exposed

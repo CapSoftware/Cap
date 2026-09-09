@@ -74,7 +74,12 @@ const payload = {
 	bucketId: null,
 	loomVideoId: "loom-video",
 };
-const video = { id: "video", createdAt: new Date(), updatedAt: new Date() };
+const video = {
+	id: "video",
+	source: { type: "webMP4" },
+	createdAt: new Date(),
+	updatedAt: new Date(),
+};
 const metadata = { duration: 30, width: 1920, height: 1080, fps: 30 };
 const pending = { phase: "processing", processingProgress: 25 };
 

@@ -86,6 +86,7 @@ vi.mock("@/app/(org)/dashboard/Contexts", () => ({
 }));
 vi.mock("@/components/UpgradeModal", () => ({ UpgradeModal: () => null }));
 vi.mock("next/navigation", () => ({
+	useSearchParams: () => new URLSearchParams(),
 	useRouter: () => ({ push: mocks.push, refresh: mocks.refresh }),
 }));
 vi.mock("next/link", () => ({

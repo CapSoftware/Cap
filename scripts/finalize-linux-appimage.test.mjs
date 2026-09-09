@@ -224,8 +224,8 @@ for (const failureAt of [1, 2]) {
 				assert.equal(options.env.LC_ALL, "C");
 				return { stdout: digestSectionHeaders };
 			} else {
-				assert.equal(command, "pnpm");
-				await writeFile(`${args[3]}.sig`, "new signature");
+				assert.equal(command, "bun");
+				await writeFile(`${args[4]}.sig`, "new signature");
 			}
 		};
 		await assert.rejects(
@@ -356,8 +356,8 @@ for (const failure of [false, true]) {
 				changedRuntime.fill(0xa5, digestMd5Offset, digestMd5Offset + 16);
 				await writeFile(options.env.OUTPUT, finalImage(changedRuntime));
 			} else {
-				assert.equal(command, "pnpm");
-				assert.deepEqual(args.slice(0, 3), ["tauri", "signer", "sign"]);
+				assert.equal(command, "bun");
+				assert.deepEqual(args.slice(0, 4), ["run", "tauri", "signer", "sign"]);
 				assert.equal(
 					options.env.TAURI_PRIVATE_KEY,
 					env.TAURI_SIGNING_PRIVATE_KEY,
@@ -369,9 +369,9 @@ for (const failure of [false, true]) {
 				assert.ok(!args.includes(env.TAURI_SIGNING_PRIVATE_KEY));
 				if (failure) throw new Error("signer failed");
 				const hash = createHash("sha256")
-					.update(await readFile(args[3]))
+					.update(await readFile(args[4]))
 					.digest("hex");
-				await writeFile(`${args[3]}.sig`, hash);
+				await writeFile(`${args[4]}.sig`, hash);
 			}
 		};
 		const operation = finalizeLinuxAppImage(image, {
@@ -399,7 +399,7 @@ for (const failure of [false, true]) {
 				createHash("sha256").update(finalImage(expectedRuntime)).digest("hex"),
 			);
 		}
-		assert.deepEqual(calls, [image, image, "readelf", image, plugin, "pnpm"]);
+		assert.deepEqual(calls, [image, image, "readelf", image, plugin, "bun"]);
 		assert.ok(
 			!(await readdir(root)).some((file) => file.startsWith(".cap-appimage-")),
 		);
