@@ -16,7 +16,7 @@ import {
 	meshStyle,
 } from "@/components/pages/HomeTwo/theme";
 import { CAP_AGENT_PROMPT } from "@/data/agent-prompt";
-import { POINTER_PROMPT, setupSteps } from "./content";
+import { ANCHORS, POINTER_PROMPT, setupSteps } from "./content";
 import { CopyLabelButton, Snippet } from "./copy";
 
 const DARK = {
@@ -39,8 +39,7 @@ export const SetupPrompt = () => {
 	const [expanded, setExpanded] = useState(false);
 
 	return (
-		// biome-ignore lint/correctness/useUniqueElementIds: stable anchor target for the hero's "See how it works" link
-		<section id="setup" className="scroll-mt-24 px-5 py-20 lg:py-28">
+		<section id={ANCHORS.setup} className="scroll-mt-24 px-5 py-20 lg:py-28">
 			<div className="mx-auto max-w-[1200px]">
 				<div className="max-w-[760px]">
 					<Eyebrow accent={MODE_THEME.instant.accent}>One prompt</Eyebrow>

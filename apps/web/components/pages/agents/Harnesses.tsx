@@ -14,6 +14,7 @@ import {
 	MONO,
 } from "@/components/pages/HomeTwo/theme";
 import {
+	ANCHORS,
 	type HarnessKey,
 	harnesses,
 	INSTALLERS,
@@ -90,8 +91,10 @@ export const Harnesses = () => {
 	if (!active) return null;
 
 	return (
-		// biome-ignore lint/correctness/useUniqueElementIds: stable anchor target linked from the docs
-		<section id="harnesses" className="scroll-mt-24 px-5 pb-20 lg:pb-28">
+		<section
+			id={ANCHORS.harnesses}
+			className="scroll-mt-24 px-5 pb-20 lg:pb-28"
+		>
 			<style>{TAB_CSS}</style>
 			<div className="mx-auto max-w-[1200px]">
 				<div className="mx-auto flex max-w-[760px] flex-col items-center text-center">

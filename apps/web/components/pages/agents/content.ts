@@ -27,6 +27,11 @@ export const agentsSeo = {
 
 export const POINTER_URL = "https://cap.so/agents";
 
+export const ANCHORS = {
+	setup: "setup",
+	harnesses: "harnesses",
+} as const;
+
 export const POINTER_PROMPT =
 	"Read https://cap.so/agents and follow it to set up Cap for me, then ask what I want to record or review.";
 

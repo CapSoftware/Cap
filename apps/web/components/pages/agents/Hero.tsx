@@ -22,7 +22,7 @@ import {
 	MONO,
 } from "@/components/pages/HomeTwo/theme";
 import { CAP_AGENT_PROMPT } from "@/data/agent-prompt";
-import { HARNESS_NAMES, POINTER_URL } from "./content";
+import { ANCHORS, HARNESS_NAMES, POINTER_URL } from "./content";
 import { CopyIconButton, CopyLabelButton } from "./copy";
 
 const DARK = {
@@ -81,7 +81,7 @@ export const Hero = () => {
 							Copy the setup prompt
 						</CopyLabelButton>
 						<a
-							href="#setup"
+							href={`#${ANCHORS.setup}`}
 							className={`${BTN_SECONDARY} group cursor-pointer gap-2.5`}
 						>
 							See how it works
