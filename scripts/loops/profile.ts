@@ -149,11 +149,13 @@ export function classifyProfile(input: ProfileInput) {
 		email: normalizeEmail(source.email),
 		userId: user?.id ?? `bento:${emailHash(source.email)}`,
 		firstName:
-			source.first_name ||
-			source.firstname ||
-			user?.name?.split(/\s+/)[0] ||
-			"",
-		lastName: source.last_name || source.lastname || user?.lastName || "",
+			[source.first_name, source.firstname, user?.name?.trim().split(/\s+/)[0]]
+				.map((value) => value?.trim())
+				.find((value) => value && value !== "null") ?? "",
+		lastName:
+			[source.last_name, source.lastname, user?.lastName]
+				.map((value) => value?.trim())
+				.find((value) => value && value !== "null") ?? "",
 		subscribed: consent === "subscribed",
 		source: "Bento migration",
 		capAudience: audience,
