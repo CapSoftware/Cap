@@ -54,8 +54,12 @@ export async function proxy(request: NextRequest) {
 	const hostname = url.hostname;
 
 	if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") {
+		// Files under public/ have no route of their own, so without this every
+		// <img src="/logos/..."> on a self-hosted instance redirects to /login.
+		const isStaticAsset = /\.[a-z0-9]+$/i.test(path);
 		if (
 			!(
+				isStaticAsset ||
 				path.startsWith("/s/") ||
 				path.startsWith("/c/") ||
 				path.startsWith("/cli/") ||
