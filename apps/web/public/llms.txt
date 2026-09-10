@@ -44,6 +44,7 @@ Cap has run organization migrations spanning hundreds of users and tens of thous
 
 Cap can be operated through a shell-capable agent using the `cap` CLI or its MCP server.
 
+- Cap for Agents (start here, includes the copyable setup prompt): https://cap.so/agents
 - Overview and copyable prompt: https://cap.so/docs/agents
 - Setup: https://cap.so/docs/agents/setup
 - Workflows: https://cap.so/docs/agents/workflows
