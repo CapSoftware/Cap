@@ -802,7 +802,7 @@ export const Share = ({
 									// border), so the two read as one contained, rounded unit,
 									// centred at the same width. Classic view's toggle lives under
 									// the player instead.
-									<div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-3 rounded-t-xl border border-b-0 border-gray-5 bg-gray-1 px-5">
+									<div className="mx-auto flex w-full max-w-6xl flex-col items-stretch gap-2 rounded-t-xl border border-b-0 border-gray-5 bg-gray-1 px-3 py-2 sm:h-14 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-5 sm:py-0">
 										<div className="flex min-w-0 items-center gap-3">
 											<ShareNavigation />
 											<SignedImageUrl
