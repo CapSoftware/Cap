@@ -329,32 +329,40 @@ pub struct Organization {
     pub brand_colors: OrganizationBrandColors,
 }
 
-pub async fn signal_recording_complete(
+pub(crate) async fn prepare_recording_segments(
     app: &AppHandle,
     video_id: &str,
-) -> Result<(), AuthedApiError> {
-    let resp = app
-        .authed_api_request("/api/upload/recording-complete", |client, url| {
-            client
-                .post(url)
-                .header("Content-Type", "application/json")
-                .json(&serde_json::json!({
-                    "videoId": video_id,
-                }))
-        })
-        .await
-        .map_err(|err| format!("api/signal_recording_complete/request: {err}"))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let error_body = resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!("api/signal_recording_complete/{status}: {error_body}").into());
+    segments: &[crate::upload::preparation::Segment],
+) -> Result<Option<Vec<crate::upload::preparation::Segment>>, AuthedApiError> {
+    #[derive(Deserialize)]
+    struct Response {
+        version: u32,
+        prepared: Vec<crate::upload::preparation::Segment>,
     }
 
-    Ok(())
+    let response = app
+        .authed_api_request("/api/recording/prepare", |client, url| {
+            client
+                .post(url)
+                .timeout(std::time::Duration::from_secs(20))
+                .json(&serde_json::json!({ "videoId": video_id, "segments": segments }))
+        })
+        .await?;
+    if matches!(response.status().as_u16(), 404 | 405) {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Err(format!(
+            "Optional recording preparation unavailable ({})",
+            response.status()
+        )
+        .into());
+    }
+    let response: Response = crate::upload::lifecycle::cancellable(response.json()).await??;
+    if response.version != 1 || response.prepared.len() > 32 {
+        return Ok(None);
+    }
+    Ok(Some(response.prepared))
 }
 
 pub async fn verify_recording_complete(

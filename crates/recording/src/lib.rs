@@ -17,6 +17,7 @@ pub mod sources;
 pub mod studio_recording;
 pub mod sync_calibration;
 pub mod track_heal;
+pub mod upload_preparation;
 pub mod upload_resume;
 pub mod upload_verification;
 

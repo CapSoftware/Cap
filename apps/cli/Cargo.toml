@@ -42,6 +42,7 @@ toml_edit = "0.23.7"
 url = "2.5.7"
 tracing.workspace = true
 tracing-subscriber = "0.3.19"
+tracing-appender = "0.2.3"
 cpal = { workspace = true }
 winit = "0.30"
 softbuffer = "0.4"

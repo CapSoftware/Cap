@@ -1,4 +1,11 @@
-use std::{path::PathBuf, sync::Mutex, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use serde::Serialize;
 use specta::Type;
@@ -131,6 +138,77 @@ struct ControlError {
     message: String,
 }
 
+#[derive(Clone)]
+pub(crate) struct StopNoticeOwner {
+    sequence: u64,
+    directory: PathBuf,
+    generation: Option<u32>,
+    confirmed: Arc<AtomicBool>,
+}
+
+impl StopNoticeOwner {
+    pub(crate) fn is_confirmed(&self) -> bool {
+        self.confirmed.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn same_attempt(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.confirmed, &other.confirmed)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct StopNoticeTicket {
+    sequence: u64,
+    pub(crate) owner: StopNoticeOwner,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StopNoticeKind {
+    Unconfirmed,
+    ConfirmedFailure,
+    ControlFailure,
+}
+
+struct StopNotice {
+    ticket: StopNoticeTicket,
+    kind: StopNoticeKind,
+    message: String,
+    previous_message: Option<String>,
+    restoration: Option<Result<(), String>>,
+}
+
+impl StopNotice {
+    fn error(&self) -> String {
+        let confirmed =
+            self.ticket.owner.is_confirmed() || self.kind == StopNoticeKind::ConfirmedFailure;
+        let status = if confirmed {
+            match (&self.restoration, self.ticket.owner.generation) {
+                (Some(Err(_)), _) => "Recording stopped; window restoration failed",
+                (None, Some(_)) => "Recording stopped; window restoration is pending",
+                _ => "Recording stopped",
+            }
+        } else {
+            "Stop could not be confirmed"
+        };
+        let mut message = format!(
+            "{status} ({}): {}",
+            self.ticket.owner.directory.display(),
+            self.message
+        );
+        if let Some(previous) = &self.previous_message {
+            message.push('\n');
+            message.push_str(previous);
+        }
+        if let Some(Err(error)) = &self.restoration
+            && !self.message.contains(error)
+        {
+            message.push('\n');
+            message.push_str(error);
+        }
+        message
+    }
+}
+
 struct RestorationReceipt {
     generation: u32,
     result: Result<(), String>,
@@ -139,9 +217,13 @@ struct RestorationReceipt {
 }
 
 impl RestorationReceipt {
+    fn restoration_result(&self) -> Result<(), String> {
+        self.result.clone()
+    }
+
     #[cfg(target_os = "linux")]
     fn restart_result(&self) -> Result<(), String> {
-        self.result.clone()?;
+        self.restoration_result()?;
         if self.stop_requested {
             Err("Recording restart was cancelled by Stop".into())
         } else {
@@ -156,6 +238,8 @@ struct Inner {
     lease: Option<Lease>,
     control_error: Option<ControlError>,
     restored: Option<RestorationReceipt>,
+    stop_notice_sequence: u64,
+    stop_notice: Option<StopNotice>,
     #[cfg(target_os = "linux")]
     x11_cleanup_sequence: u64,
     #[cfg(target_os = "linux")]
@@ -276,11 +360,7 @@ impl Inner {
             return None;
         }
         let succeeded = result.is_ok();
-        self.restored = Some(RestorationReceipt {
-            generation,
-            result,
-            stop_requested: self.lease.as_ref().unwrap().stop_requested,
-        });
+        let _ = self.record_stop_restoration(generation, result);
         if succeeded {
             let owned = self.lease.take().unwrap().registered_shortcut;
             self.generation = self.generation.wrapping_add(1);
@@ -288,6 +368,108 @@ impl Inner {
         } else {
             None
         }
+    }
+
+    fn record_stop_restoration(&mut self, generation: u32, result: Result<(), String>) -> bool {
+        let Some(lease) = self
+            .lease
+            .as_ref()
+            .filter(|lease| lease.generation == generation && lease.phase == Phase::Restoring)
+        else {
+            return false;
+        };
+        if let Some(notice) = &mut self.stop_notice
+            && notice.ticket.owner.generation == Some(generation)
+            && lease.recording_dir.as_ref() == Some(&notice.ticket.owner.directory)
+        {
+            notice.restoration = Some(result.clone());
+        }
+        self.restored = Some(RestorationReceipt {
+            generation,
+            result,
+            #[cfg(target_os = "linux")]
+            stop_requested: lease.stop_requested,
+        });
+        true
+    }
+
+    fn next_stop_notice_sequence(&mut self) -> u64 {
+        self.stop_notice_sequence = self
+            .stop_notice_sequence
+            .checked_add(1)
+            .expect("Stop notice identity exhausted");
+        self.stop_notice_sequence
+    }
+
+    fn reserve_stop_notice_owner(
+        &mut self,
+        directory: PathBuf,
+        generation: Option<u32>,
+    ) -> StopNoticeOwner {
+        StopNoticeOwner {
+            sequence: self.next_stop_notice_sequence(),
+            directory,
+            generation,
+            confirmed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn reserve_stop_notice_ticket(&mut self, owner: StopNoticeOwner) -> StopNoticeTicket {
+        StopNoticeTicket {
+            sequence: self.next_stop_notice_sequence(),
+            owner,
+        }
+    }
+
+    fn retain_stop_notice(
+        &mut self,
+        ticket: &StopNoticeTicket,
+        kind: StopNoticeKind,
+        message: String,
+    ) -> bool {
+        if let Some(previous) = &mut self.stop_notice {
+            if previous.ticket.sequence == ticket.sequence
+                && previous.ticket.owner.same_attempt(&ticket.owner)
+            {
+                if previous.message == message
+                    || previous.previous_message.as_ref() == Some(&message)
+                {
+                    return false;
+                }
+                if kind == StopNoticeKind::ConfirmedFailure {
+                    previous.previous_message =
+                        Some(std::mem::replace(&mut previous.message, message));
+                    previous.kind = kind;
+                } else {
+                    previous.previous_message = Some(message);
+                }
+                tracing::info!(project = %ticket.owner.directory.display(), "Retained distinct failure from the same Stop cohort");
+                return true;
+            }
+            if (previous.ticket.owner.sequence, previous.ticket.sequence)
+                >= (ticket.owner.sequence, ticket.sequence)
+            {
+                return false;
+            }
+            tracing::info!(
+                previous_project = %previous.ticket.owner.directory.display(),
+                next_project = %ticket.owner.directory.display(),
+                "Retained Stop notice superseded by a newer failure"
+            );
+        }
+        let restoration = self
+            .restored
+            .as_ref()
+            .filter(|receipt| Some(receipt.generation) == ticket.owner.generation)
+            .map(RestorationReceipt::restoration_result);
+        self.stop_notice = Some(StopNotice {
+            ticket: ticket.clone(),
+            kind,
+            message,
+            previous_message: None,
+            restoration,
+        });
+        true
     }
 
     fn owner(&self, dir: &std::path::Path) -> Option<u32> {
@@ -360,6 +542,35 @@ impl Inner {
     }
 
     fn snapshot(&self) -> Snapshot {
+        let mut errors = Vec::with_capacity(4);
+        if let Some(error) = self.control_error.as_ref().filter(|error| {
+            error.generation == self.generation
+                && self
+                    .lease
+                    .as_ref()
+                    .is_none_or(|lease| lease.recording_dir.as_ref() == Some(&error.dir))
+        }) {
+            errors.push(error.message.clone());
+        }
+        for error in [
+            self.lease
+                .as_ref()
+                .and_then(|lease| lease.stop_error.clone()),
+            self.restored.as_ref().and_then(|receipt| {
+                self.lease
+                    .as_ref()
+                    .filter(|lease| lease.generation == receipt.generation)
+                    .and_then(|_| receipt.result.as_ref().err().cloned())
+            }),
+            self.stop_notice.as_ref().map(StopNotice::error),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !errors.contains(&error) {
+                errors.push(error);
+            }
+        }
         Snapshot {
             generation: self.generation,
             phase: self.lease.as_ref().map(|lease| lease.phase),
@@ -373,30 +584,7 @@ impl Inner {
                     }
                 })
             }),
-            error: self
-                .control_error
-                .as_ref()
-                .filter(|error| {
-                    error.generation == self.generation
-                        && self
-                            .lease
-                            .as_ref()
-                            .is_none_or(|lease| lease.recording_dir.as_ref() == Some(&error.dir))
-                })
-                .map(|error| error.message.clone())
-                .or_else(|| {
-                    self.lease
-                        .as_ref()
-                        .and_then(|lease| lease.stop_error.clone())
-                })
-                .or_else(|| {
-                    self.restored.as_ref().and_then(|receipt| {
-                        self.lease
-                            .as_ref()
-                            .filter(|lease| lease.generation == receipt.generation)
-                            .and_then(|_| receipt.result.as_ref().err().cloned())
-                    })
-                }),
+            error: (!errors.is_empty()).then(|| errors.join("\n")),
         }
     }
 
@@ -509,6 +697,51 @@ fn notify(app: &AppHandle) {
     let _ = CurrentRecordingChanged.emit(app);
 }
 
+pub(crate) fn reserve_stop_notice_owner(
+    app: &AppHandle,
+    directory: PathBuf,
+    generation: Option<u32>,
+) -> StopNoticeOwner {
+    app.state::<State>()
+        .inner
+        .lock()
+        .unwrap()
+        .reserve_stop_notice_owner(directory, generation)
+}
+
+pub(crate) fn reserve_stop_notice_ticket(
+    app: &AppHandle,
+    owner: StopNoticeOwner,
+) -> StopNoticeTicket {
+    app.state::<State>()
+        .inner
+        .lock()
+        .unwrap()
+        .reserve_stop_notice_ticket(owner)
+}
+
+pub(crate) fn retain_stop_notice(
+    app: &AppHandle,
+    ticket: &StopNoticeTicket,
+    kind: StopNoticeKind,
+    message: String,
+) {
+    let retained = app
+        .state::<State>()
+        .inner
+        .lock()
+        .unwrap()
+        .retain_stop_notice(ticket, kind, message);
+    if retained {
+        notify(app);
+    }
+}
+
+pub(crate) fn confirm_stop_notice(app: &AppHandle, owner: &StopNoticeOwner) {
+    owner.confirmed.store(true, Ordering::Release);
+    notify(app);
+}
+
 pub fn set_phase(app: &AppHandle, generation: u32, phase: Phase) -> bool {
     let state = app.state::<State>();
     let mut inner = state.inner.lock().unwrap();
@@ -563,6 +796,27 @@ pub fn queue_stop(app: &AppHandle) -> bool {
     drop(inner);
     notify(app);
     deferred
+}
+
+pub(crate) fn queue_owned_studio_stop(
+    app: &AppHandle,
+    generation: u32,
+    directory: &std::path::Path,
+) -> bool {
+    let state = app.state::<State>();
+    let mut inner = state.inner.lock().unwrap();
+    if inner.lease.as_ref().is_none_or(|lease| {
+        lease.generation != generation
+            || lease.mode != cap_recording::RecordingMode::Studio
+            || lease.recording_dir.as_deref() != Some(directory)
+            || !(lease.phase.can_stop() || lease.phase == Phase::Stopping)
+    }) {
+        return false;
+    }
+    let _ = inner.queue_stop();
+    drop(inner);
+    notify(app);
+    true
 }
 
 pub fn handle_shortcut(app: &AppHandle, pressed: bool) -> bool {
@@ -622,6 +876,21 @@ fn handle_stop_input(app: &AppHandle, pressed: bool, route: Option<(u32, StopRou
             .as_ref()
             .is_some_and(|lease| lease.phase != Phase::AwaitingShortcut);
     let handled = inner.shortcut(pressed);
+    let studio_stop = pressed
+        .then(|| {
+            inner.lease.as_ref().and_then(|lease| {
+                (lease.mode == cap_recording::RecordingMode::Studio
+                    && (lease.phase.can_stop() || lease.phase == Phase::Stopping))
+                    .then(|| {
+                        lease
+                            .recording_dir
+                            .clone()
+                            .map(|dir| (lease.generation, dir))
+                    })
+                    .flatten()
+            })
+        })
+        .flatten();
     let stop = handled
         && pressed
         && inner
@@ -634,7 +903,9 @@ fn handle_stop_input(app: &AppHandle, pressed: bool, route: Option<(u32, StopRou
     if handled {
         notify(app);
     }
-    if stop {
+    if let Some((generation, directory)) = studio_stop {
+        crate::recording::queue_clean_studio_stop(app, generation, directory);
+    } else if stop {
         let app = app.clone();
         drop(tauri::async_runtime::spawn(async move {
             if let Err(error) = crate::recording::stop_recording(app.clone(), app.state()).await {
@@ -876,7 +1147,13 @@ pub fn control(
             },
             restore: restore_paused_main(app, generation, dir.clone()),
             stop: async {
-                Box::pin(crate::recording::stop_recording(app.clone(), app.state())).await
+                Box::pin(crate::recording::stop_clean_studio_recording(
+                    app.clone(),
+                    handle.clone(),
+                    generation,
+                    dir.clone(),
+                ))
+                .await
             },
             notify: || notify(app),
         }
@@ -1760,6 +2037,29 @@ async fn restore_pass_acknowledged(
     scheduled && matches!(acknowledgement.await, Ok(Ok(())))
 }
 
+fn restore_saved_window(app: &AppHandle, saved: &SavedWindow) -> Result<(), String> {
+    let window = app.get_webview_window(&saved.label).ok_or_else(|| {
+        format!(
+            "Recording window {} disappeared before restoration",
+            saved.label
+        )
+    })?;
+    let visible = saved.visibility_for(native_id(&window)?).ok_or_else(|| {
+        format!(
+            "Recording window {} was replaced before restoration",
+            saved.label
+        )
+    })?;
+    set_native_visibility(&window, visible)?;
+    if window.is_visible().map_err(|error| error.to_string())? != visible {
+        return Err(format!(
+            "Recording window {} restoration was not acknowledged",
+            saved.label
+        ));
+    }
+    Ok(())
+}
+
 fn release_inner(
     app: &AppHandle,
     generation: u32,
@@ -1830,6 +2130,8 @@ fn release_inner(
     let app = app.clone();
     drop(tauri::async_runtime::spawn(async move {
         let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+        let restoration_error = Arc::new(Mutex::new(None::<String>));
+        let first_error = restoration_error.clone();
         let handle = app.clone();
         let scheduled = app.run_on_main_thread(move || {
             #[cfg(target_os = "linux")]
@@ -1860,15 +2162,10 @@ fn release_inner(
             };
             if let Some((saved, owned)) = saved {
                 crate::hotkeys::release_clean_capture_stop(&handle, owned);
-                if !editor_took_foreground
-                    && let Some(saved) = saved
-                    && let Some(window) = handle.get_webview_window(&saved.label)
-                    && let Some(visible) = native_id(&window)
-                        .ok()
-                        .and_then(|id| saved.visibility_for(id))
-                {
-                    let result = set_native_visibility(&window, visible);
+                if !editor_took_foreground && let Some(saved) = saved {
+                    let result = restore_saved_window(&handle, &saved);
                     if let Err(error) = result {
+                        *first_error.lock().unwrap() = Some(error.to_string());
                         tracing::warn!(%error, "Could not restore Main after recording");
                     }
                 }
@@ -1914,19 +2211,20 @@ fn release_inner(
                 {
                     continue;
                 }
-                if let Some(window) = handle.get_webview_window(&saved.label)
-                    && let Some(visible) = native_id(&window)
-                        .ok()
-                        .and_then(|id| saved.visibility_for(id))
-                {
-                    let result = set_native_visibility(&window, visible);
-                    if let Err(error) = result {
-                        tracing::warn!(%error, "Could not restore clean capture window");
-                    }
+                if let Err(error) = restore_saved_window(&handle, &saved) {
+                    restoration_error
+                        .lock()
+                        .unwrap()
+                        .get_or_insert_with(|| error.to_string());
+                    tracing::warn!(%error, "Could not restore clean capture window");
                 }
             }
             {
                 let mut inner = state.inner.lock().unwrap();
+                let result = restoration_error.lock().unwrap().take().map_or(Ok(()), Err);
+                if !inner.record_stop_restoration(generation, result) {
+                    return;
+                }
                 inner.lease = None;
                 inner.generation = inner.generation.wrapping_add(1);
             }
@@ -1984,6 +2282,956 @@ pub async fn reveal_capture_window(
     }
     let main = matches!(window.label().parse::<CapWindowId>(), Ok(CapWindowId::Main));
     reveal_with_options(window, generation, main, main).await
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod instant_activation_tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[tokio::test]
+    async fn instant_seal_waits_for_hide_ack_then_settle_then_revalidates() {
+        let (hide_tx, hide_rx) = tokio::sync::oneshot::channel();
+        let (settle_tx, settle_rx) = tokio::sync::oneshot::channel();
+        let (settling_tx, settling_rx) = tokio::sync::oneshot::channel();
+        let stage = Arc::new(AtomicUsize::new(0));
+        let observed = stage.clone();
+        let task = tokio::spawn(async move {
+            let validated = observed.clone();
+            seal_then_settle(
+                async { hide_rx.await.map_err(|_| "hide ack lost".to_string()) },
+                async {
+                    observed.store(1, Ordering::SeqCst);
+                    settling_tx.send(()).unwrap();
+                    settle_rx.await.map_err(|_| "settle cancelled".to_string())
+                },
+                |owner| async move {
+                    validated.store(2, Ordering::SeqCst);
+                    Ok(owner)
+                },
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(stage.load(Ordering::SeqCst), 0);
+        assert!(!task.is_finished());
+        hide_tx.send(7).unwrap();
+        settling_rx.await.unwrap();
+        assert_eq!(stage.load(Ordering::SeqCst), 1);
+        assert!(!task.is_finished());
+        settle_tx.send(()).unwrap();
+        assert_eq!(task.await.unwrap().unwrap(), 7);
+        assert_eq!(stage.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn instant_lost_hide_ack_never_settles_or_builds() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<u32>();
+        drop(tx);
+        let result = seal_then_settle(
+            async { rx.await.map_err(|_| "hide ack lost".to_string()) },
+            async { panic!("settle cannot begin before hide acknowledgement") },
+            |_| async { panic!("build validation cannot begin") },
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), "hide ack lost");
+    }
+
+    #[tokio::test]
+    async fn instant_cancelled_settle_does_not_revalidate_or_build() {
+        let result = seal_then_settle(
+            async { Ok(7) },
+            async { Err("cancelled".into()) },
+            |_| async { panic!("cancelled preparation cannot build") },
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), "cancelled");
+    }
+
+    #[tokio::test]
+    async fn instant_changed_effect_or_geometry_after_settle_rejects_owner() {
+        let result = seal_then_settle(async { Ok(7) }, async { Ok(()) }, |owner| async move {
+            assert_eq!(owner, 7);
+            Err("prepared presentation changed".into())
+        })
+        .await;
+        assert_eq!(result.unwrap_err(), "prepared presentation changed");
+    }
+
+    #[tokio::test]
+    async fn instant_restore_waits_for_main_and_camera_acknowledgements() {
+        let (main_tx, main_rx) = tokio::sync::oneshot::channel();
+        let (camera_tx, camera_rx) = tokio::sync::oneshot::channel();
+        let (inputs_tx, inputs_rx) = tokio::sync::oneshot::channel();
+        let stage = Arc::new(AtomicUsize::new(0));
+        let observed = stage.clone();
+        let task = tokio::spawn(async move {
+            restore_instant_sequence(
+                async { main_rx.await.map_err(|_| "main ack lost".to_string()) },
+                || async {
+                    observed.store(1, Ordering::SeqCst);
+                    inputs_tx.send(()).unwrap();
+                },
+                || async { camera_rx.await.map_err(|_| "camera ack lost".to_string()) },
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(stage.load(Ordering::SeqCst), 0);
+        main_tx.send(()).unwrap();
+        inputs_rx.await.unwrap();
+        assert_eq!(stage.load(Ordering::SeqCst), 1);
+        assert!(!task.is_finished());
+        camera_tx.send(()).unwrap();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn instant_restore_rejected_or_lost_main_ack_never_restores_inputs() {
+        for rejected in [true, false] {
+            let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+            if rejected {
+                tx.send(Err("unsafe cleanup".into())).unwrap();
+            } else {
+                drop(tx);
+            }
+            let result = restore_instant_sequence(
+                async { rx.await.map_err(|_| "main ack lost".to_string())? },
+                || async { panic!("inputs must remain untouched") },
+                || async { panic!("camera must remain hidden") },
+            )
+            .await;
+            assert!(result.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn instant_open_cap_waits_for_stop_ack_and_never_polls_studio_pause() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(finish_main_controls(
+            Some(Phase::Recording),
+            Some(async { rx.await.map_err(|_| "stop ack lost".to_string()) }),
+            async { panic!("Instant OpenCap must not pause") },
+        ));
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+        tx.send(()).unwrap();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn instant_open_cap_preserves_stop_failure_without_pause_or_reveal_permission() {
+        let result = finish_main_controls(
+            Some(Phase::Starting),
+            Some(async { Err("capture cleanup unconfirmed".into()) }),
+            async { panic!("Instant OpenCap must not pause") },
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), "capture cleanup unconfirmed");
+    }
+
+    #[tokio::test]
+    async fn studio_open_cap_waits_for_pause_ack_before_allowing_reveal() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (paused_tx, paused_rx) = tokio::sync::oneshot::channel();
+        let reveals = Arc::new(AtomicUsize::new(0));
+        let observed = reveals.clone();
+        let task = tokio::spawn(async move {
+            finish_main_controls(
+                Some(Phase::Recording),
+                None::<std::future::Ready<Result<(), String>>>,
+                async {
+                    started_tx.send(()).unwrap();
+                    paused_rx.await.map_err(|_| "pause ack lost".to_string())
+                },
+            )
+            .await?;
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok::<(), String>(())
+        });
+        started_rx.await.unwrap();
+        assert!(!task.is_finished());
+        assert_eq!(reveals.load(Ordering::SeqCst), 0);
+        paused_tx.send(()).unwrap();
+        task.await.unwrap().unwrap();
+        assert_eq!(reveals.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn studio_open_cap_preserves_pause_failure_without_allowing_reveal() {
+        let result: Result<(), String> = async {
+            finish_main_controls(
+                Some(Phase::Recording),
+                None::<std::future::Ready<Result<(), String>>>,
+                async { Err("pause acknowledgement failed".into()) },
+            )
+            .await?;
+            panic!("a failed pause must not permit controls to be revealed")
+        }
+        .await;
+        assert_eq!(result.unwrap_err(), "pause acknowledgement failed");
+    }
+
+    #[tokio::test]
+    async fn repeated_studio_open_cap_keeps_the_recording_paused() {
+        for _ in 0..3 {
+            finish_main_controls(
+                Some(Phase::Paused),
+                None::<std::future::Ready<Result<(), String>>>,
+                async { panic!("an already paused recording must not be changed") },
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn studio_open_cap_rejects_pending_transitions_without_changing_capture() {
+        for phase in [
+            Phase::Starting,
+            Phase::Pausing,
+            Phase::Resuming,
+            Phase::ResumeFailed,
+            Phase::Restarting,
+            Phase::Stopping,
+        ] {
+            let result = finish_main_controls(
+                Some(phase),
+                None::<std::future::Ready<Result<(), String>>>,
+                async { panic!("a pending recording transition must not be changed") },
+            )
+            .await;
+            assert_eq!(
+                result.unwrap_err(),
+                "Recording is changing state. Use Ctrl+Shift+F9 to stop."
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn open_cap_keeps_preflight_visible_and_studio_pause_semantics() {
+        finish_main_controls(
+            Some(Phase::AwaitingShortcut),
+            Some(async { panic!("preflight must not issue Stop") }),
+            async { panic!("preflight must not issue Pause") },
+        )
+        .await
+        .unwrap();
+        finish_main_controls(
+            Some(Phase::Recording),
+            None::<std::future::Ready<Result<(), String>>>,
+            async { Ok(()) },
+        )
+        .await
+        .unwrap();
+    }
+
+    fn restoring() -> Inner {
+        Inner {
+            generation: 7,
+            lease: Some(Lease {
+                mode: cap_recording::RecordingMode::Instant,
+                generation: 7,
+                phase: Phase::Restoring,
+                pressed: false,
+                stop_requested: false,
+                registered_shortcut: true,
+                wayland: false,
+                stop_route: None,
+                stop_description: None,
+                stop_error: None,
+                lost_stop_routes: [false; 2],
+                recording_dir: None,
+                windows: Vec::new(),
+            }),
+            ..Inner::default()
+        }
+    }
+
+    #[test]
+    fn instant_restore_error_retains_lease_shortcut_and_error_until_successful_retry() {
+        let mut inner = restoring();
+        assert_eq!(
+            inner.complete_instant_restoration(7, Err("camera ack lost".into())),
+            None
+        );
+        assert_eq!(inner.snapshot().error.as_deref(), Some("camera ack lost"));
+        assert!(inner.lease.as_ref().unwrap().registered_shortcut);
+        assert_eq!(inner.generation, 7);
+        assert_eq!(inner.complete_instant_restoration(7, Ok(())), Some(true));
+        assert!(inner.lease.is_none());
+        assert_eq!(inner.generation, 8);
+        let receipt = inner.restored.as_ref().unwrap();
+        assert_eq!(receipt.generation, 7);
+        assert_eq!(receipt.restart_result(), Ok(()));
+    }
+
+    #[test]
+    fn instant_stop_during_restoration_prevents_restart_after_successful_window_ack() {
+        let mut inner = restoring();
+        assert!(inner.shortcut(true));
+        assert_eq!(inner.complete_instant_restoration(7, Ok(())), Some(true));
+        assert!(inner.lease.is_none());
+        assert_eq!(inner.generation, 8);
+        assert!(inner.restored.as_ref().unwrap().restart_result().is_err());
+    }
+
+    #[test]
+    fn instant_stale_restore_receipt_cannot_clear_new_lease_or_error() {
+        let mut inner = restoring();
+        assert_eq!(inner.complete_instant_restoration(6, Ok(())), None);
+        assert!(inner.restored.is_none());
+        inner.lease.as_mut().unwrap().phase = Phase::Starting;
+        assert_eq!(inner.complete_instant_restoration(7, Ok(())), None);
+        assert!(inner.lease.as_ref().unwrap().registered_shortcut);
+        assert!(inner.restored.is_none());
+    }
+}
+
+#[cfg(target_os = "linux")]
+thread_local! {
+    static WAYLAND_WINDOWS: std::cell::RefCell<std::collections::HashMap<u32, Vec<gtk::ApplicationWindow>>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn wayland_generation(app: &AppHandle) -> Option<u32> {
+    let state = app.try_state::<State>()?;
+    let inner = state.inner.lock().unwrap();
+    inner
+        .lease
+        .as_ref()
+        .filter(|lease| lease.wayland)
+        .map(|lease| lease.generation)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn describe_wayland_stop(app: &AppHandle, generation: u32, description: String) {
+    let state = app.state::<State>();
+    let mut inner = state.inner.lock().unwrap();
+    if let Some(lease) = inner
+        .lease
+        .as_mut()
+        .filter(|lease| lease.generation == generation && lease.wayland)
+    {
+        lease.stop_description = Some(description);
+    }
+    drop(inner);
+    notify(app);
+}
+
+async fn save_windows(app: &AppHandle, generation: u32) -> Result<Vec<SavedWindow>, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let result = (|| {
+            if !is_current(&handle, generation) {
+                return Err("Recording preflight was superseded".to_string());
+            }
+            #[cfg(target_os = "linux")]
+            if wayland_generation(&handle) == Some(generation) {
+                install_wayland_window_guard(&handle)?;
+                remember_wayland_windows(&handle, generation)?;
+            }
+            #[cfg(target_os = "linux")]
+            let save_all = wayland_generation(&handle) == Some(generation);
+            #[cfg(not(target_os = "linux"))]
+            let save_all = false;
+            let mut saved = Vec::new();
+            for (label, window) in handle.webview_windows() {
+                if save_all
+                    || matches!(
+                        label.parse::<CapWindowId>(),
+                        Ok(CapWindowId::Main | CapWindowId::Camera)
+                    )
+                {
+                    #[cfg(target_os = "linux")]
+                    if wayland_generation(&handle) == Some(generation) {
+                        let gtk = window.gtk_window().map_err(|error| error.to_string())?;
+                        WAYLAND_WINDOWS.with_borrow_mut(|windows| {
+                            windows.entry(generation).or_default().push(gtk)
+                        });
+                    }
+                    saved.push(SavedWindow {
+                        label,
+                        native_id: native_id(&window)?,
+                        visible: window.is_visible().map_err(|error| error.to_string())?,
+                    });
+                }
+            }
+            Ok(saved)
+        })();
+        let _ = tx.send(result);
+    })
+    .map_err(|error| error.to_string())?;
+    tokio::time::timeout(Duration::from_secs(2), rx)
+        .await
+        .map_err(|_| "Timed out saving recording windows".to_string())?
+        .map_err(|_| "Recording windows could not be saved".to_string())?
+}
+
+fn set_native_visibility(window: &WebviewWindow, visible: bool) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        let gtk = window.gtk_window().map_err(|error| error.to_string())?;
+        // Tao queues GTK visibility changes even on the UI thread; this gate needs
+        // the native change to complete before checking its acknowledgement.
+        if visible {
+            gtk.show_all();
+        } else {
+            gtk.hide();
+        }
+        if gtk.is_visible() != visible || (!visible && gtk.is_mapped()) {
+            return Err("GTK did not acknowledge the recording window visibility change".into());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if visible {
+            window.show()
+        } else {
+            window.hide()
+        }
+        .map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn wayland_fence(app: &AppHandle, generation: u32, hidden: bool) -> Result<(), String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let display = (|| {
+            use gtk::prelude::*;
+            if !is_current(&handle, generation) {
+                return Err("Recording visibility fence was superseded".to_string());
+            }
+            let gtk = if let Some(window) = CapWindowId::Main.get(&handle) {
+                window.gtk_window().map_err(|error| error.to_string())?
+            } else if !hidden && phase(&handle) == Some(Phase::Restoring) {
+                WAYLAND_WINDOWS
+                    .with_borrow(|windows| {
+                        windows
+                            .get(&generation)
+                            .and_then(|windows| windows.first())
+                            .cloned()
+                    })
+                    .ok_or("Retained recording display disappeared")?
+            } else {
+                return Err("Main recording window disappeared".into());
+            };
+            let display = gtk.display();
+            if display.type_().name() != "GdkWaylandDisplay" {
+                return Err(
+                    "The recording window is not connected to the Wayland compositor".into(),
+                );
+            }
+            Ok(display)
+        })();
+        match display {
+            Ok(display) => wayland_ack::start(display, handle, generation, hidden, tx),
+            Err(error) => {
+                let _ = tx.send(Err(error));
+            }
+        }
+    })
+    .map_err(|error| error.to_string())?;
+    tokio::time::timeout(Duration::from_secs(3), rx)
+        .await
+        .map_err(|_| "Wayland visibility acknowledgement timed out".to_string())?
+        .map_err(|_| "Wayland visibility acknowledgement was lost".to_string())??;
+    if !is_current(app, generation) {
+        return Err("Recording visibility acknowledgement was superseded".into());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+mod wayland_ack {
+    use gtk::{gdk, prelude::*};
+    use std::{
+        cell::{Cell, RefCell},
+        ffi::c_void,
+        rc::Rc,
+        time::Duration,
+    };
+    use wayland_sys::{client::*, common::*};
+
+    type Reply = tokio::sync::oneshot::Sender<Result<(), String>>;
+    struct Pending {
+        callback: Cell<*mut wl_proxy>,
+        reply: RefCell<Option<Reply>>,
+        _display: gdk::Display,
+        app: tauri::AppHandle,
+        generation: u32,
+        hidden: bool,
+    }
+    impl Pending {
+        fn finish(&self, result: Result<(), String>) {
+            let callback = self.callback.replace(std::ptr::null_mut());
+            if !callback.is_null() {
+                unsafe {
+                    (wayland_client_handle().wl_proxy_destroy)(callback);
+                }
+            }
+            if let Some(reply) = self.reply.borrow_mut().take() {
+                let _ = reply.send(result);
+            }
+        }
+    }
+    static CALLBACK: wl_interface = wl_interface {
+        name: c"wl_callback".as_ptr(),
+        version: 1,
+        request_count: 0,
+        requests: std::ptr::null(),
+        event_count: 1,
+        events: &wl_message {
+            name: c"done".as_ptr(),
+            signature: c"u".as_ptr(),
+            types: std::ptr::null(),
+        },
+    };
+    unsafe extern "C" fn dispatch(
+        _: *const c_void,
+        data: *mut c_void,
+        opcode: u32,
+        _: *const wl_message,
+        _: *const wl_argument,
+    ) -> i32 {
+        let pending = unsafe {
+            &*((wayland_client_handle().wl_proxy_get_user_data)(data.cast()).cast::<Pending>())
+        };
+        pending.finish(if opcode == 0 {
+            if pending.hidden {
+                super::verify_wayland_hidden(&pending.app, pending.generation)
+            } else {
+                super::verify_wayland_restored(&pending.app, pending.generation)
+            }
+        } else {
+            Err("Unexpected Wayland visibility acknowledgement".into())
+        });
+        0
+    }
+    pub(super) fn start(
+        display: gdk::Display,
+        app: tauri::AppHandle,
+        generation: u32,
+        hidden: bool,
+        reply: Reply,
+    ) {
+        let Some(client) = wayland_client_option() else {
+            let _ = reply.send(Err("Wayland client library is unavailable".into()));
+            return;
+        };
+        let raw =
+            unsafe { gdk_wayland_sys::gdk_wayland_display_get_wl_display(display.as_ptr().cast()) }
+                .cast::<wl_display>();
+        if raw.is_null() {
+            let _ = reply.send(Err("Wayland display connection is unavailable".into()));
+            return;
+        }
+        let mut args = [wl_argument {
+            o: std::ptr::null(),
+        }];
+        let callback = unsafe {
+            (client.wl_proxy_marshal_array_constructor)(raw.cast(), 0, args.as_mut_ptr(), &CALLBACK)
+        };
+        if callback.is_null() {
+            let _ = reply.send(Err(
+                "Could not queue Wayland visibility acknowledgement".into()
+            ));
+            return;
+        }
+        let pending = Rc::new(Pending {
+            callback: Cell::new(callback),
+            reply: RefCell::new(Some(reply)),
+            _display: display.clone(),
+            app,
+            generation,
+            hidden,
+        });
+        let result = unsafe {
+            (client.wl_proxy_add_dispatcher)(
+                callback,
+                dispatch,
+                std::ptr::null(),
+                Rc::as_ptr(&pending).cast_mut().cast(),
+            )
+        };
+        if result != 0 {
+            pending.finish(Err(
+                "Could not subscribe to Wayland visibility acknowledgement".into(),
+            ));
+            return;
+        }
+        // GDK owns dispatch on this connection. The timeout retains listener data until
+        // either the callback or timeout destroys the proxy, without reading GDK's queue.
+        gtk::glib::timeout_add_local_once(Duration::from_secs(2), move || {
+            pending.finish(Err(
+                "Wayland compositor did not acknowledge window visibility".into(),
+            ))
+        });
+        display.flush();
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn wayland_stop_lost(app: &AppHandle, generation: u32, route: StopRoute, error: String) {
+    let state = app.state::<State>();
+    let mut inner = state.inner.lock().unwrap();
+    let Some(lease) = inner
+        .lease
+        .as_mut()
+        .filter(|lease| lease.generation == generation && lease.wayland)
+    else {
+        return;
+    };
+    let stop = lease.lose_stop_route(route);
+    let studio_stop = (lease.mode == cap_recording::RecordingMode::Studio
+        && (stop || lease.stop_requested && lease.phase == Phase::Stopping))
+        .then(|| lease.recording_dir.clone())
+        .flatten();
+    if lease.stop_requested {
+        lease.stop_error = Some(error);
+    } else if route == StopRoute::Tray {
+        lease.stop_description = Some("the portal shortcut shown by your desktop".into());
+    }
+    drop(inner);
+    notify(app);
+    if let Some(directory) = studio_stop {
+        crate::recording::queue_clean_studio_stop(app, generation, directory);
+    } else if stop {
+        let app = app.clone();
+        drop(tauri::async_runtime::spawn(async move {
+            if let Err(error) = crate::recording::stop_recording(app.clone(), app.state()).await {
+                tracing::error!(%error, "Could not stop recording after losing its Stop control");
+            }
+        }));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn verify_wayland_hidden(app: &AppHandle, generation: u32) -> Result<(), String> {
+    use gtk::prelude::*;
+    if !is_current(app, generation) || stop_requested(app, generation) {
+        return Err("Recording hide acknowledgement was superseded or cancelled".into());
+    }
+    let main = CapWindowId::Main
+        .get(app)
+        .ok_or("Main recording window disappeared")?
+        .gtk_window()
+        .map_err(|error| error.to_string())?;
+    let display = main.display();
+    for window in wayland_application(app)?.windows() {
+        if window.display() != display || window.is_visible() || window.is_mapped() {
+            return Err("A Cap window is visible or uses another display connection".into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn verify_wayland_restored(app: &AppHandle, generation: u32) -> Result<(), String> {
+    use gtk::prelude::*;
+    for (saved, wanted) in wayland_restore_plan(app, generation, true)? {
+        if saved.window.is_visible() != wanted || saved.window.is_mapped() != wanted {
+            return Err("The compositor restore acknowledgement did not match Cap windows".into());
+        }
+    }
+    Ok(())
+}
+
+fn wayland_blocks_mapping(phase: Phase) -> bool {
+    !matches!(
+        phase,
+        Phase::AwaitingShortcut | Phase::Paused | Phase::Restoring
+    )
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn restore_floating_window(label: Option<&str>) -> bool {
+    !matches!(
+        label.and_then(|label| label.parse::<CapWindowId>().ok()),
+        Some(
+            CapWindowId::RecordingControls
+                | CapWindowId::TargetSelectOverlay { .. }
+                | CapWindowId::WindowCaptureOccluder { .. }
+                | CapWindowId::CaptureArea
+        )
+    )
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone)]
+struct RetainedWaylandWindow {
+    window: gtk::Window,
+    label: Option<String>,
+    visible: bool,
+    requested_during_stop: bool,
+}
+
+#[cfg(target_os = "linux")]
+thread_local! {
+    static WAYLAND_GUARD_APPLICATION: std::cell::RefCell<Option<gtk::glib::WeakRef<gtk::Application>>> = const { std::cell::RefCell::new(None) };
+    static WAYLAND_GUARDED_WINDOWS: std::cell::RefCell<Vec<gtk::glib::WeakRef<gtk::Window>>> = const { std::cell::RefCell::new(Vec::new()) };
+    static WAYLAND_CAPTURE_WINDOWS: std::cell::RefCell<std::collections::HashMap<u32, Vec<RetainedWaylandWindow>>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_application(app: &AppHandle) -> Result<gtk::Application, String> {
+    use gtk::prelude::*;
+    CapWindowId::Main
+        .get(app)
+        .ok_or("Main recording window disappeared")?
+        .gtk_window()
+        .map_err(|error| error.to_string())?
+        .application()
+        .ok_or("Recording GTK application disappeared".into())
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_window_label(app: &AppHandle, native: &gtk::Window) -> Option<String> {
+    use gtk::prelude::*;
+    app.webview_windows()
+        .into_iter()
+        .find_map(|(label, window)| {
+            window
+                .gtk_window()
+                .ok()
+                .filter(|window| window.upcast_ref::<gtk::Window>() == native)
+                .map(|_| label)
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn remember_wayland_window(
+    app: &AppHandle,
+    generation: u32,
+    window: &gtk::Window,
+    during_stop: bool,
+) {
+    use gtk::prelude::*;
+    let label = wayland_window_label(app, window);
+    WAYLAND_CAPTURE_WINDOWS.with_borrow_mut(|windows| {
+        let windows = windows.entry(generation).or_default();
+        if let Some(saved) = windows.iter_mut().find(|saved| saved.window == *window) {
+            if during_stop {
+                saved.requested_during_stop = true;
+            }
+        } else {
+            windows.push(RetainedWaylandWindow {
+                window: window.clone(),
+                label,
+                visible: window.is_visible(),
+                requested_during_stop: during_stop,
+            });
+        }
+    });
+}
+
+#[cfg(target_os = "linux")]
+fn guard_wayland_window(app: &AppHandle, window: &gtk::Window) {
+    use gtk::prelude::*;
+    let already_guarded = WAYLAND_GUARDED_WINDOWS.with_borrow_mut(|windows| {
+        windows.retain(|window| window.upgrade().is_some());
+        if windows
+            .iter()
+            .any(|saved| saved.upgrade().as_ref() == Some(window))
+        {
+            true
+        } else {
+            windows.push(window.downgrade());
+            false
+        }
+    });
+    if already_guarded {
+        return;
+    }
+    let app = app.clone();
+    window.connect_map(move |window| {
+        let blocked = {
+            let state = app.state::<State>();
+            let inner = state.inner.lock().unwrap();
+            inner
+                .lease
+                .as_ref()
+                .filter(|lease| lease.wayland && wayland_blocks_mapping(lease.phase))
+                .map(|lease| (lease.generation, lease.phase == Phase::Stopping))
+        };
+        if let Some((generation, during_stop)) = blocked {
+            remember_wayland_window(&app, generation, window, during_stop);
+            // GTK's map default handler sends an empty Wayland commit with updates frozen
+            // until initial configure. This synchronous handler unmaps before that dispatch.
+            window.hide();
+        }
+    });
+}
+
+#[cfg(target_os = "linux")]
+fn install_wayland_window_guard(app: &AppHandle) -> Result<(), String> {
+    use gtk::prelude::*;
+    let application = wayland_application(app)?;
+    let installed = WAYLAND_GUARD_APPLICATION
+        .with_borrow(|saved| saved.as_ref().and_then(gtk::glib::WeakRef::upgrade));
+    if let Some(installed) = installed {
+        if installed != application {
+            return Err("Recording GTK application identity changed".into());
+        }
+        return Ok(());
+    }
+    let handle = app.clone();
+    application.connect_window_added(move |_, window| guard_wayland_window(&handle, window));
+    for window in application.windows() {
+        guard_wayland_window(app, &window);
+    }
+    WAYLAND_GUARD_APPLICATION.with_borrow_mut(|saved| *saved = Some(application.downgrade()));
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn remember_wayland_windows(app: &AppHandle, generation: u32) -> Result<(), String> {
+    use gtk::prelude::*;
+    for window in wayland_application(app)?.windows() {
+        remember_wayland_window(app, generation, &window, false);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn hide_wayland_windows(app: &AppHandle, generation: u32) -> Result<(), String> {
+    use gtk::prelude::*;
+    remember_wayland_windows(app, generation)?;
+    for window in wayland_application(app)?.windows() {
+        window.hide();
+        if window.is_visible() || window.is_mapped() {
+            return Err("GTK could not hide a Cap window".into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn admit_wayland_window_creation(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<State>();
+    let inner = state.inner.lock().unwrap();
+    if inner.lease.as_ref().is_some_and(|lease| {
+        lease.wayland && wayland_blocks_mapping(lease.phase) && lease.phase != Phase::Stopping
+    }) {
+        return Err("Pause or stop recording before opening another Cap window".into());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn wayland_restore_plan(
+    app: &AppHandle,
+    generation: u32,
+    require_inputs: bool,
+) -> Result<Vec<(RetainedWaylandWindow, bool)>, String> {
+    use gtk::prelude::*;
+    let saved_main = {
+        let state = app.state::<State>();
+        let inner = state.inner.lock().unwrap();
+        let lease = inner
+            .lease
+            .as_ref()
+            .filter(|lease| lease.generation == generation && lease.phase == Phase::Restoring)
+            .ok_or("Wayland restoration was superseded")?;
+        lease
+            .windows
+            .iter()
+            .find(|window| window.label == CapWindowId::Main.label())
+            .cloned()
+    };
+    let requested = if require_inputs {
+        Some(
+            app.state::<crate::RequestedInputsState>()
+                .ready_snapshot()?,
+        )
+    } else {
+        None
+    };
+    let retained = WAYLAND_CAPTURE_WINDOWS
+        .with_borrow(|windows| windows.get(&generation).cloned())
+        .ok_or("Retained Wayland windows disappeared")?;
+    let application = WAYLAND_GUARD_APPLICATION
+        .with_borrow(|saved| saved.as_ref().and_then(gtk::glib::WeakRef::upgrade))
+        .ok_or("Retained GTK application disappeared")?;
+    let current = application.windows();
+    let mut result = Vec::new();
+    for mut saved in retained {
+        let label = wayland_window_label(app, &saved.window);
+        let label_changed = saved.label.is_some() && saved.label != label;
+        if saved.label.is_none() {
+            saved.label = label;
+        }
+        let camera = saved
+            .label
+            .as_deref()
+            .is_some_and(|label| matches!(label.parse(), Ok(CapWindowId::Camera)));
+        let editor = saved
+            .label
+            .as_deref()
+            .is_some_and(|label| matches!(label.parse(), Ok(CapWindowId::Editor { .. })));
+        let mut wanted = (saved.visible || (editor && saved.requested_during_stop))
+            && restore_floating_window(saved.label.as_deref())
+            && (!camera
+                || requested
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.camera.value.is_some()));
+        if saved.label.as_deref() == Some("main") {
+            wanted = saved_main.as_ref().is_some_and(|saved| saved.visible);
+        }
+        if wanted && label_changed {
+            return Err("A retained Cap window changed identity".into());
+        }
+        if wanted && !current.contains(&saved.window) {
+            return Err("A retained Cap window disappeared before restoration".into());
+        }
+        result.push((saved, wanted));
+    }
+    if requested.as_ref().is_some_and(|requested| {
+        !app.state::<crate::RequestedInputsState>()
+            .is_current(requested)
+    }) {
+        return Err("Requested inputs changed during Wayland restoration".into());
+    }
+    Ok(result)
+}
+
+#[cfg(target_os = "linux")]
+fn restore_wayland_windows(
+    app: &AppHandle,
+    generation: u32,
+    main_only: bool,
+) -> Result<(), String> {
+    use gtk::prelude::*;
+    for (saved, wanted) in wayland_restore_plan(app, generation, !main_only)? {
+        if (saved.label.as_deref() == Some("main")) != main_only {
+            continue;
+        }
+        if wanted {
+            saved.window.show_all();
+            if saved.requested_during_stop
+                && saved
+                    .label
+                    .as_deref()
+                    .is_some_and(|label| matches!(label.parse(), Ok(CapWindowId::Editor { .. })))
+            {
+                saved.window.present();
+            }
+        } else {
+            saved.window.hide();
+        }
+        if saved.window.is_visible() != wanted || (!wanted && saved.window.is_mapped()) {
+            return Err("GTK did not acknowledge Cap window restoration".into());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2411,6 +3659,8 @@ mod tests {
     fn fixture() -> Inner {
         Inner {
             generation: 1,
+            stop_notice: None,
+            stop_notice_sequence: 0,
             control_error: None,
             restored: None,
             #[cfg(target_os = "linux")]
@@ -3310,952 +4560,4 @@ mod tests {
         inner.generation = 2;
         assert!(inner.snapshot().error.is_none());
     }
-}
-
-#[cfg(all(test, target_os = "linux"))]
-mod instant_activation_tests {
-    use super::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-
-    #[tokio::test]
-    async fn instant_seal_waits_for_hide_ack_then_settle_then_revalidates() {
-        let (hide_tx, hide_rx) = tokio::sync::oneshot::channel();
-        let (settle_tx, settle_rx) = tokio::sync::oneshot::channel();
-        let (settling_tx, settling_rx) = tokio::sync::oneshot::channel();
-        let stage = Arc::new(AtomicUsize::new(0));
-        let observed = stage.clone();
-        let task = tokio::spawn(async move {
-            let validated = observed.clone();
-            seal_then_settle(
-                async { hide_rx.await.map_err(|_| "hide ack lost".to_string()) },
-                async {
-                    observed.store(1, Ordering::SeqCst);
-                    settling_tx.send(()).unwrap();
-                    settle_rx.await.map_err(|_| "settle cancelled".to_string())
-                },
-                |owner| async move {
-                    validated.store(2, Ordering::SeqCst);
-                    Ok(owner)
-                },
-            )
-            .await
-        });
-        tokio::task::yield_now().await;
-        assert_eq!(stage.load(Ordering::SeqCst), 0);
-        assert!(!task.is_finished());
-        hide_tx.send(7).unwrap();
-        settling_rx.await.unwrap();
-        assert_eq!(stage.load(Ordering::SeqCst), 1);
-        assert!(!task.is_finished());
-        settle_tx.send(()).unwrap();
-        assert_eq!(task.await.unwrap().unwrap(), 7);
-        assert_eq!(stage.load(Ordering::SeqCst), 2);
-    }
-
-    #[tokio::test]
-    async fn instant_lost_hide_ack_never_settles_or_builds() {
-        let (tx, rx) = tokio::sync::oneshot::channel::<u32>();
-        drop(tx);
-        let result = seal_then_settle(
-            async { rx.await.map_err(|_| "hide ack lost".to_string()) },
-            async { panic!("settle cannot begin before hide acknowledgement") },
-            |_| async { panic!("build validation cannot begin") },
-        )
-        .await;
-        assert_eq!(result.unwrap_err(), "hide ack lost");
-    }
-
-    #[tokio::test]
-    async fn instant_cancelled_settle_does_not_revalidate_or_build() {
-        let result = seal_then_settle(
-            async { Ok(7) },
-            async { Err("cancelled".into()) },
-            |_| async { panic!("cancelled preparation cannot build") },
-        )
-        .await;
-        assert_eq!(result.unwrap_err(), "cancelled");
-    }
-
-    #[tokio::test]
-    async fn instant_changed_effect_or_geometry_after_settle_rejects_owner() {
-        let result = seal_then_settle(async { Ok(7) }, async { Ok(()) }, |owner| async move {
-            assert_eq!(owner, 7);
-            Err("prepared presentation changed".into())
-        })
-        .await;
-        assert_eq!(result.unwrap_err(), "prepared presentation changed");
-    }
-
-    #[tokio::test]
-    async fn instant_restore_waits_for_main_and_camera_acknowledgements() {
-        let (main_tx, main_rx) = tokio::sync::oneshot::channel();
-        let (camera_tx, camera_rx) = tokio::sync::oneshot::channel();
-        let (inputs_tx, inputs_rx) = tokio::sync::oneshot::channel();
-        let stage = Arc::new(AtomicUsize::new(0));
-        let observed = stage.clone();
-        let task = tokio::spawn(async move {
-            restore_instant_sequence(
-                async { main_rx.await.map_err(|_| "main ack lost".to_string()) },
-                || async {
-                    observed.store(1, Ordering::SeqCst);
-                    inputs_tx.send(()).unwrap();
-                },
-                || async { camera_rx.await.map_err(|_| "camera ack lost".to_string()) },
-            )
-            .await
-        });
-        tokio::task::yield_now().await;
-        assert_eq!(stage.load(Ordering::SeqCst), 0);
-        main_tx.send(()).unwrap();
-        inputs_rx.await.unwrap();
-        assert_eq!(stage.load(Ordering::SeqCst), 1);
-        assert!(!task.is_finished());
-        camera_tx.send(()).unwrap();
-        task.await.unwrap().unwrap();
-    }
-
-    #[tokio::test]
-    async fn instant_restore_rejected_or_lost_main_ack_never_restores_inputs() {
-        for rejected in [true, false] {
-            let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
-            if rejected {
-                tx.send(Err("unsafe cleanup".into())).unwrap();
-            } else {
-                drop(tx);
-            }
-            let result = restore_instant_sequence(
-                async { rx.await.map_err(|_| "main ack lost".to_string())? },
-                || async { panic!("inputs must remain untouched") },
-                || async { panic!("camera must remain hidden") },
-            )
-            .await;
-            assert!(result.is_err());
-        }
-    }
-
-    #[tokio::test]
-    async fn instant_open_cap_waits_for_stop_ack_and_never_polls_studio_pause() {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let task = tokio::spawn(finish_main_controls(
-            Some(Phase::Recording),
-            Some(async { rx.await.map_err(|_| "stop ack lost".to_string()) }),
-            async { panic!("Instant OpenCap must not pause") },
-        ));
-        tokio::task::yield_now().await;
-        assert!(!task.is_finished());
-        tx.send(()).unwrap();
-        task.await.unwrap().unwrap();
-    }
-
-    #[tokio::test]
-    async fn instant_open_cap_preserves_stop_failure_without_pause_or_reveal_permission() {
-        let result = finish_main_controls(
-            Some(Phase::Starting),
-            Some(async { Err("capture cleanup unconfirmed".into()) }),
-            async { panic!("Instant OpenCap must not pause") },
-        )
-        .await;
-        assert_eq!(result.unwrap_err(), "capture cleanup unconfirmed");
-    }
-
-    #[tokio::test]
-    async fn studio_open_cap_waits_for_pause_ack_before_allowing_reveal() {
-        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-        let (paused_tx, paused_rx) = tokio::sync::oneshot::channel();
-        let reveals = Arc::new(AtomicUsize::new(0));
-        let observed = reveals.clone();
-        let task = tokio::spawn(async move {
-            finish_main_controls(
-                Some(Phase::Recording),
-                None::<std::future::Ready<Result<(), String>>>,
-                async {
-                    started_tx.send(()).unwrap();
-                    paused_rx.await.map_err(|_| "pause ack lost".to_string())
-                },
-            )
-            .await?;
-            observed.fetch_add(1, Ordering::SeqCst);
-            Ok::<(), String>(())
-        });
-        started_rx.await.unwrap();
-        assert!(!task.is_finished());
-        assert_eq!(reveals.load(Ordering::SeqCst), 0);
-        paused_tx.send(()).unwrap();
-        task.await.unwrap().unwrap();
-        assert_eq!(reveals.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn studio_open_cap_preserves_pause_failure_without_allowing_reveal() {
-        let result: Result<(), String> = async {
-            finish_main_controls(
-                Some(Phase::Recording),
-                None::<std::future::Ready<Result<(), String>>>,
-                async { Err("pause acknowledgement failed".into()) },
-            )
-            .await?;
-            panic!("a failed pause must not permit controls to be revealed")
-        }
-        .await;
-        assert_eq!(result.unwrap_err(), "pause acknowledgement failed");
-    }
-
-    #[tokio::test]
-    async fn repeated_studio_open_cap_keeps_the_recording_paused() {
-        for _ in 0..3 {
-            finish_main_controls(
-                Some(Phase::Paused),
-                None::<std::future::Ready<Result<(), String>>>,
-                async { panic!("an already paused recording must not be changed") },
-            )
-            .await
-            .unwrap();
-        }
-    }
-
-    #[tokio::test]
-    async fn studio_open_cap_rejects_pending_transitions_without_changing_capture() {
-        for phase in [
-            Phase::Starting,
-            Phase::Pausing,
-            Phase::Resuming,
-            Phase::ResumeFailed,
-            Phase::Restarting,
-            Phase::Stopping,
-        ] {
-            let result = finish_main_controls(
-                Some(phase),
-                None::<std::future::Ready<Result<(), String>>>,
-                async { panic!("a pending recording transition must not be changed") },
-            )
-            .await;
-            assert_eq!(
-                result.unwrap_err(),
-                "Recording is changing state. Use Ctrl+Shift+F9 to stop."
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn open_cap_keeps_preflight_visible_and_studio_pause_semantics() {
-        finish_main_controls(
-            Some(Phase::AwaitingShortcut),
-            Some(async { panic!("preflight must not issue Stop") }),
-            async { panic!("preflight must not issue Pause") },
-        )
-        .await
-        .unwrap();
-        finish_main_controls(
-            Some(Phase::Recording),
-            None::<std::future::Ready<Result<(), String>>>,
-            async { Ok(()) },
-        )
-        .await
-        .unwrap();
-    }
-
-    fn restoring() -> Inner {
-        Inner {
-            generation: 7,
-            lease: Some(Lease {
-                mode: cap_recording::RecordingMode::Instant,
-                generation: 7,
-                phase: Phase::Restoring,
-                pressed: false,
-                stop_requested: false,
-                registered_shortcut: true,
-                wayland: false,
-                stop_route: None,
-                stop_description: None,
-                stop_error: None,
-                lost_stop_routes: [false; 2],
-                recording_dir: None,
-                windows: Vec::new(),
-            }),
-            ..Inner::default()
-        }
-    }
-
-    #[test]
-    fn instant_restore_error_retains_lease_shortcut_and_error_until_successful_retry() {
-        let mut inner = restoring();
-        assert_eq!(
-            inner.complete_instant_restoration(7, Err("camera ack lost".into())),
-            None
-        );
-        assert_eq!(inner.snapshot().error.as_deref(), Some("camera ack lost"));
-        assert!(inner.lease.as_ref().unwrap().registered_shortcut);
-        assert_eq!(inner.generation, 7);
-        assert_eq!(inner.complete_instant_restoration(7, Ok(())), Some(true));
-        assert!(inner.lease.is_none());
-        assert_eq!(inner.generation, 8);
-        let receipt = inner.restored.as_ref().unwrap();
-        assert_eq!(receipt.generation, 7);
-        assert_eq!(receipt.restart_result(), Ok(()));
-    }
-
-    #[test]
-    fn instant_stop_during_restoration_prevents_restart_after_successful_window_ack() {
-        let mut inner = restoring();
-        assert!(inner.shortcut(true));
-        assert_eq!(inner.complete_instant_restoration(7, Ok(())), Some(true));
-        assert!(inner.lease.is_none());
-        assert_eq!(inner.generation, 8);
-        assert!(inner.restored.as_ref().unwrap().restart_result().is_err());
-    }
-
-    #[test]
-    fn instant_stale_restore_receipt_cannot_clear_new_lease_or_error() {
-        let mut inner = restoring();
-        assert_eq!(inner.complete_instant_restoration(6, Ok(())), None);
-        assert!(inner.restored.is_none());
-        inner.lease.as_mut().unwrap().phase = Phase::Starting;
-        assert_eq!(inner.complete_instant_restoration(7, Ok(())), None);
-        assert!(inner.lease.as_ref().unwrap().registered_shortcut);
-        assert!(inner.restored.is_none());
-    }
-}
-
-#[cfg(target_os = "linux")]
-thread_local! {
-    static WAYLAND_WINDOWS: std::cell::RefCell<std::collections::HashMap<u32, Vec<gtk::ApplicationWindow>>> = std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn wayland_generation(app: &AppHandle) -> Option<u32> {
-    let state = app.try_state::<State>()?;
-    let inner = state.inner.lock().unwrap();
-    inner
-        .lease
-        .as_ref()
-        .filter(|lease| lease.wayland)
-        .map(|lease| lease.generation)
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn describe_wayland_stop(app: &AppHandle, generation: u32, description: String) {
-    let state = app.state::<State>();
-    let mut inner = state.inner.lock().unwrap();
-    if let Some(lease) = inner
-        .lease
-        .as_mut()
-        .filter(|lease| lease.generation == generation && lease.wayland)
-    {
-        lease.stop_description = Some(description);
-    }
-    drop(inner);
-    notify(app);
-}
-
-async fn save_windows(app: &AppHandle, generation: u32) -> Result<Vec<SavedWindow>, String> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let handle = app.clone();
-    app.run_on_main_thread(move || {
-        let result = (|| {
-            if !is_current(&handle, generation) {
-                return Err("Recording preflight was superseded".to_string());
-            }
-            #[cfg(target_os = "linux")]
-            if wayland_generation(&handle) == Some(generation) {
-                install_wayland_window_guard(&handle)?;
-                remember_wayland_windows(&handle, generation)?;
-            }
-            #[cfg(target_os = "linux")]
-            let save_all = wayland_generation(&handle) == Some(generation);
-            #[cfg(not(target_os = "linux"))]
-            let save_all = false;
-            let mut saved = Vec::new();
-            for (label, window) in handle.webview_windows() {
-                if save_all
-                    || matches!(
-                        label.parse::<CapWindowId>(),
-                        Ok(CapWindowId::Main | CapWindowId::Camera)
-                    )
-                {
-                    #[cfg(target_os = "linux")]
-                    if wayland_generation(&handle) == Some(generation) {
-                        let gtk = window.gtk_window().map_err(|error| error.to_string())?;
-                        WAYLAND_WINDOWS.with_borrow_mut(|windows| {
-                            windows.entry(generation).or_default().push(gtk)
-                        });
-                    }
-                    saved.push(SavedWindow {
-                        label,
-                        native_id: native_id(&window)?,
-                        visible: window.is_visible().map_err(|error| error.to_string())?,
-                    });
-                }
-            }
-            Ok(saved)
-        })();
-        let _ = tx.send(result);
-    })
-    .map_err(|error| error.to_string())?;
-    tokio::time::timeout(Duration::from_secs(2), rx)
-        .await
-        .map_err(|_| "Timed out saving recording windows".to_string())?
-        .map_err(|_| "Recording windows could not be saved".to_string())?
-}
-
-fn set_native_visibility(window: &WebviewWindow, visible: bool) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
-    {
-        use gtk::prelude::*;
-        let gtk = window.gtk_window().map_err(|error| error.to_string())?;
-        // Tao queues GTK visibility changes even on the UI thread; this gate needs
-        // the native change to complete before checking its acknowledgement.
-        if visible {
-            if cap_recording::screenshot::uses_wayland_portal() {
-                gtk.show();
-            } else {
-                gtk.show_all();
-            }
-        } else {
-            gtk.hide();
-        }
-        if gtk.is_visible() != visible || (!visible && gtk.is_mapped()) {
-            return Err("GTK did not acknowledge the recording window visibility change".into());
-        }
-        Ok(())
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        if visible {
-            window.show()
-        } else {
-            window.hide()
-        }
-        .map_err(|error| error.to_string())
-    }
-}
-
-#[cfg(target_os = "linux")]
-async fn wayland_fence(app: &AppHandle, generation: u32, hidden: bool) -> Result<(), String> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let handle = app.clone();
-    app.run_on_main_thread(move || {
-        let display = (|| {
-            use gtk::prelude::*;
-            if !is_current(&handle, generation) {
-                return Err("Recording visibility fence was superseded".to_string());
-            }
-            let gtk = if let Some(window) = CapWindowId::Main.get(&handle) {
-                window.gtk_window().map_err(|error| error.to_string())?
-            } else if !hidden && phase(&handle) == Some(Phase::Restoring) {
-                WAYLAND_WINDOWS
-                    .with_borrow(|windows| {
-                        windows
-                            .get(&generation)
-                            .and_then(|windows| windows.first())
-                            .cloned()
-                    })
-                    .ok_or("Retained recording display disappeared")?
-            } else {
-                return Err("Main recording window disappeared".into());
-            };
-            let display = gtk.display();
-            if display.type_().name() != "GdkWaylandDisplay" {
-                return Err(
-                    "The recording window is not connected to the Wayland compositor".into(),
-                );
-            }
-            Ok(display)
-        })();
-        match display {
-            Ok(display) => wayland_ack::start(display, handle, generation, hidden, tx),
-            Err(error) => {
-                let _ = tx.send(Err(error));
-            }
-        }
-    })
-    .map_err(|error| error.to_string())?;
-    tokio::time::timeout(Duration::from_secs(3), rx)
-        .await
-        .map_err(|_| "Wayland visibility acknowledgement timed out".to_string())?
-        .map_err(|_| "Wayland visibility acknowledgement was lost".to_string())??;
-    if !is_current(app, generation) {
-        return Err("Recording visibility acknowledgement was superseded".into());
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-mod wayland_ack {
-    use gtk::{gdk, prelude::*};
-    use std::{
-        cell::{Cell, RefCell},
-        ffi::c_void,
-        rc::Rc,
-        time::Duration,
-    };
-    use wayland_sys::{client::*, common::*};
-
-    type Reply = tokio::sync::oneshot::Sender<Result<(), String>>;
-    struct Pending {
-        callback: Cell<*mut wl_proxy>,
-        reply: RefCell<Option<Reply>>,
-        _display: gdk::Display,
-        app: tauri::AppHandle,
-        generation: u32,
-        hidden: bool,
-    }
-    impl Pending {
-        fn finish(&self, result: Result<(), String>) {
-            let callback = self.callback.replace(std::ptr::null_mut());
-            if !callback.is_null() {
-                unsafe {
-                    (wayland_client_handle().wl_proxy_destroy)(callback);
-                }
-            }
-            if let Some(reply) = self.reply.borrow_mut().take() {
-                let _ = reply.send(result);
-            }
-        }
-    }
-    static CALLBACK: wl_interface = wl_interface {
-        name: c"wl_callback".as_ptr(),
-        version: 1,
-        request_count: 0,
-        requests: std::ptr::null(),
-        event_count: 1,
-        events: &wl_message {
-            name: c"done".as_ptr(),
-            signature: c"u".as_ptr(),
-            types: std::ptr::null(),
-        },
-    };
-    unsafe extern "C" fn dispatch(
-        _: *const c_void,
-        data: *mut c_void,
-        opcode: u32,
-        _: *const wl_message,
-        _: *const wl_argument,
-    ) -> i32 {
-        let pending = unsafe {
-            &*((wayland_client_handle().wl_proxy_get_user_data)(data.cast()).cast::<Pending>())
-        };
-        pending.finish(if opcode == 0 {
-            if pending.hidden {
-                super::verify_wayland_hidden(&pending.app, pending.generation)
-            } else {
-                super::verify_wayland_restored(&pending.app, pending.generation)
-            }
-        } else {
-            Err("Unexpected Wayland visibility acknowledgement".into())
-        });
-        0
-    }
-    pub(super) fn start(
-        display: gdk::Display,
-        app: tauri::AppHandle,
-        generation: u32,
-        hidden: bool,
-        reply: Reply,
-    ) {
-        let Some(client) = wayland_client_option() else {
-            let _ = reply.send(Err("Wayland client library is unavailable".into()));
-            return;
-        };
-        let raw =
-            unsafe { gdk_wayland_sys::gdk_wayland_display_get_wl_display(display.as_ptr().cast()) }
-                .cast::<wl_display>();
-        if raw.is_null() {
-            let _ = reply.send(Err("Wayland display connection is unavailable".into()));
-            return;
-        }
-        let mut args = [wl_argument {
-            o: std::ptr::null(),
-        }];
-        let callback = unsafe {
-            (client.wl_proxy_marshal_array_constructor)(raw.cast(), 0, args.as_mut_ptr(), &CALLBACK)
-        };
-        if callback.is_null() {
-            let _ = reply.send(Err(
-                "Could not queue Wayland visibility acknowledgement".into()
-            ));
-            return;
-        }
-        let pending = Rc::new(Pending {
-            callback: Cell::new(callback),
-            reply: RefCell::new(Some(reply)),
-            _display: display.clone(),
-            app,
-            generation,
-            hidden,
-        });
-        let result = unsafe {
-            (client.wl_proxy_add_dispatcher)(
-                callback,
-                dispatch,
-                std::ptr::null(),
-                Rc::as_ptr(&pending).cast_mut().cast(),
-            )
-        };
-        if result != 0 {
-            pending.finish(Err(
-                "Could not subscribe to Wayland visibility acknowledgement".into(),
-            ));
-            return;
-        }
-        // GDK owns dispatch on this connection. The timeout retains listener data until
-        // either the callback or timeout destroys the proxy, without reading GDK's queue.
-        gtk::glib::timeout_add_local_once(Duration::from_secs(2), move || {
-            pending.finish(Err(
-                "Wayland compositor did not acknowledge window visibility".into(),
-            ))
-        });
-        display.flush();
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn wayland_stop_lost(app: &AppHandle, generation: u32, route: StopRoute, error: String) {
-    let state = app.state::<State>();
-    let mut inner = state.inner.lock().unwrap();
-    let Some(lease) = inner
-        .lease
-        .as_mut()
-        .filter(|lease| lease.generation == generation && lease.wayland)
-    else {
-        return;
-    };
-    let stop = lease.lose_stop_route(route);
-    if lease.stop_requested {
-        lease.stop_error = Some(error);
-    } else if route == StopRoute::Tray {
-        lease.stop_description = Some("the portal shortcut shown by your desktop".into());
-    }
-    drop(inner);
-    notify(app);
-    if stop {
-        let app = app.clone();
-        drop(tauri::async_runtime::spawn(async move {
-            if let Err(error) = crate::recording::stop_recording(app.clone(), app.state()).await {
-                tracing::error!(%error, "Could not stop recording after losing its Stop control");
-            }
-        }));
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn verify_wayland_hidden(app: &AppHandle, generation: u32) -> Result<(), String> {
-    use gtk::prelude::*;
-    if !is_current(app, generation) || stop_requested(app, generation) {
-        return Err("Recording hide acknowledgement was superseded or cancelled".into());
-    }
-    let main = CapWindowId::Main
-        .get(app)
-        .ok_or("Main recording window disappeared")?
-        .gtk_window()
-        .map_err(|error| error.to_string())?;
-    let display = main.display();
-    for window in wayland_application(app)?.windows() {
-        if window.display() != display || window.is_visible() || window.is_mapped() {
-            return Err("A Cap window is visible or uses another display connection".into());
-        }
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn verify_wayland_restored(app: &AppHandle, generation: u32) -> Result<(), String> {
-    use gtk::prelude::*;
-    for (saved, wanted) in wayland_restore_plan(app, generation, true)? {
-        if saved.window.is_visible() != wanted || saved.window.is_mapped() != wanted {
-            return Err("The compositor restore acknowledgement did not match Cap windows".into());
-        }
-    }
-    Ok(())
-}
-
-fn wayland_blocks_mapping(phase: Phase) -> bool {
-    !matches!(
-        phase,
-        Phase::AwaitingShortcut | Phase::Paused | Phase::Restoring
-    )
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn restore_floating_window(label: Option<&str>) -> bool {
-    !matches!(
-        label.and_then(|label| label.parse::<CapWindowId>().ok()),
-        Some(
-            CapWindowId::RecordingControls
-                | CapWindowId::TargetSelectOverlay { .. }
-                | CapWindowId::WindowCaptureOccluder { .. }
-                | CapWindowId::CaptureArea
-        )
-    )
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone)]
-struct RetainedWaylandWindow {
-    window: gtk::Window,
-    label: Option<String>,
-    visible: bool,
-    requested_during_stop: bool,
-}
-
-#[cfg(target_os = "linux")]
-thread_local! {
-    static WAYLAND_GUARD_APPLICATION: std::cell::RefCell<Option<gtk::glib::WeakRef<gtk::Application>>> = const { std::cell::RefCell::new(None) };
-    static WAYLAND_GUARDED_WINDOWS: std::cell::RefCell<Vec<gtk::glib::WeakRef<gtk::Window>>> = const { std::cell::RefCell::new(Vec::new()) };
-    static WAYLAND_CAPTURE_WINDOWS: std::cell::RefCell<std::collections::HashMap<u32, Vec<RetainedWaylandWindow>>> = std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
-#[cfg(target_os = "linux")]
-fn wayland_application(app: &AppHandle) -> Result<gtk::Application, String> {
-    use gtk::prelude::*;
-    CapWindowId::Main
-        .get(app)
-        .ok_or("Main recording window disappeared")?
-        .gtk_window()
-        .map_err(|error| error.to_string())?
-        .application()
-        .ok_or("Recording GTK application disappeared".into())
-}
-
-#[cfg(target_os = "linux")]
-fn wayland_window_label(app: &AppHandle, native: &gtk::Window) -> Option<String> {
-    use gtk::prelude::*;
-    app.webview_windows()
-        .into_iter()
-        .find_map(|(label, window)| {
-            window
-                .gtk_window()
-                .ok()
-                .filter(|window| window.upcast_ref::<gtk::Window>() == native)
-                .map(|_| label)
-        })
-}
-
-#[cfg(target_os = "linux")]
-fn remember_wayland_window(
-    app: &AppHandle,
-    generation: u32,
-    window: &gtk::Window,
-    during_stop: bool,
-) {
-    use gtk::prelude::*;
-    let label = wayland_window_label(app, window);
-    WAYLAND_CAPTURE_WINDOWS.with_borrow_mut(|windows| {
-        let windows = windows.entry(generation).or_default();
-        if let Some(saved) = windows.iter_mut().find(|saved| saved.window == *window) {
-            if during_stop {
-                saved.requested_during_stop = true;
-            }
-        } else {
-            windows.push(RetainedWaylandWindow {
-                window: window.clone(),
-                label,
-                visible: window.is_visible(),
-                requested_during_stop: during_stop,
-            });
-        }
-    });
-}
-
-#[cfg(target_os = "linux")]
-fn guard_wayland_window(app: &AppHandle, window: &gtk::Window) {
-    use gtk::prelude::*;
-    let already_guarded = WAYLAND_GUARDED_WINDOWS.with_borrow_mut(|windows| {
-        windows.retain(|window| window.upgrade().is_some());
-        if windows
-            .iter()
-            .any(|saved| saved.upgrade().as_ref() == Some(window))
-        {
-            true
-        } else {
-            windows.push(window.downgrade());
-            false
-        }
-    });
-    if already_guarded {
-        return;
-    }
-    let app = app.clone();
-    window.connect_map(move |window| {
-        let blocked = {
-            let state = app.state::<State>();
-            let inner = state.inner.lock().unwrap();
-            inner
-                .lease
-                .as_ref()
-                .filter(|lease| lease.wayland && wayland_blocks_mapping(lease.phase))
-                .map(|lease| (lease.generation, lease.phase == Phase::Stopping))
-        };
-        if let Some((generation, during_stop)) = blocked {
-            remember_wayland_window(&app, generation, window, during_stop);
-            // GTK's map default handler sends an empty Wayland commit with updates frozen
-            // until initial configure. This synchronous handler unmaps before that dispatch.
-            window.hide();
-        }
-    });
-}
-
-#[cfg(target_os = "linux")]
-fn install_wayland_window_guard(app: &AppHandle) -> Result<(), String> {
-    use gtk::prelude::*;
-    let application = wayland_application(app)?;
-    let installed = WAYLAND_GUARD_APPLICATION
-        .with_borrow(|saved| saved.as_ref().and_then(gtk::glib::WeakRef::upgrade));
-    if let Some(installed) = installed {
-        if installed != application {
-            return Err("Recording GTK application identity changed".into());
-        }
-        return Ok(());
-    }
-    let handle = app.clone();
-    application.connect_window_added(move |_, window| guard_wayland_window(&handle, window));
-    for window in application.windows() {
-        guard_wayland_window(app, &window);
-    }
-    WAYLAND_GUARD_APPLICATION.with_borrow_mut(|saved| *saved = Some(application.downgrade()));
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn remember_wayland_windows(app: &AppHandle, generation: u32) -> Result<(), String> {
-    use gtk::prelude::*;
-    for window in wayland_application(app)?.windows() {
-        remember_wayland_window(app, generation, &window, false);
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn hide_wayland_windows(app: &AppHandle, generation: u32) -> Result<(), String> {
-    use gtk::prelude::*;
-    remember_wayland_windows(app, generation)?;
-    for window in wayland_application(app)?.windows() {
-        window.hide();
-        if window.is_visible() || window.is_mapped() {
-            return Err("GTK could not hide a Cap window".into());
-        }
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn admit_wayland_window_creation(app: &AppHandle) -> Result<(), String> {
-    let state = app.state::<State>();
-    let inner = state.inner.lock().unwrap();
-    if inner.lease.as_ref().is_some_and(|lease| {
-        lease.wayland && wayland_blocks_mapping(lease.phase) && lease.phase != Phase::Stopping
-    }) {
-        return Err("Pause or stop recording before opening another Cap window".into());
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn wayland_restore_plan(
-    app: &AppHandle,
-    generation: u32,
-    require_inputs: bool,
-) -> Result<Vec<(RetainedWaylandWindow, bool)>, String> {
-    use gtk::prelude::*;
-    let saved_main = {
-        let state = app.state::<State>();
-        let inner = state.inner.lock().unwrap();
-        let lease = inner
-            .lease
-            .as_ref()
-            .filter(|lease| lease.generation == generation && lease.phase == Phase::Restoring)
-            .ok_or("Wayland restoration was superseded")?;
-        lease
-            .windows
-            .iter()
-            .find(|window| window.label == CapWindowId::Main.label())
-            .cloned()
-    };
-    let requested = if require_inputs {
-        Some(
-            app.state::<crate::RequestedInputsState>()
-                .ready_snapshot()?,
-        )
-    } else {
-        None
-    };
-    let retained = WAYLAND_CAPTURE_WINDOWS
-        .with_borrow(|windows| windows.get(&generation).cloned())
-        .ok_or("Retained Wayland windows disappeared")?;
-    let application = WAYLAND_GUARD_APPLICATION
-        .with_borrow(|saved| saved.as_ref().and_then(gtk::glib::WeakRef::upgrade))
-        .ok_or("Retained GTK application disappeared")?;
-    let current = application.windows();
-    let mut result = Vec::new();
-    for mut saved in retained {
-        let label = wayland_window_label(app, &saved.window);
-        let label_changed = saved.label.is_some() && saved.label != label;
-        if saved.label.is_none() {
-            saved.label = label;
-        }
-        let camera = saved
-            .label
-            .as_deref()
-            .is_some_and(|label| matches!(label.parse(), Ok(CapWindowId::Camera)));
-        let editor = saved
-            .label
-            .as_deref()
-            .is_some_and(|label| matches!(label.parse(), Ok(CapWindowId::Editor { .. })));
-        let mut wanted = (saved.visible || (editor && saved.requested_during_stop))
-            && restore_floating_window(saved.label.as_deref())
-            && (!camera
-                || requested
-                    .as_ref()
-                    .is_some_and(|snapshot| snapshot.camera.value.is_some()));
-        if saved.label.as_deref() == Some("main") {
-            wanted = saved_main.as_ref().is_some_and(|saved| saved.visible);
-        }
-        if wanted && label_changed {
-            return Err("A retained Cap window changed identity".into());
-        }
-        if wanted && !current.contains(&saved.window) {
-            return Err("A retained Cap window disappeared before restoration".into());
-        }
-        result.push((saved, wanted));
-    }
-    if requested.as_ref().is_some_and(|requested| {
-        !app.state::<crate::RequestedInputsState>()
-            .is_current(requested)
-    }) {
-        return Err("Requested inputs changed during Wayland restoration".into());
-    }
-    Ok(result)
-}
-
-#[cfg(target_os = "linux")]
-fn restore_wayland_windows(
-    app: &AppHandle,
-    generation: u32,
-    main_only: bool,
-) -> Result<(), String> {
-    use gtk::prelude::*;
-    for (saved, wanted) in wayland_restore_plan(app, generation, !main_only)? {
-        if (saved.label.as_deref() == Some("main")) != main_only {
-            continue;
-        }
-        if wanted {
-            saved.window.show();
-            if saved.requested_during_stop
-                && saved
-                    .label
-                    .as_deref()
-                    .is_some_and(|label| matches!(label.parse(), Ok(CapWindowId::Editor { .. })))
-            {
-                saved.window.present();
-            }
-        } else {
-            saved.window.hide();
-        }
-        if saved.window.is_visible() != wanted || (!wanted && saved.window.is_mapped()) {
-            return Err("GTK did not acknowledge Cap window restoration".into());
-        }
-    }
-    Ok(())
 }

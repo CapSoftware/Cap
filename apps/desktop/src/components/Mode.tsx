@@ -32,7 +32,7 @@ const MODE_BUTTONS: ModeButtonConfig[] = [
 		mode: "studio",
 		label: "Studio mode",
 		description:
-			"Records at the highest quality for local rendering later. Opens the Cap editor when you're done.",
+			"Saves to your computer and opens the editor when you stop. Choose recording quality in settings.",
 		settingsSection: "studio-quality",
 		icon: (p) => <IconCapFilmCut {...p} />,
 		iconClass: "size-[0.9rem] invert dark:invert-0",
@@ -64,7 +64,7 @@ const Mode = (props: ModeProps) => {
 		try {
 			localStorage.setItem("cap.settings.scrollToSection", section);
 		} catch {}
-		await commands.showWindow({ Settings: { page: "general" } });
+		await commands.showWindow({ Settings: { page: "quality" } });
 		await events.requestScrollToSettingsSection.emit({ section });
 	};
 

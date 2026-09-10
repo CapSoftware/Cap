@@ -789,7 +789,7 @@ async function ensureMsvcVersion() {
 			`Visual Studio Installer not found at ${vswherePath}. ` +
 				`Install "Visual Studio 2022 Build Tools" ${MIN_MSVC_VERSION[0]}.${MIN_MSVC_VERSION[1]} ` +
 				`or newer with the "MSVC v143 - VS 2022 C++ x64/x86 build tools" component, ` +
-				`then re-run pnpm dev.`,
+				`then re-run bun run dev.`,
 		);
 	}
 
@@ -809,7 +809,7 @@ async function ensureMsvcVersion() {
 			`No Visual Studio 2022 installation with MSVC v143 was found. ` +
 				`Install "Visual Studio 2022 Build Tools" ${MIN_MSVC_VERSION[0]}.${MIN_MSVC_VERSION[1]} ` +
 				`or newer with the "MSVC v143 - VS 2022 C++ x64/x86 build tools" component, ` +
-				`then re-run pnpm dev.`,
+				`then re-run bun run dev.`,
 		);
 	}
 
@@ -827,7 +827,7 @@ async function ensureMsvcVersion() {
 				`(e.g. __std_find_last_of_trivial_pos_*, __std_remove_8) that only exist in vcruntime140_1.lib from MSVC 14.42+.\n` +
 				`\nUpdate via the Visual Studio Installer, or from an elevated PowerShell:\n` +
 				`  winget upgrade --id Microsoft.VisualStudio.2022.BuildTools\n` +
-				`After updating, run: cargo clean -p cap-desktop && pnpm dev:windows\n`,
+				`After updating, run: cargo clean -p cap-desktop && bun run dev:windows\n`,
 		);
 	}
 

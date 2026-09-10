@@ -795,6 +795,61 @@ export const CAMERA3D_SCENES: Camera3DScene[] = [
 	},
 ];
 
+export const CAMERA3D_STARTER_SCENES = [
+	"glide-across",
+	"unfold",
+	"pull-back",
+].map((id): Camera3DScene => {
+	const template = motionTemplateById(id);
+	return { id, name: template.name, shots: [templateShot(template, 1)] };
+});
+
+export const CAMERA3D_SCENE_DESCRIPTIONS: Record<string, string> = {
+	"glide-across": "Move smoothly across the details",
+	unfold: "Reveal your screen with a gentle tilt",
+	"pull-back": "Pull out to show the bigger picture",
+	showcase: "Close-up, overhead sweep, then zoom in",
+	"product-tour": "Reveal, orbit, then settle on your screen",
+	"punch-in": "Zoom into a detail, then pull back",
+};
+
+export type Camera3DSetup = {
+	sceneId: string;
+	start: number;
+	duration: number;
+};
+
+export const findCamera3DScene = (id: string) =>
+	[...CAMERA3D_STARTER_SCENES, ...CAMERA3D_SCENES].find(
+		(scene) => scene.id === id,
+	);
+
+export function camera3DSceneRange(
+	segments: readonly { start: number; end: number }[],
+	time: number,
+	duration: number,
+	total: number,
+): { start: number; end: number } | null {
+	if (
+		![time, duration, total].every(Number.isFinite) ||
+		duration <= 0 ||
+		total <= 0
+	)
+		return null;
+	const start = Math.min(Math.max(time, 0), total);
+	let gapStart = 0;
+	let gapEnd = total;
+	for (const segment of segments) {
+		if (segment.start <= start && start < segment.end) return null;
+		if (segment.end <= start) gapStart = Math.max(gapStart, segment.end);
+		else gapEnd = Math.min(gapEnd, segment.start);
+	}
+	const length = Math.min(duration, gapEnd - gapStart);
+	if (length < Math.min(0.5, total)) return null;
+	const fittedStart = Math.max(gapStart, Math.min(start, gapEnd - length));
+	return { start: fittedStart, end: fittedStart + length };
+}
+
 /**
  * The scene's leading `count` shots with their weights renormalized, so a
  * shorter sequence still fills the whole range it is laid onto. Asking for

@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 
 use crate::store::{self, DEFAULT_SERVER_URL};
 
+pub const PRICING_URL: &str = "https://cap.so/pricing?ref=desktop";
+
 const CALLBACK_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en">
 <head>

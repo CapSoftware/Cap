@@ -27,6 +27,8 @@ pub struct ControlsWindow {
     session: Entity<RecordingSession>,
     theme: Theme,
     has_microphone: bool,
+    #[cfg(target_os = "linux")]
+    confirmation_pending: bool,
     /// Repaints the timer. An inactive window is repainted lazily by the
     /// platform, so the tick both notifies and asks for a frame explicitly.
     _tick: gpui::Task<()>,
@@ -36,6 +38,15 @@ pub struct ControlsWindow {
 enum DestructiveAction {
     Restart,
     Delete,
+}
+
+#[cfg(target_os = "linux")]
+fn controls_owner_is_current(owner: gpui::WindowId, window: &Window, cx: &gpui::App) -> bool {
+    window.window_handle().window_id() == owner
+        && cx
+            .try_global::<crate::app_windows::AppWindows>()
+            .and_then(|windows| windows.controls)
+            .is_some_and(|controls| controls.window_id() == owner)
 }
 
 impl ControlsWindow {
@@ -73,6 +84,8 @@ impl ControlsWindow {
             session,
             theme,
             has_microphone,
+            #[cfg(target_os = "linux")]
+            confirmation_pending: false,
             _tick: tick,
         }
     }
@@ -260,6 +273,47 @@ impl ControlsWindow {
             ),
         };
 
+        #[cfg(target_os = "linux")]
+        {
+            let owner = window.window_handle().window_id();
+            if self.confirmation_pending
+                || window.has_active_prompt()
+                || !controls_owner_is_current(owner, window, cx)
+            {
+                return;
+            }
+            let session_id = self.session.entity_id();
+            let Some(ticket) = self.session.read(cx).confirmation_ticket() else {
+                return;
+            };
+            self.confirmation_pending = true;
+            let response =
+                crate::editor_modal::confirm_action(title, message, accept, "Cancel", window, cx);
+            cx.spawn_in(window, async move |this, cx| {
+                let confirmed = response.await;
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.confirmation_pending = false;
+                    if !confirmed
+                        || !controls_owner_is_current(owner, window, cx)
+                        || this.session.entity_id() != session_id
+                    {
+                        return;
+                    }
+                    this.session.update(cx, |session, cx| {
+                        if !session.confirmation_is_current(&ticket) {
+                            return;
+                        }
+                        match action {
+                            DestructiveAction::Restart => session.restart(cx),
+                            DestructiveAction::Delete => session.delete(cx),
+                        }
+                    });
+                });
+            })
+            .detach();
+        }
+
+        #[cfg(not(target_os = "linux"))]
         cx.spawn_in(window, async move |this, cx| {
             if !crate::platform::confirm_dialog(title, message, accept, "Cancel", true) {
                 return;

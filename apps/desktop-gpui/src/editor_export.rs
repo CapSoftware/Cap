@@ -8,7 +8,7 @@ use std::time::Duration;
 use cap_export::gif::GifExportSettings;
 use cap_export::mov::MovExportSettings;
 use cap_export::mp4::{ExportCompression, Mp4ExportSettings};
-use cap_export::preview::{ExportPreviewSettings, render_preview};
+use cap_export::preview::{ExportPreviewSettings, render_preview_with_config};
 use cap_export::{ExporterBase, make_cursor_only_project};
 use cap_project::{BackgroundSource, RecordingMeta, XY};
 use gpui::{
@@ -176,6 +176,7 @@ pub struct ExportUi {
     pub preview_stats: Option<PreviewStats>,
     pub preview_error: Option<String>,
     pub preview_task: Option<gpui::Task<()>>,
+    preview_request: Arc<()>,
     pub phase: ExportPhase,
     close_requested: bool,
     pub rendered: u32,
@@ -231,6 +232,7 @@ impl ExportUi {
             preview_stats: None,
             preview_error: None,
             preview_task: None,
+            preview_request: Arc::new(()),
             phase: ExportPhase::Idle,
             close_requested: false,
             rendered: 0,
@@ -246,6 +248,14 @@ impl ExportUi {
             upload_progress: 0.0,
             copy_link_pressed: false,
         }
+    }
+
+    fn update_preview(&mut self, request: &Arc<()>, update: impl FnOnce(&mut Self)) -> bool {
+        if !Arc::ptr_eq(&self.preview_request, request) {
+            return false;
+        }
+        update(self);
+        true
     }
 
     fn persist(&self) {
@@ -472,6 +482,7 @@ impl EditorWindow {
         let Some(ui) = self.export.as_mut() else {
             return;
         };
+        let project = self.project.clone();
         let (width, height) = ui.resolution.size();
         let settings = ExportPreviewSettings {
             fps: ui.fps,
@@ -482,12 +493,14 @@ impl EditorWindow {
         // Match Windows editor playback: a fresh Media Foundation preview seek can return black.
         let force = cfg!(target_os = "windows") || ui.force_ffmpeg;
         ui.preview_error = None;
+        let request = Arc::new(());
+        ui.preview_request = request.clone();
         ui.preview_task = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(120))
                 .await;
             let result = gpui_tokio::Tokio::spawn(cx, async move {
-                render_preview(path, time, settings, force).await
+                render_preview_with_config(path, project, time, settings, force).await
             })
             .await
             .ok();
@@ -495,7 +508,7 @@ impl EditorWindow {
                 let Some(ui) = this.export.as_mut() else {
                     return;
                 };
-                match result {
+                let updated = ui.update_preview(&request, |ui| match result {
                     Some(Ok(preview)) => {
                         let bytes = base64::Engine::decode(
                             &base64::engine::general_purpose::STANDARD,
@@ -522,6 +535,9 @@ impl EditorWindow {
                     None => {
                         ui.preview_error = Some("Preview unavailable".into());
                     }
+                });
+                if !updated {
+                    return;
                 }
                 cx.notify();
                 window.refresh();
@@ -590,12 +606,24 @@ impl EditorWindow {
                     "mp4"
                 };
                 let default = format!("{pretty_name}.{ext}");
-                let chosen = std::env::var_os("CAP_GPUI_AUTO_EXPORT")
-                    .map(PathBuf::from)
-                    .or_else(|| platform::save_file_panel(&default, &[ext]));
-                if chosen.is_none() {
+                let chosen: Result<Option<PathBuf>, String> = match std::env::var_os("CAP_GPUI_AUTO_EXPORT") {
+                    Some(path) => Ok(Some(PathBuf::from(path))),
+                    None => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            platform::try_save_file_panel(&default, &[ext])
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            Ok(platform::save_file_panel_async(&default, &[ext], cx).await)
+                        }
+                    }
+                };
+                if matches!(chosen, Ok(None)) {
                     let _ = this.update(cx, |this, cx| {
-                        if let Some(ui) = this.export.as_mut() {
+                        if let Some(ui) = this.export.as_mut()
+                            && Arc::ptr_eq(&ui.cancel, &cancel)
+                        {
                             ui.phase = ExportPhase::Idle;
                         }
                         cx.notify();
@@ -605,15 +633,24 @@ impl EditorWindow {
                     });
                     return;
                 }
-                chosen
+                match chosen {
+                    Ok(path) => path,
+                    Err(error) => {
+                        tracing::warn!(error, "Save dialog unavailable; keeping the export in its project output folder");
+                        None
+                    }
+                }
             } else {
                 None
             };
 
-            let started = this.update(cx, |this, cx| {
+            let started = this.update_in(cx, |this, _, cx| {
                 let Some(ui) = this.export.as_mut() else {
                     return false;
                 };
+                if !Arc::ptr_eq(&ui.cancel, &cancel) {
+                    return false;
+                }
                 if cancel.load(Ordering::Relaxed) {
                     ui.phase = ExportPhase::Idle;
                     cx.notify();
@@ -820,7 +857,7 @@ impl EditorWindow {
 
         let upgraded = store::auth_snapshot().is_upgraded();
         if !upgraded && duration >= 300.0 {
-            cx.open_url(&format!("{}/pricing", crate::auth::server_url()));
+            cx.open_url(crate::auth::PRICING_URL);
             return;
         }
 
@@ -983,7 +1020,7 @@ impl EditorWindow {
                                 cx.notify();
                             });
                             let _ = this.update(cx, |_, cx| {
-                                cx.open_url(&format!("{}/pricing", crate::auth::server_url()));
+                                cx.open_url(crate::auth::PRICING_URL);
                             });
                             platform::alert_dialog(
                                 "Upgrade required",
@@ -1982,6 +2019,26 @@ impl EditorWindow {
                             return;
                         };
                         let cancel = ui.cancel.clone();
+                        #[cfg(target_os = "linux")]
+                        {
+                            if !ui.phase.is_busy() {
+                                return;
+                            }
+                            let response = crate::editor_modal::confirm_cancel_export(window, cx);
+                            cx.spawn_in(window, async move |this, cx| {
+                                let confirmed = response.await;
+                                let _ = this.update_in(cx, |this, _, cx| {
+                                    if let Some(ui) = this.export.as_mut()
+                                        && ui.phase.is_busy()
+                                    {
+                                        cancel_matching_export(&ui.cancel, &cancel, confirmed);
+                                    }
+                                    cx.notify();
+                                });
+                            })
+                            .detach();
+                        }
+                        #[cfg(not(target_os = "linux"))]
                         cx.spawn_in(window, async move |this, cx| {
                             let confirmed = platform::confirm_dialog(
                                 "Cancel export?",
@@ -2261,6 +2318,21 @@ mod tests {
             advanced_open: false,
             organization_id: None,
         })
+    }
+
+    #[test]
+    fn stale_preview_results_cannot_replace_the_latest_or_reopened_preview() {
+        let mut ui = clipboard_export();
+        let previous = ui.preview_request.clone();
+        let current = Arc::new(());
+        ui.preview_request = current.clone();
+        assert!(ui.update_preview(&current, |ui| ui.preview_error = Some("Latest".into())));
+        assert!(!ui.update_preview(&previous, |ui| ui.preview_error = Some("Stale".into())));
+        assert_eq!(ui.preview_error.as_deref(), Some("Latest"));
+
+        let mut reopened = clipboard_export();
+        assert!(!reopened.update_preview(&current, |ui| ui.preview_error = Some("Closed".into())));
+        assert!(reopened.preview_error.is_none());
     }
 
     #[test]

@@ -70,15 +70,15 @@ After implementing all fixes:
 
 1. **Format Code**
    - Rust: `cargo fmt --all`
-   - TypeScript: `pnpm format`
+   - TypeScript: `bun run format`
 
 2. **Check Compilation**
    - Rust: `cargo check -p affected_crate`
-   - TypeScript: `pnpm typecheck`
+   - TypeScript: `bun run typecheck`
 
 3. **Lint Check**
    - Rust: `cargo clippy`
-   - TypeScript: `pnpm lint`
+   - TypeScript: `bun run lint`
 
 ## Critical Rules
 

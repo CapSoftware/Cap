@@ -10,17 +10,73 @@ import { cva, cx, type VariantProps } from "cva";
 
 import {
 	type ComponentProps,
+	children,
 	createRoot,
 	createSignal,
 	type JSX,
 	mergeProps,
 	type ParentProps,
+	Show,
 	splitProps,
 	type ValidComponent,
 } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import { useEditorContext } from "./context";
 import { TextInput } from "./TextInput";
+
+export function Section(
+	props: ParentProps<{ name: string; action?: JSX.Element; class?: string }>,
+) {
+	return (
+		<div class={cx("flex flex-col gap-2.5", props.class)}>
+			<div class="flex flex-row gap-2 items-center min-h-[22px]">
+				<SectionLabel name={props.name} />
+				<Show when={props.action}>
+					<div class="ml-auto flex flex-row gap-1 items-center">
+						{props.action}
+					</div>
+				</Show>
+			</div>
+			{props.children}
+		</div>
+	);
+}
+
+export function SectionLabel(props: { name: string; class?: string }) {
+	return (
+		<span class={cx("text-[12px] font-medium text-ed-text-2", props.class)}>
+			{props.name}
+		</span>
+	);
+}
+
+function FieldLabel(props: {
+	name: string;
+	badge?: string;
+	disabled?: boolean;
+	icon?: JSX.Element;
+	class?: string;
+}) {
+	return (
+		<span
+			data-disabled={props.disabled}
+			class={cx(
+				"flex flex-row items-center gap-1.5 text-[13px] font-normal text-ed-text-1 data-[disabled='true']:text-ed-text-3",
+				props.class,
+			)}
+		>
+			{props.icon}
+			{props.name}
+			<Show when={props.badge}>
+				{(badge) => (
+					<span class="px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-ed-ctl text-ed-text-2">
+						{badge()}
+					</span>
+				)}
+			</Show>
+		</span>
+	);
+}
 
 export function Field(
 	props: ParentProps<{
@@ -30,25 +86,46 @@ export function Field(
 		badge?: string;
 		class?: string;
 		disabled?: boolean;
+		inline?: boolean;
 	}>,
 ) {
 	return (
-		<div class={cx("flex flex-col gap-4", props.class)}>
-			<span
-				data-disabled={props.disabled}
-				class="flex flex-row items-center gap-1.5 text-gray-12 data-[disabled='true']:text-gray-10 font-medium text-sm"
-			>
-				{props.icon}
-				{props.name}
-				{props.badge && (
-					<span class="text-[10px] px-1.5 py-0.5 bg-gray-3 rounded-full text-gray-11 font-medium">
-						{props.badge}
-					</span>
-				)}
-				{props.value && <div class="ml-auto">{props.value}</div>}
-			</span>
-			{props.children}
-		</div>
+		<Show
+			when={props.inline}
+			fallback={
+				<div class={cx("flex flex-col gap-2", props.class)}>
+					<div class="flex flex-row gap-1.5 items-center">
+						<FieldLabel
+							name={props.name}
+							badge={props.badge}
+							disabled={props.disabled}
+							icon={props.icon}
+						/>
+						<Show when={props.value}>
+							<div class="ml-auto">{props.value}</div>
+						</Show>
+					</div>
+					{props.children}
+				</div>
+			}
+		>
+			<div class={cx("flex flex-row gap-2 items-center h-[34px]", props.class)}>
+				<FieldLabel
+					name={props.name}
+					badge={props.badge}
+					disabled={props.disabled}
+					class="min-w-24 shrink-0 whitespace-nowrap"
+				/>
+				<div class="flex flex-row flex-1 gap-2 justify-end items-center min-w-0 [&>.ed-slider]:flex-1">
+					{props.children}
+				</div>
+				<Show when={props.value}>
+					<div class="shrink-0 min-w-9 text-[11px] text-right tabular-nums text-ed-text-3">
+						{props.value}
+					</div>
+				</Show>
+			</div>
+		</Show>
 	);
 }
 
@@ -56,8 +133,13 @@ export function Subfield(
 	props: ParentProps<{ name: string; class?: string; required?: boolean }>,
 ) {
 	return (
-		<div class={cx("flex flex-row justify-between items-center", props.class)}>
-			<span class="font-medium text-gray-12">
+		<div
+			class={cx(
+				"flex flex-row gap-2 justify-between items-center h-[34px]",
+				props.class,
+			)}
+		>
+			<span class="text-[13px] font-normal text-ed-text-1">
 				{props.name}
 				{props.required && (
 					<span class="ml-[2px] text-xs text-blue-500">*</span>
@@ -69,11 +151,13 @@ export function Subfield(
 }
 
 export function Slider(
-	props: ComponentProps<typeof KSlider> & {
+	_props: ComponentProps<typeof KSlider> & {
 		formatTooltip?: string | ((v: number) => string);
 		history?: { pause: () => () => void };
+		thumbClass?: string;
 	},
 ) {
+	const [local, props] = splitProps(_props, ["thumbClass"]);
 	const context = useEditorContext();
 	const history = props.history ?? context?.projectHistory;
 
@@ -90,7 +174,7 @@ export function Slider(
 		<KSlider
 			{...props}
 			class={cx(
-				"relative px-1 h-8 flex flex-row justify-stretch items-center",
+				"ed-slider relative px-1 h-8 flex flex-row justify-stretch items-center",
 				props.class,
 			)}
 			onChange={(v) => {
@@ -104,7 +188,7 @@ export function Slider(
 			}}
 		>
 			<KSlider.Track
-				class="h-[0.3rem] transition-[height] relative mx-1 bg-gray-4 rounded-full w-full before:content-[''] before:absolute before:inset-0 before:-top-3 before:-bottom-3"
+				class="h-[3px] transition-[height] relative mx-1 bg-ed-ctl-active rounded-full w-full before:content-[''] before:absolute before:inset-0 before:-top-3 before:-bottom-3"
 				onPointerDown={() => {
 					setDragging(true);
 					createRoot((dispose) => {
@@ -115,7 +199,7 @@ export function Slider(
 					});
 				}}
 			>
-				<KSlider.Fill class="absolute -ml-2 h-full rounded-full bg-blue-9 data-disabled:bg-gray-8" />
+				<KSlider.Fill class="absolute -ml-2 h-full rounded-full bg-ed-accent data-disabled:bg-ed-ctl-active" />
 				<Tooltip
 					open={dragging() ? true : undefined}
 					getAnchorRect={() => {
@@ -145,7 +229,8 @@ export function Slider(
 							setDragging(false);
 						}}
 						class={cx(
-							"bg-gray-1 dark:bg-gray-12 border border-gray-6 shadow-md rounded-full outline-hidden size-4 -top-[6.3px] data-disabled:bg-gray-9 after:content-[''] after:absolute after:inset-0 after:-m-3",
+							"bg-ed-thumb rounded-full outline-hidden size-3.5 -top-[5.5px] shadow-[0_1px_3px_rgba(0,0,0,.25),0_0_0_.5px_rgba(0,0,0,.1)] data-disabled:opacity-50 after:content-[''] after:absolute after:inset-0 after:-m-3",
+							local.thumbClass,
 						)}
 					/>
 				</Tooltip>
@@ -159,7 +244,7 @@ export function Input(props: ComponentProps<"input">) {
 		<TextInput
 			{...props}
 			class={cx(
-				"rounded-lg bg-gray-2 hover:ring-1 py-[18px] hover:ring-gray-5 h-8 font-normal placeholder:text-black-transparent-40 text-xs caret-gray-500 transition-shadow duration-200 focus:ring-offset-1 focus:bg-gray-3 focus:ring-offset-gray-100 focus:ring-1 focus:ring-gray-10 px-2 w-full outline-hidden text-gray-12",
+				"rounded-[7px] bg-ed-ctl border-0 py-[18px] h-8 font-normal placeholder:text-ed-text-3 text-xs caret-ed-accent transition-shadow duration-200 hover:bg-ed-ctl-hover focus:bg-ed-ctl-hover focus:ring-1 focus:ring-ed-accent px-2 w-full outline-hidden text-ed-text-1",
 				props.class,
 			)}
 		/>
@@ -184,7 +269,7 @@ export const Dialog = {
 						<KDialog.Content
 							class={cx(
 								props.contentClass,
-								"z-50 text-sm rounded-[1.25rem] overflow-hidden border border-gray-3 bg-gray-1 min-w-88 data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 origin-top data-closed:animate-out data-closed:fade-out data-closed:zoom-out-95",
+								"z-50 text-sm rounded-[1.25rem] overflow-hidden border-0 bg-ed-card shadow-ed-pop min-w-88 data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 origin-top data-closed:animate-out data-closed:fade-out data-closed:zoom-out-95",
 								(props.size ?? "sm") === "sm" ? "max-w-96" : "max-w-3xl",
 							)}
 						>
@@ -236,7 +321,7 @@ export const Dialog = {
 		return (
 			<div
 				{...props}
-				class={cx("p-4 flex flex-col border-y border-gray-3", props.class)}
+				class={cx("p-4 flex flex-col border-y border-ed-line", props.class)}
 			/>
 		);
 	},
@@ -254,7 +339,7 @@ export function DialogContent(
 	return (
 		<>
 			<Dialog.Header>
-				<KDialog.Title class="text-gray-12">{props.title}</KDialog.Title>
+				<KDialog.Title class="text-ed-text-1">{props.title}</KDialog.Title>
 			</Dialog.Header>
 			<Dialog.Content class={props.class}>{props.children}</Dialog.Content>
 			<Dialog.Footer
@@ -278,7 +363,7 @@ export function MenuItem<T extends ValidComponent = "button">(
 			class={cx(
 				props.class,
 				"flex flex-row shrink-0 items-center gap-1.5 px-[0.675rem] py-1.5 rounded-lg outline-hidden text-nowrap overflow-hidden text-ellipsis w-full max-w-full",
-				"text-[0.875rem] text-gray-10 disabled:text-gray-10 data-highlighted:bg-gray-3 data-highlighted:text-gray-12",
+				"text-[13px] text-ed-text-2 disabled:text-ed-text-3 data-highlighted:bg-ed-ctl-hover data-highlighted:text-ed-text-1",
 			)}
 		/>
 	);
@@ -316,34 +401,34 @@ export function MenuItemList<T extends ValidComponent = "div">(
 
 const editorButtonStyles = cva(
 	[
-		"group flex flex-row items-center px-1.5 gap-1.5 h-8 rounded-lg text-[0.875rem]",
+		"group flex flex-row items-center justify-center shrink-0 gap-1.5 rounded-[7px] font-medium",
 		"focus:outline-solid focus:outline-2 focus:outline-offset-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 transition-colors duration-100",
-		"disabled:opacity-50 disabled:text-gray-11",
+		"disabled:opacity-45",
+		"[&_svg]:shrink-0",
 	],
 	{
 		variants: {
+			size: {
+				sm: "h-[22px] min-w-[22px] text-[12px] [&_svg]:size-3.5",
+				md: "h-7 min-w-7 text-[13px] [&_svg]:size-4",
+			},
 			variant: {
 				primary:
-					"text-gray-12 enabled:hover:not-data-pressed:bg-gray-3 data-expanded:bg-gray-3 outline-blue-300 focus:bg-transparent",
+					"text-ed-text-2 enabled:hover:not-data-pressed:bg-ed-ctl-hover enabled:hover:not-data-pressed:text-ed-text-1 enabled:active:not-data-pressed:bg-ed-ctl-active data-expanded:bg-ed-ctl-hover data-expanded:text-ed-text-1 outline-ed-accent focus:bg-transparent",
+				text: "text-ed-text-1 enabled:hover:not-data-pressed:bg-ed-ctl-hover enabled:active:not-data-pressed:bg-ed-ctl-active data-expanded:bg-ed-ctl-hover outline-ed-accent focus:bg-transparent",
 				danger:
-					"text-gray-12 enabled:hover:not-data-pressed:bg-gray-3 data-expanded:bg-red-300 data-pressed:bg-red-300 data-expanded:text-gray-1 data-pressed:text-gray-1 outline-red-300",
+					"text-ed-text-2 enabled:hover:not-data-pressed:bg-ed-ctl-hover enabled:hover:not-data-pressed:text-ed-text-1 data-expanded:bg-red-300 data-pressed:bg-red-300 data-expanded:text-white data-pressed:text-white outline-red-300",
 			},
 		},
-		defaultVariants: { variant: "primary" },
+		defaultVariants: { variant: "primary", size: "md" },
 	},
 );
 
-const editorButtonLeftIconStyles = cva("transition-colors duration-100", {
-	variants: {
-		variant: {
-			primary:
-				"text-gray-12 enabled:group-hover:not-data-group-disabled:text-gray-12 data-group-expanded:text-gray-12",
-			danger:
-				"text-gray-12 group-hover:enabled:text-gray-12 data-group-expanded:text-gray-1 data-group-pressed:text-gray-1",
-		},
-	},
-	defaultVariants: { variant: "primary" },
-});
+const editorButtonLeftIconStyles =
+	"flex items-center text-current transition-colors duration-100";
+
+const editorButtonRightIconStyles =
+	"flex items-center text-ed-text-3 [&_svg]:size-2.5!";
 
 type EditorButtonProps<T extends ValidComponent = "button"> =
 	PolymorphicProps<T> & {
@@ -360,7 +445,10 @@ export function EditorButton<T extends ValidComponent = "button">(
 	props: EditorButtonProps<T>,
 ) {
 	const [local, cvaProps, others] = splitProps(
-		mergeProps({ variant: "primary" }, props) as unknown as EditorButtonProps,
+		mergeProps(
+			{ variant: "primary", size: "md" },
+			props,
+		) as unknown as EditorButtonProps,
 		[
 			"children",
 			"leftIcon",
@@ -371,22 +459,53 @@ export function EditorButton<T extends ValidComponent = "button">(
 			"comingSoon",
 			"rightIconEnd",
 		],
-		["class", "variant"],
+		["class", "variant", "size"],
 	);
+
+	// Resolve children once. Reading local.children directly inside the
+	// reactive buttonClass() below would re-resolve a render-prop child (e.g.
+	// a Kobalte <Select.Value>) on every class recompute, and that child's own
+	// reactivity re-invalidates the class binding — an unbounded synchronous
+	// re-entry that overflows the stack the instant such a trigger opens.
+	const resolvedChildren = children(() => local.children as JSX.Element);
+	const iconOnly = () => !resolvedChildren() && !local.rightIcon;
 
 	const buttonContent = (
 		<>
-			<span class={editorButtonLeftIconStyles({ variant: cvaProps.variant })}>
-				{local.leftIcon}
-			</span>
-			{local.children && <span>{local.children}</span>}
+			{local.leftIcon && (
+				<span class={editorButtonLeftIconStyles}>{local.leftIcon}</span>
+			)}
+			{resolvedChildren() && <span>{resolvedChildren()}</span>}
 			{local.rightIcon && (
-				<span class={local.rightIconEnd ? "ml-auto" : ""}>
+				<span
+					class={cx(
+						editorButtonRightIconStyles,
+						local.rightIconEnd && "ml-auto",
+					)}
+				>
 					{local.rightIcon}
 				</span>
 			)}
 		</>
 	);
+
+	const buttonClass = () =>
+		cx(
+			editorButtonStyles({
+				...cvaProps,
+				class: cx(
+					iconOnly()
+						? cvaProps.size === "sm"
+							? "w-[22px]"
+							: "w-7"
+						: cvaProps.size === "sm"
+							? "px-1.5"
+							: "px-[7px]",
+					cvaProps.class,
+				),
+			}),
+			local.rightIconEnd && "justify-between",
+		);
 
 	return (
 		<>
@@ -398,24 +517,14 @@ export function EditorButton<T extends ValidComponent = "button">(
 					<Polymorphic
 						as="button"
 						{...others}
-						class={cx(
-							editorButtonStyles({ ...cvaProps, class: cvaProps.class }),
-							local.rightIconEnd && "justify-between",
-						)}
+						class={buttonClass()}
 						disabled={local.comingSoon}
 					>
 						{buttonContent}
 					</Polymorphic>
 				</Tooltip>
 			) : (
-				<Polymorphic
-					as="button"
-					{...others}
-					class={cx(
-						editorButtonStyles({ ...cvaProps, class: cvaProps.class }),
-						local.rightIconEnd && "justify-between",
-					)}
-				>
+				<Polymorphic as="button" {...others} class={buttonClass()}>
 					{buttonContent}
 				</Polymorphic>
 			)}
@@ -424,7 +533,7 @@ export function EditorButton<T extends ValidComponent = "button">(
 }
 
 export const dropdownContainerClasses =
-	"z-60 flex flex-col rounded-xl border border-gray-3 bg-gray-1 shadow-s overflow-y-hidden outline-hidden";
+	"z-60 flex flex-col rounded-xl bg-ed-card shadow-ed-pop overflow-y-hidden outline-hidden";
 
 export const topLeftAnimateClasses =
 	"data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 data-closed:animate-out data-closed:fade-out data-closed:zoom-out-95 origin-top-left";

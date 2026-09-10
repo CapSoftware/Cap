@@ -7,6 +7,7 @@ import { useCanvasSnapTargets } from "./CanvasElementsOverlay";
 import { useEditorContext } from "./context";
 import { evaluateMask, type MaskSegment } from "./masks";
 import { SNAP_PX, snapMovingRect } from "./snapping";
+import { getOverlayZIndex } from "./timelineTracks";
 
 type MaskOverlayProps = {
 	size: { width: number; height: number };
@@ -24,7 +25,14 @@ export function MaskOverlay(props: MaskOverlayProps) {
 		const time = currentAbsoluteTime();
 		return segments
 			.map((segment, index) => ({ segment, index }))
-			.filter(({ segment }) => time >= segment.start && time < segment.end);
+			.filter(
+				({ segment }) =>
+					segment.enabled && time >= segment.start && time < segment.end,
+			)
+			.sort(
+				(a, b) =>
+					(a.segment.track ?? 0) - (b.segment.track ?? 0) || a.index - b.index,
+			);
 	});
 
 	const selectedMaskIndex = createMemo(() => {
@@ -120,24 +128,8 @@ export function MaskOverlay(props: MaskOverlayProps) {
 		);
 	};
 
-	const handleBackgroundClick = (e: MouseEvent) => {
-		if (e.target === e.currentTarget && selectedMaskIndex() !== null) {
-			e.preventDefault();
-			e.stopPropagation();
-			setEditorState("timeline", "selection", null);
-		}
-	};
-
-	const hasMaskSelection = () => selectedMaskIndex() !== null;
-
 	return (
 		<div class="absolute inset-0 pointer-events-none">
-			<Show when={hasMaskSelection()}>
-				<div
-					class="absolute inset-0 pointer-events-auto"
-					onMouseDown={handleBackgroundClick}
-				/>
-			</Show>
 			<Show when={shouldRenderHoveredMask() ? hoveredMask() : null}>
 				{(hovered) => {
 					const rect = () =>
@@ -146,6 +138,11 @@ export function MaskOverlay(props: MaskOverlayProps) {
 						<div
 							class="absolute z-20 pointer-events-none rounded-md border-2 border-gray-11/65 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]"
 							style={{
+								"z-index": getOverlayZIndex(
+									project,
+									"mask",
+									hovered().segment.track ?? 0,
+								),
 								left: `${rect().left}px`,
 								top: `${rect().top}px`,
 								width: `${rect().width}px`,
@@ -177,6 +174,11 @@ export function MaskOverlay(props: MaskOverlayProps) {
 										overlayClass(),
 									)}
 									style={{
+										"z-index": getOverlayZIndex(
+											project,
+											"mask",
+											segment.track ?? 0,
+										),
 										left: `${rect().left}px`,
 										top: `${rect().top}px`,
 										width: `${rect().width}px`,
@@ -189,6 +191,7 @@ export function MaskOverlay(props: MaskOverlayProps) {
 							<MaskOverlayContent
 								size={props.size}
 								maskIndex={index}
+								zIndex={getOverlayZIndex(project, "mask", segment.track ?? 0)}
 								maskState={maskState}
 								updateSegment={updateSegment}
 								projectHistory={projectHistory}
@@ -204,6 +207,7 @@ export function MaskOverlay(props: MaskOverlayProps) {
 function MaskOverlayContent(props: {
 	size: { width: number; height: number };
 	maskIndex: number;
+	zIndex: number;
 	maskState: () => ReturnType<typeof evaluateMask>;
 	updateSegment: (fn: (segment: MaskSegment) => void) => void;
 	projectHistory: ReturnType<typeof useEditorContext>["projectHistory"];
@@ -328,6 +332,7 @@ function MaskOverlayContent(props: {
 		<div
 			class="absolute pointer-events-auto group z-10"
 			style={{
+				"z-index": props.zIndex,
 				left: `${rect().left}px`,
 				top: `${rect().top}px`,
 				width: `${rect().width}px`,

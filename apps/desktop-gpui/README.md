@@ -35,7 +35,7 @@ one (see the editor's measurements below).
 ./dev.sh
 ```
 
-`pnpm dev:desktop` (from the repo root) starts this loop automatically next
+`bun run dev:desktop` (from the repo root) starts this loop automatically next
 to the Tauri app, output prefixed `[gpui]`; set `CAP_GPUI_DEV=0` to opt out
 (`scripts/dev-desktop.mjs`).
 

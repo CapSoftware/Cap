@@ -27,6 +27,8 @@ mod editor_color;
 mod editor_crop;
 mod editor_edits;
 mod editor_export;
+#[cfg(target_os = "linux")]
+mod editor_modal;
 mod editor_panels;
 mod editor_sidebar;
 mod editor_tabs;
@@ -43,6 +45,10 @@ mod onboarding_audio;
 mod onboarding_window;
 mod permissions;
 mod permissions_ui;
+#[cfg(test)]
+mod picker_benchmark;
+#[cfg(debug_assertions)]
+mod picker_ui_benchmark;
 mod platform;
 mod presets;
 mod recording;
@@ -142,27 +148,42 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
             .unwrap_or_else(|_| "cap_gpui=info".into())
     };
 
-    let logs_dir = diagnostics::logs_dir();
-    let file = match std::fs::create_dir_all(&logs_dir) {
-        Ok(()) => {
-            let (writer, guard) = tracing_appender::non_blocking(tracing_appender::rolling::daily(
-                &logs_dir,
-                diagnostics::LOG_FILE_PREFIX,
-            ));
-            Some((
+    let file = create_log_appender(&diagnostics::logs_dir(), diagnostics::LOG_FILE_PREFIX).map(
+        |appender| {
+            let (writer, guard) = tracing_appender::non_blocking(
+                cap_utils::diagnostic_writer::DiagnosticWriter::new(
+                    appender,
+                    &diagnostics::logs_dir(),
+                    diagnostics::LOG_FILE_PREFIX,
+                ),
+            );
+            let queue_errors = writer.error_counter();
+            cap_utils::operation_diagnostics::install_queue_loss_counter(move || {
+                queue_errors.dropped_lines()
+            });
+            let diagnostic_writer = writer.clone();
+            cap_utils::operation_diagnostics::install_sink(
+                cap_utils::operation_diagnostics::AppInfo {
+                    flavor: "gpui",
+                    version: env!("CARGO_PKG_VERSION"),
+                    source_revision: option_env!("CAP_BUILD_REVISION"),
+                    debug_build: cfg!(debug_assertions),
+                    source_dirty: option_env!("CAP_BUILD_DIRTY").map(|value| value == "true"),
+                },
+                move |bytes| {
+                    use std::io::Write;
+                    let _ = diagnostic_writer.clone().write_all(bytes);
+                },
+            );
+            (
                 tracing_subscriber::fmt::layer()
                     .with_ansi(false)
                     .with_writer(writer)
                     .with_filter(filter()),
                 guard,
-            ))
-        }
-        Err(error) => {
-            // A log file is a nice-to-have; losing it must never stop the app.
-            eprintln!("failed to create the logs directory {logs_dir:?}: {error}");
-            None
-        }
-    };
+            )
+        },
+    );
     let (file_layer, guard) = match file {
         Some((layer, guard)) => (Some(layer), Some(guard)),
         None => (None, None),
@@ -173,6 +194,29 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
         .with(file_layer)
         .init();
     guard
+}
+
+fn create_log_appender(
+    directory: &std::path::Path,
+    prefix: &str,
+) -> Option<tracing_appender::rolling::RollingFileAppender> {
+    use std::io::Write;
+
+    match tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix(prefix)
+        .build(directory)
+    {
+        Ok(appender) => Some(appender),
+        Err(error) => {
+            let _ = writeln!(
+                std::io::stderr(),
+                "Could not open {prefix} in {}: {error}; console logging remains enabled",
+                directory.display()
+            );
+            None
+        }
+    }
 }
 
 fn main() {
@@ -209,8 +253,15 @@ fn main() {
     // registered on the builder -- gpui exposes it nowhere else -- with the
     // handler guarding against firing before the window registry exists.
     app.on_reopen(crate::app_windows::handle_dock_reopen);
+    #[cfg(target_os = "macos")]
+    app.on_open_urls(|urls| {
+        for url in urls {
+            crate::deeplink::submit_deep_link(&url);
+        }
+    });
     app.run(|cx: &mut App| {
         gpui_tokio::init(cx);
+        gpui_tokio::Tokio::spawn(cx, cap_utils::operation_diagnostics::run_checkpoints()).detach();
         // The dock icon: an unbundled dev binary shows the generic terminal
         // document without it. The bytes are the shipping app's icon.png.
         platform::set_dock_icon(include_bytes!("../assets/dock-icon.png"));
@@ -234,11 +285,12 @@ fn main() {
         crate::feeds::Feeds::init(cx);
         crate::target_overlay::TargetSelect::init(cx);
 
-        let bounds = Bounds::centered(
-            None,
-            size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT)),
-            cx,
-        );
+        let dev_restore = dev_restore::load();
+        let main_size = size(px(MAIN_WINDOW_WIDTH), px(MAIN_WINDOW_HEIGHT));
+        let bounds = dev_restore
+            .as_ref()
+            .and_then(|restore| restore.main_window_bounds(main_size, cx))
+            .unwrap_or_else(|| Bounds::centered(None, main_size, cx));
         let window_handle = cx
             .open_window(
                 WindowOptions {
@@ -386,7 +438,9 @@ fn main() {
         // `CAP_GPUI_DEV_RESTORE=<state file>`: `dev.sh`'s relaunch loop.
         // Reopens the previous process's windows in place and keeps the
         // state file current for the next swap.
-        dev_restore::init(cx);
+        if let Some(dev_restore) = dev_restore {
+            dev_restore.init(cx);
+        }
 
         // Enumeration is started here rather than in `MainWindow::new`, which
         // runs before the window is fully built -- see `start_enumeration`.
@@ -398,6 +452,9 @@ fn main() {
                 platform::apply_panel_behavior(
                     window,
                     platform::PanelBehavior {
+                        #[cfg(target_os = "macos")]
+                        level: objc2_app_kit::NSFloatingWindowLevel,
+                        #[cfg(not(target_os = "macos"))]
                         level: platform::MAIN_WINDOW_LEVEL,
                         join_all_spaces: true,
                         shadow: true,
@@ -591,6 +648,8 @@ fn main() {
         // the primary display and record for N seconds (or capture once). The
         // end-to-end check drives the recorder this way because unprivileged
         // synthetic clicks are dropped.
+        #[cfg(debug_assertions)]
+        picker_ui_benchmark::run(window_handle, cx);
         if let Ok(auto) = std::env::var("CAP_GPUI_AUTO_RECORD")
             && let Some((mode, secs)) = parse_auto_record(&auto)
         {
@@ -616,4 +675,72 @@ fn main() {
             cx.activate(true);
         }
     });
+}
+
+#[cfg(test)]
+mod logging_tests {
+    use super::create_log_appender;
+    use std::{io::Write, path::PathBuf};
+
+    struct LogDirectory(PathBuf);
+
+    impl LogDirectory {
+        fn new() -> Self {
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let directory = std::env::temp_dir()
+                .join(format!("cap-gpui-logging-{}-{nonce}", std::process::id()));
+            std::fs::create_dir_all(&directory).unwrap();
+            Self(directory)
+        }
+    }
+
+    impl Drop for LogDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn healthy_log_destination_preserves_existing_records() {
+        let directory = LogDirectory::new();
+        let destination = directory.0.join("nested");
+        for record in ["first\n", "second\n"] {
+            let mut appender = create_log_appender(&destination, "cap.log").unwrap();
+            appender.write_all(record.as_bytes()).unwrap();
+            appender.flush().unwrap();
+        }
+        let records: String = std::fs::read_dir(destination)
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
+        assert!(records.contains("first\n"));
+        assert!(records.contains("second\n"));
+    }
+
+    #[test]
+    fn unavailable_log_directory_disables_only_file_logging() {
+        let directory = LogDirectory::new();
+        let destination = directory.0.join("blocked");
+        std::fs::write(&destination, "existing file").unwrap();
+        assert!(create_log_appender(&destination, "cap.log").is_none());
+        assert_eq!(
+            std::fs::read_to_string(destination).unwrap(),
+            "existing file"
+        );
+    }
+
+    #[test]
+    fn unavailable_daily_log_file_disables_only_file_logging() {
+        let directory = LogDirectory::new();
+        let today = chrono::Utc::now().date_naive();
+        for days in [-1, 0, 1] {
+            let date = today + chrono::Duration::days(days);
+            std::fs::create_dir(directory.0.join(format!("cap.log.{date}"))).unwrap();
+        }
+        assert!(create_log_appender(&directory.0, "cap.log").is_none());
+        assert!(create_log_appender(&directory.0, "other.log").is_some());
+    }
 }

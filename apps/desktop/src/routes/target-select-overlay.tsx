@@ -82,6 +82,7 @@ import {
 	createOptionsQuery,
 	createOrganizationsQuery,
 } from "~/utils/queries";
+import { isRecordingStartCancelled } from "~/utils/recording";
 import { createRecordingMenuPopup } from "~/utils/recording-menu";
 import {
 	type CanvasControls,
@@ -833,12 +834,51 @@ function Inner() {
 							minSize(),
 						);
 					});
+					const linux = ostype() === "linux";
+					const [localPointerInside, setLocalPointerInside] = createSignal<
+						boolean | undefined
+					>();
+					if (linux) {
+						const updateLocalPointer = (event: PointerEvent) => {
+							setLocalPointerInside(
+								event.clientX >= 0 &&
+									event.clientY >= 0 &&
+									event.clientX < window.innerWidth &&
+									event.clientY < window.innerHeight,
+							);
+						};
+						createEventListener(
+							window,
+							"pointerover",
+							updateLocalPointer,
+							true,
+						);
+						createEventListener(
+							window,
+							"pointermove",
+							updateLocalPointer,
+							true,
+						);
+						createEventListener(
+							window,
+							"pointerout",
+							(event) => {
+								if (event.relatedTarget === null) setLocalPointerInside(false);
+							},
+							true,
+						);
+						createEventListener(window, "blur", () =>
+							setLocalPointerInside(false),
+						);
+					}
 					const isActiveDisplay = createMemo(() => {
 						const activeDisplayId = targetUnderCursor.display_id;
-						if (activeDisplayId) {
+						if (activeDisplayId != null) {
 							return activeDisplayId === displayId();
 						}
-						return params.isHoveredDisplay === "true";
+						return linux
+							? (localPointerInside() ?? params.isHoveredDisplay === "true")
+							: params.isHoveredDisplay === "true";
 					});
 					const shouldShowOverlay = createMemo(
 						() => isInteracting() || isActiveDisplay(),
@@ -1894,30 +1934,36 @@ function RecordingControls(props: {
 	const permissions = createMemo(() => devices.data?.permissions);
 	const setMicInput = createMicrophoneMutation();
 	const setCamera = createCameraMutation();
+	const [restoringInputs, setRestoringInputs] = createSignal(true);
 
 	onMount(async () => {
-		if (rawOptions.micName) {
-			setMicInput
-				.mutateAsync(rawOptions.micName)
-				.catch((error) => console.error("Failed to set mic input:", error));
-		}
+		const restoreMicrophone = rawOptions.micName
+			? commands
+					.setMicInput(rawOptions.micName)
+					.catch((error) =>
+						console.error("Failed to restore mic input:", error),
+					)
+			: Promise.resolve();
 
 		const isCameraOnly = props.target.variant === "cameraOnly";
-		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
-			await setCamera.mutateAsync({
-				model: { ModelID: rawOptions.cameraID.ModelID },
-				skipCameraWindow: isCameraOnly,
-			});
-		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
-			await setCamera.mutateAsync({
-				model: { DeviceID: rawOptions.cameraID.DeviceID },
-				skipCameraWindow: isCameraOnly,
-			});
+		const restoreCamera = async () => {
+			if (rawOptions.cameraID) {
+				await setCamera.rawMutate({ ...rawOptions.cameraID }, isCameraOnly);
+			}
 
-		if (isCameraOnly) {
-			const win = await getCameraWindow();
-			if (win) win.close();
-		}
+			if (isCameraOnly) {
+				const win = await getCameraWindow();
+				if (win) await win.close();
+			}
+		};
+
+		await Promise.all([
+			restoreMicrophone,
+			restoreCamera().catch((error) =>
+				console.error("Failed to restore camera input:", error),
+			),
+		]);
+		if (!controlsDisposed) setRestoringInputs(false);
 	});
 
 	const selectedCamera = createMemo(() => {
@@ -1967,6 +2013,7 @@ function RecordingControls(props: {
 	const startLoading = () =>
 		devices.isPending ||
 		recordingStartSafety.isPending ||
+		restoringInputs() ||
 		setMicInput.isPending ||
 		setCamera.isPending;
 	const startDisabled = () => !!props.disabled || startLoading();
@@ -2078,7 +2125,7 @@ function RecordingControls(props: {
 					toast.error(
 						"Selected microphone is not available. Please select a different microphone in settings.",
 					);
-				} else {
+				} else if (!isRecordingStartCancelled(e)) {
 					toast.error(`Failed to start recording: ${msg}`);
 				}
 				// An IPC-level rejection never reaches the backend, so no
@@ -2269,7 +2316,6 @@ function RecordingControls(props: {
 											{(() => {
 												if (rawOptions.mode === "instant" && !auth.data)
 													return "Sign In To Use";
-												if (startLoading()) return "Preparing...";
 												if (rawOptions.mode === "screenshot")
 													return "Take Screenshot";
 												return "Start Recording";

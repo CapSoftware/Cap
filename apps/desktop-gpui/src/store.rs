@@ -322,7 +322,7 @@ pub fn clear_update_handoff() {
 /// sentinel asks whatever supervises the dev session (`scripts/dev-desktop.mjs`
 /// watches for it) to start that harness again; with no supervisor listening it
 /// is inert, and the flag written alongside it still routes the next
-/// `pnpm dev:desktop` to the classic app.
+/// `bun run dev:desktop` to the classic app.
 pub fn classic_reopen_path() -> PathBuf {
     app_data_dir().join("cap-classic.reopen")
 }

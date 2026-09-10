@@ -80,6 +80,30 @@ async fn attach_camera_preview_sender(
     result.map_err(|error| error.to_string())
 }
 
+#[cfg(any(target_os = "macos", test))]
+async fn await_current_input_consent(
+    permission: impl std::future::Future<Output = Result<(), String>>,
+    current_epoch: &AtomicU64,
+    epoch: u64,
+) -> Result<(), String> {
+    tokio::pin!(permission);
+    let mut changed = tokio::time::interval(Duration::from_millis(50));
+    loop {
+        if current_epoch.load(Ordering::Acquire) != epoch {
+            return Err("Device selection changed before permission was granted".into());
+        }
+        tokio::select! {
+            _ = changed.tick() => {},
+            result = &mut permission => {
+                if current_epoch.load(Ordering::Acquire) != epoch {
+                    return Err("Device selection changed before permission was granted".into());
+                }
+                return result;
+            }
+        }
+    }
+}
+
 async fn camera_input_operation<T>(
     gate: &tokio::sync::Mutex<()>,
     current_epoch: &AtomicU64,
@@ -933,6 +957,15 @@ impl Feeds {
         let current_epoch = self.camera_input_epoch.clone();
         let readiness_epoch = current_epoch.clone();
         let set = gpui_tokio::Tokio::spawn(cx, async move {
+            #[cfg(target_os = "macos")]
+            await_current_input_consent(
+                crate::permissions::ensure_capture_media_permission(
+                    crate::permissions::OSPermission::Camera,
+                ),
+                &current_epoch,
+                epoch,
+            )
+            .await?;
             let ready = camera_input_operation(&gate, &current_epoch, epoch, async {
                 let sender = sender
                     .as_ref()
@@ -1050,6 +1083,17 @@ impl Feeds {
         let current_epoch = self.mic_input_epoch.clone();
         let readiness_epoch = current_epoch.clone();
         let task = gpui_tokio::Tokio::spawn(cx, async move {
+            #[cfg(target_os = "macos")]
+            if label.is_some() {
+                await_current_input_consent(
+                    crate::permissions::ensure_capture_media_permission(
+                        crate::permissions::OSPermission::Microphone,
+                    ),
+                    &current_epoch,
+                    epoch,
+                )
+                .await?;
+            }
             let ready = camera_input_operation(&gate, &current_epoch, epoch, async {
                 if let Some(label) = label {
                     actor
@@ -1839,5 +1883,90 @@ mod tests {
         let (_, recapped) =
             camera_preview_image(&frame, &mut scaler, false, Some((16, 16))).unwrap();
         assert_eq!(recapped, (16, 8));
+    }
+}
+
+#[cfg(test)]
+mod capture_consent_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stale_selection_never_starts_a_permission_request() {
+        let epoch = AtomicU64::new(2);
+        let result = await_current_input_consent(
+            async {
+                panic!("An obsolete selection must not request permission");
+            },
+            &epoch,
+            1,
+        )
+        .await;
+        assert!(result.unwrap_err().contains("selection changed"));
+    }
+
+    #[tokio::test]
+    async fn disabled_selection_cancels_while_consent_is_unanswered() {
+        let epoch = AtomicU64::new(1);
+        let (send, receive) = tokio::sync::oneshot::channel::<()>();
+        let wait = await_current_input_consent(
+            async { receive.await.map_err(|error| error.to_string()) },
+            &epoch,
+            1,
+        );
+        tokio::pin!(wait);
+        assert!(futures_util::poll!(&mut wait).is_pending());
+        epoch.store(2, Ordering::Release);
+        let result = tokio::time::timeout(Duration::from_millis(250), &mut wait)
+            .await
+            .unwrap();
+        assert!(result.unwrap_err().contains("selection changed"));
+        assert!(send.send(()).is_err());
+    }
+
+    #[tokio::test]
+    async fn grant_arriving_with_reselection_cannot_revive_old_device() {
+        let epoch = AtomicU64::new(1);
+        let result = await_current_input_consent(
+            async {
+                epoch.store(2, Ordering::Release);
+                Ok(())
+            },
+            &epoch,
+            1,
+        )
+        .await;
+        assert!(result.unwrap_err().contains("selection changed"));
+        assert!(
+            await_current_input_consent(async { Ok(()) }, &epoch, 2)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn consent_wait_leaves_device_operations_unlocked() {
+        let epoch = AtomicU64::new(1);
+        let gate = tokio::sync::Mutex::new(());
+        let (send, receive) = tokio::sync::oneshot::channel::<()>();
+        let configure = async {
+            await_current_input_consent(
+                async { receive.await.map_err(|error| error.to_string()) },
+                &epoch,
+                1,
+            )
+            .await?;
+            camera_input_operation(&gate, &epoch, 1, async { Ok(()) }).await
+        };
+        tokio::pin!(configure);
+        assert!(futures_util::poll!(&mut configure).is_pending());
+        let remove = tokio::time::timeout(
+            Duration::from_millis(50),
+            camera_input_operation(&gate, &epoch, 1, async { Ok(()) }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(remove.unwrap(), Some(()));
+        send.send(()).unwrap();
+        assert_eq!(configure.await.unwrap(), Some(()));
     }
 }

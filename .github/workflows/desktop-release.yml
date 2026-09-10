@@ -301,7 +301,7 @@ jobs:
 
       - name: Run cap-setup
         shell: bash
-        run: pnpm -w cap-setup
+        run: bun run cap-setup
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
@@ -348,7 +348,7 @@ jobs:
 
       - name: Build app
         working-directory: apps/desktop
-        run: ${{ runner.os == 'Linux' && 'CARGO_PROFILE_RELEASE_DEBUG=0 node ../../scripts/build-linux-packages.mjs' || runner.os == 'macOS' && hashFiles('scripts/build-macos-packages.mjs') != '' && 'node ../../scripts/build-macos-packages.mjs' || 'pnpm build:tauri --target' }} ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json ${{ runner.os == 'Windows' && '--bundles nsis' || runner.os == 'Linux' && '--verbose' || '' }}
+        run: ${{ runner.os == 'Linux' && 'CARGO_PROFILE_RELEASE_DEBUG=0 node ../../scripts/build-linux-packages.mjs' || runner.os == 'macOS' && hashFiles('scripts/build-macos-packages.mjs') != '' && 'node ../../scripts/build-macos-packages.mjs' || 'bun run build:tauri --target' }} ${{ matrix.settings.target }} --config src-tauri/tauri.prod.conf.json ${{ runner.os == 'Windows' && '--bundles nsis' || runner.os == 'Linux' && '--verbose' || '' }}
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
           CI: false
@@ -411,7 +411,7 @@ jobs:
         if: ${{ runner.os == 'Windows' }}
         working-directory: apps/desktop
         shell: bash
-        run: pnpm tauri bundle --target ${{ matrix.settings.target }} --bundles nsis --config src-tauri/tauri.prod.conf.json
+        run: bun run tauri bundle --target ${{ matrix.settings.target }} --bundles nsis --config src-tauri/tauri.prod.conf.json
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -792,7 +792,7 @@ jobs:
           for exe in "$BUNDLE_DIR"/*.exe; do
             echo "Re-signing $(basename "$exe") for Tauri updater..."
             rm -f "${exe}.sig"
-            pnpm tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$exe"
+            bun run tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$exe"
             if [[ ! -s "${exe}.sig" ]]; then
               echo "::error::Windows production updater signature missing for $exe"
               exit 1

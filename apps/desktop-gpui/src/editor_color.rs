@@ -41,7 +41,7 @@ use cap_project::{ColorCorrection, ProjectConfiguration};
 use gpui::{
     AnyElement, Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
     RenderImage, SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, div, img,
-    prelude::FluentBuilder, px, svg,
+    prelude::FluentBuilder, px,
 };
 
 use crate::{editor_window::EditorWindow, ui};
@@ -827,38 +827,29 @@ impl EditorWindow {
         let mut section = div()
             .flex()
             .flex_col()
-            .gap(px(24.))
-            .child(
-                ui::Field::plain(&theme, "Color Correction")
-                    .icon("icons/sliders-horizontal.svg")
-                    .child(tiles),
-            )
-            .child(
-                ui::Field::plain(&theme, "Grain")
-                    .icon("icons/grip.svg")
-                    .child(self.slider(
-                        crate::editor_sidebar::SliderKey::Grade(target, GradeSlider::Grain),
-                        "%",
-                        cx,
-                    )),
-            );
+            .gap(px(14.))
+            .child(ui::Field::section(&theme, "Color Correction").child(tiles))
+            .child(self.slider_field(
+                "Grain",
+                crate::editor_sidebar::SliderKey::Grade(target, GradeSlider::Grain),
+                "%",
+                cx,
+            ));
 
         // `<Show when={props.target === "screen"}>` (`:151`).
         if target == GradeTarget::Screen {
             let grade_cursor = self.project.color_correction.grade_cursor;
             section = section.child(
-                ui::Field::plain(&theme, "Apply to cursor")
-                    .icon("icons/mouse-pointer-2.svg")
-                    .value(
-                        ui::Toggle::plain(&theme, "grade-cursor", grade_cursor)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.edit_project("grade-cursor", window, cx, |project| {
-                                    project.color_correction.grade_cursor = !grade_cursor;
-                                    true
-                                });
-                            }))
-                            .into_any_element(),
-                    ),
+                ui::Field::inline(&theme, "Apply to cursor").value(
+                    ui::Toggle::plain(&theme, "grade-cursor", grade_cursor)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.edit_project("grade-cursor", window, cx, |project| {
+                                project.color_correction.grade_cursor = !grade_cursor;
+                                true
+                            });
+                        }))
+                        .into_any_element(),
+                ),
             );
         }
 
@@ -869,53 +860,32 @@ impl EditorWindow {
                     .w_full()
                     .flex()
                     .flex_col()
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("grade-adjust-{}", target.key())))
-                            .flex()
-                            .flex_row()
-                            .gap(px(4.))
-                            .items_center()
-                            .w_full()
-                            .text_size(px(14.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_12))
-                            .cursor_pointer()
-                            .child("Fine-tune colors")
-                            .child(
-                                // `group-data-expanded:rotate-180` -- no
-                                // rotation in this rev, so the glyph swaps.
-                                svg()
-                                    .path(if open.is_open() {
-                                        "icons/chevron-down.svg"
-                                    } else {
-                                        "icons/chevron-right.svg"
-                                    })
-                                    .size(px(20.))
-                                    .text_color(Hsla::from(theme.gray_12)),
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                let next = !this.sidebar.grade_open(target).is_open();
-                                this.sidebar.set_grade_open(target, next);
-                                this.animate_collapsibles(window, cx);
-                            })),
-                    )
+                    .child(crate::editor_sidebar::disclosure_row(
+                        &theme,
+                        SharedString::from(format!("grade-adjust-{}", target.key())),
+                        "Fine-tune colors",
+                        open.is_open(),
+                        cx.listener(move |this, _, window, cx| {
+                            let next = !this.sidebar.grade_open(target).is_open();
+                            this.sidebar.set_grade_open(target, next);
+                            this.animate_collapsibles(window, cx);
+                        }),
+                    ))
                     .child(crate::editor_sidebar::collapsible(
                         open,
                         div()
                             .flex()
                             .flex_col()
-                            .gap(px(24.))
                             // `mt-4 space-y-6`
-                            .pt(px(16.))
+                            .pt(px(4.))
                             .children(GradeSlider::ADJUST.map(|slider| {
-                                ui::Field::plain(&theme, slider.label())
-                                    .child(self.slider(
-                                        crate::editor_sidebar::SliderKey::Grade(target, slider),
-                                        "%",
-                                        cx,
-                                    ))
-                                    .into_any_element()
+                                self.slider_field(
+                                    slider.label(),
+                                    crate::editor_sidebar::SliderKey::Grade(target, slider),
+                                    "%",
+                                    cx,
+                                )
+                                .into_any_element()
                             }))
                             .into_any_element(),
                     )),

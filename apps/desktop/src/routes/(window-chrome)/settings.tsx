@@ -201,6 +201,11 @@ export default function Settings(props: RouteSectionProps) {
 			icon: IconCapSettings,
 		},
 		{
+			href: "quality",
+			name: "Recording quality",
+			icon: IconCapFilmCut,
+		},
+		{
 			href: "hotkeys",
 			name: "Shortcuts",
 			icon: IconCapHotkeys,
@@ -237,7 +242,7 @@ export default function Settings(props: RouteSectionProps) {
 		},
 		{
 			href: "license",
-			name: "License",
+			name: "Plan & license",
 			icon: IconLucideGift,
 		},
 		{

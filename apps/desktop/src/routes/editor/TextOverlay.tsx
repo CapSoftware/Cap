@@ -26,6 +26,7 @@ import {
 	type TextAlign,
 	type TextSegment,
 } from "./text";
+import { getOverlayZIndex } from "./timelineTracks";
 
 // Figma-style text manipulation on the canvas: the selection box always hugs
 // the rendered glyphs (a hidden measure div mirrors the renderer's font
@@ -58,7 +59,14 @@ export function TextOverlay(props: TextOverlayProps) {
 		const time = currentAbsoluteTime();
 		return segments
 			.map((segment, index) => ({ segment, index }))
-			.filter(({ segment }) => time >= segment.start && time < segment.end);
+			.filter(
+				({ segment }) =>
+					segment.enabled && time >= segment.start && time < segment.end,
+			)
+			.sort(
+				(a, b) =>
+					(a.segment.track ?? 0) - (b.segment.track ?? 0) || a.index - b.index,
+			);
 	});
 
 	const selectedTextIndex = createMemo(() => {
@@ -164,16 +172,6 @@ export function TextOverlay(props: TextOverlayProps) {
 		});
 	};
 
-	const handleBackgroundClick = (e: MouseEvent) => {
-		if (e.target === e.currentTarget && selectedTextIndex() !== null) {
-			e.preventDefault();
-			e.stopPropagation();
-			setEditorState("timeline", "selection", null);
-		}
-	};
-
-	const hasTextSelection = () => selectedTextIndex() !== null;
-
 	// A pending inline-edit request (set when the Add-track picker creates a
 	// text segment) only survives while that segment stays selected; the
 	// segment's overlay consumes it on mount.
@@ -231,17 +229,14 @@ export function TextOverlay(props: TextOverlayProps) {
 	});
 
 	return (
-		<div
-			class="absolute inset-0"
-			classList={{ "pointer-events-none": !hasTextSelection() }}
-			onMouseDown={handleBackgroundClick}
-		>
+		<div class="absolute inset-0 pointer-events-none">
 			<For each={visibleTextSegments()}>
 				{({ segment, index }) => (
 					<TextSegmentOverlay
 						size={props.size}
 						segment={segment}
 						index={index}
+						zIndex={getOverlayZIndex(project, "text", segment.track ?? 0)}
 						isSelected={selectedTextIndex() === index}
 						onSelect={() => handleSelectSegment(index)}
 						updateSegment={(fn) => updateSegmentByIndex(index, fn)}
@@ -309,6 +304,7 @@ function TextSegmentOverlay(props: {
 	size: { width: number; height: number };
 	segment: TauriTextSegment;
 	index: number;
+	zIndex: number;
 	isSelected: boolean;
 	onSelect: () => void;
 	updateSegment: (fn: (segment: TextSegment) => void) => void;
@@ -770,6 +766,7 @@ function TextSegmentOverlay(props: {
 					"cursor-text": editing(),
 				}}
 				style={{
+					"z-index": props.zIndex,
 					left: `${rect().left}px`,
 					top: `${rect().top}px`,
 					width: `${rect().width}px`,

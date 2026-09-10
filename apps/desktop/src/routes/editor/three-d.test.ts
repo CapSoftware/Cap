@@ -11,12 +11,14 @@ import {
 	CAMERA3D_MIN_SHOT_DURATION,
 	CAMERA3D_PROPERTY_KEYS,
 	CAMERA3D_SCENES,
+	CAMERA3D_STARTER_SCENES,
 	CAMERA3D_TRACK_KEYS,
 	type Camera3DKeyframe,
 	type Camera3DProperties,
 	type Camera3DScene,
 	type Camera3DSegment,
 	camera3DPosesEqual,
+	camera3DSceneRange,
 	DEFAULT_IN_EASING,
 	DEFAULT_OUT_EASING,
 	defaultCamera3DSegment,
@@ -1060,5 +1062,73 @@ describe("flipCamera3DSegment", () => {
 		// Horizontal family untouched.
 		expect(getStartPose(segment).tiltY).toBeCloseTo(26, 9);
 		expect(segment.blur.focusY).toBeCloseTo(0.64, 9);
+	});
+});
+
+describe("3D scene creation", () => {
+	it("starts at the playhead and fits the end of short recordings", () => {
+		expect(camera3DSceneRange([], 4, 6, 30)).toEqual({ start: 4, end: 10 });
+		expect(camera3DSceneRange([], 9, 6, 10)).toEqual({ start: 4, end: 10 });
+		expect(camera3DSceneRange([], 0, 6, 0.3)).toEqual({ start: 0, end: 0.3 });
+	});
+
+	it("preserves existing scenes and shortens to the available gap", () => {
+		const existing = [
+			{ start: 8, end: 12 },
+			{ start: 0, end: 3 },
+		];
+		expect(camera3DSceneRange(existing, 3, 6, 20)).toEqual({
+			start: 3,
+			end: 8,
+		});
+		expect(camera3DSceneRange(existing, 12, 6, 20)).toEqual({
+			start: 12,
+			end: 18,
+		});
+		expect(camera3DSceneRange(existing, 9, 6, 20)).toBeNull();
+		expect(camera3DSceneRange([{ start: 0, end: 20 }], 20, 6, 20)).toBeNull();
+		expect(existing).toEqual([
+			{ start: 8, end: 12 },
+			{ start: 0, end: 3 },
+		]);
+	});
+
+	it("rejects invalid times and gaps too small to use", () => {
+		for (const value of [
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			Number.NEGATIVE_INFINITY,
+		]) {
+			expect(camera3DSceneRange([], value, 6, 20)).toBeNull();
+			expect(camera3DSceneRange([], 0, value, 20)).toBeNull();
+			expect(camera3DSceneRange([], 0, 6, value)).toBeNull();
+		}
+		expect(camera3DSceneRange([], 0, 0, 20)).toBeNull();
+		expect(camera3DSceneRange([], 0, 6, 0)).toBeNull();
+		expect(
+			camera3DSceneRange(
+				[
+					{ start: 0, end: 3 },
+					{ start: 3.2, end: 6 },
+				],
+				3,
+				6,
+				20,
+			),
+		).toBeNull();
+	});
+
+	it("creates a complete animated move from each starter", () => {
+		expect(CAMERA3D_STARTER_SCENES.map((scene) => scene.id)).toEqual([
+			"glide-across",
+			"unfold",
+			"pull-back",
+		]);
+		for (const scene of CAMERA3D_STARTER_SCENES) {
+			const segments = applySceneToRange(scene, 4, 10);
+			expect(segments).toHaveLength(1);
+			expect(segments[0]).toMatchObject({ start: 4, end: 10, enabled: true });
+			expect(hasCamera3DMotion(segments[0])).toBe(true);
+		}
 	});
 });

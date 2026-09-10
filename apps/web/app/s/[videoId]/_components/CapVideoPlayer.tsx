@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
 import CommentStamp from "./CommentStamp";
 import { bindCaptionTrackCueText } from "./caption-tracks";
+import { resolveInitialPlaybackUrl } from "./initial-playback-url";
 import {
 	AVC_LEVEL_IOS_HARDWARE_CEILING,
 	createLevelPatchedMp4ObjectUrl,
@@ -93,6 +94,7 @@ interface CaptionOption {
 
 interface Props {
 	videoSrc: string;
+	initialPlaybackUrl?: Promise<string | null>;
 	rawFallbackSrc?: string;
 	videoId: Video.VideoId;
 	chaptersSrc: string;
@@ -141,6 +143,7 @@ interface Props {
 
 export function CapVideoPlayer({
 	videoSrc,
+	initialPlaybackUrl,
 	rawFallbackSrc,
 	videoId,
 	chaptersSrc,
@@ -191,6 +194,9 @@ export function CapVideoPlayer({
 		null,
 	);
 	const queryClient = useQueryClient();
+	const initialPlaybackUrlUsed = useRef<Promise<string | null> | undefined>(
+		undefined,
+	);
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -240,13 +246,22 @@ export function CapVideoPlayer({
 		],
 		queryFn: shouldDeferResolvedSource
 			? skipToken
-			: () =>
-					resolvePlaybackSource({
+			: async () => {
+					const useInitialUrl =
+						preferredSource === "mp4" &&
+						initialPlaybackUrl !== initialPlaybackUrlUsed.current;
+					if (useInitialUrl)
+						initialPlaybackUrlUsed.current = initialPlaybackUrl;
+					return resolvePlaybackSource({
 						videoSrc,
+						initialUrl: useInitialUrl
+							? await resolveInitialPlaybackUrl(initialPlaybackUrl)
+							: undefined,
 						rawFallbackSrc,
 						enableCrossOrigin,
 						preferredSource,
-					}),
+					});
+				},
 		refetchOnWindowFocus: false,
 		staleTime: Number.POSITIVE_INFINITY,
 		retry: false,
@@ -698,6 +713,13 @@ export function CapVideoPlayer({
 			)}
 			<VideoPreviewGif
 				videoId={videoId}
+				preload={
+					!disablePreviewGif &&
+					!hasActiveUpload &&
+					!hasPlayedOnce &&
+					!showUploadFailureOverlay &&
+					!showPlaybackResolutionError
+				}
 				visible={
 					!disablePreviewGif &&
 					videoLoaded &&

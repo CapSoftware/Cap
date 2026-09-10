@@ -16,7 +16,6 @@ import {
 	createResource,
 	createSignal,
 	For,
-	onCleanup,
 	onMount,
 	Show,
 } from "solid-js";
@@ -46,7 +45,6 @@ import {
 	type MainWindowRecordingStartBehaviour,
 	type PostDeletionBehaviour,
 	type PostStudioRecordingBehaviour,
-	type StudioRecordingQuality,
 	type UpdateChannel,
 	type WindowExclusion,
 } from "~/utils/tauri";
@@ -128,8 +126,6 @@ const MAX_FPS_OPTIONS = [
 
 const DEFAULT_PROJECT_NAME_TEMPLATE =
 	"{target_name} ({target_kind}) {date} {time}";
-const FREE_INSTANT_MODE_MAX_RESOLUTION = 1280;
-const PRO_INSTANT_MODE_MAX_RESOLUTION = 1920;
 
 export default function GeneralSettings() {
 	const [stores] = createResource(() =>
@@ -237,69 +233,9 @@ function Inner(props: {
 	] = createSignal(
 		props.initialRecordingStartSafety.confirmBeforeRecordingWithoutMicrophone,
 	);
-	const auth = authStore.createQuery();
-	const hasCapPro = createMemo(() => {
-		const plan = auth.data?.plan;
-		return !!plan && (plan.upgraded || plan.manual);
-	});
-	const instantModeMaxResolution = createMemo(() =>
-		hasCapPro()
-			? (settings.instantModeMaxResolution ?? PRO_INSTANT_MODE_MAX_RESOLUTION)
-			: FREE_INSTANT_MODE_MAX_RESOLUTION,
-	);
 
 	createEffect(() => {
 		setSettings(reconcile(deriveGeneralSettings(props.initialStore)));
-	});
-
-	let scrollContainerRef: HTMLDivElement | undefined;
-
-	const scrollToSection = (section: string) => {
-		try {
-			localStorage.removeItem("cap.settings.scrollToSection");
-		} catch {}
-		const attempt = (remaining: number) => {
-			const target = document.getElementById(`settings-section-${section}`);
-			const container = scrollContainerRef;
-			if (!target || !container) {
-				if (remaining > 0) {
-					window.setTimeout(() => attempt(remaining - 1), 50);
-				}
-				return;
-			}
-			const containerRect = container.getBoundingClientRect();
-			const targetRect = target.getBoundingClientRect();
-			const offset =
-				targetRect.top - containerRect.top + container.scrollTop - 8;
-			container.scrollTo({ top: offset, behavior: "smooth" });
-			target.classList.add("settings-section-pulse");
-			window.setTimeout(() => {
-				target.classList.remove("settings-section-pulse");
-			}, 1600);
-		};
-		attempt(10);
-	};
-
-	onMount(() => {
-		commands
-			.updateAuthPlan()
-			.then(() => auth.refetch())
-			.catch(console.error);
-
-		let pending: string | null = null;
-		try {
-			pending = localStorage.getItem("cap.settings.scrollToSection");
-		} catch {}
-		if (pending) {
-			scrollToSection(pending);
-		}
-
-		const unlisten = events.requestScrollToSettingsSection.listen((event) => {
-			scrollToSection(event.payload.section);
-		});
-		onCleanup(() => {
-			unlisten.then((cb) => cb()).catch(() => {});
-		});
 	});
 
 	const [windows, { refetch: refetchWindows }] = createResource(
@@ -465,7 +401,6 @@ function Inner(props: {
 			| MainWindowRecordingStartBehaviour
 			| PostStudioRecordingBehaviour
 			| PostDeletionBehaviour
-			| StudioRecordingQuality
 			| number,
 	>(props: {
 		label: string;
@@ -509,10 +444,7 @@ function Inner(props: {
 	};
 
 	return (
-		<div
-			ref={scrollContainerRef}
-			class="cap-settings-page flex flex-col h-full custom-scroll"
-		>
+		<div class="cap-settings-page flex flex-col h-full custom-scroll">
 			<SettingsPageContent>
 				<AppearanceSection
 					currentTheme={settings.theme ?? "system"}
@@ -552,25 +484,6 @@ function Inner(props: {
 						</SectionRows>
 					</Section>
 				)}
-
-				<CapProSection
-					hasCapPro={hasCapPro()}
-					instantResolution={instantModeMaxResolution()}
-					onInstantResolutionChange={(value) =>
-						handleChange("instantModeMaxResolution", value)
-					}
-					autoOpenShareableLinks={!settings.disableAutoOpenLinks}
-					onAutoOpenShareableLinksChange={(v) =>
-						handleChange("disableAutoOpenLinks", !v)
-					}
-				/>
-
-				<QualitySection
-					studioQuality={settings.studioRecordingQuality ?? "balanced"}
-					onStudioQualityChange={(value) =>
-						handleChange("studioRecordingQuality", value)
-					}
-				/>
 
 				<Section
 					title="Recording"
@@ -969,51 +882,6 @@ function UpdatesSection(props: {
 	);
 }
 
-type StudioQualityTier = {
-	value: StudioRecordingQuality;
-	label: string;
-	summary: string;
-	bestFor: string;
-};
-
-const STUDIO_QUALITY_TIERS: StudioQualityTier[] = [
-	{
-		value: "compatibility",
-		label: "Compatibility",
-		summary: "Lower bitrate to keep older or low-power machines smooth.",
-		bestFor: "Older Intel Macs, 8GB MacBook Air, weaker laptops.",
-	},
-	{
-		value: "balanced",
-		label: "Balanced",
-		summary: "Sharp footage with sensible CPU and disk usage.",
-		bestFor: "Most modern Macs and PCs with 16GB+ RAM.",
-	},
-	{
-		value: "ultra",
-		label: "Ultra",
-		summary: "Maximum detail for color-graded, large-display edits.",
-		bestFor: "M-series Pro/Max, discrete GPUs, 32GB+ RAM, NVMe.",
-	},
-];
-
-type InstantResolutionTier = {
-	value: number;
-	label: string;
-	summary: string;
-};
-
-const INSTANT_RESOLUTION_TIERS: InstantResolutionTier[] = [
-	{ value: 1280, label: "720p", summary: "Smallest size, low bandwidth." },
-	{
-		value: 1920,
-		label: "1080p",
-		summary: "Recommended. Sharp on most networks.",
-	},
-	{ value: 2560, label: "1440p", summary: "More detail for desktop content." },
-	{ value: 3840, label: "4K", summary: "Max clarity. Needs fast upload." },
-];
-
 function SegmentedControl<T extends string | number>(props: {
 	value: T;
 	onChange: (value: T) => void;
@@ -1041,177 +909,6 @@ function SegmentedControl<T extends string | number>(props: {
 				}}
 			</For>
 		</div>
-	);
-}
-
-function StudioQualitySubsection(props: {
-	value: StudioRecordingQuality;
-	onChange: (value: StudioRecordingQuality) => void;
-}) {
-	const currentTier = createMemo(
-		() =>
-			STUDIO_QUALITY_TIERS.find((t) => t.value === props.value) ??
-			STUDIO_QUALITY_TIERS[1],
-	);
-
-	return (
-		<div
-			id="settings-section-studio-quality"
-			class="flex flex-col gap-3 px-4 py-4"
-		>
-			<div class="flex justify-between items-start gap-4">
-				<div class="flex flex-col gap-0.5 min-w-0">
-					<p class="text-[13px] text-gray-12">Studio mode</p>
-					<p class="text-xs leading-snug text-gray-10">
-						Encoder profile for local Studio recordings.
-					</p>
-				</div>
-				<SegmentedControl
-					value={props.value}
-					onChange={props.onChange}
-					options={STUDIO_QUALITY_TIERS.map((tier) => ({
-						value: tier.value,
-						label: tier.label,
-					}))}
-				/>
-			</div>
-			<div class="flex flex-col gap-1.5 px-3 py-2.5 rounded-lg bg-gray-3">
-				<p class="text-xs text-gray-12">{currentTier().summary}</p>
-				<p class="text-[11px] text-gray-10 leading-snug">
-					<span class="text-gray-11">Best for:</span> {currentTier().bestFor}
-				</p>
-			</div>
-		</div>
-	);
-}
-
-function InstantQualitySetting(props: {
-	hasCapPro: boolean;
-	value: number;
-	onChange: (value: number) => void;
-}) {
-	const effectiveValue = createMemo(() =>
-		props.hasCapPro ? props.value : FREE_INSTANT_MODE_MAX_RESOLUTION,
-	);
-	const currentTier = createMemo(
-		() =>
-			INSTANT_RESOLUTION_TIERS.find((t) => t.value === effectiveValue()) ??
-			INSTANT_RESOLUTION_TIERS[0],
-	);
-	const handleResolutionClick = async (value: number) => {
-		if (props.hasCapPro || value === FREE_INSTANT_MODE_MAX_RESOLUTION) {
-			props.onChange(value);
-			return;
-		}
-
-		toast.custom(
-			(t) => (
-				<div class="flex gap-3 items-center px-4 py-3 rounded-xl border shadow-lg bg-gray-1 border-gray-4 text-gray-12">
-					<p class="text-sm">
-						Upgrade to Cap Pro to record Instant Mode videos above 720p.
-					</p>
-					<button
-						type="button"
-						class="px-2.5 py-1 text-xs font-medium rounded-lg transition-colors bg-blue-9 text-white hover:bg-blue-10"
-						onClick={() => {
-							toast.dismiss(t.id);
-							void commands.showWindow("Upgrade");
-						}}
-					>
-						Upgrade
-					</button>
-				</div>
-			),
-			{ duration: 6000 },
-		);
-	};
-
-	return (
-		<SettingItem
-			id="settings-section-instant-quality"
-			label="Instant Mode quality"
-			description={
-				props.hasCapPro
-					? "Choose the maximum upload resolution for Instant recordings."
-					: "Instant recordings are locked to 720p. Cap Pro unlocks higher resolutions."
-			}
-		>
-			<div class="flex flex-col items-end gap-1.5">
-				<div class="inline-flex p-0.5 rounded-lg border border-gray-3 bg-gray-3">
-					<For each={INSTANT_RESOLUTION_TIERS}>
-						{(tier) => {
-							const isSelected = () => effectiveValue() === tier.value;
-							return (
-								<button
-									type="button"
-									onClick={() => void handleResolutionClick(tier.value)}
-									class={cx(
-										"px-3 py-1 text-xs font-medium rounded-md transition-[background-color,color,box-shadow]",
-										isSelected()
-											? "bg-gray-1 text-gray-12 shadow-sm"
-											: "text-gray-10 hover:text-gray-12",
-									)}
-								>
-									{tier.label}
-								</button>
-							);
-						}}
-					</For>
-				</div>
-				<p class="text-[11px] leading-snug text-right text-gray-10">
-					{currentTier().summary}
-				</p>
-			</div>
-		</SettingItem>
-	);
-}
-
-function CapProSection(props: {
-	hasCapPro: boolean;
-	instantResolution: number;
-	onInstantResolutionChange: (value: number) => void;
-	autoOpenShareableLinks: boolean;
-	onAutoOpenShareableLinksChange: (value: boolean) => void;
-}) {
-	return (
-		<Section
-			title="Cap Pro"
-			description="Settings available with a Cap Pro license."
-			pro
-		>
-			<SectionRows>
-				<InstantQualitySetting
-					hasCapPro={props.hasCapPro}
-					value={props.instantResolution}
-					onChange={props.onInstantResolutionChange}
-				/>
-				<ToggleSettingItem
-					label="Auto-open shareable links"
-					description="Open the share link in your browser as soon as the upload finishes."
-					value={props.autoOpenShareableLinks}
-					onChange={props.onAutoOpenShareableLinksChange}
-				/>
-			</SectionRows>
-		</Section>
-	);
-}
-
-function QualitySection(props: {
-	studioQuality: StudioRecordingQuality;
-	onStudioQualityChange: (value: StudioRecordingQuality) => void;
-}) {
-	return (
-		<Section
-			title="Quality"
-			description="Pick the right profile for local Studio recordings."
-		>
-			<SectionCard>
-				<StudioQualitySubsection
-					value={props.studioQuality}
-					onChange={props.onStudioQualityChange}
-				/>
-			</SectionCard>
-		</Section>
 	);
 }
 

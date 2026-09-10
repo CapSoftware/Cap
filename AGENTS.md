@@ -6,14 +6,14 @@ These rules are enforced by CI (`cargo clippy -D warnings`, Biome). Fixing them 
 
 ### Zero-tolerance rules
 - **Default to no code comments. Add a comment only after solving a bug or working through a complex issue, and only when it captures non-obvious context that a future investigator or reviewer genuinely needs** — e.g. why the fix looks the way it does, the upstream/platform bug being worked around, a non-obvious invariant or trade-off chosen after investigation, or a link to the PR/issue that explains the decision. Bad cases that remain banned: narrating what the code does, restating types, JSDoc that paraphrases parameter names, "TODO: refactor" or "this should be cleaner" notes, and any comment that just describes the change you are currently making. When in doubt, prefer better naming/types over a comment. Applies to every language: Rust, TS, JS, Python, shell, SQL, TOML, etc.
-- **Never hand-edit generated files**: `**/tauri.ts`, `apps/desktop/src-tauri/gen/**`, `packages/ui-solid/src/auto-imports.d.ts`, Drizzle migration SQL under `packages/database/migrations/`. These are regenerated (e.g. `tauri.ts` only on debug desktop runs) but stay committed because CI typecheck and fresh clones depend on them; commit binding changes alongside the Rust change that produced them. For database schema changes, run `pnpm db:generate` and commit the generated SQL, snapshot, and journal changes alongside the schema change. Generating and committing these artifacts is required; modifying generated output by hand is prohibited. Note: `apps/desktop/src/utils/queries.ts` is hand-written, not generated — edit it normally.
-- **Never start additional dev servers** (`pnpm dev`, `pnpm dev:web`, `pnpm dev:desktop`, Docker services). Assume they are already running.
+- **Never hand-edit generated files**: `**/tauri.ts`, `apps/desktop/src-tauri/gen/**`, `packages/ui-solid/src/auto-imports.d.ts`, Drizzle migration SQL under `packages/database/migrations/`. These are regenerated (e.g. `tauri.ts` only on debug desktop runs) but stay committed because CI typecheck and fresh clones depend on them; commit binding changes alongside the Rust change that produced them. For database schema changes, run `bun run db:generate` and commit the generated SQL, snapshot, and journal changes alongside the schema change. Generating and committing these artifacts is required; modifying generated output by hand is prohibited. Note: `apps/desktop/src/utils/queries.ts` is hand-written, not generated — edit it normally.
+- **Never start additional dev servers** (`bun run dev`, `bun run dev:web`, `bun run dev:desktop`, Docker services). Assume they are already running.
 
 ### Post-edit checks (run before you say "done")
 - Prefer scoped, fast checks over full workspace gates. Do not run long full-repo checks by default.
 - Touched any Rust file → `cargo fmt --all` and `cargo check -p <crate>`. Add `--all-targets`, `--workspace`, or clippy only when explicitly requested, when preparing CI/PR final validation, or when the change needs broader coverage.
-- Touched any TS / JS / JSON / CSS / MD file → run the narrowest applicable formatter/linter on touched files first, such as `pnpm exec biome check --write <files>`. Use full `pnpm format`, `pnpm lint`, and `pnpm typecheck` only when explicitly requested or when the change spans shared types/packages.
-- Touched DB schema → `pnpm db:generate` before relying on it.
+- Touched any TS / JS / JSON / CSS / MD file → run the narrowest applicable formatter/linter on touched files first, such as `bun run biome check --write <files>`. Use full `bun run format`, `bun run lint`, and `bun run typecheck` only when explicitly requested or when the change spans shared types/packages.
+- Touched DB schema → `bun run db:generate` before relying on it.
 
 ### Rust — write the clippy-clean form the FIRST time
 All patterns below are `deny` in the workspace `[workspace.lints]` in `Cargo.toml`. Do not emit the left column; always emit the right column.
@@ -56,18 +56,18 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
   - `scripts/*`, `infra/`, and `packages/local-docker/` for tooling and local services.
 
 ## Build, Test, Develop
-- Install: `pnpm install`; setup: `pnpm env-setup` then `pnpm cap-setup`.
-- Dev: `pnpm dev` (web+desktop). Desktop only: `pnpm dev:desktop`. Web only: `pnpm dev:web` or `cd apps/web && pnpm dev`.
-- Build: `pnpm build` (Turbo). Desktop release: `pnpm tauri:build`.
-- DB: `pnpm db:generate` → `pnpm db:push` → `pnpm db:studio`.
-- Docker: `pnpm docker:up | docker:stop | docker:clean`.
-- Quality: `pnpm lint`, `pnpm format`, `pnpm typecheck`. Rust: `cargo build -p <crate>`, `cargo test -p <crate>`.
+- Install: `bun install`; setup: `bun run env-setup` then `bun run cap-setup`.
+- Dev: `bun run dev` (web+desktop). Desktop only: `bun run dev:desktop`. Web only: `bun run dev:web` or `cd apps/web && bun run dev`.
+- Build: `bun run build` (Turbo). Desktop release: `bun run tauri:build`.
+- DB: `bun run db:generate` → `bun run db:push` → `bun run db:studio`.
+- Docker: `bun run docker:up | docker:stop | docker:clean`.
+- Quality: `bun run lint`, `bun run format`, `bun run typecheck`. Rust: `cargo build -p <crate>`, `cargo test -p <crate>`.
 
 ## Coding Style & Naming
 - TypeScript / JS / JSON / CSS: **tab indent** and **double-quoted** strings, enforced by Biome (see `biome.json`). Do not configure per-file overrides.
 - Rust: `rustfmt` default style + the denied clippy lints in the Pre-Generation Invariants above.
 - Naming: files kebab‑case (`user-menu.tsx`); React/Solid components PascalCase; hooks `useX`; Rust modules snake_case; crates kebab‑case.
-- Runtime: Node 20, pnpm 10.5.2, Rust 1.88+, Docker for MySQL/MinIO.
+- Runtime: Node 20, Bun 1.4.0, Rust 1.88+, Docker for MySQL/MinIO.
 
 (See **Pre-Generation Invariants** at the top of this file for the comments policy and the denied clippy/Biome patterns. Those are the source of truth — do not duplicate or weaken them here.)
 
@@ -82,11 +82,11 @@ Additionally, `unused_must_use = "deny"` applies to all Rust code: every `Result
 - PRs: clear description, linked issues, screenshots/GIFs for UI, env/migration notes. Keep scope tight and update docs when behavior changes.
 
 ## Agent‑Specific Practices
-- Do not start extra servers; use `pnpm dev:web` or `pnpm dev:desktop` as needed.
+- Do not start extra servers; use `bun run dev:web` or `bun run dev:desktop` as needed.
 - Prefer existing scripts and Turbo filters over ad‑hoc commands; clear `.turbo` only when necessary.
 - Database flow: always `db:generate` → `db:push` before relying on new schema.
-- Keep secrets out of VCS; configure via `.env` from `pnpm env-setup`.
-- macOS note: desktop permissions (screen/mic) apply to the terminal running `pnpm dev:desktop`.
+- Keep secrets out of VCS; configure via `.env` from `bun run env-setup`.
+- macOS note: desktop permissions (screen/mic) apply to the terminal running `bun run dev:desktop`.
 - All other agent-facing rules (comments policy, no editing generated files, clippy/Biome shape, post-edit gates) live in **Pre-Generation Invariants** at the top of this file.
 
 ## Deep Investigation Default
@@ -112,5 +112,5 @@ Prefer the smallest correct fix, but only after checking whether the narrow fix 
 Before declaring any task complete, the agent should run the fastest useful check for every file type it touched and report anything skipped.
 
 - **Rust**: `cargo fmt --all` and `cargo check -p <crate>` for the touched crate. Add `--all-targets`, `--workspace`, or `cargo clippy -p <crate> --all-targets -- -D warnings` only for explicit requests, CI/PR final validation, or changes that need broader coverage.
-- **TS / JS / JSON / CSS / MD**: prefer scoped checks such as `pnpm exec biome check --write <files>`. Use full `pnpm format`, `pnpm lint`, and `pnpm typecheck` only when explicitly requested or when the change is broad enough to justify it.
+- **TS / JS / JSON / CSS / MD**: prefer scoped checks such as `bun run biome check --write <files>`. Use full `bun run format`, `bun run lint`, and `bun run typecheck` only when explicitly requested or when the change is broad enough to justify it.
 - If a scoped check fails, fix the violation in the source (do NOT suppress with `#[allow(...)]`, `// biome-ignore`, or `any` unless explicitly approved). The Pre-Generation Invariants show the correct form for every denied lint.

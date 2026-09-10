@@ -2,6 +2,7 @@ import { db } from "@cap/database";
 import { videoProcessingJobs } from "@cap/database/schema";
 import { inArray, sql } from "drizzle-orm";
 import { z } from "zod";
+import { DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED } from "@/lib/desktop-recording-jobs";
 
 const RECOVERY_GRACE_MS = 30 * 60 * 1_000;
 
@@ -11,6 +12,7 @@ const countsSchema = z.object({
 	retryLoops: z.number().int().nonnegative(),
 	blockedCommittedSources: z.number().int().nonnegative(),
 	changedSources: z.number().int().nonnegative(),
+	awaitingSourceReupload: z.number().int().nonnegative(),
 });
 
 export async function getDesktopRecordingHealth({
@@ -35,11 +37,15 @@ export async function getDesktopRecordingHealth({
 					Number,
 				),
 			blockedCommittedSources:
-				sql<number>`COALESCE(SUM(CASE WHEN ${job.state} = 'source-blocked' AND ${job.source} IS NOT NULL AND COALESCE(${job.errorCode}, '') NOT IN ('output-replaced', 'video-deleting') THEN 1 ELSE 0 END), 0)`.mapWith(
+				sql<number>`COALESCE(SUM(CASE WHEN ${job.state} = 'source-blocked' AND ${job.source} IS NOT NULL AND COALESCE(${job.errorCode}, '') NOT IN ('output-replaced', 'video-deleting', ${DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED}) THEN 1 ELSE 0 END), 0)`.mapWith(
 					Number,
 				),
 			changedSources:
 				sql<number>`COALESCE(SUM(CASE WHEN ${job.state} = 'source-blocked' AND ${job.errorCode} = 'source-changed' THEN 1 ELSE 0 END), 0)`.mapWith(
+					Number,
+				),
+			awaitingSourceReupload:
+				sql<number>`COALESCE(SUM(CASE WHEN ${job.state} = 'source-blocked' AND ${job.errorCode} = ${DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED} THEN 1 ELSE 0 END), 0)`.mapWith(
 					Number,
 				),
 		})
@@ -53,7 +59,7 @@ export async function getDesktopRecordingHealth({
 				"source-blocked",
 			]),
 		);
-	const counts = countsSchema.parse(row);
+	const { awaitingSourceReupload, ...counts } = countsSchema.parse(row);
 	return {
 		status: Object.values(counts).some((count) => count > 0)
 			? ("degraded" as const)
@@ -61,5 +67,6 @@ export async function getDesktopRecordingHealth({
 		checkedAt: now.toISOString(),
 		scope: "unresolved" as const,
 		...counts,
+		awaitingSourceReupload,
 	};
 }

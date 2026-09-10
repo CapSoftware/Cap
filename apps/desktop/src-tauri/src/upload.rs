@@ -35,7 +35,6 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Manager, ipc::Channel};
-use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
 use tokio::{
     fs::File,
@@ -47,6 +46,7 @@ use tokio_util::io::ReaderStream;
 use tracing::{Span, debug, error, info, info_span, instrument, trace, warn};
 
 pub(crate) mod lifecycle;
+pub(crate) mod preparation;
 pub(crate) mod resume;
 use tracing_futures::Instrument;
 
@@ -782,8 +782,6 @@ impl InstantMultipartUpload {
 
         emit_upload_complete(&app, &video_id);
 
-        let _ = app.clipboard().write_text(pre_created_video.link.clone());
-
         Ok(metadata)
     }
 }
@@ -1337,6 +1335,12 @@ impl SegmentUploader {
         })?;
 
         let state = Arc::new(Mutex::new(SegmentUploadState::new()));
+        let preparation = preparation::start(
+            app.clone(),
+            video_id.clone(),
+            state.clone(),
+            session.clone(),
+        );
         let semaphore = Arc::new(tokio::sync::Semaphore::new(6));
         let read_semaphore = Arc::new(tokio::sync::Semaphore::new(12));
         let consecutive_failures = Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -1666,6 +1670,7 @@ impl SegmentUploader {
         }
 
         drain_segment_upload_tasks(&state, &mut in_flight).await;
+        preparation.stop().await;
 
         if bridge_handle.join().is_err() {
             state
@@ -1802,50 +1807,8 @@ impl SegmentUploader {
                 }
             }
 
-            {
-                let mut signal_ok = false;
-                for attempt in 0..3u32 {
-                    match api::signal_recording_complete(&app, &video_id).await {
-                        Ok(()) => {
-                            signal_ok = true;
-                            break;
-                        }
-                        Err(e) => {
-                            warn!(
-                                attempt = attempt + 1,
-                                "Failed to signal recording complete: {e}"
-                            );
-                            if attempt < 2 {
-                                tokio::time::sleep(Duration::from_millis(
-                                    1000 * (1 << attempt) as u64,
-                                ))
-                                .await;
-                            }
-                        }
-                    }
-                }
-                if !signal_ok {
-                    error!("All attempts to signal recording complete failed for {video_id}");
-
-                    session.persist_upload(UploadMeta::SegmentUpload {
-                        video_id: video_id.clone(),
-                        pre_created_video: pre_created_video.clone(),
-                        recording_dir: recording_dir.clone(),
-                    })?;
-
-                    emit_upload_complete(&app, &video_id);
-
-                    return Err(format!(
-                        "Failed to signal recording complete for {video_id} after 3 attempts"
-                    )
-                    .into());
-                }
-            }
-
             await_upload_verification(&app, &video_id, &verification, &session).await?;
             emit_upload_complete(&app, &video_id);
-
-            let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
             let total_bytes = completion_state
                 .lock()

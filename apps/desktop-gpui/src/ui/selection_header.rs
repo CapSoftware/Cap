@@ -68,8 +68,8 @@ impl SelectionHeader {
             id: id.into(),
             label: label.into(),
             select_all: None,
-            label_color: Hsla::from(theme.gray_10),
-            action_color: Hsla::from(theme.blue_11),
+            label_color: Hsla::from(theme.editor.text_2),
+            action_color: Hsla::from(theme.editor.accent),
             theme: *theme,
             on_done: None,
             on_delete: None,
@@ -134,7 +134,7 @@ impl RenderOnce for SelectionHeader {
                     )
                     .child(
                         div()
-                            .text_size(px(14.))
+                            .text_size(px(12.))
                             .text_color(label_color)
                             .child(label),
                     )
@@ -142,7 +142,7 @@ impl RenderOnce for SelectionHeader {
                         this.child(
                             div()
                                 .id(SharedString::from(format!("{id}-select-all")))
-                                .text_size(px(14.))
+                                .text_size(px(12.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(action_color)
                                 .cursor_pointer()

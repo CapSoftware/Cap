@@ -857,7 +857,10 @@ async fn capture_screenshot_wayland(target: &ScreenCaptureTarget) -> anyhow::Res
         .ok_or_else(|| anyhow!("Selected Wayland display size unavailable"))?;
     let (width, height) =
         checked_wayland_display_size(display_size.width(), display_size.height())?;
-    let crop = checked_wayland_screenshot_crop(target, width, height)?;
+    let logical_size = display
+        .logical_size()
+        .ok_or_else(|| anyhow!("Selected Wayland display logical size unavailable"))?;
+    let crop = checked_wayland_screenshot_crop(target, width, height, logical_size)?;
 
     let screenshot = ashpd::desktop::screenshot::Screenshot::request()
         .interactive(false)
@@ -980,6 +983,7 @@ fn checked_wayland_screenshot_crop(
     target: &ScreenCaptureTarget,
     image_width: u32,
     image_height: u32,
+    logical_size: scap_targets::bounds::LogicalSize,
 ) -> anyhow::Result<Option<(u32, u32, u32, u32)>> {
     let ScreenCaptureTarget::Area { bounds, .. } = target else {
         return Ok(None);
@@ -992,6 +996,16 @@ fn checked_wayland_screenshot_crop(
     let right = x + width;
     let bottom = y + height;
 
+    if !logical_size.width().is_finite()
+        || !logical_size.height().is_finite()
+        || logical_size.width() <= 0.0
+        || logical_size.height() <= 0.0
+        || image_width == 0
+        || image_height == 0
+    {
+        return Err(anyhow!("Selected Wayland display scale is invalid"));
+    }
+
     if ![x, y, width, height, right, bottom]
         .iter()
         .all(|value| value.is_finite())
@@ -999,18 +1013,20 @@ fn checked_wayland_screenshot_crop(
         || y < 0.0
         || width <= 0.0
         || height <= 0.0
-        || right > f64::from(image_width)
-        || bottom > f64::from(image_height)
+        || right > logical_size.width()
+        || bottom > logical_size.height()
     {
         return Err(anyhow!(
             "Selected Wayland screenshot area exceeds the selected display"
         ));
     }
 
-    let x = x.ceil() as u32;
-    let y = y.ceil() as u32;
-    let right = right.floor() as u32;
-    let bottom = bottom.floor() as u32;
+    let scale_x = f64::from(image_width) / logical_size.width();
+    let scale_y = f64::from(image_height) / logical_size.height();
+    let x = (x * scale_x).ceil() as u32;
+    let y = (y * scale_y).ceil() as u32;
+    let right = (right * scale_x).floor() as u32;
+    let bottom = (bottom * scale_y).floor() as u32;
 
     if right <= x || bottom <= y {
         return Err(anyhow!("Selected Wayland screenshot area is empty"));
@@ -1569,8 +1585,33 @@ mod wayland_screenshot_tests {
     fn selected_wayland_area_is_cropped_exactly() {
         let target = area_target(100.0, 120.0, 640.0, 360.0);
         assert_eq!(
-            checked_wayland_screenshot_crop(&target, 1920, 1080).expect("valid crop"),
+            checked_wayland_screenshot_crop(&target, 1920, 1080, LogicalSize::new(1920.0, 1080.0))
+                .expect("valid crop"),
             Some((100, 120, 640, 360))
+        );
+    }
+
+    #[test]
+    fn scaled_wayland_area_uses_physical_screenshot_pixels() {
+        let target = area_target(100.0, 120.0, 400.0, 200.0);
+        assert_eq!(
+            checked_wayland_screenshot_crop(&target, 1920, 1080, LogicalSize::new(960.0, 540.0),)
+                .unwrap(),
+            Some((200, 240, 800, 400))
+        );
+        assert_eq!(
+            checked_wayland_screenshot_crop(&target, 1920, 1080, LogicalSize::new(1280.0, 720.0),)
+                .unwrap(),
+            Some((150, 180, 600, 300))
+        );
+    }
+
+    #[test]
+    fn scaled_wayland_area_rejects_bounds_outside_logical_display() {
+        let target = area_target(950.0, 0.0, 20.0, 10.0);
+        assert!(
+            checked_wayland_screenshot_crop(&target, 1920, 1080, LogicalSize::new(960.0, 540.0),)
+                .is_err()
         );
     }
 
@@ -1578,7 +1619,8 @@ mod wayland_screenshot_tests {
     fn fractional_wayland_areas_never_include_pixels_outside_selection() {
         let target = area_target(10.25, 20.25, 30.75, 40.75);
         assert_eq!(
-            checked_wayland_screenshot_crop(&target, 1920, 1080).expect("valid crop"),
+            checked_wayland_screenshot_crop(&target, 1920, 1080, LogicalSize::new(1920.0, 1080.0))
+                .expect("valid crop"),
             Some((11, 21, 30, 40))
         );
     }
@@ -1597,14 +1639,25 @@ mod wayland_screenshot_tests {
             (f64::MAX, 0.0, f64::MAX, 10.0),
         ] {
             let target = area_target(x, y, width, height);
-            assert!(checked_wayland_screenshot_crop(&target, 1920, 1080).is_err());
+            assert!(
+                checked_wayland_screenshot_crop(
+                    &target,
+                    1920,
+                    1080,
+                    LogicalSize::new(1920.0, 1080.0)
+                )
+                .is_err()
+            );
         }
     }
 
     #[test]
     fn too_small_fractional_wayland_areas_are_rejected() {
         let target = area_target(10.25, 20.25, 0.25, 0.25);
-        assert!(checked_wayland_screenshot_crop(&target, 1920, 1080).is_err());
+        assert!(
+            checked_wayland_screenshot_crop(&target, 1920, 1080, LogicalSize::new(1920.0, 1080.0))
+                .is_err()
+        );
     }
 
     #[test]

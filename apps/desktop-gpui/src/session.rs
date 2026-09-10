@@ -162,6 +162,16 @@ struct RecordingOwner {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(PartialEq, Eq)]
+pub(crate) struct RecordingConfirmationTicket {
+    owner: RecordingOwner,
+    operation: u64,
+    phase: Phase,
+    pause_sequence: u64,
+    clean_sequence: u64,
+}
+
+#[cfg(target_os = "linux")]
 #[derive(Clone)]
 struct TerminalTicket {
     owner: RecordingOwner,
@@ -1155,6 +1165,28 @@ impl RecordingSession {
             generation: self.recording_generation,
             project_dir: active.project_dir.clone(),
         })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn confirmation_ticket(&self) -> Option<RecordingConfirmationTicket> {
+        if !matches!(self.phase, Phase::Recording { .. })
+            || self.pause_unavailable()
+            || self.stop_requested
+        {
+            return None;
+        }
+        Some(RecordingConfirmationTicket {
+            owner: self.recording_owner()?,
+            operation: self.terminal_operation,
+            phase: self.phase,
+            pause_sequence: self.pause_control.sequence,
+            clean_sequence: self.clean_control.sequence,
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn confirmation_is_current(&self, ticket: &RecordingConfirmationTicket) -> bool {
+        self.confirmation_ticket().as_ref() == Some(ticket)
     }
 
     #[cfg(target_os = "linux")]

@@ -6,7 +6,7 @@
  *
  * Run:
  *   CAP_TRANSCRIBE_E2E=1 CAP_TRANSCRIBE_E2E_PREFIX=<userId>/<videoId> \
- *     pnpm exec dotenv -e ../../.env -- vitest run __tests__/e2e/live-transcribe-local-e2e.test.ts
+ *     bun run dotenv -e ../../.env -- vitest run __tests__/e2e/live-transcribe-local-e2e.test.ts
  *
  * where <userId>/<videoId> has `segments/manifest.json` + audio segments in
  * the CAP_AWS_BUCKET of CAP_AWS_ENDPOINT.

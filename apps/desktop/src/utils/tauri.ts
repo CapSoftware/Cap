@@ -106,6 +106,9 @@ async refreshUploadHealthStatus() : Promise<UploadHealthStatus> {
 async importCurrentDesktopBackground(projectPath: string) : Promise<string> {
     return await TAURI_INVOKE("import_current_desktop_background", { projectPath });
 },
+async getDefaultProjectConfig() : Promise<ProjectConfiguration> {
+    return await TAURI_INVOKE("get_default_project_config");
+},
 async listCameras() : Promise<CameraInfo[]> {
     return await TAURI_INVOKE("list_cameras");
 },
@@ -1074,6 +1077,7 @@ export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean;
 export type HotkeyAction = "startStudioRecording" | "startInstantRecording" | "stopRecording" | "restartRecording" | "togglePauseRecording" | "cycleRecordingMode" | "openRecordingPicker" | "openRecordingPickerDisplay" | "openRecordingPickerWindow" | "openRecordingPickerArea" | "screenshotDisplay" | "screenshotWindow" | "screenshotArea" | "other"
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
+export type ImageSegment = { start: number; end: number; track: number; enabled: boolean; path: string; name: string; center: XY<number>; size: XY<number>; opacity: number; rotation: number; rounding: number; flipX: boolean; flipY: boolean; lockAspect: boolean }
 export type ImportStage = "Probing" | "Converting" | "Finalizing" | "Complete" | "Failed"
 export type ImportedAudioTrack = {
 /**
@@ -1127,6 +1131,8 @@ export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; micropho
 export type OnEscapePress = null
 export type Organization = { id: string; name: string; ownerId: string; role?: string; canEditBrand?: boolean; iconUrl?: string | null; brandColors?: OrganizationBrandColors }
 export type OrganizationBrandColors = { primary: string | null; secondary: string | null; accent: string | null; background: string | null }
+export type OverlayTrack = { kind: OverlayTrackKind; track: number }
+export type OverlayTrackKind = "mask" | "image" | "text"
 export type Phase = "awaitingShortcut" | "starting" | "recording" | "pausing" | "paused" | "resuming" | "resumeFailed" | "restarting" | "stopping" | "restoring"
 export type PhysicalSize = { width: number; height: number }
 export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
@@ -1135,7 +1141,7 @@ export type PostDeletionBehaviour = "doNothing" | "reopenRecordingWindow"
 export type PostStudioRecordingBehaviour = "openEditor" | "showOverlay"
 export type Preset = { name: string; config: ProjectConfiguration }
 export type PresetsStore = { presets: Preset[]; default: number | null }
-export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline: TimelineConfiguration | null; captions: CaptionsData | null; keyboard: KeyboardData | null; clips: ClipConfiguration[]; annotations: Annotation[]; screenMotionBlur?: number; screenMovementSpring?: ScreenMovementSpring;
+export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline: TimelineConfiguration | null; overlayOrder: OverlayTrack[]; captions: CaptionsData | null; keyboard: KeyboardData | null; clips: ClipConfiguration[]; annotations: Annotation[]; screenMotionBlur?: number; screenMovementSpring?: ScreenMovementSpring;
 /**
  * Per-layer cinematic color grades. Field-level default keeps old
  * project files (and old saved presets) deserializing to the identity
@@ -1222,6 +1228,8 @@ export type StereoMode = "stereo" | "monoL" | "monoR"
 export type StudioRecordingMeta = { segment: SingleSegment } | { inner: MultipleSegments }
 export type StudioRecordingQuality = "compatibility" | "balanced" | "ultra"
 export type StudioRecordingStatus = { status: "InProgress" } | { status: "NeedsRemux" } | { status: "Failed"; error: string } | { status: "Complete" }
+export type StyleOverrides = { background?: BackgroundConfiguration | null; camera?: Camera | null; cursor?: CursorConfiguration | null; cameraOnlyPadding?: number | null }
+export type StyleSegment = { start: number; end: number; track: number; enabled: boolean; name: string; overrides: StyleOverrides }
 export type SystemDiagnostics = { windowsVersion: WindowsVersionInfo | null; gpuInfo: GpuInfoDiag | null; allGpus: AllGpusInfo | null; renderingStatus: RenderingStatus; availableEncoders: string[]; graphicsCaptureSupported: boolean; d3D11VideoProcessorAvailable: boolean }
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
 export type TextAlign = "left" | "center" | "right"
@@ -1263,7 +1271,7 @@ letterSpacing?: number; lineHeight?: number; opacity?: number; shadow?: number; 
  * segment edges when `layout` is not `Overlay`.
  */
 layoutTransition?: number }
-export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[]; camera3dSegments?: Camera3DSegment[] }
+export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[]; styleSegments: StyleSegment[]; imageSegments: ImageSegment[]; camera3dSegments?: Camera3DSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null; speedAudioMode?: ClipSpeedAudioMode | null }
 export type TranscriptionEngine = "Whisper" | "Parakeet"
 export type Trigger = "screenshotTaken" | "studioRecordingFinished" | "instantRecordingFinished" | "recordingStarted" | "uploadCompleted" | "videoImported" | "recordingDeleted"

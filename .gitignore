@@ -4,7 +4,6 @@ logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
 lerna-debug.log*
 .deepsec
 
@@ -36,13 +35,10 @@ outputs
 *.sln
 *.sw?
 .turbo
-bun.lock
-pnpm-lock.yaml
 .zed
 .output
 .vinxi
 native-deps*
-apps/storybook/storybook-static
 .tinyb
 
 **/.tinyb

@@ -32,6 +32,8 @@ export class Video extends Schema.Class<Video>("Video")({
 	public: Schema.Boolean,
 	source: Schema.Struct({
 		outputKey: Schema.optional(Schema.String),
+		audioLevelOutputKey: Schema.optional(Schema.String),
+		audioLevelSourceKey: Schema.optional(Schema.String),
 		thumbnailKey: Schema.optional(Schema.String),
 		previewKey: Schema.optional(Schema.String),
 		type: Schema.Literal(
@@ -81,7 +83,7 @@ export class Video extends Schema.Class<Video>("Video")({
 			return new Mp4Source({
 				videoId: self.id,
 				ownerId: self.ownerId,
-				outputKey: self.source.outputKey,
+				outputKey: getAudioLevelOutputKey(self) ?? self.source.outputKey,
 			});
 	}
 }
@@ -158,6 +160,39 @@ export function getRetainedRecordingOutputKey(
 	) {
 		return undefined;
 	}
+	return key;
+}
+
+export function getAudioLevelOutputKey(video: {
+	id: string;
+	ownerId: string;
+	source: {
+		type: string;
+		outputKey?: string;
+		audioLevelSourceKey?: string;
+		audioLevelOutputKey?: string;
+	};
+}) {
+	const { source } = video;
+	const originalKey =
+		getRetainedRecordingOutputKey(video.ownerId, video.id, source.outputKey) ??
+		(source.type === "webMP4"
+			? `${video.ownerId}/${video.id}/result.mp4`
+			: undefined);
+	const key = getRetainedRecordingOutputKey(
+		video.ownerId,
+		video.id,
+		source.audioLevelOutputKey,
+	);
+	if (
+		!["desktopMP4", "webMP4"].includes(source.type) ||
+		!originalKey ||
+		source.audioLevelSourceKey !== originalKey ||
+		!key?.startsWith(
+			`${video.ownerId}/${video.id}/.recording/outputs/audio-quality-v3/`,
+		)
+	)
+		return undefined;
 	return key;
 }
 

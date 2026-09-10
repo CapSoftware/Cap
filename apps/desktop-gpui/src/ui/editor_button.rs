@@ -3,16 +3,10 @@
 //! player toolbar's triggers, the background section's Reset and Import
 //! actions, and every selection panel's Done/Delete pair.
 //!
-//! `cva` gives it two variants and a pile of group-driven icon colours. The
-//! two that matter are reproduced:
-//!
-//! - **primary** `text-gray-12 enabled:hover:not-data-pressed:bg-gray-3
-//!   data-expanded:bg-gray-3` -- it self-highlights while the popover it
-//!   triggers is open;
-//! - **danger** whose *pressed/expanded* state flips to a solid `bg-red-300
-//!   text-gray-1` rather than a wash.
-//!
-//! Disabled is `opacity-50 text-gray-11` on both.
+//! Visually it is the editor's ghost button: 28px tall, transparent at rest
+//! with a `text-2` label, `ctl-hover` + `text-1` on hover and `ctl-active`
+//! while pressed. `danger` keeps its solid red pressed state, and `text`
+//! promotes the resting label to `text-1` for the player toolbar's triggers.
 //!
 use gpui::{
     App, ClickEvent, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
@@ -48,10 +42,13 @@ pub struct EditorButton {
     /// `data-pressed` / `data-expanded`.
     pressed: bool,
     text: Hsla,
+    hover_text: Hsla,
     disabled_text: Hsla,
     hover_bg: Hsla,
+    active_bg: Hsla,
     pressed_bg: Hsla,
     pressed_text: Hsla,
+    chevron: Hsla,
     tooltip: Option<(Theme, SharedString)>,
     on_click: Option<ClickHandler>,
     on_open: Option<OpenHandler>,
@@ -65,17 +62,20 @@ impl EditorButton {
             left_icon: None,
             right_icon: None,
             right_icon_end: false,
-            icon_size: px(20.),
-            right_icon_size: px(12.),
+            icon_size: px(16.),
+            right_icon_size: px(10.),
             width: None,
             variant: EditorButtonVariant::Primary,
             disabled: false,
             pressed: false,
-            text: Hsla::from(theme.gray_12),
-            disabled_text: Hsla::from(theme.gray_11),
-            hover_bg: Hsla::from(theme.gray_3),
-            pressed_bg: Hsla::from(theme.gray_3),
-            pressed_text: Hsla::from(theme.gray_12),
+            text: Hsla::from(theme.editor.text_2),
+            hover_text: Hsla::from(theme.editor.text_1),
+            disabled_text: Hsla::from(theme.editor.text_3),
+            hover_bg: Hsla::from(theme.editor.ctl_hover),
+            active_bg: Hsla::from(theme.editor.ctl_active),
+            pressed_bg: Hsla::from(theme.editor.ctl_hover),
+            pressed_text: Hsla::from(theme.editor.text_1),
+            chevron: Hsla::from(theme.editor.text_3),
             tooltip: None,
             on_click: None,
             on_open: None,
@@ -88,6 +88,12 @@ impl EditorButton {
         self.variant = EditorButtonVariant::Danger;
         self.pressed_bg = Hsla::from(theme.red_300);
         self.pressed_text = Hsla::from(theme.gray_1);
+        self
+    }
+
+    /// The "text" ghost: the resting label is `text-1` rather than `text-2`.
+    pub fn text(mut self, theme: &Theme) -> Self {
+        self.text = Hsla::from(theme.editor.text_1);
         self
     }
 
@@ -168,10 +174,13 @@ impl RenderOnce for EditorButton {
             disabled,
             pressed,
             text,
+            hover_text,
             disabled_text,
             hover_bg,
+            active_bg,
             pressed_bg,
             pressed_text,
+            chevron,
             tooltip,
             on_click,
             on_open,
@@ -184,33 +193,50 @@ impl RenderOnce for EditorButton {
         } else {
             text
         };
+        // gpui svgs do not inherit a parent's text colour, so the icon follows
+        // the label through a group rather than through the cascade.
+        let group: SharedString = match &id {
+            ElementId::Name(name) => SharedString::from(format!("eb-{name}")),
+            other => SharedString::from(format!("eb-{other:?}")),
+        };
+        let icon_hover = (!disabled && !pressed).then_some(hover_text);
 
         div()
             .id(id)
+            .group(group.clone())
             .tab_index(0)
             .flex()
             .flex_row()
             .items_center()
-            .px(px(6.))
+            .justify_center()
+            .px(px(7.))
             .gap(px(6.))
-            .h(px(32.))
-            .rounded(px(8.))
+            .h(px(28.))
+            .min_w(px(28.))
+            .rounded(px(7.))
             .flex_shrink_0()
             .when(right_icon_end, |this| this.justify_between())
             .when_some(width, |this, width| this.w(width))
-            .text_size(px(14.))
+            .text_size(px(13.))
+            .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(foreground)
-            .when(disabled, |this| this.opacity(0.5))
+            .when(disabled, |this| this.opacity(0.45))
             .when(pressed, |this| this.bg(pressed_bg))
             .when(!disabled && !pressed, |this| {
-                this.cursor_pointer().hover(|this| this.bg(hover_bg))
+                this.cursor_pointer()
+                    .hover(move |this| this.bg(hover_bg).text_color(hover_text))
+                    .active(move |this| this.bg(active_bg))
             })
             .children(left_icon.map(|icon| {
+                let group = group.clone();
                 svg()
                     .path(icon)
                     .size(icon_size)
                     .flex_shrink_0()
                     .text_color(foreground)
+                    .when_some(icon_hover, |this, color| {
+                        this.group_hover(group, move |style| style.text_color(color))
+                    })
             }))
             .children(label.map(|label| div().truncate().child(label)))
             .children(right_icon.map(|icon| {
@@ -219,7 +245,7 @@ impl RenderOnce for EditorButton {
                     .size(right_icon_size)
                     .flex_shrink_0()
                     .when(right_icon_end, |this| this.ml_auto())
-                    .text_color(foreground)
+                    .text_color(if disabled { disabled_text } else { chevron })
             }))
             .when_some(tooltip, |this, (theme, label)| {
                 this.tooltip_show_delay(crate::ui::TOOLTIP_SHOW_DELAY)

@@ -33,6 +33,8 @@ export const DESKTOP_RECORDING_LEASE_MS = 5 * 60 * 1_000;
 export const DESKTOP_RECORDING_SOURCE_RETRY_MS = 60 * 60 * 1_000;
 export const DESKTOP_RECORDING_OUTPUT_REPLACED = "output-replaced";
 export const DESKTOP_RECORDING_DELETING = "video-deleting";
+export const DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED =
+	"source-reupload-required";
 export const DESKTOP_RECORDING_RETRY_EXHAUSTED = "processing-retry-exhausted";
 const MAX_AUTOMATIC_ATTEMPTS = 5;
 const RETRY_EXHAUSTED_MESSAGE =
@@ -162,6 +164,8 @@ export function isDesktopRecordingJobRecoverable(
 	now: Date,
 ) {
 	if (job.state === "verified") return false;
+	if (job.errorCode === DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED)
+		return false;
 	if (job.errorCode === DESKTOP_RECORDING_RETRY_EXHAUSTED) return false;
 	if (job.errorCode === DESKTOP_RECORDING_OUTPUT_REPLACED) return false;
 	if (job.errorCode === DESKTOP_RECORDING_DELETING) return false;
@@ -286,9 +290,24 @@ export async function ensureSegmentProcessingJob({
 			verification !== undefined &&
 			(job.source !== null || job.verification !== null) &&
 			!sameArtifact(verification, job);
-		if (created || replacesArtifact) {
-			if (replacesArtifact) {
-				job = candidate;
+		const resumesReupload =
+			verification !== undefined &&
+			job.errorCode === DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED;
+		if (created || replacesArtifact || resumesReupload) {
+			if (replacesArtifact || resumesReupload) {
+				job =
+					resumesReupload && !replacesArtifact && verification
+						? {
+								...candidate,
+								verification: {
+									...verification,
+									requiredAudio:
+										verification.requiredAudio ||
+										job.verification?.requiredAudio === true ||
+										job.source?.requiredAudio === true,
+								},
+							}
+						: candidate;
 				await tx
 					.update(videoProcessingJobs)
 					.set(job)
@@ -972,6 +991,10 @@ export async function listRecoverableSegmentJobs({
 								DESKTOP_RECORDING_OUTPUT_REPLACED,
 							),
 							ne(videoProcessingJobs.errorCode, DESKTOP_RECORDING_DELETING),
+							ne(
+								videoProcessingJobs.errorCode,
+								DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED,
+							),
 							ne(
 								videoProcessingJobs.errorCode,
 								DESKTOP_RECORDING_RETRY_EXHAUSTED,

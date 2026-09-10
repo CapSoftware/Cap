@@ -18,5 +18,7 @@
 		"app/.well-known/workflow/v1/step/route.js": {
 			"memory": 3009
 		}
-	}
+	},
+	"installCommand": "cd ../.. && bunx bun@1.4.0 install --frozen-lockfile",
+	"buildCommand": "cd ../.. && bunx bun@1.4.0 run build --filter=@cap/web"
 }

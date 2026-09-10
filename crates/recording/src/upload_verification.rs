@@ -186,6 +186,7 @@ mod tests {
             "already-processing",
             "already-complete",
             "complete",
+            "source-commit-pending",
         ] {
             assert!(
                 request

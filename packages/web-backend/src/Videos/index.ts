@@ -17,6 +17,7 @@ import { Database } from "../Database.ts";
 import { Storage as StorageService } from "../Storage/index.ts";
 import {
 	getPublishedRecordingCopyKeys,
+	getPublishedRecordingThumbnailKey,
 	isInternalRecordingKey,
 } from "../Storage/recording-output.ts";
 import { Tinybird } from "../Tinybird/index.ts";
@@ -414,7 +415,14 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						{
 							...video,
 							source:
-								publishedKeys.size > 0 ? { type: "desktopMP4" } : video.source,
+								publishedKeys.size > 0
+									? {
+											type:
+												video.source.type === "webMP4"
+													? "webMP4"
+													: "desktopMP4",
+										}
+									: video.source,
 							metadata: Option.map(video.metadata, (metadata) => {
 								const copied = { ...metadata };
 								delete copied.desktopRecordingUpload;
@@ -781,6 +789,12 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				const [video] = maybeVideo.value;
 
 				const [bucket] = yield* storage.getAccessForVideo(video);
+				const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+				if (publishedThumbnail) {
+					return Option.some(
+						yield* bucket.getSignedObjectUrl(publishedThumbnail),
+					);
+				}
 				const listResponse = yield* bucket.listObjects({
 					prefix: `${video.ownerId}/${video.id}/`,
 				});

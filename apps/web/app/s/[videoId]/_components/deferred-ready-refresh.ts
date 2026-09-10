@@ -2,17 +2,19 @@
  * When an instant recording finishes processing, the page refresh swaps the
  * live HLS player for the final MP4 player - which restarts playback. Never
  * do that under an active viewer: defer the refresh to a natural break
- * (pause, ended, tab hidden), stashing the playback position so ShareVideo
+ * (pause or ended), stashing the playback position so ShareVideo
  * can resume from it after the swap.
  */
 export function scheduleReadyRefresh(options: {
 	video: HTMLVideoElement | null;
 	videoId: string;
 	refresh: () => void;
-}): void {
+}): () => void {
 	const { video, videoId, refresh } = options;
+	let cancelled = false;
 
 	const stashAndRefresh = () => {
+		if (cancelled) return;
 		try {
 			if (video && video.currentTime > 0 && !video.ended) {
 				sessionStorage.setItem(
@@ -26,25 +28,22 @@ export function scheduleReadyRefresh(options: {
 
 	if (!video || video.paused || video.ended) {
 		stashAndRefresh();
-		return;
+		return () => {};
 	}
 
 	function cleanup() {
 		video?.removeEventListener("pause", onBreak);
 		video?.removeEventListener("ended", onBreak);
-		document.removeEventListener("visibilitychange", onHidden);
 	}
 	function onBreak() {
 		cleanup();
 		stashAndRefresh();
-	}
-	function onHidden() {
-		if (document.visibilityState === "hidden") {
-			cleanup();
-			stashAndRefresh();
-		}
+		cancelled = true;
 	}
 	video.addEventListener("pause", onBreak);
 	video.addEventListener("ended", onBreak);
-	document.addEventListener("visibilitychange", onHidden);
+	return () => {
+		cancelled = true;
+		cleanup();
+	};
 }

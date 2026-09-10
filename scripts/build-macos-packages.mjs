@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { constants } from "node:os";
 import path from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
@@ -11,6 +12,38 @@ const desktopDirectory = fileURLToPath(
 const retryDelays = [15_000, 30_000];
 const outputTailLimit = 64 * 1024;
 
+export function resolveMacosDeploymentTarget(value) {
+	const minimum = JSON.parse(
+		readFileSync(
+			path.join(desktopDirectory, "src-tauri/tauri.conf.json"),
+			"utf8",
+		),
+	).bundle.macOS.minimumSystemVersion;
+	const target = value || minimum;
+	const parseVersion = (version) => {
+		if (typeof version !== "string" || !/^\d+(?:\.\d+){0,2}$/.test(version)) {
+			throw new Error(`Invalid macOS deployment target: ${version}`);
+		}
+		const parts = version.split(".").map(Number);
+		if (!parts.every(Number.isSafeInteger)) {
+			throw new Error(`Invalid macOS deployment target: ${version}`);
+		}
+		return parts;
+	};
+	const required = parseVersion(minimum);
+	const requested = parseVersion(target);
+	for (let index = 0; index < 3; index++) {
+		const difference = (requested[index] ?? 0) - (required[index] ?? 0);
+		if (difference > 0) return target;
+		if (difference < 0) {
+			throw new Error(
+				`MACOSX_DEPLOYMENT_TARGET=${target} is below Cap's minimum macOS version ${minimum}; ScreenCaptureKit requires macOS 12.3 or later.`,
+			);
+		}
+	}
+	return target;
+}
+
 export function isTimestampSigningFailure(output) {
 	const lines = stripVTControlCharacters(output)
 		.split(/\r?\n/)
@@ -18,7 +51,8 @@ export function isTimestampSigningFailure(output) {
 		.filter(
 			(line) =>
 				line &&
-				!/^ELIFECYCLE\s+Command failed with exit code \d+\.$/.test(line),
+				!/^ELIFECYCLE\s+Command failed with exit code \d+\.$/.test(line) &&
+				!/^error: script "[^"]+" exited with code \d+$/.test(line),
 		);
 	const signingError =
 		/^(?:Error\s+)?failed to bundle project: failed to sign app$/;
@@ -58,7 +92,7 @@ export function executeMacosCommand(
 ) {
 	signal?.throwIfAborted();
 	return new Promise((resolve, reject) => {
-		const child = spawnProcess("pnpm", args, {
+		const child = spawnProcess("bun", ["run", ...args], {
 			cwd: desktopDirectory,
 			env,
 			detached: true,
@@ -124,7 +158,23 @@ export async function buildMacosPackages(
 ) {
 	validateArguments(target, args, platform);
 	const commandArguments = ["--target", target, ...args];
-	const environment = { ...env, RUST_TARGET_TRIPLE: target };
+	const environment = {
+		...env,
+		RUST_TARGET_TRIPLE: target,
+		MACOSX_DEPLOYMENT_TARGET: resolveMacosDeploymentTarget(
+			env.MACOSX_DEPLOYMENT_TARGET,
+		),
+	};
+	commandArguments.push(
+		"--config",
+		JSON.stringify({
+			bundle: {
+				macOS: {
+					minimumSystemVersion: environment.MACOSX_DEPLOYMENT_TARGET,
+				},
+			},
+		}),
+	);
 	for (let attempt = 0; ; attempt++) {
 		signal?.throwIfAborted();
 		let outputTail = "";
@@ -132,12 +182,12 @@ export async function buildMacosPackages(
 			attempt === 0
 				? ["build:tauri", ...commandArguments]
 				: [
-						"exec",
 						"dotenv",
 						"-e",
 						"../../.env",
 						"--",
-						"pnpm",
+						"bun",
+						"run",
 						"tauri",
 						"bundle",
 						...commandArguments,
@@ -171,13 +221,19 @@ export async function buildMacosPackages(
 }
 
 async function main() {
+	const [target, ...args] = process.argv.slice(2);
+	if (target === "--deployment-target" && args.length === 0) {
+		console.log(
+			resolveMacosDeploymentTarget(process.env.MACOSX_DEPLOYMENT_TARGET),
+		);
+		return;
+	}
 	const controller = new AbortController();
 	const interrupt = () => controller.abort("SIGINT");
 	const terminate = () => controller.abort("SIGTERM");
 	process.on("SIGINT", interrupt);
 	process.on("SIGTERM", terminate);
 	try {
-		const [target, ...args] = process.argv.slice(2);
 		const result = await buildMacosPackages(target, args, {
 			signal: controller.signal,
 		});

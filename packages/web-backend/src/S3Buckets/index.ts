@@ -10,11 +10,13 @@ import { Database } from "../Database.ts";
 import { createS3BucketAccess } from "./S3BucketAccess.ts";
 import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
 import { S3BucketsRepo } from "./S3BucketsRepo.ts";
+import { s3ConnectionPool } from "./S3ConnectionPool.ts";
 
 export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
-	effect: Effect.gen(function* () {
+	scoped: Effect.gen(function* () {
 		const repo = yield* S3BucketsRepo;
 		const { credentials } = yield* AwsCredentials;
+		const requestHandler = yield* s3ConnectionPool;
 
 		const defaultConfigs = {
 			publicEndpoint: yield* Config.string("S3_PUBLIC_ENDPOINT").pipe(
@@ -43,7 +45,10 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				credentials: defaultConfigs.credentials,
 				forcePathStyle: defaultConfigs.forcePathStyle,
 				requestStreamBufferSize: 16 * 1024,
+				requestHandler,
 			});
+		const defaultInternalClient = createDefaultClient(true);
+		const defaultPublicClient = createDefaultClient(false);
 
 		const endpointIsPathStyle = (endpoint: string, bucket: string) => {
 			try {
@@ -78,6 +83,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 						Option.getOrNull,
 					) ?? true,
 				useArnRegion: false,
+				requestHandler,
 			});
 		};
 
@@ -142,8 +148,8 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 			const bucketAccess = yield* Option.match(customBucket, {
 				onNone: () => {
 					const provider = Layer.succeed(S3BucketClientProvider, {
-						getInternal: Effect.succeed(createDefaultClient(true)),
-						getPublic: Effect.succeed(createDefaultClient(false)),
+						getInternal: Effect.succeed(defaultInternalClient),
+						getPublic: Effect.succeed(defaultPublicClient),
 						bucket: defaultConfigs.bucket,
 						isPathStyle: defaultConfigs.forcePathStyle,
 					});

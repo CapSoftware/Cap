@@ -1,24 +1,50 @@
 //! `Field` and `Subfield` -- the config sidebar's two labelled setting
 //! containers (`routes/editor/ui.tsx:25-69`).
 //!
-//! They are layout-only in the source and layout-only here: a `Field` is a
-//! header row (icon, name, optional badge pill, optional right-aligned slot)
-//! stacked `gap-4` above whatever control it wraps, and a `Subfield` is a
-//! single `justify-between` row of label and control. Between them they carry
-//! every section header in the sidebar, so their spacing is load-bearing -- the
-//! background tab's rhythm is `gap-6` between fields and `gap-4` inside one.
+//! They are layout-only in the source and layout-only here. `Field` has four
+//! shapes:
+//!
+//! | shape | used for | header |
+//! |---|---|---|
+//! | `plain` | the export flow and the screenshot editor | 13px/600 with an icon |
+//! | `section` | a sidebar group title, with an optional trailing ghost action | 12px/500 `text_2` |
+//! | `stacked` | a complex control that cannot sit on one row | 13px/400 `text_1` |
+//! | `inline` | one control on a 34px row: label, control, value | 13px/400 `text_1` |
+//!
+//! `Subfield` is the inline row for controls whose label is a sentence rather
+//! than a column heading.
 //!
 //! `ui.tsx` is imported by the settings pages and the main window too, which is
 //! why these live in the shared library rather than next to the editor window.
 
+use std::sync::Arc;
+
 use gpui::{
-    AnyElement, FontWeight, Hsla, IntoElement, ParentElement, Pixels, RenderOnce, SharedString,
-    Styled, Window, div, prelude::FluentBuilder, px, svg,
+    AnyElement, FontFeatures, FontWeight, Hsla, IntoElement, ParentElement, Pixels, RenderOnce,
+    SharedString, Styled, Window, div, prelude::FluentBuilder, px, svg,
 };
 
 use crate::theme::Theme;
 
-/// `<Field>`: `flex flex-col gap-4` with a header row above the children.
+/// The label column every inline row shares, so a column of sliders starts at
+/// the same x.
+const INLINE_LABEL_WIDTH: f32 = 96.;
+const INLINE_ROW_HEIGHT: f32 = 34.;
+const INLINE_VALUE_WIDTH: f32 = 36.;
+
+fn tabular_numerals() -> FontFeatures {
+    FontFeatures(Arc::new(vec![("tnum".to_string(), 1)]))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldStyle {
+    Plain,
+    Section,
+    Stacked,
+    Inline,
+}
+
+/// `<Field>`: a header row above the children, or -- inline -- one row.
 #[derive(IntoElement)]
 pub struct Field {
     name: SharedString,
@@ -29,9 +55,14 @@ pub struct Field {
     badge: Option<SharedString>,
     /// The `ml-auto` slot. Every header toggle in the sidebar lives here.
     value: Option<AnyElement>,
+    /// The inline row's right-hand readout.
+    value_text: Option<SharedString>,
     children: Vec<AnyElement>,
     gap: Pixels,
+    style: FieldStyle,
     text: Hsla,
+    muted: Hsla,
+    value_color: Hsla,
     disabled_text: Hsla,
     badge_bg: Hsla,
     badge_text: Hsla,
@@ -39,24 +70,46 @@ pub struct Field {
 }
 
 impl Field {
-    /// The editor surface: Radix, no material.
-    pub fn plain(theme: &Theme, name: impl Into<SharedString>) -> Self {
+    fn new(theme: &Theme, name: impl Into<SharedString>, style: FieldStyle, gap: Pixels) -> Self {
         Self {
             name: name.into(),
             icon: None,
             icon_size: px(16.),
             badge: None,
             value: None,
+            value_text: None,
             children: Vec::new(),
-            // `gap-4`
-            gap: px(16.),
-            text: Hsla::from(theme.gray_12),
-            // `data-[disabled='true']:text-gray-10`
-            disabled_text: Hsla::from(theme.gray_10),
-            badge_bg: Hsla::from(theme.gray_3),
-            badge_text: Hsla::from(theme.gray_11),
+            gap,
+            style,
+            text: Hsla::from(theme.editor.text_1),
+            muted: Hsla::from(theme.editor.text_2),
+            value_color: Hsla::from(theme.editor.text_3),
+            disabled_text: Hsla::from(theme.editor.text_3),
+            badge_bg: Hsla::from(theme.editor.ctl),
+            badge_text: Hsla::from(theme.editor.text_2),
             disabled: false,
         }
+    }
+
+    /// The editor surface: Radix, no material.
+    pub fn plain(theme: &Theme, name: impl Into<SharedString>) -> Self {
+        Self::new(theme, name, FieldStyle::Plain, px(16.))
+    }
+
+    /// A sidebar group title: 12px/500 `text_2`, no icon, with the group's
+    /// action (`None`, `Save`, `Reset`) in the `value` slot.
+    pub fn section(theme: &Theme, name: impl Into<SharedString>) -> Self {
+        Self::new(theme, name, FieldStyle::Section, px(10.))
+    }
+
+    /// A control that needs its own block under the label.
+    pub fn stacked(theme: &Theme, name: impl Into<SharedString>) -> Self {
+        Self::new(theme, name, FieldStyle::Stacked, px(8.))
+    }
+
+    /// One control on one row: label, control, readout.
+    pub fn inline(theme: &Theme, name: impl Into<SharedString>) -> Self {
+        Self::new(theme, name, FieldStyle::Inline, px(0.))
     }
 
     /// `<IconCapImage class="size-4" />` and friends. Some call sites pass no
@@ -78,6 +131,11 @@ impl Field {
 
     pub fn value(mut self, value: AnyElement) -> Self {
         self.value = Some(value);
+        self
+    }
+
+    pub fn value_text(mut self, value: impl Into<SharedString>) -> Self {
+        self.value_text = Some(value.into());
         self
     }
 
@@ -111,33 +169,92 @@ impl RenderOnce for Field {
             icon_size,
             badge,
             value,
+            value_text,
             children,
             gap,
+            style,
             text,
+            muted,
+            value_color,
             disabled_text,
             badge_bg,
             badge_text,
             disabled,
         } = self;
-        let label_color = if disabled { disabled_text } else { text };
+        let label_color = match (disabled, style) {
+            (true, _) => disabled_text,
+            (false, FieldStyle::Section) => muted,
+            (false, _) => text,
+        };
+
+        if style == FieldStyle::Inline {
+            return div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .h(px(INLINE_ROW_HEIGHT))
+                .gap(px(10.))
+                .child(
+                    div()
+                        .flex_none()
+                        .min_w(px(INLINE_LABEL_WIDTH))
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(label_color)
+                        .child(name),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_end()
+                        .gap(px(8.))
+                        .children(children),
+                )
+                .when_some(value_text, |this, value_text| {
+                    this.child(
+                        div()
+                            .flex_none()
+                            .min_w(px(INLINE_VALUE_WIDTH))
+                            .text_right()
+                            .text_size(px(11.))
+                            .font_features(tabular_numerals())
+                            .text_color(value_color)
+                            .child(value_text),
+                    )
+                })
+                .when_some(value, |this, value| {
+                    this.child(div().flex_none().flex().items_center().child(value))
+                });
+        }
+
+        let (label_size, label_weight) = match style {
+            FieldStyle::Section => (px(12.), FontWeight::MEDIUM),
+            FieldStyle::Stacked => (px(13.), FontWeight::NORMAL),
+            _ => (px(13.), FontWeight::SEMIBOLD),
+        };
+        let show_icon = style == FieldStyle::Plain;
 
         div()
             .flex()
             .flex_col()
             .gap(gap)
             .child(
-                // `flex flex-row items-center gap-1.5 text-gray-12 font-medium
-                //  text-sm`
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap(px(6.))
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::MEDIUM)
+                    .when(style == FieldStyle::Section, |this| this.min_h(px(22.)))
+                    .text_size(label_size)
+                    .font_weight(label_weight)
                     .text_color(label_color)
                     .children(
-                        icon.map(|icon| svg().path(icon).size(icon_size).text_color(label_color)),
+                        icon.filter(|_| show_icon)
+                            .map(|icon| svg().path(icon).size(icon_size).text_color(label_color)),
                     )
                     .child(name)
                     .children(badge.map(|badge| {
@@ -159,8 +276,7 @@ impl RenderOnce for Field {
     }
 }
 
-/// `<Subfield>`: `flex flex-row justify-between items-center`, label
-/// `font-medium text-gray-12`, control on the right.
+/// `<Subfield>`: one 34px row of label and control, the control at the end.
 #[derive(IntoElement)]
 pub struct Subfield {
     name: SharedString,
@@ -179,8 +295,8 @@ impl Subfield {
             required: false,
             children: Vec::new(),
             gap: None,
-            text: Hsla::from(theme.gray_12),
-            accent: Hsla::from(theme.blue_500),
+            text: Hsla::from(theme.editor.text_1),
+            accent: Hsla::from(theme.editor.accent),
         }
     }
 
@@ -217,13 +333,16 @@ impl RenderOnce for Subfield {
             .flex_row()
             .justify_between()
             .items_center()
+            .min_h(px(INLINE_ROW_HEIGHT))
             .when_some(gap, |this, gap| this.gap(gap))
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
-                    .font_weight(FontWeight::MEDIUM)
+                    .flex_none()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::NORMAL)
                     .text_color(text)
                     .child(name)
                     .when(required, |this| {

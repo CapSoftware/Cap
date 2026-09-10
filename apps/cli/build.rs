@@ -1,3 +1,6 @@
+#[path = "../../scripts/diagnostic-build.rs"]
+mod diagnostic_build;
+
 use std::path::Path;
 
 // The cap-demo skill directory is embedded wholesale into the `cap` binary via
@@ -9,6 +12,7 @@ use std::path::Path;
 // including playwright-core — bloating the shipped CLI and making builds
 // non-reproducible. Guard against that here, loudly, at build time.
 fn main() {
+    diagnostic_build::emit();
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set");
     let node_modules = Path::new(&manifest_dir)
         .join("skill")
