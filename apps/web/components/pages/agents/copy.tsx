@@ -79,8 +79,9 @@ export const CopyIconButton = ({
 			type="button"
 			aria-label={copied ? `${label} copied` : `Copy ${label}`}
 			onClick={() => {
-				onCopy?.();
-				void copy(text);
+				void copy(text).then((ok) => {
+					if (ok) onCopy?.();
+				});
 			}}
 			className={classNames(
 				"grid size-8 shrink-0 place-items-center rounded-[8px] transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2",
@@ -132,8 +133,9 @@ export const CopyLabelButton = ({
 		<button
 			type="button"
 			onClick={() => {
-				onCopy?.();
-				void copy(text);
+				void copy(text).then((ok) => {
+					if (ok) onCopy?.();
+				});
 			}}
 			className={classNames(className, "gap-2.5")}
 		>
