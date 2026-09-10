@@ -95,7 +95,7 @@ const TASKS: readonly Task[] = [
 			{
 				type: "tool",
 				cmd: "cap caps context x7f2k9 --json",
-				out: '{ "title": "Checkout bug repro", "chapters": 3, "transcript": "1,204 words" }',
+				out: '{ "title": { "current": "Checkout bug repro" }, "summary": { "status": "available" }, "chapters": { "status": "available" }, "transcript": { "status": "complete" } }',
 				ms: 1000,
 			},
 			{
@@ -161,7 +161,7 @@ const TASKS: readonly Task[] = [
 			{
 				type: "tool",
 				cmd: "cap caps context x7f2k9 --json",
-				out: '{ "chapters": [ { "at": "04:32", "title": "Pricing" } ] }',
+				out: '{ "chapters": { "status": "available", "value": [ … ] }, "transcript": { "status": "complete" } }',
 			},
 			{
 				type: "ask",
@@ -171,7 +171,7 @@ const TASKS: readonly Task[] = [
 			{
 				type: "tool",
 				cmd: 'cap caps comments add x7f2k9 "Is the annual discount 20% or 25%? The deck says both." --timestamp-ms 272000 --yes --json',
-				out: '{ "id": "cmt_8h2k", "posted": true }',
+				out: '{ "id": "cmt_8h2k", "timestampMs": 272000 }',
 			},
 			{
 				type: "result",
@@ -209,11 +209,16 @@ const TASKS: readonly Task[] = [
 			{
 				type: "tool",
 				cmd: "cap caps move x7f2k9 --container space --organization org_2j4k --space sp_prod --folder fld_rel --yes --json",
-				out: '{ "moved": true }',
+				out: '{ "resource": { "type": "cap", "id": "x7f2k9" }, "action": "moved" }',
+			},
+			{
+				type: "tool",
+				cmd: "cap caps get x7f2k9 --json",
+				out: '{ "id": "x7f2k9", "organizationId": "org_2j4k", "folderId": "fld_rel" }',
 			},
 			{
 				type: "result",
-				text: "Moved. The Cap now reads Product / Releases.",
+				text: "Moved and verified. The Cap now sits in Product / Releases.",
 			},
 		],
 	},
@@ -233,18 +238,24 @@ const TASKS: readonly Task[] = [
 			{
 				type: "tool",
 				cmd: "cap caps import loom https://loom.com/share/7f3a9c2e --organization org_2j4k --owner-email sam@acme.com --space Product --yes --json",
-				out: '{ "operationId": "op_51ac", "state": "queued" }',
+				out: '{ "id": "op_51ac", "state": "queued" }',
 				ms: 900,
 			},
 			{
 				type: "tool",
 				cmd: "cap jobs wait op_51ac --json",
-				out: '{ "state": "succeeded" }',
+				out: '{ "id": "op_51ac", "state": "succeeded", "resultResourceId": "m4p2q8" }',
 				ms: 2200,
 			},
 			{
+				type: "tool",
+				cmd: "cap caps context m4p2q8 --json",
+				out: '{ "title": { "current": "Q3 roadmap walkthrough" }, "transcript": { "status": "complete" }, "chapters": { "status": "available" } }',
+				ms: 900,
+			},
+			{
 				type: "result",
-				text: "Imported. cap.so/s/m4p2q8 has its title, a transcript, and chapters.",
+				text: "Imported and verified. The Cap has its title, a transcript, and chapters.",
 				card: {
 					kind: "link",
 					title: "Q3 roadmap walkthrough",
