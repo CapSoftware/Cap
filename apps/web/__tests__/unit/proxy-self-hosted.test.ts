@@ -25,6 +25,20 @@ vi.mock("@cap/env", () => ({
 const request = (path: string) =>
 	proxy(new NextRequest(`https://cap.example.com${path}`));
 
+const expectServed = async (path: string) => {
+	const response = await request(path);
+	expect(response.status).toBe(200);
+	expect(response.headers.get("location")).toBeNull();
+};
+
+const expectLoginRedirect = async (path: string) => {
+	const response = await request(path);
+	expect(response.status).toBe(307);
+	expect(response.headers.get("location")).toBe(
+		"https://cap.example.com/login",
+	);
+};
+
 describe("self-hosted proxy routes", () => {
 	it("allows browser-based CLI authorization pages", () => {
 		const source = readFileSync(join(process.cwd(), "proxy.ts"), "utf8");
@@ -33,30 +47,29 @@ describe("self-hosted proxy routes", () => {
 
 	it.each([
 		"/logos/browsers/google-chrome.svg",
-		"/illustrations/mask-bg.webp",
-		"/sounds/recording-start.mp3",
+		"/illustrations/app.webp",
+		"/sounds/start-recording.ogg",
 		"/rive/main.riv",
-		"/fonts/Inter.woff2",
-	])("serves the public asset %s instead of redirecting", async (path) => {
-		const response = await request(path);
+		"/fonts/Geist-Regular.woff2",
+		"/site.webmanifest",
+	])("serves the public asset %s instead of redirecting", (path) =>
+		expectServed(path),
+	);
 
-		expect(response.status).toBe(200);
-		expect(response.headers.get("location")).toBeNull();
-	});
+	it("still redirects page routes to /login", () =>
+		expectLoginRedirect("/pricing"));
 
-	it("still redirects unauthenticated page routes to /login", async () => {
-		const response = await request("/pricing");
+	it("still redirects extension-suffixed route handlers to /login", () =>
+		expectLoginRedirect("/install-cli.sh"));
 
-		expect(response.status).toBe(307);
-		expect(response.headers.get("location")).toBe(
-			"https://cap.example.com/login",
-		);
-	});
+	it("does not let a missing file through", () =>
+		expectLoginRedirect("/logos/missing.svg"));
 
-	it("does not treat a share link as a static asset", async () => {
-		const response = await request("/s/video123");
+	it("does not let a directory through", () => expectLoginRedirect("/logos"));
 
-		expect(response.status).toBe(200);
-		expect(response.headers.get("location")).toBeNull();
-	});
+	it("rejects path traversal out of public/", () =>
+		expectLoginRedirect("/logos/..%2F..%2Fproxy.ts"));
+
+	it("does not treat a share link as an asset", () =>
+		expectServed("/s/video123"));
 });
