@@ -60,8 +60,14 @@ const TASKS: readonly Task[] = [
 			{
 				type: "tool",
 				cmd: 'cap upload ./recording.cap --export --name "Checkout bug repro" --json',
-				out: '{ "url": "https://cap.so/s/x7f2k9" }',
+				out: '{ "type": "uploaded", "id": "x7f2k9", "link": "https://cap.so/s/x7f2k9" }',
 				ms: 1200,
+			},
+			{
+				type: "tool",
+				cmd: "cap caps wait x7f2k9 --for all --json",
+				out: '{ "transcript": { "status": "complete" }, "ai": { "status": "complete" } }',
+				ms: 1600,
 			},
 			{
 				type: "result",
@@ -121,7 +127,7 @@ const TASKS: readonly Task[] = [
 			{
 				type: "tool",
 				cmd: 'cap caps list --search "onboarding" --updated-after 2026-08-10 --json',
-				out: '{ "count": 4 }',
+				out: '{ "caps": [ { "id": "k3m8v2", "title": "Onboarding flow v3 walkthrough" }, … ] }',
 			},
 			{
 				type: "tool",
@@ -227,18 +233,18 @@ const TASKS: readonly Task[] = [
 			{
 				type: "tool",
 				cmd: "cap caps import loom https://loom.com/share/7f3a9c2e --organization org_2j4k --owner-email sam@acme.com --space Product --yes --json",
-				out: '{ "operationId": "op_51ac", "status": "queued" }',
+				out: '{ "operationId": "op_51ac", "state": "queued" }',
 				ms: 900,
 			},
 			{
 				type: "tool",
 				cmd: "cap jobs wait op_51ac --json",
-				out: '{ "status": "completed", "url": "https://cap.so/s/m4p2q8" }',
+				out: '{ "state": "succeeded" }',
 				ms: 2200,
 			},
 			{
 				type: "result",
-				text: "Imported with its title, a transcript, and chapters.",
+				text: "Imported. cap.so/s/m4p2q8 has its title, a transcript, and chapters.",
 				card: {
 					kind: "link",
 					title: "Q3 roadmap walkthrough",

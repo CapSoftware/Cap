@@ -362,8 +362,9 @@ export const AgentScene = (props: SceneProps) => {
 							}
 						>
 							<Json>
-								{"{"} <Key>"url"</Key>: <Str>"https://cap.so/s/x7f2k9"</Str>{" "}
-								{"}"}
+								{"{"} <Key>"type"</Key>: <Str>"uploaded"</Str>, <Key>"id"</Key>:{" "}
+								<Str>"x7f2k9"</Str>, <Key>"link"</Key>:{" "}
+								<Str>"https://cap.so/s/x7f2k9"</Str> {"}"}
 							</Json>
 						</Tool>
 						<Tool
