@@ -64,6 +64,7 @@ export const EmbedVideo = forwardRef<
 		/** Seconds to open at, from the embed URL's `?t=`. */
 		startTime?: number | null;
 		minimal?: boolean;
+		defaultPlaybackSpeed?: number;
 		viewerSettings?: ViewerSettings | null;
 		showPlaybackStatusBadge?: boolean;
 	}
@@ -79,6 +80,7 @@ export const EmbedVideo = forwardRef<
 			autoplay = false,
 			startTime = null,
 			minimal = false,
+			defaultPlaybackSpeed,
 			viewerSettings,
 			showPlaybackStatusBadge = false,
 		},
@@ -274,6 +276,7 @@ export const EmbedVideo = forwardRef<
 							captionsSrc={captionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
 							autoplay={autoplay}
+							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							enableCrossOrigin={enableCrossOrigin}
 							hasActiveUpload={data.hasActiveUpload}
 						/>
@@ -288,6 +291,7 @@ export const EmbedVideo = forwardRef<
 							captionsSrc={captionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
 							autoplay={autoplay}
+							defaultPlaybackSpeed={defaultPlaybackSpeed}
 							hasActiveUpload={data.hasActiveUpload}
 							isLiveSegments={isSegmentsSource}
 						/>

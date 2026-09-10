@@ -27,6 +27,7 @@ import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
 import * as EffectRuntime from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
@@ -392,6 +393,10 @@ async function EmbedContent({
 			autoplay={autoplay}
 			startTime={startTime}
 			minimal={minimal}
+			defaultPlaybackSpeed={resolveDefaultPlaybackSpeed(
+				video.settings?.defaultPlaybackSpeed,
+				video.orgSettings?.defaultPlaybackSpeed,
+			)}
 			viewerSettings={rules.settings}
 			showPlaybackStatusBadge={user?.id === video.ownerId}
 		/>
