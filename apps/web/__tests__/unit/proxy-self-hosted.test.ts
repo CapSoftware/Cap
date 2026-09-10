@@ -52,6 +52,7 @@ describe("self-hosted proxy routes", () => {
 		"/rive/main.riv",
 		"/fonts/Geist-Regular.woff2",
 		"/site.webmanifest",
+		"/.well-known/atproto-did",
 	])("serves the public asset %s instead of redirecting", (path) =>
 		expectServed(path),
 	);
