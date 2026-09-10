@@ -1,10 +1,10 @@
 "use client";
 
 import Cookies from "js-cookie";
-import { useEffect } from "react";
+import { useLayoutEffect } from "react";
 
 export function ShareTheme() {
-	useEffect(() => {
+	useLayoutEffect(() => {
 		const preference = window.matchMedia("(prefers-color-scheme: dark)");
 		const applyTheme = () => {
 			const savedTheme = Cookies.get("theme");
