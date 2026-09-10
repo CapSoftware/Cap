@@ -109,6 +109,8 @@ Core principles:
 
 Cap ships a `cap` CLI designed to be driven by AI coding agents (Claude Code, Codex, Cursor, OpenCode) and scripts.
 
+Start at https://cap.so/agents for the copyable setup prompt, per-agent install steps, and the safety rules; the full reference lives under https://cap.so/docs/agents.
+
 Install:
 - `curl -fsSL https://cap.so/install-cli.sh | sh` (PowerShell: `irm https://cap.so/install-cli.ps1 | iex`)
 - or `cap desktop install-cli`, or via Cap Desktop → Settings → Command Line.
