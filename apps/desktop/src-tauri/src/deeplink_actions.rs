@@ -1,6 +1,5 @@
-﻿use url::Url;
+use url::Url;
 
-// Deeplink action handler for cap-desktop:// protocol
 pub fn handle_deeplink_recording_action(url_str: &str) {
     if let Ok(parsed_url) = Url::parse(url_str) {
         match parsed_url.host_str() {
