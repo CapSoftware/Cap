@@ -2193,11 +2193,23 @@ impl ShowCapWindow {
 
                 PendingEditorInstances::start_prewarm(app, _id.label(), project_path.clone()).await;
 
-                let window = self
+                let builder = self
                     .window_builder_with_id(app, "/editor", &_id, _id.label())
                     .maximizable(true)
-                    .focused(true)
-                    .build()?;
+                    .focused(true);
+                #[cfg(debug_assertions)]
+                let builder = if crate::stop_editor_benchmark::enabled() {
+                    builder.initialization_script(crate::stop_editor_benchmark::SCRIPT)
+                } else {
+                    builder
+                };
+                #[cfg(debug_assertions)]
+                let builder = if crate::stop_editor_benchmark::dom_capture_requested() {
+                    builder.initialization_script(crate::stop_editor_benchmark::DOM_SCRIPT)
+                } else {
+                    builder
+                };
+                let window = builder.build()?;
                 if let Some(opening) = project_opening.as_mut() {
                     opening.own_window(&window);
                 }

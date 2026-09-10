@@ -1,5 +1,9 @@
 import { createWS } from "@solid-primitives/websocket";
 import { createResource, createSignal } from "solid-js";
+import {
+	type RenderedFrameIdentity,
+	readFrameIdentity,
+} from "./frame-identity";
 import FrameWorker from "./frame-worker?worker";
 import {
 	createProducer,
@@ -34,7 +38,7 @@ const NV12_VIDEO_MAGIC = 0x4e563132;
 const NV12_FULL_MAGIC = 0x4e563146;
 const NV12_METADATA_SIZE = 28;
 
-type Nv12Metadata = {
+type Nv12Metadata = RenderedFrameIdentity & {
 	yStride: number;
 	height: number;
 	width: number;
@@ -71,6 +75,7 @@ function readNv12Metadata(buffer: ArrayBuffer): Nv12Metadata | null {
 		height,
 		width,
 		fullRange: magic === NV12_FULL_MAGIC,
+		...readFrameIdentity(meta),
 	};
 }
 
@@ -199,6 +204,7 @@ export type FrameData = {
 	width: number;
 	height: number;
 	bitmap?: ImageBitmap | null;
+	renderedFrame?: RenderedFrameIdentity;
 };
 
 export type CanvasControls = {
@@ -214,6 +220,7 @@ export type CanvasControls = {
 
 export type ImageDataWSOptions = {
 	powerPreference?: GPUPowerPreference;
+	retainLastFrameOnDispose?: HTMLCanvasElement;
 };
 
 interface ReadyMessage {
@@ -222,6 +229,8 @@ interface ReadyMessage {
 
 interface FrameRenderedMessage {
 	type: "frame-rendered";
+	frameNumber?: number;
+	targetTimeNs?: bigint;
 	width: number;
 	height: number;
 }
@@ -372,6 +381,13 @@ export function createImageDataWS(
 
 	function cleanup() {
 		if (isCleanedUp) return;
+		if (options.retainLastFrameOnDispose) {
+			try {
+				canvasControls.drawLatestFrameToCanvas(
+					options.retainLastFrameOnDispose,
+				);
+			} catch {}
+		}
 		isCleanedUp = true;
 
 		ws.onmessage = null;
@@ -489,7 +505,14 @@ export function createImageDataWS(
 				timing,
 				receivedAt,
 			);
-			onmessage({ width, height });
+			onmessage({
+				width,
+				height,
+				renderedFrame: {
+					frameNumber: metadata.frameNumber,
+					targetTimeNs: metadata.targetTimeNs,
+				},
+			});
 		}
 	}
 
@@ -544,7 +567,7 @@ export function createImageDataWS(
 				timing,
 				receivedAt,
 			);
-			onmessage({ width, height });
+			onmessage({ width, height, renderedFrame: readFrameIdentity(meta) });
 		}
 	}
 
@@ -564,6 +587,7 @@ export function createImageDataWS(
 		height: number,
 		yStride: number,
 		fullRange: boolean,
+		identity: RenderedFrameIdentity,
 		receivedAt?: number,
 	) {
 		if (!directCanvas || !directCtx) return;
@@ -602,7 +626,7 @@ export function createImageDataWS(
 			undefined,
 			receivedAt,
 		);
-		onmessage({ width, height });
+		onmessage({ width, height, renderedFrame: identity });
 	}
 
 	function renderPendingFrameCanvas2D() {
@@ -628,6 +652,10 @@ export function createImageDataWS(
 				height,
 				yStride,
 				fullRange,
+				{
+					frameNumber: metadata.frameNumber,
+					targetTimeNs: metadata.targetTimeNs,
+				},
 				receivedAt,
 			);
 		}
@@ -680,7 +708,14 @@ export function createImageDataWS(
 				false,
 			);
 			recordRender(performance.now() - renderStart, "canvas2d");
-			onmessage({ width, height });
+			onmessage({
+				width,
+				height,
+				renderedFrame: {
+					frameNumber: e.data.frameNumber,
+					targetTimeNs: e.data.targetTimeNs,
+				},
+			});
 		};
 		return strideWorker;
 	}
@@ -747,13 +782,14 @@ export function createImageDataWS(
 				undefined,
 				receivedAt,
 			);
-			onmessage({ width, height });
+			onmessage({ width, height, renderedFrame: readFrameIdentity(meta) });
 			return;
 		}
 
 		ensureStrideWorker().postMessage(
 			{
 				type: "correct-stride",
+				...readFrameIdentity(meta),
 				buffer,
 				strideBytes,
 				width,
@@ -1024,7 +1060,17 @@ export function createImageDataWS(
 			if (!hasRenderedFrame()) {
 				setHasRenderedFrame(true);
 			}
-			onmessage({ width, height });
+			onmessage({
+				width,
+				height,
+				renderedFrame:
+					e.data.frameNumber !== undefined && e.data.targetTimeNs !== undefined
+						? {
+								frameNumber: e.data.frameNumber,
+								targetTimeNs: e.data.targetTimeNs,
+							}
+						: undefined,
+			});
 			recordRender(0, "worker");
 			if (isProcessingSharedFrame) {
 				isProcessingSharedFrame = false;

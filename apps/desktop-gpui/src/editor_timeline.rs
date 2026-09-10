@@ -503,44 +503,8 @@ fn visible_box(start: f64, end: f64, transform: Transform, secs_per_pixel: f64) 
 // Waveform peaks
 // ---------------------------------------------------------------------------
 
-/// `AudioData::SAMPLE_RATE` (`crates/audio/src/audio_data.rs:20`). Spelled out
-/// rather than imported because `cap-audio` is not a direct dependency here --
-/// the decoded track arrives through `cap_editor::AudioLoader`, and its
-/// inherent methods are all this needs.
-const AUDIO_SAMPLE_RATE: usize = 48_000;
-
-/// `get_waveform` (`apps/desktop/src-tauri/src/audio.rs:42-73`), transcribed:
-/// one absolute-dBFS value per ~100 ms chunk of the decoded track, with digital
-/// silence pinned to -60 dBFS rather than -inf.
-///
-/// It lives in the Tauri *app*, not in a crate, which is the only reason it is
-/// copied here rather than called. The data path itself needs nothing new:
-/// `EditorInstance::segment_medias[i].audio` is an `AudioLoader` whose `get()`
-/// resolves once the background decode finishes, exactly as
-/// `get_mic_waveforms` (`lib.rs:4395-4412`) awaits it.
-pub fn waveform_peaks(samples: &[f32], channels: u16) -> Vec<f32> {
-    const CHUNK_SIZE: usize = AUDIO_SAMPLE_RATE / 10; // ~100ms
-
-    let channels = (channels as usize).max(1);
-    let mut waveform = Vec::new();
-
-    let mut i = 0;
-    while i < samples.len() {
-        let end = (i + CHUNK_SIZE * channels).min(samples.len());
-        let mut sum = 0.0f32;
-        for s in &samples[i..end] {
-            sum += s.abs();
-        }
-        let avg = if end > i { sum / (end - i) as f32 } else { 0.0 };
-        waveform.push(avg);
-        i += CHUNK_SIZE * channels;
-    }
-
-    for v in waveform.iter_mut() {
-        *v = if *v > 0.0 { 20.0 * v.log10() } else { -60.0 };
-    }
-
-    waveform
+pub fn waveform_peaks<'a>(samples: impl IntoIterator<Item = &'a f32>, channels: u16) -> Vec<f32> {
+    cap_editor::waveform_peaks(samples.into_iter(), channels)
 }
 
 /// `WAVEFORM_MIN_DB` / `WAVEFORM_SAMPLE_STEP` / `WAVEFORM_MUTE_DB`
@@ -3290,6 +3254,8 @@ pub fn wheel_zoom_delta(dom_delta_y: f64, zoom: f64) -> f64 {
 mod tests {
     use super::*;
 
+    const AUDIO_SAMPLE_RATE: usize = 48_000;
+
     // -- The ruler ----------------------------------------------------------
 
     #[test]
@@ -4180,5 +4146,162 @@ mod style_image_tests {
         );
         assert!(scene_available(&project, true));
         assert!(!scene_available(&project, false));
+    }
+}
+
+pub(crate) fn preparing_frontier_offset(
+    playable_until: f64,
+    view: TimelineView,
+    width: f32,
+) -> f32 {
+    if !playable_until.is_finite() || !width.is_finite() || width <= 0.0 {
+        return 0.0;
+    }
+    let seconds_per_pixel = view.transform.secs_per_pixel(width);
+    if !seconds_per_pixel.is_finite() || seconds_per_pixel <= 0.0 {
+        return 0.0;
+    }
+    ((playable_until - view.transform.position) / seconds_per_pixel).clamp(0.0, f64::from(width))
+        as f32
+}
+
+pub(crate) fn render_preparing_timeline(
+    theme: &Theme,
+    model: &TimelineModel,
+    view: TimelineView,
+    viewport_width: f32,
+    progress: Option<&cap_editor::PreparingEditorProgress>,
+) -> AnyElement {
+    let known_duration = progress.and_then(|progress| progress.total_duration);
+    let playable_until = progress.map_or(0.0, |progress| progress.playable_until);
+    let content_width = content_width(viewport_width);
+    let frontier = preparing_frontier_offset(playable_until, view, content_width);
+    let mut rows = div()
+        .flex()
+        .flex_col()
+        .gap(px(TRACK_ROW_GAP))
+        .w_full()
+        .pr(px(SCROLL_BODY_PADDING_RIGHT));
+    if known_duration.is_some() {
+        for row in &model.rows {
+            rows = rows.child(render_row(
+                theme,
+                model,
+                *row,
+                view,
+                viewport_width,
+                SegmentUi::default(),
+            ));
+        }
+    } else {
+        rows = rows.child(
+            div()
+                .flex()
+                .flex_row()
+                .h(px(TRACK_HEIGHT))
+                .rounded(px(TRACK_BAND_RADIUS))
+                .bg(Hsla::from(theme.editor.ctl))
+                .child(
+                    div()
+                        .w(px(TRACK_GUTTER))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .pl(px(10.))
+                        .text_size(px(12.))
+                        .child("Clip"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .m(px(8.))
+                        .rounded(px(6.))
+                        .bg(Hsla::from(theme.editor.ctl_hover)),
+                ),
+        );
+    }
+    let mut veil = theme.editor.card;
+    veil.a = 0.88;
+    let mut edge = theme.editor.card;
+    edge.a = 0.35;
+    let mut clear = theme.editor.card;
+    clear.a = 0.0;
+    div()
+        .size_full()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .relative()
+        .overflow_hidden()
+        .pt(px(TIMELINE_TOP_PADDING))
+        .px(px(TIMELINE_PADDING))
+        .pb(px(TIMELINE_BOTTOM_PADDING))
+        .gap(px(TIMELINE_HEADER_GAP))
+        .child(
+            div()
+                .relative()
+                .h(px(TIMELINE_HEADER_HEIGHT))
+                .flex_none()
+                .children(known_duration.map(|_| render_ruler(theme, view, viewport_width)))
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(4.))
+                        .bottom_0()
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.editor.text_3))
+                        .child("Timeline"),
+                ),
+        )
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .overflow_hidden()
+                .child(rows)
+                .children((frontier < content_width).then(|| {
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(px(TRACK_GUTTER + frontier))
+                        .right_0()
+                        .bg(gpui::linear_gradient(
+                            90.,
+                            gpui::linear_color_stop(edge, 0.),
+                            gpui::linear_color_stop(veil, 1.),
+                        ))
+                        .child(div().absolute().left_0().top_0().bottom_0().w(px(20.)).bg(
+                            gpui::linear_gradient(
+                                90.,
+                                gpui::linear_color_stop(clear, 0.),
+                                gpui::linear_color_stop(veil, 1.),
+                            ),
+                        ))
+                })),
+        )
+        .child(render_playhead(
+            theme,
+            playhead_offset(view, content_width),
+            0.65,
+        ))
+        .into_any_element()
+}
+
+#[cfg(test)]
+mod preparing_frontier_tests {
+    use super::*;
+
+    #[test]
+    fn confirmed_boundary_stays_inside_visible_timeline() {
+        let mut view = TimelineView::default();
+        view.transform.zoom = 20.0;
+        view.transform.position = 10.0;
+        assert_eq!(preparing_frontier_offset(5.0, view, 400.0), 0.0);
+        assert_eq!(preparing_frontier_offset(20.0, view, 400.0), 200.0);
+        assert_eq!(preparing_frontier_offset(35.0, view, 400.0), 400.0);
+        assert_eq!(preparing_frontier_offset(f64::NAN, view, 400.0), 0.0);
+        assert_eq!(preparing_frontier_offset(20.0, view, 0.0), 0.0);
     }
 }

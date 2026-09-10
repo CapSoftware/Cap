@@ -1183,11 +1183,23 @@ async fn upload_exported_video_inner(
         .map_err(|error| format!("Failed to persist upload state: {error}"))?;
 
     match checked_upload_step(&cancel, || {
-        upload_video(&s3_config.id, &file_path, &metadata, progress, &cancel)
+        upload_video(
+            &s3_config.id,
+            &file_path,
+            &metadata,
+            progress,
+            &cancel,
+            meta.sharing.is_some(),
+        )
     })
     .await
     {
         Ok((link, object_identity)) => {
+            let link = meta
+                .sharing
+                .as_ref()
+                .map(|sharing| sharing.link.clone())
+                .unwrap_or(link);
             meta.sharing = Some(SharingMeta {
                 link: link.clone(),
                 id: s3_config.id.clone(),
@@ -1333,6 +1345,7 @@ async fn upload_video(
     metadata: &VideoMeta,
     progress: impl Fn(f64),
     cancel: &AtomicBool,
+    replace_existing: bool,
 ) -> Result<(String, Option<String>), AuthApiError> {
     let initiate = checked_upload_step(cancel, || multipart_initiate(video_id)).await?;
     let is_drive = is_google_drive_upload(initiate.provider.as_deref(), &initiate.upload_id);
@@ -1349,7 +1362,13 @@ async fn upload_video(
         return Err(AuthApiError::Other("Export cancelled".into()));
     }
     let completed_identity = checked_upload_step(cancel, || {
-        multipart_complete(video_id, &initiate.upload_id, &parts, Some(metadata))
+        multipart_complete(
+            video_id,
+            &initiate.upload_id,
+            &parts,
+            Some(metadata),
+            replace_existing,
+        )
     })
     .await?;
     progress(1.0);
@@ -1453,11 +1472,13 @@ async fn multipart_complete(
     upload_id: &str,
     parts: &[UploadedPart],
     meta: Option<&VideoMeta>,
+    replace_existing: bool,
 ) -> Result<Option<String>, AuthApiError> {
     let mut body = json!({
         "videoId": video_id,
         "uploadId": upload_id,
         "parts": parts,
+        "replaceExisting": replace_existing,
     });
     if let Some(meta) = meta
         && let Value::Object(object) = &mut body

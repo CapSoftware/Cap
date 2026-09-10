@@ -56,6 +56,7 @@ import { EditorSkeleton } from "./editor-skeleton";
 import { Header, type TitleSaveRegistration } from "./Header";
 import { ImportProgress } from "./ImportProgress";
 import { PlayerContent } from "./Player";
+import { usePreparingEditor } from "./preparing-editor-context";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 
@@ -397,6 +398,8 @@ function Inner(props: {
 		previewResolutionBase,
 		dialog,
 		exportState,
+		requestHandoffPlayback,
+		handoffPlaybackPending,
 	} = useEditorContext();
 
 	const registerEditorSave = (
@@ -430,6 +433,11 @@ function Inner(props: {
 	const appendRecordedClip = async (recordingPath: string) => {
 		const toastId = toast.loading("Adding clip…");
 		try {
+			const pending = requestHandoffPlayback(false);
+			if (pending && !(await pending)) {
+				toast.dismiss(toastId);
+				return;
+			}
 			if (editorState.playing) {
 				await commands.stopPlayback();
 				setEditorState("playing", false);
@@ -634,6 +642,7 @@ function Inner(props: {
 	);
 
 	createTauriEventListener(events.editorStateChanged, (payload) => {
+		if (handoffPlaybackPending()) return;
 		throttledRenderFrame.clear();
 		trailingRenderFrame.clear();
 		setEditorState("playbackTime", payload.playhead_position / FPS);
@@ -641,13 +650,19 @@ function Inner(props: {
 
 	let skipRenderFrameForConfigUpdate = false;
 
+	const preparing = usePreparingEditor();
+	const requestedFrame = (time: number) => {
+		const frameNumber = Math.max(Math.floor(time * FPS), 0);
+		return preparing?.requestOrdinaryFrame(frameNumber) ?? frameNumber;
+	};
+
 	const emitRenderFrame = (time: number) => {
 		if (skipRenderFrameForConfigUpdate) {
 			return;
 		}
 		if (!editorState.playing) {
 			events.renderFrameEvent.emit({
-				frame_number: Math.max(Math.floor(time * FPS), 0),
+				frame_number: requestedFrame(time),
 				fps: FPS,
 				resolution_base: previewResolutionBase(),
 			});
@@ -707,7 +722,7 @@ function Inner(props: {
 	const doConfigUpdate = (time: number) => {
 		pendingPreviewConfigUpdate = {
 			config: getPreviewProjectConfig(project, editorState),
-			frameNumber: Math.max(Math.floor(time * FPS), 0),
+			frameNumber: requestedFrame(time),
 			resolutionBase: previewResolutionBase(),
 		};
 		void flushPreviewConfigUpdate();
@@ -951,7 +966,7 @@ function Dialogs() {
 			contentClass={(() => {
 				const d = dialog();
 				if ("type" in d && d.type === "export") return "max-w-[740px]";
-				if ("type" in d && d.type === "crop") return "max-w-[1180px]";
+				if ("type" in d && d.type === "crop") return "max-w-[1440px]";
 				return "";
 			})()}
 			open={isDialogType()}
@@ -1121,8 +1136,6 @@ function Dialogs() {
 								let cropperRef: CropperRef | undefined;
 								let previewCanvas: HTMLCanvasElement | undefined;
 								const [crop, setCrop] = createSignal(CROP_ZERO);
-								const [cropInteracting, setCropInteracting] =
-									createSignal(false);
 								const [aspect, setAspect] = createSignal<Ratio | null>(null);
 
 								const [frameUrl, setFrameUrl] = createSignal<string | null>(
@@ -1172,8 +1185,8 @@ function Dialogs() {
 								const boxSize = createMemo(() => {
 									const { w: vw, h: vh } = viewport();
 									const ratio = display.width / display.height;
-									const maxW = Math.min(vw * 0.4, 520);
-									const maxH = Math.min(vh * 0.5, 520);
+									const maxW = Math.max(120, Math.min(vw - 164, 1280)) * 0.68;
+									const maxH = Math.max(100, Math.min(vh - 280, 760));
 									let w = maxW;
 									let h = w / ratio;
 									if (h > maxH) {
@@ -1469,20 +1482,19 @@ function Dialogs() {
 														Crop area
 													</span>
 													<div
-														class="overflow-hidden relative rounded-xl border shadow-sm border-gray-3 bg-gray-3"
+														class="relative rounded-xl border p-4 shadow-sm border-gray-5 bg-gray-3"
 														style={{
-															width: `${boxSize().w}px`,
-															height: `${boxSize().h}px`,
+															width: `${boxSize().w + 32}px`,
+															height: `${boxSize().h + 32}px`,
 														}}
 													>
 														<div
-															class="w-full h-full transition-opacity duration-200"
+															class="relative w-full h-full transition-opacity duration-200"
 															classList={{ "opacity-0": !frameLoaded() }}
 														>
 															<Cropper
 																ref={cropperRef}
 																onCropChange={setCrop}
-																onInteraction={setCropInteracting}
 																aspectRatio={aspect() ?? undefined}
 																targetSize={{
 																	x: display.width,
@@ -1492,6 +1504,8 @@ function Dialogs() {
 																snapToRatioEnabled={snapToRatio()}
 																useBackdropFilter={true}
 																allowLightMode={true}
+																appearance="editor"
+																snapToAlignmentEnabled={true}
 																onContextMenu={(e) =>
 																	showCropOptionsMenu(e, true)
 																}
@@ -1514,29 +1528,6 @@ function Dialogs() {
 																	}
 																/>
 															</Cropper>
-															<Show
-																when={
-																	cropInteracting() &&
-																	crop().width > 0 &&
-																	crop().height > 0
-																}
-															>
-																<div
-																	aria-hidden="true"
-																	class="absolute z-40 border pointer-events-none border-black/90 shadow-[0_0_0_1px_rgba(255,255,255,0.9)]"
-																	style={{
-																		left: `${(crop().x / display.width) * 100}%`,
-																		top: `${(crop().y / display.height) * 100}%`,
-																		width: `${(crop().width / display.width) * 100}%`,
-																		height: `${(crop().height / display.height) * 100}%`,
-																	}}
-																>
-																	<div class="absolute left-0 top-[calc(100%/3)] w-full h-px bg-black/90 shadow-[0_1px_0_rgba(255,255,255,0.9)]" />
-																	<div class="absolute left-0 top-[calc(200%/3)] w-full h-px bg-black/90 shadow-[0_1px_0_rgba(255,255,255,0.9)]" />
-																	<div class="absolute top-0 left-[calc(100%/3)] w-px h-full bg-black/90 shadow-[1px_0_0_rgba(255,255,255,0.9)]" />
-																	<div class="absolute top-0 left-[calc(200%/3)] w-px h-full bg-black/90 shadow-[1px_0_0_rgba(255,255,255,0.9)]" />
-																</div>
-															</Show>
 														</div>
 														<Show when={!frameLoaded()}>
 															<div class="flex absolute inset-0 z-40 flex-col gap-3 justify-center items-center bg-gray-3">
@@ -1574,8 +1565,8 @@ function Dialogs() {
 													<div
 														class="flex overflow-hidden relative justify-center items-center rounded-xl border shadow-sm border-gray-3 bg-gray-3"
 														style={{
-															width: `${boxSize().w}px`,
-															height: `${boxSize().h}px`,
+															width: `${Math.round(boxSize().w * 0.44)}px`,
+															height: `${boxSize().h + 32}px`,
 														}}
 													>
 														<canvas
@@ -1592,6 +1583,26 @@ function Dialogs() {
 														</Show>
 													</div>
 												</div>
+											</div>
+											<div class="flex items-center justify-between gap-3 pt-4 text-xs text-gray-11">
+												<span>
+													Drag to move · Snap to center, halves and quarters ·
+													Hold Shift to skip snapping
+												</span>
+												<EditorButton
+													onClick={() => {
+														const bounds = crop();
+														cropperRef?.animateTo({
+															...bounds,
+															x: Math.round((display.width - bounds.width) / 2),
+															y: Math.round(
+																(display.height - bounds.height) / 2,
+															),
+														});
+													}}
+												>
+													Center crop
+												</EditorButton>
 											</div>
 										</Dialog.Content>
 										<Dialog.Footer>

@@ -1052,6 +1052,7 @@ pub struct RgbaToBgraSurfaceConverter {
     /// resolution change swaps both entries out within two frames, so no
     /// retired texture is kept alive past that.
     source_bind_groups: Vec<(wgpu::Texture, wgpu::BindGroup)>,
+    readiness_first_output: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -1075,6 +1076,7 @@ struct BgraSurfaceSlot {
 #[cfg(target_os = "macos")]
 impl RgbaToBgraSurfaceConverter {
     pub fn new(device: &wgpu::Device) -> Result<Self, RenderingError> {
+        let phase = crate::readiness::Phase::start("bgra.converter");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("RGBA to BGRA Surface Blit"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
@@ -1127,7 +1129,7 @@ impl RgbaToBgraSurfaceConverter {
         let texture_cache = IOSurfaceTextureCache::new()
             .ok_or_else(|| RenderingError::Surface("Metal device is unavailable".to_string()))?;
 
-        Ok(Self {
+        let converter = Self {
             pipeline,
             bind_group_layout,
             texture_cache,
@@ -1137,7 +1139,10 @@ impl RgbaToBgraSurfaceConverter {
             allocation_attributes: surface_allocation_attributes(BGRA_SURFACE_RING_MAX)?,
             pool_size: (0, 0),
             source_bind_groups: Vec::new(),
-        })
+            readiness_first_output: true,
+        };
+        phase.finish("returned");
+        Ok(converter)
     }
 
     fn source_bind_group(
@@ -1395,6 +1400,7 @@ impl PendingSurface {
 }
 
 pub struct PendingReadback {
+    readiness_phase: Option<crate::readiness::Phase>,
     rx: oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
     buffer: Arc<wgpu::Buffer>,
     padded_bytes_per_row: u32,
@@ -1470,6 +1476,9 @@ impl PendingReadback {
             }
         }
 
+        if let Some(phase) = &self.readiness_phase {
+            phase.mark("gpu_map_observed");
+        }
         let Some(active_bytes) =
             usize::try_from(self.buffer.size())
                 .ok()
@@ -1495,6 +1504,9 @@ impl PendingReadback {
         let target_time_ns =
             (self.frame_number as u64 * 1_000_000_000) / self.frame_rate.max(1) as u64;
 
+        if let Some(phase) = self.readiness_phase.take() {
+            phase.finish("frame_ready");
+        }
         Ok(RenderedFrame {
             data: Arc::new(data_vec),
             padded_bytes_per_row: self.padded_bytes_per_row,
@@ -1513,6 +1525,7 @@ pub struct PipelinedGpuReadback {
     pending: Option<PendingReadback>,
     needs_resize: bool,
     pending_resize_size: u64,
+    readiness_first_output: bool,
 }
 
 impl PipelinedGpuReadback {
@@ -1533,6 +1546,7 @@ impl PipelinedGpuReadback {
             pending: None,
             needs_resize: false,
             pending_resize_size: 0,
+            readiness_first_output: true,
         }
     }
 
@@ -1603,6 +1617,8 @@ impl PipelinedGpuReadback {
         uniforms: &ProjectUniforms,
         mut render_encoder: wgpu::CommandEncoder,
     ) -> Result<(), RenderingError> {
+        let phase = std::mem::take(&mut self.readiness_first_output)
+            .then(|| crate::readiness::Phase::start("rgba.first_output"));
         let padded_bytes_per_row = padded_bytes_per_row(uniforms.output_size);
         let output_buffer_size =
             u64::from(padded_bytes_per_row) * u64::from(uniforms.output_size.1);
@@ -1634,7 +1650,13 @@ impl PipelinedGpuReadback {
             output_texture_size,
         );
 
+        if let Some(phase) = &phase {
+            phase.mark("submit_start");
+        }
         queue.submit(std::iter::once(render_encoder.finish()));
+        if let Some(phase) = &phase {
+            phase.mark("submit_returned");
+        }
 
         let (tx, rx) = oneshot::channel();
         buffer
@@ -1646,6 +1668,7 @@ impl PipelinedGpuReadback {
             });
 
         self.pending = Some(PendingReadback {
+            readiness_phase: phase,
             rx,
             buffer,
             padded_bytes_per_row,
@@ -1674,6 +1697,7 @@ pub struct RenderSession {
 
 impl RenderSession {
     pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+        let phase = crate::readiness::Phase::start("frame.session");
         let make_texture = || {
             device.create_texture(&wgpu::TextureDescriptor {
                 size: wgpu::Extent3d {
@@ -1695,7 +1719,7 @@ impl RenderSession {
 
         let textures = (make_texture(), make_texture());
 
-        Self {
+        let session = Self {
             current_is_left: true,
             texture_views: (
                 textures.0.create_view(&Default::default()),
@@ -1705,7 +1729,9 @@ impl RenderSession {
             pipelined_readback: None,
             texture_width: width,
             texture_height: height,
-        }
+        };
+        phase.finish("returned");
+        session
     }
 
     pub fn update_texture_size(&mut self, device: &wgpu::Device, width: u32, height: u32) {
@@ -1960,6 +1986,8 @@ pub async fn finish_encoder_bgra_surface(
     uniforms: &ProjectUniforms,
     mut encoder: wgpu::CommandEncoder,
 ) -> Result<SurfaceFrame, RenderingError> {
+    let phase = std::mem::take(&mut converter.readiness_first_output)
+        .then(|| crate::readiness::Phase::start("bgra.first_output"));
     let texture = if session.current_is_left {
         &session.textures.0
     } else {
@@ -1976,8 +2004,22 @@ pub async fn finish_encoder_bgra_surface(
             uniforms.frame_rate,
         )
         .await?;
+    if let Some(phase) = &phase {
+        phase.mark("submit_start");
+    }
     queue.submit(std::iter::once(encoder.finish()));
-    pending.wait(device, queue).await
+    if let Some(phase) = &phase {
+        phase.mark("submit_returned");
+    }
+    let result = pending.wait(device, queue).await;
+    if let Some(phase) = phase {
+        phase.finish(if result.is_ok() {
+            "frame_ready"
+        } else {
+            "error"
+        });
+    }
+    result
 }
 
 pub async fn flush_pending_readback(

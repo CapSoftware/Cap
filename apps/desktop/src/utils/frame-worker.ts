@@ -47,6 +47,8 @@ interface ReadyMessage {
 
 interface FrameRenderedMessage {
 	type: "frame-rendered";
+	frameNumber?: number;
+	targetTimeNs?: bigint;
 	width: number;
 	height: number;
 }
@@ -453,6 +455,8 @@ function renderBorrowedWebGPU(bytes: Uint8Array, release: () => void): boolean {
 		type: "frame-rendered",
 		width,
 		height,
+		frameNumber,
+		targetTimeNs,
 	} satisfies FrameRenderedMessage);
 
 	return true;
@@ -733,6 +737,7 @@ function renderLoop() {
 					type: "frame-rendered",
 					width: frame.width,
 					height: frame.height,
+					...frame.timing,
 				} satisfies FrameRenderedMessage);
 
 				const shouldContinue =
@@ -792,6 +797,7 @@ function renderLoop() {
 			type: "frame-rendered",
 			width: frame.width,
 			height: frame.height,
+			...frame.timing,
 		} satisfies FrameRenderedMessage);
 	}
 

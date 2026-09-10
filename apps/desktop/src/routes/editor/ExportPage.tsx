@@ -161,6 +161,7 @@ function buildExportSettings(
 
 export function ExportPage() {
 	const {
+		dialog,
 		setDialog,
 		editorInstance,
 		editorState,
@@ -173,6 +174,7 @@ export function ExportPage() {
 	} = useEditorContext();
 
 	const projectPath = editorInstance.path;
+	const [reuploading, setReuploading] = createSignal(false);
 
 	const auth = authStore.createQuery();
 	const organizationSelection = createSelectedOrganization();
@@ -207,6 +209,14 @@ export function ExportPage() {
 		}),
 		{ name: "export_settings" },
 	);
+	const initialDialog = dialog();
+	if (
+		"type" in initialDialog &&
+		initialDialog.type === "export" &&
+		initialDialog.destination
+	) {
+		setSettings("exportTo", initialDialog.destination);
+	}
 
 	const VALID_COMPRESSIONS: ExportCompression[] = [
 		"Maximum",
@@ -731,6 +741,8 @@ export function ExportPage() {
 			const releaseExportSession = await beginExportSessionGuard();
 			try {
 				setExportState(reconcile({ action: "upload", type: "starting" }));
+				await refetchMeta();
+				setReuploading(!!meta().sharing);
 
 				const existingAuth = await authStore.get();
 				if (!existingAuth) createSignInMutation();
@@ -782,7 +794,7 @@ export function ExportPage() {
 							projectPath,
 							"Reupload",
 							uploadChannel,
-							settings.organizationId ?? null,
+							null,
 						)
 					: await commands.uploadExportedVideo(
 							projectPath,
@@ -1038,7 +1050,11 @@ export function ExportPage() {
 														isSelected() ? "text-gray-12" : "text-gray-10",
 													)}
 												/>
-												<span class="text-xs font-medium">{option.label}</span>
+												<span class="text-xs font-medium">
+													{option.value === "link" && meta().sharing
+														? "Reupload"
+														: option.label}
+												</span>
 											</button>
 										);
 
@@ -1051,10 +1067,34 @@ export function ExportPage() {
 								</For>
 							</div>
 
+							<Show when={settings.exportTo === "link" && meta().sharing}>
+								{(sharing) => (
+									<div class="mt-3 p-3 rounded-lg bg-blue-3 border border-blue-5 space-y-1.5">
+										<p class="text-sm font-medium text-gray-12">
+											Update your existing link
+										</p>
+										<p class="text-xs text-gray-11">
+											Reupload replaces the video at this link with your latest
+											edit. Everyone with the link will see the updated version.
+										</p>
+										<a
+											class="block text-xs text-blue-11 truncate"
+											href={sharing().link}
+											target="_blank"
+											rel="noreferrer"
+										>
+											{sharing().link}
+										</a>
+									</div>
+								)}
+							</Show>
+
 							<Suspense>
 								<Show
 									when={
-										settings.exportTo === "link" && organisations().length > 1
+										settings.exportTo === "link" &&
+										!meta().sharing &&
+										organisations().length > 1
 									}
 								>
 									<button
@@ -1499,7 +1539,9 @@ export function ExportPage() {
 									{settings.exportTo === "link" && (
 										<>
 											<IconCapLink class="size-5" />
-											Export to Link
+											{meta().sharing
+												? "Reupload to same link"
+												: "Create shareable link"}
 										</>
 									)}
 								</Button>
@@ -1659,7 +1701,11 @@ export function ExportPage() {
 											>
 												{(uploading) => (
 													<ActiveExport
-														heading="Uploading"
+														heading={
+															reuploading()
+																? "Reuploading to your link"
+																: "Uploading"
+														}
 														percent={uploading.progress}
 													/>
 												)}
@@ -1686,8 +1732,16 @@ export function ExportPage() {
 											</Match>
 											<Match when={uploadState.type === "done"}>
 												<CompletedExport
-													title="Upload complete"
-													subtitle="Your Cap has been uploaded successfully"
+													title={
+														reuploading()
+															? "Reupload complete"
+															: "Upload complete"
+													}
+													subtitle={
+														reuploading()
+															? "Your latest edit is ready at the same link"
+															: "Your Cap has been uploaded successfully"
+													}
 												/>
 											</Match>
 										</Switch>

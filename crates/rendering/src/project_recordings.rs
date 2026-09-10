@@ -18,61 +18,70 @@ pub struct Video {
 
 impl Video {
     pub fn new(path: impl AsRef<Path>, start_time: f64) -> Result<Self, String> {
-        fn inner(path: &Path, start_time: f64) -> Result<Video, String> {
-            let input =
-                ffmpeg::format::input(path).map_err(|e| format!("Failed to open video: {e}"))?;
-            let stream = input
-                .streams()
-                .best(ffmpeg::media::Type::Video)
-                .ok_or_else(|| "No video stream found".to_string())?;
+        let path = path.as_ref();
+        if path.is_dir() {
+            let input = cap_video_decode::ffmpeg::open_fragmented_input(path)?;
+            Self::from_input(input.input(), start_time)
+        } else {
+            let input = ffmpeg::format::input(path)
+                .map_err(|error| format!("Failed to open video: {error}"))?;
+            Self::from_input(&input, start_time)
+        }
+    }
 
-            let decoder_ctx = ffmpeg::codec::Context::from_parameters(stream.parameters())
-                .map_err(|e| format!("Failed to create decoder context: {e}"))?;
-            let decoder = decoder_ctx
-                .decoder()
-                .video()
-                .map_err(|e| format!("Failed to get video decoder: {e}"))?;
+    pub fn from_input(
+        input: &ffmpeg::format::context::Input,
+        start_time: f64,
+    ) -> Result<Self, String> {
+        let stream = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .ok_or_else(|| "No video stream found".to_string())?;
 
-            let width = decoder.width();
-            let height = decoder.height();
+        let decoder_ctx = ffmpeg::codec::Context::from_parameters(stream.parameters())
+            .map_err(|e| format!("Failed to create decoder context: {e}"))?;
+        let decoder = decoder_ctx
+            .decoder()
+            .video()
+            .map_err(|e| format!("Failed to get video decoder: {e}"))?;
 
-            if width == 0 || height == 0 {
-                return Err("Invalid video dimensions".to_string());
-            }
+        let width = decoder.width();
+        let height = decoder.height();
 
-            let rate = stream.avg_frame_rate();
-            let fps = if rate.denominator() != 0 {
-                rate.numerator() as f64 / rate.denominator() as f64
-            } else {
-                30.0
-            };
-
-            let duration = {
-                let container_duration = input.duration();
-                if container_duration > 0 {
-                    container_duration as f64 / 1_000_000.0
-                } else {
-                    let stream_duration = stream.duration();
-                    let time_base = stream.time_base();
-                    if stream_duration > 0 && time_base.denominator() > 0 {
-                        stream_duration as f64 * time_base.numerator() as f64
-                            / time_base.denominator() as f64
-                    } else {
-                        return Err("Could not determine video duration".to_string());
-                    }
-                }
-            };
-
-            Ok(Video {
-                width,
-                height,
-                duration,
-                fps: fps.round() as u32,
-                start_time,
-            })
+        if width == 0 || height == 0 {
+            return Err("Invalid video dimensions".to_string());
         }
 
-        inner(path.as_ref(), start_time)
+        let rate = stream.avg_frame_rate();
+        let fps = if rate.denominator() != 0 {
+            rate.numerator() as f64 / rate.denominator() as f64
+        } else {
+            30.0
+        };
+
+        let duration = {
+            let container_duration = input.duration();
+            if container_duration > 0 {
+                container_duration as f64 / 1_000_000.0
+            } else {
+                let stream_duration = stream.duration();
+                let time_base = stream.time_base();
+                if stream_duration > 0 && time_base.denominator() > 0 {
+                    stream_duration as f64 * time_base.numerator() as f64
+                        / time_base.denominator() as f64
+                } else {
+                    return Err("Could not determine video duration".to_string());
+                }
+            }
+        };
+
+        Ok(Video {
+            width,
+            height,
+            duration,
+            fps: fps.round() as u32,
+            start_time,
+        })
     }
 
     pub fn fps(&self) -> u32 {
@@ -90,29 +99,32 @@ pub struct Audio {
 
 impl Audio {
     pub fn new(path: impl AsRef<Path>, start_time: f64) -> Result<Self, String> {
-        fn inner(path: &Path, start_time: f64) -> Result<Audio, String> {
-            let input =
-                ffmpeg::format::input(path).map_err(|e| format!("Failed to open audio: {e}"))?;
-            let stream = input
-                .streams()
-                .best(ffmpeg::media::Type::Audio)
-                .ok_or_else(|| "No audio stream found".to_string())?;
+        let input = ffmpeg::format::input(path.as_ref())
+            .map_err(|e| format!("Failed to open audio: {e}"))?;
+        Self::from_input(&input, start_time)
+    }
 
-            let audio_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
-                .map_err(|e| format!("Failed to create decoder: {e}"))?
-                .decoder()
-                .audio()
-                .map_err(|e| format!("Failed to get audio decoder: {e}"))?;
+    pub fn from_input(
+        input: &ffmpeg::format::context::Input,
+        start_time: f64,
+    ) -> Result<Self, String> {
+        let stream = input
+            .streams()
+            .best(ffmpeg::media::Type::Audio)
+            .ok_or_else(|| "No audio stream found".to_string())?;
 
-            Ok(Audio {
-                duration: input.duration() as f64 / 1_000_000.0,
-                sample_rate: audio_decoder.rate(),
-                channels: audio_decoder.channels(),
-                start_time,
-            })
-        }
+        let audio_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
+            .map_err(|e| format!("Failed to create decoder: {e}"))?
+            .decoder()
+            .audio()
+            .map_err(|e| format!("Failed to get audio decoder: {e}"))?;
 
-        inner(path.as_ref(), start_time)
+        Ok(Audio {
+            duration: input.duration() as f64 / 1_000_000.0,
+            sample_rate: audio_decoder.rate(),
+            channels: audio_decoder.channels(),
+            start_time,
+        })
     }
 }
 

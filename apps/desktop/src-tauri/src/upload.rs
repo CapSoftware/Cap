@@ -226,13 +226,29 @@ fn content_type_for_upload_subpath(subpath: &str) -> &'static str {
     }
 }
 
+pub fn reusable_video_id(
+    sharing: Option<&cap_project::SharingMeta>,
+    upload: Option<&cap_project::UploadMeta>,
+) -> Option<String> {
+    sharing
+        .map(|sharing| sharing.id.clone())
+        .or_else(|| match upload {
+            Some(cap_project::UploadMeta::SinglePartUpload { video_id, .. })
+            | Some(cap_project::UploadMeta::SegmentUpload { video_id, .. })
+            | Some(cap_project::UploadMeta::MultipartUpload { video_id, .. }) => {
+                Some(video_id.clone())
+            }
+            _ => None,
+        })
+}
+
 #[instrument(skip(app, channel, file_path, screenshot_path))]
 pub async fn upload_video(
     app: &AppHandle,
     video_id: String,
     file_path: PathBuf,
     screenshot_path: PathBuf,
-    meta: S3VideoMeta,
+    replace_existing: bool,
     channel: Option<Channel<UploadProgress>>,
 ) -> Result<UploadedItem, AuthedApiError> {
     let _active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
@@ -291,9 +307,15 @@ pub async fn upload_video(
             .map_err(|e| error!("Failed to get video metadata: {e}"))
             .ok();
 
-        let completed_identity =
-            api::upload_multipart_complete(app, &video_id, &upload_id, &parts, metadata.clone())
-                .await?;
+        let completed_identity = api::upload_multipart_complete(
+            app,
+            &video_id,
+            &upload_id,
+            &parts,
+            metadata.clone(),
+            replace_existing,
+        )
+        .await?;
         let object_identity = if is_drive_upload {
             parts
                 .iter()
@@ -758,9 +780,15 @@ impl InstantMultipartUpload {
         let duration = metadata.duration_in_secs;
         let metadata = Some(metadata);
         session.wait_ready().await?;
-        let completed_identity =
-            api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata.clone())
-                .await?;
+        let completed_identity = api::upload_multipart_complete(
+            &app,
+            &video_id,
+            &upload_id,
+            &parts,
+            metadata.clone(),
+            false,
+        )
+        .await?;
         let object_identity = if is_drive_upload {
             parts
                 .iter()
@@ -1046,6 +1074,7 @@ impl PresignedUrlCache {
 }
 
 impl SegmentUploader {
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn spawn(
         app: AppHandle,
         segment_rx: std::sync::mpsc::Receiver<
@@ -2718,6 +2747,42 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
+    fn reupload_keeps_sharing_identity_after_completion_or_failure() {
+        let sharing = cap_project::SharingMeta {
+            id: "existing-video".into(),
+            link: "https://cap.link/existing-video".into(),
+            content_hash: None,
+        };
+        for upload in [
+            None,
+            Some(cap_project::UploadMeta::Complete),
+            Some(cap_project::UploadMeta::Failed {
+                error: "offline".into(),
+            }),
+        ] {
+            assert_eq!(
+                reusable_video_id(Some(&sharing), upload.as_ref()).as_deref(),
+                Some("existing-video")
+            );
+        }
+    }
+
+    #[test]
+    fn retry_keeps_the_reserved_identity_until_sharing_is_saved() {
+        let upload = cap_project::UploadMeta::SinglePartUpload {
+            video_id: "reserved-video".into(),
+            file_path: "output.mp4".into(),
+            screenshot_path: "display.jpg".into(),
+            recording_dir: "recording.cap".into(),
+        };
+        assert_eq!(
+            reusable_video_id(None, Some(&upload)).as_deref(),
+            Some("reserved-video")
+        );
+        assert_eq!(reusable_video_id(None, None), None);
+    }
+
+    #[test]
     fn active_upload_guards_track_overlapping_sessions() {
         let active = AtomicUsize::new(0);
         let first = ActiveUploadGuard::new(&active);
@@ -3648,13 +3713,6 @@ pub(crate) mod strict_instant {
             result
         }
 
-        async fn complete<T, F>(&self, complete: impl FnOnce() -> F) -> Result<(), AuthedApiError>
-        where
-            F: Future<Output = Result<T, AuthedApiError>>,
-        {
-            self.step(complete).await.map(drop)
-        }
-
         async fn permission(&self) -> Result<(), AuthedApiError> {
             let mut decision = self.0.decision.subscribe();
             loop {
@@ -4248,6 +4306,7 @@ pub(crate) mod strict_instant {
                     &upload.upload_id,
                     &parts,
                     Some(metadata),
+                    false,
                 )
             })
             .await?;
@@ -4386,7 +4445,7 @@ pub(crate) mod strict_instant {
                             part_number: info.part_number,
                             offset: info.offset,
                             total_size: info.total_size,
-                            chunk: bytes.into(),
+                            chunk: bytes,
                         })
                     })
                     .await?,
@@ -4787,24 +4846,24 @@ pub(crate) mod strict_instant {
             std::fs::remove_dir_all(dir).unwrap();
         }
         #[tokio::test]
-        async fn strict_multipart_complete_maps_optional_success_and_retains_errors_and_late_revocation()
+        async fn strict_multipart_completion_step_retains_optional_success_errors_and_late_revocation()
          {
             let (control, permission) = Control::new();
             permission.grant().unwrap();
-            let result: Result<(), AuthedApiError> = control
-                .complete(|| async { Ok(Some("synthetic-location".to_string())) })
+            let result: Result<Option<String>, AuthedApiError> = control
+                .step(|| async { Ok(Some("synthetic-location".to_string())) })
                 .await;
-            result.unwrap();
+            assert_eq!(result.unwrap().as_deref(), Some("synthetic-location"));
             assert!(
                 control
-                    .complete(|| async {
+                    .step(|| async {
                         Err::<Option<String>, _>("required completion failed".into())
                     })
                     .await
                     .is_err()
             );
             let (release, released) = tokio::sync::oneshot::channel();
-            let future = control.complete(|| async {
+            let future = control.step(|| async {
                 released.await.unwrap();
                 Ok(Some("late-location".to_string()))
             });

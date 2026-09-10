@@ -1,4 +1,5 @@
 import type { VideoEditSpec } from "@cap/database/types";
+import { User, Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -74,6 +75,7 @@ import {
 	getVideoReplaceUploadUrl,
 	invalidateVideoCache,
 } from "@/actions/admin/replace-video";
+import { prepareDesktopReupload } from "@/lib/desktop-reupload";
 import { saveMetadataAndComplete } from "@/workflows/admin-reprocess-video";
 import {
 	saveEditResultAndComplete,
@@ -244,6 +246,44 @@ beforeEach(() => {
 });
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("desktop reupload publication", () => {
+	const original = () => ({
+		id: Video.VideoId.make(video.id),
+		ownerId: User.UserId.make(video.ownerId),
+		bucketId: Option.none(),
+		storageIntegrationId: Option.none(),
+	});
+
+	it("replaces processed playback and stale AI while preserving the link's other metadata", async () => {
+		video.source.audioLevelOutputKey =
+			"user/video/.recording/outputs/old-audio.mp4";
+		video.metadata.editProcessing = { token: "old-edit" };
+		const tx = createClient() as unknown as Parameters<
+			typeof prepareDesktopReupload
+		>[0];
+		const replacement = await prepareDesktopReupload(tx, original());
+		expect(replacement).toEqual({
+			source: { type: "desktopMP4" },
+			metadata: { customCreatedAt: "2020-01-01T00:00:00Z" },
+			transcriptionStatus: null,
+		});
+		expect(video.source.outputKey).toBeDefined();
+		expect(events).toEqual(["retire-job", "lock-video"]);
+	});
+
+	it("rejects publication if storage changed during upload", async () => {
+		const snapshot = original();
+		video.bucket = "different-bucket";
+		const tx = createClient() as unknown as Parameters<
+			typeof prepareDesktopReupload
+		>[0];
+		await expect(prepareDesktopReupload(tx, snapshot)).rejects.toThrow(
+			"storage changed",
+		);
+		expect(updates).toEqual([]);
+	});
+});
 
 describe("edited recording publication", () => {
 	it.each(["reprocess", "replace"])(

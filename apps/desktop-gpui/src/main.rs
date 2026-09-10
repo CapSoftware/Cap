@@ -30,6 +30,7 @@ mod editor_export;
 #[cfg(target_os = "linux")]
 mod editor_modal;
 mod editor_panels;
+mod editor_preparing;
 mod editor_sidebar;
 mod editor_tabs;
 mod editor_timeline;
@@ -505,7 +506,16 @@ fn main() {
             });
         })
         .detach();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        cx.spawn(async move |_| {
+            if let Some(native) = native_main
+                && let Err(error) = platform::install_main_window_frame_policy(&native)
+            {
+                tracing::warn!(%error, "could not install Main window frame policy");
+            }
+        })
+        .detach();
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let _ = native_main;
 
         // `CAP_GPUI_DEBUG_LIGHTS=1`: poll the main window's style mask and

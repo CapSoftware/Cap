@@ -1396,6 +1396,7 @@ dependencies = [
 name = "cap-audio"
 version = "0.1.0"
 dependencies = [
+ "cap-enc-ffmpeg",
  "cidre",
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "ffmpeg-next",
@@ -1538,6 +1539,7 @@ dependencies = [
  "anyhow",
  "ashpd 0.11.1",
  "base64 0.22.1",
+ "cap-audio",
  "cap-camera",
  "cap-camera-effects",
  "cap-cursor-info",
@@ -1619,6 +1621,7 @@ dependencies = [
  "ringbuf",
  "sentry",
  "serde",
+ "serde_json",
  "specta",
  "tokio",
  "tokio-util",
@@ -1654,6 +1657,7 @@ dependencies = [
  "sysinfo 0.32.1",
  "thiserror 1.0.69",
  "tracing",
+ "windows 0.60.0",
  "workspace-hack",
 ]
 
@@ -1909,6 +1913,7 @@ dependencies = [
  "bytemuck",
  "cap-camera-effects",
  "cap-cursor-info",
+ "cap-enc-ffmpeg",
  "cap-flags",
  "cap-project",
  "cap-video-decode",
@@ -1979,6 +1984,7 @@ name = "cap-video-decode"
 version = "0.1.0"
 dependencies = [
  "cap-d3d-adapter",
+ "cap-enc-ffmpeg",
  "cidre",
  "ffmpeg-hw-device",
  "ffmpeg-next",

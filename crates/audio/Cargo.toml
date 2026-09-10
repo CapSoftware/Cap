@@ -3,8 +3,11 @@ name = "cap-audio"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+test-support = []
 
 [dependencies]
+cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 ffmpeg = { workspace = true }
 cpal = { workspace = true }
 tokio.workspace = true

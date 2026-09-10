@@ -23,6 +23,49 @@ pub enum Phase {
     Stopping,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StudioEditorPresentation<I = gpui::WindowId> {
+    Pending,
+    Attempted,
+    Opened(I),
+    Dismissed,
+}
+
+impl<I: PartialEq> StudioEditorPresentation<I> {
+    pub(crate) fn suppresses_completion_open(&self) -> bool {
+        matches!(self, Self::Opened(_) | Self::Dismissed)
+    }
+
+    pub(crate) fn closed(&mut self, window: I) {
+        if matches!(self, Self::Opened(current) if *current == window) {
+            *self = Self::Dismissed;
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct PreparingStudioEditor {
+    generation: u64,
+    pub(crate) project_path: std::path::PathBuf,
+    pub(crate) finalization: recording::StudioFinalization,
+    pub(crate) capture_stopped: bool,
+    pub(crate) presentation: StudioEditorPresentation,
+}
+
+fn prepares_studio_editor(
+    mode: Option<recording::RecordingMode>,
+    low_storage: bool,
+    recording_failed: bool,
+    editor_target: bool,
+    open_editor: bool,
+) -> bool {
+    mode == Some(recording::RecordingMode::Studio)
+        && !low_storage
+        && !recording_failed
+        && !editor_target
+        && open_editor
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CountdownAdvance {
     Ignore,
@@ -367,6 +410,7 @@ pub struct RecordingSession {
     /// Taken by the phase observer to honour `postStudioRecordingBehaviour`
     /// (`openEditor` by default) the way the Tauri app does.
     pub finished_studio: Option<std::path::PathBuf>,
+    preparing_studio_editor: Option<PreparingStudioEditor>,
     /// `EditorRecordingTarget` (`src-tauri/src/windows.rs:3679-3697`): the
     /// open editor project a "Record a new clip" capture must land back in.
     /// Set by the editor's record modal (`setEditorRecordingTarget`,
@@ -416,6 +460,7 @@ impl RecordingSession {
             controls_open: false,
             mic_muted: false,
             finished_studio: None,
+            preparing_studio_editor: None,
             editor_recording_target: None,
             started_at: None,
             paused_accum: Duration::ZERO,
@@ -553,6 +598,29 @@ impl RecordingSession {
         self.countdown_remaining
     }
 
+    pub(crate) fn preparing_studio_editor(&self) -> Option<&PreparingStudioEditor> {
+        self.preparing_studio_editor
+            .as_ref()
+            .filter(|pending| pending.generation == self.recording_generation)
+    }
+
+    pub(crate) fn preparing_studio_editor_mut(&mut self) -> Option<&mut PreparingStudioEditor> {
+        self.preparing_studio_editor
+            .as_mut()
+            .filter(|pending| pending.generation == self.recording_generation)
+    }
+
+    pub(crate) fn take_preparing_studio_editor(&mut self) -> Option<PreparingStudioEditor> {
+        self.preparing_studio_editor.take()
+    }
+
+    pub(crate) fn capture_stopped_for_editor(&self) -> bool {
+        self.phase == Phase::Stopping
+            && self
+                .preparing_studio_editor()
+                .is_some_and(|pending| pending.capture_stopped)
+    }
+
     pub fn start(&mut self, config: StartConfig, cx: &mut Context<Self>) {
         if self.phase != Phase::Idle {
             return;
@@ -564,6 +632,7 @@ impl RecordingSession {
         self.storage_monitor = None;
         self.failure_monitor = None;
         self.recording_generation = self.recording_generation.wrapping_add(1);
+        self.preparing_studio_editor = None;
         let generation = self.recording_generation;
         let countdown = crate::store::GeneralSettings::load()
             .recording_countdown
@@ -947,18 +1016,35 @@ impl RecordingSession {
             let separator = if link.contains('?') { '&' } else { '?' };
             cx.open_url(&format!("{link}{separator}recordingStopped=1"));
         }
+        let studio_project_path = active.project_dir.clone();
+        let (studio_progress, studio_finalization) = if prepares_studio_editor(
+            self.mode(),
+            low_storage,
+            recording_failed,
+            self.editor_recording_target.is_some(),
+            crate::store::GeneralSettings::load().post_studio_recording_behaviour
+                == crate::store::PostStudioBehaviour::OpenEditor,
+        ) {
+            let (publisher, finalization) = recording::StudioFinalization::channel(
+                studio_project_path.clone(),
+                self.recording_generation,
+            );
+            (Some(publisher), Some(finalization))
+        } else {
+            (None, None)
+        };
         #[cfg(target_os = "linux")]
         let retained_stop = active
             .instant_stop_handle(low_storage || recording_failed, recording_failed)
-            .or_else(|| active.clean_studio_stop_handle());
+            .or_else(|| active.clean_studio_stop_handle(studio_progress));
         #[cfg(windows)]
         let retained_stop = recording_failed
             .then(|| active.failed_stop_handle())
-            .or_else(|| active.clean_studio_stop_handle());
+            .or_else(|| active.clean_studio_stop_handle(studio_progress));
         #[cfg(target_os = "macos")]
         let retained_stop = recording_failed
             .then(|| active.failed_stop_handle())
-            .or_else(|| active.clean_studio_stop_handle());
+            .or_else(|| active.clean_studio_stop_handle(studio_progress));
         #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         let retained_stop: Option<recording::CaptureStopFuture> = None;
         let retains_active = retained_stop.is_some();
@@ -977,9 +1063,42 @@ impl RecordingSession {
         self.stopped_elapsed = Some(self.elapsed());
         self.pause_control.cancel_for_stop();
         self.phase = Phase::Stopping;
+        self.preparing_studio_editor =
+            studio_finalization.map(|finalization| PreparingStudioEditor {
+                generation: self.recording_generation,
+                project_path: studio_project_path,
+                finalization,
+                capture_stopped: false,
+                presentation: StudioEditorPresentation::Pending,
+            });
         cx.notify();
 
         let task = gpui_tokio::Tokio::spawn(cx, stop_future);
+        if let Some(pending) = self.preparing_studio_editor.clone() {
+            let finalization = pending.finalization.clone();
+            let captured =
+                gpui_tokio::Tokio::spawn(cx, async move { finalization.wait_for_capture().await });
+            #[cfg(target_os = "linux")]
+            let capture_ticket = stop_ticket.clone();
+            cx.spawn(async move |this, cx| {
+                if !matches!(captured.await, Ok(true)) {
+                    return;
+                }
+                this.update(cx, |this, cx| {
+                    #[cfg(target_os = "linux")]
+                    if !capture_ticket.is_current(this.phase, this.recording_generation, this.terminal_operation, this.recording_owner().as_ref(), retains_active) { return; }
+                    #[cfg(not(target_os = "linux"))]
+                    if this.recording_generation != pending.generation || this.phase != Phase::Stopping { return; }
+                    if let Some(current) = this.preparing_studio_editor_mut()
+                        && current.finalization.same_job(&pending.finalization)
+                    {
+                        current.capture_stopped = true;
+                        tracing::info!(path = %current.project_path.display(), "Studio capture stopped; editor preparation can begin");
+                        cx.notify();
+                    }
+                }).ok();
+            }).detach();
+        }
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
@@ -992,6 +1111,7 @@ impl RecordingSession {
                     Err(_) => !retains_active,
                 };
                 if !capture_stopped {
+                    this.preparing_studio_editor = None;
                     let error = match result {
                         Ok((_, Err(error))) => format!("{error:#}"),
                         Err(error) => format!("Stop task failed: {error}"),
@@ -2298,5 +2418,57 @@ mod pause_control_tests {
         state.invalidate();
         assert!(control.await.is_err());
         assert!(!polled.load(std::sync::atomic::Ordering::SeqCst));
+    }
+}
+
+#[cfg(test)]
+mod studio_editor_presentation_tests {
+    use super::*;
+
+    #[test]
+    fn early_editor_only_applies_to_normal_studio_stops_with_open_editor_preference() {
+        for mode in [
+            None,
+            Some(recording::RecordingMode::Instant),
+            Some(recording::RecordingMode::Studio),
+        ] {
+            for flags in 0..16 {
+                let low_storage = flags & 1 != 0;
+                let failed = flags & 2 != 0;
+                let editor_target = flags & 4 != 0;
+                let open_editor = flags & 8 != 0;
+                let expected = mode == Some(recording::RecordingMode::Studio) && flags == 8;
+                assert_eq!(
+                    prepares_studio_editor(mode, low_storage, failed, editor_target, open_editor),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unsuccessful_or_raced_early_window_creation_keeps_normal_completion_open() {
+        assert!(!StudioEditorPresentation::<u32>::Pending.suppresses_completion_open());
+        assert!(!StudioEditorPresentation::<u32>::Attempted.suppresses_completion_open());
+    }
+
+    #[test]
+    fn closing_a_preparing_editor_suppresses_completion_reopening() {
+        let mut state = StudioEditorPresentation::Opened(1);
+        assert!(state.suppresses_completion_open());
+        state.closed(1);
+        assert_eq!(state, StudioEditorPresentation::Dismissed);
+        assert!(state.suppresses_completion_open());
+    }
+
+    #[test]
+    fn explicit_reopening_retains_the_new_window_when_the_old_close_arrives() {
+        let mut state = StudioEditorPresentation::Opened(1);
+        state.closed(1);
+        state = StudioEditorPresentation::Opened(2);
+        state.closed(1);
+        assert_eq!(state, StudioEditorPresentation::Opened(2));
+        state.closed(2);
+        assert_eq!(state, StudioEditorPresentation::Dismissed);
     }
 }

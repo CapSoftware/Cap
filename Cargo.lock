@@ -1268,6 +1268,7 @@ dependencies = [
 name = "cap-audio"
 version = "0.1.0"
 dependencies = [
+ "cap-enc-ffmpeg",
  "cidre",
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "ffmpeg-next",
@@ -1560,6 +1561,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite",
  "tokio-util",
  "tracing",
  "tracing-appender",
@@ -1584,6 +1586,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "cap-audio",
+ "cap-enc-ffmpeg",
  "cap-media",
  "cap-media-info",
  "cap-project",
@@ -1593,6 +1596,7 @@ dependencies = [
  "ffmpeg-next",
  "flume",
  "futures",
+ "image 0.25.8",
  "lru",
  "ringbuf",
  "sentry",
@@ -1635,6 +1639,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
+ "windows 0.60.0",
  "workspace-hack",
 ]
 
@@ -1926,7 +1931,9 @@ dependencies = [
  "bytemuck",
  "cap-camera-effects",
  "cap-cursor-info",
+ "cap-enc-ffmpeg",
  "cap-flags",
+ "cap-media-info",
  "cap-project",
  "cap-video-decode",
  "cidre",
@@ -1950,6 +1957,7 @@ dependencies = [
  "serde",
  "serde_json",
  "specta",
+ "tempfile",
  "thiserror 1.0.69",
  "tiny-skia",
  "tokio",
@@ -2054,10 +2062,14 @@ name = "cap-video-decode"
 version = "0.1.0"
 dependencies = [
  "cap-d3d-adapter",
+ "cap-enc-ffmpeg",
+ "cap-media-info",
  "cidre",
  "ffmpeg-hw-device",
  "ffmpeg-next",
  "num_cpus",
+ "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tracing",

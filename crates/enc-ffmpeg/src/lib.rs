@@ -12,7 +12,11 @@ pub use video::*;
 mod mux;
 pub use mux::*;
 
+mod relocatable_source;
 pub mod remux;
+pub use relocatable_source::{RelocatableReader, RelocatableSource};
+mod segmented_input;
+pub use segmented_input::SegmentedInput;
 pub mod dash_audio {
     pub use crate::mux::dash_audio::*;
 }

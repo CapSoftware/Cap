@@ -126,6 +126,7 @@ pub async fn upload_multipart_complete(
     upload_id: &str,
     parts: &[UploadedPart],
     meta: Option<S3VideoMeta>,
+    replace_existing: bool,
 ) -> Result<Option<String>, AuthedApiError> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -135,6 +136,7 @@ pub async fn upload_multipart_complete(
         parts: &'a [UploadedPart],
         #[serde(flatten)]
         meta: Option<S3VideoMeta>,
+        replace_existing: bool,
     }
 
     #[derive(Deserialize)]
@@ -154,6 +156,7 @@ pub async fn upload_multipart_complete(
                     upload_id,
                     parts,
                     meta,
+                    replace_existing,
                 })
         })
         .await

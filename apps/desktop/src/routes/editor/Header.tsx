@@ -60,7 +60,6 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 		meta,
 		exportState,
 		setExportState,
-		customDomain,
 		editorState,
 		setEditorState,
 	} = useEditorContext();
@@ -219,9 +218,7 @@ export function Header(props: { registerTitleSave: RegisterTitleSave }) {
 						</span>
 					</EditorButton>
 				</Show>
-				<Show when={customDomain.data}>
-					<ShareButton />
-				</Show>
+				<ShareButton />
 				<button
 					type="button"
 					class={cx(

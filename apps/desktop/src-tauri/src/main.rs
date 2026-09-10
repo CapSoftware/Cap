@@ -100,6 +100,24 @@ fn main() {
             .join("so.cap.desktop")
             .join("logs");
 
+        #[cfg(debug_assertions)]
+        let path = match (
+            std::env::var_os("CAP_STOP_EDITOR_BENCHMARK_OUTPUT"),
+            std::env::var_os("CAP_STOP_BENCH_LOG_DIR"),
+        ) {
+            (Some(output), Some(directory)) => match create_benchmark_log_directory(
+                std::path::Path::new(&output),
+                std::path::Path::new(&directory),
+            ) {
+                Ok(directory) => directory,
+                Err(error) => {
+                    eprintln!("Invalid private benchmark log directory: {error}");
+                    std::process::exit(2);
+                }
+            },
+            _ => path,
+        };
+
         path
     };
 
@@ -246,6 +264,66 @@ fn create_log_appender(
     }
 }
 
+#[cfg(debug_assertions)]
+fn create_benchmark_log_directory(
+    output: &std::path::Path,
+    directory: &std::path::Path,
+) -> std::io::Result<std::path::PathBuf> {
+    use std::{io, path::Component};
+
+    if !output.is_absolute()
+        || !directory.is_absolute()
+        || output == directory
+        || [output, directory].into_iter().any(|path| {
+            path.components().any(|component| {
+                !matches!(
+                    component,
+                    Component::Prefix(_) | Component::RootDir | Component::Normal(_)
+                )
+            })
+        })
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Benchmark paths must be distinct absolute paths without traversal",
+        ));
+    }
+    let parent = directory.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Benchmark log directory has no parent",
+        )
+    })?;
+    if output.parent() != Some(parent) || parent.canonicalize()? != parent || !parent.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Benchmark output and logs must share an existing canonical parent",
+        ));
+    }
+    for path in [output, directory] {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "Benchmark output and log paths must be new",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    let builder = {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = builder;
+        builder.mode(0o700);
+        builder
+    };
+    builder.create(directory)?;
+    Ok(directory.to_path_buf())
+}
+
 fn install_panic_hook(logs_dir: std::path::PathBuf) {
     let prev = std::panic::take_hook();
     let panics_log = logs_dir.join("panics.log");
@@ -382,5 +460,80 @@ mod logging_tests {
         }
         assert!(create_log_appender(&directory.0, "cap.log").is_none());
         assert!(create_log_appender(&directory.0, "other.log").is_some());
+    }
+}
+
+#[cfg(all(test, debug_assertions))]
+mod benchmark_log_directory_tests {
+    use super::create_benchmark_log_directory;
+
+    #[test]
+    fn benchmark_logs_use_a_new_private_sibling_without_creating_output() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let output = root.join("benchmark.json");
+        let logs = root.join("logs");
+        assert_eq!(
+            create_benchmark_log_directory(&output, &logs).unwrap(),
+            logs
+        );
+        assert!(logs.is_dir());
+        assert!(!output.exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(logs.metadata().unwrap().permissions().mode() & 0o777, 0o700);
+        }
+    }
+
+    #[test]
+    fn existing_or_foreign_benchmark_paths_are_preserved() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let output = root.join("benchmark.json");
+        let logs = root.join("logs");
+        std::fs::write(&output, "retained evidence").unwrap();
+        assert!(create_benchmark_log_directory(&output, &logs).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "retained evidence"
+        );
+        assert!(!logs.exists());
+        std::fs::create_dir(&logs).unwrap();
+        assert!(create_benchmark_log_directory(&root.join("new.json"), &logs).is_err());
+        assert!(
+            create_benchmark_log_directory(&root.join("new.json"), &root.join("other/logs"))
+                .is_err()
+        );
+        assert!(
+            create_benchmark_log_directory(
+                std::path::Path::new("relative.json"),
+                &root.join("fresh")
+            )
+            .is_err()
+        );
+        assert!(
+            create_benchmark_log_directory(&root.join("new.json"), &root.join("nested/../fresh"))
+                .is_err()
+        );
+        assert!(!root.join("fresh").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_benchmark_parents_are_rejected_without_writes() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let actual = root.join("actual");
+        let alias = root.join("alias");
+        std::fs::create_dir(&actual).unwrap();
+        symlink(&actual, &alias).unwrap();
+        assert!(
+            create_benchmark_log_directory(&alias.join("result.json"), &alias.join("logs"))
+                .is_err()
+        );
+        assert!(!actual.join("logs").exists());
+        assert!(!actual.join("result.json").exists());
     }
 }

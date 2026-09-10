@@ -20,8 +20,8 @@ use frame_pipeline::{
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, Camera3DBlurKind, Camera3DLayer, CameraLayer,
-    CaptionsLayer, ClickRippleLayer, ColorGradeLayer, CursorLayer, DisplayLayer, FrameLayer,
-    ImageLayer, KeyboardLayer, MaskLayer, NotchLayer, NotchUniforms, TextLayer,
+    ClickRippleLayer, ColorGradeLayer, CursorLayer, DisplayLayer, FrameLayer, MaskLayer,
+    NotchLayer, NotchUniforms,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -45,10 +45,15 @@ mod frame_pipeline;
 #[cfg(target_os = "macos")]
 pub mod iosurface_texture;
 mod layers;
+mod managed_segment;
 mod mask;
 pub mod notch_shape;
+mod overlay_layers;
 mod project_recordings;
+mod readiness;
+mod recorded_cursor_assets;
 mod scene;
+mod segment_timing;
 pub mod spring_mass_damper;
 mod takeover;
 mod text;
@@ -67,7 +72,14 @@ pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, Shar
 #[cfg(target_os = "macos")]
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use layers::{BackgroundTextureCache, clean_background_path};
+pub use managed_segment::{
+    ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
+    ManagedSegmentVideoError, ManagedSegmentVideoExit, ManagedSegmentVideoInput,
+    ManagedVideoTrackInput,
+};
+use overlay_layers::OverlayLayers;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
+pub use recorded_cursor_assets::{FrozenCursorAssetError, FrozenRecordedCursorAssets};
 use transition::{TransitionCompositor, TransitionParameters};
 
 /// Warms the process-wide system-font scan used by the text/captions/keyboard
@@ -354,53 +366,13 @@ impl RecordingSegmentDecoders {
             camera: camera_path,
         } = segment;
 
-        let latest_start_time = match &meta {
-            StudioRecordingMeta::SingleSegment { .. } => None,
-            StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                inner.segments[segment_i].latest_start_time()
-            }
-        };
-
-        let screen_fps = match &meta {
-            StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
-            StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                inner.segments[segment_i].display.fps
-            }
-        };
-
-        let camera_fps = match &meta {
-            StudioRecordingMeta::SingleSegment { segment } => {
-                segment.camera.as_ref().map(|camera| camera.fps)
-            }
-            StudioRecordingMeta::MultipleSegments { inner, .. } => inner.segments[segment_i]
-                .camera
-                .as_ref()
-                .map(|camera| camera.fps),
-        };
-
-        let screen_offset = match &meta {
-            StudioRecordingMeta::SingleSegment { .. } => 0.0,
-            StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                let segment = &inner.segments[segment_i];
-
-                latest_start_time
-                    .zip(segment.display.start_time)
-                    .map(|(latest_start_time, display_time)| latest_start_time - display_time)
-                    .unwrap_or(0.0)
-            }
-        };
-
-        let camera_offset = match &meta {
-            StudioRecordingMeta::SingleSegment { .. } => 0.0,
-            StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                let segment = &inner.segments[segment_i];
-
-                latest_start_time
-                    .zip(segment.camera.as_ref().and_then(|camera| camera.start_time))
-                    .map(|(latest_start_time, start_time)| latest_start_time - start_time)
-                    .unwrap_or(0.0)
-            }
-        };
+        let segment_timing::SegmentVideoTiming {
+            latest_start_time,
+            screen_fps,
+            camera_fps,
+            screen_offset,
+            camera_offset,
+        } = segment_timing::segment_video_timing(meta, segment_i);
 
         let screen_future = async {
             spawn_decoder(
@@ -451,7 +423,8 @@ impl RecordingSegmentDecoders {
         needs_display: bool,
         offsets: ClipOffsets,
     ) -> Option<DecodedSegmentFrames> {
-        let camera_request_time = segment_time + offsets.camera;
+        let (camera_request_time, recording_time) =
+            segment_timing::segment_frame_times(segment_time, self.segment_offset, offsets);
         let (screen_width, screen_height) = self.screen_video_dimensions();
         let screen_size = XY::new(screen_width, screen_height);
 
@@ -479,7 +452,7 @@ impl RecordingSegmentDecoders {
                 screen_frame: Some(screen?),
                 camera_frame,
                 segment_time,
-                recording_time: segment_time + self.segment_offset as f32,
+                recording_time,
                 segment_has_camera: self.camera.is_some(),
             })
         } else {
@@ -505,7 +478,7 @@ impl RecordingSegmentDecoders {
                 screen_frame: None,
                 camera_frame,
                 segment_time,
-                recording_time: segment_time + self.segment_offset as f32,
+                recording_time,
                 segment_has_camera: self.camera.is_some(),
             })
         }
@@ -518,7 +491,8 @@ impl RecordingSegmentDecoders {
         needs_display: bool,
         offsets: ClipOffsets,
     ) -> Option<DecodedSegmentFrames> {
-        let camera_request_time = segment_time + offsets.camera;
+        let (camera_request_time, recording_time) =
+            segment_timing::segment_frame_times(segment_time, self.segment_offset, offsets);
         let (screen_width, screen_height) = self.screen_video_dimensions();
         let screen_size = XY::new(screen_width, screen_height);
 
@@ -542,7 +516,7 @@ impl RecordingSegmentDecoders {
                 screen_frame: Some(screen?),
                 camera_frame,
                 segment_time,
-                recording_time: segment_time + self.segment_offset as f32,
+                recording_time,
                 segment_has_camera: self.camera.is_some(),
             })
         } else {
@@ -568,10 +542,20 @@ impl RecordingSegmentDecoders {
                 screen_frame: None,
                 camera_frame,
                 segment_time,
-                recording_time: segment_time + self.segment_offset as f32,
+                recording_time,
                 segment_has_camera: self.camera.is_some(),
             })
         }
+    }
+
+    pub fn screen_decoder_status(&self) -> &decoder::DecoderStatus {
+        self.screen.decoder_status()
+    }
+
+    pub fn camera_decoder_status(&self) -> Option<&decoder::DecoderStatus> {
+        self.camera
+            .as_ref()
+            .map(AsyncVideoDecoderHandle::decoder_status)
     }
 
     pub fn screen_video_dimensions(&self) -> (u32, u32) {
@@ -587,6 +571,8 @@ impl RecordingSegmentDecoders {
 pub enum RenderingError {
     #[error("No GPU adapter found")]
     NoAdapter,
+    #[error("Project overlays require ordinary editor loading")]
+    PreparingOverlayContent,
     #[error("No segments available in recording")]
     NoSegments,
     #[error(transparent)]
@@ -2000,6 +1986,7 @@ pub struct RenderVideoConstants {
     pub background_textures: std::sync::Arc<BackgroundTextureCache>,
     pub is_software_adapter: bool,
     adapter_name: String,
+    frozen_recorded_cursors: Option<FrozenRecordedCursorAssets>,
 }
 
 pub struct SharedWgpuDevice {
@@ -2011,6 +1998,17 @@ pub struct SharedWgpuDevice {
 }
 
 impl RenderVideoConstants {
+    pub fn with_frozen_recorded_cursors(mut self, assets: FrozenRecordedCursorAssets) -> Self {
+        self.frozen_recorded_cursors = Some(assets);
+        self
+    }
+
+    pub fn frozen_cursor_error(&self) -> Option<FrozenCursorAssetError> {
+        self.frozen_recorded_cursors
+            .as_ref()
+            .and_then(FrozenRecordedCursorAssets::first_error)
+    }
+
     pub fn new_with_device(
         shared: SharedWgpuDevice,
         segments: &[SegmentRecordings],
@@ -2045,6 +2043,7 @@ impl RenderVideoConstants {
             background_textures,
             meta,
             recording_meta,
+            frozen_recorded_cursors: None,
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         })
@@ -2074,6 +2073,7 @@ impl RenderVideoConstants {
             background_textures,
             meta,
             recording_meta,
+            frozen_recorded_cursors: None,
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         }
@@ -2107,13 +2107,17 @@ impl RenderVideoConstants {
         recording_meta: RecordingMeta,
         meta: StudioRecordingMeta,
     ) -> Result<Self, RenderingError> {
+        let constants_phase = readiness::Phase::start("constants.new");
+        let instance_phase = readiness::Phase::start("wgpu.instance");
         let instance = create_wgpu_instance().await;
+        instance_phase.finish("returned");
 
         let force_software_adapter = force_software_wgpu_adapter();
         if force_software_adapter {
             tracing::warn!("Forcing software WGPU adapter");
         }
 
+        let adapter_phase = readiness::Phase::start("wgpu.adapter");
         let hardware_adapter = if force_software_adapter {
             None
         } else {
@@ -2169,6 +2173,12 @@ impl RenderVideoConstants {
             (software_adapter, true, adapter_info.name)
         };
 
+        adapter_phase.finish(if is_software_adapter {
+            "software"
+        } else {
+            "hardware"
+        });
+
         let mut required_features = wgpu::Features::empty();
         if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
             required_features |= wgpu::Features::PIPELINE_CACHE;
@@ -2186,7 +2196,9 @@ impl RenderVideoConstants {
             ..Default::default()
         };
 
+        let device_phase = readiness::Phase::start("wgpu.device");
         let (device, queue) = adapter.request_device(&device_descriptor).await?;
+        device_phase.finish("returned");
 
         let background_textures = Arc::new(BackgroundTextureCache::default());
 
@@ -2194,6 +2206,7 @@ impl RenderVideoConstants {
             frame_pipeline::note_software_adapter_in_use();
         }
 
+        constants_phase.finish("returned");
         Ok(Self {
             _instance: instance,
             _adapter: adapter,
@@ -2203,6 +2216,7 @@ impl RenderVideoConstants {
             background_textures,
             meta,
             recording_meta,
+            frozen_recorded_cursors: None,
             is_software_adapter,
             adapter_name,
         })
@@ -5338,6 +5352,7 @@ mod style_image_tests {
                 .expect("studio metadata")
                 .clone(),
             recording_meta,
+            frozen_recorded_cursors: None,
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: false,
         };
@@ -5539,6 +5554,7 @@ mod nv12_flush_tests {
                     .expect("studio metadata")
                     .clone(),
                 recording_meta,
+                frozen_recorded_cursors: None,
                 background_textures: Arc::new(BackgroundTextureCache::default()),
                 is_software_adapter: software,
             };
@@ -5624,6 +5640,7 @@ mod nv12_flush_tests {
 
 pub struct FrameRenderer<'a> {
     constants: &'a RenderVideoConstants,
+    readiness_first_render: bool,
     session: Option<RenderSession>,
     nv12_converter: Option<frame_pipeline::RgbaToNv12Converter>,
     #[cfg(target_os = "macos")]
@@ -5640,6 +5657,7 @@ impl<'a> FrameRenderer<'a> {
     pub fn new(constants: &'a RenderVideoConstants) -> Self {
         Self {
             constants,
+            readiness_first_render: true,
             session: None,
             nv12_converter: None,
             #[cfg(target_os = "macos")]
@@ -5707,6 +5725,8 @@ impl<'a> FrameRenderer<'a> {
         render_display: bool,
         layers: &mut RendererLayers,
     ) -> Result<(Option<RenderedFrame>, FrameRenderStageTimings), RenderingError> {
+        let phase = std::mem::take(&mut self.readiness_first_render)
+            .then(|| readiness::Phase::start("frame.rgba_first_render"));
         let mut last_error = None;
 
         for attempt in 0..Self::MAX_RENDER_RETRIES {
@@ -5746,7 +5766,12 @@ impl<'a> FrameRenderer<'a> {
             )
             .await
             {
-                Ok(result) => return Ok(result),
+                Ok(result) => {
+                    if let Some(phase) = phase {
+                        phase.finish("submitted");
+                    }
+                    return Ok(result);
+                }
                 Err(RenderingError::BufferMapWaitingFailed) => {
                     tracing::warn!(
                         frame_number = uniforms.frame_number,
@@ -5946,6 +5971,8 @@ impl<'a> FrameRenderer<'a> {
         render_display: bool,
         layers: &mut RendererLayers,
     ) -> Result<SurfaceFrame, RenderingError> {
+        let phase = std::mem::take(&mut self.readiness_first_render)
+            .then(|| readiness::Phase::start("frame.bgra_first_render"));
         let mut last_error = None;
         for attempt in 0..Self::MAX_RENDER_RETRIES {
             if attempt > 0 {
@@ -6001,7 +6028,7 @@ impl<'a> FrameRenderer<'a> {
                 session,
                 &uniforms,
                 render_display,
-            );
+            )?;
             let converter = self
                 .bgra_surface_converter
                 .as_mut()
@@ -6016,7 +6043,12 @@ impl<'a> FrameRenderer<'a> {
             )
             .await
             {
-                Ok(frame) => return Ok(frame),
+                Ok(frame) => {
+                    if let Some(phase) = phase {
+                        phase.finish("frame_ready");
+                    }
+                    return Ok(frame);
+                }
                 Err(RenderingError::BufferMapWaitingFailed) => {
                     last_error = Some(RenderingError::BufferMapWaitingFailed);
                 }
@@ -6419,7 +6451,7 @@ impl<'a> FrameRenderer<'a> {
                 session,
                 &uniforms,
                 render_display,
-            );
+            )?;
 
             match finish_encoder_nv12_pooled(
                 session,
@@ -6459,10 +6491,7 @@ pub struct RendererLayers {
     camera: CameraLayer,
     camera_only: CameraLayer,
     mask: MaskLayer,
-    text: TextLayer,
-    images: ImageLayer,
-    captions: CaptionsLayer,
-    keyboard: KeyboardLayer,
+    overlays: Option<OverlayLayers>,
     camera3d: Camera3DLayer,
     camera_blur_processor: Option<cap_camera_effects::BlurProcessor>,
     camera_blur_init_failed: bool,
@@ -6479,44 +6508,94 @@ impl RendererLayers {
         queue: &wgpu::Queue,
         prefer_cpu_conversion: bool,
     ) -> Self {
-        let shared_yuv_pipelines = Arc::new(yuv_converter::YuvConverterPipelines::new(device));
-        let shared_composite_pipeline =
-            Arc::new(composite_frame::CompositeVideoFramePipeline::new(device));
+        Self::new_with_overlay_layers(device, queue, prefer_cpu_conversion, true)
+    }
 
-        Self {
-            background: BackgroundLayer::new(device),
-            background_blur: BlurLayer::new(device),
-            background_color_grade: ColorGradeLayer::new(device),
-            frame: FrameLayer::new(device, shared_composite_pipeline.clone()),
-            notch: NotchLayer::new(device, shared_composite_pipeline.clone()),
-            display: DisplayLayer::new_with_all_shared_pipelines(
-                device,
-                shared_yuv_pipelines.clone(),
-                shared_composite_pipeline.clone(),
-                prefer_cpu_conversion,
-            ),
-            click_ripple: ClickRippleLayer::new(device),
-            cursor: CursorLayer::new(device),
-            camera: CameraLayer::new_with_all_shared_pipelines(
-                device,
-                shared_yuv_pipelines.clone(),
-                shared_composite_pipeline.clone(),
-            ),
-            camera_only: CameraLayer::new_with_all_shared_pipelines(
-                device,
-                shared_yuv_pipelines,
-                shared_composite_pipeline,
-            ),
-            mask: MaskLayer::new(device),
-            text: TextLayer::new(device, queue),
-            images: ImageLayer::new(device),
-            captions: CaptionsLayer::new(device, queue),
-            keyboard: KeyboardLayer::new(device, queue),
-            camera3d: Camera3DLayer::new(device),
+    pub fn new_for_preparing_preview(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prefer_cpu_conversion: bool,
+        project: &ProjectConfiguration,
+    ) -> Result<Self, RenderingError> {
+        OverlayLayers::validate_omission(project, false)?;
+        Ok(Self::new_with_overlay_layers(
+            device,
+            queue,
+            prefer_cpu_conversion,
+            false,
+        ))
+    }
+
+    fn new_with_overlay_layers(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prefer_cpu_conversion: bool,
+        include_overlays: bool,
+    ) -> Self {
+        let layers_phase = readiness::Phase::start("layers.new");
+        let shared_yuv_pipelines = readiness::measure("layers.shared_yuv", || {
+            Arc::new(yuv_converter::YuvConverterPipelines::new(device))
+        });
+        let shared_composite_pipeline = readiness::measure("layers.shared_composite", || {
+            Arc::new(composite_frame::CompositeVideoFramePipeline::new(device))
+        });
+
+        let layers = Self {
+            background: readiness::measure("layers.background", || BackgroundLayer::new(device)),
+            background_blur: readiness::measure("layers.background_blur", || {
+                BlurLayer::new(device)
+            }),
+            background_color_grade: readiness::measure("layers.background_color_grade", || {
+                ColorGradeLayer::new(device)
+            }),
+            frame: readiness::measure("layers.frame", || {
+                FrameLayer::new(device, shared_composite_pipeline.clone())
+            }),
+            notch: readiness::measure("layers.notch", || {
+                NotchLayer::new(device, shared_composite_pipeline.clone())
+            }),
+            display: readiness::measure("layers.display", || {
+                DisplayLayer::new_with_all_shared_pipelines(
+                    device,
+                    shared_yuv_pipelines.clone(),
+                    shared_composite_pipeline.clone(),
+                    prefer_cpu_conversion,
+                )
+            }),
+            click_ripple: readiness::measure("layers.click_ripple", || {
+                ClickRippleLayer::new(device)
+            }),
+            cursor: readiness::measure("layers.cursor", || CursorLayer::new(device)),
+            camera: readiness::measure("layers.camera", || {
+                CameraLayer::new_with_all_shared_pipelines(
+                    device,
+                    shared_yuv_pipelines.clone(),
+                    shared_composite_pipeline.clone(),
+                )
+            }),
+            camera_only: readiness::measure("layers.camera_only", || {
+                CameraLayer::new_with_all_shared_pipelines(
+                    device,
+                    shared_yuv_pipelines,
+                    shared_composite_pipeline,
+                )
+            }),
+            mask: readiness::measure("layers.mask", || MaskLayer::new(device)),
+            overlays: include_overlays.then(|| OverlayLayers::new(device, queue)),
+            camera3d: readiness::measure("layers.camera3d", || Camera3DLayer::new(device)),
             camera_blur_processor: None,
             camera_blur_init_failed: false,
             camera_blur_unavailable: false,
+        };
+        layers_phase.finish("returned");
+        layers
+    }
+
+    fn validate_overlay_uniforms(&self, uniforms: &ProjectUniforms) -> Result<(), RenderingError> {
+        if self.overlays.is_none() {
+            OverlayLayers::validate_omission(&uniforms.project, !uniforms.texts.is_empty())?;
         }
+        Ok(())
     }
 
     fn ensure_camera_blur_processor(&mut self, device: &wgpu::Device) {
@@ -6638,7 +6717,9 @@ impl RendererLayers {
         use_svg: bool,
         cursor_type: &CursorType,
     ) {
-        self.cursor.preload_assets(constants, use_svg, cursor_type);
+        readiness::measure("cursor.preload", || {
+            self.cursor.preload_assets(constants, use_svg, cursor_type)
+        });
     }
 
     pub async fn prepare(
@@ -6649,6 +6730,7 @@ impl RendererLayers {
         cursor: &CursorEvents,
         render_display: bool,
     ) -> Result<(), RenderingError> {
+        self.validate_overlay_uniforms(uniforms)?;
         self.camera_blur_unavailable = false;
         self.background
             .prepare(
@@ -6731,38 +6813,40 @@ impl RendererLayers {
             self.run_shared_camera_blur(&constants.device, &constants.queue, mode);
         }
 
-        self.images.prepare(constants, uniforms).await;
+        if let Some(overlays) = &mut self.overlays {
+            overlays.images.prepare(constants, uniforms).await;
 
-        if uniforms.project.overlay_order.is_empty() {
-            self.text.prepare(
-                &constants.device,
-                &constants.queue,
-                uniforms.output_size,
-                &uniforms.texts,
+            if uniforms.project.overlay_order.is_empty() {
+                overlays.text.prepare(
+                    &constants.device,
+                    &constants.queue,
+                    uniforms.output_size,
+                    &uniforms.texts,
+                );
+            } else {
+                overlays.text.prepare_mixed(
+                    &constants.device,
+                    &constants.queue,
+                    uniforms.output_size,
+                    &uniforms.texts,
+                );
+            }
+
+            overlays.captions.prepare(
+                uniforms,
+                segment_frames,
+                XY::new(uniforms.output_size.0, uniforms.output_size.1),
+                constants,
             );
-        } else {
-            self.text.prepare_mixed(
-                &constants.device,
-                &constants.queue,
-                uniforms.output_size,
-                &uniforms.texts,
+
+            overlays.keyboard.prepare(
+                uniforms,
+                segment_frames,
+                XY::new(uniforms.output_size.0, uniforms.output_size.1),
+                constants,
+                overlays.captions.active_layout(),
             );
         }
-
-        self.captions.prepare(
-            uniforms,
-            segment_frames,
-            XY::new(uniforms.output_size.0, uniforms.output_size.1),
-            constants,
-        );
-
-        self.keyboard.prepare(
-            uniforms,
-            segment_frames,
-            XY::new(uniforms.output_size.0, uniforms.output_size.1),
-            constants,
-            self.captions.active_layout(),
-        );
 
         Ok(())
     }
@@ -6797,6 +6881,7 @@ impl RendererLayers {
         encoder: &mut wgpu::CommandEncoder,
         render_display: bool,
     ) -> Result<FrameRenderStageTimings, RenderingError> {
+        self.validate_overlay_uniforms(uniforms)?;
         self.camera_blur_unavailable = false;
         let mut timings = FrameRenderStageTimings::default();
 
@@ -6906,44 +6991,46 @@ impl RendererLayers {
         }
         timings.camera_blur_prepare_duration = start.elapsed();
 
-        let start = Instant::now();
-        self.images.prepare(constants, uniforms).await;
+        if let Some(overlays) = &mut self.overlays {
+            let start = Instant::now();
+            overlays.images.prepare(constants, uniforms).await;
 
-        if uniforms.project.overlay_order.is_empty() {
-            self.text.prepare(
-                &constants.device,
-                &constants.queue,
-                uniforms.output_size,
-                &uniforms.texts,
+            if uniforms.project.overlay_order.is_empty() {
+                overlays.text.prepare(
+                    &constants.device,
+                    &constants.queue,
+                    uniforms.output_size,
+                    &uniforms.texts,
+                );
+            } else {
+                overlays.text.prepare_mixed(
+                    &constants.device,
+                    &constants.queue,
+                    uniforms.output_size,
+                    &uniforms.texts,
+                );
+            }
+            timings.text_prepare_duration = start.elapsed();
+
+            let start = Instant::now();
+            overlays.captions.prepare(
+                uniforms,
+                segment_frames,
+                XY::new(uniforms.output_size.0, uniforms.output_size.1),
+                constants,
             );
-        } else {
-            self.text.prepare_mixed(
-                &constants.device,
-                &constants.queue,
-                uniforms.output_size,
-                &uniforms.texts,
+            timings.captions_prepare_duration = start.elapsed();
+
+            let start = Instant::now();
+            overlays.keyboard.prepare(
+                uniforms,
+                segment_frames,
+                XY::new(uniforms.output_size.0, uniforms.output_size.1),
+                constants,
+                overlays.captions.active_layout(),
             );
+            timings.keyboard_prepare_duration = start.elapsed();
         }
-        timings.text_prepare_duration = start.elapsed();
-
-        let start = Instant::now();
-        self.captions.prepare(
-            uniforms,
-            segment_frames,
-            XY::new(uniforms.output_size.0, uniforms.output_size.1),
-            constants,
-        );
-        timings.captions_prepare_duration = start.elapsed();
-
-        let start = Instant::now();
-        self.keyboard.prepare(
-            uniforms,
-            segment_frames,
-            XY::new(uniforms.output_size.0, uniforms.output_size.1),
-            constants,
-            self.captions.active_layout(),
-        );
-        timings.keyboard_prepare_duration = start.elapsed();
 
         self.camera3d.prepare(&constants.queue, uniforms);
 
@@ -6958,7 +7045,8 @@ impl RendererLayers {
         session: &mut RenderSession,
         uniforms: &ProjectUniforms,
         render_display: bool,
-    ) {
+    ) -> Result<(), RenderingError> {
+        self.validate_overlay_uniforms(uniforms)?;
         macro_rules! render_pass {
             ($view:expr, $load:expr) => {
                 encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -7129,16 +7217,18 @@ impl RendererLayers {
                 }
             }
 
-            if render_display && self.images.has_content() {
-                let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-                self.images.render(&mut pass);
-            }
+            if let Some(overlays) = &self.overlays {
+                if render_display && overlays.images.has_content() {
+                    let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                    overlays.images.render(&mut pass);
+                }
 
-            if !uniforms.texts.is_empty() {
-                let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-                self.text.render(&mut pass);
+                if !uniforms.texts.is_empty() {
+                    let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                    overlays.text.render(&mut pass);
+                }
             }
-        } else {
+        } else if let Some(overlays) = &self.overlays {
             for overlay in uniforms.project.overlay_tracks().into_iter().rev() {
                 match overlay.kind {
                     OverlayTrackKind::Mask => {
@@ -7151,31 +7241,34 @@ impl RendererLayers {
                         }
                     }
                     OverlayTrackKind::Image
-                        if render_display && self.images.has_track(overlay.track) =>
+                        if render_display && overlays.images.has_track(overlay.track) =>
                     {
                         let mut pass =
                             render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-                        self.images.render_track(&mut pass, overlay.track);
+                        overlays.images.render_track(&mut pass, overlay.track);
                     }
-                    OverlayTrackKind::Text if self.text.has_track(overlay.track) => {
+                    OverlayTrackKind::Text if overlays.text.has_track(overlay.track) => {
                         let mut pass =
                             render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-                        self.text.render_track(&mut pass, overlay.track);
+                        overlays.text.render_track(&mut pass, overlay.track);
                     }
                     OverlayTrackKind::Text | OverlayTrackKind::Image => {}
                 }
             }
         }
 
-        if self.keyboard.has_content() {
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-            self.keyboard.render(&mut pass);
-        }
+        if let Some(overlays) = &self.overlays {
+            if overlays.keyboard.has_content() {
+                let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                overlays.keyboard.render(&mut pass);
+            }
 
-        if self.captions.has_content() {
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-            self.captions.render(&mut pass);
+            if overlays.captions.has_content() {
+                let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                overlays.captions.render(&mut pass);
+            }
         }
+        Ok(())
     }
 }
 
@@ -7215,7 +7308,7 @@ async fn produce_frame_with_timings(
         session,
         &uniforms,
         render_display,
-    );
+    )?;
     timings.layer_render_duration = layer_render_start.elapsed();
 
     let finish_start = Instant::now();
@@ -7267,7 +7360,7 @@ async fn produce_transition_texture(
         session,
         &outgoing.uniforms,
         outgoing.render_display,
-    );
+    )?;
     compositor.capture_outgoing(&mut outgoing_encoder, session.current_texture());
     constants
         .queue
@@ -7299,7 +7392,7 @@ async fn produce_transition_texture(
         session,
         &incoming.uniforms,
         incoming.render_display,
-    );
+    )?;
     compositor.capture_incoming_and_render(
         &constants.queue,
         &mut incoming_encoder,

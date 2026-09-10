@@ -17,6 +17,7 @@ mod clip_thumbnails;
 mod crash_sentinel;
 mod deeplink_actions;
 mod diagnostics;
+mod editor_preparing;
 mod editor_window;
 mod exit_shutdown;
 mod export;
@@ -39,6 +40,7 @@ mod permissions;
 mod picker_benchmark;
 mod platform;
 mod power_observer;
+mod preparing_finalization;
 mod presets;
 mod recording;
 mod recording_settings;
@@ -46,6 +48,8 @@ mod recording_telemetry;
 mod recordings_locations;
 mod recovery;
 mod screenshot_editor;
+#[cfg(debug_assertions)]
+mod stop_editor_benchmark;
 mod target_select_overlay;
 mod telemetry;
 mod thumbnails;
@@ -159,6 +163,7 @@ const MAX_SETTLED_FINALIZATIONS: usize = 32;
 struct FinalizingRecordingsMap {
     attempts: std::collections::HashMap<ProjectObjectId, Arc<FinalizationAttempt>>,
     settled: std::collections::VecDeque<(ProjectObjectId, String)>,
+    last_preparing_generation: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -172,6 +177,10 @@ struct FinalizationAttempt {
     origin: FinalizationOrigin,
     project: Arc<FinalizationProject>,
     result: watch::Sender<FinalizationResult>,
+    preparing_generation: Option<u64>,
+    preparing_presentation:
+        watch::Sender<Option<Result<Arc<cap_project::ProjectConfiguration>, String>>>,
+    preparing: watch::Sender<preparing_finalization::PreparingFinalizationState>,
 }
 
 pub(crate) struct FinalizationToken {
@@ -974,6 +983,7 @@ impl FinalizingRecordings {
         project: Arc<FinalizationProject>,
         retry_failed: bool,
         origin: FinalizationOrigin,
+        preparing_requested: bool,
     ) -> Result<FinalizationRequest, String> {
         if project.access != FinalizationAccess::Write {
             return Err("Recording directory was not admitted for recovery.".into());
@@ -991,11 +1001,23 @@ impl FinalizingRecordings {
         {
             return Ok(FinalizationRequest::Existing(attempt.result.subscribe()));
         }
+        let preparing_generation = if preparing_requested
+            && origin == FinalizationOrigin::Recording
+            && let Some(generation) = recordings.last_preparing_generation.checked_add(1)
+        {
+            recordings.last_preparing_generation = generation;
+            Some(generation)
+        } else {
+            None
+        };
         let attempt = Arc::new(FinalizationAttempt {
             id: uuid::Uuid::new_v4().to_string(),
             origin,
             project,
             result: watch::channel(None).0,
+            preparing_generation,
+            preparing_presentation: watch::channel(None).0,
+            preparing: watch::channel(Default::default()).0,
         });
         recordings
             .settled
@@ -1013,8 +1035,9 @@ impl FinalizingRecordings {
         &self,
         project: Arc<FinalizationProject>,
         origin: FinalizationOrigin,
+        preparing_requested: bool,
     ) -> Result<FinalizationToken, String> {
-        match self.request(project, true, origin)? {
+        match self.request(project, true, origin, preparing_requested)? {
             FinalizationRequest::Started(token) => Ok(token),
             FinalizationRequest::Existing(_) => Err(
                 "This recording is already being prepared. Please wait for it to finish.".into(),
@@ -1026,14 +1049,14 @@ impl FinalizingRecordings {
         &self,
         project: Arc<FinalizationProject>,
     ) -> Result<FinalizationToken, String> {
-        self.start_with_origin(project, FinalizationOrigin::Recording)
+        self.start_with_origin(project, FinalizationOrigin::Recording, true)
     }
 
     pub(crate) fn start_recovering(
         &self,
         project: Arc<FinalizationProject>,
     ) -> Result<FinalizationToken, String> {
-        self.start_with_origin(project, FinalizationOrigin::Recovery)
+        self.start_with_origin(project, FinalizationOrigin::Recovery, false)
     }
 
     pub(crate) async fn recovery_success(&self, path: &Path) -> Result<Option<String>, String> {
@@ -3376,6 +3399,17 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
     fake_window::cancel_all_fake_window_listeners(app);
     close_target_select_overlays(app);
 
+    let preparing = app
+        .state::<editor_preparing::PreparingConsumers>()
+        .inner()
+        .clone();
+    let _ = await_exit_step(
+        "dispose_preparing_editor_frames",
+        APP_EXIT_STEP_TIMEOUT,
+        preparing.dispose_all(),
+    )
+    .await;
+
     let app_for_pending_editors = app.clone();
     let _ = await_exit_step(
         "dispose_pending_editor_instances",
@@ -4672,10 +4706,50 @@ async fn stop_playback(editor_instance: WindowEditorInstance) -> Result<(), Stri
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn commit_editor_preparing_frame(
+    editor_instance: WindowEditorInstance,
+    instance_id: String,
+    frame_number: u32,
+    fps: u32,
+) -> Result<bool, String> {
+    editor_instance.commit_preparing_frame(&instance_id, frame_number, fps)
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn start_editor_handoff_playback(
+    editor_instance: WindowEditorInstance,
+    instance_id: String,
+    frame_number: u32,
+    fps: u32,
+    resolution_base: XY<u32>,
+) -> Result<String, String> {
+    editor_instance
+        .start_handoff_playback(&instance_id, frame_number, fps, resolution_base)
+        .await
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn stop_editor_handoff_playback(
+    editor_instance: WindowEditorInstance,
+    instance_id: String,
+    playback_id: String,
+) -> Result<(), String> {
+    editor_instance
+        .stop_handoff_playback(&instance_id, &playback_id)
+        .await
+}
+
 #[derive(Serialize, Type, Debug)]
 #[serde(rename_all = "camelCase")]
 struct SerializedEditorInstance {
+    instance_id: String,
+    preparing_playback: bool,
     frames_socket_url: String,
+    preparing_snapshot: Option<editor_preparing::PreparingEditorChanged>,
     recording_duration: f64,
     saved_project_config: ProjectConfiguration,
     recordings: Arc<ProjectRecordingsMeta>,
@@ -4709,6 +4783,11 @@ async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstan
     let editor_instance = EditorInstances::get_or_create(&window, path).await?;
 
     Ok(SerializedEditorInstance {
+        instance_id: editor_instance.instance_id.to_string(),
+        preparing_playback: editor_instance.preparing_adoption().is_some(),
+        preparing_snapshot: window
+            .state::<editor_preparing::PreparingConsumers>()
+            .snapshot_for_window(id),
         frames_socket_url: format!("ws://localhost:{}", editor_instance.ws_port),
         recording_duration: editor_instance.recordings.duration(),
         saved_project_config: {
@@ -5107,13 +5186,17 @@ async fn upload_exported_video(
 
     channel.send(UploadProgress { progress: 0.0 }).ok();
 
+    let existing_video_id = upload::reusable_video_id(meta.sharing.as_ref(), meta.upload.as_ref());
     let s3_config = match async {
         let video_id = match mode {
             UploadMode::Initial { pre_created_video } => {
-                if let Some(pre_created) = pre_created_video {
+                if let Some(video_id) = existing_video_id.clone() {
+                    Some(video_id)
+                } else if let Some(pre_created) = pre_created_video {
                     return Ok(pre_created.config);
+                } else {
+                    None
                 }
-                None
             }
             UploadMode::Reupload => {
                 let Some(sharing) = meta.sharing.clone() else {
@@ -5142,6 +5225,13 @@ async fn upload_exported_video(
         Err(err) => return Err(err.to_string()),
     };
 
+    if existing_video_id
+        .as_ref()
+        .is_some_and(|video_id| *video_id != s3_config.id)
+    {
+        return Err("Server did not preserve the existing share link".into());
+    }
+
     let screenshot_path = meta.project_path.join("screenshots/display.jpg");
     meta.upload = Some(UploadMeta::SinglePartUpload {
         video_id: s3_config.id.clone(),
@@ -5150,15 +5240,14 @@ async fn upload_exported_video(
         recording_dir: path.clone(),
     });
     meta.save_for_project()
-        .map_err(|e| error!("Failed to save recording meta: {e}"))
-        .ok();
+        .map_err(|error| format!("Failed to persist upload state: {error}"))?;
 
     match upload_video(
         &app,
         s3_config.id.clone(),
         file_path,
         screenshot_path,
-        metadata,
+        meta.sharing.is_some(),
         Some(channel.clone()),
     )
     .await
@@ -5166,24 +5255,29 @@ async fn upload_exported_video(
         Ok(uploaded_video) => {
             channel.send(UploadProgress { progress: 1.0 }).ok();
 
+            let link = meta
+                .sharing
+                .as_ref()
+                .map(|sharing| sharing.link.clone())
+                .unwrap_or(uploaded_video.link);
+
             meta.upload = Some(UploadMeta::Complete);
             meta.sharing = Some(SharingMeta {
-                link: uploaded_video.link.clone(),
+                link: link.clone(),
                 id: uploaded_video.id.clone(),
                 content_hash: None,
             });
             meta.save_for_project()
-                .map_err(|e| error!("Failed to save recording meta: {e}"))
-                .ok();
+                .map_err(|error| format!("Failed to persist sharing state: {error}"))?;
 
             let _ = app
                 .state::<ArcLock<ClipboardContext>>()
                 .write()
                 .await
-                .set_text(uploaded_video.link.clone());
+                .set_text(link.clone());
 
             NotificationType::ShareableLinkCopied.send(&app);
-            Ok(UploadResult::Success(uploaded_video.link))
+            Ok(UploadResult::Success(link))
         }
         Err(AuthedApiError::UpgradeRequired) => Ok(UploadResult::UpgradeRequired),
         Err(e) => {
@@ -6631,6 +6725,11 @@ fn specta_builder() -> tauri_specta::Builder {
             open_file_path,
             get_video_metadata,
             create_editor_instance,
+            editor_preparing::create_preparing_editor_frame,
+            editor_preparing::get_preparing_editor_state,
+            editor_preparing::seek_preparing_editor,
+            editor_preparing::set_preparing_editor_playing,
+            editor_preparing::stop_preparing_editor_frame,
             get_editor_project_path,
             get_mic_waveforms,
             get_system_audio_waveforms,
@@ -6639,6 +6738,9 @@ fn specta_builder() -> tauri_specta::Builder {
             audio_library::import_audio_track_file,
             start_playback,
             stop_playback,
+            commit_editor_preparing_frame,
+            start_editor_handoff_playback,
+            stop_editor_handoff_playback,
             set_playhead_position,
             set_project_config,
             update_project_config_in_memory,
@@ -6745,6 +6847,7 @@ fn specta_builder() -> tauri_specta::Builder {
             NewScreenshotAdded,
             RenderFrameEvent,
             EditorStateChanged,
+            editor_preparing::PreparingEditorChanged,
             FrameLayoutEvent,
             CurrentRecordingChanged,
             RecordingStarted,
@@ -7043,6 +7146,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(http_client::RetryableHttpClient::default());
             app.manage(PendingScreenshots::default());
             app.manage(FinalizingRecordings::default());
+            app.manage(editor_preparing::PreparingConsumers::default());
             app.manage(updates::UpdatesState::default());
             updates::spawn_background_loop(app.clone());
 
@@ -7210,6 +7314,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 move |_| {
                     app.state::<MainWindowReadyState>().set_ready(true);
                     tracing::info!("Main window frontend ready");
+                    #[cfg(debug_assertions)]
+                    stop_editor_benchmark::run(app.clone());
                     #[cfg(debug_assertions)]
                     picker_benchmark::run(app.clone());
                     gpu_context::prewarm_gpu();
@@ -8282,6 +8388,8 @@ fn retire_project_window(window: &Window, window_id: &CapWindowId) {
     let app = window.app_handle();
     match window_id {
         CapWindowId::Editor { id } => {
+            app.state::<editor_preparing::PreparingConsumers>()
+                .cancel_window(*id, None);
             let window_ids = EditorWindowIds::get(app);
             match window_ids.ids.lock() {
                 Ok(mut ids) => ids.retain(|(_, current_id)| current_id != id),
@@ -8574,18 +8682,46 @@ async fn create_editor_instance_impl(
                 is_software_adapter: shared.is_software_adapter,
             });
 
+    #[cfg(debug_assertions)]
+    let frame_cb: cap_editor::EditorFrameCallback =
+        if stop_editor_benchmark::frame_capture_requested() {
+            let capture_path = path.clone();
+            let mut frame_cb = frame_cb;
+            Box::new(move |output, layout| {
+                stop_editor_benchmark::capture_output(
+                    stop_editor_benchmark::CaptureKind::Ordinary,
+                    &capture_path,
+                    &output,
+                );
+                frame_cb(output, layout);
+            })
+        } else {
+            frame_cb
+        };
+
+    let (audio_output, startup, live_handoff) = app
+        .state::<editor_preparing::PreparingConsumers>()
+        .take_startup(&path)
+        .await?;
     let instance = {
         let app = app.clone();
-        EditorInstance::new(
+        EditorInstance::new_with_startup_inputs(
             path,
             move |state| {
                 let _ = EditorStateChanged::new(state).emit(&app);
             },
             frame_cb,
             shared_device,
+            cap_editor::EditorFrameFormat::Rgba,
+            audio_output,
+            startup,
         )
         .await?
     };
+
+    if let Some(handoff) = &live_handoff {
+        instance.install_preparing_handoff(handoff).await?;
+    }
 
     let event_id = RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();
@@ -8600,21 +8736,73 @@ async fn create_editor_instance_impl(
         }
     });
 
-    instance
-        .preview_tx
-        .send_modify(|v| *v = Some((0, EDITOR_PREVIEW_FPS, default_editor_preview_resolution())));
+    let started = match instance
+        .start_preparing_handoff(EDITOR_PREVIEW_FPS, default_editor_preview_resolution())
+        .await
+    {
+        Ok(started) => started,
+        Err(error) => {
+            app.unlisten(event_id);
+            let cleanup_failed = if let Some(handoff) = &live_handoff {
+                handoff.stop_and_wait().await.cleanup_failed
+            } else {
+                false
+            };
+            instance.dispose().await;
+            return Err(if cleanup_failed {
+                format!(
+                    "Preparing handoff start failed: {error:?}; preparing playback cleanup failed"
+                )
+            } else {
+                format!("Preparing handoff start failed: {error:?}")
+            });
+        }
+    };
+    if !started {
+        let frame = instance
+            .preparing_adoption()
+            .and_then(|adoption| adoption.frame_number(EDITOR_PREVIEW_FPS))
+            .unwrap_or(0);
+        instance.preview_tx.send_modify(|v| {
+            *v = Some((
+                frame,
+                EDITOR_PREVIEW_FPS,
+                default_editor_preview_resolution(),
+            ))
+        });
+    }
 
     Ok((instance, event_id))
 }
 
 pub(crate) async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Result<(), String> {
+    let result = wait_for_recording_ready_inner(app, path).await;
+    if result.is_err() {
+        let cleanup = editor_preparing::join_before_ordinary(app, path).await;
+        return result.and(cleanup);
+    }
+    result
+}
+
+async fn await_finalization_before_ordinary(
+    app: &AppHandle,
+    path: &Path,
+    result: watch::Receiver<FinalizationResult>,
+) -> Result<(), String> {
+    let finalization = await_finalization_result(result).await;
+    let cleanup = editor_preparing::join_before_ordinary(app, path).await;
+    finalization.and(cleanup)
+}
+
+async fn wait_for_recording_ready_inner(app: &AppHandle, path: &Path) -> Result<(), String> {
+    let display_path = path;
     let project = FinalizationProject::observe(path.to_path_buf()).await?;
     let path = project.work_path();
     let finalizing_state = app.state::<FinalizingRecordings>();
 
     if let Some(result) = finalizing_state.is_finalizing(&project) {
         info!("Recording is being finalized, waiting for completion...");
-        await_finalization_result(result).await?;
+        await_finalization_before_ordinary(app, display_path, result).await?;
         project.validate_async().await?;
         info!("Recording finalization completed");
         let meta = RecordingMeta::load_for_project(path)
@@ -8624,6 +8812,8 @@ pub(crate) async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Re
         }
         return Ok(());
     }
+
+    editor_preparing::join_before_ordinary(app, display_path).await?;
 
     let meta = match RecordingMeta::load_for_project(path) {
         Ok(meta) => meta,
@@ -8649,7 +8839,7 @@ pub(crate) async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Re
 
             project.validate_async().await?;
             if let Some(result) = finalizing_state.is_finalizing(&project) {
-                await_finalization_result(result).await?;
+                await_finalization_before_ordinary(app, display_path, result).await?;
                 break;
             }
 
@@ -8676,7 +8866,7 @@ pub(crate) async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Re
 
     project.validate_async().await?;
     if let Some(result) = finalizing_state.is_finalizing(&project) {
-        await_finalization_result(result).await?;
+        await_finalization_before_ordinary(app, display_path, result).await?;
         project.validate_async().await?;
     }
 
@@ -8697,11 +8887,13 @@ pub(crate) async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Re
                 "Recording directory changed before recovery",
             ));
         }
-        match finalizing_state.request(work_project, false, FinalizationOrigin::Recording)? {
+        match finalizing_state.request(work_project, false, FinalizationOrigin::Recording, false)? {
             FinalizationRequest::Started(token) => {
                 run_finalization_worker(token, recording::remux_fragmented_recording).await?;
             }
-            FinalizationRequest::Existing(result) => await_finalization_result(result).await?,
+            FinalizationRequest::Existing(result) => {
+                await_finalization_before_ordinary(app, display_path, result).await?
+            }
         }
         project.validate_async().await?;
         info!("Crash recovery remux completed");

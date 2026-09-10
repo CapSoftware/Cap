@@ -16,6 +16,10 @@ import { Effect, Option, Schedule } from "effect";
 import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
+import {
+	invalidateReuploadedVideo,
+	prepareDesktopReupload,
+} from "@/lib/desktop-reupload";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import {
 	queueVideoTranscription,
@@ -309,6 +313,7 @@ app.post(
 				width: stringOrNumberOptional,
 				height: stringOrNumberOptional,
 				fps: stringOrNumberOptional,
+				replaceExisting: z.boolean().optional(),
 			})
 			.and(
 				z.union([
@@ -328,6 +333,8 @@ app.post(
 
 			const fileKey = getMultipartFileKey(user.id, body);
 			const subpath = getSubpath(body) ?? "result.mp4";
+			const replacesVideo =
+				body.replaceExisting === true && subpath === "result.mp4";
 
 			const videoIdFromFileKey = fileKey.split("/")[1];
 			const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
@@ -409,7 +416,9 @@ app.post(
 			}
 
 			return yield* Effect.gen(function* () {
-				const [bucket] = yield* Storage.getAccessForVideo(video);
+				const [bucket] = yield* Storage.getAccessForVideo(video, {
+					resolvePublishedOutput: false,
+				});
 
 				const { result, formattedParts } = yield* Effect.gen(function* () {
 					console.log(
@@ -479,6 +488,15 @@ app.post(
 					console.log(`Complete response: ${JSON.stringify(result, null, 2)}`);
 
 					yield* bucket.headObject(fileKey).pipe(
+						Effect.tap((head) =>
+							replacesVideo &&
+							(!head.ContentLength ||
+								(result.ETag && head.ETag !== result.ETag))
+								? Effect.fail(
+										new Error("Reuploaded video could not be verified"),
+									)
+								: Effect.void,
+						),
 						Effect.tap((headResult) =>
 							Effect.log(
 								`Object verification successful: ContentType=${headResult.ContentType}, ContentLength=${headResult.ContentLength}`,
@@ -489,7 +507,11 @@ app.post(
 							schedule: Schedule.exponential("50 millis"),
 						}),
 						Effect.catchAll((headError) =>
-							Effect.logError(`Warning: Unable to verify object: ${headError}`),
+							replacesVideo
+								? Effect.fail(headError)
+								: Effect.logError(
+										`Warning: Unable to verify object: ${headError}`,
+									),
 						),
 					);
 
@@ -577,33 +599,50 @@ app.post(
 					}
 
 					yield* db.use((db) =>
-						db.transaction(() =>
-							Promise.all([
-								db
-									.update(Db.videos)
-									.set({
-										duration: updateIfDefined(
-											body.durationInSecs,
-											Db.videos.duration,
-										),
-										width: updateIfDefined(body.width, Db.videos.width),
-										height: updateIfDefined(body.height, Db.videos.height),
-										fps: updateIfDefined(body.fps, Db.videos.fps),
-									})
-									.where(
-										and(
-											eq(Db.videos.id, Video.VideoId.make(videoId)),
-											eq(Db.videos.ownerId, user.id),
-										),
+						db.transaction(async (tx) => {
+							const replacement = replacesVideo
+								? await prepareDesktopReupload(tx, video)
+								: {};
+							await tx
+								.update(Db.videos)
+								.set({
+									...replacement,
+									duration: updateIfDefined(
+										body.durationInSecs,
+										Db.videos.duration,
 									),
-								db
-									.delete(Db.videoUploads)
-									.where(
-										eq(Db.videoUploads.videoId, Video.VideoId.make(videoId)),
+									width: updateIfDefined(body.width, Db.videos.width),
+									height: updateIfDefined(body.height, Db.videos.height),
+									fps: updateIfDefined(body.fps, Db.videos.fps),
+								})
+								.where(
+									and(
+										eq(Db.videos.id, Video.VideoId.make(videoId)),
+										eq(Db.videos.ownerId, user.id),
 									),
-							]),
-						),
+								);
+							await tx
+								.delete(Db.videoUploads)
+								.where(
+									eq(Db.videoUploads.videoId, Video.VideoId.make(videoId)),
+								);
+						}),
 					);
+					if (replacesVideo) {
+						yield* Effect.tryPromise(() =>
+							invalidateReuploadedVideo(video),
+						).pipe(
+							Effect.catchAll((error) =>
+								Effect.logWarning(
+									"Published reupload cache invalidation failed",
+									{
+										videoId,
+										error,
+									},
+								),
+							),
+						);
+					}
 
 					const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
 					let mediaProcessingPending = false;

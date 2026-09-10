@@ -74,8 +74,11 @@ pub struct CursorEvents {
 impl CursorEvents {
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
         let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {e}"))?;
-        serde_json::from_reader(BufReader::new(file))
-            .map_err(|e| format!("Failed to parse cursor data: {e}"))
+        Self::load_from_reader(BufReader::new(file))
+    }
+
+    pub fn load_from_reader(reader: impl std::io::Read) -> Result<Self, String> {
+        serde_json::from_reader(reader).map_err(|e| format!("Failed to parse cursor data: {e}"))
     }
 
     pub fn stabilize_short_lived_cursor_shapes(
@@ -359,6 +362,55 @@ mod tests {
             expected
         );
         assert_eq!(CursorData::load_from_file(&missing).unwrap_err(), expected);
+    }
+
+    #[test]
+    fn cursor_reader_preserves_unicode_and_events_across_short_reads() {
+        struct ShortReads<'a>(&'a [u8]);
+
+        impl std::io::Read for ShortReads<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                let count = buffer.len().min(3).min(self.0.len());
+                buffer[..count].copy_from_slice(&self.0[..count]);
+                self.0 = &self.0[count..];
+                Ok(count)
+            }
+        }
+
+        let expected = CursorData {
+            clicks: vec![click_event(12.5, "文字🖱")],
+            moves: vec![move_event(1.25, "文字🖱"), move_event(99.75, "pointer")],
+            cursor_images: CursorImages::default(),
+        };
+        let bytes = serde_json::to_vec(&expected).unwrap();
+        let events = CursorEvents::load_from_reader(ShortReads(&bytes)).unwrap();
+        assert_eq!(events.clicks, expected.clicks);
+        assert_eq!(events.moves, expected.moves);
+    }
+
+    #[test]
+    fn cursor_reader_does_not_turn_late_input_failure_into_success() {
+        struct FailingReader {
+            prefix: std::io::Cursor<Vec<u8>>,
+        }
+
+        impl std::io::Read for FailingReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                let count = std::io::Read::read(&mut self.prefix, buffer)?;
+                if count == 0 {
+                    return Err(std::io::Error::other("retained source failed"));
+                }
+                Ok(count)
+            }
+        }
+
+        let bytes = serde_json::to_vec(&CursorEvents::default()).unwrap();
+        let error = CursorEvents::load_from_reader(FailingReader {
+            prefix: std::io::Cursor::new(bytes),
+        })
+        .unwrap_err();
+        assert!(error.starts_with("Failed to parse cursor data: "));
+        assert!(error.contains("retained source failed"));
     }
 
     fn move_event(time_ms: f64, cursor_id: &str) -> CursorMoveEvent {
