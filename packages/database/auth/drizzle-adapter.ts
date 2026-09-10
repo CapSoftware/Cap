@@ -139,6 +139,8 @@ export function DrizzleAdapter(
 					name: userData.name,
 					image: userData.image as ImageUpload.ImageUrlOrKey | null,
 					activeOrganizationId: Organisation.OrganisationId.make(""),
+					marketingOrigin:
+						pendingInvite || ssoIdentity ? "teammate" : "independent",
 				});
 				if (ssoIdentity) {
 					await insertUser.onDuplicateKeyUpdate({

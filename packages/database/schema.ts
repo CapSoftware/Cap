@@ -129,9 +129,38 @@ export const users = mysqlTable(
 		defaultOrgId:
 			nanoIdNullable("defaultOrgId").$type<Organisation.OrganisationId>(),
 		authSessionVersion: int("authSessionVersion").notNull().default(0),
+		marketingOrigin: varchar("marketingOrigin", { length: 20 })
+			.notNull()
+			.default("unknown"),
 	},
 	(table) => ({
 		emailIndex: uniqueIndex("email_idx").on(table.email),
+	}),
+);
+
+export const marketingContacts = mysqlTable(
+	"marketing_contacts",
+	{
+		emailHash: varchar("emailHash", { length: 64 }).notNull().primaryKey(),
+		email: varchar("email", { length: 255 }),
+		userId: nanoIdNullable("userId").$type<User.UserId>(),
+		consent: varchar("consent", { length: 20 }).notNull().default("unknown"),
+		source: varchar("source", { length: 64 }).notNull(),
+		teammate: boolean("teammate").notNull().default(false),
+		imported: boolean("imported").notNull().default(false),
+		lastAudience: varchar("lastAudience", { length: 20 }),
+		lastProfileHash: varchar("lastProfileHash", { length: 64 }),
+		lastSyncedAt: datetime("lastSyncedAt", { mode: "date" }),
+		createdAt: datetime("createdAt", { mode: "date" })
+			.notNull()
+			.default(sql`CURRENT_TIMESTAMP`),
+		updatedAt: datetime("updatedAt", { mode: "date" })
+			.notNull()
+			.default(sql`CURRENT_TIMESTAMP`),
+	},
+	(table) => ({
+		userIndex: index("marketing_contacts_user_idx").on(table.userId),
+		syncIndex: index("marketing_contacts_sync_idx").on(table.lastSyncedAt),
 	}),
 );
 

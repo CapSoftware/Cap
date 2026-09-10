@@ -259,6 +259,7 @@ export async function provisionSsoMembership(
 			.update(users)
 			.set({
 				activeOrganizationId: identity.organizationId,
+				marketingOrigin: "teammate",
 				defaultOrgId: user.defaultOrgId || identity.organizationId,
 				emailVerified: user.emailVerified ?? new Date(),
 				onboarding_completed_at: user.onboarding_completed_at ?? new Date(),
