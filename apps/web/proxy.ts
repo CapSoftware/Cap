@@ -16,15 +16,13 @@ const addHttps = (s?: string) => {
 const publicDir = resolve(process.cwd(), "public");
 
 const isPublicAsset = (path: string) => {
-	let decoded: string;
 	try {
-		decoded = decodeURIComponent(path);
+		const file = resolve(publicDir, `.${decodeURIComponent(path)}`);
+		if (!file.startsWith(`${publicDir}${sep}`)) return false;
+		return statSync(file, { throwIfNoEntry: false })?.isFile() ?? false;
 	} catch {
 		return false;
 	}
-	const file = resolve(publicDir, `.${decoded}`);
-	if (!file.startsWith(`${publicDir}${sep}`)) return false;
-	return statSync(file, { throwIfNoEntry: false })?.isFile() ?? false;
 };
 
 const mainOrigins = [

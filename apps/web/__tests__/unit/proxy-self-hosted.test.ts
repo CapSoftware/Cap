@@ -71,6 +71,11 @@ describe("self-hosted proxy routes", () => {
 	it("rejects path traversal out of public/", () =>
 		expectLoginRedirect("/logos/..%2F..%2Fproxy.ts"));
 
+	it.each(["/%00", "/favicon.ico/nested.svg", `/${"a".repeat(5000)}.svg`])(
+		"treats a filesystem lookup failure for %s as not an asset",
+		(path) => expectLoginRedirect(path),
+	);
+
 	it("does not treat a share link as an asset", () =>
 		expectServed("/s/video123"));
 });
