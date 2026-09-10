@@ -11,6 +11,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardContexts } from "@/app/(org)/dashboard/Contexts";
 import { ShareTheme } from "@/app/s/ShareTheme";
+import { SonnerToaster } from "@/components/SonnerToastProvider";
 
 vi.mock("@cap/env", () => ({ buildEnv: { NEXT_PUBLIC_IS_CAP: false } }));
 vi.mock("next/navigation", () => ({
@@ -25,6 +26,11 @@ vi.mock(
 	() => ({ InviteDialog: () => null }),
 );
 vi.mock("@/components/UpgradeModal", () => ({ UpgradeModal: () => null }));
+
+vi.mock("sonner", () => ({
+	Toaster: ({ theme }: { theme: string }) =>
+		createElement("div", { "data-toast-theme": theme }),
+}));
 
 let dom: JSDOM;
 let root: Root;
@@ -66,7 +72,15 @@ async function navigate(route: "dashboard" | "share" | "marketing") {
 				? createElement(ShareTheme)
 				: null;
 	await act(async () => {
-		root.render(createElement(Fragment, null, page, createElement(PaintProbe)));
+		root.render(
+			createElement(
+				Fragment,
+				null,
+				page,
+				createElement(PaintProbe),
+				createElement(SonnerToaster),
+			),
+		);
 	});
 }
 
@@ -77,6 +91,7 @@ beforeEach(() => {
 	);
 	vi.stubGlobal("window", dom.window);
 	vi.stubGlobal("document", dom.window.document);
+	vi.stubGlobal("MutationObserver", dom.window.MutationObserver);
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	systemDark = false;
 	mediaChanges = new EventTarget();
@@ -127,6 +142,22 @@ describe("theme at the navigation paint boundary", () => {
 		await navigate("share");
 		await navigate("dashboard");
 		expect(beforePaint).toEqual(["light", "dark", "light"]);
+	});
+
+	it("keeps notifications aligned with system-dark share pages and navigation", async () => {
+		systemDark = true;
+		await navigate("share");
+		expect(
+			document
+				.querySelector("[data-toast-theme]")
+				?.getAttribute("data-toast-theme"),
+		).toBe("dark");
+		await navigate("dashboard");
+		expect(
+			document
+				.querySelector("[data-toast-theme]")
+				?.getAttribute("data-toast-theme"),
+		).toBe("light");
 	});
 
 	it("removes share listeners and dark mode when leaving for marketing", async () => {
