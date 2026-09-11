@@ -20,6 +20,8 @@ export async function enqueueLoopsSync(
 			set: {
 				revision: sql`${loopsSyncJobs.revision} + 1`,
 				nextAttemptAt: sql`UTC_TIMESTAMP()`,
+				failures: 0,
+				lastError: null,
 				...(teammateJoined ? { teammateJoinedAt: sql`UTC_TIMESTAMP()` } : {}),
 			},
 		});

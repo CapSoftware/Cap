@@ -5,11 +5,11 @@ import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql, { type Connection, type RowDataPacket } from "mysql2/promise";
 import { enqueueLoopsSync } from "../../packages/database/loops/queue";
-import { claimJob } from "../../packages/database/loops/worker";
+import { claimJob, deferJob } from "../../packages/database/loops/worker";
 import { loopsSyncJobs } from "../../packages/database/schema";
 
 const url = process.env.LOOPS_TEST_DATABASE_URL;
-const ids = Array.from({ length: 4 }, () =>
+const ids = Array.from({ length: 6 }, () =>
 	User.UserId.make(randomUUID().replaceAll("-", "").slice(0, 15)),
 );
 
@@ -102,5 +102,53 @@ describe.skipIf(!url)("durable Loops queue on an isolated database", () => {
 				String(row.possible_keys).includes("loops_sync_due_idx"),
 			),
 		).toBe(true);
+	});
+
+	test("new invite work stays immediately due when an older attempt fails", async () => {
+		await enqueueLoopsSync(drizzle(database), ids[3]);
+		const old = await claimJob(database, "failing-attempt", [ids[3]]);
+		if (!old) throw new Error("Test job was not claimed");
+		await enqueueLoopsSync(drizzle(other), ids[3], true);
+		await deferJob(
+			database,
+			old,
+			"failing-attempt",
+			"loops_http_429",
+			new Date(Date.now() + 60 * 60_000),
+		);
+		const next = await claimJob(other, "new-invite", [ids[3]]);
+		expect(next?.revision).toBe(old.revision + 1);
+		expect(next?.failures).toBe(0);
+		expect(next?.teammateJoinedAt).toBeTruthy();
+	});
+
+	test("unchanged failed work backs off and an expired lease cannot overwrite its replacement", async () => {
+		await enqueueLoopsSync(drizzle(database), ids[4]);
+		const old = await claimJob(database, "original-attempt", [ids[4]]);
+		if (!old) throw new Error("Test job was not claimed");
+		await deferJob(
+			database,
+			old,
+			"original-attempt",
+			"loops_http_429",
+			new Date(Date.now() + 60 * 60_000),
+		);
+		expect(await claimJob(other, "too-early", [ids[4]])).toBeUndefined();
+		await enqueueLoopsSync(drizzle(other), ids[4]);
+		const replacement = await claimJob(other, "replacement-attempt", [ids[4]]);
+		if (!replacement) throw new Error("Replacement was not claimed");
+		await deferJob(
+			database,
+			old,
+			"original-attempt",
+			"sync_failed",
+			new Date(),
+		);
+		const [rows] = await database.execute<RowDataPacket[]>(
+			"SELECT leaseToken,revision FROM loops_sync_jobs WHERE userId=?",
+			[ids[4]],
+		);
+		expect(rows[0].leaseToken).toBe("replacement-attempt");
+		expect(rows[0].revision).toBe(replacement.revision);
 	});
 });

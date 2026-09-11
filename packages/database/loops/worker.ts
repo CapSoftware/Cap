@@ -126,6 +126,27 @@ export async function claimJob(
 	}
 }
 
+export async function deferJob(
+	database: Connection,
+	job: Pick<Job, "userId" | "revision">,
+	token: string,
+	reason: string,
+	nextAttemptAt: Date,
+) {
+	await database.execute(
+		"UPDATE loops_sync_jobs SET failures=CASE WHEN revision=? THEN failures+1 ELSE 0 END,lastError=CASE WHEN revision=? THEN ? ELSE NULL END,nextAttemptAt=CASE WHEN revision=? THEN ? ELSE UTC_TIMESTAMP() END,leaseToken=NULL,leaseUntil=NULL WHERE userId=? AND leaseToken=?",
+		[
+			job.revision,
+			job.revision,
+			reason,
+			job.revision,
+			nextAttemptAt,
+			job.userId,
+			token,
+		],
+	);
+}
+
 export function loopsRuntimeConfig(env: NodeJS.ProcessEnv): LoopsRuntimeConfig {
 	const listId = env.LOOPS_MAILING_LIST_ID;
 	const enrollmentAfter = new Date(env.LOOPS_ENROLLMENT_AFTER ?? "");
@@ -275,14 +296,12 @@ export async function runLoopsSync(customerCopy: CustomerCopy) {
 							: error instanceof Error && /^[a-z_]+$/.test(error.message)
 								? error.message
 								: "sync_failed";
-					await cap.execute(
-						"UPDATE loops_sync_jobs SET failures=failures+1,lastError=?,nextAttemptAt=?,leaseToken=NULL,leaseUntil=NULL WHERE userId=? AND leaseToken=?",
-						[
-							reason,
-							new Date(Date.now() + retryDelay(job.failures)),
-							job.userId,
-							token,
-						],
+					await deferJob(
+						cap,
+						job,
+						token,
+						reason,
+						new Date(Date.now() + retryDelay(job.failures)),
 					);
 					console.error("Loops sync deferred", { userId: job.userId, reason });
 					failed++;
