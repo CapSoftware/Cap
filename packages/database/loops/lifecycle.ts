@@ -22,6 +22,19 @@ export type LoopsRuntimeConfig = {
 	teammateJoinedAt?: string | null;
 };
 
+export function enrollmentWindow(signupAt: string, config: LoopsRuntimeConfig) {
+	return {
+		recentSignup:
+			config.enrollmentEnabled &&
+			Date.parse(signupAt) >= config.enrollmentAfter.getTime(),
+		recentJoin:
+			config.enrollmentEnabled &&
+			Boolean(config.teammateJoinedAt) &&
+			Date.parse(isoDate(config.teammateJoinedAt ?? "")) >=
+				config.enrollmentAfter.getTime(),
+	};
+}
+
 export function lifecycleUpdate(
 	source: LoopsProfileSource,
 	remote: LifecycleContact,
@@ -42,20 +55,15 @@ export function lifecycleUpdate(
 		!["unsubscribed", "suppressed"].includes(remote.capConsent ?? "");
 	const subscribed =
 		globallySubscribed && remote.mailingLists[config.listId] === true;
-	const recentSignup =
-		Date.parse(profile.capSignupAt) >= config.enrollmentAfter.getTime();
+	const enrollment = enrollmentWindow(profile.capSignupAt, config);
 	const imported = Boolean(remote.capImportedAt);
-	const recentJoin =
-		teammate &&
-		Boolean(config.teammateJoinedAt) &&
-		Date.parse(isoDate(config.teammateJoinedAt ?? "")) >=
-			config.enrollmentAfter.getTime();
 	const eligible =
 		config.enrollmentEnabled &&
 		source.signedUp &&
 		subscribed &&
 		!source.pendingInvite &&
-		((!imported && recentSignup) || recentJoin) &&
+		((!imported && enrollment.recentSignup) ||
+			(teammate && enrollment.recentJoin)) &&
 		audience !== "unknown";
 	const {
 		subscribed: _subscribed,

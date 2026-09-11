@@ -109,15 +109,25 @@ export async function enforceDeliverySafety(
 	assert.equal(identity.teamName, registry.teamName);
 	const results: { workflow: string; action: string }[] = [];
 	for (const target of options.targets ?? safetyTargets) {
+		let sending = false;
+		let attemptedUpdate = false;
 		try {
 			const path = `workflows/${target.workflowId}`;
 			const workflow = await api.request<{
 				name: string;
+				status: string;
 				mailingListId: string;
 				rootNodeId: string;
 				nodes: Record<string, { nextNodeIds: string[] }>;
 			}>(path);
 			assert.equal(workflow.name, target.journey.name);
+			sending = workflow.status === "Sending";
+			assert(
+				["Draft", "Sending", "Paused", "PausedAndQueueing"].includes(
+					workflow.status,
+				),
+				"Unknown workflow status",
+			);
 			assert.equal(workflow.mailingListId, target.mailingListId);
 			assert.deepEqual(workflow.nodes[workflow.rootNodeId]?.nextNodeIds, [
 				target.guardId,
@@ -158,7 +168,21 @@ export async function enforceDeliverySafety(
 						};
 				action = options.apply ? "held" : "would-hold";
 			}
+			if (
+				nextFilter &&
+				isDeepStrictEqual(nextFilter, guard.audienceFilter) &&
+				guard.appliesDownstream
+			)
+				nextFilter = undefined;
+			if (nextFilter && sending) {
+				results.push({
+					workflow: target.journey.key,
+					action: "manual-pause-required",
+				});
+				continue;
+			}
 			if (nextFilter && options.apply) {
+				attemptedUpdate = true;
 				await api.request(nodePath, "POST", {
 					expectedRevisionId: guard.workflowRevisionId,
 					payload: { audienceFilter: nextFilter, appliesDownstream: true },
@@ -169,7 +193,20 @@ export async function enforceDeliverySafety(
 			}
 			results.push({ workflow: target.journey.key, action });
 		} catch {
-			results.push({ workflow: target.journey.key, action: "error" });
+			if (attemptedUpdate && !sending) {
+				try {
+					const latest = await api.request<{ status: string }>(
+						`workflows/${target.workflowId}`,
+					);
+					sending = latest.status === "Sending";
+				} catch {
+					sending = false;
+				}
+			}
+			results.push({
+				workflow: target.journey.key,
+				action: sending ? "manual-pause-required" : "error",
+			});
 		}
 	}
 	return results;
@@ -191,6 +228,13 @@ if (import.meta.main) {
 		{ healthy, apply: values.apply, resume: values.resume, hold: values.hold },
 	);
 	console.log(JSON.stringify({ healthy, results }));
+	const manualPause = results.filter(
+		(result) => result.action === "manual-pause-required",
+	);
+	if (manualPause.length)
+		console.error(
+			`Pause these workflows in Loops now: ${manualPause.map((result) => result.workflow).join(", ")}. The Loops API cannot edit audience filters while a workflow is sending. Delivery has not been stopped.`,
+		);
 	const successfulActions = values.hold
 		? ["held", "already-held"]
 		: ["healthy", "resumed"];

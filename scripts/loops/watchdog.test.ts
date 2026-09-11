@@ -3,7 +3,7 @@ import {
 	heldWorkflowAudience,
 	workflowAudience,
 } from "../../emails/delivery-safety";
-import type { LoopsApi } from "./api";
+import { type LoopsApi, LoopsApiError } from "./api";
 import {
 	checkSyncHealth,
 	enforceDeliverySafety,
@@ -12,7 +12,7 @@ import {
 	safetyTargets,
 } from "./watchdog";
 
-function fakeProvider() {
+function fakeProvider(status = "Draft") {
 	const guards = new Map(
 		safetyTargets.map((target) => [
 			target.workflowId,
@@ -25,7 +25,11 @@ function fakeProvider() {
 		]),
 	);
 	const writes: string[] = [];
+	const attemptedWrites: string[] = [];
 	let brokenWorkflow: string | undefined;
+	let startedWorkflow: string | undefined;
+	let startedOnWrite = false;
+	let startError: Error | undefined;
 	const api: Pick<LoopsApi, "request"> = {
 		async request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
 			if (path === "api-key") return { teamName: "Cap Software, Inc." } as T;
@@ -37,6 +41,16 @@ function fakeProvider() {
 				const guard = guards.get(target.workflowId);
 				if (!guard) throw new Error("Unknown guard");
 				if (method === "POST") {
+					attemptedWrites.push(target.workflowId);
+					if (target.workflowId === startedWorkflow) {
+						startedOnWrite = true;
+						if (startError) throw startError;
+					}
+					if (status === "Sending" || target.workflowId === startedWorkflow)
+						throw new LoopsApiError(400, path, {
+							message:
+								"This operation is not allowed while the workflow is sending.",
+						});
 					if (target.workflowId === brokenWorkflow)
 						throw new Error("Unavailable");
 					const update = body as {
@@ -53,6 +67,10 @@ function fakeProvider() {
 			}
 			return {
 				name: target.journey.name,
+				status:
+					target.workflowId === startedWorkflow && startedOnWrite
+						? "Sending"
+						: status,
 				mailingListId: target.mailingListId,
 				rootNodeId: "trigger",
 				nodes: { trigger: { nextNodeIds: [target.guardId] } },
@@ -63,6 +81,11 @@ function fakeProvider() {
 		api,
 		guards,
 		writes,
+		attemptedWrites,
+		startDuringWrite: (id: string, error?: Error) => {
+			startedWorkflow = id;
+			startError = error;
+		},
 		fail: (id: string) => {
 			brokenWorkflow = id;
 		},
@@ -89,6 +112,22 @@ describe("independent delivery safety", () => {
 		expect(results.every((result) => result.action === "held")).toBe(true);
 	});
 
+	test("concurrent activation is detected even when the provider error format changes", async () => {
+		for (const error of [
+			new LoopsApiError(400, "nodes/guard", { error: "Workflow is active" }),
+			new SyntaxError("Unexpected response encoding"),
+		]) {
+			const provider = fakeProvider();
+			provider.startDuringWrite(safetyTargets[0].workflowId, error);
+			const result = await enforceDeliverySafety(provider.api, {
+				healthy: false,
+				apply: true,
+			});
+			expect(result[0].action).toBe("manual-pause-required");
+			expect(provider.attemptedWrites).toHaveLength(4);
+		}
+	});
+
 	test("healthy operation never rewrites audiences", async () => {
 		const provider = fakeProvider();
 		const result = await enforceDeliverySafety(provider.api, {
@@ -99,7 +138,7 @@ describe("independent delivery safety", () => {
 		expect(provider.writes).toHaveLength(0);
 	});
 
-	test("an outage blocks every downstream journey and recovery never resumes it automatically", async () => {
+	test("an outage holds stopped journeys and recovery never resumes them automatically", async () => {
 		const provider = fakeProvider();
 		const result = await enforceDeliverySafety(provider.api, {
 			healthy: false,
@@ -121,6 +160,85 @@ describe("independent delivery safety", () => {
 			true,
 		);
 		expect(provider.writes).toHaveLength(4);
+	});
+
+	test("an unhealthy running journey requires manual pause without attempting forbidden edits", async () => {
+		const provider = fakeProvider("Sending");
+		const result = await enforceDeliverySafety(provider.api, {
+			healthy: false,
+			apply: true,
+		});
+		expect(
+			result.every((item) => item.action === "manual-pause-required"),
+		).toBe(true);
+		expect(provider.attemptedWrites).toHaveLength(0);
+		for (const guard of provider.guards.values())
+			expect(filterIsHeld(guard.audienceFilter)).toBe(false);
+	});
+
+	test("explicit holds on running journeys require manual pause even during a dry run", async () => {
+		for (const apply of [true, false]) {
+			const provider = fakeProvider("Sending");
+			const result = await enforceDeliverySafety(provider.api, {
+				healthy: true,
+				hold: true,
+				apply,
+			});
+			expect(
+				result.every((item) => item.action === "manual-pause-required"),
+			).toBe(true);
+			expect(provider.attemptedWrites).toHaveLength(0);
+		}
+	});
+
+	test("a journey starting between read and write still reports the manual pause requirement", async () => {
+		const provider = fakeProvider();
+		provider.startDuringWrite(safetyTargets[0].workflowId);
+		const result = await enforceDeliverySafety(provider.api, {
+			healthy: false,
+			apply: true,
+		});
+		expect(result[0].action).toBe("manual-pause-required");
+		expect(result.slice(1).every((item) => item.action === "held")).toBe(true);
+	});
+
+	test("unknown workflow states fail without edits", async () => {
+		const provider = fakeProvider("Unknown");
+		const result = await enforceDeliverySafety(provider.api, {
+			healthy: false,
+			apply: true,
+		});
+		expect(result.every((item) => item.action === "error")).toBe(true);
+		expect(provider.attemptedWrites).toHaveLength(0);
+	});
+
+	test("healthy running journeys are not rewritten when already resumed", async () => {
+		const provider = fakeProvider("Sending");
+		const result = await enforceDeliverySafety(provider.api, {
+			healthy: true,
+			apply: true,
+			resume: true,
+		});
+		expect(result.every((item) => item.action === "resumed")).toBe(true);
+		expect(provider.attemptedWrites).toHaveLength(0);
+	});
+
+	test("removing a hold requires pausing a running workflow first", async () => {
+		const provider = fakeProvider("Sending");
+		for (const target of safetyTargets) {
+			const guard = provider.guards.get(target.workflowId);
+			if (!guard) throw new Error("Missing fixture");
+			guard.audienceFilter = heldWorkflowAudience(target.journey);
+		}
+		const result = await enforceDeliverySafety(provider.api, {
+			healthy: true,
+			apply: true,
+			resume: true,
+		});
+		expect(
+			result.every((item) => item.action === "manual-pause-required"),
+		).toBe(true);
+		expect(provider.attemptedWrites).toHaveLength(0);
 	});
 
 	test("resuming requires explicit apply and a fresh healthy result", async () => {
@@ -219,7 +337,7 @@ describe("health response boundaries", () => {
 			expect(healthyReport(invalid, now)).toBe(false);
 	});
 
-	test("HTTP errors, malformed JSON and network failures hold delivery", async () => {
+	test("HTTP errors, malformed JSON and network failures fail the health check", async () => {
 		expect(
 			await checkSyncHealth(
 				"secret",
