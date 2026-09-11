@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { customerCopy } from "../../emails/customer-copy";
 
 export type Consent = "subscribed" | "unsubscribed" | "suppressed" | "unknown";
 export type CapUser = {
@@ -131,20 +132,16 @@ export function classifyProfile(input: ProfileInput) {
 				: independent && !historicalCustomer && !user?.stripeSubscriptionStatus
 					? "free"
 					: "unknown";
-	const planName = directCustomer
-		? "Cap Pro"
-		: activeLicenses.some((license) => license.kind === "selfhosted")
-			? "Cap Self-hosted"
-			: activeLicenses.length
-				? "Cap Desktop"
-				: "Cap";
-	const welcome = directCustomer
-		? "Your Cap Pro plan includes cloud sharing and collaboration, plus the desktop commercial license. Open your dashboard to find your organization and manage your setup."
-		: activeLicenses.some((license) => license.kind === "selfhosted")
-			? "Your self-hosted license supports your own Cap deployment. Use the setup details supplied with your purchase, and reply if you need help."
-			: activeLicenses.length
-				? "Your desktop license covers commercial use of Cap's recorder and editor. Activate it in the desktop app using the license details from your purchase email."
-				: "If you need help with your Cap account or access, reply to this email.";
+	const copy =
+		customerCopy[
+			directCustomer
+				? "pro"
+				: activeLicenses.some((license) => license.kind === "selfhosted")
+					? "selfhosted"
+					: activeLicenses.length
+						? "desktop"
+						: "other"
+		];
 	return {
 		email: normalizeEmail(source.email),
 		userId: user?.id ?? `bento:${emailHash(source.email)}`,
@@ -163,8 +160,8 @@ export function classifyProfile(input: ProfileInput) {
 		capConsent: consent,
 		capTeammate: teammate,
 		capCustomer: customer,
-		capPlanName: planName,
-		capCustomerWelcome: welcome,
+		capPlanName: copy.plan,
+		capCustomerWelcome: copy.welcome,
 		capPromotionalEligible:
 			consent === "subscribed" &&
 			!teammate &&

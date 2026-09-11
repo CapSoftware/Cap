@@ -1,6 +1,9 @@
 {
 	"type": "module",
 	"scripts": {
+		"emails:catalog": "bun scripts/emails/manage.ts",
+		"emails:check": "bun scripts/emails/manage.ts --check",
+		"emails:check-loops": "bun scripts/loops/verify.ts",
 		"build": "dotenv -e .env -- turbo run build",
 		"build:web": "turbo run build:web",
 		"build:web:docker": "bun run --filter=@cap/web build:docker",

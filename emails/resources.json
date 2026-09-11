@@ -1,0 +1,43 @@
+{
+	"version": "cap-lifecycle-v1",
+	"teamName": "Cap Software, Inc.",
+	"resources": {
+		"theme": "cmtvpigqa01cy0jzmygof5f31",
+		"Cap lifecycle header v1": "cmtvpigup01e80j0xjmwxqzxu",
+		"Cap lifecycle signature v1": "cmtvpih0q01da0j20hgcd7ygv",
+		"free": "cmtvpih6201fp0jznodf8fpwz",
+		"customer": "cmtvpilm601f40jzwx3474cko",
+		"teammate": "cmtvpm0ag01it0j37w02o6wav",
+		"former": "cmtvpm8zm01ii0j01cz7d15qr",
+		"segment:customer-update": "cmtvpmfc201jw0j1b50wngv06",
+		"customer-update": "cmtvpmfxc01ls0j0nnlffombv",
+		"segment:free-update": "cmtvpmit001kb0j1v86w1bx2w",
+		"free-update": "cmtvpmjej01kr0j18cxoz2n0y",
+		"mailingList": "cmtvqgqjj027l0j10fbgb2uvy"
+	},
+	"operations": {
+		"free:guard": "n3",
+		"free:welcome:email": "n4",
+		"free:record:timer": "n5",
+		"free:record:branch": "n6",
+		"free:record:email": "n9",
+		"free:share:timer": "n10",
+		"free:share:branch": "n11",
+		"free:share:email": "n14",
+		"free:plans:timer": "n15",
+		"free:plans:email": "n16",
+		"customer:guard": "n3",
+		"customer:welcome:email": "n4",
+		"customer:workflow:timer": "n5",
+		"customer:workflow:email": "n6",
+		"customer:feedback:timer": "n7",
+		"customer:feedback:email": "n8",
+		"teammate:guard": "n3",
+		"teammate:welcome:email": "n4",
+		"teammate:handoff:timer": "n5",
+		"teammate:handoff:email": "n6",
+		"former:guard": "n3",
+		"former:feedback:timer": "n4",
+		"former:feedback:email": "n5"
+	}
+}

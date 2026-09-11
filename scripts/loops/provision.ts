@@ -1,6 +1,9 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
+import { emailContent } from "../../emails/brand";
+import { normalizeLmx } from "../emails/content";
 import { LoopsApi, LoopsApiError } from "./api";
 import {
 	audienceFilter,
@@ -159,6 +162,31 @@ try {
 		key: string,
 	) => {
 		const existing = named(rows, definition.name);
+		if (existing && path === "themes") {
+			const current = await api.request<{ styles: Record<string, unknown> }>(
+				`${path}/${existing.id}`,
+			);
+			for (const [style, value] of Object.entries(theme.styles))
+				assert.deepEqual(
+					current.styles[style],
+					value,
+					"Shared theme changed; create a new branding version before updating drafts",
+				);
+		}
+		if (existing && path === "components") {
+			const current = await api.request<{ lmx: string }>(
+				`${path}/${existing.id}`,
+			);
+			const expected = components.find(
+				(component) => component.name === definition.name,
+			);
+			assert(expected);
+			assert.equal(
+				normalizeLmx(current.lmx),
+				normalizeLmx(expected.lmx),
+				"Shared component changed; create a new branding version before updating drafts",
+			);
+		}
 		const resource =
 			existing ?? (await api.request<Named>(path, "POST", definition));
 		receipt.resources[key] = resource.id;
@@ -172,28 +200,15 @@ try {
 			await ensure("components", sharedComponents, component, component.name),
 		);
 	}
-	const render = (body: string) =>
-		`<Style themeId="${themeId}" />\n<Component componentId="${componentIds[0]}" />\n${body}\n<Component componentId="${componentIds[1]}" />`;
-
 	const editEmail = async (
 		id: string,
 		message: { subject: string; previewText: string; body: string },
 	) => {
-		const definition = {
-			subject: message.subject,
-			previewText: message.previewText,
-			fromName: "Richie from Cap",
-			fromEmail: "richie",
-			replyToEmail: "richie@cap.so",
-			emailFormat: "styled",
-			lmx: render(message.body),
-			contactPropertiesFallbacks: {
-				firstName: "there",
-				capPlanName: "Cap",
-				capCustomerWelcome:
-					"Your paid access is ready. If you need help getting started, reply to this email.",
-			},
-		};
+		const definition = emailContent(message, {
+			theme: themeId,
+			header: componentIds[0],
+			signature: componentIds[1],
+		});
 		const current = await api.request<Email>(`email-messages/${id}`);
 		if (
 			receipt.definitions[id] !== hash(definition) ||

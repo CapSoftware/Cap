@@ -1,5 +1,7 @@
 # Cap lifecycle email migration
 
+Marketing source and shared branding now live in [emails/](../../emails/README.md). Start with the [email catalogue and flow maps](../../emails/CATALOG.md); regenerate it with `bun run emails:catalog`. Run `bun run emails:check` for local checks and `bun run emails:check-loops` for read-only comparison with the registered Loops drafts.
+
 This prepares Cap's Bento audience and replacement Loops journeys. Provisioning creates drafts only. Importing and syncing keep `capLifecycleEnabled=false`, `capOnboardingEligible=false`, and `capLifecycleStage=idle`. No script activates workflows, sends messages, or replays historical events.
 
 The September 2026 repository audit found no Bento SDK, environment variable, or send call to replace. Bento's marketing automations were configured outside this repository. Existing Resend authentication, invitation, billing, notification, support, and BAA emails remain in place.

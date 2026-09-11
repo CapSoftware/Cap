@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { components, theme } from "../../emails/brand";
+import registry from "../../emails/resources.json";
+import { assertEmailContent, normalizeLmx } from "../emails/content";
 import { LoopsApi } from "./api";
 import {
 	audienceFilter,
@@ -28,7 +32,7 @@ type Workflow = {
 	rootNodeId: string;
 	nodes: Record<string, Node>;
 };
-type Email = {
+type Email = Record<string, unknown> & {
 	subject: string;
 	previewText: string;
 	fromEmail: string;
@@ -39,9 +43,14 @@ type Email = {
 
 const { values } = parseArgs({
 	options: {
-		state: { type: "string" },
-		team: { type: "string" },
-		"mailing-list": { type: "string" },
+		state: {
+			type: "string",
+			default: fileURLToPath(
+				new URL("../../emails/resources.json", import.meta.url),
+			),
+		},
+		team: { type: "string", default: registry.teamName },
+		"mailing-list": { type: "string", default: registry.resources.mailingList },
 	},
 });
 assert(values.state && values.team && values["mailing-list"]);
@@ -56,13 +65,37 @@ assert.equal(receipt.teamName, values.team);
 const api = new LoopsApi(process.env.LOOPS_API_KEY ?? "");
 const identity = await api.request<{ teamName: string }>("api-key");
 assert.equal(identity.teamName, values.team);
-const text = (lmx: string) =>
-	lmx
-		.replace(/<[^>]+>/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
-const links = (lmx: string) =>
-	[...lmx.matchAll(/href="([^"]+)"/g)].map((match) => match[1]);
+const brandIds = {
+	theme: receipt.resources.theme,
+	header: receipt.resources[components[0].name],
+	signature: receipt.resources[components[1].name],
+};
+assert(
+	brandIds.theme && brandIds.header && brandIds.signature,
+	"Brand IDs missing from resources.json",
+);
+const remoteTheme = await api.request<{
+	name: string;
+	styles: Record<string, unknown>;
+}>(`themes/${brandIds.theme}`);
+assert.equal(remoteTheme.name, theme.name);
+for (const [key, value] of Object.entries(theme.styles))
+	assert.deepEqual(
+		remoteTheme.styles[key],
+		value,
+		`Shared theme differs: ${key}`,
+	);
+for (const component of components) {
+	const remote = await api.request<{ name: string; lmx: string }>(
+		`components/${receipt.resources[component.name]}`,
+	);
+	assert.equal(remote.name, component.name);
+	assert.equal(
+		normalizeLmx(remote.lmx),
+		normalizeLmx(component.lmx),
+		`Shared component differs: ${component.name}`,
+	);
+}
 let emails = 0;
 const verifyEmail = async (
 	id: string | undefined,
@@ -70,17 +103,7 @@ const verifyEmail = async (
 ) => {
 	assert(id);
 	const email = await api.request<Email>(`email-messages/${id}`);
-	assert.equal(email.subject, expected.subject);
-	assert.equal(email.previewText, expected.previewText);
-	assert.equal(email.fromEmail, "richie");
-	assert.equal(email.replyToEmail, "richie@cap.so");
-	assert.equal(email.contactPropertiesFallbacks.firstName, "there");
-	assert(
-		text(email.lmx).includes(text(expected.body)),
-		`Email body changed: ${id}`,
-	);
-	for (const link of links(expected.body))
-		assert(links(email.lmx).includes(link));
+	assertEmailContent(email, expected, brandIds);
 	const guardian = await api.request<{
 		errors: unknown[];
 		warnings: unknown[];
