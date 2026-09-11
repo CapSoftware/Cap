@@ -208,7 +208,19 @@ for (const journey of selectedJourneys) {
 			assert.equal(timer.unit, "d");
 		}
 		let skipped: string | undefined;
-		if (message.onlyIf) {
+		if (message.onlyIf && message === journey.messages.at(-1)) {
+			const filterId = receipt.operations[`${operation}:filter`];
+			connect(filterId);
+			node(filterId, "AudienceFilter");
+			const filter = await api.request<Node>(
+				`workflows/${id}/nodes/${filterId}`,
+			);
+			assert.deepEqual(filter.audienceFilter, {
+				match: "all",
+				conditions: [condition(message.onlyIf.property, message.onlyIf.value)],
+			});
+			assert.equal(filter.appliesDownstream, false);
+		} else if (message.onlyIf) {
 			const branchId = receipt.operations[`${operation}:branch`];
 			connect(branchId);
 			const branch = node(branchId, "BranchNode");

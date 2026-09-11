@@ -400,7 +400,23 @@ try {
 				);
 			}
 			let fromNodeId: string | undefined;
-			if (message.onlyIf) {
+			if (message.onlyIf && message === journey.messages.at(-1)) {
+				const filter = await insert("AudienceFilter", `${operation}:filter`);
+				await update(
+					filter.id,
+					{
+						audienceFilter: {
+							match: "all",
+							conditions: [
+								condition(message.onlyIf.property, message.onlyIf.value),
+							],
+						},
+						appliesDownstream: false,
+					},
+					`${operation}:filter-config`,
+				);
+				fromNodeId = filter.id;
+			} else if (message.onlyIf) {
 				const branch = await insert("BranchNode", `${operation}:branch`);
 				const children = workflow.nodes[branch.id].nextNodeIds;
 				if (children.length !== 2)
