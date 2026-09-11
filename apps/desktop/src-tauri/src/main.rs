@@ -101,22 +101,15 @@ fn main() {
             .join("logs");
 
         #[cfg(debug_assertions)]
-        let path = match (
-            std::env::var_os("CAP_STOP_EDITOR_BENCHMARK_OUTPUT"),
-            std::env::var_os("CAP_STOP_BENCH_LOG_DIR"),
-        ) {
-            (Some(output), Some(directory)) => match create_benchmark_log_directory(
-                std::path::Path::new(&output),
-                std::path::Path::new(&directory),
-            ) {
-                Ok(directory) => directory,
+        let path =
+            match cap_desktop_lib::initialize_stop_editor_benchmark(create_benchmark_log_directory)
+            {
+                Ok(directory) => directory.unwrap_or(path),
                 Err(error) => {
-                    eprintln!("Invalid private benchmark log directory: {error}");
+                    eprintln!("Invalid Stop benchmark invocation: {error}");
                     std::process::exit(2);
                 }
-            },
-            _ => path,
-        };
+            };
 
         path
     };

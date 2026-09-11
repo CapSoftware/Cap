@@ -6525,6 +6525,13 @@ type FilteredRegistry = tracing_subscriber::layer::Layered<
 pub type DynLoggingLayer = Box<dyn tracing_subscriber::Layer<FilteredRegistry> + Send + Sync>;
 type LoggingHandle = tracing_subscriber::reload::Handle<Option<DynLoggingLayer>, FilteredRegistry>;
 
+#[cfg(debug_assertions)]
+pub fn initialize_stop_editor_benchmark(
+    create_log_directory: impl FnOnce(&std::path::Path, &std::path::Path) -> std::io::Result<PathBuf>,
+) -> Result<Option<PathBuf>, String> {
+    stop_editor_benchmark::initialize(create_log_directory)
+}
+
 /// Software recovery exists to break GPU-driver crash loops: a process that died
 /// while wgpu adapter/device initialisation was in flight. Any other unexpected
 /// termination (force-quit, power loss, OS kill, a hung shutdown) says nothing
@@ -7075,6 +7082,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         })
         .setup(move |app| {
             let app = app.handle().clone();
+            #[cfg(debug_assertions)]
+            stop_editor_benchmark::validate_app_identifier(&app.config().identifier)?;
             #[cfg(target_os = "macos")]
             let _startup_open_guard = app
                 .try_state::<StartupOpenGate>()
