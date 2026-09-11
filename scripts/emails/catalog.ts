@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { applicationEmails } from "../../emails/application";
-import { audienceFilter, contactProperties } from "../../emails/audiences";
+import { contactProperties } from "../../emails/audiences";
 import {
 	components,
 	contactFallbacks,
@@ -10,6 +10,7 @@ import {
 } from "../../emails/brand";
 import { campaignTemplates } from "../../emails/campaigns";
 import { customerCopy } from "../../emails/customer-copy";
+import { workflowAudience } from "../../emails/delivery-safety";
 import { journeys } from "../../emails/flows";
 import resources from "../../emails/resources.json";
 import type { EmailDefinition, Journey } from "../../emails/types";
@@ -83,15 +84,6 @@ export const validateTheme = (styles: Record<string, unknown>) =>
 					value > 300),
 		)
 		.map(([key]) => `${key} must be a percentage from 100 to 300`);
-const workflowFilter = (journey: Journey) => ({
-	...audienceFilter(journey.audience, journey.promotional),
-	conditions: [
-		...audienceFilter(journey.audience, journey.promotional).conditions,
-		{ type: "property", key: "capLifecycleEnabled", operator: "isTrue" },
-		{ type: "property", key: "capOnboardingEligible", operator: "isTrue" },
-	],
-});
-
 export const validateCatalog = async () => {
 	const errors = marketingEmails.flatMap((email) =>
 		validateEmail(email).map((error) => `${email.id}: ${error}`),
@@ -215,6 +207,8 @@ export const renderCatalog = () => {
 		"",
 		"Teammate history takes priority over paid/free classification. Ambiguous contacts receive no journey. [Audience classification and consent](../scripts/loops/README.md#audience-rules).",
 		"",
+		"An independent watchdog can block all four automatic journeys by adding an impossible subscription condition to their downstream guards. Recovery never resumes delivery automatically. This does not cancel manually scheduled campaigns; check sync health before every campaign send. See the [outage and resume procedure](../scripts/loops/README.md#outage-protection).",
+		"",
 	];
 	for (const journey of journeys) {
 		lines.push(
@@ -222,7 +216,7 @@ export const renderCatalog = () => {
 			"",
 			`Entry: capLifecycleStage changes into ${journey.key}. Re-entry is disabled. Delays below are relative to the previous step; day numbers are cumulative from entry.`,
 			"",
-			`Downstream conditions: ${workflowFilter(journey)
+			`Downstream conditions: ${workflowAudience(journey)
 				.conditions.map(
 					(condition) =>
 						`${condition.key} ${condition.operator}${"value" in condition ? ` ${condition.value}` : ""}`,

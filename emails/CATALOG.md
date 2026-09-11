@@ -19,6 +19,8 @@ Current draft journeys require global subscription, capConsent=subscribed, the e
 
 Teammate history takes priority over paid/free classification. Ambiguous contacts receive no journey. [Audience classification and consent](../scripts/loops/README.md#audience-rules).
 
+An independent watchdog can block all four automatic journeys by adding an impossible subscription condition to their downstream guards. Recovery never resumes delivery automatically. This does not cancel manually scheduled campaigns; check sync health before every campaign send. See the [outage and resume procedure](../scripts/loops/README.md#outage-protection).
+
 ### Independent free-user onboarding
 
 Entry: capLifecycleStage changes into free. Re-entry is disabled. Delays below are relative to the previous step; day numbers are cumulative from entry.

@@ -12,6 +12,7 @@ Start with the [catalogue and flow maps](CATALOG.md), [copy guidance](VOICE.md),
 | Flow ordering, delays and milestone branches                    | [flows.ts](flows.ts)                           |
 | Campaign targeting                                              | [campaigns.ts](campaigns.ts)                   |
 | Audience guards and contact properties                          | [audiences.ts](audiences.ts)                   |
+| Shared downstream guards and emergency holds                    | [delivery-safety.ts](delivery-safety.ts)       |
 | Paid-plan welcome variations                                    | [customer-copy.ts](customer-copy.ts)           |
 | Application email purposes and send locations                   | [application.ts](application.ts)               |
 | Registered Loops resource IDs                                   | [resources.json](resources.json)               |

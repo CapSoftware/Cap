@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { deliveryFormat, emailContent } from "../../emails/brand";
+import { workflowAudience } from "../../emails/delivery-safety";
 import { normalizeLmx } from "../emails/content";
 import { LoopsApi, LoopsApiError } from "./api";
 import {
@@ -349,11 +350,7 @@ try {
 			`${journey.key}:trigger`,
 		);
 		const guard = await insert("AudienceFilter", `${journey.key}:guard`);
-		const filter = audienceFilter(journey.audience, journey.promotional);
-		filter.conditions.push(
-			condition("capLifecycleEnabled", true),
-			condition("capOnboardingEligible", true),
-		);
+		const filter = workflowAudience(journey);
 		await update(
 			guard.id,
 			{ audienceFilter: filter, appliesDownstream: true },

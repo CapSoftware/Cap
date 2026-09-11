@@ -1,0 +1,29 @@
+name: Loops delivery safety
+
+on:
+  schedule:
+    - cron: "2-57/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loops-delivery-safety
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: vars.LOOPS_WATCHDOG_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+      - name: Hold lifecycle delivery if synchronization is unhealthy
+        env:
+          LOOPS_API_KEY: ${{ secrets.LOOPS_API_KEY }}
+          LOOPS_HEALTH_SECRET: ${{ secrets.LOOPS_HEALTH_SECRET }}
+        run: bun scripts/loops/watchdog.ts --apply

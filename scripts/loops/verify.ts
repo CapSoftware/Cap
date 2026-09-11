@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import { isDeepStrictEqual, parseArgs } from "node:util";
 import { components, deliveryFormat, theme } from "../../emails/brand";
+import {
+	heldWorkflowAudience,
+	workflowAudience,
+} from "../../emails/delivery-safety";
 import registry from "../../emails/resources.json";
 import { assertEmailContent, normalizeLmx } from "../emails/content";
 import { LoopsApi, LoopsApiError } from "./api";
@@ -52,6 +56,7 @@ const { values } = parseArgs({
 		team: { type: "string", default: registry.teamName },
 		"mailing-list": { type: "string", default: registry.resources.mailingList },
 		"structure-only": { type: "boolean", default: false },
+		"require-held": { type: "boolean", default: false },
 	},
 });
 assert(values.state && values.team && values["mailing-list"]);
@@ -101,6 +106,7 @@ if (deliveryFormat === "lmx") {
 }
 let emails = 0;
 let customEmails = 0;
+let heldWorkflows = 0;
 const verifyEmail = async (
 	id: string | undefined,
 	expected: { subject: string; previewText: string; body: string },
@@ -170,12 +176,14 @@ for (const journey of journeys) {
 	connect(guardId);
 	node(guardId, "AudienceFilter");
 	const guard = await api.request<Node>(`workflows/${id}/nodes/${guardId}`);
-	const filter = audienceFilter(journey.audience, journey.promotional);
-	filter.conditions.push(
-		condition("capLifecycleEnabled", true),
-		condition("capOnboardingEligible", true),
+	const held = isDeepStrictEqual(
+		guard.audienceFilter,
+		heldWorkflowAudience(journey),
 	);
-	assert.deepEqual(guard.audienceFilter, filter);
+	if (held) heldWorkflows++;
+	else assert.deepEqual(guard.audienceFilter, workflowAudience(journey));
+	if (values["require-held"])
+		assert(held, "Workflow delivery guard is not held");
 	assert.equal(guard.appliesDownstream, true);
 	for (const message of journey.messages) {
 		const operation = `${journey.key}:${message.key}`;
@@ -230,6 +238,7 @@ for (const journey of journeys) {
 			workflow: journey.name,
 			status: "Draft",
 			graphVerified: true,
+			deliveryHeld: held,
 		}),
 	);
 }
@@ -263,6 +272,7 @@ console.log(
 		apiEmailContentVerified: emails,
 		customEmailContentRequiresBrowserReview: customEmails,
 		guardianVerifiedEmails: emails,
+		deliveryHeldWorkflows: heldWorkflows,
 		allDraft: true,
 	}),
 );

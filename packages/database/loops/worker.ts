@@ -147,6 +147,18 @@ export async function deferJob(
 	);
 }
 
+export async function completeUnchangedJob(
+	database: Connection,
+	job: Pick<Job, "userId" | "revision">,
+	token: string,
+	nextAttemptAt: Date,
+) {
+	await database.execute(
+		"UPDATE loops_sync_jobs SET failures=0,lastError=NULL,nextAttemptAt=CASE WHEN revision=? THEN ? ELSE UTC_TIMESTAMP() END,leaseToken=NULL,leaseUntil=NULL WHERE userId=? AND leaseToken=?",
+		[job.revision, nextAttemptAt, job.userId, token],
+	);
+}
+
 export function loopsRuntimeConfig(env: NodeJS.ProcessEnv): LoopsRuntimeConfig {
 	const listId = env.LOOPS_MAILING_LIST_ID;
 	const enrollmentAfter = new Date(env.LOOPS_ENROLLMENT_AFTER ?? "");
@@ -259,14 +271,11 @@ export async function runLoopsSync(customerCopy: CustomerCopy) {
 						)
 						.digest("hex");
 					if (job.profileHash === hash) {
-						await cap.execute(
-							"UPDATE loops_sync_jobs SET nextAttemptAt=CASE WHEN revision=? THEN ? ELSE UTC_TIMESTAMP() END,leaseToken=NULL,leaseUntil=NULL WHERE userId=? AND leaseToken=?",
-							[
-								job.revision,
-								nextProfileCheck(localProfile, new Date()),
-								job.userId,
-								token,
-							],
+						await completeUnchangedJob(
+							cap,
+							job,
+							token,
+							nextProfileCheck(localProfile, new Date()),
 						);
 						processed++;
 						continue;

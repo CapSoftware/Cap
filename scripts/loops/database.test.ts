@@ -4,12 +4,17 @@ import { User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql, { type Connection, type RowDataPacket } from "mysql2/promise";
+import { readQueueHealth } from "../../packages/database/loops/health";
 import { enqueueLoopsSync } from "../../packages/database/loops/queue";
-import { claimJob, deferJob } from "../../packages/database/loops/worker";
+import {
+	claimJob,
+	completeUnchangedJob,
+	deferJob,
+} from "../../packages/database/loops/worker";
 import { loopsSyncJobs } from "../../packages/database/schema";
 
 const url = process.env.LOOPS_TEST_DATABASE_URL;
-const ids = Array.from({ length: 6 }, () =>
+const ids = Array.from({ length: 7 }, () =>
 	User.UserId.make(randomUUID().replaceAll("-", "").slice(0, 15)),
 );
 
@@ -102,6 +107,48 @@ describe.skipIf(!url)("durable Loops queue on an isolated database", () => {
 				String(row.possible_keys).includes("loops_sync_due_idx"),
 			),
 		).toBe(true);
+	});
+
+	test("health detects an overdue queue and repeated failures without flagging held signups", async () => {
+		await enqueueLoopsSync(drizzle(database), ids[5]);
+		await database.execute(
+			"UPDATE loops_sync_jobs SET nextAttemptAt=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 6 MINUTE),failures=3,lastError='loops_http_429' WHERE userId=?",
+			[ids[5]],
+		);
+		expect(await readQueueHealth(database)).toMatchObject({
+			healthy: false,
+			overdueJobs: 1,
+			failingJobs: 1,
+		});
+		await database.execute(
+			"UPDATE loops_sync_jobs SET lastError='signup_not_complete' WHERE userId=?",
+			[ids[5]],
+		);
+		expect((await readQueueHealth(database)).healthy).toBe(true);
+		await enqueueLoopsSync(drizzle(other), ids[5]);
+		const [rows] = await database.execute<RowDataPacket[]>(
+			"SELECT failures,lastError FROM loops_sync_jobs WHERE userId=?",
+			[ids[5]],
+		);
+		expect(rows[0].failures).toBe(0);
+		expect(rows[0].lastError).toBeNull();
+	});
+
+	test("a successful unchanged profile clears a recovered failure", async () => {
+		await enqueueLoopsSync(drizzle(database), ids[6]);
+		await database.execute(
+			"UPDATE loops_sync_jobs SET failures=3,lastError='sync_failed' WHERE userId=?",
+			[ids[6]],
+		);
+		const job = await claimJob(database, "recovered-worker", [ids[6]]);
+		if (!job) throw new Error("Test job was not claimed");
+		await completeUnchangedJob(
+			database,
+			job,
+			"recovered-worker",
+			new Date(Date.now() + 60 * 60_000),
+		);
+		expect((await readQueueHealth(database)).healthy).toBe(true);
 	});
 
 	test("new invite work stays immediately due when an older attempt fails", async () => {
