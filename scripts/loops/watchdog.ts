@@ -8,7 +8,7 @@ import {
 import { journeys } from "../../emails/flows";
 import registry from "../../emails/resources.json";
 import type { Journey } from "../../emails/types";
-import { LoopsApi } from "./api";
+import { LoopsApi, LoopsApiError } from "./api";
 
 export const healthUrl = "https://cap.so/api/cron/sync-loops/health";
 
@@ -113,11 +113,18 @@ export async function enforceDeliverySafety(
 			const path = `workflows/${target.workflowId}`;
 			const workflow = await api.request<{
 				name: string;
+				status: string;
 				mailingListId: string;
 				rootNodeId: string;
 				nodes: Record<string, { nextNodeIds: string[] }>;
 			}>(path);
 			assert.equal(workflow.name, target.journey.name);
+			assert(
+				["Draft", "Sending", "Paused", "PausedAndQueueing"].includes(
+					workflow.status,
+				),
+				"Unknown workflow status",
+			);
 			assert.equal(workflow.mailingListId, target.mailingListId);
 			assert.deepEqual(workflow.nodes[workflow.rootNodeId]?.nextNodeIds, [
 				target.guardId,
@@ -158,6 +165,19 @@ export async function enforceDeliverySafety(
 						};
 				action = options.apply ? "held" : "would-hold";
 			}
+			if (
+				nextFilter &&
+				isDeepStrictEqual(nextFilter, guard.audienceFilter) &&
+				guard.appliesDownstream
+			)
+				nextFilter = undefined;
+			if (nextFilter && workflow.status === "Sending") {
+				results.push({
+					workflow: target.journey.key,
+					action: "manual-pause-required",
+				});
+				continue;
+			}
 			if (nextFilter && options.apply) {
 				await api.request(nodePath, "POST", {
 					expectedRevisionId: guard.workflowRevisionId,
@@ -168,8 +188,19 @@ export async function enforceDeliverySafety(
 				assert.equal(confirmed.appliesDownstream, true);
 			}
 			results.push({ workflow: target.journey.key, action });
-		} catch {
-			results.push({ workflow: target.journey.key, action: "error" });
+		} catch (error) {
+			const sending =
+				error instanceof LoopsApiError &&
+				error.status === 400 &&
+				typeof error.details === "object" &&
+				error.details !== null &&
+				"message" in error.details &&
+				error.details.message ===
+					"This operation is not allowed while the workflow is sending.";
+			results.push({
+				workflow: target.journey.key,
+				action: sending ? "manual-pause-required" : "error",
+			});
 		}
 	}
 	return results;
@@ -191,6 +222,13 @@ if (import.meta.main) {
 		{ healthy, apply: values.apply, resume: values.resume, hold: values.hold },
 	);
 	console.log(JSON.stringify({ healthy, results }));
+	const manualPause = results.filter(
+		(result) => result.action === "manual-pause-required",
+	);
+	if (manualPause.length)
+		console.error(
+			`Pause these workflows in Loops now: ${manualPause.map((result) => result.workflow).join(", ")}. The Loops API cannot edit audience filters while a workflow is sending. Delivery has not been stopped.`,
+		);
 	const successfulActions = values.hold
 		? ["held", "already-held"]
 		: ["healthy", "resumed"];
