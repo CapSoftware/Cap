@@ -17,6 +17,15 @@ import {
 } from "../schema.ts";
 import type { ValidatedSsoIdentity } from "./sso.ts";
 
+const getAffectedRows = (result: unknown) => {
+	if (Array.isArray(result)) {
+		return (
+			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
+		);
+	}
+	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
+};
+
 type CreateUserData = Parameters<NonNullable<Adapter["createUser"]>>[0];
 type LinkAccountData = Parameters<NonNullable<Adapter["linkAccount"]>>[0];
 type UnlinkAccountData = Parameters<NonNullable<Adapter["unlinkAccount"]>>[0];
@@ -510,31 +519,40 @@ export function DrizzleAdapter(
 			return row;
 		},
 		async useVerificationToken({ identifier, token }) {
+			const normalizedIdentifier = identifier?.toLowerCase() ?? "";
 			const rows = await db
 				.select()
 				.from(verificationTokens)
-				.where(eq(verificationTokens.token, token))
+				.where(eq(verificationTokens.identifier, normalizedIdentifier))
 				.limit(1);
 			const row = rows[0];
 			if (!row) {
 				console.warn("[useVerificationToken] No token found");
 				return null;
 			}
-			const normalizedIdentifier = identifier?.toLowerCase() ?? "";
-			const storedIdentifier = row.identifier?.toLowerCase() ?? "";
-			if (normalizedIdentifier !== storedIdentifier) {
-				console.warn("[useVerificationToken] Identifier mismatch");
-				return null;
-			}
-			await db
+			// Claim the exact row we just read (identifier + token) with a single
+			// delete, and only proceed if we actually removed it. This makes
+			// consumption atomic: concurrent requests race on the same delete, so
+			// at most one of them can claim the row, whether the guess is right or
+			// wrong. Scoping by token too (not identifier alone) means the delete
+			// can't clobber a resend that replaced this row after we read it.
+			const result = await db
 				.delete(verificationTokens)
 				.where(
 					and(
-						eq(verificationTokens.token, token),
 						eq(verificationTokens.identifier, row.identifier),
+						eq(verificationTokens.token, row.token),
 					),
 				);
-			return { ...row, identifier: storedIdentifier };
+			if (getAffectedRows(result) !== 1) {
+				console.warn("[useVerificationToken] Token already consumed");
+				return null;
+			}
+			if (row.token !== token) {
+				console.warn("[useVerificationToken] Token mismatch");
+				return null;
+			}
+			return { ...row, identifier: normalizedIdentifier };
 		},
 	};
 }
