@@ -182,7 +182,7 @@ export const catalogExcerpt = (body: string) =>
 	body
 		.replace(/<\/(Paragraph|Button)>/g, "\n\n")
 		.replace(/<Br\s*\/>/g, "\n")
-		.replace(/<[^>]+>/g, "")
+		.replace(/<\/?(?:Paragraph|Button|Link|Strong|Em)\b[^>]*>/g, "")
 		.replaceAll("&", "&amp;")
 		.replaceAll("<", "&lt;")
 		.replaceAll(">", "&gt;")

@@ -14,6 +14,9 @@ import { assertEmailContent, normalizeLmx } from "./content";
 
 describe("email library", () => {
 	test("catalogue excerpts keep malformed markup inert", () => {
+		expect(catalogExcerpt("<script>alert(1)</script>")).toBe(
+			"&lt;script&gt;alert(1)&lt;/script&gt;",
+		);
 		expect(catalogExcerpt("<Paragraph>Hello</Paragraph><script src=x")).toBe(
 			"Hello\n\n&lt;script src=x",
 		);
