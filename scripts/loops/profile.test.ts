@@ -244,23 +244,31 @@ test("existing teammate evidence and identities survive contact enrichment", () 
 	assert.equal(contactUpdate(profile, remote(), "tips").userId, "cap-user");
 });
 
-test("migration joins a new list without overwriting any explicit preference", () => {
-	const profile = classifyProfile(input());
-	const update = importContactUpdate(profile, remote(), "new-list");
-	assert.deepEqual("mailingLists" in update && update.mailingLists, {
-		"new-list": true,
-	});
+test("migration preserves missing, removed and unsubscribed list preferences", () => {
+	const profile = {
+		...classifyProfile(input()),
+		capOnboardingEligible: true,
+		capLifecycleEnabled: true,
+		capLifecycleStage: "free",
+	};
+	const update = importContactUpdate(profile, remote(), "tips");
+	assert.equal("mailingLists" in update, false);
 	assert.equal(update.capPromotionalEligible, true);
-	assert.equal(update.capLifecycleEnabled, false);
+	assert.equal(update.capLifecycleEnabled, true);
 	assert.equal("subscribed" in update, false);
 	for (const contact of [
 		{ ...remote(), subscribed: false },
-		{ ...remote(), mailingLists: { "new-list": false } },
+		{ ...remote(), mailingLists: {} },
+		{ ...remote(), mailingLists: { other: true } },
+		{ ...remote(), mailingLists: { tips: false } },
 	]) {
-		const held = importContactUpdate(profile, contact, "new-list");
+		const held = importContactUpdate(profile, contact, "tips");
 		assert.equal("mailingLists" in held, false);
 		assert.equal("subscribed" in held, false);
 		assert.equal(held.capPromotionalEligible, false);
+		assert.equal(held.capOnboardingEligible, false);
+		assert.equal(held.capLifecycleEnabled, false);
+		assert.equal(held.capLifecycleStage, "idle");
 	}
 });
 

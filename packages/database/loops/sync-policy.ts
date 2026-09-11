@@ -74,20 +74,5 @@ export function importContactUpdate(
 	remote: RemoteContact,
 	listId?: string,
 ) {
-	if (
-		listId &&
-		profile.capConsent === "subscribed" &&
-		remote.subscribed &&
-		remote.mailingLists[listId] === undefined
-	) {
-		return {
-			...contactUpdate(
-				profile,
-				{ ...remote, mailingLists: { ...remote.mailingLists, [listId]: true } },
-				listId,
-			),
-			mailingLists: { [listId]: true },
-		};
-	}
 	return contactUpdate(profile, remote, listId);
 }
