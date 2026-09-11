@@ -96,7 +96,7 @@ The hold persists after recovery. It does not change workflow status, contact su
 bun run emails:check-loops --structure-only --require-held
 ```
 
-For an emergency hold, with the Loops API key in the environment:
+For an emergency, first pause active workflows in the Loops UI. Then, with the Loops API key in the environment, apply persistent audience holds to the stopped workflows:
 
 ```sh
 bun scripts/loops/watchdog.ts --hold --apply
@@ -110,7 +110,7 @@ bun scripts/loops/watchdog.ts --resume --apply
 
 Resume requires a fresh authenticated health response and refuses changed audience rules. It does not start a draft or unpause a workflow. Contacts that have already exited because of a hold are not automatically replayed; assess recovery separately without bulk re-enrolling history.
 
-GitHub scheduling can be delayed, and a Loops API outage can prevent guard updates. A message already being sent may still arrive. Test a running owned-account journey across an outage in the deployed environment before relying on this protection. Manually pause Loops if the check cannot apply a hold. Campaigns require a fresh health check before scheduling and manual cancellation or pause during an outage; the checker only guards the four registered journeys.
+GitHub scheduling can be delayed, and a Loops API outage can prevent even stopped-workflow guard updates. Running workflows keep sending until they are manually paused; a message already being sent may still arrive. Verify the alert and manual-response procedure with an owned-account journey before relying on it. Campaigns require a fresh health check before scheduling and manual cancellation or pause during an outage; the checker only inspects the four registered journeys.
 
 ## Before any activation
 
