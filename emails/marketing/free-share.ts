@@ -12,6 +12,6 @@ export const freeShare = {
 		"<Paragraph>Next time you're typing a long explanation, try showing it in Cap instead.</Paragraph>",
 		"<Paragraph>Record the bit that's hard to explain, then send the link with a sentence about what you need. Something like: “Here's the bug I mentioned. Can you see the same thing?”</Paragraph>",
 		"<Paragraph>It doesn't have to be polished to be useful.</Paragraph>",
-		'<Paragraph><Link href="https://cap.so/dashboard">Open your Cap library</Link>.</Paragraph>',
+		`<Paragraph><Link href="https://cap.so/dashboard">Open your Cap library</Link>.</Paragraph>`,
 	].join(""),
 } satisfies EmailDefinition;

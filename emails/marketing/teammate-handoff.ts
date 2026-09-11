@@ -11,7 +11,7 @@ export const teammateHandoff = {
 		"<Paragraph>{contact.capGreeting}</Paragraph>",
 		"<Paragraph>Next time you hand something over to a teammate, try recording the part that's tricky to explain in a message.</Paragraph>",
 		"<Paragraph>Show what changed and what you need them to look at. Even a short recording can save a lot of back and forth.</Paragraph>",
-		'<Paragraph><Link href="https://cap.so/dashboard">Open your team workspace</Link>. Before sending a recording, check its sharing settings so the right people can watch it.</Paragraph>',
+		`<Paragraph><Link href="https://cap.so/dashboard">Open your team workspace</Link>. Before sending a recording, check its sharing settings so the right people can watch it.</Paragraph>`,
 		"<Paragraph>If anything about sharing with your team feels awkward, reply and let me know.</Paragraph>",
 	].join(""),
 } satisfies EmailDefinition;
