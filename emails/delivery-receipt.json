@@ -1,0 +1,149 @@
+{
+	"recordedAt": "2026-09-11T13:14:46.625Z",
+	"format": "mjml",
+	"scope": "Browser-reviewed draft uploads; historical record, not live drift detection",
+	"logoSource": "packages/ui/src/components/icons/Logo.tsx",
+	"reviewed": {
+		"draft": true,
+		"canonicalLogo": true,
+		"singleFooter": true,
+		"greetingFallback": true,
+		"metadata": true
+	},
+	"emails": [
+		{
+			"id": "free-welcome",
+			"sha256": "2c655d03647af236d1cf4a45a60073121ee027e6799ed473069dd04d0a450813",
+			"containerId": "cmtvpih6201fp0jznodf8fpwz",
+			"nodeId": "n4",
+			"subject": "Welcome to Cap",
+			"previewText": "Richie here. Great to have you with us :)",
+			"fallbacks": {
+				"capGreeting": "Hey,"
+			}
+		},
+		{
+			"id": "free-record",
+			"sha256": "00372d4d5a911b3433f958c3e163ef90bb0653f6e2b483172b60ed87da6a6e79",
+			"containerId": "cmtvpih6201fp0jznodf8fpwz",
+			"nodeId": "n9",
+			"subject": "A quick way to try Cap",
+			"previewText": "You don't need a script or a perfect take.",
+			"fallbacks": {
+				"capGreeting": "Hey,"
+			}
+		},
+		{
+			"id": "free-share",
+			"sha256": "974a3ae5f158f66aaed3451f29964cc348b19bc0c56a86f3a7c755412cf3bf1e",
+			"containerId": "cmtvpih6201fp0jznodf8fpwz",
+			"nodeId": "n14",
+			"subject": "Send your next explanation as a Cap",
+			"previewText": "A short recording and one sentence are enough.",
+			"fallbacks": {
+				"capGreeting": "Hey,"
+			}
+		},
+		{
+			"id": "free-plans",
+			"sha256": "ce4635d7a6fad264ec0405c25525a999291e498bc8a93d898a81e92db696e2fb",
+			"containerId": "cmtvpih6201fp0jznodf8fpwz",
+			"nodeId": "n16",
+			"subject": "Using Cap for work?",
+			"previewText": "Here's how the Desktop License and Cap Pro compare.",
+			"fallbacks": {
+				"capGreeting": "Hey,"
+			}
+		},
+		{
+			"id": "customer-welcome",
+			"sha256": "91481e642ffb79d6d413b68a6232ec60616b203bd03813035f04e308302ab780",
+			"containerId": "cmtvpilm601f40jzwx3474cko",
+			"nodeId": "n4",
+			"subject": "Thanks for choosing {capPlanName}",
+			"previewText": "Thanks for backing what we're building.",
+			"fallbacks": {
+				"capCustomerWelcome": "If you need a hand getting set up, just reply and I'll help you sort it.",
+				"capPlanName": "Cap",
+				"capGreeting": "Hey,"
+			}
+		},
+		{
+			"id": "customer-workflow",
+			"sha256": "e335467f93d9377de9bb83050ffb7294567a1cbcf9062ba0319b7ed3c861e1e5",
+			"containerId": "cmtvpilm601f40jzwx3474cko",
+			"nodeId": "n6",
+			"subject": "One less thing to explain twice",
+			"previewText": "A recording you can keep coming back to.",
+			"fallbacks": {
+				"capGreeting": "Hey,"
+			}
+		},
+		{
+			"id": "customer-feedback",
+			"sha256": "d3d6bec25066bb422d92400e220d23a4626b9dffae8f442abefb6c36e5c819b4",
+			"containerId": "cmtvpilm601f40jzwx3474cko",
+			"nodeId": "n8",
+			"subject": "How is Cap working for you?",
+			"previewText": "I'd love to hear what's working and what isn't.",
+			"fallbacks": {
+				"capGreeting": "Hey,"
+			}
+		},
+		{
+			"id": "teammate-welcome",
+			"sha256": "39cf59dde6b58b7512122143c3a0571e0a79e837fdbd84c3211a52326acb2ae2",
+			"containerId": "cmtvpm0ag01it0j37w02o6wav",
+			"nodeId": "n4",
+			"subject": "Welcome to your team in Cap",
+			"previewText": "Here's where to find your team's recordings.",
+			"fallbacks": {
+				"capGreeting": "Hey,"
+			}
+		},
+		{
+			"id": "teammate-handoff",
+			"sha256": "fe1e7a5ae897734a26c7fd5821205a077ff358ebf74c43e44322a721a2201f14",
+			"containerId": "cmtvpm0ag01it0j37w02o6wav",
+			"nodeId": "n6",
+			"subject": "Make your next handoff easier",
+			"previewText": "Show your teammate the bit that's hard to put into words.",
+			"fallbacks": {
+				"capGreeting": "Hey,"
+			}
+		},
+		{
+			"id": "former-feedback",
+			"sha256": "1d896cd1e5e1be97de072aaf831d307ad01d616483712bb8aeef483c0409ad17",
+			"containerId": "cmtvpm8zm01ii0j01cz7d15qr",
+			"nodeId": "n5",
+			"subject": "Could I ask about your time with Cap?",
+			"previewText": "I'd appreciate your honest feedback.",
+			"fallbacks": {
+				"capGreeting": "Hey,"
+			}
+		},
+		{
+			"id": "customer-update",
+			"sha256": "505f8049580c9162834db0506cbd9002ab4589046f00ff5032aa522fc344ec13",
+			"containerId": "cmtvpmfxc01ls0j0nnlffombv",
+			"nodeId": null,
+			"subject": "Keeping up with Cap",
+			"previewText": "The changes we've shipped, all in one place.",
+			"fallbacks": {
+				"capGreeting": "Hey,"
+			}
+		},
+		{
+			"id": "free-update",
+			"sha256": "556e8bcc3465918c1a9ca57f88fa38baeda7abfaa4edeb73e2ca689322ff1840",
+			"containerId": "cmtvpmjej01kr0j18cxoz2n0y",
+			"nodeId": null,
+			"subject": "Take another look at Cap",
+			"previewText": "Was something missing when you tried it?",
+			"fallbacks": {
+				"capGreeting": "Hey,"
+			}
+		}
+	]
+}

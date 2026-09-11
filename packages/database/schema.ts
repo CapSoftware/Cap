@@ -129,9 +129,32 @@ export const users = mysqlTable(
 		defaultOrgId:
 			nanoIdNullable("defaultOrgId").$type<Organisation.OrganisationId>(),
 		authSessionVersion: int("authSessionVersion").notNull().default(0),
+		marketingOrigin: varchar("marketingOrigin", { length: 20 })
+			.notNull()
+			.default("unknown"),
 	},
 	(table) => ({
 		emailIndex: uniqueIndex("email_idx").on(table.email),
+	}),
+);
+
+export const loopsSyncJobs = mysqlTable(
+	"loops_sync_jobs",
+	{
+		userId: nanoId("userId").notNull().primaryKey().$type<User.UserId>(),
+		revision: int("revision").notNull().default(1),
+		nextAttemptAt: datetime("nextAttemptAt", { mode: "date" }).notNull(),
+		leaseToken: varchar("leaseToken", { length: 36 }),
+		leaseUntil: datetime("leaseUntil", { mode: "date" }),
+		failures: int("failures").notNull().default(0),
+		lastError: varchar("lastError", { length: 64 }),
+		profileHash: varchar("profileHash", { length: 64 }),
+		teammateJoinedAt: datetime("teammateJoinedAt", { mode: "date" }),
+		syncedEmail: varchar("syncedEmail", { length: 255 }),
+		lastSyncedAt: datetime("lastSyncedAt", { mode: "date" }),
+	},
+	(table) => ({
+		dueIndex: index("loops_sync_due_idx").on(table.nextAttemptAt),
 	}),
 );
 
