@@ -99,6 +99,14 @@ const VerifyStep = ({
 		hasRecommendedCNAME && !cnameConfigured && isSubdomain(domain);
 	const showTXTRecord = hasTXTVerification && !isVerified;
 
+	const showFallbackRecords =
+		!showTXTRecord &&
+		!showARecord &&
+		!showCNAMERecord &&
+		!aRecordConfigured &&
+		!cnameConfigured;
+	const fallbackIsSubdomain = isSubdomain(domain);
+
 	const handleCopy = async (text: string, fieldId: string) => {
 		try {
 			await navigator.clipboard.writeText(text);
@@ -145,6 +153,13 @@ const VerifyStep = ({
 			{initialConfigLoading && !domainConfig ? (
 				<div className="flex justify-center items-center w-full h-20">
 					<LoadingSpinner size={36} />
+				</div>
+			) : !isVerified && !domainConfig ? (
+				<div className="px-4 py-3 text-center rounded-lg border border-gray-4 bg-gray-2">
+					<p className="text-sm text-gray-11">
+						We couldn't load the DNS configuration for this domain. Use Check
+						Status to try again.
+					</p>
 				</div>
 			) : (
 				!isVerified &&
@@ -428,6 +443,73 @@ const VerifyStep = ({
 													</div>
 												);
 											})}
+									</dl>
+								</div>
+							</div>
+						)}
+
+						{/* Fallback when Vercel returned no recommendations */}
+						{showFallbackRecords && (
+							<div className="overflow-hidden rounded-lg border border-gray-4">
+								<div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
+									<p className="font-medium text-md text-gray-12">
+										{fallbackIsSubdomain
+											? "CNAME Record Configuration"
+											: "A Record Configuration"}
+									</p>
+									<p className="mt-1 text-sm text-gray-10">
+										Add this record to your domain:
+									</p>
+								</div>
+								<div className="px-4 py-3">
+									<dl className="grid gap-4">
+										<div className="grid grid-cols-[100px,1fr] items-center">
+											<dt className="text-sm font-medium text-gray-12">Type</dt>
+											<dd className="text-sm text-gray-10">
+												{fallbackIsSubdomain ? "CNAME" : "A"}
+											</dd>
+										</div>
+										<div className="grid grid-cols-[100px,1fr] items-center">
+											<dt className="text-sm font-medium text-gray-12">Name</dt>
+											<dd className="text-sm text-gray-10">
+												<code className="px-2 py-1 text-xs rounded bg-gray-4">
+													{fallbackIsSubdomain ? domain.split(".")[0] : "@"}
+												</code>
+											</dd>
+										</div>
+										<div className="grid grid-cols-[100px,1fr] items-center">
+											<dt className="text-sm font-medium text-gray-12">
+												Value
+											</dt>
+											<dd className="text-sm text-gray-10">
+												<div className="flex items-center justify-between gap-1.5 bg-gray-3 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-4">
+													<code className="text-xs text-gray-10">
+														{fallbackIsSubdomain
+															? "cname.vercel-dns.com"
+															: "76.76.21.21"}
+													</code>
+													<button
+														type="button"
+														onClick={() =>
+															handleCopy(
+																fallbackIsSubdomain
+																	? "cname.vercel-dns.com"
+																	: "76.76.21.21",
+																"fallback-record",
+															)
+														}
+														className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
+														title="Copy to clipboard"
+													>
+														{copiedField === "fallback-record" ? (
+															<Check className="size-3.5 text-green-500" />
+														) : (
+															<Copy className="size-3.5 text-gray-10" />
+														)}
+													</button>
+												</div>
+											</dd>
+										</div>
 									</dl>
 								</div>
 							</div>
