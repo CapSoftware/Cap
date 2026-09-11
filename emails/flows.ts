@@ -5,6 +5,12 @@ import { formerFeedback } from "./marketing/former-feedback";
 import { freePlans } from "./marketing/free-plans";
 import { freeRecord } from "./marketing/free-record";
 import { freeShare } from "./marketing/free-share";
+import { freeV2Ai } from "./marketing/free-v2-ai";
+import { freeV2Help } from "./marketing/free-v2-help";
+import { freeV2Plans } from "./marketing/free-v2-plans";
+import { freeV2Record } from "./marketing/free-v2-record";
+import { freeV2Share } from "./marketing/free-v2-share";
+import { freeV2Welcome } from "./marketing/free-v2-welcome";
 import { freeWelcome } from "./marketing/free-welcome";
 import { teammateHandoff } from "./marketing/teammate-handoff";
 import { teammateWelcome } from "./marketing/teammate-welcome";
@@ -40,6 +46,40 @@ export const journeys: Journey[] = [
 			{ ...customerWelcome, delayDays: 0 },
 			{ ...customerWorkflow, delayDays: 3 },
 			{ ...customerFeedback, delayDays: 4 },
+		],
+	},
+	{
+		key: "free-v2",
+		name: "Cap | Free activation and Pro conversion v2",
+		audience: "free",
+		promotional: true,
+		messages: [
+			{ ...freeV2Welcome, delayDays: 0 },
+			{
+				...freeV2Record,
+				delayDays: 1,
+				onlyIf: { property: "capNeedsRecordingHelp", value: true },
+			},
+			{
+				...freeV2Plans,
+				delayDays: 2,
+				onlyIf: { property: "capReadyForPro", value: true },
+			},
+			{
+				...freeV2Share,
+				delayDays: 5,
+				onlyIf: { property: "capNeedsSharingHelp", value: true },
+			},
+			{
+				...freeV2Ai,
+				delayDays: 2,
+				onlyIf: { property: "capReadyForPro", value: true },
+			},
+			{
+				...freeV2Help,
+				delayDays: 2,
+				onlyIf: { property: "capNeedsRecordingHelp", value: true },
+			},
 		],
 	},
 	{

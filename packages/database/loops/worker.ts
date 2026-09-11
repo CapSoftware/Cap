@@ -11,7 +11,9 @@ import {
 	type LoopsClient,
 	LoopsRequestError,
 } from "./client";
+import { activationSignalsAfter, inFreeExperiment } from "./experiment";
 import {
+	activationFollowUps,
 	enrollmentWindow,
 	type LifecycleContact,
 	type LoopsRuntimeConfig,
@@ -176,11 +178,23 @@ export function loopsRuntimeConfig(env: NodeJS.ProcessEnv): LoopsRuntimeConfig {
 			);
 	if (allowedEmails && !allowedEmails.size)
 		throw new Error("Test mode requires LOOPS_TEST_EMAILS");
+	const freeExperimentAfter = env.LOOPS_FREE_EXPERIMENT_AFTER
+		? new Date(env.LOOPS_FREE_EXPERIMENT_AFTER)
+		: undefined;
+	if (freeExperimentAfter && !Number.isFinite(freeExperimentAfter.getTime()))
+		throw new Error("Invalid free onboarding experiment date");
+	if (freeExperimentAfter && freeExperimentAfter < activationSignalsAfter)
+		throw new Error("Experiment date predates activation signal rollout");
+	if (env.LOOPS_FREE_EXPERIMENT_ENABLED === "true" && !freeExperimentAfter)
+		throw new Error("Enabled free experiment requires a start date");
 	return {
 		listId,
 		enrollmentAfter,
 		allowedEmails,
 		enrollmentEnabled: env.LOOPS_ENROLLMENT_ENABLED === "true",
+		freeExperimentAfter,
+		freeExperimentEnrollmentEnabled:
+			env.LOOPS_FREE_EXPERIMENT_ENABLED === "true",
 	};
 }
 
@@ -270,6 +284,20 @@ export async function runLoopsSync(customerCopy: CustomerCopy) {
 								),
 								listId: config.listId,
 								teammateJoinedAt: job.teammateJoinedAt,
+								...(inFreeExperiment(
+									localProfile.capSignupAt,
+									activationSignalsAfter,
+								)
+									? {
+											freeExperiment: activationFollowUps(source.input),
+											freeExperimentEnrollmentEnabled:
+												config.freeExperimentEnrollmentEnabled &&
+												inFreeExperiment(
+													localProfile.capSignupAt,
+													config.freeExperimentAfter,
+												),
+										}
+									: {}),
 							}),
 						)
 						.digest("hex");

@@ -291,7 +291,7 @@ test("verification timestamps do not churn the sync fingerprint", () => {
 test("every journey requires subscription consent and promotional journeys exclude teammates", () => {
 	assert.equal(
 		journeys.reduce((count, journey) => count + journey.messages.length, 0),
-		10,
+		16,
 	);
 	for (const journey of journeys) {
 		const filter = audienceFilter(journey.audience, journey.promotional);

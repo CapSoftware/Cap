@@ -1,4 +1,10 @@
 import {
+	activationSignalsAfter,
+	freeOnboardingExperiment,
+	freeOnboardingVariant,
+	inFreeExperiment,
+} from "./experiment";
+import {
 	type ContactProfile,
 	type CustomerCopy,
 	classifyProfile,
@@ -12,6 +18,9 @@ export type LifecycleContact = RemoteContact & {
 	capConsent?: string;
 	capLifecycleEnabled?: boolean;
 	capSignupAt?: string;
+	capFreeOnboardingVariant?: string;
+	capFreeOnboardingExperiment?: string;
+	capFreeOnboardingAssignedAt?: string;
 };
 
 export type LoopsRuntimeConfig = {
@@ -20,6 +29,8 @@ export type LoopsRuntimeConfig = {
 	enrollmentEnabled: boolean;
 	allowedEmails: Set<string> | null;
 	teammateJoinedAt?: string | null;
+	freeExperimentAfter?: Date;
+	freeExperimentEnrollmentEnabled?: boolean;
 };
 
 export function enrollmentWindow(signupAt: string, config: LoopsRuntimeConfig) {
@@ -32,6 +43,21 @@ export function enrollmentWindow(signupAt: string, config: LoopsRuntimeConfig) {
 			Boolean(config.teammateJoinedAt) &&
 			Date.parse(isoDate(config.teammateJoinedAt ?? "")) >=
 				config.enrollmentAfter.getTime(),
+	};
+}
+
+export function activationFollowUps(input: LoopsProfileSource["input"]) {
+	const recentlyNotified = Boolean(
+		input.lastActivationNotificationAt &&
+			input.now.getTime() -
+				Date.parse(isoDate(input.lastActivationNotificationAt)) <
+				24 * 60 * 60_000,
+	);
+	const ready = input.hasVideo && !input.hasPendingUpload && !recentlyNotified;
+	return {
+		capReadyForPro: ready,
+		capNeedsSharingHelp: ready && !input.hasSharedVideo,
+		capNeedsRecordingHelp: !input.hasVideo && !recentlyNotified,
 	};
 }
 
@@ -73,8 +99,40 @@ export function lifecycleUpdate(
 		capSourceGroup: _group,
 		...attributes
 	} = profile;
+	const assigned =
+		remote.capFreeOnboardingExperiment === freeOnboardingExperiment;
+	const canAssign =
+		config.freeExperimentEnrollmentEnabled === true &&
+		eligible &&
+		audience === "free" &&
+		!teammate &&
+		!remote.capFreeOnboardingExperiment &&
+		(!remote.capLifecycleStage || remote.capLifecycleStage === "idle") &&
+		inFreeExperiment(profile.capSignupAt, config.freeExperimentAfter);
+	const assignment = canAssign
+		? {
+				capFreeOnboardingVariant: freeOnboardingVariant(profile.userId),
+				capFreeOnboardingExperiment: freeOnboardingExperiment,
+				capFreeOnboardingAssignedAt: source.input.now.toISOString(),
+			}
+		: {};
+	const variant = canAssign
+		? assignment.capFreeOnboardingVariant
+		: assigned
+			? remote.capFreeOnboardingVariant
+			: undefined;
+	if (
+		assigned &&
+		(!["control", "pro-v2"].includes(remote.capFreeOnboardingVariant ?? "") ||
+			!Number.isFinite(Date.parse(remote.capFreeOnboardingAssignedAt ?? "")))
+	)
+		throw new Error("invalid_free_experiment_assignment");
 	return {
 		...attributes,
+		...(inFreeExperiment(profile.capSignupAt, activationSignalsAfter)
+			? activationFollowUps(source.input)
+			: {}),
+		...assignment,
 		capTeammate: teammate,
 		capAudience: audience,
 		capOrigin: teammate ? "teammate" : profile.capOrigin,
@@ -87,7 +145,11 @@ export function lifecycleUpdate(
 			subscribed && !teammate && profile.capPromotionalEligible,
 		capLifecycleEnabled: eligible,
 		capOnboardingEligible: eligible,
-		capLifecycleStage: eligible ? audience : "idle",
+		capLifecycleStage: eligible
+			? audience === "free" && variant === "pro-v2"
+				? "free-v2"
+				: audience
+			: "idle",
 	};
 }
 

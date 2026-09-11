@@ -7,6 +7,9 @@ export const workflowAudience = (journey: Journey) => ({
 		...audienceFilter(journey.audience, journey.promotional).conditions,
 		condition("capLifecycleEnabled", true),
 		condition("capOnboardingEligible", true),
+		...(journey.key === "free-v2"
+			? [condition("capLifecycleStage", "free-v2")]
+			: []),
 	],
 });
 
