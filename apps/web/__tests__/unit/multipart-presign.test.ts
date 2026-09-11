@@ -555,6 +555,37 @@ describe("desktop reupload completion", () => {
 		).toBe(403);
 		expect(uploadKey).toBe("newer-operation");
 	});
+	it("restarts a legacy session without completing its canonical object", async () => {
+		const initiate = (replaceExisting: boolean) =>
+			app.request("/initiate", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					videoId: "video",
+					contentType: "video/mp4",
+					replaceExisting,
+				}),
+			});
+		const legacy = await initiate(false);
+		expect(legacy.status).toBe(200);
+		const { uploadId: legacyId } = await legacy.json();
+		const rejected = await complete(true, legacyId);
+		expect(rejected.status).toBe(409);
+		expect(await rejected.json()).toMatchObject({
+			code: "REPLACEMENT_RESTART_REQUIRED",
+		});
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(video.source.outputKey).toBe(oldKey);
+		const retry = await initiate(true);
+		expect(retry.status).toBe(200);
+		const { uploadId: replacementId } = await retry.json();
+		const replacement = decodeDesktopReuploadToken(replacementId);
+		expect(replacement).not.toBeNull();
+		expect((await complete(true, replacementId)).status).toBe(200);
+		expect(video.source.outputKey).toBe(replacement?.outputKey);
+		expect(objects.get(oldKey)?.ETag).toBe("original");
+		expect(mocks.complete).toHaveBeenCalledTimes(1);
+	});
 	it("signs only the authenticated replacement key and backend session", async () => {
 		const response = await app.request("/presign-part", {
 			method: "POST",

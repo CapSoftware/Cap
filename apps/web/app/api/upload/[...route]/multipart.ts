@@ -654,6 +654,7 @@ app.post(
 							Option.getOrNull(video.storageIntegrationId),
 						),
 					).pipe(Effect.catchAll(Effect.logWarning));
+					// Storage resolves outputKey before signing playback URLs; only canonical derived assets need invalidation.
 					yield* Effect.tryPromise(() => invalidateReuploadedVideo(video)).pipe(
 						Effect.catchAll((error) =>
 							Effect.logWarning(

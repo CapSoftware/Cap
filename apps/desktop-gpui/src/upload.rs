@@ -1339,6 +1339,179 @@ async fn create_or_get_video_with_mode(
         .map_err(|_| AuthApiError::Other("Invalid video creation response".into()))
 }
 
+#[derive(Debug)]
+enum ReplacementUploadAttempt<T, S = ()> {
+    Completed(T),
+    RestartRequired(S),
+}
+
+async fn retry_replacement_upload<T, S, F, Fut>(
+    replace_existing: bool,
+    cancel: &AtomicBool,
+    mut state: S,
+    mut attempt: F,
+) -> Result<T, AuthApiError>
+where
+    F: FnMut(S) -> Fut,
+    Fut: Future<Output = Result<ReplacementUploadAttempt<T, S>, AuthApiError>>,
+{
+    for attempt_index in 0..2 {
+        match checked_upload_step(cancel, || attempt(state)).await? {
+            ReplacementUploadAttempt::Completed(value) => return Ok(value),
+            ReplacementUploadAttempt::RestartRequired(next)
+                if replace_existing && attempt_index == 0 =>
+            {
+                // Aborting a legacy Drive session can delete the published mapping.
+                state = next;
+            }
+            ReplacementUploadAttempt::RestartRequired(_) => break,
+        }
+    }
+    Err(replacement_restart_error())
+}
+
+fn replacement_restart_error() -> AuthApiError {
+    AuthApiError::Other("api/upload_multipart_complete/409/REPLACEMENT_RESTART_REQUIRED".into())
+}
+
+fn is_legacy_replacement_upload(replace_existing: bool, upload_id: &str) -> bool {
+    replace_existing && !upload_id.starts_with("cap-reupload.")
+}
+
+fn validate_replacement_restart_session(
+    restarted: bool,
+    upload_id: &str,
+) -> Result<(), AuthApiError> {
+    if restarted && !upload_id.starts_with("cap-reupload.") {
+        return Err(replacement_restart_error());
+    }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ReplacementUploadFile {
+    path: PathBuf,
+    size: u64,
+    modified: std::time::SystemTime,
+}
+
+impl ReplacementUploadFile {
+    fn read(path: &Path) -> Result<Self, AuthApiError> {
+        let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+            AuthApiError::Other(format!("Failed to inspect replacement export: {error}"))
+        })?;
+        if !metadata.file_type().is_file() || metadata.len() == 0 {
+            return Err(replacement_source_changed());
+        }
+        Ok(Self {
+            path: path.canonicalize().map_err(|error| {
+                AuthApiError::Other(format!("Failed to resolve replacement export: {error}"))
+            })?,
+            size: metadata.len(),
+            modified: metadata.modified().map_err(|error| {
+                AuthApiError::Other(format!(
+                    "Failed to inspect replacement export time: {error}"
+                ))
+            })?,
+        })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ReplacementUploadChunk {
+    offset: u64,
+    size: usize,
+    md5: String,
+}
+
+#[derive(Debug)]
+struct ReplacementUploadSource {
+    file: ReplacementUploadFile,
+    chunks: Vec<ReplacementUploadChunk>,
+    sealed: bool,
+}
+
+fn replacement_source_changed() -> AuthApiError {
+    AuthApiError::Other("Rendered video changed during replacement upload".into())
+}
+
+impl ReplacementUploadSource {
+    fn new(path: &Path) -> Result<Self, AuthApiError> {
+        Ok(Self {
+            file: ReplacementUploadFile::read(path)?,
+            chunks: Vec::new(),
+            sealed: false,
+        })
+    }
+
+    fn validate_file(&self, path: &Path) -> Result<(), AuthApiError> {
+        if ReplacementUploadFile::read(path)? != self.file {
+            return Err(replacement_source_changed());
+        }
+        Ok(())
+    }
+
+    fn check_chunk(
+        &mut self,
+        part_number: u32,
+        offset: u64,
+        bytes: &[u8],
+        file_size: u64,
+    ) -> Result<(), AuthApiError> {
+        let index = usize::try_from(part_number)
+            .ok()
+            .and_then(|part| part.checked_sub(1))
+            .ok_or_else(replacement_source_changed)?;
+        if file_size != self.file.size || bytes.is_empty() {
+            return Err(replacement_source_changed());
+        }
+        let chunk = ReplacementUploadChunk {
+            offset,
+            size: bytes.len(),
+            md5: md5_base64(bytes),
+        };
+        if self.sealed {
+            if self.chunks.get(index) != Some(&chunk) {
+                return Err(replacement_source_changed());
+            }
+        } else {
+            let expected_offset = self
+                .chunks
+                .last()
+                .map(|previous| previous.offset.saturating_add(previous.size as u64))
+                .unwrap_or(0);
+            if index != self.chunks.len() || offset != expected_offset {
+                return Err(replacement_source_changed());
+            }
+            self.chunks.push(chunk);
+        }
+        Ok(())
+    }
+
+    fn seal_parts(&mut self, parts: &[UploadedPart]) -> Result<(), AuthApiError> {
+        if parts.len() != self.chunks.len() || parts.is_empty() {
+            return Err(replacement_source_changed());
+        }
+        let mut size = 0u64;
+        for (index, (part, chunk)) in parts.iter().zip(&self.chunks).enumerate() {
+            if usize::try_from(part.part_number).ok() != Some(index + 1)
+                || part.size != chunk.size
+                || chunk.offset != size
+            {
+                return Err(replacement_source_changed());
+            }
+            size = size
+                .checked_add(chunk.size as u64)
+                .ok_or_else(replacement_source_changed)?;
+        }
+        if size != self.file.size {
+            return Err(replacement_source_changed());
+        }
+        self.sealed = true;
+        Ok(())
+    }
+}
+
 async fn upload_video(
     video_id: &str,
     file_path: &Path,
@@ -1347,45 +1520,77 @@ async fn upload_video(
     cancel: &AtomicBool,
     replace_existing: bool,
 ) -> Result<(String, Option<String>), AuthApiError> {
-    let initiate =
-        checked_upload_step(cancel, || multipart_initiate(video_id, replace_existing)).await?;
-    let is_drive = is_google_drive_upload(initiate.provider.as_deref(), &initiate.upload_id);
-    let parts = upload_parts(
-        video_id,
-        &initiate.upload_id,
-        file_path,
-        is_drive,
-        &progress,
+    let progress = &progress;
+    let result = retry_replacement_upload(
+        replace_existing,
         cancel,
+        None,
+        |mut source: Option<ReplacementUploadSource>| async move {
+            if let Some(source) = &source {
+                source.validate_file(file_path)?;
+            }
+            let initiate =
+                checked_upload_step(cancel, || multipart_initiate(video_id, replace_existing))
+                    .await?;
+            validate_replacement_restart_session(source.is_some(), &initiate.upload_id)?;
+            if source.is_none()
+                && is_legacy_replacement_upload(replace_existing, &initiate.upload_id)
+            {
+                source = Some(ReplacementUploadSource::new(file_path)?);
+            }
+            let is_drive =
+                is_google_drive_upload(initiate.provider.as_deref(), &initiate.upload_id);
+            let parts = upload_parts(
+                video_id,
+                &initiate.upload_id,
+                file_path,
+                is_drive,
+                progress,
+                cancel,
+                source.as_mut(),
+            )
+            .await?;
+            check_export_cancelled(cancel)?;
+            if let Some(source) = &mut source {
+                source.validate_file(file_path)?;
+                source.seal_parts(&parts)?;
+            }
+            let completed_identity = checked_upload_step(cancel, || {
+                multipart_complete(
+                    video_id,
+                    &initiate.upload_id,
+                    &parts,
+                    Some(metadata),
+                    replace_existing,
+                )
+            })
+            .await?;
+            let completed_identity = match completed_identity {
+                ReplacementUploadAttempt::Completed(identity) => identity,
+                ReplacementUploadAttempt::RestartRequired(()) => {
+                    if source.is_none() {
+                        return Err(replacement_restart_error());
+                    }
+                    return Ok(ReplacementUploadAttempt::RestartRequired(source));
+                }
+            };
+            let object_identity = if is_drive {
+                parts
+                    .iter()
+                    .rev()
+                    .find_map(|part| part.object_identity.clone())
+            } else {
+                completed_identity
+            };
+            Ok(ReplacementUploadAttempt::Completed((
+                format!("{}/s/{video_id}", auth::server_url()),
+                object_identity,
+            )))
+        },
     )
     .await?;
-    if cancel.load(Ordering::Relaxed) {
-        return Err(AuthApiError::Other("Export cancelled".into()));
-    }
-    let completed_identity = checked_upload_step(cancel, || {
-        multipart_complete(
-            video_id,
-            &initiate.upload_id,
-            &parts,
-            Some(metadata),
-            replace_existing,
-        )
-    })
-    .await?;
     progress(1.0);
-
-    let object_identity = if is_drive {
-        parts
-            .iter()
-            .rev()
-            .find_map(|part| part.object_identity.clone())
-    } else {
-        completed_identity
-    };
-    Ok((
-        format!("{}/s/{video_id}", auth::server_url()),
-        object_identity,
-    ))
+    Ok(result)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1478,7 +1683,7 @@ async fn multipart_complete(
     parts: &[UploadedPart],
     meta: Option<&VideoMeta>,
     replace_existing: bool,
-) -> Result<Option<String>, AuthApiError> {
+) -> Result<ReplacementUploadAttempt<Option<String>>, AuthApiError> {
     let mut body = json!({
         "videoId": video_id,
         "uploadId": upload_id,
@@ -1501,17 +1706,31 @@ async fn multipart_complete(
     .map_err(|error| {
         AuthApiError::Other(format!("api/upload_multipart_complete/request: {error}"))
     })?;
-    if !response.status().is_success() {
-        let status = response.status().as_u16();
+    let status = response.status();
+    if !status.is_success() {
+        if status == StatusCode::CONFLICT {
+            let body = response.json::<Value>().await.unwrap_or(Value::Null);
+            if replacement_restart_required(status, &body) {
+                return Ok(ReplacementUploadAttempt::RestartRequired(()));
+            }
+        }
         return Err(AuthApiError::Other(format!(
-            "api/upload_multipart_complete/{status}"
+            "api/upload_multipart_complete/{}",
+            status.as_u16()
         )));
     }
     let response = response.json::<Value>().await.unwrap_or(Value::Null);
-    Ok(response
-        .get("objectIdentity")
-        .and_then(Value::as_str)
-        .map(str::to_string))
+    Ok(ReplacementUploadAttempt::Completed(
+        response
+            .get("objectIdentity")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    ))
+}
+
+fn replacement_restart_required(status: StatusCode, body: &Value) -> bool {
+    status == StatusCode::CONFLICT
+        && body.get("code").and_then(Value::as_str) == Some("REPLACEMENT_RESTART_REQUIRED")
 }
 
 async fn upload_parts(
@@ -1521,6 +1740,7 @@ async fn upload_parts(
     is_drive: bool,
     progress: &impl Fn(f64),
     cancel: &AtomicBool,
+    mut replacement_source: Option<&mut ReplacementUploadSource>,
 ) -> Result<Vec<UploadedPart>, AuthApiError> {
     let file_size = std::fs::metadata(file_path)
         .map_err(|error| AuthApiError::Other(format!("Failed to read export size: {error}")))?
@@ -1541,6 +1761,9 @@ async fn upload_parts(
         }
         let size = (file_size - offset).min(chunk_size) as usize;
         let chunk = read_chunk(file_path, offset, size)?;
+        if let Some(source) = &mut replacement_source {
+            source.check_chunk(part_number, offset, &chunk, file_size)?;
+        }
         match put_part(
             video_id,
             upload_id,
@@ -2993,6 +3216,327 @@ mod tests {
             .unwrap();
         assert!(still_reading);
         assert_eq!(reads.active.load(Ordering::Acquire), 0);
+    }
+}
+
+#[cfg(test)]
+mod replacement_upload_restart_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn only_legacy_replacements_capture_a_restart_source() {
+        assert!(is_legacy_replacement_upload(true, "raw-s3-upload"));
+        assert!(is_legacy_replacement_upload(
+            true,
+            "https://googleapis.com/upload/legacy"
+        ));
+        assert!(!is_legacy_replacement_upload(false, "raw-s3-upload"));
+        assert!(!is_legacy_replacement_upload(
+            true,
+            "cap-reupload.signed-token"
+        ));
+        assert!(!is_legacy_replacement_upload(true, "cap-reupload."));
+    }
+
+    #[test]
+    fn only_the_exact_conflict_code_requests_a_restart() {
+        let body = json!({ "code": "REPLACEMENT_RESTART_REQUIRED" });
+        assert!(replacement_restart_required(StatusCode::CONFLICT, &body));
+        for status in [
+            StatusCode::OK,
+            StatusCode::BAD_REQUEST,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            assert!(!replacement_restart_required(status, &body));
+        }
+        for body in [
+            Value::Null,
+            json!({}),
+            json!({ "error": "REPLACEMENT_RESTART_REQUIRED" }),
+            json!({ "code": "OTHER_CONFLICT" }),
+            json!({ "code": "replacement_restart_required" }),
+            json!({ "code": ["REPLACEMENT_RESTART_REQUIRED"] }),
+            json!({ "code": "REPLACEMENT_RESTART_REQUIRED extra" }),
+        ] {
+            assert!(!replacement_restart_required(StatusCode::CONFLICT, &body));
+        }
+    }
+
+    #[tokio::test]
+    async fn restarts_the_whole_replacement_once_and_returns_only_the_second_identity() {
+        let cancel = AtomicBool::new(false);
+        let events = Mutex::new(Vec::new());
+        let cancel = &cancel;
+        let events = &events;
+        let result = retry_replacement_upload(true, cancel, 0usize, |attempt| async move {
+            checked_upload_step(cancel, || async {
+                events.lock().unwrap().push((attempt, "initiate"));
+                Ok(())
+            })
+            .await?;
+            checked_upload_step(cancel, || async {
+                events.lock().unwrap().push((attempt, "parts"));
+                Ok(())
+            })
+            .await?;
+            checked_upload_step(cancel, || async {
+                events.lock().unwrap().push((attempt, "complete"));
+                Ok(if attempt == 0 {
+                    ReplacementUploadAttempt::RestartRequired(1)
+                } else {
+                    ReplacementUploadAttempt::Completed("new-object-identity")
+                })
+            })
+            .await
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, "new-object-identity");
+        assert_eq!(
+            *events.lock().unwrap(),
+            [
+                (0, "initiate"),
+                (0, "parts"),
+                (0, "complete"),
+                (1, "initiate"),
+                (1, "parts"),
+                (1, "complete"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_requires_a_signed_session_before_any_further_upload_work() {
+        for upload_id in ["legacy-again", "cap-reupload.signed"] {
+            let uploads = AtomicUsize::new(0);
+            let uploads = &uploads;
+            let result = retry_replacement_upload(
+                true,
+                &AtomicBool::new(false),
+                false,
+                |restarted| async move {
+                    validate_replacement_restart_session(
+                        restarted,
+                        if restarted { upload_id } else { "legacy-first" },
+                    )?;
+                    uploads.fetch_add(1, Ordering::AcqRel);
+                    Ok(if restarted {
+                        ReplacementUploadAttempt::Completed(())
+                    } else {
+                        ReplacementUploadAttempt::RestartRequired(true)
+                    })
+                },
+            )
+            .await;
+            assert_eq!(result.is_ok(), upload_id.starts_with("cap-reupload."));
+            assert_eq!(
+                uploads.load(Ordering::Acquire),
+                if result.is_ok() { 2 } else { 1 }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_restart_requests_fail_after_two_attempts() {
+        let attempts = AtomicUsize::new(0);
+        let result: Result<(), _> =
+            retry_replacement_upload(true, &AtomicBool::new(false), (), |()| async {
+                attempts.fetch_add(1, Ordering::AcqRel);
+                Ok(ReplacementUploadAttempt::RestartRequired(()))
+            })
+            .await;
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("REPLACEMENT_RESTART_REQUIRED")
+        );
+        assert_eq!(attempts.load(Ordering::Acquire), 2);
+    }
+
+    #[tokio::test]
+    async fn first_uploads_and_other_errors_do_not_restart() {
+        let attempts = AtomicUsize::new(0);
+        let result: Result<(), _> =
+            retry_replacement_upload(false, &AtomicBool::new(false), (), |()| async {
+                attempts.fetch_add(1, Ordering::AcqRel);
+                Ok(ReplacementUploadAttempt::RestartRequired(()))
+            })
+            .await;
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::Acquire), 1);
+        for message in [
+            "api/upload_multipart_complete/409",
+            "api/upload_multipart_complete/500",
+            "Failed to read export chunk",
+        ] {
+            attempts.store(0, Ordering::Release);
+            let result: Result<(), _> =
+                retry_replacement_upload(true, &AtomicBool::new(false), (), |()| async {
+                    attempts.fetch_add(1, Ordering::AcqRel);
+                    Err(AuthApiError::Other(message.into()))
+                })
+                .await;
+            assert_eq!(result.unwrap_err().to_string(), message);
+            assert_eq!(attempts.load(Ordering::Acquire), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_upload_prevents_both_attempts() {
+        let result: Result<(), _> =
+            retry_replacement_upload(true, &AtomicBool::new(true), (), |()| async {
+                panic!("Cancelled upload must not initiate")
+            })
+            .await;
+        assert!(result.unwrap_err().to_string().contains("Export cancelled"));
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_the_conflict_response_prevents_restart() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let worker_cancel = cancel.clone();
+        let worker_attempts = attempts.clone();
+        let (entered, entered_rx) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
+            let mut entered = Some(entered);
+            let mut released = Some(released);
+            retry_replacement_upload(true, &worker_cancel, (), |()| {
+                worker_attempts.fetch_add(1, Ordering::AcqRel);
+                let entered = entered.take().unwrap();
+                let released = released.take().unwrap();
+                async move {
+                    entered.send(()).unwrap();
+                    released.await.unwrap();
+                    Ok(ReplacementUploadAttempt::<(), _>::RestartRequired(()))
+                }
+            })
+            .await
+        });
+        entered_rx.await.unwrap();
+        cancel.store(true, Ordering::Release);
+        release.send(()).unwrap();
+        assert!(
+            worker
+                .await
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("Export cancelled")
+        );
+        assert_eq!(attempts.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_restarted_parts_prevents_completion() {
+        let cancel = AtomicBool::new(false);
+        let completed = AtomicUsize::new(0);
+        let cancel = &cancel;
+        let completed = &completed;
+        let result: Result<(), _> =
+            retry_replacement_upload(true, cancel, 0, |attempt| async move {
+                if attempt == 0 {
+                    return Ok(ReplacementUploadAttempt::RestartRequired(1));
+                }
+                checked_upload_step(cancel, || async {
+                    cancel.store(true, Ordering::Release);
+                    Ok(())
+                })
+                .await?;
+                checked_upload_step(cancel, || async {
+                    completed.fetch_add(1, Ordering::AcqRel);
+                    Ok(ReplacementUploadAttempt::Completed(()))
+                })
+                .await
+            })
+            .await;
+        assert!(result.unwrap_err().to_string().contains("Export cancelled"));
+        assert_eq!(completed.load(Ordering::Acquire), 0);
+    }
+
+    fn source() -> ReplacementUploadSource {
+        ReplacementUploadSource {
+            file: ReplacementUploadFile {
+                path: PathBuf::from("export.mp4"),
+                size: 6,
+                modified: std::time::SystemTime::UNIX_EPOCH,
+            },
+            chunks: Vec::new(),
+            sealed: false,
+        }
+    }
+
+    fn parts() -> Vec<UploadedPart> {
+        (1..=2)
+            .map(|part_number| UploadedPart {
+                part_number,
+                etag: format!("part-{part_number}"),
+                size: 3,
+                object_identity: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn restarted_reads_match_the_original_bytes_offsets_and_total() {
+        let mut source = source();
+        source.check_chunk(1, 0, b"abc", 6).unwrap();
+        source.check_chunk(2, 3, b"def", 6).unwrap();
+        source.seal_parts(&parts()).unwrap();
+        source.check_chunk(1, 0, b"abc", 6).unwrap();
+        source.check_chunk(2, 3, b"def", 6).unwrap();
+        assert!(source.check_chunk(1, 0, b"abd", 6).is_err());
+        assert!(source.check_chunk(1, 1, b"abc", 6).is_err());
+        assert!(source.check_chunk(1, 0, b"abc", 7).is_err());
+        assert!(source.check_chunk(3, 6, b"ghi", 6).is_err());
+        assert!(source.check_chunk(0, 0, b"abc", 6).is_err());
+        assert!(source.check_chunk(1, 0, b"", 6).is_err());
+    }
+
+    #[test]
+    fn completion_requires_the_full_contiguous_original_part_inventory() {
+        let mut source = source();
+        assert!(source.check_chunk(2, 0, b"abc", 6).is_err());
+        source.check_chunk(1, 0, b"abc", 6).unwrap();
+        assert!(source.seal_parts(&parts()[..1]).is_err());
+        assert!(source.check_chunk(2, 4, b"def", 6).is_err());
+        source.check_chunk(2, 3, b"def", 6).unwrap();
+        let mut wrong_parts = parts();
+        wrong_parts[1].part_number = 1;
+        assert!(source.seal_parts(&wrong_parts).is_err());
+        wrong_parts[1].part_number = 2;
+        wrong_parts[1].size = 2;
+        assert!(source.seal_parts(&wrong_parts).is_err());
+        source.seal_parts(&parts()).unwrap();
+    }
+
+    #[test]
+    fn changed_file_metadata_is_rejected_before_a_fresh_initiation() {
+        static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "cap-gpui-replacement-{}-{}-{}.mp4",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            NEXT_FILE.fetch_add(1, Ordering::AcqRel),
+        ));
+        std::fs::write(&path, b"abcdef").unwrap();
+        let source = ReplacementUploadSource::new(&path).unwrap();
+        source.validate_file(&path).unwrap();
+        std::fs::write(&path, b"changed-file").unwrap();
+        let changed = source.validate_file(&path);
+        std::fs::remove_file(&path).unwrap();
+        assert!(
+            changed
+                .unwrap_err()
+                .to_string()
+                .contains("Rendered video changed")
+        );
     }
 }
 
