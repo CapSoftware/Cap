@@ -62,6 +62,7 @@ import {
 import { type EditorTimelineSegment, useEditorContext } from "./context";
 import { getExistingRecordingPickerOptions } from "./existing-recording-picker";
 import { rippleKeyboardTrack } from "./keyboard-timing";
+import { routeEditorPlaybackIntent } from "./playback-intent-routing";
 import { scaleKeyframeTimes } from "./three-d";
 import { effectiveToOutput, holdWindows } from "./timeline-holds";
 import { Input } from "./ui";
@@ -272,6 +273,7 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 		editorState,
 		setEditorState,
 		setDialog,
+		requestHandoffPlayback,
 	} = useEditorContext();
 	const { rawOptions, setOptions } = useRecordingOptions();
 
@@ -431,23 +433,33 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 		if (hiddenForPicker) void showEditorWindow(false).catch(() => {});
 	});
 
+	const pauseForProjectChange = () =>
+		routeEditorPlaybackIntent(
+			requestHandoffPlayback,
+			{ playing: false },
+			async () => {
+				if (editorState.playing) {
+					await commands.stopPlayback();
+					setEditorState("playing", false);
+				}
+			},
+		);
+
 	const beginEditorRecording = async () => {
 		closeRecord();
-		if (editorState.playing) {
-			await commands.stopPlayback();
-			setEditorState("playing", false);
-		}
+		if (!(await pauseForProjectChange())) return false;
 		if (previousMode === null) previousMode = rawOptions.mode;
 		setOptions("mode", "studio");
 		await commands.setRecordingMode("studio");
 		await flushProjectConfig();
 		await commands.setEditorRecordingTarget(editorInstance.path);
+		return true;
 	};
 
 	const openTargetMode = async (mode: RecordingTargetMode) => {
 		setDisplayMenuOpen(false);
 		setWindowMenuOpen(false);
-		await beginEditorRecording();
+		if (!(await beginEditorRecording())) return;
 
 		if (mode === "camera") {
 			setOptions(
@@ -468,7 +480,7 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 			reconcile({ variant: "display", id: target.id }),
 		);
 		setDisplayMenuOpen(false);
-		await beginEditorRecording();
+		if (!(await beginEditorRecording())) return;
 		await commands.openTargetSelectOverlays(
 			{ variant: "display", id: target.id },
 			null,
@@ -484,7 +496,7 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 			reconcile({ variant: "window", id: target.id }),
 		);
 		setWindowMenuOpen(false);
-		await beginEditorRecording();
+		if (!(await beginEditorRecording())) return;
 		await commands.openTargetSelectOverlays(
 			{ variant: "window", id: target.id },
 			null,
@@ -505,9 +517,10 @@ function ClipsSidebarInner(props: { open: boolean; class?: string }) {
 		setImporting(true);
 		const toastId = toast.loading("Importing clip…");
 		try {
-			if (editorState.playing) {
-				await commands.stopPlayback();
-				setEditorState("playing", false);
+			if (!(await pauseForProjectChange())) {
+				toast.dismiss(toastId);
+				setImporting(false);
+				return;
 			}
 			await flushProjectConfig();
 			const count = await commands.addExistingRecordingToEditor(sourcePath);

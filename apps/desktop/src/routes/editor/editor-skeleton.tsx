@@ -1,203 +1,217 @@
 import { type as ostype } from "@tauri-apps/plugin-os";
-import { cx } from "cva";
+import { For, Show } from "solid-js";
+import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { usePreparingEditorModel } from "./preparing-editor-context";
+import {
+	type PreparingEditorModel,
+	preparingTime,
+} from "./preparing-editor-model";
+import { PreparingFrame } from "./preparing-frame";
+import { PreparingTimeline } from "./preparing-timeline";
 
-const MIN_PLAYER_HEIGHT = 320;
-const TIMELINE_SKELETON_HEIGHT = 22 + 26 + 4 + 2 * 44 + 6;
+const DISABLED_CONTROL =
+	"h-7 px-2 rounded-[7px] text-xs text-ed-text-3 disabled:opacity-50 disabled:cursor-default";
 
-function SkeletonPulse(props: { class?: string }) {
-	return (
-		<div class={cx("animate-pulse rounded-sm bg-ed-ctl-hover", props.class)} />
-	);
-}
-
-function HeaderSkeleton() {
+function PreparingHeader(props: { model: PreparingEditorModel }) {
 	return (
 		<div
 			data-tauri-drag-region
-			class="flex relative flex-row items-center w-full h-13 pr-3"
+			class="flex relative shrink-0 flex-row items-center w-full h-13 pr-3 max-[900px]:grid max-[900px]:grid-cols-1 max-[900px]:grid-rows-[36px_36px] max-[900px]:h-[72px] max-[900px]:pr-2"
 		>
 			<div
 				data-tauri-drag-region
-				class="flex flex-row flex-1 gap-1.5 items-center h-full"
+				class="flex flex-row flex-1 min-w-0 items-center h-full"
 			>
-				{ostype() === "macos" && <div class="h-full w-[92px] shrink-0" />}
+				{ostype() === "macos" && (
+					<div data-tauri-drag-region class="h-full w-[92px] shrink-0" />
+				)}
+				{ostype() === "linux" && (
+					<CaptionControlsMacOS class="mr-1 ml-3 shrink-0" />
+				)}
 				{ostype() === "windows" && <div class="w-3 shrink-0" />}
-				<SkeletonPulse class="h-4 w-40" />
-				<SkeletonPulse class="h-4 w-7" />
-				<SkeletonPulse class="ml-1.5 size-7 rounded-[7px]" />
-				<SkeletonPulse class="size-7 rounded-[7px]" />
+				<span class="truncate text-[13px] font-medium">
+					{props.model.seed().title || "Recording"}
+				</span>
+				<span class="ml-1.5 text-[13px] text-ed-text-3">.cap</span>
+				<div class="flex gap-1 ml-3">
+					<button
+						type="button"
+						disabled
+						class={DISABLED_CONTROL}
+						aria-label="Undo"
+					>
+						↶
+					</button>
+					<button
+						type="button"
+						disabled
+						class={DISABLED_CONTROL}
+						aria-label="Redo"
+					>
+						↷
+					</button>
+				</div>
 				<div data-tauri-drag-region class="flex-1 h-full" />
 			</div>
-			<div class="flex flex-row gap-1 items-center">
-				<SkeletonPulse class="size-7 rounded-[7px]" />
-				<SkeletonPulse class="size-7 rounded-[7px]" />
-				<SkeletonPulse class="mx-1.5 w-px h-4" />
-				<SkeletonPulse class="h-7 w-20 rounded-[7px]" />
-				<SkeletonPulse class="h-7 w-16 rounded-[7px]" />
-				<SkeletonPulse class="ml-1.5 h-[30px] w-[92px] rounded-lg" />
+			<div class="flex gap-1 items-center justify-end max-[900px]:pr-1">
+				<button type="button" disabled class={DISABLED_CONTROL}>
+					Presets
+				</button>
+				<button type="button" disabled class={DISABLED_CONTROL}>
+					Clips
+				</button>
+				<button
+					type="button"
+					disabled
+					class="ml-1.5 h-[30px] px-3.5 rounded-lg bg-ed-accent/40 text-white/70 text-[13px] font-medium"
+					title="Available when your recording is ready to edit"
+				>
+					Export
+				</button>
 			</div>
-			{ostype() === "windows" && <CaptionControlsWindows11 class="shrink-0" />}
+			{ostype() === "windows" && (
+				<CaptionControlsWindows11 class="shrink-0 max-[900px]:absolute max-[900px]:top-0 max-[900px]:right-0" />
+			)}
 		</div>
 	);
 }
 
-function PlayerSkeleton() {
+function PreparingPlayer(props: { model: PreparingEditorModel }) {
 	return (
 		<div class="flex flex-col flex-1 min-w-0 rounded-xl bg-ed-card shadow-ed-card overflow-hidden">
 			<div class="flex flex-row items-center px-3 h-11 shrink-0">
 				<div class="flex flex-row flex-1 gap-0.5 items-center">
-					<SkeletonPulse class="h-7 w-16 rounded-[7px]" />
-					<SkeletonPulse class="h-7 w-16 rounded-[7px]" />
-					<SkeletonPulse class="h-7 w-20 rounded-[7px]" />
+					<button type="button" disabled class={DISABLED_CONTROL}>
+						Aspect ratio
+					</button>
+					<button type="button" disabled class={DISABLED_CONTROL}>
+						Captions
+					</button>
 				</div>
-				<div class="flex flex-row gap-2 items-center">
-					<SkeletonPulse class="h-3 w-12" />
-					<SkeletonPulse class="h-7 w-40 rounded-lg" />
-				</div>
+				<span class="text-[11px] text-ed-text-3">Preview</span>
 			</div>
 			<div class="relative flex flex-1 min-h-0 justify-center items-center p-4">
-				<div class="flex justify-center items-center w-full max-w-[85%] rounded-md aspect-video bg-ed-ctl">
-					<div class="animate-spin opacity-60">
-						<IconCapLogo class="size-16 text-ed-text-3" />
-					</div>
-				</div>
+				<PreparingFrame />
 			</div>
 			<div class="flex flex-row items-center px-3.5 h-12 shrink-0">
-				<div class="flex flex-row flex-1 items-center">
-					<SkeletonPulse class="h-4 w-24" />
+				<div class="flex-1 tabular-nums text-[11px] text-ed-text-3">
+					{preparingTime(props.model.playback().playheadSeconds)}
+					<Show when={props.model.timeline().totalDuration}>
+						{(duration) => <span> / {preparingTime(duration())}</span>}
+					</Show>
 				</div>
-				<div class="flex flex-row gap-3.5 items-center">
-					<SkeletonPulse class="size-3.5 rounded-sm" />
-					<SkeletonPulse class="size-8 rounded-full" />
-					<SkeletonPulse class="size-3.5 rounded-sm" />
+				<div class="flex gap-3.5 items-center">
+					<button
+						type="button"
+						aria-label="Go to beginning"
+						disabled={!props.model.canPlay()}
+						class={DISABLED_CONTROL}
+						onClick={() => void props.model.seek(0)}
+					>
+						↤
+					</button>
+					<button
+						type="button"
+						aria-label={props.model.playback().playing ? "Pause" : "Play"}
+						disabled={!props.model.canPlay()}
+						class="flex items-center justify-center size-8 rounded-full bg-ed-ctl-hover text-ed-text-1 disabled:opacity-40"
+						onClick={() =>
+							void props.model.setPlaying(!props.model.playback().playing)
+						}
+					>
+						<Show
+							when={props.model.playback().playing}
+							fallback={<IconCapPlay class="size-3" />}
+						>
+							<IconCapPause class="size-3" />
+						</Show>
+					</button>
+					<button
+						type="button"
+						aria-label="Go to playable end"
+						disabled={!props.model.canPlay()}
+						class={DISABLED_CONTROL}
+						onClick={() =>
+							void props.model.seek(props.model.timeline().playableUntil)
+						}
+					>
+						↦
+					</button>
 				</div>
-				<div class="flex flex-row flex-1 gap-0.5 justify-end items-center">
-					<SkeletonPulse class="size-7 rounded-[7px]" />
-					<SkeletonPulse class="mx-1.5 w-px h-4" />
-					<SkeletonPulse class="size-7 rounded-[7px]" />
-					<SkeletonPulse class="mx-1 w-[72px] h-[3px] rounded-full" />
-					<SkeletonPulse class="size-7 rounded-[7px]" />
+				<div class="flex-1 text-right text-[11px] text-ed-text-3" role="status">
+					{props.model.playback().buffering ? "Preparing playback" : ""}
 				</div>
 			</div>
 		</div>
 	);
 }
 
-function SidebarSkeleton() {
+function PreparingSidebar() {
 	return (
 		<div class="flex flex-col min-h-0 w-104 min-w-104 flex-none overflow-hidden rounded-xl bg-ed-card shadow-ed-card">
-			<div class="flex flex-row justify-around items-center px-2.5 h-[46px] border-b border-ed-line shrink-0">
-				<SkeletonPulse class="w-10 h-[30px] rounded-[9px]" />
-				<SkeletonPulse class="w-10 h-[30px] rounded-[9px]" />
-				<SkeletonPulse class="w-10 h-[30px] rounded-[9px]" />
-				<SkeletonPulse class="w-10 h-[30px] rounded-[9px]" />
-				<SkeletonPulse class="w-10 h-[30px] rounded-[9px]" />
-				<SkeletonPulse class="w-10 h-[30px] rounded-[9px]" />
+			<div class="flex justify-around items-center px-2.5 h-[46px] border-b border-ed-line shrink-0">
+				<For each={["Background", "Camera", "Audio", "Cursor", "Keyboard"]}>
+					{(name) => (
+						<button
+							type="button"
+							disabled
+							class="px-1 text-[10px] text-ed-text-3 opacity-50"
+						>
+							{name}
+						</button>
+					)}
+				</For>
 			</div>
-			<div class="flex flex-col flex-1 gap-3.5 px-4 pt-3.5 pb-4 overflow-hidden">
-				<div class="flex justify-between items-center h-5">
-					<SkeletonPulse class="h-3 w-20" />
-					<SkeletonPulse class="h-5 w-12 rounded-md" />
+			<div class="flex flex-col gap-5 px-4 py-4">
+				<div>
+					<h2 class="text-[12px] font-medium text-ed-text-2">Background</h2>
+					<p class="mt-2 text-[12px] text-ed-text-3">
+						Your recording’s appearance is being prepared.
+					</p>
 				</div>
-				<SkeletonPulse class="h-[30px] w-full rounded-lg" />
-				<div class="flex gap-1">
-					<SkeletonPulse class="h-6 w-16 rounded-[7px]" />
-					<SkeletonPulse class="h-6 w-12 rounded-[7px]" />
-					<SkeletonPulse class="h-6 w-12 rounded-[7px]" />
-					<SkeletonPulse class="h-6 w-14 rounded-[7px]" />
-				</div>
-				<div class="grid grid-cols-6 gap-1.5">
-					<SkeletonPulse class="h-[34px] rounded-md" />
-					<SkeletonPulse class="h-[34px] rounded-md" />
-					<SkeletonPulse class="h-[34px] rounded-md" />
-					<SkeletonPulse class="h-[34px] rounded-md" />
-					<SkeletonPulse class="h-[34px] rounded-md" />
-					<SkeletonPulse class="h-[34px] rounded-md" />
-					<SkeletonPulse class="h-[34px] rounded-md" />
-					<SkeletonPulse class="h-[34px] rounded-md" />
-					<SkeletonPulse class="h-[34px] rounded-md" />
-					<SkeletonPulse class="h-[34px] rounded-md" />
-					<SkeletonPulse class="h-[34px] rounded-md" />
-					<SkeletonPulse class="h-[34px] rounded-md" />
-				</div>
-				<div class="h-px w-full bg-ed-line" />
-				<SkeletonPulse class="h-3 w-14" />
-				<div class="flex items-center gap-3 h-[34px]">
-					<SkeletonPulse class="h-3.5 w-16" />
-					<SkeletonPulse class="flex-1 h-[3px] rounded-full" />
-					<SkeletonPulse class="h-3 w-8" />
-				</div>
-				<div class="flex items-center gap-3 h-[34px]">
-					<SkeletonPulse class="h-3.5 w-14" />
-					<SkeletonPulse class="flex-1 h-[3px] rounded-full" />
-					<SkeletonPulse class="h-3 w-8" />
-				</div>
-				<div class="flex items-center justify-between h-[34px]">
-					<SkeletonPulse class="h-3.5 w-16" />
-					<SkeletonPulse class="h-5 w-[34px] rounded-full" />
-				</div>
-			</div>
-		</div>
-	);
-}
-
-function TimelineTrackSkeleton() {
-	return (
-		<div class="flex items-center h-11 rounded-lg bg-ed-ctl">
-			<div class="flex gap-1.5 items-center pl-2 w-[104px] shrink-0">
-				<SkeletonPulse class="size-[22px] rounded-md" />
-				<SkeletonPulse class="h-3 w-10" />
-			</div>
-			<SkeletonPulse class="flex-1 h-full rounded-r-lg" />
-		</div>
-	);
-}
-
-function TimelineSkeleton() {
-	return (
-		<div class="flex flex-col h-full rounded-xl bg-ed-card shadow-ed-card overflow-hidden px-3 pt-2.5 pb-3">
-			<div class="flex items-end h-[26px] shrink-0">
-				<div class="w-[104px] pl-1 shrink-0">
-					<SkeletonPulse class="h-6 w-[88px] rounded-md" />
-				</div>
-				<div class="flex flex-1 gap-[92px] items-end pb-2.5">
-					<SkeletonPulse class="h-2.5 w-7" />
-					<SkeletonPulse class="h-2.5 w-7" />
-					<SkeletonPulse class="h-2.5 w-7" />
-					<SkeletonPulse class="h-2.5 w-7" />
-					<SkeletonPulse class="h-2.5 w-7" />
-					<SkeletonPulse class="h-2.5 w-7" />
-				</div>
-			</div>
-			<div class="flex flex-col gap-1.5 mt-1">
-				<TimelineTrackSkeleton />
-				<TimelineTrackSkeleton />
+				<div class="h-px bg-ed-line" />
+				<For each={["Padding", "Rounding", "Shadow"]}>
+					{(name) => (
+						<div class="flex items-center justify-between h-[34px] text-[12px] text-ed-text-3">
+							<span>{name}</span>
+							<span class="text-[11px]">Available when ready</span>
+						</div>
+					)}
+				</For>
+				<p class="text-[11px] text-ed-text-3">
+					Editing and export will be available when preparation finishes.
+				</p>
 			</div>
 		</div>
 	);
 }
 
 export function EditorSkeleton() {
+	const model = usePreparingEditorModel();
 	return (
-		<div class="flex flex-col flex-1 min-h-0">
-			<HeaderSkeleton />
+		<div
+			class="flex flex-col flex-1 min-h-0"
+			aria-label="Recording editor"
+			data-preparing-editor
+		>
+			<PreparingHeader model={model} />
 			<div
 				data-tauri-drag-region
 				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-2 w-full min-h-0 leading-5"
 			>
 				<div
 					class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2"
-					style={{ "min-height": `${MIN_PLAYER_HEIGHT}px` }}
+					style={{ "min-height": "320px" }}
 				>
-					<PlayerSkeleton />
-					<SidebarSkeleton />
+					<PreparingPlayer model={model} />
+					<PreparingSidebar />
 				</div>
 				<div
 					class="flex-none min-h-0 px-2 overflow-hidden"
-					style={{ height: `${TIMELINE_SKELETON_HEIGHT}px` }}
+					style={{ height: "146px" }}
 				>
-					<TimelineSkeleton />
+					<PreparingTimeline model={model} />
 				</div>
 			</div>
 		</div>

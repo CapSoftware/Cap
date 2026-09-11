@@ -1,8 +1,10 @@
 use std::{
     path::{Path, PathBuf},
-    time::Duration,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 
+use cap_enc_ffmpeg::RelocatableSource;
 use cap_enc_ffmpeg::fragmented_mp4::tail_is_complete;
 use cap_enc_ffmpeg::remux::{
     concatenate_audio_to_ogg, concatenate_m4s_segments_with_init,
@@ -19,6 +21,19 @@ use relative_path::RelativePathBuf;
 use tracing::{debug, warn};
 
 use crate::output_pipeline::{HealthSender, PipelineHealthEvent, emit_health};
+use crate::studio_recording::CompletedRecording;
+
+mod preparing_observer;
+mod preparing_projection;
+
+pub use preparing_observer::{
+    LivePreparingStudioSources, PreparingAudioLease, PreparingAudioTrack, PreparingSidecarKind,
+    PreparingSidecarLease, PreparingStudioIdentity, PreparingStudioJob, PreparingStudioObserver,
+    PreparingStudioSources, PreparingStudioState, PreparingVideoLease, PreparingVideoTrack,
+};
+pub use preparing_projection::{
+    PreparingAudioInput, PreparingCursorImage, PreparingStudioSegment, PreparingVideoInput,
+};
 
 macro_rules! finalization_info {
     ($($arg:tt)*) => {
@@ -200,7 +215,34 @@ impl RecoveryManager {
         }
     }
 
+    pub fn remux_stopped_with_preparing(
+        completed: &CompletedRecording,
+        mut job: PreparingStudioJob,
+    ) -> Result<bool, RecoveryError> {
+        let matches = job.claimed().is_some_and(|claim| {
+            claim.metadata().project_path == completed.project_path
+                && serde_json::to_value(claim.metadata().studio_meta())
+                    .ok()
+                    .zip(serde_json::to_value(&completed.meta).ok())
+                    .is_some_and(|(stopped, supplied)| stopped == supplied)
+        });
+        if !matches {
+            job.unavailable(
+                "The completed recording no longer matches its stopped snapshot".into(),
+            );
+            return Self::remux_if_needed(&completed.project_path);
+        }
+        Self::remux_with_preparing(&completed.project_path, Some(job))
+    }
+
     pub fn remux_if_needed(project_path: &Path) -> Result<bool, RecoveryError> {
+        Self::remux_with_preparing(project_path, None)
+    }
+
+    fn remux_with_preparing(
+        project_path: &Path,
+        preparing: Option<PreparingStudioJob>,
+    ) -> Result<bool, RecoveryError> {
         if !project_path.is_dir() {
             return Ok(false);
         }
@@ -221,7 +263,15 @@ impl RecoveryManager {
             return Ok(false);
         }
 
-        Self::finalize(&incomplete)?;
+        Self::finalize_with_publication(
+            &incomplete,
+            RecoveryPurpose::Finalize,
+            copy_recovery_input_with_durability,
+            |_, _| Ok(()),
+            publish_recovery,
+            RecoveryLock::acquire,
+            preparing,
+        )?;
         Ok(true)
     }
 
@@ -903,6 +953,36 @@ impl RecoveryManager {
         Self::finalize_with_purpose(recording, RecoveryPurpose::Finalize)
     }
 
+    pub fn finalize_with_preparing(
+        recording: &IncompleteRecording,
+        job: PreparingStudioJob,
+    ) -> Result<RecoveredRecording, RecoveryError> {
+        Self::finalize_with_publication(
+            recording,
+            RecoveryPurpose::Finalize,
+            copy_recovery_input_with_durability,
+            |_, _| Ok(()),
+            publish_recovery,
+            RecoveryLock::acquire,
+            Some(job),
+        )
+    }
+
+    pub fn finalize_with_relocatable_source(
+        recording: &IncompleteRecording,
+        source: &RelocatableSource,
+    ) -> Result<RecoveredRecording, RecoveryError> {
+        Self::finalize_with_publication(
+            recording,
+            RecoveryPurpose::Finalize,
+            copy_recovery_input_with_durability,
+            |_, _| Ok(()),
+            |project, workspace| publish_recovery_with_source(project, workspace, source),
+            RecoveryLock::acquire_for_preparing_preview,
+            None,
+        )
+    }
+
     fn finalize_with_purpose(
         recording: &IncompleteRecording,
         purpose: RecoveryPurpose,
@@ -918,13 +998,39 @@ impl RecoveryManager {
     fn finalize_with_operations(
         recording: &IncompleteRecording,
         purpose: RecoveryPurpose,
-        mut copy_input: impl FnMut(&Path, &Path, RecoveryCopyDurability) -> Result<(), RecoveryError>,
+        copy_input: impl FnMut(&Path, &Path, RecoveryCopyDurability) -> Result<(), RecoveryError>,
         before_source_check: impl FnOnce(&Path, &Path) -> Result<(), RecoveryError>,
     ) -> Result<RecoveredRecording, RecoveryError> {
+        Self::finalize_with_publication(
+            recording,
+            purpose,
+            copy_input,
+            before_source_check,
+            publish_recovery,
+            RecoveryLock::acquire,
+            None,
+        )
+    }
+
+    fn finalize_with_publication(
+        recording: &IncompleteRecording,
+        purpose: RecoveryPurpose,
+        mut copy_input: impl FnMut(&Path, &Path, RecoveryCopyDurability) -> Result<(), RecoveryError>,
+        before_source_check: impl FnOnce(&Path, &Path) -> Result<(), RecoveryError>,
+        publish: impl FnOnce(&Path, &Path) -> Result<(), RecoveryError>,
+        acquire: impl FnOnce(&Path) -> Result<RecoveryLock, RecoveryError>,
+        preparing: Option<PreparingStudioJob>,
+    ) -> Result<RecoveredRecording, RecoveryError> {
+        let started = Instant::now();
         Self::require_no_track_failure(&recording.project_path)?;
         let project = &recording.project_path;
-        let _lock = RecoveryLock::acquire(project)?;
+        let lock = HeldRecoveryLock::new(acquire(project)?, preparing.is_some());
+        let mut preparing = preparing;
         let before = recovery_snapshot(project)?;
+        debug!(
+            elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+            "Studio finalization source snapshot ready"
+        );
         let current = RecordingMeta::load_for_project(project)
             .map_err(|error| RecoveryError::Validation(error.to_string()))?;
         if serde_json::to_value(&current)? != serde_json::to_value(&recording.meta)? {
@@ -939,17 +1045,24 @@ impl RecoveryManager {
             VideoValidation::Bounded => RecoveryCopyDurability::Deferred,
         };
         Self::require_recoverable_tracks(recording)?;
+        let preparing_source = prepare_studio_source(recording, preparing.as_mut(), &lock);
         let workspace = project.join(format!(".recovery-{}", uuid::Uuid::new_v4()));
         create_private_recovery_dir(&workspace)?;
         let staged = workspace.join("staged");
         create_private_recovery_dir(&staged)?;
         let prepared = (|| {
+            let copying = Instant::now();
             for name in RECOVERY_INPUTS {
                 let source = project.join(name);
                 if source.try_exists()? {
                     copy_input(&source, &staged.join(name), staging_durability)?;
                 }
             }
+            debug!(
+                elapsed_ms = copying.elapsed().as_secs_f64() * 1000.0,
+                "Studio finalization staging copy ready"
+            );
+            let checking = Instant::now();
             // Clean finalization mutates only staged bytes and rechecks originals before publication.
             if recovery_snapshot(&staged)? != before
                 || (video_validation == VideoValidation::Full
@@ -959,6 +1072,10 @@ impl RecoveryManager {
                     "Recording changed while copying".into(),
                 ));
             }
+            debug!(
+                elapsed_ms = checking.elapsed().as_secs_f64() * 1000.0,
+                "Studio finalization staging snapshot ready"
+            );
             let staged_meta = RecordingMeta::load_for_project(&staged)
                 .map_err(|error| RecoveryError::Validation(error.to_string()))?;
             for (index, track) in legacy_omitted_tracks(&staged_meta, &staged)? {
@@ -979,12 +1096,27 @@ impl RecoveryManager {
                 }
             }
             validate_recovery_manifests(&staged.join("content"))?;
+            let analyzing = Instant::now();
             let staged_recording = Self::analyze_incomplete(&staged, &staged_meta)
                 .ok_or(RecoveryError::NoRecoverableSegments)?;
+            debug!(
+                elapsed_ms = analyzing.elapsed().as_secs_f64() * 1000.0,
+                "Studio finalization staged analysis ready"
+            );
             Self::require_recoverable_tracks(&staged_recording)?;
             Self::require_local_fragments(&staged_recording)?;
+            let validating = Instant::now();
             Self::validate_staged_inputs(&staged_recording, video_validation)?;
+            debug!(
+                elapsed_ms = validating.elapsed().as_secs_f64() * 1000.0,
+                "Studio finalization staged inputs validated"
+            );
+            let remuxing = Instant::now();
             let recovered = Self::finalize_staged(&staged_recording, purpose, video_validation)?;
+            debug!(
+                elapsed_ms = remuxing.elapsed().as_secs_f64() * 1000.0,
+                "Studio finalization media ready"
+            );
             let config = ProjectConfiguration::load(&staged)?;
             config
                 .validate()
@@ -996,14 +1128,24 @@ impl RecoveryManager {
             {
                 return Err(RecoveryError::Validation("Staged metadata mismatch".into()));
             }
+            let syncing = Instant::now();
             sync_recovery_input(&staged)?;
+            debug!(
+                elapsed_ms = syncing.elapsed().as_secs_f64() * 1000.0,
+                "Studio finalization staging synced"
+            );
             before_source_check(project, &staged)?;
             Self::require_no_track_failure(project)?;
+            let rechecking = Instant::now();
             if recovery_snapshot(project)? != before {
                 return Err(RecoveryError::Validation(
                     "Recording changed before publication".into(),
                 ));
             }
+            debug!(
+                elapsed_ms = rechecking.elapsed().as_secs_f64() * 1000.0,
+                "Studio finalization source rechecked"
+            );
             Ok(recovered.meta)
         })();
         let meta = match prepared {
@@ -1013,7 +1155,18 @@ impl RecoveryManager {
                 return Err(error);
             }
         };
-        publish_recovery(project, &workspace)?;
+        if let Some(source) = &preparing_source {
+            publish_recovery_with_source(project, &workspace, source)?;
+            if let Some(job) = &mut preparing {
+                job.mark_publication_succeeded();
+            }
+        } else {
+            publish(project, &workspace)?;
+        }
+        debug!(
+            elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+            "Studio finalization complete"
+        );
         finalization_info!(path = %workspace.display(), "Recovered recording retains original media backup");
         Ok(RecoveredRecording {
             project_path: project.clone(),
@@ -1182,6 +1335,7 @@ impl RecoveryManager {
                 .join("content/segments")
                 .join(format!("segment-{}", segment.index));
 
+            let video_started = Instant::now();
             let display_output = segment_dir.join("display.mp4");
             let display_dir = segment_dir.join("display");
 
@@ -1271,12 +1425,25 @@ impl RecoveryManager {
                 }
             }
 
+            debug!(
+                segment = segment.index,
+                elapsed_ms = video_started.elapsed().as_secs_f64() * 1000.0,
+                "Studio finalization segment video ready"
+            );
+            let audio_started = Instant::now();
+
             if let Some(mic_frags) = &segment.mic_fragments {
-                let mic_output = segment_dir.join("audio-input.ogg");
+                let mic_output =
+                    segment_dir.join(finalized_audio_name(&segment_dir, "audio-input", mic_frags));
                 if mic_frags.len() == 1 {
                     let source = &mic_frags[0];
                     let is_ogg = source.extension().map(|e| e == "ogg").unwrap_or(false);
-                    if source != &mic_output {
+                    if mic_output
+                        .extension()
+                        .is_some_and(|extension| extension == "m4a")
+                    {
+                        finalize_m4a(source, &mic_output)?;
+                    } else if source != &mic_output {
                         if is_ogg {
                             finalization_info!("Moving single mic fragment to {:?}", mic_output);
                             std::fs::rename(source, &mic_output)?;
@@ -1322,11 +1489,20 @@ impl RecoveryManager {
             }
 
             if let Some(system_frags) = &segment.system_audio_fragments {
-                let system_output = segment_dir.join("system_audio.ogg");
+                let system_output = segment_dir.join(finalized_audio_name(
+                    &segment_dir,
+                    "system_audio",
+                    system_frags,
+                ));
                 if system_frags.len() == 1 {
                     let source = &system_frags[0];
                     let is_ogg = source.extension().map(|e| e == "ogg").unwrap_or(false);
-                    if source != &system_output {
+                    if system_output
+                        .extension()
+                        .is_some_and(|extension| extension == "m4a")
+                    {
+                        finalize_m4a(source, &system_output)?;
+                    } else if source != &system_output {
                         if is_ogg {
                             finalization_info!(
                                 "Moving single system audio fragment to {:?}",
@@ -1373,8 +1549,14 @@ impl RecoveryManager {
                     }
                 }
             }
+            debug!(
+                segment = segment.index,
+                elapsed_ms = audio_started.elapsed().as_secs_f64() * 1000.0,
+                "Studio finalization segment audio remuxed"
+            );
         }
 
+        let validating = Instant::now();
         for segment in &recording.recoverable_segments {
             let dir = recording
                 .project_path
@@ -1389,17 +1571,28 @@ impl RecoveryManager {
             for (fragments, name, kind) in [
                 (
                     segment.camera_fragments.as_ref(),
-                    "camera.mp4",
+                    "camera.mp4".to_string(),
                     ffmpeg::media::Type::Video,
                 ),
                 (
                     segment.mic_fragments.as_ref(),
-                    "audio-input.ogg",
+                    finalized_audio_name(
+                        &dir,
+                        "audio-input",
+                        segment.mic_fragments.as_deref().unwrap_or_default(),
+                    ),
                     ffmpeg::media::Type::Audio,
                 ),
                 (
                     segment.system_audio_fragments.as_ref(),
-                    "system_audio.ogg",
+                    finalized_audio_name(
+                        &dir,
+                        "system_audio",
+                        segment
+                            .system_audio_fragments
+                            .as_deref()
+                            .unwrap_or_default(),
+                    ),
                     ffmpeg::media::Type::Audio,
                 ),
             ] {
@@ -1411,6 +1604,10 @@ impl RecoveryManager {
                 }
             }
         }
+        debug!(
+            elapsed_ms = validating.elapsed().as_secs_f64() * 1000.0,
+            "Studio finalization output tracks validated"
+        );
         let meta = Self::build_recovered_meta(recording)?;
 
         let mut recording_meta = recording.meta.clone();
@@ -2003,7 +2200,12 @@ impl RecoveryManager {
                         if seg.mic_fragments.is_some() {
                             Some(AudioMeta {
                                 path: RelativePathBuf::from(format!(
-                                    "{segment_base}/audio-input.ogg"
+                                    "{segment_base}/{}",
+                                    finalized_audio_name(
+                                        &segment_dir,
+                                        "audio-input",
+                                        seg.mic_fragments.as_deref().unwrap_or_default()
+                                    )
                                 )),
                                 start_time: get_start_time_or_fallback(
                                     original_segment
@@ -2023,7 +2225,12 @@ impl RecoveryManager {
                         if seg.system_audio_fragments.is_some() {
                             Some(AudioMeta {
                                 path: RelativePathBuf::from(format!(
-                                    "{segment_base}/system_audio.ogg"
+                                    "{segment_base}/{}",
+                                    finalized_audio_name(
+                                        &segment_dir,
+                                        "system_audio",
+                                        seg.system_audio_fragments.as_deref().unwrap_or_default()
+                                    )
                                 )),
                                 start_time: get_start_time_or_fallback(
                                     original_segment
@@ -2443,6 +2650,52 @@ const RECOVERY_INPUTS: [&str; 4] = [
     "recording-diagnostics.json",
 ];
 
+enum HeldRecoveryLock {
+    Owned { _lock: RecoveryLock },
+    Shared(Arc<RecoveryLock>),
+}
+
+impl HeldRecoveryLock {
+    fn new(lock: RecoveryLock, preparing: bool) -> Self {
+        if preparing {
+            Self::Shared(Arc::new(lock))
+        } else {
+            Self::Owned { _lock: lock }
+        }
+    }
+}
+
+fn prepare_studio_source(
+    recording: &IncompleteRecording,
+    preparing: Option<&mut PreparingStudioJob>,
+    lock: &HeldRecoveryLock,
+) -> Option<RelocatableSource> {
+    let job = preparing?;
+    let HeldRecoveryLock::Shared(lock) = lock else {
+        job.unavailable("The finalizer does not own a preparing source lease".into());
+        return None;
+    };
+    let projected = job
+        .claimed()
+        .ok_or_else(|| "The stopped recording was already claimed".to_string())
+        .and_then(|claim| preparing_projection::project(recording, claim))
+        .and_then(|projection| {
+            let source = RelocatableSource::new_with_owner(
+                recording.project_path.join("content/segments"),
+                lock.clone(),
+            )
+            .map_err(|error| error.to_string())?;
+            Ok((source, projection))
+        });
+    match projected {
+        Ok((source, projection)) => job.publish(source.clone(), projection).then_some(source),
+        Err(error) => {
+            job.unavailable(error);
+            None
+        }
+    }
+}
+
 struct RecoveryLock {
     _file: std::fs::File,
     #[cfg(unix)]
@@ -2451,6 +2704,26 @@ struct RecoveryLock {
 
 impl RecoveryLock {
     fn acquire(project: &Path) -> Result<Self, RecoveryError> {
+        Self::acquire_with(project, reconcile_recovery_publication)
+    }
+
+    fn acquire_for_preparing_preview(project: &Path) -> Result<Self, RecoveryError> {
+        Self::acquire_with(project, |project| {
+            match project.join(RECOVERY_PUBLICATION).symlink_metadata() {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error.into()),
+                Ok(_) => Err(RecoveryError::Validation(
+                    "Interrupted publication must be reconciled after preparing preview readers stop"
+                        .into(),
+                )),
+            }
+        })
+    }
+
+    fn acquire_with(
+        project: &Path,
+        reconcile: impl FnOnce(&Path) -> Result<(), RecoveryError>,
+    ) -> Result<Self, RecoveryError> {
         reject_recovery_link(&project.symlink_metadata()?)?;
         let path = project.join(".recovery.lock");
         let mut options = std::fs::OpenOptions::new();
@@ -2496,7 +2769,7 @@ impl RecoveryLock {
             #[cfg(unix)]
             owner_pid: unsafe { libc::getpid() },
         };
-        if let Err(error) = reconcile_recovery_publication(project) {
+        if let Err(error) = reconcile(project) {
             warn!(path = %project.display(), %error, "Interrupted recovery publication requires attention; all files retained");
             return Err(error);
         }
@@ -2560,6 +2833,13 @@ fn copy_recovery_input_with_durability(
         }
     } else if metadata.is_file() {
         let mut input = std::fs::File::open(source)?;
+        #[cfg(target_os = "macos")]
+        if clone_recovery_file(&input, destination) {
+            if durability == RecoveryCopyDurability::Durable {
+                std::fs::File::open(destination)?.sync_all()?;
+            }
+            return Ok(());
+        }
         let mut output = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -2577,13 +2857,57 @@ fn copy_recovery_input_with_durability(
     Ok(())
 }
 
-fn recovery_snapshot(
-    project: &Path,
-) -> Result<std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>, RecoveryError> {
+#[cfg(target_os = "macos")]
+fn clone_recovery_file(input: &std::fs::File, destination: &Path) -> bool {
+    use std::{os::fd::AsRawFd, os::unix::ffi::OsStrExt};
+
+    let Ok(destination) = std::ffi::CString::new(destination.as_os_str().as_bytes()) else {
+        return false;
+    };
+    unsafe { libc::fclonefileat(input.as_raw_fd(), libc::AT_FDCWD, destination.as_ptr(), 0) == 0 }
+}
+
+type RecoverySnapshot = std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>;
+
+fn hash_recovery_files(root: &Path, paths: &[PathBuf]) -> Result<RecoverySnapshot, RecoveryError> {
+    use std::io::Read;
+
+    let mut entries = RecoverySnapshot::new();
+    let mut buffer = [0_u8; 65536];
+    for path in paths {
+        let metadata = path.symlink_metadata()?;
+        reject_recovery_link(&metadata)?;
+        if !metadata.is_file() {
+            return Err(RecoveryError::Validation(format!(
+                "Unsupported recovery input: {}",
+                path.display()
+            )));
+        }
+        let mut input = std::fs::File::open(path)?;
+        let mut digest = blake3::Hasher::new();
+        loop {
+            let count = input.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            digest.update(&buffer[..count]);
+        }
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|error| RecoveryError::Validation(error.to_string()))?
+            .to_path_buf();
+        let _ = entries.insert(relative, Some(digest.finalize().as_bytes().to_vec()));
+    }
+    Ok(entries)
+}
+
+fn recovery_snapshot(project: &Path) -> Result<RecoverySnapshot, RecoveryError> {
     fn visit(
         root: &Path,
         path: &Path,
-        entries: &mut std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>,
+        entries: &mut RecoverySnapshot,
+        files: &mut Vec<PathBuf>,
+        bytes: &mut u64,
     ) -> Result<(), RecoveryError> {
         let metadata = path.symlink_metadata()?;
         reject_recovery_link(&metadata)?;
@@ -2594,21 +2918,11 @@ fn recovery_snapshot(
         if metadata.is_dir() {
             let _ = entries.insert(relative, None);
             for entry in std::fs::read_dir(path)? {
-                visit(root, &entry?.path(), entries)?;
+                visit(root, &entry?.path(), entries, files, bytes)?;
             }
         } else if metadata.is_file() {
-            let mut digest = blake3::Hasher::new();
-            use std::io::Read;
-            let mut input = std::fs::File::open(path)?;
-            let mut buffer = [0_u8; 65536];
-            loop {
-                let count = input.read(&mut buffer)?;
-                if count == 0 {
-                    break;
-                }
-                digest.update(&buffer[..count]);
-            }
-            let _ = entries.insert(relative, Some(digest.finalize().as_bytes().to_vec()));
+            files.push(path.to_path_buf());
+            *bytes = bytes.saturating_add(metadata.len());
         } else {
             return Err(RecoveryError::Validation(format!(
                 "Unsupported recovery input: {}",
@@ -2617,15 +2931,42 @@ fn recovery_snapshot(
         }
         Ok(())
     }
-    let mut entries = std::collections::BTreeMap::new();
+    let mut entries = RecoverySnapshot::new();
+    let mut files = Vec::new();
+    let mut bytes = 0;
     for name in RECOVERY_INPUTS {
         let path = project.join(name);
         match path.symlink_metadata() {
-            Ok(_) => visit(project, &path, &mut entries)?,
+            Ok(_) => visit(project, &path, &mut entries, &mut files, &mut bytes)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
     }
+    let can_parallelize = bytes >= 32 * 1024 * 1024
+        && files.len() >= 2
+        && std::thread::available_parallelism().is_ok_and(|count| count.get() > 1);
+    let hashes = if can_parallelize {
+        let middle = files.len().div_ceil(2);
+        std::thread::scope(|scope| {
+            match std::thread::Builder::new()
+                .name("studio-integrity-check".into())
+                .spawn_scoped(scope, || hash_recovery_files(project, &files[..middle]))
+            {
+                Ok(worker) => {
+                    let remaining = hash_recovery_files(project, &files[middle..]);
+                    let mut hashes = worker.join().map_err(|_| {
+                        RecoveryError::Validation("Recovery integrity worker panicked".into())
+                    })??;
+                    hashes.extend(remaining?);
+                    Ok(hashes)
+                }
+                Err(_) => hash_recovery_files(project, &files),
+            }
+        })?
+    } else {
+        hash_recovery_files(project, &files)?
+    };
+    entries.extend(hashes);
     Ok(entries)
 }
 
@@ -2647,6 +2988,12 @@ fn sync_recovery_input(path: &Path) -> Result<(), RecoveryError> {
 const RECOVERY_PUBLICATION: &str = ".recovery-publication.json";
 const RECOVERY_PUBLICATION_RECEIPT: &str = "publication-receipt.json";
 const RECOVERY_PUBLICATION_MAX_BYTES: u64 = 8192;
+
+#[derive(Clone, Copy)]
+enum RecoveryPublicationStampVersion {
+    V1,
+    V2,
+}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2707,7 +3054,10 @@ fn recovery_publication_file_digest(path: &Path) -> Result<Option<[u8; 32]>, Rec
     Ok(Some(digest.finalize().into()))
 }
 
-fn recovery_publication_segments_stamp(path: &Path) -> Result<Option<[u8; 32]>, RecoveryError> {
+fn recovery_publication_segments_stamp(
+    path: &Path,
+    version: RecoveryPublicationStampVersion,
+) -> Result<Option<[u8; 32]>, RecoveryError> {
     // These stamps locate the interrupted rename; ordinary recovery still validates media content.
     use sha2::Digest;
     #[derive(serde::Serialize)]
@@ -2723,6 +3073,7 @@ fn recovery_publication_segments_stamp(path: &Path) -> Result<Option<[u8; 32]>, 
         root: &Path,
         path: &Path,
         entries: &mut std::collections::BTreeMap<PathBuf, Entry>,
+        version: RecoveryPublicationStampVersion,
     ) -> Result<(), RecoveryError> {
         let metadata = path.symlink_metadata()?;
         reject_recovery_link(&metadata)?;
@@ -2739,7 +3090,13 @@ fn recovery_publication_segments_stamp(path: &Path) -> Result<Option<[u8; 32]>, 
                 .to_path_buf(),
             Entry {
                 directory: metadata.is_dir(),
-                size: metadata.len(),
+                // V1 persists allocation sizes; some filesystems change directory sizes on rename.
+                size: if metadata.is_dir() && matches!(version, RecoveryPublicationStampVersion::V2)
+                {
+                    0
+                } else {
+                    metadata.len()
+                },
                 modified: metadata
                     .modified()?
                     .duration_since(std::time::UNIX_EPOCH)
@@ -2754,7 +3111,7 @@ fn recovery_publication_segments_stamp(path: &Path) -> Result<Option<[u8; 32]>, 
         );
         if metadata.is_dir() {
             for entry in std::fs::read_dir(path)? {
-                visit(root, &entry?.path(), entries)?;
+                visit(root, &entry?.path(), entries, version)?;
             }
         }
         Ok(())
@@ -2772,13 +3129,20 @@ fn recovery_publication_segments_stamp(path: &Path) -> Result<Option<[u8; 32]>, 
         Err(error) => return Err(error.into()),
     }
     let mut entries = std::collections::BTreeMap::new();
-    visit(path, path, &mut entries)?;
+    visit(path, path, &mut entries, version)?;
     Ok(Some(
         sha2::Sha256::digest(serde_json::to_vec(&entries)?).into(),
     ))
 }
 
 fn recovery_publication_state(project: &Path) -> Result<RecoveryPublicationState, RecoveryError> {
+    recovery_publication_state_for_version(project, RecoveryPublicationStampVersion::V2)
+}
+
+fn recovery_publication_state_for_version(
+    project: &Path,
+    version: RecoveryPublicationStampVersion,
+) -> Result<RecoveryPublicationState, RecoveryError> {
     for path in [project.to_path_buf(), project.join("content")] {
         let metadata = path.symlink_metadata()?;
         reject_recovery_link(&metadata)?;
@@ -2789,7 +3153,7 @@ fn recovery_publication_state(project: &Path) -> Result<RecoveryPublicationState
         }
     }
     Ok(RecoveryPublicationState {
-        segments: recovery_publication_segments_stamp(&project.join("content/segments"))?,
+        segments: recovery_publication_segments_stamp(&project.join("content/segments"), version)?,
         meta: recovery_publication_file_digest(&project.join("recording-meta.json"))?,
         config: recovery_publication_file_digest(&project.join("project-config.json"))?,
     })
@@ -2880,7 +3244,7 @@ fn begin_recovery_publication(project: &Path, workspace: &Path) -> Result<Vec<u8
         ));
     }
     let receipt = RecoveryPublication {
-        version: 1,
+        version: 2,
         project: project.canonicalize()?,
         workspace: name.into(),
         original: recovery_publication_state(project)?,
@@ -2946,8 +3310,16 @@ fn reconcile_recovery_publication(project: &Path) -> Result<(), RecoveryError> {
         Err(error) => return Err(error.into()),
     };
     let receipt: RecoveryPublication = serde_json::from_slice(&bytes)?;
-    if receipt.version != 1
-        || receipt.project != project.canonicalize()?
+    let version = match receipt.version {
+        1 => RecoveryPublicationStampVersion::V1,
+        2 => RecoveryPublicationStampVersion::V2,
+        _ => {
+            return Err(RecoveryError::Validation(
+                "Invalid publication identity; evidence retained".into(),
+            ));
+        }
+    };
+    if receipt.project != project.canonicalize()?
         || receipt.original.meta.is_none()
         || receipt.original.segments.is_none()
         || receipt.staged.meta.is_none()
@@ -2964,9 +3336,10 @@ fn reconcile_recovery_publication(project: &Path) -> Result<(), RecoveryError> {
             "Publication generation does not match its workspace".into(),
         ));
     }
-    let current = recovery_publication_state(project)?;
-    let staged = recovery_publication_state(&workspace.join("staged"))?;
-    let backup = recovery_publication_segments_stamp(&workspace.join("original-segments"))?;
+    let current = recovery_publication_state_for_version(project, version)?;
+    let staged = recovery_publication_state_for_version(&workspace.join("staged"), version)?;
+    let backup =
+        recovery_publication_segments_stamp(&workspace.join("original-segments"), version)?;
     let backup_config =
         recovery_publication_file_digest(&workspace.join("original-project-config.json"))?;
     if recovery_publication_file_digest(&workspace.join("original-recording-meta.json"))?
@@ -3029,7 +3402,7 @@ fn reconcile_recovery_publication(project: &Path) -> Result<(), RecoveryError> {
             Err(error) => return Err(error.into()),
         }
         std::fs::rename(workspace.join("original-segments"), destination)?;
-        if recovery_publication_state(project)? != receipt.original {
+        if recovery_publication_state_for_version(project, version)? != receipt.original {
             return Err(RecoveryError::Validation(
                 "Restored publication state changed; evidence retained".into(),
             ));
@@ -3044,6 +3417,32 @@ fn reconcile_recovery_publication(project: &Path) -> Result<(), RecoveryError> {
 
 fn publish_recovery(project: &Path, workspace: &Path) -> Result<(), RecoveryError> {
     publish_recovery_with(project, workspace, rename_recovery_path)
+}
+
+fn publish_recovery_with_source(
+    project: &Path,
+    workspace: &Path,
+    source: &RelocatableSource,
+) -> Result<(), RecoveryError> {
+    let original = project.join("content/segments");
+    let backup = workspace.join("original-segments");
+    publish_recovery_with(project, workspace, |from, to| {
+        rename_recovery_path_with_source(from, to, &original, &backup, source)
+    })
+}
+
+fn rename_recovery_path_with_source(
+    from: &Path,
+    to: &Path,
+    original: &Path,
+    backup: &Path,
+    source: &RelocatableSource,
+) -> std::io::Result<()> {
+    if (from == original && to == backup) || (from == backup && to == original) {
+        source.relocate_from(from, to.to_path_buf())
+    } else {
+        rename_recovery_path(from, to)
+    }
 }
 
 fn rename_recovery_path(source: &Path, destination: &Path) -> std::io::Result<()> {
@@ -3111,6 +3510,42 @@ fn publish_recovery_with(
         return Err(error.into());
     }
     finish_recovery_publication(project, workspace, &publication)?;
+    Ok(())
+}
+
+fn finalized_audio_name(segment_dir: &Path, stem: &str, fragments: &[PathBuf]) -> String {
+    let m4a = format!("{stem}.m4a");
+    if let [source] = fragments
+        && source
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("m4a"))
+    {
+        let output = segment_dir.join(&m4a);
+        let source = if source.is_file() {
+            source.as_path()
+        } else {
+            output.as_path()
+        };
+        if ffmpeg::format::input(source).is_ok_and(|input| {
+            input.streams().best(ffmpeg::media::Type::Video).is_none()
+                && input
+                    .streams()
+                    .best(ffmpeg::media::Type::Audio)
+                    .is_some_and(|stream| stream.parameters().id() == ffmpeg::codec::Id::AAC)
+        }) {
+            return m4a;
+        }
+    }
+    format!("{stem}.ogg")
+}
+
+fn finalize_m4a(source: &Path, output: &Path) -> Result<(), RecoveryError> {
+    let temporary = output.with_extension(format!("{}.m4a", uuid::Uuid::new_v4()));
+    remux_file(source, &temporary).map_err(RecoveryError::AudioConcat)?;
+    replace_file(&temporary, output)?;
+    if source != output {
+        std::fs::remove_file(source)?;
+    }
     Ok(())
 }
 
@@ -3484,6 +3919,574 @@ mod clean_studio_snapshot_tests {
         )
         .unwrap();
         directory
+    }
+
+    fn add_fragmented_audio(project: &Path, name: &str, blocks: i64) -> PathBuf {
+        use cap_enc_ffmpeg::fragmented_audio::FragmentedAudioFile;
+        use ffmpeg::{ChannelLayout, format::Sample, format::sample::Type};
+
+        let path = project.join(format!("content/segments/segment-0/{name}.m4a"));
+        let mut encoder = FragmentedAudioFile::init(
+            path.clone(),
+            cap_media_info::AudioInfo::new_raw(Sample::F32(Type::Packed), 48_000, 1),
+        )
+        .unwrap();
+        for block in 0..blocks {
+            let mut frame =
+                ffmpeg::frame::Audio::new(Sample::F32(Type::Packed), 1024, ChannelLayout::MONO);
+            frame.set_rate(48_000);
+            frame.set_pts(Some(block * 1024));
+            for (index, value) in frame.data_mut(0)[..4096].chunks_exact_mut(4).enumerate() {
+                let position = (block * 1024) as f32 + index as f32;
+                let sample = (position * std::f32::consts::TAU * 440.0 / 48_000.0).sin() * 0.25;
+                value.copy_from_slice(&sample.to_ne_bytes());
+            }
+            encoder
+                .queue_frame(
+                    frame,
+                    Duration::from_secs_f64(block as f64 * 1024.0 / 48_000.0),
+                )
+                .unwrap();
+        }
+        encoder.finish().unwrap().unwrap();
+        path
+    }
+
+    fn completed_preparing_fixture(project: &Path) -> CompletedRecording {
+        use crate::studio_recording::CleanStoppedStudio;
+
+        let mut metadata = RecordingMeta::load_for_project(project).unwrap();
+        let RecordingMetaInner::Studio(studio) = &mut metadata.inner else {
+            panic!()
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+            panic!()
+        };
+        inner.segments[0].display.path = DISPLAY.into();
+        inner.segments[0].display.start_time = Some(0.0);
+        let configuration = ProjectConfiguration {
+            timeline: Some(
+                serde_json::from_value(serde_json::json!({
+                    "segments": [{"recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 2.0}],
+                    "zoomSegments": []
+                }))
+                .unwrap(),
+            ),
+            ..ProjectConfiguration::default()
+        };
+        metadata.save_for_project().unwrap();
+        configuration.write(project).unwrap();
+        CompletedRecording {
+            project_path: project.to_path_buf(),
+            meta: metadata.studio_meta().unwrap().clone(),
+            cursor_data: Default::default(),
+            clean_stopped: CleanStoppedStudio::for_test(metadata, configuration),
+        }
+    }
+
+    enum PreparingEntryCase {
+        Supported,
+        EditedConfiguration,
+        EditedMetadata,
+        WrongStoppedProject,
+        StaleAnalysis,
+        RequiredTrackFailure,
+        HeldRecoveryLock,
+    }
+
+    fn assert_preparing_entry_point_matches_ordinary(case: PreparingEntryCase) {
+        use super::preparing_observer::PreparingStudioTestTransition;
+
+        let candidate = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let completed = completed_preparing_fixture(candidate.path());
+        let ordinary = tempfile::tempdir().unwrap();
+        for entry in fs::read_dir(candidate.path()).unwrap() {
+            let entry = entry.unwrap();
+            copy_recovery_input(&entry.path(), &ordinary.path().join(entry.file_name())).unwrap();
+        }
+        assert_eq!(
+            recovery_snapshot(candidate.path()).unwrap(),
+            recovery_snapshot(ordinary.path()).unwrap()
+        );
+        let mut candidate_recording = RecoveryManager::inspect_recording(candidate.path()).unwrap();
+        let mut ordinary_recording = RecoveryManager::inspect_recording(ordinary.path()).unwrap();
+        let alternate = tempfile::tempdir().unwrap();
+        let (job, observer) = if matches!(case, PreparingEntryCase::WrongStoppedProject) {
+            let mut metadata = RecordingMeta::load_for_project(candidate.path()).unwrap();
+            metadata.project_path = alternate.path().to_path_buf();
+            let configuration = ProjectConfiguration::load(candidate.path()).unwrap();
+            let alternate_completed = CompletedRecording {
+                project_path: alternate.path().to_path_buf(),
+                meta: metadata.studio_meta().unwrap().clone(),
+                cursor_data: Default::default(),
+                clean_stopped: crate::studio_recording::CleanStoppedStudio::for_test(
+                    metadata,
+                    configuration,
+                ),
+            };
+            PreparingStudioJob::claim(&alternate_completed, 73).unwrap()
+        } else {
+            PreparingStudioJob::claim(&completed, 72).unwrap()
+        };
+        match case {
+            PreparingEntryCase::Supported
+            | PreparingEntryCase::WrongStoppedProject
+            | PreparingEntryCase::HeldRecoveryLock => {}
+            PreparingEntryCase::EditedConfiguration => {
+                for path in [candidate.path(), ordinary.path()] {
+                    let mut configuration = ProjectConfiguration::load(path).unwrap();
+                    configuration.timeline.as_mut().unwrap().segments[0].name =
+                        Some("Edited after Stop".into());
+                    configuration.write(path).unwrap();
+                }
+            }
+            PreparingEntryCase::EditedMetadata => {
+                for path in [candidate.path(), ordinary.path()] {
+                    let mut metadata = RecordingMeta::load_for_project(path).unwrap();
+                    metadata.pretty_name.push_str(" edited after Stop");
+                    metadata.save_for_project().unwrap();
+                }
+                candidate_recording = RecoveryManager::inspect_recording(candidate.path()).unwrap();
+                ordinary_recording = RecoveryManager::inspect_recording(ordinary.path()).unwrap();
+            }
+            PreparingEntryCase::StaleAnalysis => {
+                candidate_recording.meta.pretty_name.push_str(" stale");
+                ordinary_recording.meta.pretty_name.push_str(" stale");
+            }
+            PreparingEntryCase::RequiredTrackFailure => {
+                for path in [candidate.path(), ordinary.path()] {
+                    fs::write(
+                        path.join("recording-diagnostics.json"),
+                        br#"{"version":2,"segments":[{"trackFailures":[{"track":"display","reason":"injected requested track failure"}]}]}"#,
+                    )
+                    .unwrap();
+                }
+            }
+        }
+        let candidate_before = recovery_snapshot(candidate.path()).unwrap();
+        let ordinary_before = recovery_snapshot(ordinary.path()).unwrap();
+        let transitions = job.test_transitions();
+        let held_locks = matches!(case, PreparingEntryCase::HeldRecoveryLock).then(|| {
+            (
+                RecoveryLock::acquire(candidate.path()).unwrap(),
+                RecoveryLock::acquire(ordinary.path()).unwrap(),
+            )
+        });
+        let expected = RecoveryManager::finalize(&ordinary_recording)
+            .map(|recording| serde_json::to_value(recording.meta).unwrap())
+            .map_err(|error| error.to_string());
+        let actual = RecoveryManager::finalize_with_preparing(&candidate_recording, job)
+            .map(|recording| serde_json::to_value(recording.meta).unwrap())
+            .map_err(|error| error.to_string());
+        assert_eq!(actual, expected);
+        assert_eq!(
+            observer.publication_succeeded(),
+            matches!(case, PreparingEntryCase::Supported) && actual.is_ok()
+        );
+        assert!(matches!(observer.latest(), PreparingStudioState::Ended));
+        let expected_transitions = match case {
+            PreparingEntryCase::Supported => vec![
+                PreparingStudioTestTransition::Available,
+                PreparingStudioTestTransition::Ended,
+            ],
+            PreparingEntryCase::EditedConfiguration => vec![
+                PreparingStudioTestTransition::Unavailable(
+                    "Persisted stopped configuration changed".into(),
+                ),
+                PreparingStudioTestTransition::Ended,
+            ],
+            PreparingEntryCase::EditedMetadata | PreparingEntryCase::WrongStoppedProject => vec![
+                PreparingStudioTestTransition::Unavailable(
+                    "Stopped recording identity or metadata changed".into(),
+                ),
+                PreparingStudioTestTransition::Ended,
+            ],
+            PreparingEntryCase::StaleAnalysis
+            | PreparingEntryCase::RequiredTrackFailure
+            | PreparingEntryCase::HeldRecoveryLock => vec![PreparingStudioTestTransition::Ended],
+        };
+        assert_eq!(*transitions.lock().unwrap(), expected_transitions);
+        drop(held_locks);
+        assert!(RecoveryLock::acquire(candidate.path()).is_ok());
+        assert!(RecoveryLock::acquire(ordinary.path()).is_ok());
+        if matches!(
+            case,
+            PreparingEntryCase::StaleAnalysis
+                | PreparingEntryCase::RequiredTrackFailure
+                | PreparingEntryCase::HeldRecoveryLock
+        ) {
+            assert!(actual.is_err());
+            assert_eq!(
+                recovery_snapshot(candidate.path()).unwrap(),
+                candidate_before
+            );
+            assert_eq!(recovery_snapshot(ordinary.path()).unwrap(), ordinary_before);
+            assert!(!candidate.path().join(OUTPUT).exists());
+            assert!(!ordinary.path().join(OUTPUT).exists());
+        } else {
+            assert!(actual.is_ok());
+            assert_eq!(
+                recovery_snapshot(candidate.path()).unwrap(),
+                recovery_snapshot(ordinary.path()).unwrap()
+            );
+            assert_eq!(
+                fs::read(candidate.path().join(OUTPUT)).unwrap(),
+                fs::read(ordinary.path().join(OUTPUT)).unwrap()
+            );
+            assert!(probe_video_can_decode(&candidate.path().join(OUTPUT)).unwrap());
+        }
+    }
+
+    #[test]
+    fn inspected_preparing_finalization_matches_ordinary_outputs_and_metadata() {
+        assert_preparing_entry_point_matches_ordinary(PreparingEntryCase::Supported);
+    }
+
+    #[test]
+    fn inspected_preparing_finalization_matches_ordinary_configuration_behavior_after_edits() {
+        assert_preparing_entry_point_matches_ordinary(PreparingEntryCase::EditedConfiguration);
+    }
+
+    #[test]
+    fn inspected_preparing_finalization_preserves_fresh_metadata_edits_and_declines_preview() {
+        assert_preparing_entry_point_matches_ordinary(PreparingEntryCase::EditedMetadata);
+    }
+
+    #[test]
+    fn inspected_preparing_finalization_preserves_recovery_lock_contention_without_writes() {
+        assert_preparing_entry_point_matches_ordinary(PreparingEntryCase::HeldRecoveryLock);
+    }
+
+    #[test]
+    fn inspected_preparing_finalization_declines_a_different_stopped_project() {
+        assert_preparing_entry_point_matches_ordinary(PreparingEntryCase::WrongStoppedProject);
+    }
+
+    #[test]
+    fn inspected_preparing_finalization_rejects_stale_analysis_without_writes() {
+        assert_preparing_entry_point_matches_ordinary(PreparingEntryCase::StaleAnalysis);
+    }
+
+    #[test]
+    fn inspected_preparing_finalization_preserves_requested_track_failure() {
+        assert_preparing_entry_point_matches_ordinary(PreparingEntryCase::RequiredTrackFailure);
+    }
+
+    #[test]
+    fn preparing_finalizer_revokes_sources_and_retains_lock_until_last_reader_closes() {
+        use std::io::Read;
+
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let completed = completed_preparing_fixture(project);
+        let (job, observer) = PreparingStudioJob::claim(&completed, 42).unwrap();
+        let metadata = RecordingMeta::load_for_project(project).unwrap();
+        let recording = RecoveryManager::analyze_incomplete(project, &metadata).unwrap();
+        let mut retained = None;
+        RecoveryManager::finalize_with_publication(
+            &recording,
+            RecoveryPurpose::Finalize,
+            copy_recovery_input_with_durability,
+            |_, _| {
+                let sources = match observer.latest() {
+                    PreparingStudioState::Available(sources) => sources,
+                    PreparingStudioState::Unavailable(reason) => panic!("{reason}"),
+                    _ => panic!("Expected preparing sources before publication"),
+                };
+                let live = sources.live().unwrap();
+                let video = live.video(0, PreparingVideoTrack::Display).unwrap();
+                let (source, paths) = video.input().unwrap();
+                let expected = fs::read(project.join("content/segments").join(&paths[0]))?;
+                let mut reader = source.reader(&paths[0])?;
+                let mut header = [0; 8];
+                reader.read_exact(&mut header)?;
+                assert_eq!(&header, &expected[..8]);
+                retained = Some((sources.clone(), reader, expected));
+                Ok(())
+            },
+            publish_recovery,
+            RecoveryLock::acquire,
+            Some(job),
+        )
+        .unwrap();
+        assert!(matches!(observer.latest(), PreparingStudioState::Ended));
+        let (sources, mut reader, expected) = retained.unwrap();
+        assert!(sources.live().is_none());
+        assert!(RecoveryLock::acquire(project).is_err());
+        drop(sources);
+        drop(observer);
+        assert!(RecoveryLock::acquire(project).is_err());
+        let mut remaining = Vec::new();
+        reader.read_to_end(&mut remaining).unwrap();
+        assert_eq!(remaining, expected[8..]);
+        drop(reader);
+        let lock = RecoveryLock::acquire(project).unwrap();
+        drop(lock);
+        let finalized = RecordingMeta::load_for_project(project).unwrap();
+        assert!(matches!(
+            finalized.studio_meta().unwrap().status(),
+            StudioRecordingStatus::Complete
+        ));
+    }
+
+    #[test]
+    fn preparing_config_drift_declines_preview_without_failing_finalization() {
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let completed = completed_preparing_fixture(project);
+        let (job, observer) = PreparingStudioJob::claim(&completed, 7).unwrap();
+        let mut configuration = ProjectConfiguration::load(project).unwrap();
+        configuration.timeline.as_mut().unwrap().segments[0].name = Some("Changed".into());
+        configuration.write(project).unwrap();
+        let metadata = RecordingMeta::load_for_project(project).unwrap();
+        let recording = RecoveryManager::analyze_incomplete(project, &metadata).unwrap();
+        RecoveryManager::finalize_with_publication(
+            &recording,
+            RecoveryPurpose::Finalize,
+            copy_recovery_input_with_durability,
+            |_, _| {
+                assert!(matches!(
+                    observer.latest(),
+                    PreparingStudioState::Unavailable(_)
+                ));
+                Ok(())
+            },
+            publish_recovery,
+            RecoveryLock::acquire,
+            Some(job),
+        )
+        .unwrap();
+        assert!(matches!(observer.latest(), PreparingStudioState::Ended));
+        assert!(project.join(OUTPUT).is_file());
+        assert!(RecoveryLock::acquire(project).is_ok());
+    }
+
+    #[test]
+    fn preparing_finalizer_panic_revokes_capability_without_unlocking_live_reader() {
+        use std::io::Read;
+
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let completed = completed_preparing_fixture(project);
+        let (job, observer) = PreparingStudioJob::claim(&completed, 8).unwrap();
+        let metadata = RecordingMeta::load_for_project(project).unwrap();
+        let recording = RecoveryManager::analyze_incomplete(project, &metadata).unwrap();
+        let before = recovery_snapshot(project).unwrap();
+        let mut retained = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            RecoveryManager::finalize_with_publication(
+                &recording,
+                RecoveryPurpose::Finalize,
+                copy_recovery_input_with_durability,
+                |_, _| {
+                    let sources = match observer.latest() {
+                        PreparingStudioState::Available(sources) => sources,
+                        PreparingStudioState::Unavailable(reason) => panic!("{reason}"),
+                        _ => panic!("Expected preparing sources before injected failure"),
+                    };
+                    let live = sources.live().unwrap();
+                    let video = live.video(0, PreparingVideoTrack::Display).unwrap();
+                    let (source, paths) = video.input().unwrap();
+                    let mut reader = source.reader(&paths[0])?;
+                    let mut header = [0; 8];
+                    reader.read_exact(&mut header)?;
+                    retained = Some((sources.clone(), reader));
+                    panic!("Injected finalizer interruption after source publication");
+                },
+                publish_recovery,
+                RecoveryLock::acquire,
+                Some(job),
+            )
+        }));
+        assert!(result.is_err());
+        assert!(matches!(observer.latest(), PreparingStudioState::Ended));
+        let (sources, reader) = retained.unwrap();
+        assert!(sources.live().is_none());
+        drop(sources);
+        assert!(RecoveryLock::acquire(project).is_err());
+        drop(reader);
+        assert!(RecoveryLock::acquire(project).is_ok());
+        assert_eq!(recovery_snapshot(project).unwrap(), before);
+        assert!(project.join(DISPLAY).is_dir());
+        assert!(!project.join(OUTPUT).exists());
+    }
+
+    #[test]
+    fn preparing_drifted_completion_uses_ordinary_success_path() {
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let mut completed = completed_preparing_fixture(project);
+        let (job, observer) = PreparingStudioJob::claim(&completed, 9).unwrap();
+        let StudioRecordingMeta::MultipleSegments { inner } = &mut completed.meta else {
+            panic!()
+        };
+        inner.segments[0].display.fps = 60;
+        assert!(RecoveryManager::remux_stopped_with_preparing(&completed, job).unwrap());
+        assert!(matches!(observer.latest(), PreparingStudioState::Ended));
+        assert!(project.join(OUTPUT).is_file());
+        assert!(RecoveryLock::acquire(project).is_ok());
+    }
+
+    #[test]
+    fn studio_finalization_preserves_encoded_audio_samples_and_offsets() {
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let microphone = add_fragmented_audio(project, "audio-input", 90);
+        let system_audio = add_fragmented_audio(project, "system_audio", 90);
+        let original_bytes = fs::read(&microphone).unwrap();
+        let original_audio = cap_audio::AudioData::from_file(&microphone).unwrap();
+        let mut meta = RecordingMeta::load_for_project(project).unwrap();
+        let RecordingMetaInner::Studio(studio) = &mut meta.inner else {
+            panic!()
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+            panic!()
+        };
+        inner.segments[0].mic = Some(AudioMeta {
+            path: "content/segments/segment-0/audio-input.m4a".into(),
+            start_time: Some(-0.125),
+            device_id: Some("benchmark microphone".into()),
+            gap_summary: None,
+        });
+        inner.segments[0].system_audio = Some(AudioMeta {
+            path: "content/segments/segment-0/system_audio.m4a".into(),
+            start_time: Some(0.25),
+            device_id: None,
+            gap_summary: None,
+        });
+        meta.save_for_project().unwrap();
+
+        assert!(RecoveryManager::remux_if_needed(project).unwrap());
+        let meta = RecordingMeta::load_for_project(project).unwrap();
+        let StudioRecordingMeta::MultipleSegments { inner } = meta.studio_meta().unwrap() else {
+            panic!()
+        };
+        let segment = &inner.segments[0];
+        let mic = segment.mic.as_ref().unwrap();
+        assert_eq!(
+            mic.path.as_str(),
+            "content/segments/segment-0/audio-input.m4a"
+        );
+        assert_eq!(mic.start_time, Some(-0.125));
+        assert_eq!(mic.device_id.as_deref(), Some("benchmark microphone"));
+        assert_eq!(
+            segment.system_audio.as_ref().unwrap().start_time,
+            Some(0.25)
+        );
+        for path in [&microphone, &system_audio] {
+            let audio = cap_audio::AudioData::from_file(path).unwrap();
+            assert_eq!(audio.channels(), original_audio.channels());
+            assert_eq!(audio.samples(), original_audio.samples());
+        }
+        let backup = fs::read_dir(project)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(".recovery-")
+            })
+            .unwrap();
+        assert_eq!(
+            fs::read(backup.join("original-segments/segment-0/audio-input.m4a")).unwrap(),
+            original_bytes
+        );
+    }
+
+    #[test]
+    fn studio_finalization_preserves_a_live_managed_audio_decoder() {
+        use cap_audio::{AudioStream, ChunkRead};
+        use std::sync::{Arc, atomic::AtomicBool};
+
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let microphone = add_fragmented_audio(project, "audio-input", 2880);
+        assert!(microphone.metadata().unwrap().len() > 4 * 64 * 1024);
+        let original_audio = cap_audio::AudioData::from_file(&microphone).unwrap();
+        let mut meta = RecordingMeta::load_for_project(project).unwrap();
+        let RecordingMetaInner::Studio(studio) = &mut meta.inner else {
+            panic!()
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+            panic!()
+        };
+        inner.segments[0].mic = Some(AudioMeta {
+            path: "content/segments/segment-0/audio-input.m4a".into(),
+            start_time: Some(-0.125),
+            device_id: None,
+            gap_summary: None,
+        });
+        meta.save_for_project().unwrap();
+        let recording = RecoveryManager::analyze_incomplete(project, &meta).unwrap();
+        let source = RelocatableSource::new(project.join("content/segments")).unwrap();
+        let mut audio = AudioStream::open_relocatable(
+            &source,
+            [Path::new("segment-0/audio-input.m4a")],
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        let ChunkRead::Chunk(prefix) = audio.read_chunk(4096).unwrap() else {
+            panic!()
+        };
+        assert_eq!(prefix.source_start_sample, 0);
+        let mut decoded = prefix.samples;
+        let recovered =
+            RecoveryManager::finalize_with_relocatable_source(&recording, &source).unwrap();
+        assert_eq!(recovered.project_path, project);
+        loop {
+            match audio.read_chunk(4096).unwrap() {
+                ChunkRead::Chunk(chunk) => {
+                    assert_eq!(
+                        chunk.source_start_sample as usize,
+                        decoded.len() / usize::from(original_audio.channels())
+                    );
+                    assert_eq!(chunk.channels, original_audio.channels());
+                    decoded.extend(chunk.samples);
+                }
+                ChunkRead::Eof { next_sample } => {
+                    assert_eq!(
+                        next_sample as usize,
+                        decoded.len() / usize::from(original_audio.channels())
+                    );
+                    break;
+                }
+            }
+        }
+        let expected = original_audio
+            .samples()
+            .iter()
+            .map(|sample| sample.to_bits());
+        assert!(decoded.iter().map(|sample| sample.to_bits()).eq(expected));
+        let finalized = cap_audio::AudioData::from_file(&microphone).unwrap();
+        assert!(
+            finalized
+                .samples()
+                .iter()
+                .map(|sample| sample.to_bits())
+                .eq(original_audio
+                    .samples()
+                    .iter()
+                    .map(|sample| sample.to_bits()))
+        );
+        let persisted = RecordingMeta::load_for_project(project).unwrap();
+        assert_eq!(
+            serde_json::to_value(persisted.studio_meta()).unwrap(),
+            serde_json::to_value(&recovered.meta).unwrap()
+        );
+    }
+
+    #[test]
+    fn recovery_copies_have_independent_bytes_and_preserve_existing_destinations() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        let destination = directory.path().join("destination");
+        fs::write(&source, b"original recording").unwrap();
+        copy_recovery_input(&source, &destination).unwrap();
+        fs::write(&destination, b"staged recording").unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"original recording");
+        assert!(copy_recovery_input(&source, &destination).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"staged recording");
     }
 
     fn change_fragment_bytes(project: &Path) {
@@ -4137,6 +5140,7 @@ mod required_track_failure_recovery_tests {
 #[cfg(test)]
 mod transactional_recovery_tests {
     use super::*;
+    use std::io::{Read, Seek, SeekFrom};
 
     fn publication_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
         let temporary = tempfile::tempdir().unwrap();
@@ -4177,6 +5181,144 @@ mod transactional_recovery_tests {
         assert!(result.is_err());
         assert!(project.join(RECOVERY_PUBLICATION).is_file());
         assert!(workspace.join(RECOVERY_PUBLICATION_RECEIPT).is_file());
+    }
+
+    fn publication_fixture_with_version(
+        version: u32,
+        had_config: bool,
+    ) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let fixture = publication_fixture();
+        let (_, project, workspace) = &fixture;
+        if !had_config {
+            std::fs::remove_file(project.join("project-config.json")).unwrap();
+        }
+        interrupt_publication(project, workspace, 0);
+        let stamp_version = match version {
+            1 => RecoveryPublicationStampVersion::V1,
+            2 => RecoveryPublicationStampVersion::V2,
+            _ => unreachable!(),
+        };
+        let receipt = RecoveryPublication {
+            version,
+            project: project.canonicalize().unwrap(),
+            workspace: workspace.file_name().unwrap().to_str().unwrap().into(),
+            original: recovery_publication_state_for_version(project, stamp_version).unwrap(),
+            staged: recovery_publication_state_for_version(
+                &workspace.join("staged"),
+                stamp_version,
+            )
+            .unwrap(),
+        };
+        let bytes = serde_json::to_vec(&receipt).unwrap();
+        std::fs::write(project.join(RECOVERY_PUBLICATION), &bytes).unwrap();
+        std::fs::write(workspace.join(RECOVERY_PUBLICATION_RECEIPT), bytes).unwrap();
+        fixture
+    }
+
+    #[test]
+    fn publication_receipt_versions_reconcile_without_changing_originals() {
+        for version in [1, 2] {
+            for had_config in [false, true] {
+                let (_temporary, project, workspace) =
+                    publication_fixture_with_version(version, had_config);
+                let original = recovery_snapshot(&project).unwrap();
+                let receipt = std::fs::read(workspace.join(RECOVERY_PUBLICATION_RECEIPT)).unwrap();
+                let _lock = RecoveryLock::acquire(&project).unwrap();
+                assert_eq!(recovery_snapshot(&project).unwrap(), original);
+                assert!(!project.join(RECOVERY_PUBLICATION).exists());
+                assert_eq!(
+                    std::fs::read(workspace.join(RECOVERY_PUBLICATION_RECEIPT)).unwrap(),
+                    receipt
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn publication_receipt_versions_retain_conflict_guards() {
+        use std::io::Write;
+
+        for version in [1, 2] {
+            for changed in [
+                "raw", "added", "removed", "metadata", "config", "stamp", "receipt",
+            ] {
+                let (_temporary, project, workspace) =
+                    publication_fixture_with_version(version, true);
+                match changed {
+                    "raw" => {
+                        let path = project.join("content/segments/raw.m4s");
+                        let modified = path.metadata().unwrap().modified().unwrap();
+                        let mut file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+                        file.set_len(0).unwrap();
+                        file.write_all(b"different raw length with original modification time")
+                            .unwrap();
+                        file.set_times(std::fs::FileTimes::new().set_modified(modified))
+                            .unwrap();
+                    }
+                    "added" => {
+                        std::fs::create_dir(project.join("content/segments/unrelated")).unwrap();
+                    }
+                    "removed" => {
+                        std::fs::remove_file(project.join("content/segments/raw.m4s")).unwrap();
+                    }
+                    "metadata" | "config" => {
+                        let name = if changed == "metadata" {
+                            "recording-meta.json"
+                        } else {
+                            "project-config.json"
+                        };
+                        let path = project.join(name);
+                        let mut bytes = std::fs::read(&path).unwrap();
+                        bytes[0] ^= 1;
+                        std::fs::write(path, bytes).unwrap();
+                    }
+                    "stamp" => {
+                        let path = project.join(RECOVERY_PUBLICATION);
+                        let mut receipt: RecoveryPublication =
+                            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                        receipt.original.segments.as_mut().unwrap()[0] ^= 1;
+                        let bytes = serde_json::to_vec(&receipt).unwrap();
+                        std::fs::write(path, &bytes).unwrap();
+                        std::fs::write(workspace.join(RECOVERY_PUBLICATION_RECEIPT), bytes)
+                            .unwrap();
+                    }
+                    "receipt" => {
+                        std::fs::write(
+                            workspace.join(RECOVERY_PUBLICATION_RECEIPT),
+                            b"different receipt",
+                        )
+                        .unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                let before = recovery_snapshot(&project).unwrap();
+                assert!(RecoveryLock::acquire(&project).is_err());
+                assert_eq!(recovery_snapshot(&project).unwrap(), before);
+                assert!(project.join(RECOVERY_PUBLICATION).is_file());
+                assert!(workspace.join(RECOVERY_PUBLICATION_RECEIPT).is_file());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_publication_receipts_never_fall_back_to_version_two_stamps() {
+        let (_temporary, project, workspace) = publication_fixture_with_version(2, true);
+        let legacy =
+            recovery_publication_state_for_version(&project, RecoveryPublicationStampVersion::V1)
+                .unwrap();
+        let path = project.join(RECOVERY_PUBLICATION);
+        let mut receipt: RecoveryPublication =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(legacy.segments != receipt.original.segments);
+        receipt.version = 1;
+        let bytes = serde_json::to_vec(&receipt).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::write(workspace.join(RECOVERY_PUBLICATION_RECEIPT), &bytes).unwrap();
+        let before = recovery_snapshot(&project).unwrap();
+        assert!(RecoveryLock::acquire(&project).is_err());
+        assert_eq!(recovery_snapshot(&project).unwrap(), before);
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
     }
 
     fn scannable_publication_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
@@ -4584,7 +5726,7 @@ mod transactional_recovery_tests {
                 "oversized" => vec![0; RECOVERY_PUBLICATION_MAX_BYTES as usize + 1],
                 _ => {
                     match value {
-                        "version" => receipt.version = 2,
+                        "version" => receipt.version = u32::MAX,
                         "generation" => {
                             receipt.workspace = format!(".recovery-{}", uuid::Uuid::new_v4())
                         }
@@ -4668,6 +5810,195 @@ mod transactional_recovery_tests {
                 b"original status"
             );
         }
+    }
+
+    #[test]
+    fn preparing_reader_retains_recovery_lock_after_source_and_finalizer_drop() {
+        let (_temporary, project, workspace) = publication_fixture();
+        let mut reader = {
+            let lock = Arc::new(RecoveryLock::acquire(&project).unwrap());
+            let source =
+                RelocatableSource::new_with_owner(project.join("content/segments"), lock.clone())
+                    .unwrap();
+            let mut reader = source.reader(Path::new("raw.m4s")).unwrap();
+            let mut prefix = [0; 4];
+            reader.read_exact(&mut prefix).unwrap();
+            assert_eq!(&prefix, b"orig");
+            publish_recovery_with_source(&project, &workspace, &source).unwrap();
+            reader
+        };
+        assert!(RecoveryLock::acquire(&project).is_err());
+        let mut suffix = Vec::new();
+        reader.read_to_end(&mut suffix).unwrap();
+        assert_eq!(suffix, b"inal raw");
+        drop(reader);
+        let lock = RecoveryLock::acquire(&project).unwrap();
+        drop(lock);
+    }
+
+    #[test]
+    fn preparing_source_failures_release_recovery_lock_without_retained_readers() {
+        let (_temporary, project, _workspace) = publication_fixture();
+        let owner = Arc::new(RecoveryLock::acquire(&project).unwrap());
+        assert!(RelocatableSource::new_with_owner(project.join("missing"), owner).is_err());
+        let owner = Arc::new(RecoveryLock::acquire(&project).unwrap());
+        let source =
+            RelocatableSource::new_with_owner(project.join("content/segments"), owner).unwrap();
+        assert!(source.reader(Path::new("missing.m4s")).is_err());
+        drop(source);
+        let lock = RecoveryLock::acquire(&project).unwrap();
+        drop(lock);
+    }
+
+    #[test]
+    fn managed_recovery_publication_keeps_readers_on_original_media() {
+        let (_temporary, project, workspace) = publication_fixture();
+        let source = RelocatableSource::new(project.join("content/segments")).unwrap();
+        let mut reader = source.reader(Path::new("raw.m4s")).unwrap();
+        let mut prefix = [0; 4];
+        reader.read_exact(&mut prefix).unwrap();
+        assert_eq!(&prefix, b"orig");
+        publish_recovery_with_source(&project, &workspace, &source).unwrap();
+        let mut suffix = Vec::new();
+        reader.read_to_end(&mut suffix).unwrap();
+        assert_eq!(suffix, b"inal raw");
+        reader.seek(SeekFrom::Start(0)).unwrap();
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"original raw");
+        let mut reopened = source.reader(Path::new("raw.m4s")).unwrap();
+        bytes.clear();
+        reopened.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"original raw");
+        assert_eq!(
+            std::fs::read(project.join("content/segments/display.mp4")).unwrap(),
+            b"validated output"
+        );
+        assert!(!project.join(RECOVERY_PUBLICATION).exists());
+    }
+
+    #[test]
+    fn managed_recovery_readers_survive_every_publication_rollback() {
+        for failure in 1..=4 {
+            let (_temporary, project, workspace) = publication_fixture();
+            let before = recovery_snapshot(&project).unwrap();
+            let original = project.join("content/segments");
+            let backup = workspace.join("original-segments");
+            let source = RelocatableSource::new(original.clone()).unwrap();
+            let mut reader = source.reader(Path::new("raw.m4s")).unwrap();
+            let mut prefix = [0; 4];
+            reader.read_exact(&mut prefix).unwrap();
+            let mut calls = 0;
+            let result = publish_recovery_with(&project, &workspace, |from, to| {
+                calls += 1;
+                if calls == failure {
+                    return Err(std::io::Error::other(
+                        "injected managed publication failure",
+                    ));
+                }
+                rename_recovery_path_with_source(from, to, &original, &backup, &source)
+            });
+            assert!(result.is_err());
+            assert_eq!(recovery_snapshot(&project).unwrap(), before);
+            assert!(!project.join(RECOVERY_PUBLICATION).exists());
+            let mut suffix = Vec::new();
+            reader.read_to_end(&mut suffix).unwrap();
+            assert_eq!(suffix, b"inal raw");
+            assert!(source.reader(Path::new("raw.m4s")).is_ok());
+        }
+    }
+
+    #[test]
+    fn managed_recovery_rollback_failure_retains_readable_originals() {
+        for rollback_failure in 5..=7 {
+            let (_temporary, project, workspace) = publication_fixture();
+            let original = project.join("content/segments");
+            let backup = workspace.join("original-segments");
+            let source = RelocatableSource::new(original.clone()).unwrap();
+            let mut reader = source.reader(Path::new("raw.m4s")).unwrap();
+            let mut prefix = [0; 4];
+            reader.read_exact(&mut prefix).unwrap();
+            let mut calls = 0;
+            let result = publish_recovery_with(&project, &workspace, |from, to| {
+                calls += 1;
+                if calls == 4 || calls == rollback_failure {
+                    return Err(std::io::Error::other("injected managed rollback failure"));
+                }
+                rename_recovery_path_with_source(from, to, &original, &backup, &source)
+            });
+            assert!(result.unwrap_err().to_string().contains("rollback failed"));
+            assert!(project.join(RECOVERY_PUBLICATION).is_file());
+            assert_eq!(
+                std::fs::read(backup.join("raw.m4s")).unwrap(),
+                b"original raw"
+            );
+            let mut suffix = Vec::new();
+            reader.read_to_end(&mut suffix).unwrap();
+            assert_eq!(suffix, b"inal raw");
+        }
+    }
+
+    #[test]
+    fn managed_recovery_refuses_a_different_projects_source() {
+        let (_temporary, project, workspace) = publication_fixture();
+        let (_other_temporary, other, _other_workspace) = publication_fixture();
+        let before = recovery_snapshot(&project).unwrap();
+        let other_before = recovery_snapshot(&other).unwrap();
+        let source = RelocatableSource::new(other.join("content/segments")).unwrap();
+        let mut reader = source.reader(Path::new("raw.m4s")).unwrap();
+        assert!(publish_recovery_with_source(&project, &workspace, &source).is_err());
+        assert_eq!(recovery_snapshot(&project).unwrap(), before);
+        assert_eq!(recovery_snapshot(&other).unwrap(), other_before);
+        assert!(!project.join(RECOVERY_PUBLICATION).exists());
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"original raw");
+    }
+
+    #[test]
+    fn managed_recovery_lock_leaves_pending_publication_for_reader_shutdown() {
+        let (_temporary, project, workspace) = publication_fixture();
+        let original = project.join("content/segments");
+        let backup = workspace.join("original-segments");
+        let source = RelocatableSource::new(original.clone()).unwrap();
+        let mut reader = source.reader(Path::new("raw.m4s")).unwrap();
+        let mut prefix = [0; 4];
+        reader.read_exact(&mut prefix).unwrap();
+        {
+            let _lock = RecoveryLock::acquire(&project).unwrap();
+            let mut calls = 0;
+            let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                publish_recovery_with(&project, &workspace, |from, to| {
+                    rename_recovery_path_with_source(from, to, &original, &backup, &source)?;
+                    calls += 1;
+                    assert_ne!(calls, 1, "interrupted after managed source relocation");
+                    Ok(())
+                })
+            }));
+            assert!(interrupted.is_err());
+        }
+        let receipt = std::fs::read(project.join(RECOVERY_PUBLICATION)).unwrap();
+        assert!(RecoveryLock::acquire_for_preparing_preview(&project).is_err());
+        assert_eq!(
+            std::fs::read(project.join(RECOVERY_PUBLICATION)).unwrap(),
+            receipt
+        );
+        assert!(!original.exists());
+        assert_eq!(
+            std::fs::read(backup.join("raw.m4s")).unwrap(),
+            b"original raw"
+        );
+        let mut suffix = Vec::new();
+        reader.read_to_end(&mut suffix).unwrap();
+        assert_eq!(suffix, b"inal raw");
+        drop(reader);
+        drop(source);
+        let _lock = RecoveryLock::acquire(&project).unwrap();
+        assert_eq!(
+            std::fs::read(original.join("raw.m4s")).unwrap(),
+            b"original raw"
+        );
+        assert!(!project.join(RECOVERY_PUBLICATION).exists());
     }
 
     #[test]
@@ -4940,6 +6271,51 @@ mod transactional_recovery_tests {
         std::fs::create_dir(project.join("content/segments/segment-1")).unwrap();
         assert_ne!(recovery_snapshot(&project).unwrap(), before);
     }
+
+    #[test]
+    fn large_recovery_snapshots_preserve_exact_bytes_and_directory_entries() {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path();
+        std::fs::create_dir_all(project.join("content/nested/empty")).unwrap();
+        let first = vec![0x25; 16 * 1024 * 1024 + 1];
+        let second = vec![0x82; first.len()];
+        std::fs::write(project.join("content/first.bin"), &first).unwrap();
+        std::fs::write(project.join("content/nested/second.bin"), &second).unwrap();
+        std::fs::write(project.join("recording-meta.json"), b"metadata").unwrap();
+        std::fs::write(project.join("excluded"), b"not a recovery input").unwrap();
+
+        let mut expected = RecoverySnapshot::new();
+        for path in ["content", "content/nested", "content/nested/empty"] {
+            let _ = expected.insert(PathBuf::from(path), None);
+        }
+        for (path, bytes) in [
+            ("content/first.bin", first.as_slice()),
+            ("content/nested/second.bin", second.as_slice()),
+            ("recording-meta.json", b"metadata".as_slice()),
+        ] {
+            let _ = expected.insert(
+                PathBuf::from(path),
+                Some(blake3::hash(bytes).as_bytes().to_vec()),
+            );
+        }
+        assert_eq!(recovery_snapshot(project).unwrap(), expected);
+
+        let path = project.join("content/nested/second.bin");
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::End(-1)).unwrap();
+        file.write_all(&[0x83]).unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_ne!(recovery_snapshot(project).unwrap(), expected);
+        file.seek(SeekFrom::End(-1)).unwrap();
+        file.write_all(&[0x82]).unwrap();
+        assert_eq!(recovery_snapshot(project).unwrap(), expected);
+        std::fs::remove_dir(project.join("content/nested/empty")).unwrap();
+        assert_ne!(recovery_snapshot(project).unwrap(), expected);
+    }
     #[test]
     fn recovery_lock_child_probe() {
         let Some(path) = std::env::var_os("CAP_RECOVERY_LOCK_CHILD") else {
@@ -4994,3 +6370,6 @@ mod transactional_recovery_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod preparing_canonical_probe;

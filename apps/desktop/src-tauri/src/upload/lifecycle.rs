@@ -786,7 +786,8 @@ pub(crate) async fn resume_existing(
                     video_id.clone(),
                     file_path,
                     screenshot_path,
-                    metadata,
+                    meta.sharing.is_some()
+                        && matches!(meta.inner, cap_project::RecordingMetaInner::Studio(_)),
                     None,
                 )
                 .await?;

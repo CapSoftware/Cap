@@ -5927,6 +5927,7 @@ async fn handle_recording_finish(
                         recording,
                         default_preset,
                         Some(capture_target),
+                        finalization.preparing(),
                     )
                     .await;
 
@@ -5975,6 +5976,7 @@ async fn handle_recording_finish(
                     project_path: recording.project_path,
                     meta: updated_studio_meta.clone(),
                     cursor_data: recording.cursor_data,
+                    clean_stopped: None,
                 },
                 &recordings,
                 PresetsStore::get_default_preset(app)?.map(|p| p.config),
@@ -6164,21 +6166,28 @@ async fn finalize_studio_recording(
     recording: cap_recording::studio_recording::CompletedRecording,
     default_preset: Option<ProjectConfiguration>,
     capture_target: Option<ScreenCaptureTarget>,
+    preparing: crate::preparing_finalization::FinalizationPreparing,
 ) -> Result<(), String> {
     info!("Starting background finalization for recording");
     project.validate_async().await?;
+    preparing.set_presentation(preparing_presentation_snapshot(
+        default_preset.as_ref(),
+        capture_target.as_ref(),
+    ));
     let recording_dir = project.work_path().to_path_buf();
     let screenshots_dir = recording_dir.join("screenshots");
     let display_path = project.display_path().to_path_buf();
     let recording_dir_for_remux = recording_dir.clone();
     let app_for_remux = app.clone();
-    let remux_result = tokio::task::spawn_blocking(move || {
-        remux_fragmented_recording_with_trigger(
+    let (remux_result, recording) = tokio::task::spawn_blocking(move || {
+        let result = remux_fragmented_recording_with_preparing(
             &recording_dir_for_remux,
             &display_path,
             "recording_stop",
             Some(&app_for_remux),
-        )
+            Some((&preparing, &recording)),
+        );
+        (result, recording)
     })
     .await
     .map_err(|e| format!("Recording finalization task panicked: {e}"))?;
@@ -6220,6 +6229,7 @@ async fn finalize_studio_recording(
             project_path: recording.project_path,
             meta: updated_studio_meta,
             cursor_data: recording.cursor_data,
+            clean_stopped: None,
         },
         &recordings,
         default_preset,
@@ -6421,24 +6431,7 @@ fn project_config_from_recording(
 
     let camera_preview_manager = CameraPreviewManager::new(app);
     if let Ok(camera_preview_state) = camera_preview_manager.get_state() {
-        match camera_preview_state.shape {
-            CameraPreviewShape::Round => {
-                config.camera.shape = CameraShape::Square;
-                config.camera.rounding = 100.0;
-            }
-            CameraPreviewShape::Square => {
-                config.camera.shape = CameraShape::Square;
-                config.camera.rounding = 25.0;
-            }
-            CameraPreviewShape::Full => {
-                config.camera.shape = CameraShape::Source;
-                config.camera.rounding = 25.0;
-            }
-        }
-
-        config.camera.background_blur = cap_project::BackgroundBlurConfig {
-            mode: camera_preview_state.background_blur,
-        };
+        apply_recording_camera_preview_state(&mut config, &camera_preview_state);
     }
 
     let timeline_segments = recordings
@@ -6478,8 +6471,17 @@ fn project_config_from_recording(
         });
     }
 
-    config.timeline = Some(TimelineConfiguration {
-        segments: timeline_segments,
+    config.timeline = Some(recording_timeline(timeline_segments, zoom_segments));
+
+    config
+}
+
+pub(crate) fn recording_timeline(
+    segments: Vec<TimelineSegment>,
+    zoom_segments: Vec<ZoomSegment>,
+) -> TimelineConfiguration {
+    TimelineConfiguration {
+        segments,
         transitions: Vec::new(),
         zoom_segments,
         scene_segments: Vec::new(),
@@ -6491,9 +6493,31 @@ fn project_config_from_recording(
         keyboard_segments: Vec::new(),
         audio_segments: Vec::new(),
         camera3d_segments: Vec::new(),
-    });
+    }
+}
 
-    config
+fn apply_recording_camera_preview_state(
+    config: &mut ProjectConfiguration,
+    camera_preview_state: &crate::camera::CameraPreviewState,
+) {
+    match camera_preview_state.shape {
+        CameraPreviewShape::Round => {
+            config.camera.shape = CameraShape::Square;
+            config.camera.rounding = 100.0;
+        }
+        CameraPreviewShape::Square => {
+            config.camera.shape = CameraShape::Square;
+            config.camera.rounding = 25.0;
+        }
+        CameraPreviewShape::Full => {
+            config.camera.shape = CameraShape::Source;
+            config.camera.rounding = 25.0;
+        }
+    }
+
+    config.camera.background_blur = cap_project::BackgroundBlurConfig {
+        mode: camera_preview_state.background_blur,
+    };
 }
 
 fn should_enable_notch_overlay(
@@ -6662,6 +6686,19 @@ pub fn remux_fragmented_recording_with_trigger(
     trigger: &'static str,
     app: Option<&AppHandle>,
 ) -> Result<(), String> {
+    remux_fragmented_recording_with_preparing(recording_dir, display_path, trigger, app, None)
+}
+
+pub(crate) fn remux_fragmented_recording_with_preparing(
+    recording_dir: &Path,
+    display_path: &Path,
+    trigger: &'static str,
+    app: Option<&AppHandle>,
+    preparing: Option<(
+        &crate::preparing_finalization::FinalizationPreparing,
+        &studio_recording::CompletedRecording,
+    )>,
+) -> Result<(), String> {
     crate::recovery::ensure_finalization_storage(recording_dir, display_path)?;
     let incomplete_recording = RecoveryManager::inspect_recording(recording_dir);
 
@@ -6669,7 +6706,10 @@ pub fn remux_fragmented_recording_with_trigger(
         let normal_stop = trigger == "recording_stop";
         let validation_start = std::time::Instant::now();
         let outcome = if normal_stop {
-            RecoveryManager::finalize(&recording)
+            match preparing.and_then(|(publisher, completed)| publisher.claim(completed)) {
+                Some(job) => RecoveryManager::finalize_with_preparing(&recording, job),
+                None => RecoveryManager::finalize(&recording),
+            }
         } else {
             RecoveryManager::recover(&recording)
         };
@@ -9505,6 +9545,7 @@ mod studio_joined_completion_tests {
                                     },
                                 },
                                 cursor_data: Default::default(),
+                                clean_stopped: None,
                             }),
                         }
                     },
@@ -9755,6 +9796,338 @@ mod studio_capture_control_tests {
                     .starts_with("Recording stopped because your disk is full."),
                 confirmed
             );
+        }
+    }
+}
+
+pub(crate) fn preparing_presentation_snapshot(
+    preset: Option<&ProjectConfiguration>,
+    capture_target: Option<&ScreenCaptureTarget>,
+) -> Result<ProjectConfiguration, String> {
+    let mut config = preset
+        .cloned()
+        .ok_or("Default presentation requires ordinary finalization")?;
+    if matches!(capture_target, None | Some(ScreenCaptureTarget::CameraOnly))
+        || !matches!(
+            config.background.source,
+            cap_project::BackgroundSource::Color { .. }
+                | cap_project::BackgroundSource::Gradient {
+                    animated: None | Some(false),
+                    ..
+                }
+        )
+        || config.background.notch.is_some()
+    {
+        return Err("Presentation requires ordinary finalization".into());
+    }
+    config.cursor.size = cap_project::CursorConfiguration::default().size;
+    apply_screen_recording_presentation_defaults(&mut config, capture_target, false, None);
+    Ok(config)
+}
+
+#[cfg(test)]
+mod preparing_presentation_tests {
+    use super::*;
+
+    #[test]
+    fn preparing_never_guesses_default_wallpaper_or_animated_background() {
+        assert!(preparing_presentation_snapshot(None, None).is_err());
+        let config = ProjectConfiguration::default();
+        assert!(preparing_presentation_snapshot(Some(&config), None).is_err());
+        assert!(
+            preparing_presentation_snapshot(Some(&config), Some(&ScreenCaptureTarget::CameraOnly))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn static_preset_defaults_match_the_existing_screen_defaults() {
+        let target = ScreenCaptureTarget::Display {
+            id: "1".parse().unwrap(),
+        };
+        let mut config = ProjectConfiguration::default();
+        config.cursor.size = 173;
+        config.background.padding = 0.0;
+        config.background.rounding = 0.0;
+        let projected = preparing_presentation_snapshot(Some(&config), Some(&target)).unwrap();
+        let mut ordinary = config;
+        ordinary.cursor.size = cap_project::CursorConfiguration::default().size;
+        apply_screen_recording_presentation_defaults(&mut ordinary, Some(&target), false, None);
+        assert_eq!(
+            serde_json::to_value(projected).unwrap(),
+            serde_json::to_value(ordinary).unwrap()
+        );
+    }
+}
+
+#[cfg(test)]
+mod preparing_presentation_parity_tests {
+    use super::*;
+    use cap_project::{BackgroundSource, ClipConfiguration, ClipOffsets, ScreenMovementSpring};
+
+    fn value(config: &ProjectConfiguration) -> serde_json::Value {
+        serde_json::to_value(config).unwrap()
+    }
+
+    fn targets() -> Vec<ScreenCaptureTarget> {
+        vec![
+            ScreenCaptureTarget::Display {
+                id: "1".parse().unwrap(),
+            },
+            ScreenCaptureTarget::Window {
+                id: "1".parse().unwrap(),
+            },
+            ScreenCaptureTarget::Area {
+                screen: "1".parse().unwrap(),
+                bounds: scap_targets::bounds::LogicalBounds::new(
+                    scap_targets::bounds::LogicalPosition::new(10.0, 20.0),
+                    scap_targets::bounds::LogicalSize::new(320.0, 240.0),
+                ),
+            },
+        ]
+    }
+
+    fn one_segment(end: f64) -> Vec<TimelineSegment> {
+        vec![TimelineSegment {
+            recording_clip: 0,
+            start: 0.0,
+            end,
+            timescale: 1.0,
+            name: None,
+            speed_audio_mode: None,
+        }]
+    }
+
+    fn preset() -> ProjectConfiguration {
+        ProjectConfiguration::default()
+    }
+
+    fn ordinary_static_projection(
+        preset: &ProjectConfiguration,
+        target: &ScreenCaptureTarget,
+        segments: Vec<TimelineSegment>,
+    ) -> ProjectConfiguration {
+        let mut config = preset.clone();
+        config.cursor.size = cap_project::CursorConfiguration::default().size;
+        apply_screen_recording_presentation_defaults(&mut config, Some(target), false, None);
+        apply_recording_camera_preview_state(
+            &mut config,
+            &crate::camera::CameraPreviewState::default(),
+        );
+        config.timeline = Some(recording_timeline(segments, Vec::new()));
+        config
+    }
+
+    #[test]
+    fn static_color_projection_preserves_preset_and_matches_ordinary_screen_defaults() {
+        for target in targets() {
+            let mut preset = preset();
+            preset.cursor.size = 173;
+            preset.background.padding = 0.0;
+            preset.background.rounding = 0.0;
+            preset.background.source = BackgroundSource::Color {
+                value: [32, 64, 128],
+                alpha: 160,
+            };
+            preset.screen_movement_spring = ScreenMovementSpring {
+                stiffness: 120.0,
+                damping: 14.0,
+                mass: 1.0,
+            };
+            let original = value(&preset);
+            let snapshot = preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
+            let stopped = recording_timeline(one_segment(6.0), Vec::new());
+            let projected =
+                crate::editor_preparing::project_from_preparing_presentation(&snapshot, &stopped);
+            let ordinary = ordinary_static_projection(&preset, &target, one_segment(6.0));
+            assert_eq!(value(&projected), value(&ordinary));
+            assert_eq!(value(&preset), original);
+            assert_eq!(projected.background.padding, 10.0);
+            assert_eq!(
+                projected.background.rounding,
+                if matches!(target, ScreenCaptureTarget::Area { .. }) {
+                    0.0
+                } else {
+                    7.5
+                }
+            );
+            assert_eq!(
+                projected.cursor.size,
+                cap_project::CursorConfiguration::default().size
+            );
+            assert_eq!(
+                serde_json::to_value(projected.screen_movement_spring).unwrap(),
+                serde_json::to_value(ScreenMovementSpring::default()).unwrap()
+            );
+            assert!(matches!(
+                projected.background.source,
+                BackgroundSource::Color {
+                    value: [32, 64, 128],
+                    alpha: 160
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn static_gradients_preserve_explicit_presentation_values_for_each_screen_target() {
+        for target in targets() {
+            for animated in [None, Some(false)] {
+                let mut preset = preset();
+                preset.background.padding = 23.0;
+                preset.background.rounding = 11.0;
+                preset.background.source = BackgroundSource::Gradient {
+                    from: [17, 41, 65],
+                    to: [193, 211, 227],
+                    angle: 217,
+                    noise_intensity: Some(0.125),
+                    noise_scale: Some(1.5),
+                    animated,
+                    animation_speed: Some(0.25),
+                };
+                preset.screen_movement_spring = ScreenMovementSpring {
+                    stiffness: 150.0,
+                    damping: 22.0,
+                    mass: 0.8,
+                };
+                let snapshot =
+                    preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
+                let stopped = recording_timeline(one_segment(6.0), Vec::new());
+                let projected = crate::editor_preparing::project_from_preparing_presentation(
+                    &snapshot, &stopped,
+                );
+                assert_eq!(
+                    value(&projected),
+                    value(&ordinary_static_projection(
+                        &preset,
+                        &target,
+                        one_segment(6.0)
+                    ))
+                );
+                assert_eq!(projected.background.padding, 23.0);
+                assert_eq!(projected.background.rounding, 11.0);
+                assert_eq!(
+                    serde_json::to_value(&projected.background.source).unwrap(),
+                    serde_json::to_value(&preset.background.source).unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unresolved_and_late_presentation_inputs_are_declined_without_mutating_presets() {
+        let target = targets().remove(0);
+        assert!(preparing_presentation_snapshot(None, Some(&target)).is_err());
+        let mut preset = preset();
+        for source in [
+            BackgroundSource::Wallpaper {
+                path: Some("wallpaper.jpg".into()),
+            },
+            BackgroundSource::Image {
+                path: Some("image.png".into()),
+            },
+            BackgroundSource::AnimatedGradient {
+                config: Default::default(),
+            },
+            BackgroundSource::Gradient {
+                from: [0, 0, 0],
+                to: [255, 255, 255],
+                angle: 90,
+                noise_intensity: None,
+                noise_scale: None,
+                animated: Some(true),
+                animation_speed: None,
+            },
+        ] {
+            preset.background.source = source;
+            let original = value(&preset);
+            assert!(preparing_presentation_snapshot(Some(&preset), Some(&target)).is_err());
+            assert_eq!(value(&preset), original);
+        }
+        preset.background.source = BackgroundSource::default();
+        for enabled in [false, true] {
+            preset.background.notch = Some(cap_project::NotchConfiguration {
+                enabled,
+                ..Default::default()
+            });
+            assert!(preparing_presentation_snapshot(Some(&preset), Some(&target)).is_err());
+        }
+        preset.background.notch = None;
+        assert!(preparing_presentation_snapshot(Some(&preset), None).is_err());
+        assert!(
+            preparing_presentation_snapshot(Some(&preset), Some(&ScreenCaptureTarget::CameraOnly))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn stopped_timeline_replaces_preset_edits_but_keeps_explicit_clip_offsets() {
+        let target = targets().remove(0);
+        let mut preset = preset();
+        preset.clips = vec![ClipConfiguration {
+            index: 0,
+            offsets: ClipOffsets {
+                camera: 0.125,
+                mic: -0.25,
+                system_audio: 0.0625,
+            },
+            offsets_auto_calculated: false,
+        }];
+        let old_zoom: ZoomSegment = serde_json::from_value(serde_json::json!({
+            "start": 1.0, "end": 4.0, "amount": 2.0, "mode": "auto"
+        }))
+        .unwrap();
+        preset.timeline = Some(recording_timeline(one_segment(2.0), vec![old_zoom]));
+        let snapshot = preparing_presentation_snapshot(Some(&preset), Some(&target)).unwrap();
+        let stopped = recording_timeline(one_segment(6.0), Vec::new());
+        let projected =
+            crate::editor_preparing::project_from_preparing_presentation(&snapshot, &stopped);
+        let ordinary = ordinary_static_projection(&preset, &target, one_segment(6.0));
+        assert_eq!(value(&projected), value(&ordinary));
+        let timeline = projected.timeline.as_ref().unwrap();
+        assert_eq!(timeline.segments.len(), 1);
+        assert_eq!(timeline.segments[0].end, 6.0);
+        assert!(timeline.zoom_segments.is_empty());
+        assert_eq!(
+            serde_json::to_value(&projected.clips).unwrap(),
+            serde_json::to_value(&preset.clips).unwrap()
+        );
+        assert_eq!(preset.timeline.as_ref().unwrap().segments[0].end, 2.0);
+        assert_eq!(preset.timeline.as_ref().unwrap().zoom_segments.len(), 1);
+    }
+
+    #[test]
+    fn ordinary_late_camera_state_changes_only_the_three_existing_camera_fields() {
+        for (shape, expected_shape, rounding) in [
+            (CameraPreviewShape::Round, CameraShape::Square, 100.0),
+            (CameraPreviewShape::Square, CameraShape::Square, 25.0),
+            (CameraPreviewShape::Full, CameraShape::Source, 25.0),
+        ] {
+            for blur in [
+                cap_project::BackgroundBlurMode::Off,
+                cap_project::BackgroundBlurMode::Light,
+                cap_project::BackgroundBlurMode::Heavy,
+            ] {
+                let mut config = preset();
+                config.camera.size = 41.0;
+                config.camera.mirror = true;
+                let mut expected = config.clone();
+                expected.camera.shape = expected_shape;
+                expected.camera.rounding = rounding;
+                expected.camera.background_blur.mode = blur;
+                apply_recording_camera_preview_state(
+                    &mut config,
+                    &crate::camera::CameraPreviewState {
+                        size: 99.0,
+                        shape: shape.clone(),
+                        mirrored: false,
+                        background_blur: blur,
+                    },
+                );
+                assert_eq!(value(&config), value(&expected));
+                assert_eq!(config.camera.size, 41.0);
+                assert!(config.camera.mirror);
+            }
         }
     }
 }

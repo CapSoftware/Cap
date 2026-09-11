@@ -189,6 +189,7 @@ pub struct ExportUi {
     pub sign_in_cancel: Arc<AtomicBool>,
     pub organization_id: Option<String>,
     pub share_link: Option<String>,
+    pub reuploading: bool,
     pub upload_progress: f32,
     pub copy_link_pressed: bool,
 }
@@ -245,6 +246,7 @@ impl ExportUi {
             sign_in_cancel: Arc::new(AtomicBool::new(false)),
             organization_id: prefs.organization_id,
             share_link: None,
+            reuploading: false,
             upload_progress: 0.0,
             copy_link_pressed: false,
         }
@@ -357,11 +359,52 @@ fn decode_jpeg_bytes(bytes: &[u8]) -> Option<Arc<RenderImage>> {
 }
 
 impl EditorWindow {
+    pub(crate) fn render_reupload_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .rounded(px(8.))
+            .bg(Hsla::from(self.theme.blue_3))
+            .border_1()
+            .border_color(Hsla::from(self.theme.blue_5))
+            .child(
+                ui::EditorButton::plain(&self.theme, "editor-reupload")
+                    .left_icon("icons/cloud-upload.svg")
+                    .label("Reupload")
+                    .tooltip(
+                        &self.theme,
+                        if has_transparent_background(&self.project) {
+                            "Share links require a background without transparency"
+                        } else {
+                            "Upload your latest edit to the same link"
+                        },
+                    )
+                    .disabled(!self.project_ready() || has_transparent_background(&self.project))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if !this.project_ready() {
+                            return;
+                        }
+                        this.open_export(window, cx);
+                        if !has_transparent_background(&this.project)
+                            && let Some(ui) = this.export.as_mut()
+                        {
+                            ui.destination = ExportDestination::Link;
+                            ui.format = ExportFormatKind::Mp4;
+                            ui.cursor_only = false;
+                        }
+                        this.normalize_loaded_export_fps();
+                        this.refresh_export_preview(window, cx);
+                        cx.notify();
+                    })),
+            )
+    }
+
     pub(crate) fn open_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.playing {
             self.toggle_play_from_crop(cx);
         }
         let mut ui = ExportUi::load();
+        if let Ok(meta) = RecordingMeta::load_for_project(&self.project_path) {
+            self.sharing = meta.sharing;
+        }
         if has_transparent_background(&self.project) {
             ui.format = ExportFormatKind::Gif;
             if ui.resolution == ExportResolution::P4k {
@@ -880,6 +923,7 @@ impl EditorWindow {
         ui.cancel = Arc::new(AtomicBool::new(false));
         let cancel = ui.cancel.clone();
         ui.phase = ExportPhase::Starting;
+        ui.reuploading = self.sharing.is_some();
         ui.error = None;
         ui.share_link = None;
         ui.upload_progress = 0.0;
@@ -993,6 +1037,11 @@ impl EditorWindow {
                     match upload.await {
                         Ok(Ok(crate::upload::UploadResult::Success(link))) => {
                             let _ = this.update(cx, |this, cx| {
+                                if let Ok(meta) =
+                                    RecordingMeta::load_for_project(&this.project_path)
+                                {
+                                    this.sharing = meta.sharing;
+                                }
                                 if let Some(ui) = this.export.as_mut() {
                                     ui.phase = ExportPhase::Done;
                                     ui.share_link = Some(link.clone());
@@ -1387,7 +1436,11 @@ impl EditorWindow {
                                 ),
                                 ExportDestination::Link => (
                                     ui::ButtonVariant::Primary,
-                                    "Export to Link",
+                                    if self.sharing.is_some() {
+                                        "Reupload to same link"
+                                    } else {
+                                        "Create shareable link"
+                                    },
                                     Some("icons/link.svg"),
                                 ),
                             };
@@ -1426,8 +1479,15 @@ impl EditorWindow {
                     ExportDestination::ALL
                         .iter()
                         .map(|dest| {
+                            let label = if *dest == ExportDestination::Link
+                                && self.sharing.is_some()
+                            {
+                                "Reupload"
+                            } else {
+                                dest.label()
+                            };
                             let mut option =
-                                ui::SegmentOption::new(dest.label(), ui.destination == *dest)
+                                ui::SegmentOption::new(label, ui.destination == *dest)
                                     .disabled(*dest == ExportDestination::Link && link_disabled);
                             option.icon = Some(dest.icon().into());
                             option
@@ -1455,7 +1515,47 @@ impl EditorWindow {
                 })),
             )
             .when(
+                ui.destination == ExportDestination::Link && self.sharing.is_some(),
+                |field| {
+                    let link = self.sharing.as_ref()
+                        .map(|sharing| sharing.link.clone())
+                        .unwrap_or_default();
+                    field.child(
+                        div()
+                            .p(px(12.))
+                            .rounded(px(8.))
+                            .bg(Hsla::from(theme.blue_3))
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("Update your existing link"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(Hsla::from(theme.gray_11))
+                                    .child("Reupload replaces the video at this link with your latest edit. Everyone with the link will see the updated version."),
+                            )
+                            .child(
+                                div()
+                                    .id("reupload-existing-link")
+                                    .text_size(px(12.))
+                                    .text_color(Hsla::from(theme.blue_11))
+                                    .truncate()
+                                    .cursor_pointer()
+                                    .child(link.clone())
+                                    .on_click(move |_, _, cx| cx.open_url(&link)),
+                            ),
+                    )
+                },
+            )
+            .when(
                 ui.destination == ExportDestination::Link
+                    && self.sharing.is_none()
                     && store::auth_snapshot().organizations.len() > 1,
                 |this| {
                     let orgs = store::auth_snapshot().organizations;
@@ -1922,9 +2022,13 @@ impl EditorWindow {
                 "Copying to clipboard"
             }
             ExportPhase::Copying => "Saving to file",
+            ExportPhase::Uploading if ui.reuploading => "Reuploading to your link",
             ExportPhase::Uploading => "Creating shareable link",
             ExportPhase::Done if ui.destination == ExportDestination::Clipboard => {
                 "Copied to clipboard"
+            }
+            ExportPhase::Done if ui.destination == ExportDestination::Link && ui.reuploading => {
+                "Reupload complete"
             }
             ExportPhase::Done if ui.destination == ExportDestination::Link => "Upload complete",
             ExportPhase::Done => "Export complete",
@@ -1982,7 +2086,11 @@ impl EditorWindow {
                                 div()
                                     .text_size(px(12.))
                                     .text_color(Hsla::from(theme.gray_11))
-                                    .child("Your Cap has been uploaded successfully"),
+                                    .child(if ui.reuploading {
+                                        "Your latest edit is ready at the same link"
+                                    } else {
+                                        "Your Cap has been uploaded successfully"
+                                    }),
                             )
                         },
                     ),

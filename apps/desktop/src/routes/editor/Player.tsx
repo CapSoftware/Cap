@@ -29,6 +29,12 @@ import { FrameButton } from "./FrameButton";
 import { ImageOverlay } from "./image-overlay";
 import { MaskOverlay } from "./MaskOverlay";
 import { PerformanceOverlay } from "./PerformanceOverlay";
+import { usePreparingEditor } from "./preparing-editor-context";
+import { PreparingFrame } from "./preparing-frame";
+import {
+	createPreviewBoundsReaction,
+	createPreviewBoundsUpdater,
+} from "./preview-bounds";
 import { SplitScreenOverlay } from "./SplitScreenOverlay";
 import { TextOverlay } from "./TextOverlay";
 import { EditorButton, Slider } from "./ui";
@@ -53,6 +59,9 @@ export function PlayerContent(props: { compactness?: number }) {
 		previewResolutionBase,
 		previewQuality,
 		setPreviewQuality,
+		playbackIntent,
+		requestHandoffPlayback,
+		handoffPlaybackPending,
 	} = useEditorContext();
 
 	const previewOptions = [
@@ -182,6 +191,11 @@ export function PlayerContent(props: { compactness?: number }) {
 				}),
 			},
 		});
+		const pending = requestHandoffPlayback(false);
+		if (pending) {
+			await pending;
+			return;
+		}
 		await commands.stopPlayback();
 		setEditorState("playing", false);
 	};
@@ -189,7 +203,7 @@ export function PlayerContent(props: { compactness?: number }) {
 	const handlePreviewQualityChange = async (quality: EditorPreviewQuality) => {
 		if (quality === previewQuality()) return;
 
-		const wasPlaying = editorState.playing;
+		const wasPlaying = playbackIntent();
 		const currentFrame = Math.max(
 			Math.floor(editorState.playbackTime * FPS),
 			0,
@@ -198,6 +212,11 @@ export function PlayerContent(props: { compactness?: number }) {
 		setPreviewQuality(quality);
 
 		if (!wasPlaying) return;
+		const pending = requestHandoffPlayback(true);
+		if (pending) {
+			await pending;
+			return;
+		}
 
 		try {
 			await commands.stopPlayback();
@@ -212,13 +231,23 @@ export function PlayerContent(props: { compactness?: number }) {
 	};
 
 	createEffect(() => {
-		if (isAtEnd() && editorState.playing) {
+		if (isAtEnd() && playbackIntent()) {
+			const pending = requestHandoffPlayback(false);
+			if (pending) return;
 			commands.stopPlayback();
 			setEditorState("playing", false);
 		}
 	});
 
 	const handlePlayPauseClick = async () => {
+		const pending = requestHandoffPlayback(
+			isAtEnd() || !playbackIntent(),
+			isAtEnd() ? 0 : undefined,
+		);
+		if (pending) {
+			await pending;
+			return;
+		}
 		try {
 			if (isAtEnd()) {
 				await commands.stopPlayback();
@@ -283,10 +312,11 @@ export function PlayerContent(props: { compactness?: number }) {
 			handler: async () => {
 				const prevTime = editorState.previewTime;
 
-				if (!editorState.playing) {
+				if (!playbackIntent()) {
 					if (prevTime !== null) setEditorState("playbackTime", prevTime);
 
-					await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
+					if (!handoffPlaybackPending())
+						await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
 				}
 
 				await handlePlayPauseClick();
@@ -367,6 +397,12 @@ export function PlayerContent(props: { compactness?: number }) {
 						type="button"
 						class="text-ed-text-2 transition-opacity hover:opacity-70 will-change-[opacity]"
 						onClick={async () => {
+							const pending = requestHandoffPlayback(false, 0);
+							if (pending) {
+								editorState.timeline.transform.setPosition(0);
+								await pending;
+								return;
+							}
 							await commands.stopPlayback();
 							setEditorState("playing", false);
 							setEditorState("playbackTime", 0);
@@ -381,7 +417,7 @@ export function PlayerContent(props: { compactness?: number }) {
 							onClick={handlePlayPauseClick}
 							class="flex justify-center items-center rounded-full transition-opacity size-8 bg-ed-text-1 text-ed-card hover:opacity-90"
 						>
-							{!editorState.playing || isAtEnd() ? (
+							{!playbackIntent() || isAtEnd() ? (
 								<IconCapPlay class="size-3" />
 							) : (
 								<IconCapPause class="size-3" />
@@ -392,6 +428,11 @@ export function PlayerContent(props: { compactness?: number }) {
 						type="button"
 						class="text-ed-text-2 transition-opacity hover:opacity-70 will-change-[opacity]"
 						onClick={async () => {
+							const pending = requestHandoffPlayback(false, totalDuration());
+							if (pending) {
+								await pending;
+								return;
+							}
 							await commands.stopPlayback();
 							setEditorState("playing", false);
 							setEditorState("playbackTime", totalDuration());
@@ -483,10 +524,27 @@ const gridStyle = {
 };
 
 function PreviewCanvas() {
-	const { latestFrame, canvasControls, performanceMode, setPerformanceMode } =
-		useEditorContext();
+	const preparing = usePreparingEditor();
+	const {
+		latestFrame,
+		canvasControls,
+		performanceMode,
+		setPerformanceMode,
+		editorState,
+	} = useEditorContext();
 
 	const hasRenderedFrame = () => canvasControls()?.hasRenderedFrame() ?? false;
+	createEffect(
+		on(
+			() => editorState.playing,
+			(playing) => {
+				preparing?.setOrdinaryAdvancing(
+					playing,
+					Math.max(Math.floor(editorState.playbackTime * FPS), 0),
+				);
+			},
+		),
+	);
 
 	const handleContextMenu = async (e: MouseEvent) => {
 		e.preventDefault();
@@ -502,7 +560,7 @@ function PreviewCanvas() {
 		menu.popup();
 	};
 
-	const canvasInitializedRef = { current: false };
+	let initializedCanvas: HTMLCanvasElement | undefined;
 	const [canvasRef, setCanvasRef] = createSignal<HTMLCanvasElement | null>(
 		null,
 	);
@@ -521,24 +579,34 @@ function PreviewCanvas() {
 		100,
 	);
 
-	// Only react to real container-size changes. Reading debouncedBounds()
+	const boundsUpdater = createPreviewBoundsUpdater({
+		current: () => untrack(debouncedBounds),
+		measure: () => {
+			const container = canvasContainerRef();
+			if (!container?.isConnected) return;
+			const { width, height } = container.getBoundingClientRect();
+			return { width, height, connected: container.isConnected };
+		},
+		commit: setDebouncedBounds,
+		defer: ({ width, height }) => updateDebouncedBounds(width, height),
+		cancel: updateDebouncedBounds.clear,
+		requestFrame: (callback) => requestAnimationFrame(callback),
+		cancelFrame: (id) => cancelAnimationFrame(id),
+	});
+
+	// Only track container-size and frame-availability changes. Reading debouncedBounds()
 	// reactively here would resubscribe the effect to its own debounced write:
 	// the trailing setter rewrites debouncedBounds with a fresh object every
 	// 100ms, which would re-run this effect and re-arm the timer forever,
 	// spinning the whole preview graph at ~10Hz while the editor sits idle.
-	createEffect(
-		on(
-			() => [containerBounds.width ?? 0, containerBounds.height ?? 0] as const,
-			([width, height]) => {
-				const current = untrack(debouncedBounds);
-				if (current.width === 0 && current.height === 0) {
-					setDebouncedBounds({ width, height });
-				} else {
-					updateDebouncedBounds(width, height);
-				}
-			},
-		),
-	);
+	const hasFrame = createPreviewBoundsReaction({
+		bounds: () => ({
+			width: containerBounds.width ?? 0,
+			height: containerBounds.height ?? 0,
+		}),
+		hasFrame: () => !!latestFrame(),
+		updater: boundsUpdater,
+	});
 
 	createEffect(() => {
 		const canvas = canvasRef();
@@ -546,16 +614,16 @@ function PreviewCanvas() {
 		console.warn("[Player] Canvas init effect", {
 			hasCanvas: !!canvas,
 			hasControls: !!controls,
-			alreadyInit: canvasInitializedRef.current,
+			alreadyInit: initializedCanvas === canvas,
 		});
-		if (canvasInitializedRef.current || !canvas || !controls) return;
+		if (!canvas || !controls || initializedCanvas === canvas) return;
 
 		console.warn("[Player] Initializing canvas", {
 			canvasId: canvas.id,
 			isConnected: canvas.isConnected,
 		});
 		controls.initDirectCanvas(canvas);
-		canvasInitializedRef.current = true;
+		initializedCanvas = canvas;
 		console.warn("[Player] Canvas initialized successfully");
 	});
 
@@ -596,7 +664,12 @@ function PreviewCanvas() {
 		return { width, height };
 	};
 
-	const hasFrame = () => !!latestFrame();
+	createEffect(() => {
+		const frame = latestFrame();
+		if (frame && hasRenderedFrame()) {
+			preparing?.acknowledgeOrdinaryFrame(frame, size());
+		}
+	});
 
 	return (
 		<div
@@ -606,6 +679,11 @@ function PreviewCanvas() {
 			onContextMenu={handleContextMenu}
 		>
 			<CaptionsRegenerateBadge class="absolute top-3 right-3 z-20" />
+			<Show when={preparing?.model.rendered() && !preparing?.ordinaryReady()}>
+				<div class="absolute inset-0 flex items-center justify-center p-4 z-10 pointer-events-none">
+					<PreparingFrame fallback={false} />
+				</div>
+			</Show>
 			<div
 				class="flex overflow-hidden absolute inset-0 justify-center items-center h-full"
 				style={{ visibility: hasFrame() ? "visible" : "hidden" }}
@@ -618,18 +696,22 @@ function PreviewCanvas() {
 						contain: "strict",
 					}}
 				>
-					<canvas
-						class="rounded-md shadow-[0_12px_32px_-8px_rgba(0,0,0,0.35),0_0_0_0.5px_rgba(0,0,0,0.12)]"
-						style={{
-							width: `${size().width}px`,
-							height: `${size().height}px`,
-							"image-rendering": "auto",
-							"background-color": "#000000",
-							...(hasRenderedFrame() ? gridStyle : {}),
-						}}
-						ref={setCanvasRef}
-						id="canvas"
-					/>
+					<Show when={canvasControls()} keyed>
+						{(_controls) => (
+							<canvas
+								class="rounded-md shadow-[0_12px_32px_-8px_rgba(0,0,0,0.35),0_0_0_0.5px_rgba(0,0,0,0.12)]"
+								style={{
+									width: `${size().width}px`,
+									height: `${size().height}px`,
+									"image-rendering": "auto",
+									"background-color": "#000000",
+									...(hasRenderedFrame() ? gridStyle : {}),
+								}}
+								ref={setCanvasRef}
+								id="canvas"
+							/>
+						)}
+					</Show>
 					<Show when={hasFrame()}>
 						<CanvasElementsOverlay size={size()} />
 						<div class="absolute inset-0 isolate pointer-events-none">

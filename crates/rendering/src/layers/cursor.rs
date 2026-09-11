@@ -276,18 +276,28 @@ impl CursorLayer {
     ) -> Option<CursorTexture> {
         let mut loaded_cursor = None;
 
-        let recorded_shape = match &constants.recording_meta.inner {
-            RecordingMetaInner::Studio(studio) => match studio.as_ref() {
-                StudioRecordingMeta::MultipleSegments {
-                    inner:
-                        MultipleSegments {
-                            cursors: Cursors::Correct(cursors),
-                            ..
-                        },
-                } => cursors.get(cursor_id).and_then(|v| v.shape),
+        let recorded_shape = if let Some(assets) = &constants.frozen_recorded_cursors {
+            match assets.metadata(cursor_id) {
+                Ok(metadata) => metadata.shape,
+                Err(error) => {
+                    error!("{error}");
+                    return None;
+                }
+            }
+        } else {
+            match &constants.recording_meta.inner {
+                RecordingMetaInner::Studio(studio) => match studio.as_ref() {
+                    StudioRecordingMeta::MultipleSegments {
+                        inner:
+                            MultipleSegments {
+                                cursors: Cursors::Correct(cursors),
+                                ..
+                            },
+                    } => cursors.get(cursor_id).and_then(|v| v.shape),
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
+            }
         };
 
         // An explicit family cross-maps the recorded shape into it (and
@@ -313,18 +323,39 @@ impl CursorLayer {
                 .ok();
         }
 
-        if let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta
-            && loaded_cursor.is_none()
-            && let Some(c) = inner.get_cursor_image(&constants.recording_meta, cursor_id)
-            && let Ok(img) = image::open(&c.path)
-                .map_err(|err| error!("Failed to load cursor image from {:?}: {err}", c.path))
-        {
-            loaded_cursor = Some(CursorTexture::prepare(
-                constants,
-                &img.to_rgba8(),
-                img.dimensions(),
-                c.hotspot,
-            ));
+        if loaded_cursor.is_none() {
+            let cursor = crate::recorded_cursor_assets::select_recorded_cursor_image(
+                constants.frozen_recorded_cursors.as_ref(),
+                cursor_id,
+                || {
+                    let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta
+                    else {
+                        return None;
+                    };
+                    let cursor = inner.get_cursor_image(&constants.recording_meta, cursor_id)?;
+                    let image = image::open(&cursor.path)
+                        .map_err(|err| {
+                            error!("Failed to load cursor image from {:?}: {err}", cursor.path)
+                        })
+                        .ok()?;
+                    Some(crate::recorded_cursor_assets::DecodedRecordedCursor {
+                        image,
+                        hotspot: cursor.hotspot,
+                    })
+                },
+            );
+            match cursor {
+                Ok(Some(cursor)) => {
+                    loaded_cursor = Some(CursorTexture::prepare(
+                        constants,
+                        &cursor.image.to_rgba8(),
+                        cursor.image.dimensions(),
+                        cursor.hotspot,
+                    ));
+                }
+                Err(error) => error!("{error}"),
+                Ok(None) => {}
+            }
         }
 
         loaded_cursor
@@ -336,6 +367,18 @@ impl CursorLayer {
         use_svg: bool,
         cursor_type: &CursorType,
     ) {
+        if let Some(assets) = &constants.frozen_recorded_cursors {
+            for cursor_id in assets.ids() {
+                if !self.cursors.contains_key(cursor_id)
+                    && let Some(texture) =
+                        Self::load_cursor_texture(constants, cursor_id, use_svg, cursor_type)
+                {
+                    self.cursors.insert(cursor_id.clone(), texture);
+                }
+            }
+            return;
+        }
+
         let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta else {
             return;
         };

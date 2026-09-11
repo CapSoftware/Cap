@@ -1421,6 +1421,7 @@ impl Pipeline {
     }
 
     pub async fn stop(mut self) -> anyhow::Result<PipelineStopOutcome> {
+        let stop_started = Instant::now();
         #[cfg(any(target_os = "linux", windows))]
         self.stopping
             .store(true, std::sync::atomic::Ordering::Release);
@@ -1444,6 +1445,11 @@ impl Pipeline {
             OptionFuture::from(self.microphone.map(|s| s.stop_with_outcome())),
             OptionFuture::from(self.camera.map(|s| s.stop_with_outcome())),
             OptionFuture::from(self.system_audio.map(|s| s.stop_with_outcome()))
+        );
+
+        tracing::info!(
+            elapsed_ms = stop_started.elapsed().as_secs_f64() * 1000.0,
+            "Studio capture pipelines stopped"
         );
 
         if let Some(cursor) = self.cursor.as_mut() {
@@ -2296,11 +2302,171 @@ async fn spawn_studio_recording_actor(
     })
 }
 
+const MAX_PREPARING_SEGMENTS: usize = 1024;
+const MAX_PREPARING_CURSOR_IMAGES: usize = 4096;
+const MAX_PREPARING_METADATA_STRING_BYTES: usize = 1024 * 1024;
+
+struct BoundedStoppedStudioMeta(RecordingMeta);
+
+impl BoundedStoppedStudioMeta {
+    fn new(meta: RecordingMeta) -> Option<Self> {
+        let RecordingMetaInner::Studio(studio) = &meta.inner else {
+            return None;
+        };
+        let StudioRecordingMeta::MultipleSegments { inner } = studio.as_ref() else {
+            return None;
+        };
+        if !matches!(inner.status, Some(StudioRecordingStatus::NeedsRemux))
+            || inner.segments.is_empty()
+            || inner.segments.len() > MAX_PREPARING_SEGMENTS
+            || inner.segments.capacity() > MAX_PREPARING_SEGMENTS * 2
+            || meta.sharing.is_some()
+            || meta.upload.is_some()
+        {
+            return None;
+        }
+        let cap_project::Cursors::Correct(cursors) = &inner.cursors else {
+            return None;
+        };
+        if cursors.len() > MAX_PREPARING_CURSOR_IMAGES
+            || cursors.capacity() > MAX_PREPARING_CURSOR_IMAGES * 2
+        {
+            return None;
+        }
+        let mut remaining = MAX_PREPARING_METADATA_STRING_BYTES;
+        let mut account = |bytes: usize| -> Option<()> {
+            remaining = remaining.checked_sub(bytes)?;
+            Some(())
+        };
+        account(meta.project_path.capacity())?;
+        account(meta.pretty_name.capacity())?;
+        for segment in &inner.segments {
+            account(segment.display.path.as_str().len())?;
+            account(
+                segment
+                    .display
+                    .device_id
+                    .as_ref()
+                    .map_or(0, String::capacity),
+            )?;
+            if let Some(camera) = &segment.camera {
+                account(camera.path.as_str().len())?;
+                account(camera.device_id.as_ref().map_or(0, String::capacity))?;
+            }
+            for audio in [&segment.mic, &segment.system_audio].into_iter().flatten() {
+                account(audio.path.as_str().len())?;
+                account(audio.device_id.as_ref().map_or(0, String::capacity))?;
+            }
+            for path in [&segment.cursor, &segment.keyboard].into_iter().flatten() {
+                account(path.as_str().len())?;
+            }
+        }
+        for (id, cursor) in cursors {
+            account(id.capacity())?;
+            account(cursor.image_path.as_str().len())?;
+        }
+        Some(Self(meta))
+    }
+}
+
+#[derive(Clone)]
+pub struct CleanStoppedStudio {
+    snapshot: Arc<CleanStoppedStudioSnapshot>,
+}
+
+struct CleanStoppedStudioSnapshot {
+    metadata: RecordingMeta,
+    configuration: cap_project::ProjectConfiguration,
+    claimed: std::sync::atomic::AtomicBool,
+}
+
+pub(crate) struct CleanStoppedStudioClaim {
+    snapshot: Arc<CleanStoppedStudioSnapshot>,
+}
+
+impl CleanStoppedStudio {
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        metadata: RecordingMeta,
+        configuration: cap_project::ProjectConfiguration,
+    ) -> Option<Self> {
+        Self::new(BoundedStoppedStudioMeta::new(metadata)?, configuration)
+    }
+
+    fn new(
+        metadata: BoundedStoppedStudioMeta,
+        configuration: cap_project::ProjectConfiguration,
+    ) -> Option<Self> {
+        if configuration.clips.len() > MAX_PREPARING_SEGMENTS
+            || configuration.clips.capacity() > MAX_PREPARING_SEGMENTS * 2
+        {
+            return None;
+        }
+        if let Some(timeline) = &configuration.timeline {
+            if timeline.segments.len() > MAX_PREPARING_SEGMENTS
+                || timeline.segments.capacity() > MAX_PREPARING_SEGMENTS * 2
+            {
+                return None;
+            }
+            let mut remaining = MAX_PREPARING_METADATA_STRING_BYTES;
+            for segment in &timeline.segments {
+                remaining =
+                    remaining.checked_sub(segment.name.as_ref().map_or(0, String::capacity))?;
+            }
+        }
+        Some(Self {
+            snapshot: Arc::new(CleanStoppedStudioSnapshot {
+                metadata: metadata.0,
+                configuration,
+                claimed: std::sync::atomic::AtomicBool::new(false),
+            }),
+        })
+    }
+
+    pub(crate) fn claim(&self, project_path: &Path) -> Option<CleanStoppedStudioClaim> {
+        if project_path != self.snapshot.metadata.project_path.as_path() {
+            return None;
+        }
+        self.snapshot
+            .claimed
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .ok()?;
+        Some(CleanStoppedStudioClaim {
+            snapshot: self.snapshot.clone(),
+        })
+    }
+}
+
+impl CleanStoppedStudioClaim {
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        metadata: RecordingMeta,
+        configuration: cap_project::ProjectConfiguration,
+    ) -> Option<Self> {
+        let receipt = CleanStoppedStudio::for_test(metadata, configuration)?;
+        receipt.claim(&receipt.snapshot.metadata.project_path)
+    }
+
+    pub(crate) fn metadata(&self) -> &RecordingMeta {
+        &self.snapshot.metadata
+    }
+
+    pub(crate) fn configuration(&self) -> &cap_project::ProjectConfiguration {
+        &self.snapshot.configuration
+    }
+}
+
 #[derive(Clone)]
 pub struct CompletedRecording {
     pub project_path: PathBuf,
     pub meta: StudioRecordingMeta,
     pub cursor_data: cap_project::CursorImages,
+    pub clean_stopped: Option<CleanStoppedStudio>,
 }
 
 fn snap_nearby_start_time(
@@ -2604,7 +2770,13 @@ async fn stop_recording(
         );
     }
 
-    persist_final_recording_meta(&recording_dir, &meta)?;
+    let persisted_meta = persist_final_recording_meta(&recording_dir, &meta)?;
+    let bounded_meta = if required_track_failure.is_none() {
+        BoundedStoppedStudioMeta::new(persisted_meta)
+    } else {
+        drop(persisted_meta);
+        None
+    };
 
     let mut project_config = cap_project::ProjectConfiguration::default();
     if !timeline_segments.is_empty() {
@@ -2634,10 +2806,13 @@ async fn stop_recording(
         bail!(error);
     }
 
+    let clean_stopped = bounded_meta.and_then(|meta| CleanStoppedStudio::new(meta, project_config));
+
     Ok(CompletedRecording {
         project_path: recording_dir,
         meta,
         cursor_data: Default::default(),
+        clean_stopped,
         // display_source: actor.options.capture_target,
         // segments: actor.segments,
     })
@@ -3290,7 +3465,7 @@ fn persist_failed_recording(recording_dir: &Path, error: &str) -> anyhow::Result
 fn persist_final_recording_meta(
     recording_dir: &Path,
     studio_meta: &StudioRecordingMeta,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<RecordingMeta> {
     use chrono::Local;
 
     let pretty_name = Local::now().format("Cap %Y-%m-%d at %H.%M.%S").to_string();
@@ -3305,7 +3480,8 @@ fn persist_final_recording_meta(
 
     recording_meta
         .save_for_project()
-        .context("persist final recording metadata")
+        .context("persist final recording metadata")?;
+    Ok(recording_meta)
 }
 
 fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
@@ -5528,5 +5704,247 @@ mod windows_cancel_tests {
         actor.ask(Cancel).await.unwrap();
         actor.kill();
         actor.wait_for_stop().await;
+    }
+}
+
+#[cfg(test)]
+mod clean_stop_receipt_tests {
+    use super::*;
+
+    fn metadata(segments: usize, cursors: usize) -> RecordingMeta {
+        let segment = MultipleSegment {
+            display: cap_project::VideoMeta {
+                path: "content/segments/segment-0/display".into(),
+                fps: 30,
+                start_time: Some(0.0),
+                device_id: None,
+            },
+            camera: None,
+            mic: None,
+            system_audio: None,
+            cursor: None,
+            keyboard: None,
+            display_notch: None,
+        };
+        RecordingMeta {
+            platform: Some(Platform::default()),
+            project_path: PathBuf::from("synthetic.cap"),
+            pretty_name: "Synthetic".to_string(),
+            sharing: None,
+            inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
+                inner: MultipleSegments {
+                    segments: vec![segment; segments],
+                    cursors: cap_project::Cursors::Correct(
+                        (0..cursors)
+                            .map(|index| {
+                                (
+                                    index.to_string(),
+                                    cap_project::CursorMeta {
+                                        image_path: format!("content/cursors/cursor_{index}.png")
+                                            .into(),
+                                        hotspot: cap_project::XY::new(0.0, 0.0),
+                                        shape: None,
+                                    },
+                                )
+                            })
+                            .collect(),
+                    ),
+                    status: Some(StudioRecordingStatus::NeedsRemux),
+                },
+            })),
+            upload: None,
+        }
+    }
+
+    fn receipt(metadata: RecordingMeta) -> Option<CleanStoppedStudio> {
+        CleanStoppedStudio::new(
+            BoundedStoppedStudioMeta::new(metadata)?,
+            cap_project::ProjectConfiguration::default(),
+        )
+    }
+
+    #[test]
+    fn clean_stop_receipt_is_single_use_across_completion_clones() {
+        let metadata = metadata(1, 1);
+        let RecordingMetaInner::Studio(studio) = &metadata.inner else {
+            unreachable!();
+        };
+        let completed = CompletedRecording {
+            project_path: metadata.project_path.clone(),
+            meta: studio.as_ref().clone(),
+            cursor_data: Default::default(),
+            clean_stopped: receipt(metadata),
+        };
+        let second = completed.clone();
+        let first_receipt = completed.clean_stopped.as_ref().unwrap();
+        let second_receipt = second.clean_stopped.as_ref().unwrap();
+        assert!(Arc::ptr_eq(
+            &first_receipt.snapshot,
+            &second_receipt.snapshot
+        ));
+        assert!(first_receipt.claim(Path::new("different.cap")).is_none());
+        let claim = first_receipt.claim(&completed.project_path).unwrap();
+        assert_eq!(claim.metadata().project_path, completed.project_path);
+        assert!(second_receipt.claim(&second.project_path).is_none());
+        assert!(first_receipt.claim(&completed.project_path).is_none());
+    }
+
+    #[test]
+    fn clean_stop_receipt_has_one_winner_under_concurrent_claims() {
+        let receipt = receipt(metadata(1, 0)).unwrap();
+        let winners = std::thread::scope(|scope| {
+            let workers = (0..8)
+                .map(|_| {
+                    let receipt = &receipt;
+                    scope.spawn(move || receipt.claim(Path::new("synthetic.cap")).is_some())
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .filter(|winner| *winner)
+                .count()
+        });
+        assert_eq!(winners, 1);
+    }
+
+    #[test]
+    fn clean_stop_receipt_bounds_are_preview_eligibility_only() {
+        assert!(receipt(metadata(MAX_PREPARING_SEGMENTS, 0)).is_some());
+        let oversized = metadata(MAX_PREPARING_SEGMENTS + 1, 0);
+        let RecordingMetaInner::Studio(studio) = &oversized.inner else {
+            unreachable!();
+        };
+        let completed = CompletedRecording {
+            project_path: oversized.project_path.clone(),
+            meta: studio.as_ref().clone(),
+            cursor_data: Default::default(),
+            clean_stopped: receipt(oversized),
+        };
+        assert!(completed.clean_stopped.is_none());
+        let StudioRecordingMeta::MultipleSegments { inner } = completed.meta else {
+            unreachable!();
+        };
+        assert_eq!(inner.segments.len(), MAX_PREPARING_SEGMENTS + 1);
+        assert!(receipt(metadata(1, MAX_PREPARING_CURSOR_IMAGES)).is_some());
+        assert!(receipt(metadata(1, MAX_PREPARING_CURSOR_IMAGES + 1)).is_none());
+    }
+
+    #[test]
+    fn clean_stop_receipt_string_budget_accepts_boundary_and_rejects_one_more_byte() {
+        for extra in [0, 1] {
+            let mut metadata = metadata(1, 0);
+            let fixed = metadata.project_path.capacity() + metadata.pretty_name.capacity();
+            let RecordingMetaInner::Studio(studio) = &mut metadata.inner else {
+                unreachable!();
+            };
+            let StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+                unreachable!();
+            };
+            let fixed = fixed + inner.segments[0].display.path.as_str().len();
+            inner.segments[0].display.device_id =
+                Some("x".repeat(MAX_PREPARING_METADATA_STRING_BYTES - fixed + extra));
+            assert_eq!(receipt(metadata).is_some(), extra == 0);
+        }
+    }
+
+    #[test]
+    fn clean_stop_receipt_rejects_complete_failed_and_empty_recordings() {
+        for status in [
+            Some(StudioRecordingStatus::Complete),
+            Some(StudioRecordingStatus::InProgress),
+            Some(StudioRecordingStatus::Failed {
+                error: "retained failure".into(),
+            }),
+            None,
+        ] {
+            let mut metadata = metadata(1, 0);
+            let RecordingMetaInner::Studio(studio) = &mut metadata.inner else {
+                unreachable!();
+            };
+            let StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+                unreachable!();
+            };
+            inner.status = status;
+            assert!(receipt(metadata).is_none());
+        }
+        assert!(receipt(metadata(0, 0)).is_none());
+    }
+
+    #[test]
+    fn clean_stop_receipt_moves_existing_persistence_and_configuration_allocations() {
+        let metadata = metadata(1, 1);
+        let RecordingMetaInner::Studio(studio) = &metadata.inner else {
+            unreachable!();
+        };
+        let metadata_pointer = studio.as_ref() as *const StudioRecordingMeta;
+        let mut configuration = cap_project::ProjectConfiguration::default();
+        configuration
+            .clips
+            .push(cap_project::ClipConfiguration::default());
+        let clips_pointer = configuration.clips.as_ptr();
+        let receipt = CleanStoppedStudio::new(
+            BoundedStoppedStudioMeta::new(metadata).unwrap(),
+            configuration,
+        )
+        .unwrap();
+        let claim = receipt.claim(Path::new("synthetic.cap")).unwrap();
+        let RecordingMetaInner::Studio(studio) = &claim.metadata().inner else {
+            unreachable!();
+        };
+        assert_eq!(
+            studio.as_ref() as *const StudioRecordingMeta,
+            metadata_pointer
+        );
+        assert_eq!(claim.configuration().clips.as_ptr(), clips_pointer);
+    }
+
+    #[test]
+    fn clean_stop_receipt_declines_oversized_config_capacity_without_changing_config() {
+        let mut configuration = cap_project::ProjectConfiguration {
+            clips: Vec::with_capacity(MAX_PREPARING_SEGMENTS * 2 + 1),
+            ..cap_project::ProjectConfiguration::default()
+        };
+        configuration
+            .clips
+            .push(cap_project::ClipConfiguration::default());
+        assert!(
+            CleanStoppedStudio::new(
+                BoundedStoppedStudioMeta::new(metadata(1, 0)).unwrap(),
+                configuration,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn clean_stop_receipt_snapshot_matches_existing_persisted_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let metadata = metadata(1, 1);
+        let RecordingMetaInner::Studio(studio) = &metadata.inner else {
+            unreachable!();
+        };
+        let persisted = persist_final_recording_meta(directory.path(), studio).unwrap();
+        let expected = serde_json::to_vec_pretty(&persisted).unwrap();
+        assert_eq!(
+            std::fs::read(directory.path().join("recording-meta.json")).unwrap(),
+            expected
+        );
+        let configuration = cap_project::ProjectConfiguration::default();
+        configuration.write(directory.path()).unwrap();
+        let receipt = CleanStoppedStudio::new(
+            BoundedStoppedStudioMeta::new(persisted).unwrap(),
+            configuration,
+        )
+        .unwrap();
+        let claim = receipt.claim(directory.path()).unwrap();
+        assert_eq!(
+            serde_json::to_vec_pretty(claim.metadata()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            std::fs::read(directory.path().join("project-config.json")).unwrap(),
+            serde_json::to_vec_pretty(claim.configuration()).unwrap()
+        );
     }
 }

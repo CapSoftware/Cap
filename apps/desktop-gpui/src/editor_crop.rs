@@ -26,11 +26,6 @@
 //! raw     = max(0, real / scale)                   (`boundsToRaw`,  :422-430)
 //! ```
 //!
-//! The container is [`crop_box_size`]: the display's aspect fitted into
-//! `min(vw * 0.4, 520) x min(vh * 0.5, 520)` (`Editor.tsx:1010-1023`). At the
-//! editor's 1275x800 that is 510x400, so a 3024x1964 recording gets a 510x331
-//! box and one container pixel is `3024 / 510 = 5.929` target pixels.
-//!
 //! Every number the user sees in the header -- Size and Position -- is
 //! `realBounds`, i.e. target space. Every number the pointer maths works in is
 //! `rawBounds`.
@@ -43,6 +38,9 @@
 //! what `constrainBoundsToSize` does and the capture-area cropper does pass
 //! them.
 
+mod alignment;
+
+use alignment::{CropGuides, ResizeAlignment, align_crop};
 use std::collections::BTreeSet;
 
 use crate::{
@@ -725,12 +723,10 @@ pub fn bounds_to_raw(real: CropBounds, scale: Vec2) -> CropBounds {
     }
 }
 
-/// `boxSize` (`Editor.tsx:1010-1023`): the display's aspect fitted into
-/// `min(vw * 0.4, 520) x min(vh * 0.5, 520)`, rounded.
 pub fn crop_box_size(viewport: (f32, f32), display: (u32, u32)) -> (f32, f32) {
     let ratio = f64::from(display.0) / f64::from(display.1).max(1.);
-    let max_w = f64::from(viewport.0 * 0.4).min(520.);
-    let max_h = f64::from(viewport.1 * 0.5).min(520.);
+    let max_w = f64::from((viewport.0 - 164.).clamp(120., 1280.) * 0.68);
+    let max_h = f64::from((viewport.1 - 280.).clamp(100., 760.));
     let mut w = max_w;
     let mut h = w / ratio;
     if h > max_h {
@@ -1067,6 +1063,7 @@ pub struct CropState {
     pub aspect: Option<Ratio>,
     /// `aspectState.snapped` -- the ratio a free drag landed on.
     pub snapped: Option<Ratio>,
+    pub alignment_guides: CropGuides,
     pub drag: Option<CropDrag>,
     /// `mouseState.hoveringHandle`, for the corner-cursor rule.
     pub hovering: Option<Handle>,
@@ -1101,6 +1098,7 @@ impl CropState {
             initial,
             aspect: None,
             snapped: None,
+            alignment_guides: CropGuides::default(),
             drag: None,
             hovering: None,
             frame: None,
@@ -1307,6 +1305,17 @@ impl CropState {
 
     /// `handleResizePointerMove` (`:798-868`).
     pub fn resize_move(&mut self, point: Vec2, alt: bool, shift: bool, snap_enabled: bool) {
+        self.resize_move_with_alignment(point, alt, shift, snap_enabled, false);
+    }
+
+    fn resize_move_with_alignment(
+        &mut self,
+        point: Vec2,
+        alt: bool,
+        shift: bool,
+        snap_enabled: bool,
+        alignment_enabled: bool,
+    ) {
         let Some(session) = self.session_mut() else {
             return;
         };
@@ -1349,6 +1358,44 @@ impl CropState {
 
         let container = self.container_vec();
         let final_bounds = slide_bounds_into_container(next, container.x, container.y);
+        self.alignment_guides = CropGuides::default();
+        let final_bounds = if alignment_enabled && !shift {
+            let movable = session.active_handle.movable;
+            let start = session.start_bounds;
+            let centered = session.is_alt && options.ratio.is_none();
+            let origin = Vec2::new(
+                if centered {
+                    0.5
+                } else if point.x < start.x + if movable.left { start.width } else { 0. } {
+                    1.
+                } else {
+                    0.
+                },
+                if centered {
+                    0.5
+                } else if point.y < start.y + if movable.top { start.height } else { 0. } {
+                    1.
+                } else {
+                    0.
+                },
+            );
+            let (aligned, guides) = align_crop(
+                final_bounds,
+                container,
+                Some(ResizeAlignment {
+                    origin,
+                    axes: (movable.left || movable.right, movable.top || movable.bottom),
+                    ratio: options.ratio,
+                }),
+            );
+            self.alignment_guides = guides;
+            if guides.x.is_some() || guides.y.is_some() {
+                self.snapped = None;
+            }
+            aligned
+        } else {
+            final_bounds
+        };
         self.set_raw(final_bounds);
     }
 
@@ -1672,7 +1719,7 @@ impl EditorWindow {
         // lands outside the region -- but a **handle**'s double-click expands
         // that side (`:1097, 1143, 1200, 1286`).
         if event.click_count == 2 {
-            let hit = hit_test(point, state.raw);
+            let hit = editor_hit_test(point, state.raw);
             match hit {
                 CropHit::Handle(handle) => {
                     state.stop_animation();
@@ -1690,7 +1737,13 @@ impl EditorWindow {
         }
 
         state.stop_animation();
-        let hit = hit_test(point, state.raw);
+        let hit = editor_hit_test(point, state.raw);
+        let container = state.container_vec();
+        if matches!(hit, CropHit::Draw)
+            && (point.x < 0. || point.y < 0. || point.x > container.x || point.y > container.y)
+        {
+            return;
+        }
         // The press log every crop probe calibrates against: where the box is
         // on screen, where the pointer landed inside it, and what it grabbed.
         tracing::info!(
@@ -1761,7 +1814,7 @@ impl EditorWindow {
         let Some(drag) = state.drag else {
             // `onMouseEnter` on the handles is what seeds `hoveringHandle`,
             // which the corner-cursor rule reads.
-            let hovering = match hit_test(point, state.raw) {
+            let hovering = match editor_hit_test(point, state.raw) {
                 CropHit::Handle(handle) => Some(handle),
                 _ => None,
             };
@@ -1781,10 +1834,22 @@ impl EditorWindow {
                 let new_x = clamp(point.x - start_offset.x, 0., container.x - bounds.width);
                 let new_y = clamp(point.y - start_offset.y, 0., container.y - bounds.height);
                 let moved = move_bounds(bounds, Some(new_x), Some(new_y));
+                let (moved, guides) = if event.modifiers.shift {
+                    (moved, CropGuides::default())
+                } else {
+                    align_crop(moved, container, None)
+                };
+                state.alignment_guides = guides;
                 state.set_raw(moved);
             }
             CropDrag::Handle(_) | CropDrag::Overlay { .. } => {
-                state.resize_move(point, event.modifiers.alt, event.modifiers.shift, snap);
+                state.resize_move_with_alignment(
+                    point,
+                    event.modifiers.alt,
+                    event.modifiers.shift,
+                    snap,
+                    true,
+                );
             }
         }
         self.crop_changed(cx);
@@ -1797,6 +1862,7 @@ impl EditorWindow {
         let Some(drag) = state.drag.take() else {
             return;
         };
+        state.alignment_guides = CropGuides::default();
         // `onOverlayPointerDown`'s end (`:934-941`): a drag that never grew
         // past 5px in either axis is a stray click, and the previous region
         // comes back.
@@ -2246,7 +2312,7 @@ async fn decode_display_frame(
 // ---------------------------------------------------------------------------
 
 /// `Dialog.Root`'s `max-w-[1180px]` (`Editor.tsx:809`).
-const CROP_DIALOG_MAX_WIDTH: f32 = 1180.;
+const CROP_DIALOG_MAX_WIDTH: f32 = 1440.;
 /// `h-14 px-4` (`ui.tsx:231`).
 const DIALOG_HEADER_HEIGHT: f32 = 56.;
 /// `h-16 px-4 gap-3` (`ui.tsx:213-215`).
@@ -2483,7 +2549,7 @@ impl EditorWindow {
                     .gap(px(12.))
                     .justify_center()
                     .items_stretch()
-                    .child(labelled("Crop area", self.render_crop_area(state, cx)))
+                    .child(labelled("Crop area", self.render_crop_stage(state, cx)))
                     .child(
                         div()
                             .flex()
@@ -2498,14 +2564,44 @@ impl EditorWindow {
                                     .text_color(Hsla::from(theme.gray_8)),
                             ),
                     )
-                    .child(labelled("Preview", self.render_crop_preview(px(w), px(h)))),
+                    .child(labelled("Preview", self.render_crop_preview(px((w * 0.44).round()), px(h + 32.)))),
             )
+            .child(div().flex().items_center().justify_between().gap(px(12.)).pt(px(16.)).text_size(px(12.)).text_color(Hsla::from(theme.gray_11))
+                .child("Drag to move · Snap to center, halves and quarters · Hold Shift to skip snapping")
+                .child(ui::EditorButton::plain(&theme, "crop-center").label("Center crop").on_click(cx.listener(|this, _, window, cx| {
+                    if let Some(state) = this.crop.as_mut() {
+                        let bounds = state.raw;
+                        let container = state.container_vec();
+                        state.set_raw_and_animate(CropBounds::new((container.x - bounds.width) / 2., (container.y - bounds.height) / 2., bounds.width, bounds.height), ORIGIN_CENTER, CropAnim::DEFAULT);
+                    }
+                    this.start_crop_ticker(window, cx);
+                    this.crop_changed(cx);
+                }))))
             .into_any_element()
     }
 
     /// The cropper itself: the raw frame, the occluder, the region and the
     /// eight handles.
-    fn render_crop_area(&self, state: &CropState, cx: &mut Context<Self>) -> AnyElement {
+    fn render_crop_stage(&self, state: &CropState, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id("crop-stage")
+            .p(px(16.))
+            .rounded(px(12.))
+            .bg(Hsla::from(self.theme.gray_3))
+            .child(self.render_crop_area(state))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::crop_mouse_down))
+            // `onContextMenu={(e) => showCropOptionsMenu(e, true)}` -- anchored
+            // at the cursor (`Editor.tsx:1333-1335`).
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.open_crop_menu(event.position, window, cx);
+                }),
+            )
+            .into_any_element()
+    }
+
+    fn render_crop_area(&self, state: &CropState) -> AnyElement {
         let theme = self.theme;
         let (w, h) = state.container;
         let (box_w, box_h) = state.box_size;
@@ -2528,12 +2624,16 @@ impl EditorWindow {
             .w(px(bounds.width as f32))
             .h(px(bounds.height as f32))
             .border_1()
-            // `border border-white/50` (`:1139`).
-            .border_color(gpui::hsla(0., 0., 1., 0.5))
+            .border_color(gpui::rgb(0xffffff))
+            .child(
+                div()
+                    .absolute()
+                    .inset(px(1.))
+                    .border_1()
+                    .border_color(gpui::rgb(0x111827)),
+            )
             .cursor(drag_cursor.unwrap_or(CursorStyle::OpenHand))
-            // The rule-of-thirds grid, shown while any drag is live
-            // (`:1168-1174`): `border-white/40`.
-            .children(dragging.then(|| thirds_grid(bounds)))
+            .children(dragging.then(|| editor_thirds_grid(bounds)))
             // The snapped-ratio badge (`:1295-1321`). Only while free.
             .children(
                 (state.aspect.is_none() && !too_small)
@@ -2569,24 +2669,13 @@ impl EditorWindow {
                             )
                     }),
             )
-            // The corner glyphs: an L of two bars, `stroke="white"` with a
-            // drop shadow, shrinking to nothing when the region is tiny
-            // (`:1205-1238`).
             .children(
                 HANDLES
                     .iter()
-                    .filter(|handle| handle.is_corner)
-                    .flat_map(|handle| corner_glyph(*handle, bounds, too_small)),
+                    .map(|handle| editor_handle_glyph(*handle, bounds)),
             );
 
-        // The eight hit zones, in the source's paint order: edges first (which
-        // is why the move layer occludes their inner halves), then the move
-        // layer, then the corners.
-        let mut layers = div().absolute().inset_0();
-        for handle in HANDLES.iter().filter(|handle| !handle.is_corner) {
-            layers = layers.child(handle_zone(*handle, bounds, drag_cursor));
-        }
-        layers = layers.child(
+        let mut layers = div().absolute().inset_0().child(
             div()
                 .absolute()
                 .left(px(bounds.x as f32))
@@ -2595,15 +2684,17 @@ impl EditorWindow {
                 .h(px(bounds.height as f32))
                 .cursor(drag_cursor.unwrap_or(CursorStyle::OpenHand)),
         );
-        for handle in HANDLES.iter().filter(|handle| handle.is_corner) {
-            let cursor = match (drag_cursor, state.hovering) {
-                // `mouseState.drag === "handle" &&
-                // mouseState.hoveringHandle?.isCorner` (`:1186-1189`).
-                (Some(_), Some(hovering)) if hovering.is_corner => hovering.direction.cursor(),
-                (Some(cursor), _) => cursor,
-                (None, _) => handle.direction.cursor(),
-            };
-            layers = layers.child(handle_zone_with_cursor(*handle, bounds, cursor));
+        for handle in HANDLES.iter().rev() {
+            let rect = editor_handle_rect(*handle, bounds);
+            layers = layers.child(
+                div()
+                    .absolute()
+                    .left(px((bounds.x + rect.x) as f32))
+                    .top(px((bounds.y + rect.y) as f32))
+                    .w(px(rect.width as f32))
+                    .h(px(rect.height as f32))
+                    .cursor(drag_cursor.unwrap_or(handle.direction.cursor())),
+            );
         }
 
         div()
@@ -2615,7 +2706,6 @@ impl EditorWindow {
             .border_1()
             .border_color(Hsla::from(theme.gray_3))
             .bg(Hsla::from(theme.gray_3))
-            .overflow_hidden()
             .cursor(base_cursor)
             // The box's painted origin, so a pointer position can be made
             // container-local. gpui has no `getBoundingClientRect`; this is
@@ -2653,6 +2743,7 @@ impl EditorWindow {
             // The four occluder quads (`:1124-1133`).
             .children(occluders(bounds, w, h))
             .child(region)
+            .child(editor_alignment_guides(state.alignment_guides, w, h))
             .child(layers)
             // `Loading frame…` (`Editor.tsx:1356-1364`).
             .children((state.frame.is_none() && !state.frame_failed).then(|| {
@@ -2668,15 +2759,6 @@ impl EditorWindow {
                     .text_color(Hsla::from(theme.gray_10))
                     .child("Loading frame…")
             }))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::crop_mouse_down))
-            // `onContextMenu={(e) => showCropOptionsMenu(e, true)}` -- anchored
-            // at the cursor (`Editor.tsx:1333-1335`).
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    this.open_crop_menu(event.position, window, cx);
-                }),
-            )
             .into_any_element()
     }
 
@@ -2935,24 +3017,204 @@ pub(crate) fn handle_zone_with_cursor(
         .cursor(cursor)
 }
 
+fn editor_handle_rect(handle: Handle, bounds: CropBounds) -> LocalRect {
+    let mut rect = handle_rect(handle, bounds);
+    if !handle.is_corner {
+        if handle.x == Axis::Center {
+            rect.y -= 4.;
+            rect.height = 18.;
+        } else {
+            rect.x -= 4.;
+            rect.width = 18.;
+        }
+    }
+    rect
+}
+
+fn editor_hit_test(point: Vec2, bounds: CropBounds) -> CropHit {
+    for handle in HANDLES {
+        if editor_handle_rect(handle, bounds).contains(point.x - bounds.x, point.y - bounds.y) {
+            return CropHit::Handle(handle);
+        }
+    }
+    hit_test(point, bounds)
+}
+
+fn editor_handle_glyph(handle: Handle, bounds: CropBounds) -> gpui::Div {
+    let outline = gpui::rgb(0x111827);
+    if handle.is_corner {
+        return div().absolute().inset_0().children(
+            corner_glyph(handle, bounds, false)
+                .into_iter()
+                .map(|glyph| glyph.border_1().border_color(outline)),
+        );
+    }
+    let horizontal = handle.x == Axis::Center;
+    let x = match handle.x {
+        Axis::Low => -1.,
+        Axis::High => bounds.width + 1.,
+        Axis::Center => bounds.width / 2.,
+    };
+    let y = match handle.y {
+        Axis::Low => -1.,
+        Axis::High => bounds.height + 1.,
+        Axis::Center => bounds.height / 2.,
+    };
+    let (w, h) = if horizontal { (26., 7.) } else { (7., 26.) };
+    div()
+        .absolute()
+        .left(px(x as f32 - w / 2.))
+        .top(px(y as f32 - h / 2.))
+        .w(px(w))
+        .h(px(h))
+        .rounded(px(3.))
+        .border_1()
+        .border_color(outline)
+        .bg(gpui::rgb(0xffffff))
+}
+
+fn editor_thirds_grid(bounds: CropBounds) -> gpui::Div {
+    let mut grid = div().absolute().inset_0();
+    for fraction in [1. / 3., 2. / 3.] {
+        grid = grid.child(
+            div()
+                .absolute()
+                .left_0()
+                .top(px((bounds.height * fraction) as f32))
+                .w_full()
+                .h(px(2.))
+                .bg(gpui::rgb(0xffffff))
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .h(px(1.))
+                        .bg(gpui::rgba(0x111827cc)),
+                ),
+        );
+        grid = grid.child(
+            div()
+                .absolute()
+                .top_0()
+                .left(px((bounds.width * fraction) as f32))
+                .h_full()
+                .w(px(2.))
+                .bg(gpui::rgb(0xffffff))
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .w(px(1.))
+                        .bg(gpui::rgba(0x111827cc)),
+                ),
+        );
+    }
+    grid
+}
+
+fn editor_alignment_guides(guides: CropGuides, w: f32, h: f32) -> gpui::Div {
+    let mut layer = div().absolute().inset_0();
+    for (horizontal, guide) in [(false, guides.x), (true, guides.y)] {
+        if let Some(guide) = guide {
+            layer = layer.child(
+                div()
+                    .absolute()
+                    .left(px(if horizontal { 0. } else { guide as f32 - 1. }))
+                    .top(px(if horizontal { guide as f32 - 1. } else { 0. }))
+                    .w(px(if horizontal { w } else { 3. }))
+                    .h(px(if horizontal { 3. } else { h }))
+                    .bg(gpui::rgba(0xffffff99))
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(if horizontal { 0. } else { 1. }))
+                            .top(px(if horizontal { 1. } else { 0. }))
+                            .w(px(if horizontal { w } else { 1. }))
+                            .h(px(if horizontal { 1. } else { h }))
+                            .bg(gpui::rgb(0xd946ef)),
+                    ),
+            );
+        }
+    }
+    layer
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     // -- The coordinate spaces ----------------------------------------------
 
-    /// The box the editor's 1275x800 window gives a 3024x1964 recording, and
-    /// the scale that follows from it.
     #[test]
-    fn crop_box_fits_the_display_aspect_into_the_source_caps() {
-        // maxW = min(1275 * 0.4, 520) = 510; maxH = min(800 * 0.5, 520) = 400.
-        // 510 / (3024/1964) = 331.2 -> under 400, so the width wins.
-        assert_eq!(crop_box_size((1275., 800.), (3024, 1964)), (510., 331.));
-        // An ultrawide is capped by width too, but a tall display is capped by
-        // height: 510 / (1080/1920) = 906 > 400, so h = 400, w = 225.
-        assert_eq!(crop_box_size((1275., 800.), (1080, 1920)), (225., 400.));
-        // A large viewport is still capped at 520.
-        assert_eq!(crop_box_size((2000., 1400.), (1000, 1000)), (520., 520.));
+    fn crop_box_leaves_room_for_handles_controls_and_preview() {
+        assert_eq!(crop_box_size((1275., 800.), (3024, 1964)), (755., 491.));
+        assert_eq!(crop_box_size((1275., 800.), (1080, 1920)), (293., 520.));
+        assert_eq!(crop_box_size((2000., 1400.), (1000, 1000)), (760., 760.));
+    }
+
+    #[test]
+    fn editor_edge_handles_are_live_on_both_sides_of_the_border() {
+        let bounds = CropBounds::new(100., 80., 300., 200.);
+        for (point, direction) in [
+            (Vec2::new(106., 180.), Direction::W),
+            (Vec2::new(93., 180.), Direction::W),
+            (Vec2::new(394., 180.), Direction::E),
+            (Vec2::new(406., 180.), Direction::E),
+            (Vec2::new(250., 86.), Direction::N),
+            (Vec2::new(250., 74.), Direction::N),
+            (Vec2::new(250., 274.), Direction::S),
+            (Vec2::new(250., 286.), Direction::S),
+        ] {
+            assert!(
+                matches!(editor_hit_test(point, bounds), CropHit::Handle(handle) if handle.direction == direction)
+            );
+        }
+        assert!(matches!(
+            editor_hit_test(Vec2::new(250., 180.), bounds),
+            CropHit::Move
+        ));
+        assert!(matches!(
+            hit_test(Vec2::new(106., 180.), bounds),
+            CropHit::Move
+        ));
+    }
+
+    #[test]
+    fn editor_resize_snaps_in_source_space_and_shift_releases_it() {
+        let mut state = CropState::new((2400, 1800), (802., 602.), CROP_ZERO);
+        state.set_container((802., 602.), (800., 600.));
+        let start = CropBounds::new(80., 70., 300., 180.);
+        state.set_raw(start);
+        state.drag = Some(CropDrag::Handle(ResizeSession {
+            start_bounds: start,
+            is_alt: false,
+            active_handle: HANDLES[7],
+            original_handle: HANDLES[7],
+        }));
+        state.resize_move_with_alignment(Vec2::new(397., 150.), false, false, false, true);
+        assert_eq!(state.raw, CropBounds::new(80., 70., 320., 180.));
+        assert_eq!(state.real(), CropBounds::new(240., 210., 960., 540.));
+        assert_eq!(state.alignment_guides.x, Some(400.));
+        state.resize_move_with_alignment(Vec2::new(397., 150.), false, true, false, true);
+        assert_eq!(state.raw, CropBounds::new(80., 70., 317., 180.));
+        assert_eq!(state.alignment_guides, CropGuides::default());
+    }
+
+    #[test]
+    fn editor_resize_keeps_the_anchor_after_crossing_it() {
+        let mut state = CropState::new((800, 600), (802., 602.), CROP_ZERO);
+        state.set_container((802., 602.), (800., 600.));
+        let start = CropBounds::new(100., 70., 200., 180.);
+        state.set_raw(start);
+        state.drag = Some(CropDrag::Handle(ResizeSession {
+            start_bounds: start,
+            is_alt: false,
+            active_handle: HANDLES[6],
+            original_handle: HANDLES[6],
+        }));
+        state.resize_move_with_alignment(Vec2::new(397., 150.), false, false, false, true);
+        assert_eq!(state.raw, CropBounds::new(300., 70., 100., 180.));
+        assert_eq!(state.alignment_guides.x, Some(400.));
     }
 
     #[test]

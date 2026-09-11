@@ -1,6 +1,6 @@
+use crate::completed_audio::{CompletedAudioHandoff, CompletedAudioSegment};
 use crate::editor;
 use crate::playback::{self, PlaybackHandle, PlaybackStartError};
-use cap_audio::AudioData;
 use cap_project::StudioRecordingMeta;
 use cap_project::{
     CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, TimelineConfiguration,
@@ -22,12 +22,12 @@ use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-const PREVIEW_RENDER_MAX_ATTEMPTS: u32 = 3;
-const PREVIEW_RENDER_RETRY_DELAY_MS: u64 = 120;
+pub(super) const PREVIEW_RENDER_MAX_ATTEMPTS: u32 = 3;
+pub(super) const PREVIEW_RENDER_RETRY_DELAY_MS: u64 = 120;
 const PREVIEW_CURSOR_CACHE_CAPACITY: usize = 2;
 
 #[derive(Default)]
-struct PreviewCursorCache {
+pub(super) struct PreviewCursorCache {
     entries: Vec<PreviewCursorCacheEntry>,
 }
 
@@ -39,7 +39,7 @@ struct PreviewCursorCacheEntry {
 }
 
 impl PreviewCursorCache {
-    fn get(
+    pub(super) fn get(
         &mut self,
         recording_clip: u32,
         cursor: &Arc<CursorEvents>,
@@ -176,6 +176,8 @@ fn display_video_duration(path: &Path) -> Option<f64> {
 }
 
 pub struct EditorInstance {
+    preparing_adoption: std::sync::Mutex<Option<crate::PreparingPlaybackAdoption>>,
+    completed_track_identity: Option<crate::preparing_handoff::CompletedTrackIdentity>,
     pub project_path: PathBuf,
     pub recordings: Arc<ProjectRecordingsMeta>,
     pub renderer: Arc<editor::RendererHandle>,
@@ -274,7 +276,7 @@ impl EditorInstance {
             shared_device,
             frame_format,
             audio_output,
-            None,
+            EditorStartupInputs::default(),
         )
         .await
     }
@@ -295,7 +297,31 @@ impl EditorInstance {
             shared_device,
             frame_format,
             audio_output,
-            Some(recordings),
+            EditorStartupInputs {
+                recordings: Some(recordings),
+                completed_audio: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn new_with_startup_inputs(
+        project_path: PathBuf,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        shared_device: Option<SharedWgpuDevice>,
+        frame_format: editor::EditorFrameFormat,
+        audio_output: Arc<crate::AudioOutput>,
+        inputs: EditorStartupInputs,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_inner(
+            project_path,
+            on_state_change,
+            frame_cb,
+            shared_device,
+            frame_format,
+            audio_output,
+            inputs,
         )
         .await
     }
@@ -307,8 +333,12 @@ impl EditorInstance {
         shared_device: Option<SharedWgpuDevice>,
         frame_format: editor::EditorFrameFormat,
         audio_output: Arc<crate::AudioOutput>,
-        preloaded_recordings: Option<Arc<ProjectRecordingsMeta>>,
+        inputs: EditorStartupInputs,
     ) -> Result<Arc<Self>, String> {
+        let EditorStartupInputs {
+            recordings: preloaded_recordings,
+            completed_audio,
+        } = inputs;
         if !project_path.exists() {
             return Err(format!("Video path {} not found!", project_path.display()));
         }
@@ -409,37 +439,7 @@ impl EditorInstance {
         }
 
         if project.clips.is_empty() {
-            let calibration_store = load_calibration_store(&recording_meta.project_path);
-
-            match meta.as_ref() {
-                StudioRecordingMeta::MultipleSegments { inner } => {
-                    project.clips = inner
-                        .segments
-                        .iter()
-                        .enumerate()
-                        .map(|(i, segment)| {
-                            let calibration_offset = get_calibration_offset(
-                                segment.camera_device_id(),
-                                segment.mic_device_id(),
-                                &calibration_store,
-                            );
-                            cap_project::ClipConfiguration {
-                                index: i as u32,
-                                offsets: segment
-                                    .calculate_audio_offsets_with_calibration(calibration_offset),
-                                offsets_auto_calculated: true,
-                            }
-                        })
-                        .collect();
-                }
-                StudioRecordingMeta::SingleSegment { .. } => {
-                    project.clips = vec![cap_project::ClipConfiguration {
-                        index: 0,
-                        offsets: cap_project::ClipOffsets::default(),
-                        offsets_auto_calculated: false,
-                    }];
-                }
-            }
+            project.clips = initial_clip_configuration(&recording_meta.project_path, meta);
 
             if let Err(e) = project.write(&recording_meta.project_path) {
                 warn!("Failed to save auto-generated clip offsets: {}", e);
@@ -458,10 +458,29 @@ impl EditorInstance {
             tracing::info!("Using FFmpeg decoder for editor preview");
         }
 
+        let completed_audio = completed_audio.and_then(|handoff| {
+            let matching = handoff.into_matching(&recording_meta, meta);
+            if matching.is_none() {
+                tracing::debug!("Completed preparing audio did not match finalized metadata; decoding ordinary sources");
+            }
+            matching
+        });
+        let completed_track_identity = completed_audio
+            .as_deref()
+            .map(crate::preparing_handoff::completed_track_identity);
         let segments_task = tokio::spawn({
             let recording_meta = recording_meta.clone();
             let studio_meta = (**meta).clone();
-            async move { create_segments(&recording_meta, &studio_meta, force_ffmpeg_for_editor).await }
+            async move {
+                create_segments_with_audio(
+                    &recording_meta,
+                    &studio_meta,
+                    force_ffmpeg_for_editor,
+                    true,
+                    completed_audio.as_deref(),
+                )
+                .await
+            }
         });
 
         // Open the session's audio output stream now (in the background) so
@@ -556,6 +575,8 @@ impl EditorInstance {
         let (playback_active_tx, playback_active_rx) = watch::channel(false);
 
         let this = Arc::new(Self {
+            preparing_adoption: std::sync::Mutex::new(None),
+            completed_track_identity,
             project_path,
             recordings,
             renderer,
@@ -586,11 +607,135 @@ impl EditorInstance {
         Ok(this)
     }
 
+    pub async fn install_preparing_handoff(
+        &self,
+        handoff: &crate::PreparingPlaybackHandoff,
+    ) -> Result<(), String> {
+        if self.preparing_adoption().is_some() {
+            return Err("Editor already has a preparing candidate".into());
+        }
+        let admission = if self
+            .completed_track_identity
+            .as_ref()
+            .is_some_and(|identity| handoff.matches_completed_audio(identity, &self.audio_output))
+        {
+            handoff.prepare_when_settled().await
+        } else {
+            Err("Preparing audio does not match this editor's completed sources or output".into())
+        };
+        let adoption = match admission {
+            Ok(adoption) => adoption,
+            Err(error) => {
+                let exit = handoff.stop_and_wait().await;
+                self.dispose().await;
+                return Err(if exit.cleanup_failed {
+                    format!("{error}; preparing audio ownership could not be released")
+                } else {
+                    error
+                });
+            }
+        };
+        *self
+            .preparing_adoption
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(adoption);
+        Ok(())
+    }
+
+    pub fn preparing_adoption(&self) -> Option<crate::PreparingPlaybackAdoption> {
+        self.preparing_adoption
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub fn commit_preparing_frame(&self, frame: u32, fps: u32) -> bool {
+        self.preparing_adoption()
+            .is_some_and(|adoption| adoption.try_commit(frame, fps))
+    }
+
+    pub async fn start_preparing_handoff(
+        self: &Arc<Self>,
+        fps: u32,
+        resolution: XY<u32>,
+    ) -> Result<bool, PlaybackStartError> {
+        let Some(adoption) = self.preparing_adoption() else {
+            return Ok(false);
+        };
+        let Some(snapshot) = adoption.snapshot() else {
+            return Ok(false);
+        };
+        if !snapshot.playback.playing {
+            return Ok(false);
+        }
+        let frame = crate::preparing_handoff::presentation_frame(&snapshot, fps);
+        self.start_playback_internal(fps, resolution, Some(frame), Some(adoption))
+            .await?;
+        Ok(true)
+    }
+
+    pub async fn recreate_preparing_candidate(
+        self: &Arc<Self>,
+        on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: editor::EditorFrameCallback,
+        frame_format: editor::EditorFrameFormat,
+    ) -> Result<Arc<Self>, String> {
+        let adoption = self
+            .preparing_adoption()
+            .ok_or("Editor has no preparing candidate")?;
+        if !adoption.invalidated() {
+            return Err("Preparing candidate is still current".into());
+        }
+        self.dispose().await;
+        let adoption = adoption.retry().await?;
+        let project = self.project_config.1.borrow().clone();
+        let layers = editor::start_renderer_layers_creation(&self.render_constants, &project);
+        let layers = editor::finish_renderer_layers_creation(layers).await;
+        let renderer = Arc::new(editor::Renderer::spawn_with_format(
+            self.render_constants.clone(),
+            frame_cb,
+            layers,
+            frame_format,
+        )?);
+        let (preview_tx, preview_rx) = watch::channel(None);
+        let (playback_active, playback_active_rx) = watch::channel(false);
+        let next = Arc::new(Self {
+            preparing_adoption: std::sync::Mutex::new(Some(adoption)),
+            completed_track_identity: self.completed_track_identity.clone(),
+            project_path: self.project_path.clone(),
+            recordings: self.recordings.clone(),
+            renderer,
+            render_constants: self.render_constants.clone(),
+            playback_active,
+            playback_active_rx,
+            playback_epoch: AtomicU64::new(0),
+            state: Arc::new(Mutex::new(EditorState {
+                playhead_position: 0,
+                playback_task: None,
+                preview_task: None,
+            })),
+            on_state_change: Box::new(on_state_change),
+            preview_tx,
+            project_config: self.project_config.clone(),
+            segment_medias: self.segment_medias.clone(),
+            music_cache: self.music_cache.clone(),
+            meta: self.meta.clone(),
+            export_preview_active: AtomicBool::new(false),
+            export_active: AtomicBool::new(false),
+            runtime_handle: self.runtime_handle.clone(),
+            audio_output: self.audio_output.clone(),
+        });
+        next.state.lock().await.preview_task =
+            Some(next.clone().spawn_preview_renderer(preview_rx));
+        Ok(next)
+    }
+
     pub fn meta(&self) -> &RecordingMeta {
         &self.meta
     }
 
     pub async fn dispose(&self) {
+        self.playback_epoch.fetch_add(1, Ordering::SeqCst);
         let mut state = self.state.lock().await;
 
         if let Some(handle) = state.playback_task.take() {
@@ -610,7 +755,14 @@ impl EditorInstance {
 
         self.renderer.stop().await;
 
-        self.audio_output.shutdown();
+        let adoption = self.preparing_adoption();
+        let owns_output = adoption.as_ref().is_none_or(|adoption| adoption.is_owner());
+        if let Some(adoption) = adoption {
+            drop(adoption.stop_and_wait().await);
+        }
+        if owns_output {
+            self.audio_output.shutdown();
+        }
 
         tokio::task::yield_now().await;
 
@@ -641,14 +793,61 @@ impl EditorInstance {
     }
 
     pub async fn start_playback(self: &Arc<Self>, fps: u32, resolution_base: XY<u32>) {
+        if let Err(error) = self
+            .start_playback_with_handle(fps, resolution_base, None)
+            .await
+        {
+            warn!(fps, ?error, "Skipping playback start");
+        }
+    }
+
+    pub async fn start_playback_with_handle(
+        self: &Arc<Self>,
+        fps: u32,
+        resolution_base: XY<u32>,
+        start_frame_number: Option<u32>,
+    ) -> Result<PlaybackHandle, PlaybackStartError> {
+        let adoption = self.preparing_adoption();
+        if let Some(adoption) = adoption {
+            if !adoption.is_owner() {
+                return Err(PlaybackStartError::PreparingCandidate);
+            }
+            if adoption
+                .stop_and_wait()
+                .await
+                .is_some_and(|exit| exit.cleanup_failed)
+            {
+                return Err(PlaybackStartError::PreparingCleanup);
+            }
+            drop(
+                self.preparing_adoption
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take(),
+            );
+        }
+        self.start_playback_internal(fps, resolution_base, start_frame_number, None)
+            .await
+    }
+
+    async fn start_playback_internal(
+        self: &Arc<Self>,
+        fps: u32,
+        resolution_base: XY<u32>,
+        start_frame_number: Option<u32>,
+        adoption: Option<crate::PreparingPlaybackAdoption>,
+    ) -> Result<PlaybackHandle, PlaybackStartError> {
         let music = self.load_music_tracks().await;
 
         let (mut handle, prev, epoch) = {
             let mut state = self.state.lock().await;
 
-            let start_frame_number = state.playhead_position;
+            if let Some(frame_number) = start_frame_number {
+                state.playhead_position = frame_number;
+            }
+            let start_frame_number = start_frame_number.unwrap_or(state.playhead_position);
 
-            let playback_handle = match (playback::Playback {
+            let playback = playback::Playback {
                 segment_medias: self.segment_medias.clone(),
                 music: music.clone(),
                 renderer: self.renderer.clone(),
@@ -657,21 +856,21 @@ impl EditorInstance {
                 project: self.project_config.0.subscribe(),
                 audio_output: self.audio_output.clone(),
                 telemetry: None,
-            })
-            .start_with_diagnostics(
-                fps,
-                resolution_base,
-                Some(cap_utils::operation_diagnostics::resource_id(
-                    &self.project_path,
-                )),
-            )
-            .await
-            {
-                Ok(handle) => handle,
-                Err(PlaybackStartError::InvalidFps) => {
-                    warn!(fps, "Skipping playback start due to invalid FPS");
-                    return;
-                }
+            };
+            let playback_handle = if let Some(adoption) = adoption {
+                playback
+                    .start_with_adopted_audio(fps, resolution_base, adoption)
+                    .await?
+            } else {
+                playback
+                    .start_with_diagnostics(
+                        fps,
+                        resolution_base,
+                        Some(cap_utils::operation_diagnostics::resource_id(
+                            &self.project_path,
+                        )),
+                    )
+                    .await?
             };
 
             let epoch = self.playback_epoch.fetch_add(1, Ordering::SeqCst) + 1;
@@ -684,6 +883,7 @@ impl EditorInstance {
             (playback_handle, prev, epoch)
         };
 
+        let owned_handle = handle.clone();
         let this = self.clone();
         tokio::spawn(async move {
             loop {
@@ -692,6 +892,9 @@ impl EditorInstance {
                 match event {
                     playback::PlaybackEvent::Start => {}
                     playback::PlaybackEvent::Frame(frame_number) => {
+                        if this.playback_epoch.load(Ordering::SeqCst) != epoch {
+                            continue;
+                        }
                         this.modify_and_emit_state(|state| {
                             state.playhead_position = frame_number;
                         })
@@ -712,6 +915,7 @@ impl EditorInstance {
         if let Some(prev) = prev {
             prev.stop();
         }
+        Ok(owned_handle)
     }
 
     /// True while a playback engine is live. Epoch-guarded against restart
@@ -1172,56 +1376,12 @@ pub struct SegmentMedia {
     pub decoders: RecordingSegmentDecoders,
 }
 
-/// Shared handle to an audio track that decodes in the background.
-///
-/// Editor startup doesn't block on decoding entire audio files into memory;
-/// consumers that actually need samples (playback, export, waveforms) await
-/// [`AudioLoader::get`], which resolves as soon as the background decode
-/// completes.
-#[derive(Clone)]
-pub struct AudioLoader {
-    rx: watch::Receiver<Option<Result<Option<Arc<AudioData>>, String>>>,
-}
+pub type AudioLoader = cap_audio::ProgressiveAudio;
 
-impl AudioLoader {
-    /// A loader for a segment with no audio track.
-    pub fn none() -> Self {
-        Self::ready(None)
-    }
-
-    /// A loader wrapping already-decoded audio.
-    pub fn ready(audio: Option<Arc<AudioData>>) -> Self {
-        // The sender is dropped immediately; `get` still resolves because the
-        // value is already present when it first borrows the channel.
-        let (_tx, rx) = watch::channel(Some(Ok(audio)));
-        Self { rx }
-    }
-
-    /// Starts decoding `path` on the blocking pool.
-    pub fn spawn(path: PathBuf, label: String) -> Self {
-        let (tx, rx) = watch::channel(None);
-        tokio::task::spawn_blocking(move || {
-            let result = AudioData::from_file(&path)
-                .map(|data| Some(Arc::new(data)))
-                .map_err(|e| format!("{label} / {e}"));
-            let _ = tx.send(Some(result));
-        });
-        Self { rx }
-    }
-
-    /// Waits for the background decode to finish. Returns `Ok(None)` when the
-    /// segment has no audio track.
-    pub async fn get(&self) -> Result<Option<Arc<AudioData>>, String> {
-        let mut rx = self.rx.clone();
-        loop {
-            if let Some(result) = rx.borrow_and_update().clone() {
-                return result;
-            }
-            if rx.changed().await.is_err() {
-                return Err("Audio load task was dropped".to_string());
-            }
-        }
-    }
+#[derive(Default)]
+pub struct EditorStartupInputs {
+    pub recordings: Option<Arc<ProjectRecordingsMeta>>,
+    pub completed_audio: Option<CompletedAudioHandoff>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1245,18 +1405,11 @@ impl LegacyAudioLogTrack {
     }
 }
 
-struct LegacyAudioTimingRepair {
-    log: Option<String>,
+struct LegacyAudioTimingRepair<'a> {
+    log: Option<&'a str>,
 }
 
-impl LegacyAudioTimingRepair {
-    fn load(project_path: &Path) -> Self {
-        let log_path = project_path.join("recording-logs.log");
-        Self {
-            log: std::fs::read_to_string(log_path).ok(),
-        }
-    }
-
+impl LegacyAudioTimingRepair<'_> {
     fn offset(
         &self,
         segment_index: usize,
@@ -1289,7 +1442,7 @@ impl LegacyAudioTimingRepair {
         segment_index: usize,
         track: LegacyAudioLogTrack,
     ) -> Option<cap_project::AudioGapSummary> {
-        legacy_audio_gap_summary_from_log(self.log.as_deref()?, segment_index, track)
+        legacy_audio_gap_summary_from_log(self.log?, segment_index, track)
     }
 }
 
@@ -1375,12 +1528,78 @@ fn audio_timing_repair_offset(summary: Option<&cap_project::AudioGapSummary>) ->
     -(summary.startup_overlap_trimmed_ms as f32 / 1_000.0)
 }
 
+pub fn segment_audio_timing_repairs(
+    meta: &StudioRecordingMeta,
+    legacy_log: Option<&str>,
+) -> Vec<SegmentAudioTimingRepair> {
+    let count = match meta {
+        StudioRecordingMeta::SingleSegment { .. } => 1,
+        StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
+    };
+    (0..count)
+        .map(|index| segment_audio_timing_repair(meta, index, legacy_log))
+        .collect()
+}
+
+fn segment_audio_timing_repair(
+    meta: &StudioRecordingMeta,
+    index: usize,
+    legacy_log: Option<&str>,
+) -> SegmentAudioTimingRepair {
+    let legacy = LegacyAudioTimingRepair { log: legacy_log };
+    match meta {
+        StudioRecordingMeta::SingleSegment { segment } => SegmentAudioTimingRepair {
+            mic_offset_secs: legacy.offset(
+                0,
+                LegacyAudioLogTrack::Mic,
+                segment
+                    .audio
+                    .as_ref()
+                    .and_then(|audio| audio.gap_summary.as_ref()),
+            ),
+            system_audio_offset_secs: 0.0,
+        },
+        StudioRecordingMeta::MultipleSegments { inner } => {
+            let segment = &inner.segments[index];
+            SegmentAudioTimingRepair {
+                mic_offset_secs: legacy.offset(
+                    index,
+                    LegacyAudioLogTrack::Mic,
+                    segment
+                        .mic
+                        .as_ref()
+                        .and_then(|audio| audio.gap_summary.as_ref()),
+                ),
+                system_audio_offset_secs: legacy.offset(
+                    index,
+                    LegacyAudioLogTrack::SystemAudio,
+                    segment
+                        .system_audio
+                        .as_ref()
+                        .and_then(|audio| audio.gap_summary.as_ref()),
+                ),
+            }
+        }
+    }
+}
+
+fn audio_loader_with_completed(
+    path: PathBuf,
+    label: String,
+    completed: Option<&Arc<cap_audio::DecodedAudio>>,
+) -> AudioLoader {
+    match completed {
+        Some(audio) => AudioLoader::from_result(Ok(Some(audio.clone()))),
+        None => AudioLoader::spawn(path, label),
+    }
+}
+
 pub async fn create_segments(
     recording_meta: &RecordingMeta,
     meta: &StudioRecordingMeta,
     force_ffmpeg: bool,
 ) -> Result<Vec<SegmentMedia>, String> {
-    create_segments_with_audio(recording_meta, meta, force_ffmpeg, true).await
+    create_segments_with_audio(recording_meta, meta, force_ffmpeg, true, None).await
 }
 
 pub async fn create_segments_without_audio(
@@ -1388,7 +1607,7 @@ pub async fn create_segments_without_audio(
     meta: &StudioRecordingMeta,
     force_ffmpeg: bool,
 ) -> Result<Vec<SegmentMedia>, String> {
-    create_segments_with_audio(recording_meta, meta, force_ffmpeg, false).await
+    create_segments_with_audio(recording_meta, meta, force_ffmpeg, false, None).await
 }
 
 async fn create_segments_with_audio(
@@ -1396,9 +1615,11 @@ async fn create_segments_with_audio(
     meta: &StudioRecordingMeta,
     force_ffmpeg: bool,
     load_audio: bool,
+    completed_audio: Option<&[CompletedAudioSegment]>,
 ) -> Result<Vec<SegmentMedia>, String> {
-    let legacy_timing_repair = LegacyAudioTimingRepair::load(&recording_meta.project_path);
-    let legacy_timing_repair = &legacy_timing_repair;
+    let legacy_log =
+        std::fs::read_to_string(recording_meta.project_path.join("recording-logs.log")).ok();
+    let legacy_log = legacy_log.as_deref();
 
     match &meta {
         cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
@@ -1407,9 +1628,12 @@ async fn create_segments_with_audio(
                 .as_ref()
                 .filter(|_| load_audio)
                 .map(|audio_meta| {
-                    AudioLoader::spawn(
+                    audio_loader_with_completed(
                         recording_meta.path(&audio_meta.path),
                         "SingleSegment Audio".to_string(),
+                        completed_audio
+                            .and_then(|segments| segments.first())
+                            .and_then(|segment| segment.mic.as_ref()),
                     )
                 })
                 .unwrap_or_else(AudioLoader::none);
@@ -1450,14 +1674,7 @@ async fn create_segments_with_audio(
             Ok(vec![SegmentMedia {
                 audio,
                 system_audio: AudioLoader::none(),
-                audio_timing_repair: SegmentAudioTimingRepair {
-                    mic_offset_secs: legacy_timing_repair.offset(
-                        0,
-                        LegacyAudioLogTrack::Mic,
-                        s.audio.as_ref().and_then(|m| m.gap_summary.as_ref()),
-                    ),
-                    system_audio_offset_secs: 0.0,
-                },
+                audio_timing_repair: segment_audio_timing_repair(meta, 0, legacy_log),
                 cursor,
                 keyboard: Arc::new(Default::default()),
                 decoders,
@@ -1473,9 +1690,12 @@ async fn create_segments_with_audio(
                     .as_ref()
                     .filter(|_| load_audio)
                     .map(|audio| {
-                        AudioLoader::spawn(
+                        audio_loader_with_completed(
                             recording_meta.path(&audio.path),
                             format!("MultipleSegments {i} Audio"),
+                            completed_audio
+                                .and_then(|segments| segments.get(i))
+                                .and_then(|segment| segment.mic.as_ref()),
                         )
                     })
                     .unwrap_or_else(AudioLoader::none);
@@ -1485,9 +1705,12 @@ async fn create_segments_with_audio(
                     .as_ref()
                     .filter(|_| load_audio)
                     .map(|audio| {
-                        AudioLoader::spawn(
+                        audio_loader_with_completed(
                             recording_meta.path(&audio.path),
                             format!("MultipleSegments {i} System Audio"),
+                            completed_audio
+                                .and_then(|segments| segments.get(i))
+                                .and_then(|segment| segment.system_audio.as_ref()),
                         )
                     })
                     .unwrap_or_else(AudioLoader::none);
@@ -1512,18 +1735,7 @@ async fn create_segments_with_audio(
                 Ok::<SegmentMedia, String>(SegmentMedia {
                     audio,
                     system_audio,
-                    audio_timing_repair: SegmentAudioTimingRepair {
-                        mic_offset_secs: legacy_timing_repair.offset(
-                            i,
-                            LegacyAudioLogTrack::Mic,
-                            s.mic.as_ref().and_then(|m| m.gap_summary.as_ref()),
-                        ),
-                        system_audio_offset_secs: legacy_timing_repair.offset(
-                            i,
-                            LegacyAudioLogTrack::SystemAudio,
-                            s.system_audio.as_ref().and_then(|m| m.gap_summary.as_ref()),
-                        ),
-                    },
+                    audio_timing_repair: segment_audio_timing_repair(meta, i, legacy_log),
                     cursor,
                     keyboard,
                     decoders,
@@ -1532,6 +1744,37 @@ async fn create_segments_with_audio(
 
             futures::future::try_join_all(segment_futures).await
         }
+    }
+}
+
+pub fn initial_clip_configuration(
+    project_path: &std::path::Path,
+    meta: &StudioRecordingMeta,
+) -> Vec<cap_project::ClipConfiguration> {
+    let calibration_store = load_calibration_store(project_path);
+    match meta {
+        StudioRecordingMeta::MultipleSegments { inner } => inner
+            .segments
+            .iter()
+            .enumerate()
+            .map(|(i, segment)| {
+                let calibration_offset = get_calibration_offset(
+                    segment.camera_device_id(),
+                    segment.mic_device_id(),
+                    &calibration_store,
+                );
+                cap_project::ClipConfiguration {
+                    index: i as u32,
+                    offsets: segment.calculate_audio_offsets_with_calibration(calibration_offset),
+                    offsets_auto_calculated: true,
+                }
+            })
+            .collect(),
+        StudioRecordingMeta::SingleSegment { .. } => vec![cap_project::ClipConfiguration {
+            index: 0,
+            offsets: cap_project::ClipOffsets::default(),
+            offsets_auto_calculated: false,
+        }],
     }
 }
 
@@ -1560,6 +1803,55 @@ fn get_calibration_offset(
 mod tests {
     use super::*;
     use cap_project::{AudioGapSummary, CursorClickEvent, CursorConfiguration, CursorMoveEvent};
+
+    #[tokio::test]
+    async fn completed_pcm_loader_reuses_arc_without_opening_a_missing_file() {
+        let audio = crate::completed_audio::tests::audio();
+        let loader = audio_loader_with_completed(
+            "not-created/audio.m4a".into(),
+            "cached".into(),
+            Some(&audio),
+        );
+        let loaded = loader.get().await.unwrap().unwrap();
+        assert!(Arc::ptr_eq(&loaded, &audio));
+        let missing =
+            audio_loader_with_completed("not-created/audio.m4a".into(), "ordinary".into(), None);
+        assert!(missing.get().await.is_err());
+    }
+
+    #[test]
+    fn shared_timing_repairs_preserve_track_index_and_legacy_precedence() {
+        let mut meta = crate::completed_audio::tests::metadata();
+        let structured = AudioGapSummary {
+            total_overlap_trimmed_ms: 867,
+            startup_overlap_trimmed_ms: 867,
+            overlap_dropped_frames: 3,
+            startup_overlap_drops: 3,
+        };
+        crate::completed_audio::tests::segments_mut(&mut meta)[0]
+            .mic
+            .as_mut()
+            .unwrap()
+            .gap_summary = Some(structured);
+        let log = (0..3).map(|_| "segment{index=0}:mic-out: Dropping overlapping audio frame frame_count=1 overlap_ms=100\nsegment{index=1}:system-audio-out: Dropping overlapping audio frame frame_count=1 overlap_ms=50\n").collect::<String>();
+        let repairs = segment_audio_timing_repairs(meta.studio_meta().unwrap(), Some(&log));
+        assert_eq!(
+            repairs,
+            vec![
+                SegmentAudioTimingRepair {
+                    mic_offset_secs: -0.867,
+                    system_audio_offset_secs: 0.0
+                },
+                SegmentAudioTimingRepair {
+                    mic_offset_secs: 0.0,
+                    system_audio_offset_secs: -0.15
+                }
+            ]
+        );
+        let without_log = segment_audio_timing_repairs(meta.studio_meta().unwrap(), None);
+        assert_eq!(without_log[0].mic_offset_secs, -0.867);
+        assert_eq!(without_log[1], SegmentAudioTimingRepair::default());
+    }
 
     fn preview_cursor_events() -> Arc<CursorEvents> {
         Arc::new(CursorEvents {
@@ -1956,5 +2248,140 @@ mod tests {
             startup_overlap_drops: 5,
         };
         assert_eq!(audio_timing_repair_offset(Some(&too_large)), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod initial_clip_configuration_tests {
+    use super::*;
+
+    fn metadata(with_ids: bool) -> StudioRecordingMeta {
+        serde_json::from_value(serde_json::json!({
+            "segments": [{
+                "display": {"path": "display.mp4", "fps": 30, "start_time": 1.23456789},
+                "camera": {"path": "camera.mp4", "fps": 24, "start_time": 0.987654321, "device_id": with_ids.then_some("camera")},
+                "mic": {"path": "mic.m4a", "start_time": 0.876543219, "device_id": with_ids.then_some("mic")},
+                "system_audio": {"path": "system.m4a", "start_time": 1.111111111}
+            }],
+            "cursors": {}
+        })).unwrap()
+    }
+
+    fn assert_bits(clips: &[cap_project::ClipConfiguration], calibration: f32) {
+        assert_eq!(clips.len(), 1);
+        assert_eq!(clips[0].index, 0);
+        assert!(clips[0].offsets_auto_calculated);
+        assert_eq!(
+            clips[0].offsets.camera.to_bits(),
+            ((1.23456789_f64 - 0.987654321) as f32).to_bits()
+        );
+        assert_eq!(
+            clips[0].offsets.mic.to_bits(),
+            (((1.23456789_f64 - 0.876543219) as f32) + calibration).to_bits()
+        );
+        assert_eq!(
+            clips[0].offsets.system_audio.to_bits(),
+            (((1.23456789_f64 - 1.111111111) as f32) + calibration).to_bits()
+        );
+    }
+
+    #[test]
+    fn calibration_projection_preserves_store_location_confidence_and_cast_order_without_writes() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("recordings/test.cap");
+        std::fs::create_dir_all(&project).unwrap();
+        let config = project.join("project-config.json");
+        std::fs::write(&config, b"untouched config sentinel").unwrap();
+        let mut store = cap_audio::CalibrationStore::new();
+        for confidence in [0.49, 0.5, 1.0] {
+            let offset = -0.03123456789_f64;
+            store.update_calibration(&cap_audio::DeviceSyncCalibration {
+                camera_id: "camera".into(),
+                microphone_id: "mic".into(),
+                measured_offset_secs: offset,
+                confidence,
+                measurement_count: 3,
+            });
+            store.save(directory.path()).unwrap();
+            let saved = std::fs::read(directory.path().join("sync_calibrations.json")).unwrap();
+            let clips = initial_clip_configuration(&project, &metadata(true));
+            assert_bits(
+                &clips,
+                if confidence >= 0.5 {
+                    offset as f32
+                } else {
+                    0.0
+                },
+            );
+            assert_eq!(
+                std::fs::read(&config).unwrap(),
+                b"untouched config sentinel"
+            );
+            assert_eq!(
+                std::fs::read(directory.path().join("sync_calibrations.json")).unwrap(),
+                saved
+            );
+        }
+    }
+
+    #[test]
+    fn missing_store_invalid_store_and_missing_device_ids_keep_uncalibrated_offsets() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("recordings/test.cap");
+        assert_bits(&initial_clip_configuration(&project, &metadata(true)), 0.0);
+        assert!(!directory.path().join("sync_calibrations.json").exists());
+        std::fs::write(
+            directory.path().join("sync_calibrations.json"),
+            b"malformed",
+        )
+        .unwrap();
+        assert_bits(&initial_clip_configuration(&project, &metadata(true)), 0.0);
+        let mut store = cap_audio::CalibrationStore::new();
+        store.update_calibration(&cap_audio::DeviceSyncCalibration {
+            camera_id: "camera".into(),
+            microphone_id: "mic".into(),
+            measured_offset_secs: 0.7,
+            confidence: 1.0,
+            measurement_count: 2,
+        });
+        store.save(directory.path()).unwrap();
+        assert_bits(&initial_clip_configuration(&project, &metadata(false)), 0.0);
+        assert!(!project.exists());
+    }
+
+    #[test]
+    fn legacy_single_segment_and_missing_timing_preserve_their_default_offsets() {
+        let directory = tempfile::tempdir().unwrap();
+        let single: StudioRecordingMeta = serde_json::from_value(serde_json::json!({
+            "display": {"path": "display.mp4", "fps": 30}
+        }))
+        .unwrap();
+        let clips = initial_clip_configuration(directory.path(), &single);
+        assert_eq!(clips.len(), 1);
+        assert_eq!(clips[0].index, 0);
+        assert!(!clips[0].offsets_auto_calculated);
+        assert_eq!(
+            [
+                clips[0].offsets.camera,
+                clips[0].offsets.mic,
+                clips[0].offsets.system_audio
+            ],
+            [0.0; 3]
+        );
+        let mut multiple = metadata(true);
+        let StudioRecordingMeta::MultipleSegments { inner } = &mut multiple else {
+            panic!("Expected indexed metadata")
+        };
+        inner.segments[0].camera.as_mut().unwrap().start_time = None;
+        let clips = initial_clip_configuration(directory.path(), &multiple);
+        assert!(clips[0].offsets_auto_calculated);
+        assert_eq!(
+            [
+                clips[0].offsets.camera,
+                clips[0].offsets.mic,
+                clips[0].offsets.system_audio
+            ],
+            [0.0; 3]
+        );
     }
 }

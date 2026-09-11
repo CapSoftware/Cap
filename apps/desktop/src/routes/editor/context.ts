@@ -87,6 +87,8 @@ import {
 	splitKeyboardSegment,
 } from "./keyboard-timing";
 import type { MaskSegment } from "./masks";
+import { usePreparingEditor } from "./preparing-editor-context";
+import { createPreparingPlaybackHandoff } from "./preparing-playback-handoff";
 import { createProjectConfigSave } from "./project-config-save";
 import type { SnapGuide } from "./snapping";
 import {
@@ -141,7 +143,7 @@ export type ModalDialog =
 	  };
 
 export type LayoutMode =
-	| { type: "export" }
+	| { type: "export"; destination?: "link" }
 	| { type: "transcript" }
 	| { type: "clips" };
 
@@ -1587,18 +1589,6 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					: undefined,
 			);
 
-			createEffect(
-				on(
-					() => editorState.playing,
-					(active) => {
-						if (!active)
-							commands.setPlayheadPosition(
-								Math.floor(editorState.playbackTime * FPS),
-							);
-					},
-				),
-			);
-
 			const totalDuration = () =>
 				project.timeline
 					? clipTimelineDuration(
@@ -1651,11 +1641,12 @@ export const [EditorContextProvider, useBaseEditorContext] =
 			const initialCamera3DTrackVisible =
 				(project.timeline?.camera3dSegments?.length ?? 0) > 0;
 
+			const preparing = usePreparingEditor();
 			const [editorState, setEditorState] = createStore({
 				styleEditIndex: null as number | null,
 				importingImage: false,
 				previewTime: null as number | null,
-				playbackTime: 0,
+				playbackTime: preparing?.handoffTarget()?.playback.playheadSeconds ?? 0,
 				playing: false,
 				// On-canvas selection of the screen recording / camera boxes.
 				// Kept separate from timeline.selection, which drives the sidebar
@@ -2091,8 +2082,162 @@ export const [EditorContextProvider, useBaseEditorContext] =
 				),
 			);
 
+			const [handoffIntent, setHandoffIntent] = createSignal({
+				playing: false,
+				active: false,
+			});
+			let playbackHandoff:
+				| ReturnType<typeof createPreparingPlaybackHandoff>
+				| undefined;
+			createEffect(
+				on(
+					() => props.editorInstance.instanceId,
+					(instanceId) => {
+						playbackHandoff?.dispose();
+						const initial = preparing?.handoffTarget();
+						let playbackId: string | undefined;
+						playbackHandoff = initial
+							? createPreparingPlaybackHandoff({
+									initial: {
+										frameNumber: initial.frameNumber,
+										playing: initial.playback.playing,
+									},
+									start: async (frameNumber) => {
+										playbackId = await commands.startEditorHandoffPlayback(
+											instanceId,
+											frameNumber,
+											FPS,
+											previewResolutionBase(),
+										);
+									},
+									stop: async () => {
+										const current = playbackId;
+										playbackId = undefined;
+										if (current)
+											await commands.stopEditorHandoffPlayback(
+												instanceId,
+												current,
+											);
+									},
+									changed: (intent, active) =>
+										setHandoffIntent({ playing: intent.playing, active }),
+									settled: (intent) => {
+										playbackId = undefined;
+										setEditorState("playing", intent.playing);
+									},
+									failed: (error) => {
+										setEditorState("playing", false);
+										console.error("Failed to resume editor playback:", error);
+									},
+								})
+							: undefined;
+						setHandoffIntent({
+							playing: initial?.playback.playing ?? false,
+							active: !!initial,
+						});
+						preparing?.setPlaybackHandoff(playbackHandoff);
+					},
+				),
+			);
+			createEffect(
+				on(
+					() => editorState.playing,
+					(active) => {
+						if (!active && !playbackHandoff?.active())
+							commands.setPlayheadPosition(
+								Math.floor(editorState.playbackTime * FPS),
+							);
+					},
+				),
+			);
+
+			onCleanup(() => {
+				playbackHandoff?.dispose();
+				preparing?.setPlaybackHandoff(undefined);
+			});
+			const playbackIntent = () =>
+				handoffIntent().active ? handoffIntent().playing : editorState.playing;
+			let preparingCommand: Promise<boolean> = Promise.resolve(true);
+			let preparingCommandRevision = 0;
+			let cancelPreparingCommand: (() => void) | undefined;
+			onCleanup(() => {
+				preparingCommandRevision++;
+				cancelPreparingCommand?.();
+			});
+			createEffect(() => {
+				if (
+					props.editorInstance.preparingPlayback &&
+					!preparing?.ordinaryReady()
+				) {
+					const playback = preparing?.model.playback();
+					if (playback)
+						setEditorState("playbackTime", playback.playheadSeconds);
+				}
+			});
+			const requestHandoffPlayback = (playing: boolean, seconds?: number) => {
+				const progressive =
+					props.editorInstance.preparingPlayback && !preparing?.ordinaryReady();
+				if (!progressive && !playbackHandoff?.active()) return undefined;
+				const bounded = Math.max(
+					0,
+					Math.min(seconds ?? editorState.playbackTime, totalDuration()),
+				);
+				const frameNumber =
+					preparing?.requestOrdinaryFrame(Math.floor(bounded * FPS), true) ??
+					Math.floor(bounded * FPS);
+				setEditorState("playbackTime", bounded);
+				setEditorState("previewTime", null);
+				if (!progressive || !preparing)
+					return playbackHandoff?.request({ frameNumber, playing });
+				const revision = ++preparingCommandRevision;
+				cancelPreparingCommand?.();
+				const cancelled = new Promise<false>((resolve) => {
+					cancelPreparingCommand = () => resolve(false);
+				});
+				const releaseFrames = preparing.holdOrdinaryFrames();
+				setHandoffIntent({ playing, active: true });
+				preparingCommand = preparingCommand
+					.catch(() => false)
+					.then(async () => {
+						if (revision !== preparingCommandRevision) return false;
+						const model = preparing.model;
+						let accepted = seconds === undefined || (await model.seek(bounded));
+						if (revision !== preparingCommandRevision) return false;
+						if (accepted) accepted = await model.setPlaying(playing);
+						if (revision !== preparingCommandRevision) return false;
+						if (accepted) {
+							await preparing.retryCandidate();
+							return revision === preparingCommandRevision;
+						}
+						if (model.commandError() !== "Preparing playback has been adopted")
+							return false;
+						await commands.stopPlayback();
+						if (revision !== preparingCommandRevision) return false;
+						await commands.seekTo(frameNumber);
+						if (revision !== preparingCommandRevision) return false;
+						const pending = playbackHandoff?.request({ frameNumber, playing });
+						releaseFrames();
+						events.renderFrameEvent.emit({
+							frame_number: frameNumber,
+							fps: FPS,
+							resolution_base: previewResolutionBase(),
+						});
+						const settled = await Promise.race([pending, cancelled]);
+						return revision === preparingCommandRevision && (settled ?? false);
+					})
+					.finally(() => {
+						releaseFrames();
+						if (revision === preparingCommandRevision)
+							cancelPreparingCommand = undefined;
+					});
+				return preparingCommand;
+			};
+
 			return {
 				...editorInstanceContext,
+				playbackIntent,
+				handoffPlaybackPending: () => handoffIntent().active,
+				requestHandoffPlayback,
 				meta() {
 					return props.meta();
 				},
@@ -2196,6 +2341,7 @@ function transformMeta({ pretty_name, ...rawMeta }: RecordingMeta) {
 export type TransformedMeta = ReturnType<typeof transformMeta>;
 
 const createEditorInstanceContext = () => {
+	const preparing = usePreparingEditor();
 	const [latestFrame, setLatestFrame] = createLazySignal<FrameData>();
 
 	// Rendered display/camera placement of the latest preview frame, emitted
@@ -2211,8 +2357,14 @@ const createEditorInstanceContext = () => {
 	const [performanceMode, setPerformanceMode] = createSignal(false);
 
 	let disposeWorkerReadyEffect: (() => void) | undefined;
+	let activeInstanceId: string | undefined;
+	let closeSocket: (() => void) | undefined;
+	let alive = true;
 
 	onCleanup(() => {
+		alive = false;
+		activeInstanceId = undefined;
+		closeSocket?.();
 		disposeWorkerReadyEffect?.();
 		canvasControls()?.dispose();
 	});
@@ -2254,19 +2406,37 @@ const createEditorInstanceContext = () => {
 
 			console.log("[Editor] Editor instance created, setting up WebSocket");
 
+			const instanceId = instance.instanceId;
+			if (!alive) return instance;
+			activeInstanceId = instanceId;
+			closeSocket?.();
+			disposeWorkerReadyEffect?.();
+			canvasControls()?.dispose();
+			preparing?.acceptSnapshot(instance.preparingSnapshot);
 			const requestFrame = () => {
+				if (!alive || activeInstanceId !== instanceId) return;
 				events.renderFrameEvent.emit({
-					frame_number: 0,
+					frame_number: preparing?.handoffRequestedFrame() ?? 0,
 					fps: FPS,
 					resolution_base: getPreviewResolution(DEFAULT_PREVIEW_QUALITY),
 				});
 			};
 
+			preparing?.beginHandoff(FPS, instance.recordingDuration, {
+				instanceId,
+				fps: FPS,
+				progressive: instance.preparingPlayback,
+				retry: async () => refetchEditorInstance(),
+				requestFrame,
+			});
 			const [ws, _wsConnected, workerReady, controls] = createImageDataWS(
 				instance.framesSocketUrl,
-				setLatestFrame,
+				(frame) => {
+					if (alive && activeInstanceId === instanceId) setLatestFrame(frame);
+				},
 				requestFrame,
 			);
+			closeSocket = () => ws.close();
 
 			setCanvasControls(controls);
 
@@ -2278,11 +2448,13 @@ const createEditorInstanceContext = () => {
 			});
 
 			ws.addEventListener("open", () => {
+				if (!alive || activeInstanceId !== instanceId) return;
 				setIsConnected(true);
 				requestFrame();
 			});
 
 			ws.addEventListener("close", () => {
+				if (!alive || activeInstanceId !== instanceId) return;
 				setIsConnected(false);
 			});
 

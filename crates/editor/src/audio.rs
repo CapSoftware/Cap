@@ -1,7 +1,7 @@
 use crate::export_audio::{EXPORT_AUDIO_BLOCK_SAMPLES, ExportAudioError, ExportAudioSources};
 use cap_audio::{
-    AudioData, AudioRendererTrack, FromSampleBytes, StereoMode, cast_bytes_to_f32_slice,
-    cast_f32_slice_to_bytes,
+    AudioData, AudioRendererTrack, DecodedAudio, FromSampleBytes, StereoMode,
+    cast_bytes_to_f32_slice, cast_f32_slice_to_bytes,
 };
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
@@ -60,7 +60,7 @@ pub struct AudioSegment {
 // yeah this is cursed oh well
 #[derive(Clone)]
 pub struct AudioSegmentTrack {
-    data: Arc<AudioData>,
+    data: Arc<DecodedAudio>,
     get_gain: fn(&AudioConfiguration) -> f32,
     get_stereo_mode: fn(&AudioConfiguration) -> StereoMode,
     get_offset: fn(&ClipOffsets) -> f32,
@@ -70,6 +70,20 @@ pub struct AudioSegmentTrack {
 impl AudioSegmentTrack {
     pub fn new(
         data: Arc<AudioData>,
+        get_gain: fn(&AudioConfiguration) -> f32,
+        get_stereo_mode: fn(&AudioConfiguration) -> StereoMode,
+        get_offset: fn(&ClipOffsets) -> f32,
+    ) -> Self {
+        Self::from_decoded(
+            Arc::new(DecodedAudio::from(data)),
+            get_gain,
+            get_stereo_mode,
+            get_offset,
+        )
+    }
+
+    pub fn from_decoded(
+        data: Arc<DecodedAudio>,
         get_gain: fn(&AudioConfiguration) -> f32,
         get_stereo_mode: fn(&AudioConfiguration) -> StereoMode,
         get_offset: fn(&ClipOffsets) -> f32,
@@ -88,7 +102,7 @@ impl AudioSegmentTrack {
         self
     }
 
-    pub fn data(&self) -> &Arc<AudioData> {
+    pub fn data(&self) -> &Arc<DecodedAudio> {
         &self.data
     }
 
@@ -1353,6 +1367,68 @@ fn progressive_buffer_samples(duration_secs: f64, sample_rate: u32, channels: us
 
 fn progressive_buffer_bytes(samples: usize) -> usize {
     samples.saturating_mul(std::mem::size_of::<u32>())
+}
+
+pub(crate) struct PreparingAudioOutputPolicy {
+    pub render_info: AudioInfo,
+    pub render_start_seconds: f64,
+    pub skip_output_frames: usize,
+    pub convert_from_f32: bool,
+}
+
+pub(crate) fn preparing_audio_output_policy(
+    duration_secs: f64,
+    output_info: AudioInfo,
+    start_playhead_secs: f64,
+) -> Result<PreparingAudioOutputPolicy, String> {
+    if !duration_secs.is_finite()
+        || duration_secs <= 0.0
+        || !start_playhead_secs.is_finite()
+        || start_playhead_secs < 0.0
+        || output_info.sample_rate == 0
+        || output_info.channels == 0
+    {
+        return Err("Preparing audio output timing is invalid".into());
+    }
+    let output_info = output_info.for_ffmpeg_output();
+    let estimated_output_samples =
+        progressive_buffer_samples(duration_secs, output_info.sample_rate, output_info.channels);
+    let convert_from_f32 =
+        progressive_buffer_bytes(estimated_output_samples) <= MAX_PROGRESSIVE_BUFFER_BYTES;
+    let render_start_seconds = if convert_from_f32 {
+        (start_playhead_secs - ProgressiveAudioBuffer::<f32>::START_PREROLL_SECS)
+            .max(0.0)
+            .min(duration_secs)
+    } else {
+        start_playhead_secs
+    };
+    let skip_output_frames = if convert_from_f32 {
+        let index = |seconds| {
+            output_sample_index(
+                seconds,
+                output_info.sample_rate,
+                output_info.channels,
+                estimated_output_samples,
+            ) / output_info.channels
+        };
+        index(start_playhead_secs).saturating_sub(index(render_start_seconds))
+    } else {
+        0
+    };
+    Ok(PreparingAudioOutputPolicy {
+        render_info: if convert_from_f32 {
+            AudioInfo::new_raw(
+                AudioData::SAMPLE_FORMAT,
+                output_info.sample_rate,
+                output_info.channels as u16,
+            )
+        } else {
+            output_info
+        },
+        render_start_seconds,
+        skip_output_frames,
+        convert_from_f32,
+    })
 }
 
 enum PrerenderedAudioBufferMode<T: FromSampleBytes> {

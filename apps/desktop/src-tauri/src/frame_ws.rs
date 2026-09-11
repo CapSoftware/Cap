@@ -668,7 +668,9 @@ mod shutdown_tests {
     }
 
     async fn assert_listener_closed(port: u16) {
-        tokio::time::timeout(Duration::from_secs(2), async {
+        // Windows can take just over two seconds to report a refused loopback connection.
+        let timeout = Duration::from_secs(if cfg!(windows) { 5 } else { 2 });
+        tokio::time::timeout(timeout, async {
             while TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
@@ -934,5 +936,225 @@ mod shutdown_tests {
         assert_disconnected(&mut client).await;
         wait_until(|| tx.receiver_count() == 0).await;
         assert_listener_closed(port).await;
+    }
+}
+
+pub(crate) struct OwnedWatchFrameWs {
+    pub(crate) url: String,
+    shutdown: CancellationToken,
+    task: Option<tokio::task::JoinHandle<Result<(), String>>>,
+}
+
+impl OwnedWatchFrameWs {
+    pub(crate) fn is_finished(&self) -> bool {
+        self.task
+            .as_ref()
+            .is_none_or(tokio::task::JoinHandle::is_finished)
+    }
+
+    pub(crate) async fn stop_and_wait(mut self) -> Result<(), String> {
+        self.shutdown.cancel();
+        self.task
+            .take()
+            .ok_or_else(|| "Preparing frame transport already joined".to_string())?
+            .await
+            .map_err(|error| format!("Preparing frame transport join failed: {error}"))?
+    }
+}
+
+impl Drop for OwnedWatchFrameWs {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+    }
+}
+
+pub(crate) async fn create_owned_watch_frame_ws(
+    frame_rx: watch::Receiver<Option<Arc<WSFrame>>>,
+    accepts: Arc<dyn Fn() -> bool + Send + Sync>,
+) -> Result<OwnedWatchFrameWs, String> {
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|error| error.to_string())?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| error.to_string())?
+        .port();
+    let route = format!("/{}", uuid::Uuid::new_v4());
+    let url = format!("ws://127.0.0.1:{port}{route}");
+    let shutdown = CancellationToken::new();
+    let cancelled = shutdown.clone();
+    let task = tokio::spawn(async move {
+        let mut connections = tokio::task::JoinSet::new();
+        let mut failure = None;
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancelled.cancelled() => break,
+                joined = connections.join_next(), if !connections.is_empty() => {
+                    if let Some(Err(error)) = joined {
+                        failure = Some(format!("Preparing frame connection join failed: {error}"));
+                        break;
+                    }
+                }
+                accepted = listener.accept() => {
+                    let (stream, _) = match accepted {
+                        Ok(value) => value,
+                        Err(error) => {
+                            tracing::debug!(%error, "Preparing frame transport accept stopped");
+                            break;
+                        }
+                    };
+                    if connections.len() >= 8 {
+                        drop(stream);
+                        continue;
+                    }
+                    let expected = route.clone();
+                    let mut frames = frame_rx.clone();
+                    let accepts = accepts.clone();
+                    let cancelled = cancelled.clone();
+                    connections.spawn(async move {
+                        let exchange = async move {
+                            let Ok(mut socket) = tokio_tungstenite::accept_hdr_async(
+                                stream,
+                                move |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                                    if request.uri().path() == expected && request.uri().query().is_none() {
+                                        Ok(response)
+                                    } else {
+                                        Err(tokio_tungstenite::tungstenite::http::Response::builder().status(404).body(None).unwrap())
+                                    }
+                                },
+                            ).await else { return; };
+                            loop {
+                                let frame = frames.borrow_and_update().clone();
+                                if let Some(frame) = frame
+                                    && accepts()
+                                    && socket.send(Message::Binary(pack_ws_frame(&frame))).await.is_err()
+                                {
+                                    return;
+                                }
+                                tokio::select! {
+                                    changed = frames.changed() => if changed.is_err() { return; },
+                                    message = socket.next() => match message {
+                                        None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return,
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        };
+                        tokio::select! {
+                            biased;
+                            _ = cancelled.cancelled() => {},
+                            _ = exchange => {},
+                        }
+                    });
+                }
+            }
+        }
+        cancelled.cancel();
+        drop(listener);
+        while let Some(joined) = connections.join_next().await {
+            if let Err(error) = joined {
+                failure.get_or_insert_with(|| {
+                    format!("Preparing frame connection join failed: {error}")
+                });
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    });
+    Ok(OwnedWatchFrameWs {
+        url,
+        shutdown,
+        task: Some(task),
+    })
+}
+
+#[cfg(test)]
+mod owned_preparing_tests {
+    use super::*;
+    use futures::StreamExt;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn owned_transport_joins_incomplete_handshake_and_releases_port() {
+        let (_frames, rx) = watch::channel(None);
+        let server = create_owned_watch_frame_ws(rx, Arc::new(|| true))
+            .await
+            .unwrap();
+        let address = server
+            .url
+            .strip_prefix("ws://")
+            .unwrap()
+            .split('/')
+            .next()
+            .unwrap()
+            .to_string();
+        let mut client = tokio::net::TcpStream::connect(&address).await.unwrap();
+        client.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
+        tokio::task::yield_now().await;
+        tokio::time::timeout(std::time::Duration::from_secs(2), server.stop_and_wait())
+            .await
+            .unwrap()
+            .unwrap();
+        let listener = tokio::net::TcpListener::bind(address).await.unwrap();
+        drop(listener);
+    }
+
+    #[tokio::test]
+    async fn owned_transport_keeps_exact_frame_encoding_and_joins_live_client() {
+        let frame = Arc::new(WSFrame {
+            data: Arc::new(vec![1, 2, 3, 4]),
+            width: 1,
+            height: 1,
+            stride: 4,
+            frame_number: 0,
+            target_time_ns: 0,
+            format: WSFrameFormat::Rgba,
+            created_at: Instant::now(),
+        });
+        let weak = Arc::downgrade(&frame);
+        let expected = pack_ws_frame(&frame);
+        let (frames, rx) = watch::channel(Some(frame));
+        let server = create_owned_watch_frame_ws(rx, Arc::new(|| true))
+            .await
+            .unwrap();
+        let (mut socket, _) = tokio_tungstenite::connect_async(&server.url).await.unwrap();
+        assert_eq!(socket.next().await.unwrap().unwrap().into_data(), expected);
+        tokio::time::timeout(std::time::Duration::from_secs(2), server.stop_and_wait())
+            .await
+            .unwrap()
+            .unwrap();
+        drop(frames);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn owned_transport_cancellation_joins_stalled_large_frame_send() {
+        let frame = Arc::new(WSFrame {
+            data: Arc::new(vec![1; 16 * 1024 * 1024]),
+            width: 2048,
+            height: 2048,
+            stride: 8192,
+            frame_number: 0,
+            target_time_ns: 0,
+            format: WSFrameFormat::Rgba,
+            created_at: Instant::now(),
+        });
+        let weak = Arc::downgrade(&frame);
+        let (frames, rx) = watch::channel(Some(frame));
+        let server = create_owned_watch_frame_ws(rx, Arc::new(|| true))
+            .await
+            .unwrap();
+        let (socket, _) = tokio_tungstenite::connect_async(&server.url).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        tokio::time::timeout(std::time::Duration::from_secs(2), server.stop_and_wait())
+            .await
+            .unwrap()
+            .unwrap();
+        drop(socket);
+        drop(frames);
+        assert!(weak.upgrade().is_none());
     }
 }

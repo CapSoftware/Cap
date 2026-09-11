@@ -190,6 +190,7 @@ fn shift_bounds(bounds: TextBounds, dx: f32, dy: f32) -> TextBounds {
 impl TextLayer {
     pub fn new(device: &Device, queue: &Queue) -> Self {
         let font_system = super::new_font_system();
+        let glyph_phase = crate::readiness::Phase::start("glyph.text.gpu_resources");
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let viewport = Viewport::new(device, &cache);
@@ -200,6 +201,7 @@ impl TextLayer {
             wgpu::MultisampleState::default(),
             None,
         );
+        glyph_phase.finish("returned");
 
         Self {
             font_system,

@@ -4,16 +4,11 @@
 # app persists its window state through CAP_GPUI_DEV_RESTORE and reopens where
 # it was, and the swap waits out an in-flight recording (see dev_restore.rs).
 set -uo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 STATE_FILE="$PWD/target/dev-restore.json"
 BIN="$PWD/target/debug/cap-gpui"
 BUILD=cargo
-
-# Cargo.toml turns incremental off to keep the dep tree's caches off a full
-# disk, but deps never rebuild in this loop -- the cache this creates is the
-# app crate's only, and it takes a warm rebuild from ~41s to 3-23s.
-export CARGO_INCREMENTAL=1
 
 WATCH_PATHS=(src assets Cargo.toml)
 [ -d resources ] && WATCH_PATHS+=(resources)
@@ -84,7 +79,7 @@ while true; do
 	if [ "$CURRENT" != "$LAST" ]; then
 		LAST="$CURRENT"
 		echo "[dev] building..."
-		if "$BUILD" build; then
+		if "$BUILD" build --config profile.dev.package.cap-desktop-gpui.incremental=true; then
 			if [ -n "$APP_PID" ] || gpui_owns_session || instance_live; then
 				stop_app
 				start_app

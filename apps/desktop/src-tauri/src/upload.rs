@@ -226,83 +226,335 @@ fn content_type_for_upload_subpath(subpath: &str) -> &'static str {
     }
 }
 
+pub fn reusable_video_id(
+    sharing: Option<&cap_project::SharingMeta>,
+    upload: Option<&cap_project::UploadMeta>,
+) -> Option<String> {
+    sharing
+        .map(|sharing| sharing.id.clone())
+        .or_else(|| match upload {
+            Some(cap_project::UploadMeta::SinglePartUpload { video_id, .. })
+            | Some(cap_project::UploadMeta::SegmentUpload { video_id, .. })
+            | Some(cap_project::UploadMeta::MultipartUpload { video_id, .. }) => {
+                Some(video_id.clone())
+            }
+            _ => None,
+        })
+}
+
+enum ReplacementAttempt<T> {
+    Completed(T),
+    RestartRequired,
+}
+
+async fn with_replacement_restart<T, F, Fut>(
+    replace_existing: bool,
+    mut attempt: F,
+) -> Result<T, AuthedApiError>
+where
+    F: FnMut(bool) -> Fut,
+    Fut: std::future::Future<Output = Result<ReplacementAttempt<T>, AuthedApiError>>,
+{
+    lifecycle::cancellable(async {}).await?;
+    match attempt(false).await? {
+        ReplacementAttempt::Completed(value) => return Ok(value),
+        ReplacementAttempt::RestartRequired if replace_existing => {}
+        ReplacementAttempt::RestartRequired => {
+            return Err("Unexpected replacement restart response; local files retained".into());
+        }
+    }
+    lifecycle::cancellable(async {}).await?;
+    match attempt(true).await? {
+        ReplacementAttempt::Completed(value) => Ok(value),
+        ReplacementAttempt::RestartRequired => {
+            Err("Replacement restart was rejected again; local files retained".into())
+        }
+    }
+}
+
+fn validate_replacement_restart_session(
+    restarted: bool,
+    upload_id: &str,
+) -> Result<(), AuthedApiError> {
+    if restarted && !upload_id.starts_with("cap-reupload.") {
+        return Err(
+            "Replacement restart requires a signed upload session; local files retained".into(),
+        );
+    }
+    Ok(())
+}
+
+#[derive(PartialEq, Eq)]
+struct LegacyReplacementChunk {
+    offset: u64,
+    size: usize,
+    digest: md5::Digest,
+}
+
+struct LegacyReplacementInput {
+    path: PathBuf,
+    size: u64,
+    modified: std::time::SystemTime,
+    chunks: Mutex<HashMap<u32, LegacyReplacementChunk>>,
+}
+
+impl LegacyReplacementInput {
+    async fn identity(
+        path: PathBuf,
+    ) -> Result<(PathBuf, u64, std::time::SystemTime), AuthedApiError> {
+        lifecycle::file_io(move || {
+            let metadata = std::fs::symlink_metadata(&path)?;
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if metadata.file_attributes() & 0x400 != 0 {
+                    return Err(io::Error::other("Replacement input is a reparse point"));
+                }
+            }
+            if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() == 0 {
+                return Err(io::Error::other(
+                    "Replacement input must be a nonempty regular file",
+                ));
+            }
+            Ok((path.canonicalize()?, metadata.len(), metadata.modified()?))
+        })
+        .await
+        .map_err(|error| error.to_string().into())
+    }
+
+    async fn capture(path: &Path) -> Result<Self, AuthedApiError> {
+        let (path, size, modified) = Self::identity(path.to_path_buf()).await?;
+        Ok(Self {
+            path,
+            size,
+            modified,
+            chunks: Mutex::new(HashMap::new()),
+        })
+    }
+
+    async fn verify(&self, path: &Path) -> Result<(), AuthedApiError> {
+        let (path, size, modified) = Self::identity(path.to_path_buf()).await?;
+        if path != self.path || size != self.size || modified != self.modified {
+            return Err("Replacement input changed during upload; local files retained".into());
+        }
+        Ok(())
+    }
+
+    fn inspect_chunk(&self, chunk: &Chunk, record: bool) -> io::Result<()> {
+        if chunk.total_size != self.size
+            || chunk.chunk.is_empty()
+            || chunk.part_number == 0
+            || chunk
+                .offset
+                .checked_add(chunk.chunk.len() as u64)
+                .is_none_or(|end| end > self.size)
+        {
+            return Err(io::Error::other("Replacement upload byte range changed"));
+        }
+        let receipt = LegacyReplacementChunk {
+            offset: chunk.offset,
+            size: chunk.chunk.len(),
+            digest: md5::compute(&chunk.chunk),
+        };
+        let mut chunks = self.chunks.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(expected) = chunks.get(&chunk.part_number) {
+            if expected != &receipt {
+                return Err(io::Error::other("Replacement upload bytes changed"));
+            }
+        } else if record {
+            let _ = chunks.insert(chunk.part_number, receipt);
+        } else {
+            return Err(io::Error::other(
+                "Replacement upload has an unrecognized byte range",
+            ));
+        }
+        Ok(())
+    }
+
+    fn verify_parts(&self, parts: &[UploadedPart]) -> Result<(), AuthedApiError> {
+        let chunks = self.chunks.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut offset = 0_u64;
+        if parts.len() != chunks.len() {
+            return Err("Replacement upload parts are incomplete".into());
+        }
+        for (index, part) in parts.iter().enumerate() {
+            let Some(chunk) = chunks.get(&part.part_number) else {
+                return Err("Replacement upload part was not verified".into());
+            };
+            if part.part_number as usize != index + 1
+                || chunk.offset != offset
+                || chunk.size != part.size
+                || part.total_size != self.size
+            {
+                return Err("Replacement upload part inventory changed".into());
+            }
+            offset = offset
+                .checked_add(part.size as u64)
+                .ok_or("Replacement upload size overflow")?;
+        }
+        if offset != self.size {
+            return Err("Replacement upload does not cover the original file".into());
+        }
+        Ok(())
+    }
+}
+
+fn legacy_replacement_session(replace_existing: bool, upload_id: &str) -> bool {
+    replace_existing && !upload_id.starts_with("cap-reupload.")
+}
+
 #[instrument(skip(app, channel, file_path, screenshot_path))]
 pub async fn upload_video(
     app: &AppHandle,
     video_id: String,
     file_path: PathBuf,
     screenshot_path: PathBuf,
-    meta: S3VideoMeta,
+    replace_existing: bool,
     channel: Option<Channel<UploadProgress>>,
 ) -> Result<UploadedItem, AuthedApiError> {
     let _active_upload = ActiveUploadGuard::new(&ACTIVE_UPLOADS);
     info!("Uploading video {video_id}...");
 
     let start = Instant::now();
-    let upload = api::upload_multipart_initiate(app, &video_id).await?;
-    let is_drive_upload = is_google_drive_upload(upload.provider.as_deref(), &upload.upload_id);
-    let upload_id = upload.upload_id;
+    let initial_upload = lifecycle::cancellable(api::upload_multipart_initiate(
+        app,
+        &video_id,
+        replace_existing,
+    ))
+    .await??;
+    let legacy_input = std::sync::OnceLock::<Arc<LegacyReplacementInput>>::new();
+    let video_fut = {
+        let file_path = &file_path;
+        let video_id = &video_id;
+        let channel = &channel;
+        let legacy_input = &legacy_input;
+        let initial_upload = &initial_upload;
+        with_replacement_restart(replace_existing, move |restarted| async move {
+            if let Some(input) = legacy_input.get() {
+                input.verify(file_path).await?;
+            }
+            let upload = if restarted {
+                lifecycle::cancellable(api::upload_multipart_initiate(
+                    app,
+                    video_id,
+                    replace_existing,
+                ))
+                .await??
+            } else {
+                api::MultipartUploadInitiateResponse {
+                    upload_id: initial_upload.upload_id.clone(),
+                    provider: initial_upload.provider.clone(),
+                }
+            };
+            validate_replacement_restart_session(restarted, &upload.upload_id)?;
+            if legacy_replacement_session(replace_existing, &upload.upload_id)
+                && legacy_input.get().is_none()
+            {
+                legacy_input
+                    .set(Arc::new(LegacyReplacementInput::capture(file_path).await?))
+                    .map_err(|_| "Replacement input identity was already established")?;
+            }
+            let input = legacy_input.get();
+            let is_drive_upload =
+                is_google_drive_upload(upload.provider.as_deref(), &upload.upload_id);
+            let upload_id = upload.upload_id;
+            let failed_chunks: Arc<Mutex<Vec<FailedChunkInfo>>> = Arc::new(Mutex::new(Vec::new()));
 
-    let video_fut = async {
-        let failed_chunks: Arc<Mutex<Vec<FailedChunkInfo>>> = Arc::new(Mutex::new(Vec::new()));
-
-        let stream = progress(
-            app.clone(),
-            video_id.clone(),
-            multipart_uploader(
+            let stream = progress(
                 app.clone(),
                 video_id.clone(),
-                upload_id.clone(),
-                is_drive_upload,
-                from_pending_file_to_chunks(file_path.clone(), None),
-                failed_chunks.clone(),
-            ),
-        );
-
-        let stream = if let Some(channel) = channel {
-            tauri_channel_progress(channel, stream).boxed()
-        } else {
-            stream.boxed()
-        };
-
-        let mut parts = stream.try_collect::<Vec<_>>().await?;
-
-        let failed =
-            std::mem::take(&mut *failed_chunks.lock().unwrap_or_else(PoisonError::into_inner));
-        if !failed.is_empty() {
-            info!(
-                count = failed.len(),
-                "Retrying {} failed chunk(s) after main upload pass",
-                failed.len()
+                multipart_uploader(
+                    app.clone(),
+                    video_id.clone(),
+                    upload_id.clone(),
+                    is_drive_upload,
+                    from_pending_file_to_chunks(file_path.clone(), None).map({
+                        let input = input.cloned();
+                        move |chunk| {
+                            let chunk = chunk?;
+                            if let Some(input) = &input {
+                                input.inspect_chunk(&chunk, !restarted)?;
+                            }
+                            Ok(chunk)
+                        }
+                    }),
+                    failed_chunks.clone(),
+                ),
             );
-            let retry_parts =
-                retry_failed_chunks(app, &video_id, &upload_id, &file_path, failed).await?;
-            parts.extend(retry_parts);
-        }
 
-        let mut deduplicated_parts = HashMap::new();
-        for part in parts {
-            deduplicated_parts.insert(part.part_number, part);
-        }
-        parts = deduplicated_parts.into_values().collect::<Vec<_>>();
-        parts.sort_by_key(|part| part.part_number);
+            let stream = if let Some(channel) = channel.clone() {
+                tauri_channel_progress(channel, stream).boxed()
+            } else {
+                stream.boxed()
+            };
 
-        let metadata = build_video_meta(&file_path)
-            .map_err(|e| error!("Failed to get video metadata: {e}"))
-            .ok();
+            let mut parts = stream.try_collect::<Vec<_>>().await?;
 
-        let completed_identity =
-            api::upload_multipart_complete(app, &video_id, &upload_id, &parts, metadata.clone())
+            let failed =
+                std::mem::take(&mut *failed_chunks.lock().unwrap_or_else(PoisonError::into_inner));
+            if !failed.is_empty() {
+                info!(
+                    count = failed.len(),
+                    "Retrying {} failed chunk(s) after main upload pass",
+                    failed.len()
+                );
+                let retry_parts = retry_failed_chunks_with_input(
+                    app,
+                    video_id,
+                    &upload_id,
+                    file_path,
+                    failed,
+                    input.map(Arc::as_ref),
+                )
                 .await?;
-        let object_identity = if is_drive_upload {
-            parts
-                .iter()
-                .rev()
-                .find_map(|part| part.object_identity.clone())
-        } else {
-            completed_identity
-        };
-        Ok((metadata, object_identity))
+                parts.extend(retry_parts);
+            }
+
+            let mut deduplicated_parts = HashMap::new();
+            for part in parts {
+                deduplicated_parts.insert(part.part_number, part);
+            }
+            parts = deduplicated_parts.into_values().collect::<Vec<_>>();
+            parts.sort_by_key(|part| part.part_number);
+
+            let metadata = build_video_meta(file_path)
+                .map_err(|e| error!("Failed to get video metadata: {e}"))
+                .ok();
+
+            if let Some(input) = input {
+                input.verify_parts(&parts)?;
+                input.verify(file_path).await?;
+            }
+            let completed_identity = match api::upload_multipart_complete_outcome(
+                app,
+                video_id,
+                &upload_id,
+                &parts,
+                metadata.clone(),
+                replace_existing,
+            )
+            .await?
+            {
+                api::MultipartCompletion::Completed(identity) => identity,
+                api::MultipartCompletion::ReplacementRestartRequired if input.is_some() => {
+                    return Ok(ReplacementAttempt::RestartRequired);
+                }
+                api::MultipartCompletion::ReplacementRestartRequired => {
+                    return Err(
+                        "Signed replacement upload was rejected; local files retained".into(),
+                    );
+                }
+            };
+            let object_identity = if is_drive_upload {
+                parts
+                    .iter()
+                    .rev()
+                    .find_map(|part| part.object_identity.clone())
+            } else {
+                completed_identity
+            };
+            Ok(ReplacementAttempt::Completed((metadata, object_identity)))
+        })
     };
 
     // TODO: We don't report progress on image upload
@@ -321,8 +573,6 @@ pub async fn upload_video(
 
     let (video_result, thumbnail_result): (Result<_, AuthedApiError>, Result<_, AuthedApiError>) =
         tokio::join!(video_fut, thumbnail_fut);
-
-    emit_upload_complete(app, &video_id);
 
     async_capture_event(
         app,
@@ -346,6 +596,8 @@ pub async fn upload_video(
 
     let (_, object_identity) = video_result?;
     thumbnail_result?;
+    lifecycle::cancellable(async {}).await?;
+    emit_upload_complete(app, &video_id);
 
     Ok(UploadedItem {
         link: app.make_app_url(format!("/s/{video_id}")).await,
@@ -704,7 +956,7 @@ impl InstantMultipartUpload {
             recording_dir: recording_dir.clone(),
         })?;
 
-        let upload = api::upload_multipart_initiate(&app, &video_id).await?;
+        let upload = api::upload_multipart_initiate(&app, &video_id, false).await?;
         let is_drive_upload = is_google_drive_upload(upload.provider.as_deref(), &upload.upload_id);
         let upload_id = upload.upload_id;
 
@@ -758,9 +1010,15 @@ impl InstantMultipartUpload {
         let duration = metadata.duration_in_secs;
         let metadata = Some(metadata);
         session.wait_ready().await?;
-        let completed_identity =
-            api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata.clone())
-                .await?;
+        let completed_identity = api::upload_multipart_complete(
+            &app,
+            &video_id,
+            &upload_id,
+            &parts,
+            metadata.clone(),
+            false,
+        )
+        .await?;
         let object_identity = if is_drive_upload {
             parts
                 .iter()
@@ -1046,6 +1304,7 @@ impl PresignedUrlCache {
 }
 
 impl SegmentUploader {
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn spawn(
         app: AppHandle,
         segment_rx: std::sync::mpsc::Receiver<
@@ -2272,6 +2531,17 @@ async fn retry_failed_chunks(
     file_path: &Path,
     failed_chunks: Vec<FailedChunkInfo>,
 ) -> Result<Vec<UploadedPart>, AuthedApiError> {
+    retry_failed_chunks_with_input(app, video_id, upload_id, file_path, failed_chunks, None).await
+}
+
+async fn retry_failed_chunks_with_input(
+    app: &AppHandle,
+    video_id: &str,
+    upload_id: &str,
+    file_path: &Path,
+    failed_chunks: Vec<FailedChunkInfo>,
+    input: Option<&LegacyReplacementInput>,
+) -> Result<Vec<UploadedPart>, AuthedApiError> {
     let use_md5_hashes = app.is_server_url_custom().await;
     let mut retry_parts = Vec::new();
 
@@ -2287,6 +2557,20 @@ async fn retry_failed_chunks(
         let chunk = read_exact_upload_chunk(file_path, failed.offset, failed.chunk_size)
             .await
             .map_err(|error| format!("retry/part/{}/read: {error}", failed.part_number))?;
+
+        if let Some(input) = input {
+            input
+                .inspect_chunk(
+                    &Chunk {
+                        total_size: failed.total_size,
+                        part_number: failed.part_number,
+                        offset: failed.offset,
+                        chunk: chunk.clone(),
+                    },
+                    false,
+                )
+                .map_err(|error| error.to_string())?;
+        }
 
         let md5_sum = use_md5_hashes.then(|| base64::encode(md5::compute(&chunk).0));
 
@@ -2716,6 +3000,278 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[tokio::test]
+    async fn restart_requires_a_signed_session_before_any_further_upload_work() {
+        for upload_id in ["legacy-again", "cap-reupload.signed"] {
+            let uploads = AtomicUsize::new(0);
+            let uploads = &uploads;
+            let result = with_replacement_restart(true, |restarted| async move {
+                validate_replacement_restart_session(
+                    restarted,
+                    if restarted { upload_id } else { "legacy-first" },
+                )?;
+                uploads.fetch_add(1, Ordering::AcqRel);
+                Ok(if restarted {
+                    ReplacementAttempt::Completed(())
+                } else {
+                    ReplacementAttempt::RestartRequired
+                })
+            })
+            .await;
+            assert_eq!(result.is_ok(), upload_id.starts_with("cap-reupload."));
+            assert_eq!(
+                uploads.load(Ordering::Acquire),
+                if result.is_ok() { 2 } else { 1 }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_replacement_restarts_the_entire_attempt_once() {
+        let stages = Mutex::new(Vec::new());
+        let identity = with_replacement_restart(true, |restarted| {
+            let mut stages = stages.lock().unwrap();
+            let session = if restarted { "fresh" } else { "legacy" };
+            stages.extend([
+                (session, "initiate"),
+                (session, "parts"),
+                (session, "complete"),
+            ]);
+            std::future::ready(Ok(if restarted {
+                ReplacementAttempt::Completed("fresh-object")
+            } else {
+                ReplacementAttempt::RestartRequired
+            }))
+        })
+        .await
+        .unwrap();
+        assert_eq!(identity, "fresh-object");
+        assert_eq!(
+            *stages.lock().unwrap(),
+            vec![
+                ("legacy", "initiate"),
+                ("legacy", "parts"),
+                ("legacy", "complete"),
+                ("fresh", "initiate"),
+                ("fresh", "parts"),
+                ("fresh", "complete"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn replacement_restart_is_bounded_and_never_turns_failure_into_success() {
+        for (replace_existing, expected) in [(false, 1), (true, 2)] {
+            let calls = AtomicUsize::new(0);
+            let result = with_replacement_restart(replace_existing, |_| {
+                calls.fetch_add(1, Ordering::AcqRel);
+                std::future::ready(Ok::<ReplacementAttempt<()>, AuthedApiError>(
+                    ReplacementAttempt::RestartRequired,
+                ))
+            })
+            .await;
+            assert!(result.is_err());
+            assert_eq!(calls.load(Ordering::Acquire), expected);
+        }
+        for restart_first in [false, true] {
+            let calls = AtomicUsize::new(0);
+            let result = with_replacement_restart(true, |restarted| {
+                calls.fetch_add(1, Ordering::AcqRel);
+                std::future::ready(if restart_first && !restarted {
+                    Ok(ReplacementAttempt::<()>::RestartRequired)
+                } else {
+                    Err(AuthedApiError::InvalidAuthentication)
+                })
+            })
+            .await;
+            assert!(matches!(result, Err(AuthedApiError::InvalidAuthentication)));
+            assert_eq!(
+                calls.load(Ordering::Acquire),
+                if restart_first { 2 } else { 1 }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_or_dropped_attempt_cannot_start_a_replacement() {
+        let calls = AtomicUsize::new(0);
+        let result = with_replacement_restart(true, |_| {
+            calls.fetch_add(1, Ordering::AcqRel);
+            std::future::ready(Ok(ReplacementAttempt::Completed(None::<String>)))
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, None);
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+        let future = with_replacement_restart(true, |_| {
+            calls.fetch_add(1, Ordering::AcqRel);
+            std::future::pending::<Result<ReplacementAttempt<()>, AuthedApiError>>()
+        });
+        let mut future = Box::pin(future);
+        assert!(matches!(
+            futures::poll!(&mut future),
+            std::task::Poll::Pending
+        ));
+        drop(future);
+        assert_eq!(calls.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn only_raw_replacement_sessions_need_byte_receipts() {
+        for replace_existing in [false, true] {
+            assert!(!legacy_replacement_session(
+                replace_existing,
+                "cap-reupload.signed-token"
+            ));
+        }
+        for upload_id in [
+            "raw-s3-id",
+            "https://www.googleapis.com/upload/raw-drive-session",
+        ] {
+            assert!(!legacy_replacement_session(false, upload_id));
+            assert!(legacy_replacement_session(true, upload_id));
+        }
+    }
+
+    fn replacement_input() -> LegacyReplacementInput {
+        LegacyReplacementInput {
+            path: PathBuf::from("unused"),
+            size: 4,
+            modified: std::time::SystemTime::UNIX_EPOCH,
+            chunks: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn replacement_chunk(bytes: &'static [u8]) -> Chunk {
+        Chunk {
+            total_size: 4,
+            part_number: 1,
+            offset: 0,
+            chunk: Bytes::from_static(bytes),
+        }
+    }
+
+    #[test]
+    fn restarted_and_failed_part_reads_must_match_original_bytes() {
+        let input = replacement_input();
+        let original = replacement_chunk(b"test");
+        assert!(input.inspect_chunk(&original, false).is_err());
+        input.inspect_chunk(&original, true).unwrap();
+        input.inspect_chunk(&original, false).unwrap();
+        for changed in [
+            replacement_chunk(b"best"),
+            Chunk {
+                offset: 1,
+                ..replacement_chunk(b"test")
+            },
+            Chunk {
+                total_size: 5,
+                ..replacement_chunk(b"test")
+            },
+            Chunk {
+                part_number: 2,
+                ..replacement_chunk(b"test")
+            },
+            replacement_chunk(b""),
+        ] {
+            assert!(input.inspect_chunk(&changed, false).is_err());
+        }
+        assert!(
+            input
+                .inspect_chunk(&replacement_chunk(b"best"), true)
+                .is_err()
+        );
+        input.inspect_chunk(&original, false).unwrap();
+    }
+
+    #[test]
+    fn replacement_completion_requires_the_complete_verified_inventory() {
+        let input = replacement_input();
+        input
+            .inspect_chunk(&replacement_chunk(b"test"), true)
+            .unwrap();
+        assert!(input.verify_parts(&[]).is_err());
+        let mut parts = vec![UploadedPart {
+            part_number: 1,
+            etag: "fresh-etag".into(),
+            size: 4,
+            total_size: 4,
+            object_identity: None,
+        }];
+        input.verify_parts(&parts).unwrap();
+        parts[0].size = 3;
+        assert!(input.verify_parts(&parts).is_err());
+        parts[0].size = 4;
+        parts[0].total_size = 5;
+        assert!(input.verify_parts(&parts).is_err());
+        parts[0].total_size = 4;
+        parts[0].part_number = 2;
+        assert!(input.verify_parts(&parts).is_err());
+    }
+
+    #[tokio::test]
+    async fn changed_local_input_blocks_fresh_initiation_after_restart_response() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("output.mp4");
+        std::fs::write(&path, b"test").unwrap();
+        let input = LegacyReplacementInput::capture(&path).await.unwrap();
+        let initiations = AtomicUsize::new(0);
+        let result = with_replacement_restart(true, |restarted| {
+            let path = &path;
+            let input = &input;
+            let initiations = &initiations;
+            async move {
+                input.verify(path).await?;
+                initiations.fetch_add(1, Ordering::AcqRel);
+                if !restarted {
+                    std::fs::write(path, b"changed").unwrap();
+                    return Ok(ReplacementAttempt::RestartRequired);
+                }
+                Ok(ReplacementAttempt::Completed(()))
+            }
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(initiations.load(Ordering::Acquire), 1);
+        assert_eq!(std::fs::read(&path).unwrap(), b"changed");
+    }
+
+    #[test]
+    fn reupload_keeps_sharing_identity_after_completion_or_failure() {
+        let sharing = cap_project::SharingMeta {
+            id: "existing-video".into(),
+            link: "https://cap.link/existing-video".into(),
+            content_hash: None,
+        };
+        for upload in [
+            None,
+            Some(cap_project::UploadMeta::Complete),
+            Some(cap_project::UploadMeta::Failed {
+                error: "offline".into(),
+            }),
+        ] {
+            assert_eq!(
+                reusable_video_id(Some(&sharing), upload.as_ref()).as_deref(),
+                Some("existing-video")
+            );
+        }
+    }
+
+    #[test]
+    fn retry_keeps_the_reserved_identity_until_sharing_is_saved() {
+        let upload = cap_project::UploadMeta::SinglePartUpload {
+            video_id: "reserved-video".into(),
+            file_path: "output.mp4".into(),
+            screenshot_path: "display.jpg".into(),
+            recording_dir: "recording.cap".into(),
+        };
+        assert_eq!(
+            reusable_video_id(None, Some(&upload)).as_deref(),
+            Some("reserved-video")
+        );
+        assert_eq!(reusable_video_id(None, None), None);
+    }
 
     #[test]
     fn active_upload_guards_track_overlapping_sessions() {
@@ -3648,13 +4204,6 @@ pub(crate) mod strict_instant {
             result
         }
 
-        async fn complete<T, F>(&self, complete: impl FnOnce() -> F) -> Result<(), AuthedApiError>
-        where
-            F: Future<Output = Result<T, AuthedApiError>>,
-        {
-            self.step(complete).await.map(drop)
-        }
-
         async fn permission(&self) -> Result<(), AuthedApiError> {
             let mut decision = self.0.decision.subscribe();
             loop {
@@ -4215,7 +4764,7 @@ pub(crate) mod strict_instant {
         required_audio: bool,
     ) -> Result<(), AuthedApiError> {
         let upload = control
-            .step(|| api::upload_multipart_initiate(app, &video.id))
+            .step(|| api::upload_multipart_initiate(app, &video.id, false))
             .await?;
         let concurrency = if is_google_drive_upload(upload.provider.as_deref(), &upload.upload_id) {
             1
@@ -4248,6 +4797,7 @@ pub(crate) mod strict_instant {
                     &upload.upload_id,
                     &parts,
                     Some(metadata),
+                    false,
                 )
             })
             .await?;
@@ -4386,7 +4936,7 @@ pub(crate) mod strict_instant {
                             part_number: info.part_number,
                             offset: info.offset,
                             total_size: info.total_size,
-                            chunk: bytes.into(),
+                            chunk: bytes,
                         })
                     })
                     .await?,
@@ -4787,24 +5337,24 @@ pub(crate) mod strict_instant {
             std::fs::remove_dir_all(dir).unwrap();
         }
         #[tokio::test]
-        async fn strict_multipart_complete_maps_optional_success_and_retains_errors_and_late_revocation()
+        async fn strict_multipart_completion_step_retains_optional_success_errors_and_late_revocation()
          {
             let (control, permission) = Control::new();
             permission.grant().unwrap();
-            let result: Result<(), AuthedApiError> = control
-                .complete(|| async { Ok(Some("synthetic-location".to_string())) })
+            let result: Result<Option<String>, AuthedApiError> = control
+                .step(|| async { Ok(Some("synthetic-location".to_string())) })
                 .await;
-            result.unwrap();
+            assert_eq!(result.unwrap().as_deref(), Some("synthetic-location"));
             assert!(
                 control
-                    .complete(|| async {
+                    .step(|| async {
                         Err::<Option<String>, _>("required completion failed".into())
                     })
                     .await
                     .is_err()
             );
             let (release, released) = tokio::sync::oneshot::channel();
-            let future = control.complete(|| async {
+            let future = control.step(|| async {
                 released.await.unwrap();
                 Ok(Some("late-location".to_string()))
             });

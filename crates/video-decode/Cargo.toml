@@ -7,6 +7,7 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 ffmpeg.workspace = true
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
 num_cpus = "1.17.0"
@@ -14,6 +15,11 @@ tempfile = "3"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tracing = "0.1.41"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[dev-dependencies]
+cap-media-info = { path = "../media-info" }
+serde_json.workspace = true
+sha2 = "0.10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }

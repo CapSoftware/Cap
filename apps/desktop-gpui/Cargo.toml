@@ -18,6 +18,10 @@ publish = false
 name = "cap-gpui"
 path = "src/main.rs"
 
+[[example]]
+name = "studio-finalization-benchmark"
+path = "../../crates/recording/examples/studio-finalization-benchmark.rs"
+
 [package.metadata.bundle]
 name = "Cap GPUI"
 identifier = "so.cap.desktop.gpui"
@@ -28,6 +32,7 @@ osx_info_plist_exts = ["resources/Info.plist"]
 osx_url_schemes = ["cap-desktop"]
 
 [dependencies]
+cap-audio = { path = "../../crates/audio" }
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
 # which our transparent rounded main-window shell depends on.
@@ -183,6 +188,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

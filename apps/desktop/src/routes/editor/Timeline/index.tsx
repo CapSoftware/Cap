@@ -205,6 +205,8 @@ export function Timeline(props: {
 		meta,
 		previewResolutionBase,
 		canvasControls,
+		playbackIntent,
+		requestHandoffPlayback,
 	} = useEditorContext();
 
 	const duration = () => editorInstance.recordingDuration;
@@ -1016,6 +1018,11 @@ export function Timeline(props: {
 	}
 
 	async function seekPlayheadTo(newTime: number) {
+		const pending = requestHandoffPlayback(playbackIntent(), newTime);
+		if (pending) {
+			await pending;
+			return;
+		}
 		// If playing, some backends require restart to seek reliably
 		if (editorState.playing) {
 			try {
@@ -1322,7 +1329,7 @@ export function Timeline(props: {
 				}}
 				onMouseMove={(e) => {
 					const metrics = getTimelineContentMetrics();
-					if (editorState.playing) return;
+					if (playbackIntent()) return;
 					if (!metrics || metrics.width <= 0) return;
 					const offsetX = e.clientX - metrics.left;
 					if (offsetX < 0 || offsetX > metrics.width) {
@@ -1393,7 +1400,7 @@ export function Timeline(props: {
 				</div>
 				<Show
 					when={
-						!editorState.playing &&
+						!playbackIntent() &&
 						editorState.previewTime !== null &&
 						editorState.timeline.splitPreview === null
 							? { time: editorState.previewTime }

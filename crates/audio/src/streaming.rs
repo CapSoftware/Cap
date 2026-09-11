@@ -1,3 +1,4 @@
+use crate::audio_data::ResamplerOutput;
 use ffmpeg::{ChannelLayout, Error, codec, format, frame::Audio, software::resampling};
 use std::{
     ffi::{CString, c_int, c_void},
@@ -66,19 +67,49 @@ pub enum ChunkRead {
 }
 
 pub struct AudioStream {
-    input: format::context::Input,
+    input: StreamInput,
     decoder: codec::decoder::Audio,
     resampler: resampling::Context,
     decoded_frame: Audio,
+    resampler_output: ResamplerOutput,
     stream_index: usize,
     channels: u16,
     phase: Phase,
     failure: Option<Failure>,
     pending: Vec<f32>,
     pending_offset: usize,
+    pending_frame: bool,
     position: u64,
     flush_iterations: usize,
     cancellation: Arc<StreamCancellation>,
+}
+
+enum StreamInput {
+    File(format::context::Input),
+    Relocatable(cap_enc_ffmpeg::SegmentedInput),
+}
+
+impl StreamInput {
+    fn input(&self) -> &format::context::Input {
+        match self {
+            Self::File(input) => input,
+            Self::Relocatable(input) => input.input(),
+        }
+    }
+
+    fn read_packet(&mut self, packet: &mut ffmpeg::Packet) -> Result<(), Error> {
+        match self {
+            Self::File(input) => packet.read(input),
+            Self::Relocatable(input) => input.read_packet(packet),
+        }
+    }
+
+    fn io_error(&self) -> Option<&std::io::Error> {
+        match self {
+            Self::File(_) => None,
+            Self::Relocatable(input) => input.io_error(),
+        }
+    }
 }
 
 struct StreamCancellation {
@@ -125,6 +156,56 @@ impl AudioStream {
         path: &Path,
         cancellation: StreamCancellation,
     ) -> Result<Self, AudioStreamError> {
+        Self::open_from(cancellation, |cancellation| {
+            open_input(path, cancellation).map(StreamInput::File)
+        })
+    }
+
+    pub fn open_relocatable<'a>(
+        source: &cap_enc_ffmpeg::RelocatableSource,
+        paths: impl IntoIterator<Item = &'a Path>,
+        user: Arc<AtomicBool>,
+    ) -> Result<Self, AudioStreamError> {
+        Self::open_relocatable_controlled(source, paths, StreamCancellation { user, abort: None })
+    }
+
+    pub fn open_relocatable_with_abort<'a>(
+        source: &cap_enc_ffmpeg::RelocatableSource,
+        paths: impl IntoIterator<Item = &'a Path>,
+        user: Arc<AtomicBool>,
+        abort: Arc<AtomicBool>,
+    ) -> Result<Self, AudioStreamError> {
+        Self::open_relocatable_controlled(
+            source,
+            paths,
+            StreamCancellation {
+                user,
+                abort: Some(abort),
+            },
+        )
+    }
+
+    fn open_relocatable_controlled<'a>(
+        source: &cap_enc_ffmpeg::RelocatableSource,
+        paths: impl IntoIterator<Item = &'a Path>,
+        cancellation: StreamCancellation,
+    ) -> Result<Self, AudioStreamError> {
+        Self::open_from(cancellation, |cancellation| {
+            let cancellation = cancellation.clone();
+            cap_enc_ffmpeg::SegmentedInput::open_relocatable_interruptible(
+                source,
+                paths,
+                Arc::new(move || cancellation.is_cancelled()),
+            )
+            .map(StreamInput::Relocatable)
+            .map_err(|error| error.to_string())
+        })
+    }
+
+    fn open_from(
+        cancellation: StreamCancellation,
+        open: impl FnOnce(&Arc<StreamCancellation>) -> Result<StreamInput, String>,
+    ) -> Result<Self, AudioStreamError> {
         let cancellation = Arc::new(cancellation);
         let at_open = |stage, detail: String| {
             if cancellation.is_cancelled() {
@@ -140,9 +221,9 @@ impl AudioStream {
         if cancellation.is_cancelled() {
             return Err(cancelled_error(0));
         }
-        let input =
-            open_input(path, &cancellation).map_err(|detail| at_open("input-open", detail))?;
+        let input = open(&cancellation).map_err(|detail| at_open("input-open", detail))?;
         let stream = input
+            .input()
             .streams()
             .best(ffmpeg::media::Type::Audio)
             .ok_or_else(|| at_open("stream", "No Stream".to_string()))?;
@@ -179,12 +260,14 @@ impl AudioStream {
             decoder,
             resampler,
             decoded_frame: Audio::empty(),
+            resampler_output: ResamplerOutput::new(),
             stream_index,
             channels,
             phase: Phase::NeedPacket,
             failure: None,
             pending: Vec::new(),
             pending_offset: 0,
+            pending_frame: false,
             position: 0,
             flush_iterations: 0,
             cancellation,
@@ -198,6 +281,14 @@ impl AudioStream {
         self.position
     }
 
+    fn pending_samples(&self) -> Result<&[f32], String> {
+        if self.pending_frame {
+            self.resampler_output.samples()
+        } else {
+            Ok(&self.pending)
+        }
+    }
+
     pub fn read_chunk(&mut self, max_frames: usize) -> Result<ChunkRead, AudioStreamError> {
         if !(1..=MAX_CHUNK_FRAMES).contains(&max_frames) {
             return Err(AudioStreamError {
@@ -206,7 +297,7 @@ impl AudioStream {
                 next_sample: self.position,
             });
         }
-        let max_samples = max_frames * self.channels as usize;
+        let max_samples = max_frames * usize::from(self.channels);
         let mut output = Vec::with_capacity(max_samples);
         while output.len() < max_samples {
             if self.failure.is_none() && self.cancellation.is_cancelled() {
@@ -222,17 +313,21 @@ impl AudioStream {
                     next_sample: self.position,
                 });
             }
-            if self.pending_offset < self.pending.len() {
-                let count =
-                    (max_samples - output.len()).min(self.pending.len() - self.pending_offset);
-                output.extend_from_slice(
-                    &self.pending[self.pending_offset..self.pending_offset + count],
-                );
+            let pending = self.pending_samples().map_err(|detail| AudioStreamError {
+                stage: "resample",
+                detail,
+                next_sample: self.position,
+            })?;
+            if self.pending_offset < pending.len() {
+                let count = (max_samples - output.len()).min(pending.len() - self.pending_offset);
+                output
+                    .extend_from_slice(&pending[self.pending_offset..self.pending_offset + count]);
                 self.pending_offset += count;
                 continue;
             }
             self.pending.clear();
             self.pending_offset = 0;
+            self.pending_frame = false;
             if self.failure.is_some() || self.phase == Phase::Complete {
                 break;
             }
@@ -281,7 +376,7 @@ impl AudioStream {
             match self.phase {
                 Phase::NeedPacket => {
                     let mut packet = ffmpeg::Packet::empty();
-                    match packet.read(&mut self.input) {
+                    match self.input.read_packet(&mut packet) {
                         Ok(()) => {
                             if packet.stream() != self.stream_index {
                                 continue;
@@ -299,24 +394,38 @@ impl AudioStream {
                             })?;
                             self.phase = Phase::Draining;
                         }
-                        Err(_) => continue,
+                        Err(_) => {
+                            if self.cancellation.is_cancelled() {
+                                return Err(Failure {
+                                    stage: "cancelled",
+                                    detail: "Audio decoding cancelled".into(),
+                                });
+                            }
+                            if let Some(error) = self.input.io_error() {
+                                return Err(Failure {
+                                    stage: "input-read",
+                                    detail: error.to_string(),
+                                });
+                            }
+                            continue;
+                        }
                     }
                 }
                 Phase::Receiving | Phase::Draining => {
                     match self.decoder.receive_frame(&mut self.decoded_frame) {
                         Ok(()) => {
-                            run_resampler(
-                                &mut self.resampler,
-                                &self.decoded_frame,
-                                &mut self.pending,
-                            )
-                            .map_err(|e| Failure {
+                            self.resampler_output
+                                .run(&mut self.resampler, &self.decoded_frame)
+                                .map_err(|e| Failure {
+                                    stage: "resample",
+                                    detail: e,
+                                })?;
+                            self.resampler_output.samples().map_err(|detail| Failure {
                                 stage: "resample",
-                                detail: e,
+                                detail,
                             })?;
-                            if !self.pending.is_empty() {
-                                return Ok(());
-                            }
+                            self.pending_frame = true;
+                            return Ok(());
                         }
                         Err(_) => {
                             self.phase = if self.phase == Phase::Draining {
@@ -336,34 +445,27 @@ impl AudioStream {
                         self.phase = Phase::Complete;
                         return Ok(());
                     };
-                    let target = *self.resampler.output();
                     let capacity = delay
                         .output
                         .max(1)
                         .saturating_add(16)
                         .min(i64::from(i32::MAX)) as usize;
-                    let mut frame = Audio::new(target.format, capacity, target.channel_layout);
-                    let remaining = self.resampler.flush(&mut frame).map_err(|error| Failure {
+                    let frame = self.resampler_output.prepare(&self.resampler, capacity);
+                    let remaining = self.resampler.flush(frame).map_err(|error| Failure {
                         stage: "flush",
                         detail: format!("Flush Resampler / {error}"),
                     })?;
                     let output_samples = frame.samples();
-                    if output_samples > 0 {
-                        let byte_len = output_samples
-                            .saturating_mul(frame.channels() as usize)
-                            .saturating_mul(std::mem::size_of::<f32>());
-                        let bytes = frame.data(0).get(..byte_len).ok_or_else(|| Failure {
-                            stage: "flush",
-                            detail: "Resampled frame data shorter than expected".to_string(),
-                        })?;
-                        self.pending
-                            .extend(unsafe { crate::cast_bytes_to_f32_slice(bytes) });
-                    }
+                    self.resampler_output.samples().map_err(|detail| Failure {
+                        stage: "flush",
+                        detail,
+                    })?;
+                    self.pending_frame = true;
                     self.flush_iterations += 1;
                     if remaining.is_none() || output_samples == 0 {
                         self.phase = Phase::Complete;
                     }
-                    if !self.pending.is_empty() || self.phase == Phase::Complete {
+                    if output_samples > 0 || self.phase == Phase::Complete {
                         return Ok(());
                     }
                 }
@@ -424,48 +526,6 @@ fn open_input(
         }
         Ok(format::context::Input::wrap(context))
     }
-}
-
-fn run_resampler(
-    resampler: &mut resampling::Context,
-    decoded_frame: &Audio,
-    samples: &mut Vec<f32>,
-) -> Result<(), String> {
-    let target = *resampler.output();
-    let capacity = resample_capacity(resampler, decoded_frame.samples());
-    let mut frame = Audio::new(target.format, capacity, target.channel_layout);
-    resampler
-        .run(decoded_frame, &mut frame)
-        .map_err(|error| format!("Run Resampler / {error}"))?;
-    if frame.samples() == 0 {
-        return Ok(());
-    }
-    let byte_len = frame
-        .samples()
-        .saturating_mul(frame.channels() as usize)
-        .saturating_mul(std::mem::size_of::<f32>());
-    let data = frame
-        .data(0)
-        .get(..byte_len)
-        .ok_or_else(|| "Resampled frame data shorter than expected".to_string())?;
-    samples.extend(unsafe { crate::cast_bytes_to_f32_slice(data) });
-    Ok(())
-}
-
-fn resample_capacity(resampler: &resampling::Context, input_samples: usize) -> usize {
-    let src_rate = resampler.input().rate.max(1) as u64;
-    let dst_rate = resampler.output().rate.max(1) as u64;
-    let pending_output_samples = resampler
-        .delay()
-        .map(|delay| delay.output.max(0) as u64)
-        .unwrap_or(0);
-    let resampled_from_input = (input_samples as u64)
-        .saturating_mul(dst_rate)
-        .div_ceil(src_rate);
-    pending_output_samples
-        .saturating_add(resampled_from_input)
-        .saturating_add(16)
-        .min(i32::MAX as u64) as usize
 }
 
 #[cfg(test)]
@@ -616,9 +676,9 @@ mod tests {
         let file = pcm_wav(48_000, 1, 1_201);
         let cancellation = Arc::new(AtomicBool::new(false));
         for _ in 0..32 {
-            let mut stream = AudioStream::open(file.path(), cancellation.clone()).unwrap();
+            let stream = AudioStream::open(file.path(), cancellation.clone()).unwrap();
             assert_eq!(Arc::strong_count(&cancellation), 2);
-            let callback = unsafe { (*stream.input.as_mut_ptr()).interrupt_callback };
+            let callback = unsafe { (*stream.input.input().as_ptr()).interrupt_callback };
             assert_eq!(
                 callback.opaque,
                 Arc::as_ptr(&stream.cancellation).cast_mut().cast()
@@ -653,7 +713,7 @@ mod tests {
             let mut stream =
                 AudioStream::open_with_abort(file.path(), user.clone(), abort.clone()).unwrap();
             assert!(matches!(stream.read_chunk(7).unwrap(), ChunkRead::Chunk(_)));
-            let callback = unsafe { (*stream.input.as_mut_ptr()).interrupt_callback };
+            let callback = unsafe { (*stream.input.input().as_ptr()).interrupt_callback };
             assert_eq!(unsafe { callback.callback.unwrap()(callback.opaque) }, 0);
             let worker_abort = abort.clone();
             std::thread::spawn(move || worker_abort.store(true, Ordering::Relaxed))
@@ -689,5 +749,183 @@ mod tests {
             assert_eq!(stream.position(), 0);
         }
         assert_eq!(stream.validate_to_end().unwrap(), 1_201);
+    }
+
+    #[test]
+    fn relocatable_audio_preserves_decoder_samples_across_publication_and_rollback() {
+        for (rate, channels) in [(44_100, 1), (48_000, 2), (96_000, 6)] {
+            let file = pcm_wav(rate, channels, 100_003);
+            let reference = crate::AudioData::from_file(file.path()).unwrap();
+            let bytes = std::fs::read(file.path()).unwrap();
+            let directory = tempfile::tempdir().unwrap();
+            let original = directory.path().join("original");
+            let retained = directory.path().join("retained");
+            std::fs::create_dir(&original).unwrap();
+            let paths: Vec<_> = bytes
+                .chunks(32_768)
+                .enumerate()
+                .map(|(index, bytes)| {
+                    let path = std::path::PathBuf::from(format!("part-{index:03}.bin"));
+                    std::fs::write(original.join(&path), bytes).unwrap();
+                    path
+                })
+                .collect();
+            let source = cap_enc_ffmpeg::RelocatableSource::new(original.clone()).unwrap();
+            let mut stream = AudioStream::open_relocatable(
+                &source,
+                paths.iter().map(std::path::PathBuf::as_path),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+            let mut samples = Vec::new();
+            let mut chunks = 0;
+            loop {
+                match stream.read_chunk(997).unwrap() {
+                    ChunkRead::Chunk(chunk) => {
+                        assert_eq!(chunk.channels, reference.channels());
+                        assert_eq!(
+                            chunk.source_start_sample as usize,
+                            samples.len() / usize::from(reference.channels())
+                        );
+                        samples.extend(chunk.samples);
+                        match chunks {
+                            0 => {
+                                source.relocate(retained.clone()).unwrap();
+                                std::fs::create_dir(&original).unwrap();
+                                std::fs::write(original.join(&paths[0]), b"published media")
+                                    .unwrap();
+                            }
+                            1 => {
+                                assert!(
+                                    source
+                                        .relocate(directory.path().join("missing/target"))
+                                        .is_err()
+                                );
+                            }
+                            2 => {
+                                assert_eq!(
+                                    std::fs::read(original.join(&paths[0])).unwrap(),
+                                    b"published media"
+                                );
+                                std::fs::remove_file(original.join(&paths[0])).unwrap();
+                                std::fs::remove_dir(&original).unwrap();
+                                source.relocate(original.clone()).unwrap();
+                            }
+                            _ => {}
+                        }
+                        chunks += 1;
+                    }
+                    ChunkRead::Eof { next_sample } => {
+                        assert_eq!(next_sample as usize, reference.sample_count());
+                        break;
+                    }
+                }
+            }
+            assert!(chunks > 3);
+            assert_eq!(samples.len(), reference.samples().len());
+            assert!(
+                samples
+                    .iter()
+                    .zip(reference.samples())
+                    .all(|(actual, expected)| actual.to_bits() == expected.to_bits())
+            );
+            assert_eq!(
+                stream.validate_to_end().unwrap() as usize,
+                reference.sample_count()
+            );
+            let retained_bytes: Vec<_> = paths
+                .iter()
+                .flat_map(|path| std::fs::read(original.join(path)).unwrap())
+                .collect();
+            assert_eq!(retained_bytes, bytes);
+        }
+    }
+
+    #[test]
+    fn relocatable_audio_cancellation_retains_positions_and_releases_ownership() {
+        let file = pcm_wav(48_000, 2, 100_003);
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original");
+        let retained = directory.path().join("retained");
+        std::fs::create_dir(&original).unwrap();
+        std::fs::copy(file.path(), original.join("audio.wav")).unwrap();
+        let source = cap_enc_ffmpeg::RelocatableSource::new(original.clone()).unwrap();
+        let user = Arc::new(AtomicBool::new(false));
+        let abort = Arc::new(AtomicBool::new(false));
+        for use_abort in [false, true] {
+            let mut stream = AudioStream::open_relocatable_with_abort(
+                &source,
+                [Path::new("audio.wav")],
+                user.clone(),
+                abort.clone(),
+            )
+            .unwrap();
+            assert_eq!(Arc::strong_count(&user), 2);
+            assert_eq!(Arc::strong_count(&abort), 2);
+            assert!(matches!(stream.read_chunk(7).unwrap(), ChunkRead::Chunk(_)));
+            source.relocate(retained.clone()).unwrap();
+            let flag = if use_abort { &abort } else { &user };
+            flag.store(true, Ordering::Relaxed);
+            let callback = unsafe { (*stream.input.input().as_ptr()).interrupt_callback };
+            assert_eq!(unsafe { callback.callback.unwrap()(callback.opaque) }, 1);
+            let error = stream.read_chunk(48_000).unwrap_err();
+            assert!(error.is_cancelled());
+            assert_eq!(error.next_sample, 7);
+            assert_eq!(stream.position(), 7);
+            flag.store(false, Ordering::Relaxed);
+            assert_eq!(stream.read_chunk(1).unwrap_err(), error);
+            drop(stream);
+            assert_eq!(Arc::strong_count(&user), 1);
+            assert_eq!(Arc::strong_count(&abort), 1);
+            source.relocate(original.clone()).unwrap();
+        }
+        let missing = AudioStream::open_relocatable_with_abort(
+            &source,
+            [Path::new("missing.wav")],
+            user.clone(),
+            abort.clone(),
+        );
+        assert!(missing.is_err());
+        assert_eq!(Arc::strong_count(&user), 1);
+        assert_eq!(Arc::strong_count(&abort), 1);
+        abort.store(true, Ordering::Relaxed);
+        assert!(
+            AudioStream::open_relocatable_with_abort(
+                &source,
+                [Path::new("audio.wav")],
+                user.clone(),
+                abort.clone(),
+            )
+            .err()
+            .unwrap()
+            .is_cancelled()
+        );
+        assert_eq!(Arc::strong_count(&user), 1);
+        assert_eq!(Arc::strong_count(&abort), 1);
+    }
+
+    #[test]
+    fn missing_relocatable_audio_never_spins_or_becomes_clean_eof() {
+        let file = pcm_wav(48_000, 2, 480_003);
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original");
+        let retained = directory.path().join("retained");
+        std::fs::create_dir(&original).unwrap();
+        std::fs::copy(file.path(), original.join("audio.wav")).unwrap();
+        let source = cap_enc_ffmpeg::RelocatableSource::new(original).unwrap();
+        let mut stream = AudioStream::open_relocatable(
+            &source,
+            [Path::new("audio.wav")],
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        assert!(matches!(stream.read_chunk(7).unwrap(), ChunkRead::Chunk(_)));
+        source.relocate(retained.clone()).unwrap();
+        std::fs::remove_file(retained.join("audio.wav")).unwrap();
+        let error = stream.validate_to_end().unwrap_err();
+        assert_eq!(error.stage, "input-read");
+        assert!(error.next_sample >= 7);
+        assert_eq!(stream.validate_to_end().unwrap_err(), error);
+        assert_eq!(stream.read_chunk(1).unwrap_err(), error);
     }
 }

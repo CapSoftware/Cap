@@ -968,6 +968,10 @@ pub async fn switch_to_gpui_app(app: AppHandle) -> Result<(), String> {
 ///
 /// `true` means the caller must exit before any window is created.
 pub fn redirect_at_startup_if_enabled(app: &AppHandle) -> Result<bool, String> {
+    #[cfg(debug_assertions)]
+    if crate::stop_editor_benchmark::enabled() {
+        return Ok(false);
+    }
     let update_handoff = handle_update_handoff(app);
     let redirect = !update_handoff && redirect_decision(app)?;
     if !redirect {

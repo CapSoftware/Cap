@@ -106,6 +106,7 @@ cap-fail = { version = "0.1.0", path = "../../../crates/fail" }
 tokio-stream = { version = "0.1.17", features = ["sync"] }
 md5 = "0.7.0"
 tokio-util = "0.7.15"
+tokio-tungstenite = "=0.24.0"
 wgpu.workspace = true
 pollster = "0.4"
 bytemuck = "1.23.1"

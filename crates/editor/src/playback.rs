@@ -110,6 +110,8 @@ fn has_playback_audio(audio_segments: &[crate::audio::AudioSegment], has_music: 
 #[derive(Debug)]
 pub enum PlaybackStartError {
     InvalidFps,
+    PreparingCleanup,
+    PreparingCandidate,
 }
 
 pub struct Playback {
@@ -136,6 +138,7 @@ pub struct PlaybackHandle {
     event_rx: watch::Receiver<PlaybackEvent>,
     seek_tx: Arc<watch::Sender<(u64, u32)>>,
     seek_generation: Arc<AtomicU64>,
+    adopted: Option<crate::PreparingPlaybackAdoption>,
 }
 
 struct PrefetchedFrame {
@@ -518,11 +521,31 @@ impl Playback {
             .await
     }
 
+    pub async fn start_with_adopted_audio(
+        self,
+        fps: u32,
+        resolution_base: XY<u32>,
+        adoption: crate::PreparingPlaybackAdoption,
+    ) -> Result<PlaybackHandle, PlaybackStartError> {
+        self.start_inner(fps, resolution_base, None, Some(adoption))
+            .await
+    }
+
     pub async fn start_with_diagnostics(
+        self,
+        fps: u32,
+        resolution_base: XY<u32>,
+        resource: Option<u64>,
+    ) -> Result<PlaybackHandle, PlaybackStartError> {
+        self.start_inner(fps, resolution_base, resource, None).await
+    }
+
+    async fn start_inner(
         mut self,
         fps: u32,
         resolution_base: XY<u32>,
         resource: Option<u64>,
+        adopted: Option<crate::PreparingPlaybackAdoption>,
     ) -> Result<PlaybackHandle, PlaybackStartError> {
         let start_call = Instant::now();
         let mut diagnostic = Operation::start(
@@ -561,6 +584,7 @@ impl Playback {
             event_rx,
             seek_tx: Arc::new(seek_tx),
             seek_generation: Arc::new(AtomicU64::new(0)),
+            adopted: adopted.clone(),
         };
 
         let (prefetch_tx, prefetch_rx) =
@@ -836,6 +860,8 @@ impl Playback {
         ));
         diagnostic.stage("preparing_playback");
         let playback_body = move || {
+            let adopted_guard = AdoptedPlaybackGuard(adopted);
+            let adopted = &adopted_guard.0;
             let duration = self
                 .project
                 .borrow()
@@ -885,13 +911,29 @@ impl Playback {
             let mut starvation_skips = 0u64;
 
             while !*stop_rx.borrow() {
+                if adopted
+                    .as_ref()
+                    .is_some_and(|adoption| adoption.invalidated())
+                {
+                    let _ = stop_tx.send(true);
+                    break;
+                }
+                if let Some(snapshot) = adopted.as_ref().and_then(|adoption| adoption.snapshot()) {
+                    let target = crate::preparing_handoff::presentation_frame(&snapshot, fps);
+                    if target > frame_number {
+                        frame_number = target;
+                        prefetch_buffer.retain(|frame| frame.frame_number >= target);
+                        let _ = frame_request_tx.send((seek_generation, target));
+                        let _ = playback_position_tx.send(target);
+                    }
+                }
                 refresh_prefetch_limit(
                     &prefetch_frame_limit,
                     largest_prefetched_frame_bytes,
                     boost_until,
                 );
 
-                if seek_rx.has_changed().unwrap_or(false) {
+                if adopted.is_none() && seek_rx.has_changed().unwrap_or(false) {
                     (seek_generation, frame_number) = *seek_rx.borrow_and_update();
                     prefetch_buffer.clear();
                     first_frame_time = None;
@@ -1206,7 +1248,9 @@ impl Playback {
             diagnostic.stage("initializing_audio_output");
             let audio_spawn_start = Instant::now();
             let _ = audio_playhead_tx.send(playback_start_frame as f64 / fps_f64);
-            let audio_generation = if !has_playback_audio(&audio_segments, !self.music.is_empty()) {
+            let audio_generation = if adopted.is_some() {
+                None
+            } else if !has_playback_audio(&audio_segments, !self.music.is_empty()) {
                 info!("No audio segments found, skipping audio playback.");
                 None
             } else {
@@ -1242,14 +1286,36 @@ impl Playback {
             let mut start = Instant::now();
             let mut clock_anchor_frame = playback_start_frame;
 
+            let mut last_adopted_frame = None;
             'playback: loop {
+                if *stop_rx.borrow() {
+                    break;
+                }
+                if let Some(adoption) = adopted {
+                    let Some(snapshot) = adoption.snapshot() else {
+                        break;
+                    };
+                    if snapshot.progress.phase == crate::PreparingEditorPhase::Unavailable {
+                        break;
+                    }
+                    let target = crate::preparing_handoff::presentation_frame(&snapshot, fps);
+                    if snapshot.playback.buffering || last_adopted_frame == Some(target) {
+                        if !snapshot.playback.playing && adoption.is_owner() {
+                            break;
+                        }
+                        std::thread::sleep(frame_duration);
+                        continue;
+                    }
+                    frame_number = target;
+                    let _ = playback_position_tx.send(target);
+                }
                 let limit_now = refresh_prefetch_limit(
                     &prefetch_frame_limit,
                     largest_prefetched_frame_bytes,
                     boost_until,
                 );
 
-                if seek_rx.has_changed().unwrap_or(false) {
+                if adopted.is_none() && seek_rx.has_changed().unwrap_or(false) {
                     let (generation, target) = *seek_rx.borrow_and_update();
                     tracing::debug!(from = frame_number, to = target, "playback live seek");
                     seek_generation = generation;
@@ -1277,14 +1343,20 @@ impl Playback {
                 let frame_offset = frame_number.saturating_sub(clock_anchor_frame) as f64;
                 let next_deadline = start + frame_duration.mul_f64(frame_offset);
 
-                precision_sleep_sync(next_deadline);
+                if adopted.is_none() {
+                    precision_sleep_sync(next_deadline);
+                }
 
                 if *stop_rx.borrow() {
                     break;
                 }
 
-                let overshoot = Instant::now().saturating_duration_since(next_deadline);
-                if overshoot > frame_duration + frame_duration / 2 {
+                let overshoot = if adopted.is_some() {
+                    Duration::ZERO
+                } else {
+                    Instant::now().saturating_duration_since(next_deadline)
+                };
+                if adopted.is_none() && overshoot > frame_duration + frame_duration / 2 {
                     let frames_behind = (overshoot.as_secs_f64() * fps_f64).floor() as u32;
                     let skip = frames_behind.max(1);
                     let skipped_from = frame_number;
@@ -1354,6 +1426,31 @@ impl Playback {
                     was_cached = true;
                     cache_hits += 1;
                     Some(cached)
+                } else if adopted.is_some() {
+                    let mut exact = prefetch_buffer
+                        .iter()
+                        .position(|frame| frame.frame_number == frame_number)
+                        .and_then(|index| prefetch_buffer.remove(index));
+                    if exact.is_none() {
+                        let _ = frame_request_tx.send((seek_generation, frame_number));
+                        match receive_prefetched_frame(
+                            &prefetch_rx,
+                            seek_generation,
+                            frame_duration,
+                        ) {
+                            Ok(frame) if frame.frame_number == frame_number => exact = Some(frame),
+                            Ok(frame) if frame.frame_number > frame_number => {
+                                prefetch_buffer.push_back(frame)
+                            }
+                            Ok(_) | Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(std_mpsc::RecvTimeoutError::Disconnected) => break 'playback,
+                        }
+                    }
+                    let Some(frame) = exact else {
+                        continue;
+                    };
+                    frame_source = PlaybackFrameSource::PrefetchWaitExact;
+                    Some(frame.into_cached())
                 } else if prefetch_buffer
                     .front()
                     .is_some_and(|f| f.frame_number == frame_number)
@@ -1572,6 +1669,9 @@ impl Playback {
                 if let Some((segment_frames, segment_index, transition)) = segment_frames_opt {
                     let Some(segment_media) = self.segment_medias.get(segment_index as usize)
                     else {
+                        if adopted.is_some() {
+                            break;
+                        }
                         frame_number = frame_number.saturating_add(1);
                         continue;
                     };
@@ -1717,6 +1817,10 @@ impl Playback {
                 }
 
                 event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
+                if adopted.is_some() {
+                    last_adopted_frame = Some(frame_number);
+                    continue;
+                }
 
                 frame_number = frame_number.saturating_add(1);
                 let _ = playback_position_tx.send(frame_number);
@@ -1794,8 +1898,21 @@ impl Playback {
     }
 }
 
+struct AdoptedPlaybackGuard(Option<crate::PreparingPlaybackAdoption>);
+
+impl Drop for AdoptedPlaybackGuard {
+    fn drop(&mut self) {
+        if let Some(adoption) = &self.0 {
+            adoption.cancel();
+        }
+    }
+}
+
 impl PlaybackHandle {
     pub fn stop(&self) {
+        if let Some(adoption) = &self.adopted {
+            adoption.cancel();
+        }
         self.stop_tx.send(true).ok();
     }
 
@@ -1803,6 +1920,9 @@ impl PlaybackHandle {
     /// re-attach. Returns false once the playback thread is gone, which is the
     /// caller's cue to fall back to a full restart.
     pub fn seek(&self, frame: u32) -> bool {
+        if self.adopted.is_some() {
+            return false;
+        }
         let generation = self.seek_generation.fetch_add(1, Ordering::Relaxed) + 1;
         self.seek_tx.send((generation, frame)).is_ok()
     }
@@ -1816,6 +1936,35 @@ impl PlaybackHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn late_handoff_stop_only_cancels_its_original_playback() {
+        let make_handle = || {
+            let (stop_tx, stop_rx) = watch::channel(false);
+            let (_, event_rx) = watch::channel(PlaybackEvent::Start);
+            let (seek_tx, _) = watch::channel((0, 0));
+            (
+                PlaybackHandle {
+                    adopted: None,
+                    stop_tx,
+                    event_rx,
+                    seek_tx: Arc::new(seek_tx),
+                    seek_generation: Arc::new(AtomicU64::new(0)),
+                },
+                stop_rx,
+            )
+        };
+        let (first, first_stop) = make_handle();
+        let handoff_owner = first.clone();
+        let (replacement, replacement_stop) = make_handle();
+        let mut current_playback = Some(first);
+        current_playback.replace(replacement).unwrap().stop();
+        handoff_owner.stop();
+        assert!(*first_stop.borrow());
+        assert!(!*replacement_stop.borrow());
+        current_playback.take().unwrap().stop();
+        assert!(*replacement_stop.borrow());
+    }
 
     fn decoded_frames(bytes: usize) -> DecodedSegmentFrames {
         DecodedSegmentFrames {

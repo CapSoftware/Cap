@@ -217,6 +217,21 @@ async getVideoMetadata(path: string) : Promise<VideoRecordingMetadata> {
 async createEditorInstance() : Promise<SerializedEditorInstance> {
     return await TAURI_INVOKE("create_editor_instance");
 },
+async createPreparingEditorFrame(requestEpoch: number) : Promise<string | null> {
+    return await TAURI_INVOKE("create_preparing_editor_frame", { requestEpoch });
+},
+async getPreparingEditorState(requestEpoch: number) : Promise<PreparingEditorChanged | null> {
+    return await TAURI_INVOKE("get_preparing_editor_state", { requestEpoch });
+},
+async seekPreparingEditor(requestEpoch: number, jobId: string, seconds: number) : Promise<null> {
+    return await TAURI_INVOKE("seek_preparing_editor", { requestEpoch, jobId, seconds });
+},
+async setPreparingEditorPlaying(requestEpoch: number, jobId: string, playing: boolean) : Promise<null> {
+    return await TAURI_INVOKE("set_preparing_editor_playing", { requestEpoch, jobId, playing });
+},
+async stopPreparingEditorFrame(requestEpoch: number) : Promise<null> {
+    return await TAURI_INVOKE("stop_preparing_editor_frame", { requestEpoch });
+},
 async getEditorProjectPath() : Promise<string> {
     return await TAURI_INVOKE("get_editor_project_path");
 },
@@ -240,6 +255,15 @@ async startPlayback(fps: number, resolutionBase: XY<number>) : Promise<null> {
 },
 async stopPlayback() : Promise<null> {
     return await TAURI_INVOKE("stop_playback");
+},
+async commitEditorPreparingFrame(instanceId: string, frameNumber: number, fps: number) : Promise<boolean> {
+    return await TAURI_INVOKE("commit_editor_preparing_frame", { instanceId, frameNumber, fps });
+},
+async startEditorHandoffPlayback(instanceId: string, frameNumber: number, fps: number, resolutionBase: XY<number>) : Promise<string> {
+    return await TAURI_INVOKE("start_editor_handoff_playback", { instanceId, frameNumber, fps, resolutionBase });
+},
+async stopEditorHandoffPlayback(instanceId: string, playbackId: string) : Promise<null> {
+    return await TAURI_INVOKE("stop_editor_handoff_playback", { instanceId, playbackId });
 },
 async setPlayheadPosition(frameNumber: number) : Promise<null> {
     return await TAURI_INVOKE("set_playhead_position", { frameNumber });
@@ -556,6 +580,7 @@ newNotification: NewNotification,
 newScreenshotAdded: NewScreenshotAdded,
 newStudioRecordingAdded: NewStudioRecordingAdded,
 onEscapePress: OnEscapePress,
+preparingEditorChanged: PreparingEditorChanged,
 recordingDeleted: RecordingDeleted,
 recordingEvent: RecordingEvent,
 recordingOptionsChanged: RecordingOptionsChanged,
@@ -589,6 +614,7 @@ newNotification: "new-notification",
 newScreenshotAdded: "new-screenshot-added",
 newStudioRecordingAdded: "new-studio-recording-added",
 onEscapePress: "on-escape-press",
+preparingEditorChanged: "preparing-editor-changed",
 recordingDeleted: "recording-deleted",
 recordingEvent: "recording-event",
 recordingOptionsChanged: "recording-options-changed",
@@ -1132,6 +1158,11 @@ export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
 export type Platform = "MacOS" | "Windows" | "Linux"
 export type PostDeletionBehaviour = "doNothing" | "reopenRecordingWindow"
 export type PostStudioRecordingBehaviour = "openEditor" | "showOverlay"
+export type PreparingEditorChanged = { requestEpoch: number; jobId: string; sequence: number; fps: number; progress: PreparingEditorProgress; playback: PreparingPlaybackState; seed: PreparingEditorSeed }
+export type PreparingEditorPhase = "preparing" | "handoff" | "unavailable" | "ready"
+export type PreparingEditorProgress = { totalDuration: number | null; playableUntil: number; previewAvailable: boolean; phase: PreparingEditorPhase }
+export type PreparingEditorSeed = { title: string; tracks: string[] }
+export type PreparingPlaybackState = { playheadSeconds: number; playing: boolean; buffering: boolean }
 export type Preset = { name: string; config: ProjectConfiguration }
 export type PresetsStore = { presets: Preset[]; default: number | null }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline: TimelineConfiguration | null; overlayOrder: OverlayTrack[]; captions: CaptionsData | null; keyboard: KeyboardData | null; clips: ClipConfiguration[]; annotations: Annotation[]; screenMotionBlur?: number; screenMovementSpring?: ScreenMovementSpring;
@@ -1200,7 +1231,7 @@ export type ScreenshotProjectExport = { imageBytes: number[]; config: ProjectCon
 export type ScreenshotProjectShareState = { config: ProjectConfiguration; sharing: ScreenshotSharingState | null }
 export type ScreenshotSharingState = { link: string; contentHash: string | null }
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
-export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string;
+export type SerializedEditorInstance = { instanceId: string; preparingPlayback: boolean; framesSocketUrl: string; preparingSnapshot: PreparingEditorChanged | null; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string;
 /**
  * Notch geometry the overlay uses when the project sets no manual
  * placement: this recording's own measurements where the recorder took

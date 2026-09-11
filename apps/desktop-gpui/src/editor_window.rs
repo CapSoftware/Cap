@@ -757,9 +757,6 @@ impl Render for EditorSectionView {
             return div().into_any_element();
         };
         editor.update(cx, |editor, cx| {
-            if !editor.project_ready() && !matches!(self.section, EditorSection::Header) {
-                return div().size_full().into_any_element();
-            }
             match self.section {
                 EditorSection::Header => editor.render_header(window, cx).into_any_element(),
                 EditorSection::Toolbar => {
@@ -770,6 +767,9 @@ impl Render for EditorSectionView {
                 // clips sidebar; the config sidebar is hidden, not destroyed
                 // (`Editor.tsx:728-747`).
                 EditorSection::Sidebar => {
+                    if !editor.project_ready() {
+                        return editor.render_preparing_sidebar().into_any_element();
+                    }
                     if editor.clips.open {
                         editor.render_clips_sidebar(cx).into_any_element()
                     } else {
@@ -1116,6 +1116,9 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
                     break;
                 }
                 let active = *active_rx.borrow_and_update();
+                if active && instance.preparing_adoption().is_some() {
+                    applied_playing = true;
+                }
                 // A false while this driver believes it is playing is an
                 // engine-initiated stop: the driver marks the engine gone and
                 // tells the window, which answers through its ordinary pause
@@ -1191,8 +1194,17 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
         }
 
         if want.playing && !applied_playing {
-            instance.start_playback(fps, want.resolution).await;
-            applied_playing = true;
+            match instance
+                .start_playback_with_handle(fps, want.resolution, None)
+                .await
+            {
+                Ok(_) => applied_playing = true,
+                Err(error) => {
+                    tracing::warn!(?error, "Editor playback could not start");
+                    applied_playing = false;
+                    let _ = driver.engine_stopped.try_send(());
+                }
+            }
         }
     }
 }
@@ -1372,6 +1384,17 @@ pub struct EditorWindow {
     pub(crate) theme: Theme,
     pub(crate) project_path: PathBuf,
     state: LoadState,
+    preparing_consumer: Option<crate::editor_preparing::PreparingConsumer>,
+    preparing_candidate_frame: Option<u32>,
+    preparing_retry_pending: bool,
+    preparing_sequence: u64,
+    preparing_presentation: Option<crate::editor_preparing::presentation::PreparingPresentation>,
+    ordinary_handoff_frame: Option<u32>,
+    #[cfg(debug_assertions)]
+    preparing_auto_played: bool,
+    #[cfg(debug_assertions)]
+    preparing_frame_presented: bool,
+    preparing_seed: Option<Arc<crate::editor_preparing::presentation::PreparingTimelineSeed>>,
     pub(crate) latest_frame: Option<EditorPreviewFrame>,
     /// The bundle's `screenshots/display.jpg`, letterboxed into the canvas
     /// until the first composed frame lands -- decoded in parallel with
@@ -1592,6 +1615,7 @@ pub struct EditorWindow {
     preset_dialog: Option<PresetDialog>,
     caption_sync_signature: Option<u64>,
     pub(crate) export: Option<ExportUi>,
+    pub(crate) sharing: Option<cap_project::SharingMeta>,
     /// The Clips layout mode (`ClipsSidebar.tsx`): while open, the config
     /// sidebar's column draws the clips sidebar instead.
     pub(crate) clips: crate::editor_clips::ClipsState,
@@ -1816,8 +1840,22 @@ impl EditorWindow {
             // routes, and `is_transparent()` (`windows.rs:1069-1082`) does not
             // list Editor. The root paints `bg-gray-2 dark:bg-gray-1`.
             theme: Theme::for_window(window, cx, false),
+            sharing: RecordingMeta::load_for_project(&project_path)
+                .ok()
+                .and_then(|meta| meta.sharing),
             project_path,
             state: LoadState::Loading,
+            preparing_consumer: None,
+            preparing_candidate_frame: None,
+            preparing_retry_pending: false,
+            preparing_sequence: 0,
+            preparing_presentation: None,
+            ordinary_handoff_frame: None,
+            #[cfg(debug_assertions)]
+            preparing_auto_played: false,
+            #[cfg(debug_assertions)]
+            preparing_frame_presented: false,
+            preparing_seed: None,
             latest_frame: None,
             preview,
             header,
@@ -1980,7 +2018,9 @@ impl EditorWindow {
         // (`ED/context.ts:1455`), so it is set the moment a duration exists --
         // the on-mount 80px fit then narrows it on the first render that knows
         // the timeline's width.
-        self.view.transform = Transform::initial(summary.duration);
+        if self.preparing_presentation.is_none() {
+            self.view.transform = Transform::initial(summary.duration);
+        }
         self.name_input.update(cx, |input, cx| {
             input.set_text(summary.pretty_name.clone(), cx);
             input.set_disabled(false, cx);
@@ -2346,6 +2386,7 @@ impl EditorWindow {
 
     pub fn set_error(&mut self, message: String, window: &mut Window, cx: &mut Context<Self>) {
         tracing::error!(path = %self.project_path.display(), "editor project failed to open: {message}");
+        self.cancel_preparing();
         self.state = LoadState::Failed(message);
         cx.notify();
         window.refresh();
@@ -2373,7 +2414,257 @@ impl EditorWindow {
         &self.project
     }
 
+    pub(crate) fn begin_preparing(&mut self, consumer: crate::editor_preparing::PreparingConsumer) {
+        self.preparing_sequence = 0;
+        #[cfg(debug_assertions)]
+        {
+            self.preparing_auto_played = false;
+            self.preparing_frame_presented = false;
+        }
+        self.preparing_presentation = Some(Default::default());
+        self.preparing_consumer = Some(consumer);
+    }
+
+    pub(crate) fn cancel_preparing(&mut self) {
+        drop(self.preparing_consumer.take());
+        if self.preparing_presentation.take().is_some() {
+            self.playing = false;
+            self.view.playing = false;
+        }
+        self.preparing_seed = None;
+        self.ordinary_handoff_frame = None;
+    }
+
+    pub(crate) fn finish_preparing(
+        &mut self,
+        joined: &crate::editor_preparing::PreparingJoined,
+    ) -> bool {
+        if !self
+            .preparing_consumer
+            .as_ref()
+            .is_some_and(|consumer| joined.matches(consumer))
+        {
+            return false;
+        }
+        if let Some(presentation) = &mut self.preparing_presentation {
+            if let Some(exit) = &joined.exit
+                && let Some(sequence) = exit.snapshot.sequence.checked_add(2)
+            {
+                presentation.apply(
+                    sequence,
+                    exit.snapshot.progress.clone(),
+                    exit.snapshot.playback,
+                );
+            }
+            presentation.handoff();
+            self.playhead = presentation.playback.playhead_seconds;
+            self.view.playhead = self.playhead;
+            self.playing = false;
+            self.view.playing = false;
+        }
+        drop(self.preparing_consumer.take());
+        true
+    }
+
+    fn preparing_transport_active(&self) -> bool {
+        self.preparing_consumer.is_some()
+            && self
+                .instance
+                .as_ref()
+                .and_then(|instance| instance.preparing_adoption())
+                .is_none_or(|adoption| !adoption.is_owner())
+    }
+
+    fn preparing_controls_ready(&self) -> bool {
+        self.preparing_consumer
+            .as_ref()
+            .is_some_and(|consumer| consumer.can_command())
+            && self
+                .preparing_presentation
+                .as_ref()
+                .is_some_and(|presentation| presentation.controls_ready())
+    }
+
+    fn preparing_command(&self, seek: Option<f64>, playing: Option<bool>) -> bool {
+        self.preparing_consumer.as_ref().is_some_and(|consumer| {
+            consumer.command(crate::editor_preparing::PreparingCommand { seek, playing })
+        })
+    }
+
+    pub(crate) fn preparing_progress_arrived(
+        &mut self,
+        update: crate::editor_preparing::PreparingUpdate,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if (self.project_ready() && !self.preparing_transport_active())
+            || !self
+                .preparing_consumer
+                .as_ref()
+                .is_some_and(|consumer| consumer.accepts_status(&update))
+        {
+            return;
+        }
+        let Some(presentation) = &mut self.preparing_presentation else {
+            return;
+        };
+        let previous_playback = presentation.playback;
+        if !presentation.apply(update.sequence, update.progress, update.playback) {
+            return;
+        }
+        if previous_playback.playing != presentation.playback.playing
+            || previous_playback.buffering != presentation.playback.buffering
+        {
+            tracing::debug!(
+                playing = presentation.playback.playing,
+                buffering = presentation.playback.buffering,
+                playhead = presentation.playback.playhead_seconds,
+                playable_until = presentation.progress.playable_until,
+                "GPUI preparing playback state"
+            );
+        }
+        let initial_duration = self.total <= 0.0;
+        self.total = presentation.progress.total_duration.unwrap_or(0.0);
+        self.playhead = presentation.playback.playhead_seconds;
+        self.playing = presentation.playback.playing;
+        self.view.playhead = self.playhead;
+        self.view.playing = self.playing;
+        if !self
+            .preparing_seed
+            .as_ref()
+            .is_some_and(|seed| Arc::ptr_eq(seed, &update.seed))
+        {
+            self.has_camera = update.seed.has_camera;
+            self.multiple_clips = update.seed.multiple_clips;
+            self.timeline =
+                TimelineModel::build(&update.seed.project, self.has_camera, self.multiple_clips);
+            self.name_input.update(cx, |input, cx| {
+                input.set_text(update.seed.pretty_name.clone(), cx)
+            });
+            self.preparing_seed = Some(update.seed);
+        }
+        if initial_duration && self.total > 0.0 {
+            self.view.transform = Transform::initial(self.total);
+            self.fitted = false;
+        }
+        if self.preparing_sequence > 0 {
+            presentation.progress.preview_available = true;
+        }
+        #[cfg(debug_assertions)]
+        self.drive_auto_preparing_playback(window, cx);
+        self.retry_preparing_candidate(window, cx);
+        cx.notify();
+        window.refresh();
+    }
+
+    pub(crate) fn initial_frame_number(&self) -> u32 {
+        self.preparing_presentation.as_ref().map_or(
+            (self.playhead * f64::from(EDITOR_PREVIEW_FPS)).round() as u32,
+            |presentation| presentation.handoff_frame(self.total_duration(), EDITOR_PREVIEW_FPS),
+        )
+    }
+
+    pub(crate) fn preparing_frame_arrived(
+        &mut self,
+        epoch: &crate::editor_preparing::PreparingEpoch,
+        identity: &cap_recording::recovery::PreparingStudioIdentity,
+        sequence: u64,
+        frame: EditorFrame,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if (self.project_ready() && !self.preparing_transport_active())
+            || self.preparing_candidate_frame.is_some()
+            || sequence <= self.preparing_sequence
+            || !self
+                .preparing_consumer
+                .as_ref()
+                .is_some_and(|consumer| consumer.accepts(epoch, identity))
+        {
+            return;
+        }
+        self.preparing_sequence = sequence;
+        if let Some(presentation) = &mut self.preparing_presentation {
+            presentation.progress.preview_available = true;
+        }
+        self.display_frame(frame, false, window, cx);
+        let epoch = epoch.clone();
+        let identity = identity.clone();
+        cx.on_next_frame(window, move |this, window, cx| {
+            tracing::info!("Preparing composed frame reached presentation cycle");
+            if !this
+                .preparing_consumer
+                .as_ref()
+                .is_some_and(|consumer| consumer.accepts(&epoch, &identity))
+            {
+                return;
+            }
+            #[cfg(debug_assertions)]
+            {
+                this.preparing_frame_presented = true;
+                this.drive_auto_preparing_playback(window, cx);
+            }
+            #[cfg(not(debug_assertions))]
+            let _ = (window, cx);
+        });
+        window.refresh();
+    }
+
+    #[cfg(debug_assertions)]
+    fn drive_auto_preparing_playback(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.preparing_auto_played
+            || !self.preparing_frame_presented
+            || !self.preparing_controls_ready()
+            || !std::env::var("CAP_GPUI_AUTO_PREPARING_PLAY").is_ok_and(|value| value == "1")
+        {
+            return;
+        }
+        self.preparing_auto_played = true;
+        tracing::info!("auto preparing playback requested");
+        self.toggle_play(window, cx);
+    }
+
+    pub(crate) fn is_instance(&self, instance: &Arc<EditorInstance>) -> bool {
+        self.instance
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, instance))
+    }
+
+    fn retry_preparing_candidate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.preparing_retry_pending {
+            return;
+        }
+        let Some(instance) = self
+            .instance
+            .as_ref()
+            .filter(|instance| {
+                instance
+                    .preparing_adoption()
+                    .is_some_and(|adoption| adoption.invalidated())
+            })
+            .cloned()
+        else {
+            return;
+        };
+        let Some(handle) = window.window_handle().downcast::<Self>() else {
+            return;
+        };
+        self.preparing_retry_pending = true;
+        self.preparing_candidate_frame = None;
+        let path = self.project_path.clone();
+        cx.defer(move |cx| crate::app_windows::retry_preparing_editor(path, handle, instance, cx));
+    }
+
     pub fn set_instance(&mut self, instance: Arc<EditorInstance>) {
+        self.preparing_retry_pending = false;
+        self.preparing_candidate_frame = None;
+        self.ordinary_handoff_frame = self
+            .preparing_presentation
+            .as_ref()
+            .map(|_| self.initial_frame_number());
+        if instance.preparing_adoption().is_some() {
+            self.ordinary_handoff_frame = None;
+        }
         self.instance = Some(instance);
     }
 
@@ -2397,8 +2688,36 @@ impl EditorWindow {
         if total > 0.0 {
             self.total = total;
         }
+        let initial_frame = self.initial_frame_number();
+        self.ordinary_handoff_frame = self.preparing_presentation.as_ref().map(|_| initial_frame);
+        self.playhead = self.preparing_presentation.as_ref().map_or(
+            f64::from(initial_frame) / f64::from(EDITOR_PREVIEW_FPS),
+            |presentation| {
+                presentation
+                    .playback
+                    .playhead_seconds
+                    .clamp(0.0, self.total_duration())
+            },
+        );
+        self.view.playhead = self.playhead;
         if let Some(instance) = &self.instance {
-            request_frame(instance, 0, self.preview_resolution());
+            if instance.preparing_adoption().is_some() {
+                self.ordinary_handoff_frame = None;
+                let instance = instance.clone();
+                let resolution = self.preview_resolution();
+                gpui_tokio::Tokio::spawn(cx, async move {
+                    match instance
+                        .start_preparing_handoff(EDITOR_PREVIEW_FPS, resolution)
+                        .await
+                    {
+                        Ok(true) => {}
+                        _ => request_frame(&instance, initial_frame, resolution),
+                    }
+                })
+                .detach();
+            } else {
+                request_frame(instance, initial_frame, self.preview_resolution());
+            }
         }
         cx.notify();
         window.refresh();
@@ -2463,8 +2782,15 @@ impl EditorWindow {
     /// (`ClipsSidebar.tsx:508-511`).
     pub(crate) fn stop_playback(&mut self, cx: &mut Context<Self>) {
         self.playback_follow.reset();
+        if self.preparing_transport_active() {
+            self.preparing_command(None, Some(false));
+            return;
+        }
         if let Some(transport) = &self.transport {
             transport.pause();
+            if let Some(presentation) = &mut self.preparing_presentation {
+                presentation.playback.playing = false;
+            }
         }
         if self.playing {
             self.playing = false;
@@ -2480,6 +2806,10 @@ impl EditorWindow {
     /// pressed it twice. Runs the ordinary pause path so `Desired` stays
     /// UI-owned and the run's stats still get reported.
     pub fn engine_stopped(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.preparing_transport_active() {
+            self.retry_preparing_candidate(window, cx);
+            return;
+        }
         if !self.playing {
             return;
         }
@@ -2492,6 +2822,9 @@ impl EditorWindow {
         let Some(transport) = &self.transport else {
             return;
         };
+        self.ordinary_handoff_frame = None;
+        self.preparing_presentation = None;
+        self.preparing_seed = None;
         self.playback_follow.reset();
         // `Math.floor(editorState.playbackTime * FPS)`.
         let frame = (from.max(0.0) * EDITOR_PREVIEW_FPS as f64).floor() as u32;
@@ -2562,7 +2895,23 @@ impl EditorWindow {
     /// `handlePlayPauseClick` (`Player.tsx:212-233`), verbatim: at the end,
     /// restart from 0; playing, stop; otherwise seek to the playhead and go.
     pub fn toggle_play(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.transport.is_none() {
+        if self.preparing_transport_active() {
+            if self.preparing_controls_ready() {
+                let seek = self.is_at_end().then_some(0.0);
+                self.preparing_command(seek, Some(!self.playing));
+            }
+            return;
+        }
+        if self.ordinary_handoff_frame.is_some() {
+            let at_end = self.is_at_end();
+            let target = self
+                .preparing_presentation
+                .as_mut()
+                .and_then(|presentation| presentation.toggle_handoff_playback(at_end));
+            if let Some(target) = target {
+                self.seek_to_time(target, cx);
+            }
+            cx.notify();
             return;
         }
         if self.is_at_end() {
@@ -2581,13 +2930,34 @@ impl EditorWindow {
     /// (`PlaybackHandle::seek`), so a scrub during playback holds the last
     /// picture for one decode instead of paying a warmup per tick.
     pub fn seek_to_time(&mut self, time: f64, cx: &mut Context<Self>) {
+        if self.preparing_transport_active() {
+            self.preparing_command(Some(time), None);
+            return;
+        }
         let Some(transport) = &self.transport else {
+            if let Some(target) = self
+                .preparing_presentation
+                .as_ref()
+                .and_then(|presentation| presentation.seek_target(time, EDITOR_PREVIEW_FPS))
+            {
+                self.preparing_command(Some(target), None);
+            }
             return;
         };
         let time = time.clamp(0.0, self.total_duration());
         // `Math.round(newTime * FPS)` -- "round to nearest frame to prevent
         // off-by-one drift".
-        let frame = (time * EDITOR_PREVIEW_FPS as f64).round() as u32;
+        let mut frame = (time * EDITOR_PREVIEW_FPS as f64).round() as u32;
+        if self.ordinary_handoff_frame.is_some() {
+            frame = frame.min(
+                ((self.total_duration() * f64::from(EDITOR_PREVIEW_FPS)).ceil() as u32)
+                    .saturating_sub(1),
+            );
+            self.ordinary_handoff_frame = Some(frame);
+            if let Some(presentation) = &mut self.preparing_presentation {
+                presentation.playback.playhead_seconds = time;
+            }
+        }
         if self.playing {
             // A live seek re-anchors the engine's clock at the target, and
             // the drawn line re-anchors with it: the engine's immediate
@@ -2610,12 +2980,26 @@ impl EditorWindow {
     /// timeline transform back to the start. **Not** a frame step -- neither
     /// transport button is one in the Tauri editor.
     pub fn jump_to_start(&mut self, cx: &mut Context<Self>) {
+        if self.preparing_transport_active() && self.preparing_controls_ready() {
+            self.preparing_command(Some(0.0), Some(false));
+            return;
+        }
         self.stop_playback(cx);
         self.seek_to_time(0.0, cx);
     }
 
     /// The next button (`Player.tsx:395-405`): stop, playhead to the end.
     pub fn jump_to_end(&mut self, cx: &mut Context<Self>) {
+        if self.preparing_transport_active() && self.preparing_controls_ready() {
+            if let Some(target) = self
+                .preparing_presentation
+                .as_ref()
+                .and_then(|presentation| presentation.last_playable_frame_time(EDITOR_PREVIEW_FPS))
+            {
+                self.preparing_command(Some(target), Some(false));
+            }
+            return;
+        }
         self.stop_playback(cx);
         let total = self.total_duration();
         self.seek_to_time(total, cx);
@@ -5386,6 +5770,48 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.display_frame(frame, true, window, cx);
+    }
+
+    fn display_frame(
+        &mut self,
+        frame: EditorFrame,
+        ordinary: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let adoption = ordinary
+            .then(|| {
+                self.instance
+                    .as_ref()
+                    .and_then(|instance| instance.preparing_adoption())
+            })
+            .flatten()
+            .filter(|adoption| !adoption.is_owner());
+        if let Some(adoption) = &adoption {
+            if adoption.invalidated() {
+                self.retry_preparing_candidate(window, cx);
+                return;
+            }
+            let Some(snapshot) = adoption.snapshot() else {
+                return;
+            };
+            let current =
+                (snapshot.playback.playhead_seconds * f64::from(EDITOR_PREVIEW_FPS)).floor() as u32;
+            if frame.number < current.saturating_sub(2) || frame.number > current.saturating_add(1)
+            {
+                return;
+            }
+            self.preparing_candidate_frame = Some(frame.number);
+        }
+        let candidate_number = frame.number;
+        if self
+            .ordinary_handoff_frame
+            .is_some_and(|target| frame.number != target)
+        {
+            return;
+        }
+        let handoff_target = self.transport.as_ref().and(self.ordinary_handoff_frame);
         let first_frame = self.latest_frame.is_none();
         let layout_changed = self.frame_layout != Some(frame.layout);
         if self.frame_layout.map(|layout| layout.output_size) != Some(frame.layout.output_size) {
@@ -5439,6 +5865,43 @@ impl EditorWindow {
         if !window.is_window_active() && (first_frame || !self.playing) {
             window.refresh();
         }
+        if let Some(adoption) = adoption {
+            cx.on_next_frame(window, move |this, window, cx| {
+                if this.preparing_candidate_frame != Some(candidate_number) {
+                    return;
+                }
+                this.preparing_candidate_frame = None;
+                if adoption.try_commit(candidate_number, EDITOR_PREVIEW_FPS) {
+                    this.preparing_presentation = None;
+                    this.preparing_seed = None;
+                    this.ordinary_handoff_frame = None;
+                    drop(this.preparing_consumer.take());
+                } else {
+                    this.retry_preparing_candidate(window, cx);
+                }
+                cx.notify();
+                window.refresh();
+            });
+            window.refresh();
+        } else if let Some(target) = handoff_target {
+            cx.on_next_frame(window, move |this, window, cx| {
+                if this.ordinary_handoff_frame != Some(target) {
+                    return;
+                }
+                this.ordinary_handoff_frame = None;
+                let resume = this
+                    .preparing_presentation
+                    .take()
+                    .is_some_and(|presentation| presentation.playback.playing);
+                this.preparing_seed = None;
+                if resume {
+                    this.start_playback(this.playhead, cx);
+                }
+                cx.notify();
+                window.refresh();
+            });
+            window.refresh();
+        }
     }
 
     fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
@@ -5482,6 +5945,9 @@ impl EditorWindow {
     }
 
     fn commit_pretty_name(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        if !self.project_ready() {
+            return Ok(());
+        }
         let Some(stored) = self.summary().map(|summary| summary.pretty_name.clone()) else {
             return Ok(());
         };
@@ -8086,6 +8552,9 @@ impl EditorWindow {
                             .then(|| self.header_pill("icons/captions.svg", "Captions", compact)),
                     )
                     .child(div().w(px(6.)).flex_none())
+                    .when(self.sharing.is_some(), |group| {
+                        group.child(self.render_reupload_button(cx))
+                    })
                     .child(self.render_export_button(cx)),
             );
 
@@ -8223,6 +8692,78 @@ impl EditorWindow {
             )
     }
 
+    fn render_preparing_sidebar(&self) -> impl IntoElement {
+        let theme = self.theme;
+        let project = self
+            .preparing_seed
+            .as_ref()
+            .map_or(&self.project, |seed| &seed.project);
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .rounded(px(12.))
+            .border_1()
+            .border_color(self.card_line())
+            .bg(self.panel_bg())
+            .overflow_hidden()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .px(px(10.))
+                    .h(px(44.))
+                    .flex_none()
+                    .children(
+                        crate::editor_sidebar::SidebarTab::ALL
+                            .into_iter()
+                            .map(|tab| {
+                                div()
+                                    .size(px(28.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .opacity(0.45)
+                                    .child(
+                                        svg()
+                                            .path(tab.icon())
+                                            .size(px(15.))
+                                            .text_color(Hsla::from(theme.editor.text_2)),
+                                    )
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .p(px(16.))
+                    .gap(px(16.))
+                    .text_size(px(12.))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(Hsla::from(theme.editor.text_1))
+                            .child("Background"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .text_color(Hsla::from(theme.editor.text_3))
+                            .child("Aspect ratio")
+                            .child(Self::aspect_ratio_label(project.aspect_ratio.as_ref())),
+                    )
+                    .child(
+                        div()
+                            .text_color(Hsla::from(theme.editor.text_3))
+                            .child("Editing is available when your recording is ready."),
+                    ),
+            )
+    }
+
     /// The player's top row: the stage's own triggers on the left, the
     /// preview-resolution control on the right.
     fn render_player_toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -8271,9 +8812,16 @@ impl EditorWindow {
                     .text(&theme)
                     .left_icon("icons/layout.svg")
                     .when(!narrow, |button| {
-                        button.label(Self::aspect_ratio_label(self.project.aspect_ratio.as_ref()))
+                        button.label(Self::aspect_ratio_label(
+                            self.preparing_seed
+                                .as_ref()
+                                .map_or(&self.project, |seed| &seed.project)
+                                .aspect_ratio
+                                .as_ref(),
+                        ))
                     })
                     .tooltip(&theme, "Aspect Ratio")
+                    .disabled(!self.project_ready())
                     .pressed(
                         self.toolbar_menu
                             .as_ref()
@@ -8291,6 +8839,7 @@ impl EditorWindow {
                     .left_icon("icons/crop.svg")
                     .when(!narrow, |button| button.label("Crop"))
                     .tooltip(&theme, "Crop Video")
+                    .disabled(!self.project_ready())
                     .pressed(self.crop.is_some())
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_crop(window, cx);
@@ -8349,9 +8898,11 @@ impl EditorWindow {
                         }
                     })
                     .child(quality.label())
-                    .on_click(cx.listener(move |this, _, _window, cx| {
-                        this.set_preview_quality(quality, cx);
-                    }))
+                    .when(self.project_ready(), |button| {
+                        button.on_click(cx.listener(move |this, _, _window, cx| {
+                            this.set_preview_quality(quality, cx);
+                        }))
+                    })
             }))
     }
 
@@ -8413,10 +8964,33 @@ impl EditorWindow {
             .overflow_hidden()
             .bg(Hsla::from(theme.editor.card))
             .child(body)
+            .children(
+                (!self.project_ready() && self.latest_frame.is_some()).then(|| {
+                    div()
+                        .absolute()
+                        .bottom(px(12.))
+                        .left(px(12.))
+                        .px(px(10.))
+                        .py(px(6.))
+                        .rounded(px(6.))
+                        .bg(Hsla::from(theme.editor.card))
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.editor.text_2))
+                        .child(if self.preparing_consumer.is_some() {
+                            "Preparing recording…"
+                        } else {
+                            "Opening editor…"
+                        })
+                }),
+            )
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
             // wrapper and only while a frame exists.
-            .children(self.render_canvas_overlay(cx))
+            .children(if self.project_ready() {
+                self.render_canvas_overlay(cx)
+            } else {
+                None
+            })
     }
 
     /// `EditorErrorScreen` -- what a bundle that will not open shows instead of
@@ -8546,7 +9120,7 @@ impl EditorWindow {
         // (`Player.tsx:359-365`) -- the clock reads the *hover* time when there
         // is one, which is what makes it a readout for the ghost playhead.
         let current = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
-        let live = self.transport.is_some();
+        let live = self.transport.is_some() || self.preparing_controls_ready();
         // `{!editorState.playing || isAtEnd() ? <IconCapPlay/> :
         // <IconCapPause/>}` (`Player.tsx:388-392`).
         let icon = if !self.playing || self.is_at_end() {
@@ -8606,7 +9180,11 @@ impl EditorWindow {
                             .text_color(Hsla::from(editor.text_3))
                             .child(SharedString::from(format!(
                                 " / {}",
-                                timeline::format_time(total)
+                                if total > 0.0 {
+                                    timeline::format_time(total)
+                                } else {
+                                    "--:--".into()
+                                }
                             )))
                     })),
             )
@@ -8649,6 +9227,7 @@ impl EditorWindow {
                                             .icon_size(px(12.))
                                             .color(Hsla::from(editor.card))
                                             .filled(Hsla::from(editor.text_1), None)
+                                            .disabled(!live)
                                             .hover_bg(Hsla::from(crate::theme::mix(
                                                 editor.text_1,
                                                 editor.card,
@@ -8679,6 +9258,7 @@ impl EditorWindow {
                         ui::EditorButton::plain(&theme, "transport-split")
                             .left_icon("icons/scissors.svg")
                             .tooltip(&theme, "Toggle Split")
+                            .disabled(!self.project_ready())
                             .pressed(self.split_mode)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_split_mode(cx);
@@ -8734,6 +9314,30 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
+        if !self.project_ready() {
+            return div()
+                .size_full()
+                .child(timeline::render_preparing_timeline(
+                    &theme,
+                    &self.timeline,
+                    self.view,
+                    viewport_width,
+                    self.preparing_presentation
+                        .as_ref()
+                        .map(|presentation| &presentation.progress),
+                ))
+                .when(self.preparing_controls_ready(), |timeline| {
+                    timeline.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                            let time = this.time_at(f32::from(event.position.x), viewport_width);
+                            this.seek_to_time(time, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+                })
+                .into_any_element();
+        }
         let content_width = timeline::content_width(viewport_width);
         let live = self.transport.is_some();
 
@@ -8895,6 +9499,7 @@ impl EditorWindow {
                     as f32;
                 x.is_finite().then(|| render_split_preview(&theme, x, true))
             }))
+            .into_any_element()
     }
 
     /// The 26px header strip (`TL/index.tsx:1220-1245`): the ruler, the "Add

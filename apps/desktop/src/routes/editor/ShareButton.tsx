@@ -1,19 +1,9 @@
 import { Select as KSelect } from "@kobalte/core/select";
-import { createMutation } from "@tanstack/solid-query";
-import { Channel } from "@tauri-apps/api/core";
-import { createSignal, onCleanup, Show } from "solid-js";
-import { createStore, produce, reconcile } from "solid-js/store";
+import { createSignal, Show } from "solid-js";
 import Tooltip from "~/components/Tooltip";
-import { createProgressBar } from "~/routes/editor/utils";
-import { authStore } from "~/store";
-import { exportVideo } from "~/utils/export";
-import { commands, type UploadProgress } from "~/utils/tauri";
 import IconLucideExternalLink from "~icons/lucide/external-link";
 import { useEditorContext } from "./context";
-import { RESOLUTION_OPTIONS } from "./Header";
 import {
-	Dialog,
-	DialogContent,
 	EditorButton,
 	MenuItem,
 	MenuItemList,
@@ -23,156 +13,18 @@ import {
 
 function ShareButton() {
 	const {
-		editorInstance,
 		meta,
+		project,
 		customDomain,
-		editorState,
 		setEditorState,
-		flushProjectConfig,
+		setDialog,
+		exportState,
+		setExportState,
 	} = useEditorContext();
-	const projectPath = editorInstance.path;
-	let disposed = false;
-	onCleanup(() => {
-		disposed = true;
-	});
-
-	const upload = createMutation(() => ({
-		mutationFn: async () => {
-			setUploadState({ type: "idle" });
-
-			if (!navigator.onLine) {
-				await commands.globalMessageDialog(
-					"You appear to be offline. Please check your internet connection and try again.",
-				);
-				return;
-			}
-
-			console.log("Starting upload process...");
-
-			// Check authentication first
-			const existingAuth = await authStore.get();
-			if (!existingAuth) {
-				throw new Error("You need to sign in to share recordings");
-			}
-
-			const metadata = await commands.getVideoMetadata(projectPath);
-			const plan = await commands.checkUpgradedAndUpdate();
-			const canShare = {
-				allowed: plan || metadata.duration < 300,
-				reason: !plan && metadata.duration >= 300 ? "upgrade_required" : null,
-			};
-
-			if (!canShare.allowed) {
-				if (canShare.reason === "upgrade_required") {
-					await commands.showWindow("Upgrade");
-					throw new Error(
-						"Upgrade required to share recordings longer than 5 minutes",
-					);
-				}
-			}
-
-			await flushProjectConfig();
-			if (disposed) return;
-
-			const uploadChannel = new Channel<UploadProgress>((progress) => {
-				console.log("Upload progress:", progress);
-				setUploadState(
-					produce((state) => {
-						if (state.type !== "uploading") return;
-
-						state.progress = Math.round(progress.progress * 100);
-					}),
-				);
-			});
-
-			setUploadState({ type: "starting" });
-
-			// Setup progress listener before starting upload
-
-			console.log("Starting actual upload...");
-
-			await exportVideo(
-				projectPath,
-				{
-					format: "Mp4",
-					fps: 30,
-					resolution_base: {
-						x: RESOLUTION_OPTIONS._1080p.width,
-						y: RESOLUTION_OPTIONS._1080p.height,
-					},
-					compression: "Web",
-					custom_bpp: null,
-				},
-				(msg) => {
-					setUploadState(
-						reconcile({
-							type: "rendering",
-							renderedFrames: msg.renderedCount,
-							totalFrames: msg.totalFrames,
-						}),
-					);
-				},
-			);
-
-			setUploadState({ type: "uploading", progress: 0 });
-
-			// Now proceed with upload
-			const result = meta().sharing
-				? await commands.uploadExportedVideo(
-						projectPath,
-						"Reupload",
-						uploadChannel,
-						null,
-					)
-				: await commands.uploadExportedVideo(
-						projectPath,
-						{
-							Initial: { pre_created_video: null },
-						},
-						uploadChannel,
-						null,
-					);
-
-			if (result === "NotAuthenticated") {
-				throw new Error("You need to sign in to share recordings");
-			} else if (result === "PlanCheckFailed")
-				throw new Error("Failed to verify your subscription status");
-			else if (result === "UpgradeRequired")
-				throw new Error("This feature requires an upgraded plan");
-
-			setUploadState({ type: "link-copied" });
-
-			return result;
-		},
-		onError: (error) => {
-			if (disposed) return;
-			console.error(error);
-			commands.globalMessageDialog(
-				error instanceof Error ? error.message : "Failed to upload recording",
-			);
-		},
-		onSettled() {
-			setTimeout(() => {
-				setUploadState({ type: "idle" });
-				upload.reset();
-			}, 2000);
-		},
-	}));
-
-	const [uploadState, setUploadState] = createStore<
-		| { type: "idle" }
-		| { type: "starting" }
-		| { type: "rendering"; renderedFrames: number; totalFrames: number }
-		| { type: "uploading"; progress: number }
-		| { type: "link-copied" }
-	>({ type: "idle" });
-
-	createProgressBar(() => {
-		if (uploadState.type === "starting") return 0;
-		if (uploadState.type === "rendering")
-			return (uploadState.renderedFrames / uploadState.totalFrames) * 100;
-		if (uploadState.type === "uploading") return uploadState.progress;
-	});
+	const hasTransparentBackground = () => {
+		const source = project.background.source;
+		return source.type === "color" && (source.alpha ?? 255) < 255;
+	};
 
 	return (
 		<div class="relative">
@@ -180,31 +32,25 @@ function ShareButton() {
 				{(sharing) => {
 					const normalUrl = () => new URL(sharing().link);
 					const customUrl = () =>
-						customDomain.data?.custom_domain
-							? new URL(
-									`${customDomain.data?.custom_domain}/s/${meta().sharing?.id}`,
-								)
-							: null;
-
-					const normalLink = `${normalUrl().host}${normalUrl().pathname}`;
-					const customLink = `${customUrl()?.host}${customUrl()?.pathname}`;
-
-					const copyLinks = {
-						normal: sharing().link,
-						custom: customUrl()?.href,
-					};
-
-					const [linkToDisplay, setLinkToDisplay] = createSignal<string | null>(
 						customDomain.data?.custom_domain &&
-							customDomain.data?.domain_verified
-							? customLink
-							: normalLink,
-					);
+						customDomain.data?.domain_verified
+							? new URL(`${customDomain.data.custom_domain}/s/${sharing().id}`)
+							: null;
+					const [preferCustom, setPreferCustom] = createSignal(true);
+					const selectedUrl = () =>
+						(preferCustom() && customUrl()) || normalUrl();
+					const normalLink = () => `${normalUrl().host}${normalUrl().pathname}`;
+					const customLink = () => {
+						const url = customUrl();
+						return url ? `${url.host}${url.pathname}` : normalLink();
+					};
+					const linkToDisplay = () =>
+						`${selectedUrl().host}${selectedUrl().pathname}`;
 
 					const [copyPressed, setCopyPressed] = createSignal(false);
 
 					const copyLink = () => {
-						navigator.clipboard.writeText(linkToDisplay() || sharing().link);
+						navigator.clipboard.writeText(selectedUrl().href);
 						setCopyPressed(true);
 						setTimeout(() => {
 							setCopyPressed(false);
@@ -214,33 +60,31 @@ function ShareButton() {
 					return (
 						<div class="flex gap-1 items-center">
 							<EditorButton
-								disabled={upload.isPending}
+								class="h-[30px] px-3 text-ed-accent bg-ed-accent/10 border border-ed-accent/25 hover:bg-ed-accent/20"
+								disabled={hasTransparentBackground()}
 								tooltipText={
-									upload.isPending ? "Reuploading video" : "Reupload video"
+									hasTransparentBackground()
+										? "Share links require a background without transparency"
+										: "Upload your latest edit to the same link"
 								}
 								onClick={() => {
-									if (editorState.timeline.selection) {
-										setEditorState("timeline", "selection", null);
-										return;
-									}
-									upload.mutate();
+									setEditorState("timeline", "selection", null);
+									if (exportState.type === "done")
+										setExportState({ type: "idle" });
+									setDialog({
+										type: "export",
+										open: true,
+										destination: "link",
+									});
 								}}
-								leftIcon={
-									upload.isPending ? (
-										<IconLucideLoaderCircle class="animate-spin" />
-									) : (
-										<IconLucideRotateCcw />
-									)
-								}
-							/>
+								leftIcon={<IconCapUpload />}
+							>
+								Reupload
+							</EditorButton>
 							<Tooltip content="Open link">
 								<div class="flex flex-row gap-1.5 items-center px-2.5 h-7 rounded-[7px] transition-colors duration-100 bg-ed-ctl hover:bg-ed-ctl-hover">
 									<a
-										href={
-											linkToDisplay() === customLink
-												? copyLinks.custom
-												: copyLinks.normal
-										}
+										href={selectedUrl().href}
 										target="_blank"
 										rel="noreferrer"
 										title={linkToDisplay() ?? "Open link"}
@@ -252,7 +96,6 @@ function ShareButton() {
 										</span>
 										<IconLucideExternalLink class="hidden size-4 text-ed-text-2 max-[1400px]:block" />
 									</a>
-									{/** Dropdown */}
 									<Show
 										when={
 											customDomain.data?.custom_domain &&
@@ -262,8 +105,10 @@ function ShareButton() {
 										<Tooltip content="Select link">
 											<KSelect
 												value={linkToDisplay()}
-												onChange={(value) => value && setLinkToDisplay(value)}
-												options={[customLink, normalLink].filter(
+												onChange={(value) =>
+													value && setPreferCustom(value === customLink())
+												}
+												options={[customLink(), normalLink()].filter(
 													(link) => link !== linkToDisplay(),
 												)}
 												multiple={false}
@@ -299,7 +144,6 @@ function ShareButton() {
 											</KSelect>
 										</Tooltip>
 									</Show>
-									{/** Copy button */}
 									<Tooltip content="Copy link">
 										<div
 											class="flex justify-center items-center transition-colors duration-200 rounded-md size-5 text-ed-text-2 bg-ed-ctl-hover hover:bg-ed-ctl-active"
@@ -318,48 +162,6 @@ function ShareButton() {
 					);
 				}}
 			</Show>
-			<Dialog.Root open={!upload.isIdle}>
-				<DialogContent
-					title={"Reupload Recording"}
-					confirm={null}
-					close={null}
-					class="text-gray-12 dark:text-gray-12"
-				>
-					<div class="w-[80%] text-center mx-auto relative z-10 space-y-6 py-4">
-						<div class="w-full bg-gray-3 rounded-full h-2.5 mb-2">
-							<div
-								class="bg-blue-9 h-2.5 rounded-full"
-								style={{
-									width: `${
-										uploadState.type === "uploading"
-											? uploadState.progress
-											: uploadState.type === "link-copied"
-												? 100
-												: uploadState.type === "rendering"
-													? Math.min(
-															(uploadState.renderedFrames /
-																uploadState.totalFrames) *
-																100,
-															100,
-														)
-													: 0
-									}%`,
-								}}
-							/>
-						</div>
-
-						<p class="relative z-10 mt-3 text-xs text-white">
-							{uploadState.type === "idle" || uploadState.type === "starting"
-								? "Preparing to render..."
-								: uploadState.type === "rendering"
-									? `Rendering video (${uploadState.renderedFrames}/${uploadState.totalFrames} frames)`
-									: uploadState.type === "uploading"
-										? `Uploading - ${Math.floor(uploadState.progress)}%`
-										: "Link copied to clipboard!"}
-						</p>
-					</div>
-				</DialogContent>
-			</Dialog.Root>
 		</div>
 	);
 }
