@@ -175,6 +175,8 @@ const protectedContract = c.router(
 					source: z.enum(["default", "user", "organization"]),
 					managedByOrganization: ManagedOrganizationStorage,
 				}),
+				403: z.object({ error: z.string() }),
+				500: z.object({ error: z.string(), details: z.string().optional() }),
 			},
 		},
 		setS3Config: {

@@ -8,6 +8,7 @@ import { commands } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
 import { Section, SectionCard, SettingsPageContent } from "../Setting";
 import { IntegrationConfigHeader } from "./config-header";
+import { describeS3ConfigError } from "./s3-config-error";
 
 interface S3Config {
 	provider: string;
@@ -37,7 +38,13 @@ export default function S3ConfigPage() {
 				headers: await protectedHeaders(),
 			});
 
-			if (response.status !== 200) throw new Error("Failed to fetch S3 config");
+			if (response.status !== 200) {
+				// The server already explains what went wrong (a stored bucket row
+				// that fails to decrypt, an org the user is no longer in, ...).
+				// Throwing a fixed string discarded that and left "Failed to fetch
+				// S3 config" as the only thing the user could see or report.
+				throw new Error(describeS3ConfigError(response));
+			}
 
 			return response.body;
 		},
