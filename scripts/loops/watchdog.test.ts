@@ -28,6 +28,8 @@ function fakeProvider(status = "Draft") {
 	const attemptedWrites: string[] = [];
 	let brokenWorkflow: string | undefined;
 	let startedWorkflow: string | undefined;
+	let startedOnWrite = false;
+	let startError: Error | undefined;
 	const api: Pick<LoopsApi, "request"> = {
 		async request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
 			if (path === "api-key") return { teamName: "Cap Software, Inc." } as T;
@@ -40,6 +42,10 @@ function fakeProvider(status = "Draft") {
 				if (!guard) throw new Error("Unknown guard");
 				if (method === "POST") {
 					attemptedWrites.push(target.workflowId);
+					if (target.workflowId === startedWorkflow) {
+						startedOnWrite = true;
+						if (startError) throw startError;
+					}
 					if (status === "Sending" || target.workflowId === startedWorkflow)
 						throw new LoopsApiError(400, path, {
 							message:
@@ -61,7 +67,10 @@ function fakeProvider(status = "Draft") {
 			}
 			return {
 				name: target.journey.name,
-				status,
+				status:
+					target.workflowId === startedWorkflow && startedOnWrite
+						? "Sending"
+						: status,
 				mailingListId: target.mailingListId,
 				rootNodeId: "trigger",
 				nodes: { trigger: { nextNodeIds: [target.guardId] } },
@@ -73,8 +82,9 @@ function fakeProvider(status = "Draft") {
 		guards,
 		writes,
 		attemptedWrites,
-		startDuringWrite: (id: string) => {
+		startDuringWrite: (id: string, error?: Error) => {
 			startedWorkflow = id;
+			startError = error;
 		},
 		fail: (id: string) => {
 			brokenWorkflow = id;
@@ -100,6 +110,22 @@ describe("independent delivery safety", () => {
 			hold: true,
 		});
 		expect(results.every((result) => result.action === "held")).toBe(true);
+	});
+
+	test("concurrent activation is detected even when the provider error format changes", async () => {
+		for (const error of [
+			new LoopsApiError(400, "nodes/guard", { error: "Workflow is active" }),
+			new SyntaxError("Unexpected response encoding"),
+		]) {
+			const provider = fakeProvider();
+			provider.startDuringWrite(safetyTargets[0].workflowId, error);
+			const result = await enforceDeliverySafety(provider.api, {
+				healthy: false,
+				apply: true,
+			});
+			expect(result[0].action).toBe("manual-pause-required");
+			expect(provider.attemptedWrites).toHaveLength(4);
+		}
 	});
 
 	test("healthy operation never rewrites audiences", async () => {

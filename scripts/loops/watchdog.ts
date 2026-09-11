@@ -8,7 +8,7 @@ import {
 import { journeys } from "../../emails/flows";
 import registry from "../../emails/resources.json";
 import type { Journey } from "../../emails/types";
-import { LoopsApi, LoopsApiError } from "./api";
+import { LoopsApi } from "./api";
 
 export const healthUrl = "https://cap.so/api/cron/sync-loops/health";
 
@@ -109,6 +109,8 @@ export async function enforceDeliverySafety(
 	assert.equal(identity.teamName, registry.teamName);
 	const results: { workflow: string; action: string }[] = [];
 	for (const target of options.targets ?? safetyTargets) {
+		let sending = false;
+		let attemptedUpdate = false;
 		try {
 			const path = `workflows/${target.workflowId}`;
 			const workflow = await api.request<{
@@ -119,6 +121,7 @@ export async function enforceDeliverySafety(
 				nodes: Record<string, { nextNodeIds: string[] }>;
 			}>(path);
 			assert.equal(workflow.name, target.journey.name);
+			sending = workflow.status === "Sending";
 			assert(
 				["Draft", "Sending", "Paused", "PausedAndQueueing"].includes(
 					workflow.status,
@@ -171,7 +174,7 @@ export async function enforceDeliverySafety(
 				guard.appliesDownstream
 			)
 				nextFilter = undefined;
-			if (nextFilter && workflow.status === "Sending") {
+			if (nextFilter && sending) {
 				results.push({
 					workflow: target.journey.key,
 					action: "manual-pause-required",
@@ -179,6 +182,7 @@ export async function enforceDeliverySafety(
 				continue;
 			}
 			if (nextFilter && options.apply) {
+				attemptedUpdate = true;
 				await api.request(nodePath, "POST", {
 					expectedRevisionId: guard.workflowRevisionId,
 					payload: { audienceFilter: nextFilter, appliesDownstream: true },
@@ -188,15 +192,17 @@ export async function enforceDeliverySafety(
 				assert.equal(confirmed.appliesDownstream, true);
 			}
 			results.push({ workflow: target.journey.key, action });
-		} catch (error) {
-			const sending =
-				error instanceof LoopsApiError &&
-				error.status === 400 &&
-				typeof error.details === "object" &&
-				error.details !== null &&
-				"message" in error.details &&
-				error.details.message ===
-					"This operation is not allowed while the workflow is sending.";
+		} catch {
+			if (attemptedUpdate && !sending) {
+				try {
+					const latest = await api.request<{ status: string }>(
+						`workflows/${target.workflowId}`,
+					);
+					sending = latest.status === "Sending";
+				} catch {
+					sending = false;
+				}
+			}
 			results.push({
 				workflow: target.journey.key,
 				action: sending ? "manual-pause-required" : "error",
