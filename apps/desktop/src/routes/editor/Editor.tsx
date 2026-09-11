@@ -52,6 +52,7 @@ import {
 	useEditorInstanceContext,
 } from "./context";
 import { EditorErrorScreen } from "./EditorErrorScreen";
+import { DEFAULT_TIMELINE_HEIGHT, editorVerticalLayout } from "./editor-layout";
 import { EditorSkeleton } from "./editor-skeleton";
 import { Header, type TitleSaveRegistration } from "./Header";
 import { ImportProgress } from "./ImportProgress";
@@ -391,6 +392,7 @@ function Inner(props: {
 }) {
 	const {
 		project,
+		canvasControls,
 		flushProjectConfig,
 		editorInstance,
 		editorState,
@@ -401,6 +403,34 @@ function Inner(props: {
 		requestHandoffPlayback,
 		handoffPlaybackPending,
 	} = useEditorContext();
+
+	const preparingSession = usePreparingEditor();
+	const editorReady = () =>
+		preparingSession?.ordinaryReady() ??
+		canvasControls()?.hasRenderedFrame() ??
+		false;
+	onMount(() => {
+		const blockPreparingKeys = (event: KeyboardEvent) => {
+			if (editorReady()) return;
+			if (
+				preparingSession?.handoffFailed() &&
+				event.target instanceof Element &&
+				event.target.closest("[data-editor-handoff-error]")
+			) {
+				event.stopImmediatePropagation();
+				return;
+			}
+			if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "w")
+				return;
+			if (event.altKey && event.key === "F4") return;
+			event.preventDefault();
+			event.stopImmediatePropagation();
+		};
+		window.addEventListener("keydown", blockPreparingKeys, true);
+		onCleanup(() =>
+			window.removeEventListener("keydown", blockPreparingKeys, true),
+		);
+	});
 
 	const registerEditorSave = (
 		registration: TitleSaveRegistration | undefined,
@@ -543,6 +573,13 @@ function Inner(props: {
 	const [timelineContentHeight, setTimelineContentHeight] = createSignal(
 		DEFAULT_TIMELINE_CONTENT_HEIGHT,
 	);
+	const [initialTimelineContentHeight, setInitialTimelineContentHeight] =
+		createSignal<number>();
+	const updateTimelineContentHeight = (height: number) => {
+		if (!editorReady() || initialTimelineContentHeight() === undefined)
+			setInitialTimelineContentHeight(height);
+		setTimelineContentHeight(height);
+	};
 	const [timelineViewportOverflow, setTimelineViewportOverflow] = createSignal<{
 		overflow: number;
 		visibleTrackCount: number;
@@ -557,8 +594,10 @@ function Inner(props: {
 			(layoutBounds.height ?? fullHeight + LAYOUT_GUTTERS) - LAYOUT_GUTTERS,
 			0,
 		);
-		const minPlayerHeight =
-			MIN_PLAYER_HEIGHT * Math.min(1, available / fullHeight);
+		const { minPlayerHeight } = editorVerticalLayout(
+			available,
+			DEFAULT_TIMELINE_HEIGHT,
+		);
 		const maxTimelineHeight = Math.floor(
 			Math.max(0, available - minPlayerHeight),
 		);
@@ -593,7 +632,12 @@ function Inner(props: {
 
 	const timelineHeight = createMemo(() =>
 		Math.round(
-			clampTimelineHeight(userTimelineHeight() ?? huggedTimelineHeight()),
+			clampTimelineHeight(
+				userTimelineHeight() ??
+					DEFAULT_TIMELINE_HEIGHT +
+						timelineContentHeight() -
+						(initialTimelineContentHeight() ?? timelineContentHeight()),
+			),
 		),
 	);
 
@@ -839,10 +883,51 @@ function Inner(props: {
 				</Suspense>
 			}
 		>
-			<div class="flex flex-col flex-1 min-h-0">
-				<Header registerTitleSave={registerEditorSave} />
+			<div
+				class="relative flex flex-col flex-1 min-h-0"
+				aria-busy={!editorReady() && !preparingSession?.handoffFailed()}
+			>
+				<Header
+					registerTitleSave={registerEditorSave}
+					disabled={!editorReady()}
+				/>
+				<Show when={preparingSession?.handoffFailed()}>
+					<div class="absolute inset-0 top-13 max-[900px]:top-[72px] z-30 flex items-center justify-center p-6">
+						<div
+							data-editor-handoff-error
+							role="alertdialog"
+							aria-modal="true"
+							aria-labelledby="editor-handoff-error-title"
+							class="max-w-sm rounded-xl border border-ed-line bg-ed-card p-6 text-center shadow-ed-card"
+						>
+							<h2
+								id="editor-handoff-error-title"
+								class="text-sm font-medium text-ed-text-1"
+							>
+								Couldn’t open the editor
+							</h2>
+							<p class="mt-2 text-xs text-ed-text-2">
+								Try again to finish opening your recording.
+							</p>
+							<button
+								type="button"
+								class="mt-4 rounded-lg bg-ed-accent px-4 py-2 text-xs font-medium text-white"
+								ref={(button) =>
+									queueMicrotask(() => {
+										if (button.isConnected) button.focus();
+									})
+								}
+								onClick={() => void preparingSession?.retryHandoff()}
+							>
+								Try again
+							</button>
+						</div>
+					</div>
+				</Show>
 				<div
-					class="flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0 leading-5"
+					inert={!editorReady()}
+					class="flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0 leading-5 transition-opacity duration-300 ease-out motion-reduce:transition-none"
+					style={{ opacity: editorReady() ? 1 : 0.55 }}
 					data-tauri-drag-region
 				>
 					<div
@@ -942,7 +1027,7 @@ function Inner(props: {
 								<div class="h-full">
 									<Timeline
 										onViewportOverflowChange={setTimelineViewportOverflow}
-										onContentHeightChange={setTimelineContentHeight}
+										onContentHeightChange={updateTimelineContentHeight}
 									/>
 								</div>
 							</div>

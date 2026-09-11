@@ -8633,7 +8633,7 @@ async fn resume_uploads(app: AppHandle, mark_crashed: bool) -> Result<(), String
                 Ok(Some(candidate)) => candidate,
                 Ok(None) => continue,
                 Err(error) => {
-                    warn!(%error, "Recording upload state could not be read; files retained");
+                    warn!(%error, recording = %path.display(), "Recording upload state could not be read; files retained");
                     continue;
                 }
             };

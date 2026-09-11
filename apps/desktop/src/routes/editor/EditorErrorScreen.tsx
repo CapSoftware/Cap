@@ -195,6 +195,17 @@ export function EditorErrorScreen(props: {
 						<p class="text-sm text-gray-11">{props.error}</p>
 					</div>
 
+					<Show when={!needsRecovery()}>
+						<Button
+							onClick={() => window.location.reload()}
+							variant="primary"
+							class="w-full"
+						>
+							<IconRefreshCw class="size-4 mr-2" />
+							Try again
+						</Button>
+					</Show>
+
 					<Show when={needsRecovery()}>
 						<div class="bg-gray-2 border border-gray-4 rounded-xl p-4 space-y-4">
 							<div class="space-y-2">

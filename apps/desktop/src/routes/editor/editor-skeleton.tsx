@@ -1,7 +1,10 @@
+import { createElementBounds } from "@solid-primitives/bounds";
+import { makePersisted } from "@solid-primitives/storage";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { DEFAULT_TIMELINE_HEIGHT, editorVerticalLayout } from "./editor-layout";
 import { usePreparingEditorModel } from "./preparing-editor-context";
 import {
 	type PreparingEditorModel,
@@ -167,7 +170,7 @@ function PreparingSidebar() {
 				<div>
 					<h2 class="text-[12px] font-medium text-ed-text-2">Background</h2>
 					<p class="mt-2 text-[12px] text-ed-text-3">
-						Your recording’s appearance is being prepared.
+						Choose a background for your recording.
 					</p>
 				</div>
 				<div class="h-px bg-ed-line" />
@@ -175,13 +178,10 @@ function PreparingSidebar() {
 					{(name) => (
 						<div class="flex items-center justify-between h-[34px] text-[12px] text-ed-text-3">
 							<span>{name}</span>
-							<span class="text-[11px]">Available when ready</span>
+							<span class="h-1 w-24 rounded-full bg-ed-ctl-hover" />
 						</div>
 					)}
 				</For>
-				<p class="text-[11px] text-ed-text-3">
-					Editing and export will be available when preparation finishes.
-				</p>
 			</div>
 		</div>
 	);
@@ -189,27 +189,40 @@ function PreparingSidebar() {
 
 export function EditorSkeleton() {
 	const model = usePreparingEditorModel();
+	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
+	const bounds = createElementBounds(layoutRef);
+	const [savedHeight] = makePersisted(createSignal<number | null>(null), {
+		name: "editorTimelineHeightOverride",
+	});
+	const layout = () =>
+		editorVerticalLayout(
+			(bounds.height ?? 576) - 16,
+			savedHeight() ?? DEFAULT_TIMELINE_HEIGHT,
+		);
 	return (
 		<div
 			class="flex flex-col flex-1 min-h-0"
+			aria-busy="true"
 			aria-label="Recording editor"
 			data-preparing-editor
 		>
 			<PreparingHeader model={model} />
 			<div
+				ref={setLayoutRef}
 				data-tauri-drag-region
-				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-2 w-full min-h-0 leading-5"
+				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-2 w-full min-h-0 leading-5 opacity-55"
+				inert
 			>
 				<div
 					class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2"
-					style={{ "min-height": "320px" }}
+					style={{ "min-height": `${layout().minPlayerHeight}px` }}
 				>
 					<PreparingPlayer model={model} />
 					<PreparingSidebar />
 				</div>
 				<div
 					class="flex-none min-h-0 px-2 overflow-hidden"
-					style={{ height: "146px" }}
+					style={{ height: `${layout().timelineHeight}px` }}
 				>
 					<PreparingTimeline model={model} />
 				</div>
