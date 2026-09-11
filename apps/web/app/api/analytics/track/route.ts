@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { provideOptionalAuth, Tinybird } from "@cap/web-backend";
@@ -23,6 +24,8 @@ interface TrackPayload {
 	hostname?: string | null;
 	userAgent?: string;
 	occurredAt?: string;
+	action?: string;
+	percentWatched?: number | null;
 }
 
 const VIEW_TRACKING_DELAY_MS = 2 * 60 * 1000;
@@ -85,6 +88,52 @@ export async function POST(request: NextRequest) {
 		"";
 
 	const pathname = body.pathname ?? `/s/${body.videoId}`;
+	const action = body.action ?? "page_hit";
+
+	if (action === "video_progress") {
+		const percentWatched =
+			typeof body.percentWatched === "number" &&
+			body.percentWatched >= 0 &&
+			body.percentWatched <= 100
+				? Math.round(body.percentWatched)
+				: null;
+
+		if (percentWatched !== null) {
+			await runPromise(
+				Effect.gen(function* () {
+					const maybeUser = yield* Effect.serviceOption(CurrentUser);
+					const userId = Option.match(maybeUser, {
+						onNone: () => null as string | null,
+						onSome: (user) => (user as { id: string }).id,
+					});
+
+					const [videoRecord] = yield* Effect.tryPromise(() =>
+						db()
+							.select({ ownerId: videos.ownerId })
+							.from(videos)
+							.where(eq(videos.id, Video.VideoId.make(body.videoId)))
+							.limit(1),
+					).pipe(Effect.orElseSucceed(() => [] as { ownerId: string }[]));
+
+					if (!videoRecord || userId === videoRecord.ownerId) return;
+
+					const tinybird = yield* Tinybird;
+					yield* tinybird.appendEvents([
+						{
+							timestamp: timestamp.toISOString(),
+							action: "video_progress",
+							version: "1.0",
+							session_id: sessionId ?? randomUUID(),
+							tenant_id: videoRecord.ownerId,
+							video_id: body.videoId,
+							percent_watched: percentWatched,
+						},
+					]);
+				}).pipe(provideOptionalAuth),
+			);
+		}
+		return Response.json({ success: true });
+	}
 
 	await runPromise(
 		Effect.gen(function* () {
@@ -132,7 +181,9 @@ export async function POST(request: NextRequest) {
 				),
 			);
 
-			if (videoRecord && userId === videoRecord.ownerId) {
+			if (!videoRecord) return;
+
+			if (userId === videoRecord.ownerId) {
 				return;
 			}
 
@@ -154,7 +205,7 @@ export async function POST(request: NextRequest) {
 			yield* tinybird.appendEvents([
 				{
 					timestamp: timestamp.toISOString(),
-					session_id: sessionId ?? "anon",
+					session_id: sessionId ?? randomUUID(),
 					action: "page_hit",
 					version: "1.0",
 					tenant_id: tenantId,

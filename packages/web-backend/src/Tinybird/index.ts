@@ -23,6 +23,7 @@ export interface TinybirdEventRow {
 	browser?: string | null;
 	device?: string | null;
 	os?: string | null;
+	percent_watched?: number | null;
 }
 
 export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
@@ -185,6 +186,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 						browser: row.browser ?? "unknown",
 						device: row.device ?? "desktop",
 						os: row.os ?? "unknown",
+						percent_watched: row.percent_watched ?? null,
 					}),
 				)
 				.join("\n");
@@ -245,24 +247,30 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 						console.log("Tinybird empty response", { path });
 						return { data: [] } as TinybirdResponse<T>;
 					}
+					let parsed: unknown;
 					try {
-						const parsed = JSON.parse(textBody);
-						const normalizedRes: TinybirdResponse<T> = Array.isArray(parsed)
-							? ({ data: parsed } as TinybirdResponse<T>)
-							: parsed && typeof parsed === "object" && "data" in parsed
-								? (parsed as TinybirdResponse<T>)
-								: ({ data: [parsed as T] } as TinybirdResponse<T>);
-						if ((normalizedRes as TinybirdResponse<T>).error) {
-							throw new Error(
-								(normalizedRes as TinybirdResponse<T>).error as string,
-							);
-						}
-						return normalizedRes;
+						parsed = JSON.parse(textBody);
 					} catch {
 						const aliases = extractAliases(normalized);
 						const objects = parseTsvToObjects<T>(textBody, aliases);
 						return { data: objects } as TinybirdResponse<T>;
 					}
+
+					const normalizedRes: TinybirdResponse<T> = Array.isArray(parsed)
+						? ({ data: parsed } as TinybirdResponse<T>)
+						: parsed && typeof parsed === "object" && "data" in parsed
+							? (parsed as TinybirdResponse<T>)
+							: ({ data: [parsed as T] } as TinybirdResponse<T>);
+
+					if (normalizedRes.error) {
+						console.error("Tinybird query error", {
+							path,
+							error: normalizedRes.error,
+						});
+						throw new Error(normalizedRes.error);
+					}
+
+					return normalizedRes;
 				},
 				catch: (cause) => cause as Error,
 			});

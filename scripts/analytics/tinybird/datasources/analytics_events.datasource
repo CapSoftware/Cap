@@ -15,7 +15,8 @@ SCHEMA >
 	city LowCardinality(String) `json:$.city` DEFAULT '',
 	browser LowCardinality(String) `json:$.browser` DEFAULT 'unknown',
 	device LowCardinality(String) `json:$.device` DEFAULT 'desktop',
-	os LowCardinality(String) `json:$.os` DEFAULT 'unknown'
+	os LowCardinality(String) `json:$.os` DEFAULT 'unknown',
+	percent_watched UInt8 `json:$.percent_watched` DEFAULT 0
 
 ENGINE MergeTree
 ENGINE_PARTITION_KEY toYYYYMM(timestamp)
@@ -24,4 +25,4 @@ ENGINE_TTL timestamp + INTERVAL 90 DAY
 ENGINE_SETTINGS index_granularity = 8192
 
 FORWARD_QUERY >
-	SELECT timestamp, session_id, defaultValueOfTypeName('LowCardinality(String)') AS user_id, tenant_id, action, version, defaultValueOfTypeName('String') AS pathname, defaultValueOfTypeName('LowCardinality(String)') AS video_id, defaultValueOfTypeName('LowCardinality(String)') AS country, defaultValueOfTypeName('LowCardinality(String)') AS region, defaultValueOfTypeName('LowCardinality(String)') AS city, defaultValueOfTypeName('LowCardinality(String)') AS browser, defaultValueOfTypeName('LowCardinality(String)') AS device, defaultValueOfTypeName('LowCardinality(String)') AS os
+	SELECT timestamp, session_id, defaultValueOfTypeName('LowCardinality(String)') AS user_id, tenant_id, action, version, defaultValueOfTypeName('String') AS pathname, defaultValueOfTypeName('LowCardinality(String)') AS video_id, defaultValueOfTypeName('LowCardinality(String)') AS country, defaultValueOfTypeName('LowCardinality(String)') AS region, defaultValueOfTypeName('LowCardinality(String)') AS city, defaultValueOfTypeName('LowCardinality(String)') AS browser, defaultValueOfTypeName('LowCardinality(String)') AS device, defaultValueOfTypeName('LowCardinality(String)') AS os, defaultValueOfTypeName('UInt8') AS percent_watched
