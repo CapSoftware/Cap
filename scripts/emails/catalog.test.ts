@@ -3,6 +3,7 @@ import { components, emailContent } from "../../emails/brand";
 import { journeys } from "../../emails/flows";
 import { freeWelcome } from "../../emails/marketing/free-welcome";
 import {
+	catalogExcerpt,
 	flowSteps,
 	renderCatalog,
 	validateCatalog,
@@ -12,6 +13,14 @@ import {
 import { assertEmailContent, normalizeLmx } from "./content";
 
 describe("email library", () => {
+	test("catalogue excerpts keep malformed markup inert", () => {
+		expect(catalogExcerpt("<Paragraph>Hello</Paragraph><script src=x")).toBe(
+			"Hello\n\n&lt;script src=x",
+		);
+		expect(
+			catalogExcerpt("<Paragraph>Record & share<Br />Next step</Paragraph>"),
+		).toBe("Record &amp; share\nNext step");
+	});
 	test("every template and known application send source is registered", async () => {
 		expect(await validateCatalog()).toEqual([]);
 	});

@@ -178,6 +178,16 @@ const resourceIds: Record<string, string> = resources.resources;
 const flowUrl = (key: string) =>
 	`https://app.loops.so/workflows/${resourceIds[key]}`;
 
+export const catalogExcerpt = (body: string) =>
+	body
+		.replace(/<\/(Paragraph|Button)>/g, "\n\n")
+		.replace(/<Br\s*\/>/g, "\n")
+		.replace(/<[^>]+>/g, "")
+		.replaceAll("&", "&amp;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;")
+		.trim();
+
 export const renderCatalog = () => {
 	const lines = [
 		"# Cap email catalogue",
@@ -306,12 +316,7 @@ export const renderCatalog = () => {
 			"",
 			`**Edit:** ${sourceLink(sourceFor(email))}`,
 			"",
-			...email.body
-				.replace(/<\/(Paragraph|Button)>/g, "\n\n")
-				.replace(/<Br\s*\/>/g, "\n")
-				.replace(/<[^>]+>/g, "")
-				.trim()
-				.split("\n"),
+			...catalogExcerpt(email.body).split("\n"),
 			"",
 		);
 	}
