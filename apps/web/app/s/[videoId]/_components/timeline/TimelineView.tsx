@@ -518,7 +518,7 @@ function TimelineBand({
 				    store) in its light tone, and the rounded corners close the unit.
 				    The hairline stands in for the strip's bottom edge when the
 				    comments shelf is collapsed and the film sits straight on it. */}
-				<div className="flex h-14 shrink-0 items-center gap-1 rounded-b-xl border-t border-gray-4 bg-white">
+				<div className="flex h-14 shrink-0 items-center gap-1 rounded-b-xl border-t border-gray-4 bg-gray-1">
 					<div
 						ref={controlsSlotRef}
 						className="relative h-full min-w-0 flex-1"

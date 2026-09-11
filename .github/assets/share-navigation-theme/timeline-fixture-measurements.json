@@ -1,0 +1,47 @@
+{
+	"method": "CUA Chrome Guest, file fixture; exact outer header class from current source, real Tailwind config + local font; placeholders for owner/avatar/content. Not full app validation.",
+	"before": {
+		"320": {
+			"avatarRight": 125,
+			"helpX": 99.890625,
+			"overlapPx": 25.109375,
+			"titleWidth": 0
+		},
+		"393": {
+			"avatarRight": 125,
+			"helpX": 172.890625,
+			"overlapPx": 0,
+			"titleWidth": 23.890625
+		}
+	},
+	"after": {
+		"320": {
+			"headerHeight": 99,
+			"titleWidth": 133.71875,
+			"avatarY": [15, 47],
+			"controlsY": [61, 91],
+			"overlap": false
+		},
+		"393": {
+			"headerHeight": 99,
+			"titleWidth": 133.71875,
+			"avatarY": [15, 47],
+			"controlsY": [61, 91],
+			"overlap": false
+		},
+		"640": {
+			"headerHeight": 56,
+			"titleWidth": 133.71875,
+			"avatarRight": 173.828125,
+			"controlsX": 419.890625,
+			"overlap": false
+		},
+		"1280": {
+			"headerHeight": 56,
+			"titleWidth": 133.71875,
+			"avatarRight": 221.828125,
+			"controlsX": 899.796875,
+			"overlap": false
+		}
+	}
+}

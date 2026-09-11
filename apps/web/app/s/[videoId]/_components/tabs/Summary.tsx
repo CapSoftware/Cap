@@ -183,10 +183,10 @@ export const Summary: React.FC<SummaryProps> = ({
 								/>
 							</svg>
 						</div>
-						<h3 className="mb-2 text-lg font-semibold text-gray-900">
+						<h3 className="mb-2 text-lg font-semibold text-gray-12">
 							Unlock Cap AI
 						</h3>
-						<p className="mb-4 text-sm leading-relaxed text-gray-600">
+						<p className="mb-4 text-sm leading-relaxed text-gray-11">
 							Upgrade to Cap Pro to access AI-powered features including
 							automatic titles, video summaries, and intelligent chapter
 							generation.
@@ -317,7 +317,7 @@ export const Summary: React.FC<SummaryProps> = ({
 										className="flex items-center w-full p-2 text-left rounded transition-colors hover:bg-gray-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9"
 										onClick={() => handleSeek(chapter.start)}
 									>
-										<span className="w-16 text-xs text-gray-500">
+										<span className="w-16 text-xs text-gray-10">
 											{formatTime(chapter.start)}
 										</span>
 										<span className="ml-2 text-sm">{chapter.title}</span>
