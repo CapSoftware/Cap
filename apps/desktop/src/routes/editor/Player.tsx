@@ -685,8 +685,11 @@ function PreviewCanvas() {
 				</div>
 			</Show>
 			<div
-				class="flex overflow-hidden absolute inset-0 justify-center items-center h-full"
-				style={{ visibility: hasFrame() ? "visible" : "hidden" }}
+				class="flex overflow-hidden absolute inset-0 justify-center items-center h-full transition-opacity duration-300 ease-out motion-reduce:transition-none"
+				style={{
+					visibility: hasFrame() ? "visible" : "hidden",
+					opacity: preparing?.model.rendered() || hasRenderedFrame() ? 1 : 0,
+				}}
 			>
 				<div
 					class="relative"
