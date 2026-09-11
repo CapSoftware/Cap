@@ -12,6 +12,7 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore } from "solid-js/store";
+import toast from "solid-toast";
 import { hotkeysStore } from "~/store";
 
 import {
@@ -141,14 +142,29 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 																	class="w-fit"
 																	type="button"
 																	onBlur={(e) => console.log(e)}
-																	onClick={(e) => {
+																	onClick={async (e) => {
 																		e.stopPropagation();
 
+																		const action = item();
+																		const binding = hotkeys[action] ?? null;
+																		const previous = listening()?.prev;
+
 																		setListening();
-																		commands.setHotkey(
-																			item(),
-																			hotkeys[item()] ?? null,
-																		);
+
+																		try {
+																			await commands.setHotkey(action, binding);
+																		} catch (error) {
+																			// The OS can refuse a shortcut (reserved, or
+																			// already taken by another app). Roll the row
+																			// back so it doesn't display as bound when
+																			// pressing it will do nothing.
+																			setHotkeys(action, previous);
+																			toast.error(
+																				typeof error === "string"
+																					? error
+																					: "Could not register this shortcut.",
+																			);
+																		}
 																	}}
 																>
 																	<IconCapCircleCheck class="transition-colors text-gray-12 hover:text-gray-10 size-5" />
