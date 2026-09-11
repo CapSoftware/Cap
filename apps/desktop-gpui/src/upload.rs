@@ -1347,7 +1347,8 @@ async fn upload_video(
     cancel: &AtomicBool,
     replace_existing: bool,
 ) -> Result<(String, Option<String>), AuthApiError> {
-    let initiate = checked_upload_step(cancel, || multipart_initiate(video_id)).await?;
+    let initiate =
+        checked_upload_step(cancel, || multipart_initiate(video_id, replace_existing)).await?;
     let is_drive = is_google_drive_upload(initiate.provider.as_deref(), &initiate.upload_id);
     let parts = upload_parts(
         video_id,
@@ -1394,13 +1395,17 @@ struct InitiateResponse {
     provider: Option<String>,
 }
 
-async fn multipart_initiate(video_id: &str) -> Result<InitiateResponse, AuthApiError> {
+async fn multipart_initiate(
+    video_id: &str,
+    replace_existing: bool,
+) -> Result<InitiateResponse, AuthApiError> {
     let response = auth::authed_request(
         reqwest::Method::POST,
         "/api/upload/multipart/initiate",
         Some(json!({
             "videoId": video_id,
-            "contentType": "video/mp4"
+            "contentType": "video/mp4",
+            "replaceExisting": replace_existing
         })),
     )
     .await

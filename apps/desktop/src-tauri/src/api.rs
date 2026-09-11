@@ -21,6 +21,7 @@ pub struct MultipartUploadInitiateResponse {
 pub async fn upload_multipart_initiate(
     app: &AppHandle,
     video_id: &str,
+    replace_existing: bool,
 ) -> Result<MultipartUploadInitiateResponse, AuthedApiError> {
     let resp = app
         .authed_api_request("/api/upload/multipart/initiate", |c, url| {
@@ -28,7 +29,8 @@ pub async fn upload_multipart_initiate(
                 .header("Content-Type", "application/json")
                 .json(&serde_json::json!({
                     "videoId": video_id,
-                    "contentType": "video/mp4"
+                    "contentType": "video/mp4",
+                    "replaceExisting": replace_existing
                 }))
         })
         .await

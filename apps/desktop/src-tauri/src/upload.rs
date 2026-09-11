@@ -255,7 +255,7 @@ pub async fn upload_video(
     info!("Uploading video {video_id}...");
 
     let start = Instant::now();
-    let upload = api::upload_multipart_initiate(app, &video_id).await?;
+    let upload = api::upload_multipart_initiate(app, &video_id, replace_existing).await?;
     let is_drive_upload = is_google_drive_upload(upload.provider.as_deref(), &upload.upload_id);
     let upload_id = upload.upload_id;
 
@@ -726,7 +726,7 @@ impl InstantMultipartUpload {
             recording_dir: recording_dir.clone(),
         })?;
 
-        let upload = api::upload_multipart_initiate(&app, &video_id).await?;
+        let upload = api::upload_multipart_initiate(&app, &video_id, false).await?;
         let is_drive_upload = is_google_drive_upload(upload.provider.as_deref(), &upload.upload_id);
         let upload_id = upload.upload_id;
 
@@ -4273,7 +4273,7 @@ pub(crate) mod strict_instant {
         required_audio: bool,
     ) -> Result<(), AuthedApiError> {
         let upload = control
-            .step(|| api::upload_multipart_initiate(app, &video.id))
+            .step(|| api::upload_multipart_initiate(app, &video.id, false))
             .await?;
         let concurrency = if is_google_drive_upload(upload.provider.as_deref(), &upload.upload_id) {
             1
