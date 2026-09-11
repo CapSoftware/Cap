@@ -70,6 +70,14 @@ MYSQL_PASSWORD=your-secure-password
 MINIO_ROOT_PASSWORD=your-minio-password
 ```
 
+**Building your own web image:**
+
+`CAP_URL` is read at runtime by the server, but the browser bundle gets its copy of the public URL baked in at build time from `NEXT_PUBLIC_WEB_URL`. The pre-built `ghcr.io` image bakes `http://localhost:3000`. If you build `apps/web/Dockerfile` yourself, pass your public URL as a build argument so share links, embeds and CORS work in the browser:
+
+```bash
+docker build -f apps/web/Dockerfile --build-arg NEXT_PUBLIC_WEB_URL=https://cap.yourdomain.com .
+```
+
 ### Option 2: Railway (One-Click)
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf)
