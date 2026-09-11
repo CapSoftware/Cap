@@ -22,7 +22,7 @@ import { attachPreparingFrameTransport } from "./preparing-frame-transport";
 import { createPreparingHandoff } from "./preparing-handoff";
 import type { createPreparingPlaybackHandoff } from "./preparing-playback-handoff";
 
-function createPreparingEditorSession() {
+export function createPreparingEditorSession() {
 	const model = createPreparingEditorModel();
 	const handoff = createPreparingHandoff();
 	const owner = getOwner();
@@ -55,6 +55,16 @@ function createPreparingEditorSession() {
 	}>();
 	const [retained, setRetained] = createSignal(false);
 	const [ordinaryReady, setOrdinaryReady] = createSignal(false);
+	const [handoffFailed, setHandoffFailed] = createSignal(false);
+	const retryHandoff = async () => {
+		setHandoffFailed(false);
+		try {
+			await retryCandidate();
+		} catch (error) {
+			if (alive && !ordinaryReady()) setHandoffFailed(true);
+			console.error("Failed to replace preparing editor:", error);
+		}
+	};
 	const lease = createPreparingFrameLease({
 		start: async (epoch) => {
 			const url = await commands.createPreparingEditorFrame(epoch);
@@ -144,6 +154,8 @@ function createPreparingEditorSession() {
 		canvases,
 		retained,
 		ordinaryReady,
+		handoffFailed,
+		retryHandoff,
 		acceptSnapshot: subscription.accept,
 		beginHandoff(
 			fps: number,
@@ -151,6 +163,7 @@ function createPreparingEditorSession() {
 			value: NonNullable<typeof candidate>,
 		) {
 			candidate = value;
+			setHandoffFailed(false);
 			const target = handoff.begin(
 				model.playback(),
 				fps,
@@ -222,16 +235,16 @@ function createPreparingEditorSession() {
 						return;
 					}
 					playbackHandoff?.acknowledge(frameNumber, current.progressive);
+					setHandoffFailed(false);
 					setOrdinaryReady(true);
 					lease.close();
 				})
 				.catch((error: unknown) => {
 					if (!alive || candidate !== current) return;
 					if (String(error) === "Preparing handoff candidate was superseded") {
-						void retryCandidate()?.catch((cause: unknown) =>
-							console.error("Failed to replace preparing editor:", cause),
-						);
+						void retryHandoff();
 					} else {
+						setHandoffFailed(true);
 						console.error("Failed to accept preparing editor frame:", error);
 					}
 				});

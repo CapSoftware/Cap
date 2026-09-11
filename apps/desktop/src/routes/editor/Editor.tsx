@@ -412,6 +412,14 @@ function Inner(props: {
 	onMount(() => {
 		const blockPreparingKeys = (event: KeyboardEvent) => {
 			if (editorReady()) return;
+			if (
+				preparingSession?.handoffFailed() &&
+				event.target instanceof Element &&
+				event.target.closest("[data-editor-handoff-error]")
+			) {
+				event.stopImmediatePropagation();
+				return;
+			}
 			if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "w")
 				return;
 			if (event.altKey && event.key === "F4") return;
@@ -877,12 +885,45 @@ function Inner(props: {
 		>
 			<div
 				class="relative flex flex-col flex-1 min-h-0"
-				aria-busy={!editorReady()}
+				aria-busy={!editorReady() && !preparingSession?.handoffFailed()}
 			>
 				<Header
 					registerTitleSave={registerEditorSave}
 					disabled={!editorReady()}
 				/>
+				<Show when={preparingSession?.handoffFailed()}>
+					<div class="absolute inset-0 top-13 max-[900px]:top-[72px] z-30 flex items-center justify-center p-6">
+						<div
+							data-editor-handoff-error
+							role="alertdialog"
+							aria-modal="true"
+							aria-labelledby="editor-handoff-error-title"
+							class="max-w-sm rounded-xl border border-ed-line bg-ed-card p-6 text-center shadow-ed-card"
+						>
+							<h2
+								id="editor-handoff-error-title"
+								class="text-sm font-medium text-ed-text-1"
+							>
+								Couldn’t open the editor
+							</h2>
+							<p class="mt-2 text-xs text-ed-text-2">
+								Try again to finish opening your recording.
+							</p>
+							<button
+								type="button"
+								class="mt-4 rounded-lg bg-ed-accent px-4 py-2 text-xs font-medium text-white"
+								ref={(button) =>
+									queueMicrotask(() => {
+										if (button.isConnected) button.focus();
+									})
+								}
+								onClick={() => void preparingSession?.retryHandoff()}
+							>
+								Try again
+							</button>
+						</div>
+					</div>
+				</Show>
 				<div
 					inert={!editorReady()}
 					class="flex overflow-y-hidden flex-col flex-1 gap-2 w-full min-h-0 leading-5 transition-opacity duration-300 ease-out motion-reduce:transition-none"
