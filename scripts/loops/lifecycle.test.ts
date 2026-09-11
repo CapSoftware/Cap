@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { customerCopy } from "../../emails/customer-copy";
 import type { LoopsClient } from "../../packages/database/loops/client";
 import {
+	enrollmentWindow,
 	type LifecycleContact,
 	type LoopsRuntimeConfig,
 	lifecycleUpdate,
@@ -20,6 +21,53 @@ const config: LoopsRuntimeConfig = {
 	enrollmentEnabled: true,
 	allowedEmails: new Set([email]),
 };
+
+describe("enrollment fingerprint", () => {
+	test("historical accounts stay unchanged when enrollment is enabled or the future cutoff moves", () => {
+		const signup = "2026-09-10T10:00:00.000Z";
+		const held = enrollmentWindow(signup, {
+			...config,
+			enrollmentEnabled: false,
+		});
+		expect(held).toEqual({ recentSignup: false, recentJoin: false });
+		expect(enrollmentWindow(signup, config)).toEqual(held);
+		expect(
+			enrollmentWindow(signup, {
+				...config,
+				enrollmentAfter: new Date("2026-09-12T00:00:00Z"),
+			}),
+		).toEqual(held);
+	});
+
+	test("eligible signups change when enrollment is disabled or the cutoff crosses their signup", () => {
+		const signup = "2026-09-11T10:00:00.000Z";
+		expect(enrollmentWindow(signup, config)).toEqual({
+			recentSignup: true,
+			recentJoin: false,
+		});
+		expect(
+			enrollmentWindow(signup, { ...config, enrollmentEnabled: false }),
+		).toEqual({ recentSignup: false, recentJoin: false });
+		expect(
+			enrollmentWindow(signup, {
+				...config,
+				enrollmentAfter: new Date("2026-09-11T10:00:00.001Z"),
+			}),
+		).toEqual({ recentSignup: false, recentJoin: false });
+	});
+
+	test("new teammate joins change historical accounts at the exact cutoff", () => {
+		const signup = "2026-09-10T10:00:00.000Z";
+		const joined = { ...config, teammateJoinedAt: "2026-09-11 00:00:00" };
+		expect(enrollmentWindow(signup, joined)).toEqual({
+			recentSignup: false,
+			recentJoin: true,
+		});
+		expect(
+			enrollmentWindow(signup, { ...joined, enrollmentEnabled: false }),
+		).toEqual({ recentSignup: false, recentJoin: false });
+	});
+});
 
 function fixture(): LoopsProfileSource {
 	return {

@@ -80,6 +80,8 @@ Deploy the generated schema before code that selects the new columns. The unship
 
 With the schema available and test configuration set, `bun scripts/loops/seed.ts` reports how many completed signups would be queued. `--apply` queues them without sending anything. `bun scripts/loops/sync.ts --apply` processes a bounded batch using the same worker as the cron route. Test mode fails closed without an allowlist. Set `LOOPS_SYNC_MODE=production` only as part of the reviewed cutover. Seed old completed accounts once after the final suppression reconciliation; subsequent signups enter the queue through the application.
 
+Sync fingerprints include the contact's effective signup and teammate-join eligibility, rather than the raw enrollment switch or cutoff date. Enabling enrollment or moving a future cutoff does not invalidate every historical profile. A signup or join crossing the cutoff, or disabling an eligible contact's enrollment, still changes its fingerprint and requires synchronization.
+
 ## Independent delivery check
 
 `.github/workflows/loops-safety.yml` runs every five minutes, independently of the Cap cron worker. It is disabled until the repository variable `LOOPS_WATCHDOG_ENABLED` is explicitly set to `true`. Configure GitHub secrets `LOOPS_API_KEY` and `LOOPS_HEALTH_SECRET`, and configure the same health secret in Cap. Scheduled Actions run from the default branch, so this protection is not deployed while the PR remains unmerged.

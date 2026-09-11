@@ -12,6 +12,7 @@ import {
 	LoopsRequestError,
 } from "./client";
 import {
+	enrollmentWindow,
 	type LifecycleContact,
 	type LoopsRuntimeConfig,
 	lifecycleUpdate,
@@ -263,8 +264,10 @@ export async function runLoopsSync(customerCopy: CustomerCopy) {
 								profile: profileFingerprint(localProfile),
 								signedUp: source.signedUp,
 								pendingInvite: source.pendingInvite,
-								enrollmentEnabled: config.enrollmentEnabled,
-								enrollmentAfter: config.enrollmentAfter.toISOString(),
+								enrollment: enrollmentWindow(
+									localProfile.capSignupAt,
+									jobConfig,
+								),
 								listId: config.listId,
 								teammateJoinedAt: job.teammateJoinedAt,
 							}),
