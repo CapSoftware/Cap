@@ -13,7 +13,9 @@ These are the locally configured draft journeys. This document is not a live sta
 | [Teammate onboarding](https://app.loops.so/workflows/cmtvpm0ag01it0j37w02o6wav) | teammate | Day 0, Day 3 | 2 |
 | [Former customer follow-up](https://app.loops.so/workflows/cmtvpm8zm01ii0j01cz7d15qr) | former | Day 14 | 1 |
 
-All journeys require global subscription, positive Cap consent, the exact audience, lifecycle enabled and onboarding eligible. These filters continue to apply downstream. Free/former promotional flows additionally exclude teammates and require promotional eligibility. Customer and teammate flows still require marketing consent.
+Completed signups reach Loops through Stripe; SSO uses a small direct fallback. Cap supplies targeting through a durable sync queue, without a separate marketing opt-in step. Existing opt-outs and suppressions take precedence. The integration is not deployed. Historical imports stay held; a new accepted invitation can start teammate help only.
+
+Current draft journeys require global subscription, capConsent=subscribed, the exact audience, lifecycle enabled and onboarding eligible. capConsent is a legacy migration guard, not a separate consent-capture requirement for new signups. These filters continue to apply downstream. Free/former promotional flows additionally exclude teammates and require promotional eligibility.
 
 Teammate history takes priority over paid/free classification. Ambiguous contacts receive no journey. [Audience classification and consent](../scripts/loops/README.md#audience-rules).
 
@@ -112,7 +114,7 @@ flowchart TD
 
 ## Campaign templates
 
-Campaigns are manually scheduled product updates, with no automatic enrollment. Both require subscription, positive consent and their exact audience. The free template also requires promotional eligibility and excludes teammates.
+Campaigns are manually scheduled product updates, with no automatic enrollment. Both require subscription, capConsent=subscribed and their exact audience. The free template also requires promotional eligibility and excludes teammates.
 
 | Campaign | Audience | Subject and source | Loops ID |
 | --- | --- | --- | --- |

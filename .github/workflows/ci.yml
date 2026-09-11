@@ -93,8 +93,8 @@ jobs:
       - name: Check email library
         run: |
           bun run emails:check
-          bun test scripts/emails scripts/loops/profile.test.ts
-          bun run tsc --noEmit --strict --target ESNext --module ESNext --moduleResolution bundler --resolveJsonModule --types bun --skipLibCheck scripts/loops/*.ts scripts/emails/*.ts emails/*.ts emails/marketing/*.ts
+          bun test scripts/emails scripts/loops/profile.test.ts scripts/loops/lifecycle.test.ts
+          bun run tsc --noEmit --strict --jsx react-jsx --allowImportingTsExtensions --target ESNext --module ESNext --moduleResolution bundler --resolveJsonModule --types bun --skipLibCheck scripts/loops/*.ts scripts/emails/*.ts emails/*.ts emails/marketing/*.ts
 
       - name: Test web React compatibility
         run: >-

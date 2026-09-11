@@ -1,8 +1,8 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "391928e7-ff33-46e9-8786-670008cee581",
-	"prevId": "abd5c5ee-0381-4c1d-a6c7-257c04d094ed",
+	"id": "0d80e4e5-6d93-4d28-b235-bf1231baa7a9",
+	"prevId": "391928e7-ff33-46e9-8786-670008cee581",
 	"tables": {
 		"accounts": {
 			"name": "accounts",
@@ -1751,6 +1751,13 @@
 				"profileHash": {
 					"name": "profileHash",
 					"type": "varchar(64)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"teammateJoinedAt": {
+					"name": "teammateJoinedAt",
+					"type": "datetime",
 					"primaryKey": false,
 					"notNull": false,
 					"autoincrement": false

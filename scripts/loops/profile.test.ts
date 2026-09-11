@@ -64,7 +64,8 @@ test("greetings include a name only when a nonblank name is known", () => {
 	assert.equal(classifyProfile(fixture).capGreeting, "Hey Sam,");
 	fixture.user = undefined;
 	for (const firstName of [undefined, "", "   ", "null", "NULL"]) {
-		fixture.source.first_name = firstName;
+		if (firstName === undefined) delete fixture.source.first_name;
+		else fixture.source.first_name = firstName;
 		assert.equal(classifyProfile(fixture).capGreeting, "Hey,");
 	}
 });

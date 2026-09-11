@@ -6,6 +6,7 @@ import { WorkOS } from "@workos-inc/node";
 import { and, eq, isNull } from "drizzle-orm";
 import { nanoId } from "../helpers.ts";
 import { db } from "../index.ts";
+import { enqueueLoopsSync } from "../loops/queue.ts";
 import {
 	accounts,
 	organizationInvites,
@@ -273,5 +274,10 @@ export async function provisionSsoMembership(
 				},
 			})
 			.where(eq(users.id, userId));
+		await enqueueLoopsSync(
+			tx,
+			userId,
+			!member || !user.onboarding_completed_at,
+		);
 	});
 }
