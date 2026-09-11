@@ -74,6 +74,32 @@ const postPanelMessage = (
 	);
 };
 
+// The standalone recorder (side panel or fallback popup window) has no
+// embedding overlay to report through, so it tells the service worker its
+// lifecycle directly: the action click uses the flag to toggle, and UI
+// teardown answers with "close" since no extension API can close a side
+// panel from the outside.
+if (!IS_EMBEDDED) {
+	void sendServiceWorkerMessage({
+		target: "service-worker",
+		type: "standalone-panel-opened",
+	}).catch(() => undefined);
+	window.addEventListener("pagehide", () => {
+		chrome.runtime.sendMessage(
+			{ target: "service-worker", type: "standalone-panel-closed" },
+			() => {
+				void chrome.runtime.lastError;
+			},
+		);
+	});
+	chrome.runtime.onMessage.addListener((message: unknown) => {
+		const candidate = message as { target?: string; type?: string } | null;
+		if (candidate?.target === "standalone-panel" && candidate.type === "close") {
+			window.close();
+		}
+	});
+}
+
 // Maps the offscreen document's authoritative permission query to a stored
 // access flag. "unknown" (no Permissions API) leaves the flag untouched so a
 // browser that cannot report state never wipes a working grant.
