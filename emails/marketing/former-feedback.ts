@@ -5,14 +5,14 @@ export const formerFeedback = {
 	key: "feedback",
 	purpose:
 		"Ask an eligible former cloud customer for feedback after paid access ends.",
-	subject: "What could we have done better?",
-	previewText: "A quick question about your experience with Cap.",
-	variables: ["firstName"],
+	subject: "Could I ask about your time with Cap?",
+	previewText: "I'd appreciate your honest feedback.",
+	variables: ["capGreeting"],
 	body: [
-		"<Paragraph>Hi {contact.firstName},</Paragraph>",
-		"<Paragraph>Now that your paid access has ended, I wanted to ask what could have made Cap more useful for you.</Paragraph>",
-		"<Paragraph>Was there something missing, something that did not work properly, or did you just not need it anymore?</Paragraph>",
-		"<Paragraph>Reply if you have a moment. Honest feedback helps us make better decisions.</Paragraph>",
-		"<Paragraph>Thanks for giving Cap a try.</Paragraph>",
+		"<Paragraph>{contact.capGreeting}</Paragraph>",
+		"<Paragraph>Could I ask what made you decide to stop using your paid Cap plan?</Paragraph>",
+		"<Paragraph>Was something missing, did something not work properly, or did you just not need it anymore?</Paragraph>",
+		"<Paragraph>If you've got a moment to reply, I'd really appreciate it. And if there was a problem I can help with, I'd like to try.</Paragraph>",
+		"<Paragraph>Thanks for giving Cap a go.</Paragraph>",
 	].join(""),
 } satisfies EmailDefinition;

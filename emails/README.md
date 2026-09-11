@@ -1,26 +1,27 @@
 # Cap email library
 
-Start with the [email catalogue and flow maps](CATALOG.md). It contains all four Loops journeys, two campaign templates, every marketing email's copy, customer variations, and the existing Resend application email inventory. The catalogue is generated from the same definitions used by the migration tooling.
+Start with the [catalogue and flow maps](CATALOG.md), [copy guidance](VOICE.md), and [QA results](QA.md). The catalogue includes four Loops journeys, two campaign templates, all 12 marketing emails, customer variations, and the existing Resend application email inventory.
 
 ## Where to make changes
 
-| Change                                                                | Source                               |
-| --------------------------------------------------------------------- | ------------------------------------ |
-| See all flows, timing and email copy                                  | [CATALOG.md](CATALOG.md)             |
-| Colours, typography, buttons, header, signature, sender and fallbacks | [brand.ts](brand.ts)                 |
-| Subject, preview, body and purpose of one marketing email             | [marketing/](marketing/)             |
-| Flow order, relative delays and milestone branches                    | [flows.ts](flows.ts)                 |
-| Campaign definitions and targeting                                    | [campaigns.ts](campaigns.ts)         |
-| Shared audience filter rules and contact property names               | [audiences.ts](audiences.ts)         |
-| Paid-plan names and customer welcome variations                       | [customer-copy.ts](customer-copy.ts) |
-| Existing application email purposes, triggers and send locations      | [application.ts](application.ts)     |
-| Nonsecret Loops resource and node IDs                                 | [resources.json](resources.json)     |
+| Change                                                          | Source                                         |
+| --------------------------------------------------------------- | ---------------------------------------------- |
+| Copy, subject, preview and purpose                              | [marketing/](marketing/)                       |
+| Logo, colours, spacing, signature, footer, sender and fallbacks | [brand.ts](brand.ts)                           |
+| Shared delivery layout                                          | [mjml.ts](mjml.ts)                             |
+| Flow ordering, delays and milestone branches                    | [flows.ts](flows.ts)                           |
+| Campaign targeting                                              | [campaigns.ts](campaigns.ts)                   |
+| Audience guards and contact properties                          | [audiences.ts](audiences.ts)                   |
+| Paid-plan welcome variations                                    | [customer-copy.ts](customer-copy.ts)           |
+| Application email purposes and send locations                   | [application.ts](application.ts)               |
+| Registered Loops resource IDs                                   | [resources.json](resources.json)               |
+| Last reviewed upload hashes                                     | [delivery-receipt.json](delivery-receipt.json) |
 
-Marketing copy belongs here. `scripts/loops/program.ts` is a compatibility export, not another source to edit. Each marketing file holds its subject, preview, purpose, declared variables and LMX body. Paragraphs are separate strings joined without changing the resulting email. Shared branding is composed around each body by `emailContent()`.
+Each marketing file uses a small shared content vocabulary: Paragraph, Link, Strong, Em and Br. The MJML renderer combines that copy with the shared design. Unsupported new blocks fail export instead of silently disappearing. `scripts/loops/program.ts` is a compatibility export, not another copy source.
 
-Application emails keep their existing React Email templates under `packages/database/emails/`. This index links to those sources; it does not duplicate their templates or change their provider. Loops audience filters and marketing branding do not automatically apply to Resend sends.
+The header uses the actual Cap vector artwork from `packages/ui/src/components/icons/Logo.tsx`. `bun run emails:logo` renders its original paths to the checked-in PNG with white backing. This preserves the wordmark and keeps its dark lettering visible on dark backgrounds. Do not rebuild the wordmark with a font or substitute the icon alone. The image and body share the same left edge.
 
-## Edit and inspect locally
+## Edit and upload
 
 From the repository root:
 
@@ -28,41 +29,37 @@ From the repository root:
 bun run emails:catalog
 bun run emails:check
 bun test scripts/emails scripts/loops/profile.test.ts
+bun run emails:export --output /absolute/path/to/reviewed-exports
 ```
 
-`emails:catalog` rebuilds the readable catalogue and Mermaid diagrams. `emails:check` is offline: it checks catalogue freshness, duplicate/missing email files, declared variables and fallbacks, shared branding use, delays, and the application template/send-source inventory. It does not replace Loops' LMX compiler, Guardian or a rendered preview.
+The export creates one ZIP and MJML file per email, plus a manifest containing subjects, preview text, sender fields, fallbacks and hashes. Every ZIP contains `index.mjml` and its logo. All copy and design changes start here in source; the generated catalogue is never edited by hand.
 
-Flow delays are relative to the previous step. The catalogue computes cumulative day numbers automatically. A skipped milestone reminder rejoins the flow and still observes the subsequent delay. The first-recording Resend email is also listed so future changes can account for overlap.
+In the intended Loops draft, choose **Code → Upload another email → Select**, select its ZIP, and upload. A native email uses **Code → Select** for its first conversion. Review the actual subject, preview text, sender, reply address and every variable fallback against the manifest. Uploading the body does not update these metadata fields automatically. Wait for the logo to load, inspect all copy and links, confirm one footer, and verify the email remains a draft.
 
-## Compare with Loops
+Keep `capGreeting` as a complete salutation with `Hey,` as its fallback. Profile sync supplies `Hey Richie,` only when a nonblank name is known. Previously imported contacts need an approved profile refresh before their new greeting property is populated; until then the fallback applies. Changes to `customer-copy.ts` also require a profile refresh and do not instantly change stored Loops properties.
 
-Provide `LOOPS_API_KEY` in the process environment, then run:
+## Verification boundaries
+
+With `LOOPS_API_KEY` supplied through the environment:
 
 ```sh
-bun run emails:check-loops
+bun run emails:check-loops --structure-only
 ```
 
-This command only reads Loops. It checks the expected team, registered resource IDs, draft status, workflow graph, downstream audience guards, branch reconnections, delays, campaign audiences, configured theme styles, shared components, message content, sender fields, fallbacks and Guardian results. It reports a failure when local and remote content differ. Live status is not embedded in the generated catalogue.
+This read-only command checks the team, mailing list, draft statuses, workflow graphs, downstream audience guards, branch reconnections, delays, campaign targeting and custom email format. Loops' beta API returns HTTP 409 for reading or updating custom MJML emails, so their contents and Guardian results require browser review. Running without `--structure-only` deliberately fails when content cannot be verified; it never treats an unreadable email as a content match.
 
-Dashboard edits must be reconciled into the local source before updating a managed draft. Read the current email and its `contentRevisionId`, compare it with the proposed local content, and preserve intentional dashboard changes. Updates must include `expectedRevisionId` so an intervening edit causes a conflict. The older provisioner uses a resumable migration receipt and is not a two-way editor or a replacement for this comparison.
+The historical upload receipt records the local export hashes reviewed in the browser. It is not live drift detection. Reconcile intentional dashboard edits into source before uploading replacements. Do not switch back to native format to bypass the API limitation: native footers reintroduce the automatic opt-in explanation. The legacy provisioner refuses `--apply` while custom MJML delivery is configured.
 
-Use the official Loops API/LMX skills for draft changes. Review the local diff, update only the intended drafts, run the read-only check again, and inspect the Loops render. Do not send a test or preview email as part of local validation. Sending and workflow activation remain separate actions.
+Local commands and read-only checks never send or enroll contacts. Preview sends require the user's sending scope; this migration's QA used only owned Cap inboxes. Production activation remains a separate cutover action.
 
-## Branding changes
+## Adding emails and flows
 
-All marketing messages inherit one theme and shared header/signature components. Keep brand styling in `brand.ts`; individual messages should contain content and layout, not copied colours, fonts or logos.
+1. Add `marketing/<stable-id>.ts` implementing `EmailDefinition`. Declare every variable and a suitable shared fallback.
+2. Register the email in `flows.ts` or `campaigns.ts`. Preserve existing IDs and step keys because resource receipts refer to them.
+3. Regenerate the catalogue. Check consent, customer and teammate exclusions, downstream guards, milestone behavior and re-entry rules.
+4. Create the intended draft graph through the supported migration tooling, then upload the generated custom email and record its resource IDs. The existing provisioner is guarded against overwriting the custom programme; extending graphs needs a scoped implementation.
+5. Run the local and graph checks, inspect each changed render, then commit definitions and generated catalogue together.
 
-Shared Loops theme/component updates can affect every email using them. Create a new named branding version for a redesign, attach it to reviewed drafts, then verify the rendered result. The provisioner refuses to silently reuse a same-named theme/component whose content differs. Retain the previous version while any live email uses it.
+Resend application templates stay under `packages/database/emails/`; the inventory links to them without duplicating their content. Their sending behavior and layout are unchanged. Loops marketing guards do not control Resend, and the first-recording email needs an overlap check before lifecycle activation.
 
-Changing `customer-copy.ts` changes the copy produced by profile sync; it does not instantly rewrite contact properties already stored in Loops. Review and refresh the intended profiles separately.
-
-## Add an email or flow
-
-1. Add one `marketing/<stable-id>.ts` file implementing `EmailDefinition`; use the same ID as its filename.
-2. Declare every contact variable used in the subject, preview and body. Add an appropriate shared fallback and contact property contract when needed. Current journeys use contact-property triggers; event variables need an explicit event-trigger design first.
-3. Register it in `flows.ts` or `campaigns.ts`. Keep existing step keys stable because migration receipts identify nodes by these keys.
-4. Regenerate and review the catalogue. For a new flow, verify consent, customers, teammate exclusions, downstream guards and re-entry behavior.
-5. Create or update the intended Loops draft using the migration/API tooling and record verified resource/node IDs in `resources.json`. Workflow graph editing currently uses the migration beta integration; content checks do not grant activation permission.
-6. Run local and remote checks, inspect the render, and commit the source and regenerated catalogue together.
-
-Never add exports, subscriber records, consent hashes or credentials to this directory. The [migration runbook](../scripts/loops/README.md) owns imports, consent seeding, live sync and cutover requirements. No local library command enrolls contacts or sends emails.
+Keep credentials, contacts, suppression hashes and exports outside Git. The [migration runbook](../scripts/loops/README.md) owns imports, suppression seeding, production integration and cutover.

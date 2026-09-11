@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { components, theme } from "../../emails/brand";
+import { components, deliveryFormat, theme } from "../../emails/brand";
 import registry from "../../emails/resources.json";
 import { assertEmailContent, normalizeLmx } from "../emails/content";
-import { LoopsApi } from "./api";
+import { LoopsApi, LoopsApiError } from "./api";
 import {
 	audienceFilter,
 	campaignTemplates,
@@ -51,6 +51,7 @@ const { values } = parseArgs({
 		},
 		team: { type: "string", default: registry.teamName },
 		"mailing-list": { type: "string", default: registry.resources.mailingList },
+		"structure-only": { type: "boolean", default: false },
 	},
 });
 assert(values.state && values.team && values["mailing-list"]);
@@ -74,35 +75,60 @@ assert(
 	brandIds.theme && brandIds.header && brandIds.signature,
 	"Brand IDs missing from resources.json",
 );
-const remoteTheme = await api.request<{
-	name: string;
-	styles: Record<string, unknown>;
-}>(`themes/${brandIds.theme}`);
-assert.equal(remoteTheme.name, theme.name);
-for (const [key, value] of Object.entries(theme.styles))
-	assert.deepEqual(
-		remoteTheme.styles[key],
-		value,
-		`Shared theme differs: ${key}`,
-	);
-for (const component of components) {
-	const remote = await api.request<{ name: string; lmx: string }>(
-		`components/${receipt.resources[component.name]}`,
-	);
-	assert.equal(remote.name, component.name);
-	assert.equal(
-		normalizeLmx(remote.lmx),
-		normalizeLmx(component.lmx),
-		`Shared component differs: ${component.name}`,
-	);
+if (deliveryFormat === "lmx") {
+	const remoteTheme = await api.request<{
+		name: string;
+		styles: Record<string, unknown>;
+	}>(`themes/${brandIds.theme}`);
+	assert.equal(remoteTheme.name, theme.name);
+	for (const [key, value] of Object.entries(theme.styles))
+		assert.deepEqual(
+			remoteTheme.styles[key],
+			value,
+			`Shared theme differs: ${key}`,
+		);
+	for (const component of components) {
+		const remote = await api.request<{ name: string; lmx: string }>(
+			`components/${receipt.resources[component.name]}`,
+		);
+		assert.equal(remote.name, component.name);
+		assert.equal(
+			normalizeLmx(remote.lmx),
+			normalizeLmx(component.lmx),
+			`Shared component differs: ${component.name}`,
+		);
+	}
 }
 let emails = 0;
+let customEmails = 0;
 const verifyEmail = async (
 	id: string | undefined,
 	expected: { subject: string; previewText: string; body: string },
 ) => {
 	assert(id);
-	const email = await api.request<Email>(`email-messages/${id}`);
+	let email: Email;
+	try {
+		email = await api.request<Email>(`email-messages/${id}`);
+	} catch (error) {
+		if (
+			error instanceof LoopsApiError &&
+			error.status === 409 &&
+			typeof error.details === "object" &&
+			error.details !== null &&
+			"message" in error.details &&
+			error.details.message === "MJML format is not supported via API."
+		) {
+			assert.equal(deliveryFormat, "mjml");
+			customEmails++;
+			return;
+		}
+		throw error;
+	}
+	assert.notEqual(
+		deliveryFormat,
+		"mjml",
+		"Managed email is still in native format",
+	);
 	assertEmailContent(email, expected, brandIds);
 	const guardian = await api.request<{
 		errors: unknown[];
@@ -234,9 +260,13 @@ console.log(
 	JSON.stringify({
 		workflows: journeys.length,
 		campaigns: campaignTemplates.length,
-		emails,
-		guardianErrors: 0,
-		guardianWarnings: 0,
+		apiEmailContentVerified: emails,
+		customEmailContentRequiresBrowserReview: customEmails,
+		guardianVerifiedEmails: emails,
 		allDraft: true,
 	}),
 );
+if (customEmails && !values["structure-only"])
+	throw new Error(
+		"Workflow structure and draft states passed. Custom MJML content is unavailable through the API; verify its rendered body, metadata, logo, footer and fallbacks in the browser. Use --structure-only to request only the API checks.",
+	);

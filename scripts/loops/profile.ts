@@ -142,13 +142,15 @@ export function classifyProfile(input: ProfileInput) {
 						? "desktop"
 						: "other"
 		];
+	const firstName =
+		[source.first_name, source.firstname, user?.name?.trim().split(/\s+/)[0]]
+			.map((value) => value?.trim())
+			.find((value) => value && value.toLowerCase() !== "null") ?? "";
 	return {
 		email: normalizeEmail(source.email),
 		userId: user?.id ?? `bento:${emailHash(source.email)}`,
-		firstName:
-			[source.first_name, source.firstname, user?.name?.trim().split(/\s+/)[0]]
-				.map((value) => value?.trim())
-				.find((value) => value && value !== "null") ?? "",
+		firstName,
+		capGreeting: firstName ? `Hey ${firstName},` : "Hey,",
 		lastName:
 			[source.last_name, source.lastname, user?.lastName]
 				.map((value) => value?.trim())

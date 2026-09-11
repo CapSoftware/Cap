@@ -5,15 +5,13 @@ export const teammateHandoff = {
 	key: "handoff",
 	purpose: "Help a teammate share useful context with their organization.",
 	subject: "Make your next handoff easier",
-	previewText:
-		"A short recording can give your teammate the context they need.",
-	variables: ["firstName"],
+	previewText: "Show your teammate the bit that's hard to put into words.",
+	variables: ["capGreeting"],
 	body: [
-		"<Paragraph>Hi {contact.firstName},</Paragraph>",
-		"<Paragraph>For your next handoff, try recording the bit that is difficult to explain in writing.</Paragraph>",
-		"<Paragraph>Show the work, explain what changed, and say what you need from the person watching. A clear title and a short note beside the link make it easier to pick up later.</Paragraph>",
-		"<Paragraph>When sharing, check that the recording is available to the right people in your organization.</Paragraph>",
-		'<Button href="https://cap.so/dashboard" align="left" paddingTop="16" paddingBottom="16">Open your workspace</Button>',
-		"<Paragraph>If the team workflow feels awkward anywhere, reply and let us know.</Paragraph>",
+		"<Paragraph>{contact.capGreeting}</Paragraph>",
+		"<Paragraph>Next time you hand something over to a teammate, try recording the part that's tricky to explain in a message.</Paragraph>",
+		"<Paragraph>Show what changed and what you need them to look at. Even a short recording can save a lot of back and forth.</Paragraph>",
+		'<Paragraph><Link href="https://cap.so/dashboard">Open your team workspace</Link>. Before sending a recording, check its sharing settings so the right people can watch it.</Paragraph>',
+		"<Paragraph>If anything about sharing with your team feels awkward, reply and let me know.</Paragraph>",
 	].join(""),
 } satisfies EmailDefinition;

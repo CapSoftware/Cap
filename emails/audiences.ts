@@ -1,4 +1,5 @@
 export const contactProperties = {
+	capGreeting: "string",
 	capAudience: "string",
 	capOrigin: "string",
 	capConsent: "string",

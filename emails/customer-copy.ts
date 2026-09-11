@@ -2,21 +2,21 @@ export const customerCopy = {
 	pro: {
 		plan: "Cap Pro",
 		welcome:
-			"Your Cap Pro plan includes cloud sharing and collaboration, plus the desktop commercial license. Open your dashboard to find your organization and manage your setup.",
+			"With Cap Pro, you can share recordings with a link and work on them with your team. Your plan also includes the desktop commercial license, so you can use Cap for client work too.",
 	},
 	selfhosted: {
 		plan: "Cap Self-hosted",
 		welcome:
-			"Your self-hosted license supports your own Cap deployment. Use the setup details supplied with your purchase, and reply if you need help.",
+			"For your self-hosted setup, start with the instructions supplied with your purchase. If you get stuck anywhere, reply with what you're seeing and I'll help you sort it.",
 	},
 	desktop: {
 		plan: "Cap Desktop",
 		welcome:
-			"Your desktop license covers commercial use of Cap's recorder and editor. Activate it in the desktop app using the license details from your purchase email.",
+			"Your desktop license lets you use Cap's recorder and editor for commercial work. You can activate it in the app with the license details from your purchase email.",
 	},
 	other: {
 		plan: "Cap",
 		welcome:
-			"If you need help with your Cap account or access, reply to this email.",
+			"If you need a hand getting set up, just reply and I'll help you sort it.",
 	},
 };

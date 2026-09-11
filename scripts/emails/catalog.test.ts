@@ -7,12 +7,22 @@ import {
 	renderCatalog,
 	validateCatalog,
 	validateEmail,
+	validateTheme,
 } from "./catalog";
 import { assertEmailContent, normalizeLmx } from "./content";
 
 describe("email library", () => {
 	test("every template and known application send source is registered", async () => {
 		expect(await validateCatalog()).toEqual([]);
+	});
+	test("line heights reject pixel values that collapse the Loops footer", () => {
+		expect(validateTheme({ textBaseLineHeight: 26 })).toEqual([
+			"textBaseLineHeight must be a percentage from 100 to 300",
+		]);
+		expect(
+			validateTheme({ textBaseLineHeight: 160, heading1LineHeight: 130 }),
+		).toEqual([]);
+		expect(validateTheme({ textBaseLineHeight: Number.NaN })).toHaveLength(1);
 	});
 	test("variables in subjects require a declared contract and fallback", () => {
 		expect(
@@ -78,15 +88,17 @@ describe("Loops content comparison", () => {
 		for (const lmx of [
 			`${content.lmx}<Paragraph>Unexpected promotion</Paragraph>`,
 			content.lmx.replace("https://cap.so/download", "https://example.com"),
-			content.lmx.replace("<Paragraph>", '<Paragraph textColor="#ff0000">'),
+			content.lmx.replace("<Paragraph ", '<Paragraph textColor="#ff0000" '),
 			content.lmx.replace(
 				'<Component componentId="header" />',
 				'<Component componentId="header"><Paragraph>Changed header</Paragraph></Component>',
 			),
-		])
+		]) {
+			expect(lmx).not.toBe(content.lmx);
 			expect(() =>
 				assertEmailContent({ ...content, lmx }, freeWelcome, ids),
 			).toThrow();
+		}
 	});
 	test("detects changed sender metadata and fallbacks", () => {
 		expect(() =>

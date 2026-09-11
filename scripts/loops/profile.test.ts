@@ -57,6 +57,18 @@ const remote = (): RemoteContact => ({
 	mailingLists: { tips: true },
 });
 
+test("greetings include a name only when a nonblank name is known", () => {
+	const fixture = input();
+	assert.equal(classifyProfile(fixture).capGreeting, "Hey Taylor,");
+	fixture.source.first_name = "  Sam  ";
+	assert.equal(classifyProfile(fixture).capGreeting, "Hey Sam,");
+	fixture.user = undefined;
+	for (const firstName of [undefined, "", "   ", "null", "NULL"]) {
+		fixture.source.first_name = firstName;
+		assert.equal(classifyProfile(fixture).capGreeting, "Hey,");
+	}
+});
+
 test("an explicit source opt-out always wins over a positive custom flag", () => {
 	assert.equal(
 		sourceConsent({

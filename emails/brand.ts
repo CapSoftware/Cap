@@ -1,4 +1,23 @@
-export const brandingVersion = 1;
+export const brandingVersion = 6;
+
+export const deliveryFormat: "mjml" | "lmx" = "mjml";
+
+export const bodyLineHeightPercent = 160;
+
+export const logo = {
+	src: "https://images.vialoops.com/cmtvpmjen01ks0j18ebmp77uk/img/cmtwz64ty00qx0j0poxsc4u7x.png",
+	file: "emails/assets/cap-logo.png",
+	width: 120,
+	borderRadius: 0,
+};
+
+export const signature = ["Cheers,", "Richie"];
+
+export const footer = {
+	company: "Cap Software, Inc.",
+	address: "1111B S Governors Ave, Dover, DE 19904, United States",
+	unsubscribeLabel: "Unsubscribe",
+};
 
 export const theme = {
 	name: `Cap lifecycle v${brandingVersion}`,
@@ -11,11 +30,11 @@ export const theme = {
 		bodyFontCategory: "sans-serif",
 		textBaseColor: "#252525",
 		textBaseFontSize: 16,
-		textBaseLineHeight: 26,
+		textBaseLineHeight: bodyLineHeightPercent,
 		textLinkColor: "#3159d6",
 		heading1Color: "#171717",
 		heading1FontSize: 26,
-		heading1LineHeight: 34,
+		heading1LineHeight: 130,
 		heading2FontSize: 21,
 		buttonBodyColor: "#3159d6",
 		buttonTextColor: "#ffffff",
@@ -29,11 +48,11 @@ export const theme = {
 export const components = [
 	{
 		name: `Cap lifecycle header v${brandingVersion}`,
-		lmx: '<Paragraph fontSize="20" paddingBottom="24"><Strong><Link href="https://cap.so">Cap</Link></Strong></Paragraph>',
+		lmx: `<Image src="${logo.src}" alt="Cap" width="${logo.width}" borderRadius="${logo.borderRadius}" paddingBottom="24" />`,
 	},
 	{
 		name: `Cap lifecycle signature v${brandingVersion}`,
-		lmx: '<Paragraph paddingTop="16">Richie<Br />Founder, Cap</Paragraph>',
+		lmx: `<Paragraph lineHeight="${bodyLineHeightPercent}" paddingTop="8">${signature.join("<Br />")}</Paragraph>`,
 	},
 ];
 
@@ -45,13 +64,15 @@ export const sender = {
 };
 
 export const contactFallbacks = {
-	firstName: "there",
+	capGreeting: "Hey,",
 	capPlanName: "Cap",
 	capCustomerWelcome:
-		"Your paid access is ready. If you need help getting started, reply to this email.",
+		"If you need a hand getting set up, just reply and I'll help you sort it.",
 };
 
 export type BrandIds = { theme: string; header: string; signature: string };
+
+export const paragraphSpacing = 16;
 
 export const emailContent = (
 	message: { subject: string; previewText: string; body: string },
@@ -60,6 +81,6 @@ export const emailContent = (
 	subject: message.subject,
 	previewText: message.previewText,
 	...sender,
-	lmx: `<Style themeId="${ids.theme}" />\n<Component componentId="${ids.header}" />\n${message.body}\n<Component componentId="${ids.signature}" />`,
+	lmx: `<Style themeId="${ids.theme}" />\n<Component componentId="${ids.header}" />\n${message.body.replaceAll("<Paragraph>", `<Paragraph lineHeight="${bodyLineHeightPercent}" paddingBottom="${paragraphSpacing}">`)}\n<Component componentId="${ids.signature}" />`,
 	contactPropertiesFallbacks: contactFallbacks,
 });

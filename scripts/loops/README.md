@@ -1,6 +1,6 @@
 # Cap lifecycle email migration
 
-Marketing source and shared branding now live in [emails/](../../emails/README.md). Start with the [email catalogue and flow maps](../../emails/CATALOG.md); regenerate it with `bun run emails:catalog`. Run `bun run emails:check` for local checks and `bun run emails:check-loops` for read-only comparison with the registered Loops drafts.
+Marketing source and shared branding now live in [emails/](../../emails/README.md). Start with the [email catalogue and flow maps](../../emails/CATALOG.md); regenerate it with `bun run emails:catalog`. Run `bun run emails:check` for local checks and `bun run emails:check-loops --structure-only` for read-only graph checks. Custom MJML content requires browser review; see the email library instructions.
 
 This prepares Cap's Bento audience and replacement Loops journeys. Provisioning creates drafts only. Importing and syncing keep `capLifecycleEnabled=false`, `capOnboardingEligible=false`, and `capLifecycleStage=idle`. No script activates workflows, sends messages, or replays historical events.
 
@@ -36,8 +36,7 @@ Run from the repository root with Bun 1.4. Supply `LOOPS_API_KEY` through the pr
 
 ```sh
 bun scripts/loops/provision.ts --team 'Cap Software, Inc.' --dry-run
-bun scripts/loops/provision.ts --team 'Cap Software, Inc.' --state "$LOOPS_PRIVATE_DIR/provision-state.json" --mailing-list "$LOOPS_MAILING_LIST_ID" --apply
-bun scripts/loops/verify.ts --team 'Cap Software, Inc.' --state "$LOOPS_PRIVATE_DIR/provision-state.json" --mailing-list "$LOOPS_MAILING_LIST_ID"
+bun scripts/loops/verify.ts --team 'Cap Software, Inc.' --state "$LOOPS_PRIVATE_DIR/provision-state.json" --mailing-list "$LOOPS_MAILING_LIST_ID" --structure-only
 bun scripts/loops/prepare.ts --sources "$LOOPS_PRIVATE_DIR" --output "$LOOPS_PRIVATE_DIR/import"
 bun scripts/loops/import.ts --team 'Cap Software, Inc.' --contacts "$LOOPS_PRIVATE_DIR/import/contacts.json" --receipt "$LOOPS_PRIVATE_DIR/import/receipt.jsonl" --mailing-list "$LOOPS_MAILING_LIST_ID"
 ```
@@ -48,7 +47,7 @@ The source directory must contain arrays in `bento-contacts.json`, `cap-users.js
 
 The native Loops CSV importer can be used for the reviewed positive file. Check every column mapping, select the migration mailing list, and leave **Trigger workflows** off. Loops matches user ID before email; resolve destination identity conflicts first. Export the destination afterward and reconcile all intended addresses, opt-outs, audience fields, and enrollment holds. Native CSV imports and API receipts are separate records.
 
-Provisioning uses revision checks and a private receipt to resume partially created resources. Run `verify.ts` after every provisioning pass: it independently reads the actual graph, downstream filters, branch reconnections, timing, message text/links, fallback, campaign segments, mailing lists, draft states, and Guardian results. Investigate verification failures before editing a managed draft manually or reusing its receipt.
+The legacy native provisioner uses revision checks and a private receipt, but now refuses `--apply` because managed emails use custom MJML. Generate uploads with `emails:export` and review them in the browser. `verify.ts --structure-only` checks graphs, downstream filters, reconnections, timing, segments, mailing lists, draft status and custom format. The beta API cannot read MJML content or verify its Guardian results. Never treat a structure check as content parity.
 
 ## Repository rollout
 
@@ -74,13 +73,23 @@ Review the dry run before adding `--apply`. Use a single runner and bounded batc
 
 ## Before any activation
 
+### Optional sender profile picture
+
+For Richie's existing photo on `richie@mail.cap.so`, Loops recommends adding `mail.cap.so` as a **user alias domain** in Google Workspace: Admin console → Account → Domains → Manage domains → Add a domain → User alias domain. Verify ownership using the supplied DNS record. The alias inherits the primary `richie@cap.so` account and its profile photo without a new paid seat. This affects aliases for all primary-domain users, so inspect the existing domain configuration first. Preserve Loops' sending, bounce and authentication records; do not replace DNS records while following a generic Gmail setup wizard.
+
+Avatar display is client-specific and can take time to update. Test a newly sent owned-inbox preview after setup. See [Loops' sending-avatar guide](https://loops.so/docs/deliverability/adding-a-sending-avatar). No Google Workspace domain or DNS changes were made during draft preparation.
+
+### Production cutover
+
 Activation is deliberately outside this migration's approved scope. These gates remain necessary:
 
-1. Review actual draft copy and audiences, resolve the sending-domain DMARC warning, and configure rotated credentials in the intended environment.
+1. Review the final custom drafts and audiences, and configure rotated credentials in the intended environment. September 11 controlled deliveries passed SPF, DKIM and DMARC with inherited `p=quarantine`; the earlier DMARC warning is no longer an observed blocker. Recheck sending-domain status at cutover.
 2. Deploy the reviewed schema/code, seed the complete suppression registry, and prove the held sync with real free, paid, licensed, invited, SSO, unsubscribed, deleted, and changed-email cases.
 3. Implement and verify explicit new-consent capture, lifecycle enrollment for new eligible contacts, bounded retries, duplicate prevention, and an observed sync schedule. This branch does not infer marketing consent from account creation.
 4. Add a freshness mechanism and monitoring before live sends. Downstream filters use the last synced fields; `capVerifiedAt` is evidence, not a native expiry guarantee. Prove purchase/invite/opt-out transitions remove contacts before later promotional steps. Do not enable the current held sync alongside active enrollment because it deliberately returns contacts to idle.
-5. Reconcile a fresh Bento delta at cutover. Confirm no campaign/flow is queued to send twice, then disable old Bento marketing automations only as part of the approved cutover. Preserve source history and opt-outs before retiring Bento.
+5. Reconcile a fresh Bento delta at cutover, including all opt-outs and changed entitlements. Confirm no campaign/flow is queued to send twice, check overlap with Resend recording emails, then disable old Bento marketing automations only as part of the approved cutover. Preserve source history and suppression evidence.
+6. Test the deployed Cap signup/purchase/invite/opt-out path through Loops to an owned inbox, including a sync outage and retries. The completed synthetic profile-to-Loops tests do not replace this production integration check.
+7. After explicit activation approval, enable one small cohort of newly consenting eligible contacts, monitor deliveries, complaints, opt-outs and duplicate suppression, then expand. Do not bulk enroll imported history. Rollback stops new enrollment and pauses Loops before considering re-enabling Bento; never run both senders for the same journey. Retire Bento and rotate remaining credentials after reconciliation.
 
 ## Validation
 
@@ -93,3 +102,5 @@ bun run tsc -b apps/web
 ```
 
 Unit tests cover consent conflicts, conservative customer classification, teammate suppression, imported enrollment holds, identity preservation, and stable sync fingerprints. They do not prove production email delivery or a live cutover.
+
+See [QA results and remaining limitations](../../emails/QA.md) for the controlled live Loops tests and the separate production integration gate.

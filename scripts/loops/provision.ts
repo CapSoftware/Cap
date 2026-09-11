@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
-import { emailContent } from "../../emails/brand";
+import { deliveryFormat, emailContent } from "../../emails/brand";
 import { normalizeLmx } from "../emails/content";
 import { LoopsApi, LoopsApiError } from "./api";
 import {
@@ -35,6 +35,7 @@ type Email = {
 	contentRevisionId: string | null;
 	subject: string;
 	lmx: string;
+	contactPropertiesFallbacks?: Record<string, string>;
 };
 type Receipt = {
 	teamName: string;
@@ -61,6 +62,10 @@ if (!values.team)
 	throw new Error("Pass --team with the expected Loops team name");
 if (values.apply && !values.state)
 	throw new Error("--apply requires a private --state file");
+if (values.apply && deliveryFormat === "mjml")
+	throw new Error(
+		"Managed emails use custom MJML. Run emails:export and upload reviewed archives in the Loops editor; the API cannot edit this format.",
+	);
 
 const api = new LoopsApi(process.env.LOOPS_API_KEY ?? "");
 const identity = await api.request<{ success: boolean; teamName: string }>(
@@ -220,6 +225,17 @@ try {
 				{
 					expectedRevisionId: current.contentRevisionId,
 					...definition,
+					contactPropertiesFallbacks: {
+						...Object.fromEntries(
+							Object.keys(current.contactPropertiesFallbacks ?? {})
+								.filter(
+									(key) =>
+										!Object.hasOwn(definition.contactPropertiesFallbacks, key),
+								)
+								.map((key) => [key, null]),
+						),
+						...definition.contactPropertiesFallbacks,
+					},
 				},
 			);
 			if (result.warnings?.length)
