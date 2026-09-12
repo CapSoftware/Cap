@@ -21,7 +21,7 @@
 		"db:push": "dotenv -e .env -- bun run --filter @cap/database db:push",
 		"db:studio": "dotenv -e .env -- bun run --filter @cap/database db:studio",
 		"dev": "bun run docker:up && trap 'bun run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --env-mode=loose --ui tui",
-		"dev:desktop": "bun run --filter=@cap/desktop dev",
+		"dev:desktop": "bun run --cwd apps/desktop dev",
 		"dev:extension": "bun run docker:up && trap 'bun run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/chrome-extension --env-mode=loose --ui tui",
 		"dev:manual": "bun run docker:up && trap 'bun run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --no-cache --concurrency 1",
 		"dev:mobile": "bun run docker:up && trap 'bun run docker:stop' EXIT && CAP_MOBILE_DISABLE_ASSOCIATED_DOMAINS=1 EXPO_PUBLIC_CAP_WEB_URL=${EXPO_PUBLIC_CAP_WEB_URL:-http://localhost:3000} dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/mobile --env-mode=loose --ui tui",
