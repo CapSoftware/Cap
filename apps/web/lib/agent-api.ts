@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { VideoMetadata } from "@cap/database/types";
 import type { Agent } from "@cap/web-domain";
+import { formatVttCueText, parseVttCueText } from "@/lib/transcript-vtt";
 
 export type AgentCursor = {
 	updatedAt: string;
@@ -110,28 +111,6 @@ const parseVttTimestamp = (value: string) => {
 	return ((hours * 60 + minutes) * 60 + seconds) * 1000 + milliseconds;
 };
 
-const stripVttCueTags = (value: string) => {
-	const text: string[] = [];
-	let insideTag = false;
-
-	for (const character of value) {
-		if (character === "<") {
-			insideTag = true;
-			continue;
-		}
-		if (insideTag) {
-			if (character === ">") insideTag = false;
-			continue;
-		}
-		text.push(character);
-	}
-
-	return text.join("");
-};
-
-const normalizeCueText = (lines: string[]) =>
-	stripVttCueTags(lines.join("\n")).trim();
-
 export const parseAgentVtt = (
 	vtt: string,
 ): (typeof Agent.AgentTranscriptCue)["Type"][] => {
@@ -163,8 +142,9 @@ export const parseAgentVtt = (
 			if (cueIndex === lines.length - 1) index = cueIndex;
 		}
 
-		const text = normalizeCueText(textLines);
-		if (text) cues.push({ startMs, endMs, text });
+		const { text, speaker } = parseVttCueText(textLines.join("\n"));
+		if (text)
+			cues.push({ startMs, endMs, text, ...(speaker ? { speaker } : {}) });
 	}
 
 	return cues;
@@ -191,7 +171,7 @@ export const renderAgentVtt = (
 		...cues.flatMap((cue, index) => [
 			String(index + 1),
 			`${formatVttTimestamp(cue.startMs)} --> ${formatVttTimestamp(cue.endMs)}`,
-			cue.text.replace(/\s+/g, " ").trim(),
+			formatVttCueText(cue.text, cue.speaker),
 			"",
 		]),
 	].join("\n");

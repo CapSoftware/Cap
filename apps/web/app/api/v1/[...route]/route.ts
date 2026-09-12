@@ -2528,7 +2528,14 @@ const normalizeTranscriptCues = (
 		) {
 			return null;
 		}
-		normalized.push({ startMs: cue.startMs, endMs: cue.endMs, text });
+		normalized.push({
+			startMs: cue.startMs,
+			endMs: cue.endMs,
+			text,
+			...(cue.speaker
+				? { speaker: cue.speaker.replace(/\s+/g, " ").trim() }
+				: {}),
+		});
 		previousStartMs = cue.startMs;
 	}
 	const vtt = renderAgentVtt(normalized);
