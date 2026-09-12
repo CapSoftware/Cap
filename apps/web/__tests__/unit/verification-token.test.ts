@@ -1,3 +1,5 @@
+import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import { describe, expect, it } from "vitest";
 import { DrizzleAdapter } from "../../../../packages/database/auth/drizzle-adapter";
@@ -8,36 +10,46 @@ interface VerificationTokenRow {
 	expires: Date;
 }
 
+const dialect = new MySqlDialect();
+
 function createMockDb(initialRows: VerificationTokenRow[]) {
 	let table = [...initialRows];
-	let deletePredicate: unknown = null;
+	let lastDeleteQuery: { sql: string; params: unknown[] } | null = null;
 
 	const db = {
 		select: () => ({
 			from: () => ({
-				where: () => ({
-					limit: async () => table.slice(0, 1),
-				}),
+				where: (pred: unknown) => {
+					const query = dialect.sqlToQuery(pred as SQL);
+					const identifierParam = String(query.params[0] ?? "").toLowerCase();
+					return {
+						limit: async () =>
+							table
+								.filter(
+									(row) => row.identifier.toLowerCase() === identifierParam,
+								)
+								.slice(0, 1),
+					};
+				},
 			}),
 		}),
 		delete: () => ({
 			where: (pred: unknown) => {
-				deletePredicate = pred;
+				const query = dialect.sqlToQuery(pred as SQL);
+				lastDeleteQuery = query;
+				const [identifierParam, tokenParam] = query.params;
 				const initialCount = table.length;
 				table = table.filter(
 					(row) =>
-						!(
-							row.identifier.toLowerCase() === "user@example.com" &&
-							row.token === "123456"
-						),
+						!(row.identifier === identifierParam && row.token === tokenParam),
 				);
-				const rowsAffected = initialCount - table.length;
-				return Promise.resolve({ rowsAffected });
+				const affectedRows = initialCount - table.length;
+				return Promise.resolve([{ affectedRows }]);
 			},
 		}),
 		transaction: async (cb: (tx: unknown) => Promise<unknown>) => cb(db),
 		getTable: () => table,
-		getDeletePredicate: () => deletePredicate,
+		getLastDeleteQuery: () => lastDeleteQuery,
 	};
 
 	return db;
@@ -60,7 +72,13 @@ describe("useVerificationToken", () => {
 		});
 
 		expect(result).toBeNull();
-		expect(mockDb.getDeletePredicate()).not.toBeNull();
+		const deleteQuery = mockDb.getLastDeleteQuery();
+		expect(deleteQuery).not.toBeNull();
+		expect(deleteQuery?.sql).toContain(
+			"`verification_tokens`.`identifier` = ?",
+		);
+		expect(deleteQuery?.sql).toContain("`verification_tokens`.`token` = ?");
+		expect(deleteQuery?.params).toEqual(["user@example.com", "123456"]);
 		expect(mockDb.getTable()).toHaveLength(0);
 	});
 
@@ -82,7 +100,13 @@ describe("useVerificationToken", () => {
 		expect(result).not.toBeNull();
 		expect(result?.identifier).toBe("user@example.com");
 		expect(result?.token).toBe("123456");
-		expect(mockDb.getDeletePredicate()).not.toBeNull();
+		const deleteQuery = mockDb.getLastDeleteQuery();
+		expect(deleteQuery).not.toBeNull();
+		expect(deleteQuery?.sql).toContain(
+			"`verification_tokens`.`identifier` = ?",
+		);
+		expect(deleteQuery?.sql).toContain("`verification_tokens`.`token` = ?");
+		expect(deleteQuery?.params).toEqual(["user@example.com", "123456"]);
 		expect(mockDb.getTable()).toHaveLength(0);
 	});
 
@@ -96,10 +120,10 @@ describe("useVerificationToken", () => {
 		});
 
 		expect(result).toBeNull();
-		expect(mockDb.getDeletePredicate()).toBeNull();
+		expect(mockDb.getLastDeleteQuery()).toBeNull();
 	});
 
-	it("prevents race condition by checking rowsAffected on token consumption", async () => {
+	it("prevents race condition by checking affectedRows on token consumption", async () => {
 		let table = [
 			{
 				identifier: "user@example.com",
@@ -108,6 +132,7 @@ describe("useVerificationToken", () => {
 			},
 		];
 
+		let firstDeleteDone = false;
 		const mockDb = {
 			select: () => ({
 				from: () => ({
@@ -117,11 +142,16 @@ describe("useVerificationToken", () => {
 				}),
 			}),
 			delete: () => ({
-				where: () => {
-					const initialCount = table.length;
-					table = [];
-					const rowsAffected = initialCount;
-					return Promise.resolve({ rowsAffected });
+				where: (pred: unknown) => {
+					const query = dialect.sqlToQuery(pred as SQL);
+					expect(query.sql).toContain("`verification_tokens`.`identifier` = ?");
+					expect(query.sql).toContain("`verification_tokens`.`token` = ?");
+					if (!firstDeleteDone) {
+						firstDeleteDone = true;
+						table = [];
+						return Promise.resolve([{ affectedRows: 1 }]);
+					}
+					return Promise.resolve([{ affectedRows: 0 }]);
 				},
 			}),
 			transaction: async (cb: (tx: unknown) => Promise<unknown>) => cb(mockDb),
@@ -146,7 +176,7 @@ describe("useVerificationToken", () => {
 	});
 
 	it("deletes only the selected token instance and preserves replacement tokens for the same user", async () => {
-		let table = [
+		const mockDb = createMockDb([
 			{
 				identifier: "user@example.com",
 				token: "123456",
@@ -157,40 +187,17 @@ describe("useVerificationToken", () => {
 				token: "replacement_token",
 				expires: new Date(Date.now() + 600000),
 			},
-		];
+		]);
 
-		const mockDb = {
-			select: () => ({
-				from: () => ({
-					where: () => ({
-						limit: async () => [table[0]],
-					}),
-				}),
-			}),
-			delete: () => ({
-				where: () => {
-					const initialCount = table.length;
-					table = table.filter(
-						(row) =>
-							!(
-								row.identifier === "user@example.com" && row.token === "123456"
-							),
-					);
-					const rowsAffected = initialCount - table.length;
-					return Promise.resolve({ rowsAffected });
-				},
-			}),
-			transaction: async (cb: (tx: unknown) => Promise<unknown>) => cb(mockDb),
-		} as unknown as MySql2Database;
-
-		const adapter = DrizzleAdapter(mockDb);
+		const adapter = DrizzleAdapter(mockDb as unknown as MySql2Database);
 		const result = await adapter.useVerificationToken?.({
 			identifier: "USER@example.com",
 			token: "999999",
 		});
 
 		expect(result).toBeNull();
-		expect(table.some((r) => r.token === "123456")).toBe(false);
-		expect(table.some((r) => r.token === "replacement_token")).toBe(true);
+		const remaining = mockDb.getTable();
+		expect(remaining.some((r) => r.token === "123456")).toBe(false);
+		expect(remaining.some((r) => r.token === "replacement_token")).toBe(true);
 	});
 });

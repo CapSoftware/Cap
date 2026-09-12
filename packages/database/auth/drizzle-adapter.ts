@@ -70,6 +70,21 @@ async function hasLinkedAccount(db: MySql2Database, userId: User.UserId) {
 	return !!linkedAccount;
 }
 
+function getAffectedRows(result: unknown): number {
+	if (Array.isArray(result)) {
+		return (
+			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
+		);
+	}
+	return (
+		(result as { affectedRows?: number; rowsAffected?: number } | undefined)
+			?.affectedRows ??
+		(result as { affectedRows?: number; rowsAffected?: number } | undefined)
+			?.rowsAffected ??
+		0
+	);
+}
+
 export function DrizzleAdapter(
 	db: MySql2Database,
 	options?: { getSsoIdentity: () => ValidatedSsoIdentity | null },
@@ -525,8 +540,6 @@ export function DrizzleAdapter(
 				}
 				const storedIdentifier = row.identifier?.toLowerCase() ?? "";
 
-				// Invalidate the specific token instance that was selected. This burns wrong guesses
-				// while scoping deletion to both identifier AND row.token to protect newly issued replacement tokens.
 				const result = await tx
 					.delete(verificationTokens)
 					.where(
@@ -536,9 +549,7 @@ export function DrizzleAdapter(
 						),
 					);
 
-				// If database reports 0 rows affected, token was consumed or rotated concurrently
-				const rowsAffected = (result as { rowsAffected?: number })?.rowsAffected;
-				if (rowsAffected === 0) {
+				if (getAffectedRows(result) === 0) {
 					console.warn(
 						"[useVerificationToken] Token already consumed or invalid during deletion.",
 					);
@@ -554,7 +565,9 @@ export function DrizzleAdapter(
 			};
 
 			if (typeof db.transaction === "function") {
-				return await db.transaction(async (tx) => execute(tx as unknown as typeof db));
+				return await db.transaction(async (tx) =>
+					execute(tx as unknown as typeof db),
+				);
 			}
 			return await execute(db);
 		},
