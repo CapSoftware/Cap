@@ -20,7 +20,7 @@ Journeys require global subscription, capConsent=subscribed, the exact audience,
 
 Teammate history takes priority over paid/free classification. Ambiguous contacts receive no journey. [Audience classification and consent](../scripts/loops/README.md#audience-rules).
 
-The independent watchdog checks every registered journey and alerts when an active flow requires a manual pause. It can hold paused/draft journeys with an impossible subscription condition. Recovery never resumes delivery automatically. Check sync health before campaign sends. See the [outage and resume procedure](../scripts/loops/README.md#outage-protection) and [conversion experiment](conversion-experiment.md).
+The independent watchdog checks every registered journey and alerts when an active flow requires a manual pause. It can hold paused/draft journeys with an impossible subscription condition. Recovery never resumes delivery automatically. Check sync health before campaign sends. See the [outage and resume procedure](../scripts/loops/README.md#outage-protection) and [onboarding runtime](onboarding-runtime.md).
 
 ### Independent free-user onboarding
 
