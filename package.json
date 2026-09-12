@@ -1,6 +1,11 @@
 {
 	"type": "module",
 	"scripts": {
+		"emails:catalog": "bun scripts/emails/manage.ts",
+		"emails:check": "bun scripts/emails/manage.ts --check",
+		"emails:check-loops": "bun scripts/loops/verify.ts",
+		"emails:export": "bun scripts/emails/export-mjml.ts",
+		"emails:logo": "bun scripts/emails/export-logo.ts",
 		"build": "dotenv -e .env -- turbo run build",
 		"build:web": "turbo run build:web",
 		"build:web:docker": "bun run --filter=@cap/web build:docker",
@@ -58,11 +63,12 @@
 		"@effect/language-service": "^0.44.0",
 		"dotenv-cli": "latest",
 		"mysql2": "^3.15.2",
+		"react": "19.2.0",
+		"react-dom": "19.2.0",
+		"sharp": "0.35.3",
 		"tsdown": "^0.15.6",
 		"turbo": "^2.3.4",
-		"typescript": "^5.8.3",
-		"react": "19.2.0",
-		"react-dom": "19.2.0"
+		"typescript": "^5.8.3"
 	},
 	"packageManager": "bun@1.4.0",
 	"name": "cap",

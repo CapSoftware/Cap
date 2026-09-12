@@ -62,8 +62,7 @@ use gpui::{
     AppContext as _, Bounds, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
     IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
     Point, Render, RenderImage, SharedString, StatefulInteractiveElement as _, StyleRefinement,
-    Styled, StyledImage as _, Subscription, WeakEntity, Window, div, point, prelude::FluentBuilder,
-    px, svg,
+    Styled, Subscription, WeakEntity, Window, div, point, prelude::FluentBuilder, px, svg,
 };
 
 use crate::{
@@ -134,8 +133,6 @@ pub fn default_preview_resolution() -> XY<u32> {
 // Shell metrics (`routes/editor/Editor.tsx:77-82`)
 // ---------------------------------------------------------------------------
 
-/// The timeline height used until the project's tracks are known, which is
-/// what the auto height derives from.
 const DEFAULT_TIMELINE_HEIGHT: f32 = 260.;
 /// The reference height the player/timeline split scales against on a short
 /// viewport. It is not the floor -- see [`timeline::MIN_HUG_HEIGHT`].
@@ -574,31 +571,6 @@ pub fn frame_image(frame: &RenderedFrame) -> Option<Arc<RenderImage>> {
     ])))
 }
 
-/// The poster: the recording's own first-frame JPEG, decoded to at most the
-/// canvas's retina size. `thumbnail` (a box filter) over `resize` because the
-/// picture is on screen for well under a second.
-fn decode_poster(path: &std::path::Path) -> Option<Arc<RenderImage>> {
-    let bytes = std::fs::read(path).ok()?;
-    let image = image::load_from_memory(&bytes).ok()?;
-    let (width, height) = (image.width().max(1), image.height().max(1));
-    let scale = (1920. / width as f32).min(1080. / height as f32).min(1.);
-    let mut scaled = if scale < 1. {
-        image::imageops::thumbnail(
-            &image.into_rgba8(),
-            ((width as f32 * scale) as u32).max(1),
-            ((height as f32 * scale) as u32).max(1),
-        )
-    } else {
-        image.into_rgba8()
-    };
-    for pixel in scaled.pixels_mut() {
-        pixel.0.swap(0, 2);
-    }
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![
-        image::Frame::new(scaled)
-    ])))
-}
-
 /// What the frame pump hands the window.
 #[derive(Clone)]
 pub(crate) enum EditorPreviewFrame {
@@ -768,7 +740,7 @@ impl Render for EditorSectionView {
                 // clips sidebar; the config sidebar is hidden, not destroyed
                 // (`Editor.tsx:728-747`).
                 EditorSection::Sidebar => {
-                    if !editor.project_ready() {
+                    if !editor.visual_ready() {
                         return editor.render_preparing_sidebar(!matches!(
                             editor.state,
                             LoadState::Failed(_)
@@ -1405,13 +1377,6 @@ pub struct EditorWindow {
     preparing_frame_presented: bool,
     preparing_seed: Option<Arc<crate::editor_preparing::presentation::PreparingTimelineSeed>>,
     pub(crate) latest_frame: Option<EditorPreviewFrame>,
-    /// The bundle's `screenshots/display.jpg`, letterboxed into the canvas
-    /// until the first composed frame lands -- decoded in parallel with
-    /// `EditorInstance` construction, so the editor opens onto a picture
-    /// rather than "Loading project...". The Solid app hides the same wait
-    /// behind a skeleton; a poster is the native equivalent with the added
-    /// courtesy of showing the recording itself.
-    poster: Option<Arc<RenderImage>>,
     preview: Entity<PreviewFrameView>,
     header: Entity<EditorSectionView>,
     toolbar: Entity<EditorSectionView>,
@@ -1616,6 +1581,7 @@ pub struct EditorWindow {
     /// The user's drag on the resize grip. `None` means the card hugs its
     /// track rows and re-hugs whenever a track is added or removed.
     timeline_height_override: Option<f32>,
+    initial_timeline_rows: Option<usize>,
     timeline_resize: Option<(f32, f32)>,
     /// The header's Presets dropdown (`PresetsDropdown.tsx`), and whichever
     /// of its three dialogs is up. The dialog closes the menu when it opens,
@@ -1733,27 +1699,6 @@ impl EditorWindow {
             cx.defer(move |cx| crate::app_windows::editor_closed(&path, window_id, cx));
             true
         });
-
-        // Decode the poster off-thread immediately: it races EditorInstance
-        // construction and reliably wins, so the first paint has a picture.
-        let poster_path = project_path.join("screenshots").join("display.jpg");
-        cx.spawn_in(window, async move |this, cx| {
-            let Some(poster) = cx
-                .background_executor()
-                .spawn(async move { decode_poster(&poster_path) })
-                .await
-            else {
-                return;
-            };
-            this.update(cx, |this, cx| {
-                if this.latest_frame.is_none() {
-                    this.poster = Some(poster);
-                    cx.notify();
-                }
-            })
-            .ok();
-        })
-        .detach();
 
         let name_input = cx.new(|cx| {
             let mut input = ui::TextInputState::single_line(window, cx);
@@ -1951,11 +1896,11 @@ impl EditorWindow {
             audio_picker: None,
             camera3d_setup: None,
             timeline_height_override: None,
+            initial_timeline_rows: None,
             timeline_resize: None,
             presets_menu: None,
             preset_dialog: None,
             caption_sync_signature: None,
-            poster: None,
             export: None,
             clips: crate::editor_clips::ClipsState::default(),
         }
@@ -2412,6 +2357,14 @@ impl EditorWindow {
         self.selection.as_ref()
     }
 
+    fn visual_ready(&self) -> bool {
+        self.project_ready()
+            && self.latest_frame.is_some()
+            && self.preparing_consumer.is_none()
+            && self.ordinary_handoff_frame.is_none()
+            && self.preparing_candidate_frame.is_none()
+    }
+
     pub(crate) fn project_ready(&self) -> bool {
         self.instance.is_some() && matches!(&self.state, LoadState::Ready(_))
     }
@@ -2665,6 +2618,7 @@ impl EditorWindow {
     }
 
     pub fn set_instance(&mut self, instance: Arc<EditorInstance>) {
+        self.initial_timeline_rows = Some(self.timeline.rows.len());
         self.preparing_retry_pending = false;
         self.preparing_candidate_frame = None;
         self.ordinary_handoff_frame = self
@@ -3043,6 +2997,16 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.visual_ready() {
+            let key = &event.keystroke;
+            let close = (key.key == "w" && (key.modifiers.platform || key.modifiers.control))
+                || (key.key == "f4" && key.modifiers.alt);
+            if !close {
+                window.prevent_default();
+                cx.stop_propagation();
+            }
+            return;
+        }
         if !is_playback_shortcut(
             &event.keystroke,
             ui::text_input_has_focus(window, cx),
@@ -3065,7 +3029,7 @@ impl EditorWindow {
     /// (`useEditorShortcuts.ts:10`) and `e.repeat` is ignored there
     /// (`:42`) as `is_held` is here.
     fn on_key(&mut self, event: &gpui::KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.project_ready() {
+        if !self.visual_ready() {
             return;
         }
         if self.frame_controls.is_open() && event.keystroke.key == "escape" {
@@ -4920,17 +4884,12 @@ impl EditorWindow {
         EditorVerticalLayout::new(viewport_height, value).timeline_height
     }
 
-    /// The height the timeline card asks for: the user's dragged override if
-    /// there is one, otherwise the height that hugs the visible track rows.
-    /// Before the project loads there are no rows to hug, so the old fixed
-    /// height stands in and the card does not pop when they arrive.
     fn preferred_timeline_height(&self) -> f32 {
         self.timeline_height_override.unwrap_or_else(|| {
-            if self.timeline.rows.is_empty() {
-                DEFAULT_TIMELINE_HEIGHT
-            } else {
-                timeline::hug_height(self.timeline.rows.len())
-            }
+            DEFAULT_TIMELINE_HEIGHT
+                + self.initial_timeline_rows.map_or(0., |initial| {
+                    timeline::hug_height(self.timeline.rows.len()) - timeline::hug_height(initial)
+                })
         })
     }
 
@@ -5845,8 +5804,6 @@ impl EditorWindow {
             frame.layout.output_size[1] as f32,
         );
         self.latest_frame = Some(frame.frame.clone());
-        // The composed frame supersedes the poster; free its atlas memory.
-        self.poster = None;
         let previous = self.preview.update(cx, |preview, cx| {
             preview.set_frame(frame.frame, frame_size, self.stats.clone(), cx)
         });
@@ -8515,6 +8472,7 @@ impl EditorWindow {
                         ui::EditorButton::plain(&theme, "open-recording-bundle")
                             .left_icon("icons/folder.svg")
                             .tooltip(&theme, "Open recording bundle")
+                            .disabled(!self.visual_ready())
                             .on_click(cx.listener(|this, _, _window, cx| {
                                 this.open_recording_bundle(cx);
                             })),
@@ -8523,6 +8481,7 @@ impl EditorWindow {
                         ui::EditorButton::plain(&theme, "delete-recording")
                             .left_icon("icons/trash.svg")
                             .tooltip(&theme, "Delete recording")
+                            .disabled(!self.visual_ready())
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.delete_recording(window, cx);
                             })),
@@ -8564,7 +8523,16 @@ impl EditorWindow {
                     .when(self.sharing.is_some(), |group| {
                         group.child(self.render_reupload_button(cx))
                     })
-                    .child(self.render_export_button(cx)),
+                    .child(self.render_export_button(cx))
+                    .relative()
+                    .children((!self.visual_ready()).then(|| {
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .occlude()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                    })),
             );
 
         #[cfg(target_os = "windows")]
@@ -8904,9 +8872,9 @@ impl EditorWindow {
                 self.preview
                     .clone()
                     .cached(StyleRefinement::default().size_full()),
-                self.render_preview_placeholder(false),
+                loading::preview(&theme, false),
             ),
-            (_, false) => self.render_preview_placeholder(true),
+            (_, false) => loading::preview(&theme, true),
         };
 
         div()
@@ -8916,25 +8884,6 @@ impl EditorWindow {
             .overflow_hidden()
             .bg(Hsla::from(theme.editor.card))
             .child(body)
-            .children(
-                (!self.project_ready() && self.latest_frame.is_some()).then(|| {
-                    div()
-                        .absolute()
-                        .bottom(px(12.))
-                        .left(px(12.))
-                        .px(px(10.))
-                        .py(px(6.))
-                        .rounded(px(6.))
-                        .bg(Hsla::from(theme.editor.card))
-                        .text_size(px(12.))
-                        .text_color(Hsla::from(theme.editor.text_2))
-                        .child(if self.preparing_consumer.is_some() {
-                            "Preparing recording…"
-                        } else {
-                            "Opening editor…"
-                        })
-                }),
-            )
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
             // wrapper and only while a frame exists.
@@ -8943,26 +8892,6 @@ impl EditorWindow {
             } else {
                 None
             })
-    }
-
-    fn render_preview_placeholder(&self, animated: bool) -> gpui::AnyElement {
-        if let Some(poster) = self.poster.clone() {
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(Hsla::from(self.theme.editor.card))
-                .child(
-                    gpui::img(poster)
-                        .size_full()
-                        .object_fit(gpui::ObjectFit::Contain),
-                )
-                .into_any_element()
-        } else {
-            loading::preview(&self.theme, animated)
-        }
     }
 
     /// `EditorErrorScreen` -- what a bundle that will not open shows instead of
@@ -10139,6 +10068,11 @@ fn is_playback_shortcut(
 impl Render for EditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_appearance(window, cx);
+        let title_disabled = !self.visual_ready();
+        if self.name_input.read(cx).is_disabled() != title_disabled {
+            self.name_input
+                .update(cx, |input, cx| input.set_disabled(title_disabled, cx));
+        }
         // Fields first: a field created this frame has no text yet, and gpui
         // only renders on invalidation, so syncing before creating would leave
         // a brand-new box empty until something else asked for a frame.
@@ -10573,6 +10507,20 @@ impl Render for EditorWindow {
             }))
             // The open `KSelect` menu, painted last of all so it is over the
             // sidebar and the drag layers alike.
+            .children(
+                (!self.visual_ready() && !matches!(self.state, LoadState::Failed(_))).then(|| {
+                    div()
+                        .absolute()
+                        .top(px(HEADER_HEIGHT))
+                        .bottom_0()
+                        .left_0()
+                        .right_0()
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                }),
+            )
             .children(self.with_style_controls(|this| this.render_sidebar_menu(cx)))
             .children(self.render_toolbar_menu(cx))
             .children(self.render_frame_controls(window, cx))

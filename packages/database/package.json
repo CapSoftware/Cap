@@ -64,6 +64,7 @@
 		"./auth/sso": "./auth/sso.ts",
 		"./auth/sso-state": "./auth/sso-state.ts",
 		"./schema": "./schema.ts",
+		"./loops/*": "./loops/*.ts",
 		"./crypto": "./crypto.ts",
 		"./helpers": "./helpers.ts",
 		"./emails/config": "./emails/config.ts",

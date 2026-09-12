@@ -2,6 +2,7 @@ import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { PaymentFailed } from "@cap/database/emails/payment-failed";
 import { nanoId } from "@cap/database/helpers";
+import { enqueueLoopsSync } from "@cap/database/loops/queue";
 import {
 	developerCreditTransactions,
 	signedBaas,
@@ -608,6 +609,7 @@ export const POST = async (req: Request) => {
 						onboarding_completed_at: isOnBoarding ? new Date() : undefined,
 					})
 					.where(eq(users.id, dbUser.id));
+				await enqueueLoopsSync(db(), dbUser.id);
 
 				console.log("Successfully updated user in database");
 
@@ -767,6 +769,7 @@ export const POST = async (req: Request) => {
 						inviteQuota: inviteQuota,
 					})
 					.where(eq(users.id, dbUser.id));
+				await enqueueLoopsSync(db(), dbUser.id);
 
 				console.log(
 					"Successfully updated user in database with new invite quota:",
@@ -942,6 +945,7 @@ export const POST = async (req: Request) => {
 						inviteQuota: 1,
 					})
 					.where(eq(users.id, foundUserId));
+				await enqueueLoopsSync(db(), foundUserId);
 
 				console.log("User updated successfully", {
 					foundUserId,
