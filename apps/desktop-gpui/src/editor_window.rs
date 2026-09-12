@@ -59,11 +59,10 @@ use core_foundation::base::TCFType;
 #[cfg(target_os = "macos")]
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
-    Animation, AnimationExt as _, AppContext as _, Bounds, Context, Entity, FocusHandle,
-    FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Pixels, Point, Render, RenderImage, SharedString,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Subscription, WeakEntity, Window,
-    div, point, prelude::FluentBuilder, px, svg,
+    AppContext as _, Bounds, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
+    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
+    Point, Render, RenderImage, SharedString, StatefulInteractiveElement as _, StyleRefinement,
+    Styled, Subscription, WeakEntity, Window, div, point, prelude::FluentBuilder, px, svg,
 };
 
 use crate::{
@@ -75,6 +74,7 @@ use crate::{
 };
 
 mod frame;
+mod loading;
 mod scenes;
 
 // ---------------------------------------------------------------------------
@@ -740,16 +740,24 @@ impl Render for EditorSectionView {
                 // clips sidebar; the config sidebar is hidden, not destroyed
                 // (`Editor.tsx:728-747`).
                 EditorSection::Sidebar => {
-                    if !editor.project_ready() {
-                        return editor.render_preparing_sidebar().into_any_element();
+                    if !editor.visual_ready() {
+                        return editor.render_preparing_sidebar(!matches!(
+                            editor.state,
+                            LoadState::Failed(_)
+                        ));
                     }
-                    if editor.clips.open {
+                    let sidebar = if editor.clips.open {
                         editor.render_clips_sidebar(cx).into_any_element()
                     } else {
                         editor.with_style_controls(|editor| {
                             editor.render_sidebar(cx).into_any_element()
                         })
-                    }
+                    };
+                    loading::reveal(
+                        "editor-sidebar-ready",
+                        sidebar,
+                        editor.render_preparing_sidebar(false),
+                    )
                 }
                 EditorSection::Timeline => {
                     let viewport_width: f32 = window.viewport_size().width.into();
@@ -8661,12 +8669,8 @@ impl EditorWindow {
             )
     }
 
-    fn render_preparing_sidebar(&self) -> impl IntoElement {
+    fn render_preparing_sidebar(&self, animated: bool) -> gpui::AnyElement {
         let theme = self.theme;
-        let project = self
-            .preparing_seed
-            .as_ref()
-            .map_or(&self.project, |seed| &seed.project);
         div()
             .size_full()
             .flex()
@@ -8704,33 +8708,8 @@ impl EditorWindow {
                             }),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .p(px(16.))
-                    .gap(px(16.))
-                    .text_size(px(12.))
-                    .child(
-                        div()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.editor.text_1))
-                            .child("Background"),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .justify_between()
-                            .text_color(Hsla::from(theme.editor.text_3))
-                            .child("Aspect ratio")
-                            .child(Self::aspect_ratio_label(project.aspect_ratio.as_ref())),
-                    )
-                    .child(
-                        div()
-                            .text_color(Hsla::from(theme.editor.text_3))
-                            .child("Editing is available when your recording is ready."),
-                    ),
-            )
+            .child(loading::sidebar(&theme, animated))
+            .into_any_element()
     }
 
     /// The player's top row: the stage's own triggers on the left, the
@@ -8888,24 +8867,14 @@ impl EditorWindow {
         let theme = self.theme;
         let body = match (&self.state, self.latest_frame.is_some()) {
             (LoadState::Failed(message), _) => self.render_error_state(message).into_any_element(),
-            (_, true) => self
-                .preview
-                .clone()
-                .cached(StyleRefinement::default().size_full())
-                .into_any_element(),
-            (_, false) => div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    svg()
-                        .path("icons/video.svg")
-                        .size(px(48.))
-                        .text_color(Hsla::from(theme.editor.text_3)),
-                )
-                .into_any_element(),
+            (_, true) => loading::reveal(
+                "editor-preview-ready",
+                self.preview
+                    .clone()
+                    .cached(StyleRefinement::default().size_full()),
+                loading::preview(&theme, false),
+            ),
+            (_, false) => loading::preview(&theme, true),
         };
 
         div()
@@ -8915,17 +8884,6 @@ impl EditorWindow {
             .overflow_hidden()
             .bg(Hsla::from(theme.editor.card))
             .child(body)
-            .children(self.latest_frame.is_some().then(|| {
-                div()
-                    .absolute()
-                    .inset_0()
-                    .bg(Hsla::from(theme.editor.card))
-                    .with_animation(
-                        "editor-preview-reveal",
-                        Animation::new(Duration::from_millis(300)),
-                        |veil, progress| veil.opacity(1. - progress),
-                    )
-            }))
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
             // wrapper and only while a frame exists.
@@ -9258,6 +9216,14 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         if !self.project_ready() {
+            if self
+                .preparing_presentation
+                .as_ref()
+                .and_then(|presentation| presentation.progress.total_duration)
+                .is_none()
+            {
+                return loading::timeline(&theme, !matches!(self.state, LoadState::Failed(_)));
+            }
             return div()
                 .size_full()
                 .child(timeline::render_preparing_timeline(
@@ -10541,29 +10507,20 @@ impl Render for EditorWindow {
             }))
             // The open `KSelect` menu, painted last of all so it is over the
             // sidebar and the drag layers alike.
-            .children((!matches!(self.state, LoadState::Failed(_))).then(|| {
-                let veil = div()
-                    .absolute()
-                    .top(px(HEADER_HEIGHT))
-                    .bottom_0()
-                    .left_0()
-                    .right_0()
-                    .bg(Hsla::from(theme.editor.window).opacity(0.45));
-                if self.visual_ready() {
-                    veil.with_animation(
-                        "editor-controls-reveal",
-                        Animation::new(Duration::from_millis(300)),
-                        |veil, progress| veil.opacity(1. - progress),
-                    )
-                    .into_any_element()
-                } else {
-                    veil.occlude()
+            .children(
+                (!self.visual_ready() && !matches!(self.state, LoadState::Failed(_))).then(|| {
+                    div()
+                        .absolute()
+                        .top(px(HEADER_HEIGHT))
+                        .bottom_0()
+                        .left_0()
+                        .right_0()
+                        .occlude()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                         .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-                        .into_any_element()
-                }
-            }))
+                }),
+            )
             .children(self.with_style_controls(|this| this.render_sidebar_menu(cx)))
             .children(self.render_toolbar_menu(cx))
             .children(self.render_frame_controls(window, cx))

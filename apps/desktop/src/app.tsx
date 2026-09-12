@@ -35,6 +35,9 @@ const NewMainPage = lazy(() => import("./routes/(window-chrome)/new-main"));
 const SettingsGeneralPage = lazy(
 	() => import("./routes/(window-chrome)/settings/general"),
 );
+const SettingsQualityPage = lazy(
+	() => import("./routes/(window-chrome)/settings/quality"),
+);
 const SettingsRecordingsPage = lazy(
 	() => import("./routes/(window-chrome)/settings/recordings"),
 );
@@ -198,6 +201,7 @@ function Inner() {
 						<Route path="/settings" component={SettingsLayout}>
 							<Route path="/" component={SettingsGeneralPage} />
 							<Route path="/general" component={SettingsGeneralPage} />
+							<Route path="/quality" component={SettingsQualityPage} />
 							<Route path="/recordings" component={SettingsRecordingsPage} />
 							<Route
 								path="/transcription"
