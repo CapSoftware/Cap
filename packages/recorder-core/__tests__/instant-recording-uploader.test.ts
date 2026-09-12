@@ -5,7 +5,7 @@ import {
 import type { VideoId } from "@cap/recorder-core/recorder-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const STREAMED_PART_BYTES = 5 * 1024 * 1024 + 128;
+const STREAMED_PART_BYTES = 5 * 1024 * 1024;
 const DRIVE_PART_BYTES = 16 * 1024 * 1024;
 const OVERFLOW_PART_BYTES = 129 * 1024 * 1024;
 const FINALIZED_BLOB_BYTES = 129 * 1024 * 1024;
@@ -19,6 +19,7 @@ class MockXMLHttpRequest {
 	static outcomes: UploadOutcome[] = [];
 	static abortedCount = 0;
 	static recordedHeaders: Array<Map<string, string>> = [];
+	static uploadedBlobs: Blob[] = [];
 
 	upload = {
 		onprogress: null as ((event: ProgressEvent<EventTarget>) => void) | null,
@@ -37,6 +38,7 @@ class MockXMLHttpRequest {
 		MockXMLHttpRequest.outcomes = [...outcomes];
 		MockXMLHttpRequest.abortedCount = 0;
 		MockXMLHttpRequest.recordedHeaders = [];
+		MockXMLHttpRequest.uploadedBlobs = [];
 	}
 
 	open() {}
@@ -51,6 +53,7 @@ class MockXMLHttpRequest {
 
 	send(part: Blob) {
 		MockXMLHttpRequest.recordedHeaders.push(new Map(this.headers));
+		MockXMLHttpRequest.uploadedBlobs.push(part);
 
 		const outcome = MockXMLHttpRequest.outcomes.shift();
 		if (!outcome) {
@@ -976,5 +979,62 @@ describe("InstantRecordingUploader", () => {
 		await new Promise((resolve) => setTimeout(resolve, 600));
 		expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
 		await uploader.cancel();
+	});
+
+	it("slices streamed buffer into uniform non-trailing parts matching MIN_PART_SIZE_BYTES for Cloudflare R2 compatibility", async () => {
+		const MIN_PART_SIZE = 5 * 1024 * 1024;
+		const TRAILING_SIZE = 2 * 1024 * 1024;
+		const TOTAL_SIZE = MIN_PART_SIZE + TRAILING_SIZE;
+
+		const fetchMock = vi.fn(
+			async (input: RequestInfo | URL, init?: RequestInit) => {
+				const url = input.toString();
+				const body = init?.body ? JSON.parse(init.body as string) : null;
+
+				if (url === "/api/upload/multipart/presign-part") {
+					return makeJsonResponse({
+						presignedUrl: `https://uploads.example/part-${body.partNumber}`,
+					});
+				}
+
+				if (url === "/api/upload/multipart/complete") {
+					expect(body.parts).toHaveLength(2);
+					expect(body.parts[0]).toMatchObject({ partNumber: 1 });
+					expect(body.parts[1]).toMatchObject({ partNumber: 2 });
+					return makeJsonResponse({ success: true });
+				}
+
+				throw new Error(`Unexpected fetch call: ${url}`);
+			},
+		);
+
+		vi.stubGlobal("fetch", fetchMock);
+		MockXMLHttpRequest.setOutcomes([
+			{ type: "success", etag: "part-1" },
+			{ type: "success", etag: "part-2" },
+		]);
+
+		const uploader = new InstantRecordingUploader({
+			videoId,
+			uploadId: "upload-r2",
+			mimeType: "video/webm;codecs=vp9,opus",
+			subpath: "raw-upload.webm",
+			setUploadStatus: vi.fn(),
+			sendProgressUpdate: vi.fn().mockResolvedValue(undefined),
+		});
+
+		// Push a chunk larger than MIN_PART_SIZE_BYTES
+		const chunk = makeBlob(TOTAL_SIZE, "video/webm;codecs=vp9,opus");
+		uploader.handleChunk(chunk, chunk.size);
+
+		await uploader.finalize({
+			durationSeconds: 10,
+			subpath: "raw-upload.webm",
+		});
+
+		// Non-trailing part must have exact MIN_PART_SIZE_BYTES; trailing part has remainder
+		expect(MockXMLHttpRequest.uploadedBlobs).toHaveLength(2);
+		expect(MockXMLHttpRequest.uploadedBlobs[0].size).toBe(MIN_PART_SIZE);
+		expect(MockXMLHttpRequest.uploadedBlobs[1].size).toBe(TRAILING_SIZE);
 	});
 });
