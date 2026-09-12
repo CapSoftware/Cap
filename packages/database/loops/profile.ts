@@ -42,6 +42,8 @@ export type ProfileInput = {
 	teammateLatch?: boolean;
 	hasVideo: boolean;
 	hasSharedVideo: boolean;
+	lastActivationNotificationAt?: string | null;
+	hasPendingUpload?: boolean;
 	now: Date;
 };
 

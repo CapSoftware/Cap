@@ -1,5 +1,13 @@
 import type { Connection, RowDataPacket } from "mysql2/promise";
-import type { CapUser, License, Membership, ProfileInput } from "./profile";
+import { activationQuery } from "./activation";
+import { activationSignalsAfter, inFreeExperiment } from "./experiment";
+import {
+	type CapUser,
+	isoDate,
+	type License,
+	type Membership,
+	type ProfileInput,
+} from "./profile";
 
 type RuntimeUser = CapUser & {
 	emailVerified: string | null;
@@ -44,16 +52,30 @@ export async function readLoopsProfile(
 		"SELECT status FROM organization_invites WHERE invitedEmail=? AND status IN ('pending','accepted')",
 		[user.email],
 	);
-	const [video] = await rows<{ id: string }>(
-		cap,
-		"SELECT id FROM videos WHERE ownerId=? LIMIT 1",
-		[userId],
-	);
-	const [shared] = await rows<{ id: string }>(
-		cap,
-		"SELECT id FROM videos WHERE ownerId=? AND public=1 LIMIT 1",
-		[userId],
-	);
+	let activation: {
+		hasVideo: number | boolean | null;
+		hasSharedVideo: number | boolean | null;
+		hasPendingUpload?: number | null;
+		lastActivationNotificationAt?: string | null;
+	};
+	if (inFreeExperiment(isoDate(user.created_at), activationSignalsAfter)) {
+		const [result] = await rows<typeof activation>(cap, activationQuery, [
+			userId,
+		]);
+		activation = result;
+	} else {
+		const [video] = await rows<{ id: string }>(
+			cap,
+			"SELECT id FROM videos WHERE ownerId=? LIMIT 1",
+			[userId],
+		);
+		const [shared] = await rows<{ id: string }>(
+			cap,
+			"SELECT id FROM videos WHERE ownerId=? AND public=1 LIMIT 1",
+			[userId],
+		);
+		activation = { hasVideo: Boolean(video), hasSharedVideo: Boolean(shared) };
+	}
 	const entitlement = await rows<License>(
 		licenses,
 		"SELECT u.email,l.subscriptionActive,l.nextRenewalDate,'desktop' AS kind FROM commercialLicenses l JOIN user u ON u.id=l.userId WHERE u.email=? UNION ALL SELECT u.email,l.subscriptionActive,l.nextRenewalDate,'selfhosted' AS kind FROM selfHostedLicenses l JOIN user u ON u.id=l.userId WHERE u.email=?",
@@ -67,8 +89,10 @@ export async function readLoopsProfile(
 			licenses: entitlement,
 			invited: invites.length > 0,
 			sso: accounts.some((account) => account.provider === "workos"),
-			hasVideo: Boolean(video),
-			hasSharedVideo: Boolean(shared),
+			hasVideo: Boolean(activation?.hasVideo),
+			hasSharedVideo: Boolean(activation?.hasSharedVideo),
+			lastActivationNotificationAt: activation?.lastActivationNotificationAt,
+			hasPendingUpload: Boolean(activation?.hasPendingUpload),
 			now: new Date(),
 		},
 		signedUp: Boolean(user.emailVerified || accounts.length),

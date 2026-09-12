@@ -23,7 +23,8 @@
 		"Cap lifecycle header v5": "cmtwx1d1q0oys0jyw6yq91naz",
 		"Cap lifecycle signature v5": "cmtwx4qyk0odg0j03ibll1cad",
 		"Cap lifecycle header v6": "cmtwxickf0d570jzvtpz1dyyh",
-		"Cap lifecycle signature v6": "cmtwxid5g17tp0jyc2mu1hgwj"
+		"Cap lifecycle signature v6": "cmtwxid5g17tp0jyc2mu1hgwj",
+		"free-v2": "cmtxlhkcw0dta0jzkd6an7xz0"
 	},
 	"operations": {
 		"free:guard": "n3",
@@ -48,6 +49,23 @@
 		"teammate:handoff:email": "n6",
 		"former:guard": "n3",
 		"former:feedback:timer": "n4",
-		"former:feedback:email": "n5"
+		"former:feedback:email": "n5",
+		"free-v2:guard": "n3",
+		"free-v2:welcome:email": "n4",
+		"free-v2:record:timer": "n5",
+		"free-v2:record:branch": "n6",
+		"free-v2:record:email": "n9",
+		"free-v2:plans:timer": "n10",
+		"free-v2:plans:branch": "n11",
+		"free-v2:plans:email": "n14",
+		"free-v2:share:timer": "n15",
+		"free-v2:share:branch": "n16",
+		"free-v2:share:email": "n19",
+		"free-v2:ai:timer": "n20",
+		"free-v2:ai:branch": "n21",
+		"free-v2:ai:email": "n24",
+		"free-v2:help:timer": "n25",
+		"free-v2:help:filter": "n27",
+		"free-v2:help:email": "n29"
 	}
 }

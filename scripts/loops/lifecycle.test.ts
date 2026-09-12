@@ -2,6 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { customerCopy } from "../../emails/customer-copy";
 import type { LoopsClient } from "../../packages/database/loops/client";
 import {
+	freeOnboardingExperiment,
+	freeOnboardingVariant,
+} from "../../packages/database/loops/experiment";
+import {
+	activationFollowUps,
 	enrollmentWindow,
 	type LifecycleContact,
 	type LoopsRuntimeConfig,
@@ -107,6 +112,155 @@ function remote(): LifecycleContact {
 		mailingLists: { "test-list": true },
 	};
 }
+
+describe("free conversion experiment", () => {
+	const experimentConfig = {
+		...config,
+		freeExperimentAfter: new Date("2026-09-12T01:00:00Z"),
+		freeExperimentEnrollmentEnabled: true,
+	};
+	function freshSource() {
+		const source = fixture();
+		source.input.user.created_at = "2026-09-12T01:00:00Z";
+		source.input.now = new Date("2026-09-12T01:01:00Z");
+		return source;
+	}
+	test("both variants receive one immutable assignment at eligible entry", () => {
+		const variants = new Set<string>();
+		for (let index = 0; index < 20; index++) {
+			const source = freshSource();
+			source.input.user.id = `new-user-${index}`;
+			const update = lifecycleUpdate(
+				source,
+				remote(),
+				experimentConfig,
+				customerCopy,
+			);
+			expect(update.capFreeOnboardingExperiment).toBe(freeOnboardingExperiment);
+			expect(update.capFreeOnboardingAssignedAt).toBe(
+				source.input.now.toISOString(),
+			);
+			expect(update.capFreeOnboardingVariant).toBe(
+				freeOnboardingVariant(source.input.user.id),
+			);
+			variants.add(update.capFreeOnboardingVariant ?? "");
+			expect(update.capLifecycleStage).toBe(
+				update.capFreeOnboardingVariant === "pro-v2" ? "free-v2" : "free",
+			);
+			const contact = { ...remote(), ...update };
+			source.input.now = new Date("2026-09-14T01:00:00Z");
+			const repeated = lifecycleUpdate(
+				source,
+				contact,
+				{ ...experimentConfig, freeExperimentEnrollmentEnabled: false },
+				customerCopy,
+			);
+			expect(repeated.capLifecycleStage).toBe(update.capLifecycleStage);
+			expect(repeated).not.toHaveProperty("capFreeOnboardingAssignedAt");
+		}
+		expect([...variants].sort()).toEqual(["control", "pro-v2"]);
+	});
+	test("historical and already enrolled free contacts stay on their original flow", () => {
+		for (const [source, contact] of [
+			[fixture(), remote()],
+			[freshSource(), { ...remote(), capLifecycleStage: "free" }],
+		] as const) {
+			const update = lifecycleUpdate(
+				source,
+				contact,
+				experimentConfig,
+				customerCopy,
+			);
+			expect(update.capLifecycleStage).toBe("free");
+			expect(update).not.toHaveProperty("capFreeOnboardingVariant");
+		}
+	});
+	test("opt-outs, imports, customers, pending invites and teammate history cannot enter the experiment", () => {
+		for (const kind of [
+			"unsubscribe",
+			"list",
+			"import",
+			"customer",
+			"invite",
+			"teammate",
+			"unsigned",
+		] as const) {
+			const source = freshSource();
+			const contact = remote();
+			if (kind === "unsubscribe") contact.subscribed = false;
+			if (kind === "list") contact.mailingLists[config.listId] = false;
+			if (kind === "import") contact.capImportedAt = "2026-09-11T00:00:00Z";
+			if (kind === "customer")
+				source.input.user.stripeSubscriptionStatus = "active";
+			if (kind === "invite") source.pendingInvite = true;
+			if (kind === "teammate") contact.capTeammate = true;
+			if (kind === "unsigned") source.signedUp = false;
+			const update = lifecycleUpdate(
+				source,
+				contact,
+				experimentConfig,
+				customerCopy,
+			);
+			expect(update).not.toHaveProperty("capFreeOnboardingVariant");
+			expect(update.capLifecycleStage).not.toBe("free-v2");
+		}
+	});
+	test("purchase and unsubscribe exit sales without losing the recorded assignment", () => {
+		const source = freshSource();
+		const contact = {
+			...remote(),
+			capFreeOnboardingExperiment: freeOnboardingExperiment,
+			capFreeOnboardingVariant: "pro-v2",
+			capFreeOnboardingAssignedAt: source.input.now.toISOString(),
+			capLifecycleStage: "free-v2",
+		};
+		source.input.user.stripeSubscriptionStatus = "active";
+		const paid = lifecycleUpdate(
+			source,
+			contact,
+			experimentConfig,
+			customerCopy,
+		);
+		expect(paid.capLifecycleStage).toBe("customer");
+		expect(paid.capPromotionalEligible).toBe(false);
+		expect(paid).not.toHaveProperty("capFreeOnboardingVariant");
+		contact.subscribed = false;
+		expect(
+			lifecycleUpdate(source, contact, experimentConfig, customerCopy)
+				.capLifecycleStage,
+		).toBe("idle");
+	});
+	test("malformed assignments stop synchronization instead of silently changing arms", () => {
+		expect(() =>
+			lifecycleUpdate(
+				freshSource(),
+				{
+					...remote(),
+					capFreeOnboardingExperiment: freeOnboardingExperiment,
+					capFreeOnboardingVariant: "unknown",
+				},
+				experimentConfig,
+				customerCopy,
+			),
+		).toThrow("invalid_free_experiment_assignment");
+	});
+	test("follow-ups wait 24 hours after application notification evidence and avoid pending uploads", () => {
+		const source = freshSource();
+		source.input.hasVideo = true;
+		source.input.lastActivationNotificationAt = "2026-09-11T01:01:01Z";
+		expect(activationFollowUps(source.input).capReadyForPro).toBe(false);
+		source.input.lastActivationNotificationAt = "2026-09-11T01:01:00Z";
+		expect(activationFollowUps(source.input)).toEqual({
+			capReadyForPro: true,
+			capNeedsSharingHelp: true,
+			capNeedsRecordingHelp: false,
+		});
+		source.input.hasSharedVideo = true;
+		expect(activationFollowUps(source.input).capNeedsSharingHelp).toBe(false);
+		source.input.hasPendingUpload = true;
+		expect(activationFollowUps(source.input).capReadyForPro).toBe(false);
+	});
+});
 
 function fakeApi(initial: LifecycleContact | undefined) {
 	let contact = initial;

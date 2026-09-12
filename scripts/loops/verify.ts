@@ -57,6 +57,8 @@ const { values } = parseArgs({
 		"mailing-list": { type: "string", default: registry.resources.mailingList },
 		"structure-only": { type: "boolean", default: false },
 		"require-held": { type: "boolean", default: false },
+		"allow-live": { type: "boolean", default: false },
+		journey: { type: "string" },
 	},
 });
 assert(values.state && values.team && values["mailing-list"]);
@@ -145,10 +147,21 @@ const verifyEmail = async (
 	emails++;
 };
 
-for (const journey of journeys) {
+const selectedJourneys = values.journey
+	? journeys.filter((journey) => journey.key === values.journey)
+	: journeys;
+assert(selectedJourneys.length, "Unknown journey");
+const selectedCampaigns = values.journey ? [] : campaignTemplates;
+for (const journey of selectedJourneys) {
 	const id = receipt.resources[journey.key];
 	const workflow = await api.request<Workflow>(`workflows/${id}`);
-	assert.equal(workflow.status, "Draft");
+	assert(
+		(values["allow-live"]
+			? ["Draft", "Sending", "Paused", "PausedAndQueueing"]
+			: ["Draft"]
+		).includes(workflow.status),
+		`Unexpected workflow status: ${workflow.status}`,
+	);
 	assert.equal(workflow.name, journey.name);
 	assert.equal(workflow.mailingListId, values["mailing-list"]);
 	const visited = new Set<string>();
@@ -195,7 +208,19 @@ for (const journey of journeys) {
 			assert.equal(timer.unit, "d");
 		}
 		let skipped: string | undefined;
-		if (message.onlyIf) {
+		if (message.onlyIf && message === journey.messages.at(-1)) {
+			const filterId = receipt.operations[`${operation}:filter`];
+			connect(filterId);
+			node(filterId, "AudienceFilter");
+			const filter = await api.request<Node>(
+				`workflows/${id}/nodes/${filterId}`,
+			);
+			assert.deepEqual(filter.audienceFilter, {
+				match: "all",
+				conditions: [condition(message.onlyIf.property, message.onlyIf.value)],
+			});
+			assert.equal(filter.appliesDownstream, false);
+		} else if (message.onlyIf) {
 			const branchId = receipt.operations[`${operation}:branch`];
 			connect(branchId);
 			const branch = node(branchId, "BranchNode");
@@ -236,14 +261,14 @@ for (const journey of journeys) {
 	console.log(
 		JSON.stringify({
 			workflow: journey.name,
-			status: "Draft",
+			status: workflow.status,
 			graphVerified: true,
 			deliveryHeld: held,
 		}),
 	);
 }
 
-for (const template of campaignTemplates) {
+for (const template of selectedCampaigns) {
 	const campaign = await api.request<{
 		status: string;
 		mailingListId: string;
@@ -267,13 +292,13 @@ for (const template of campaignTemplates) {
 }
 console.log(
 	JSON.stringify({
-		workflows: journeys.length,
-		campaigns: campaignTemplates.length,
+		workflows: selectedJourneys.length,
+		campaigns: selectedCampaigns.length,
 		apiEmailContentVerified: emails,
 		customEmailContentRequiresBrowserReview: customEmails,
 		guardianVerifiedEmails: emails,
 		deliveryHeldWorkflows: heldWorkflows,
-		allDraft: true,
+		liveStatesAllowed: values["allow-live"],
 	}),
 );
 if (customEmails && !values["structure-only"])

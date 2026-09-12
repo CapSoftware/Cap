@@ -54,6 +54,7 @@ const { values } = parseArgs({
 		state: { type: "string" },
 		team: { type: "string" },
 		"mailing-list": { type: "string" },
+		"new-journey": { type: "string" },
 	},
 });
 
@@ -63,7 +64,12 @@ if (!values.team)
 	throw new Error("Pass --team with the expected Loops team name");
 if (values.apply && !values.state)
 	throw new Error("--apply requires a private --state file");
-if (values.apply && deliveryFormat === "mjml")
+const selectedJourneys = values["new-journey"]
+	? journeys.filter((journey) => journey.key === values["new-journey"])
+	: journeys;
+if (!selectedJourneys.length) throw new Error("Unknown journey");
+const selectedCampaigns = values["new-journey"] ? [] : campaignTemplates;
+if (values.apply && deliveryFormat === "mjml" && !values["new-journey"])
 	throw new Error(
 		"Managed emails use custom MJML. Run emails:export and upload reviewed archives in the Loops editor; the API cannot edit this format.",
 	);
@@ -85,7 +91,10 @@ let receipt: Receipt = {
 };
 if (values.state) {
 	try {
-		receipt = JSON.parse(await readFile(values.state, "utf8"));
+		receipt = {
+			...receipt,
+			...JSON.parse(await readFile(values.state, "utf8")),
+		};
 	} catch (error) {
 		if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
 			throw error;
@@ -119,6 +128,20 @@ try {
 	);
 	const lists = await api.request<Named[]>("lists");
 	const workflows = await api.list<Workflow>("workflows");
+	if (values["new-journey"]) {
+		const match = named(workflows, selectedJourneys[0].name);
+		const existing = match
+			? await api.request<Workflow>(`workflows/${match.id}`)
+			: undefined;
+		if (
+			existing &&
+			(receipt.resources[values["new-journey"]] !== existing.id ||
+				!existing.description.includes("created-for-mjml-upload"))
+		)
+			throw new Error(
+				"New-journey mode cannot edit an existing managed workflow",
+			);
+	}
 	const themes = await api.list<Named>("themes");
 	const sharedComponents = await api.list<Named>("components");
 	const segments = await api.list<Named>("audience-segments");
@@ -133,12 +156,12 @@ try {
 		JSON.stringify({
 			team: identity.teamName,
 			mode: values.apply ? "apply drafts" : "dry run",
-			workflows: journeys.length,
-			emails: journeys.reduce(
+			workflows: selectedJourneys.length,
+			emails: selectedJourneys.reduce(
 				(count, journey) => count + journey.messages.length,
 				0,
 			),
-			campaignTemplates: campaignTemplates.length,
+			campaignTemplates: selectedCampaigns.length,
 			mailingListId:
 				listId ?? "Create Product updates and tips in the Loops dashboard",
 		}),
@@ -199,11 +222,21 @@ try {
 		await save();
 		return resource.id;
 	};
-	const themeId = await ensure("themes", themes, theme, "theme");
+	const themeId = values["new-journey"]
+		? receipt.resources.theme
+		: await ensure("themes", themes, theme, "theme");
+	assert(themeId, "New MJML drafts require the existing brand registry");
 	const componentIds: string[] = [];
 	for (const component of components) {
 		componentIds.push(
-			await ensure("components", sharedComponents, component, component.name),
+			values["new-journey"]
+				? receipt.resources[component.name]
+				: await ensure(
+						"components",
+						sharedComponents,
+						component,
+						component.name,
+					),
 		);
 	}
 	const editEmail = async (
@@ -258,13 +291,13 @@ try {
 			);
 	};
 
-	for (const journey of journeys) {
+	for (const journey of selectedJourneys) {
 		const existing = named(workflows, journey.name);
 		let workflow = existing
 			? await api.request<Workflow>(`workflows/${existing.id}`)
 			: await api.request<Workflow>("workflows", "POST", {
 					name: journey.name,
-					description: `${programVersion}; managed by scripts/loops/provision.ts. Draft only. ${journey.messages.map((m) => m.delayDays).join(", ")} day relative delays. Imports never enroll.`,
+					description: `${programVersion}; ${values["new-journey"] ? "created-for-mjml-upload; " : ""}managed by scripts/loops/provision.ts. ${journey.messages.map((m) => m.delayDays).join(", ")} day relative delays. Imports never enroll.`,
 					mailingListId: listId,
 				});
 		if (workflow.status !== "Draft")
@@ -367,7 +400,23 @@ try {
 				);
 			}
 			let fromNodeId: string | undefined;
-			if (message.onlyIf) {
+			if (message.onlyIf && message === journey.messages.at(-1)) {
+				const filter = await insert("AudienceFilter", `${operation}:filter`);
+				await update(
+					filter.id,
+					{
+						audienceFilter: {
+							match: "all",
+							conditions: [
+								condition(message.onlyIf.property, message.onlyIf.value),
+							],
+						},
+						appliesDownstream: false,
+					},
+					`${operation}:filter-config`,
+				);
+				fromNodeId = filter.id;
+			} else if (message.onlyIf) {
 				const branch = await insert("BranchNode", `${operation}:branch`);
 				const children = workflow.nodes[branch.id].nextNodeIds;
 				if (children.length !== 2)
@@ -413,7 +462,7 @@ try {
 		);
 	}
 
-	for (const template of campaignTemplates) {
+	for (const template of selectedCampaigns) {
 		const segmentName = `${template.name} audience`;
 		const segmentId = await ensure(
 			"audience-segments",

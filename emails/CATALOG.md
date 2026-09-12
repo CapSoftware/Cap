@@ -4,22 +4,23 @@ Generated from the email library with `bun run emails:catalog`. Edit the source 
 
 ## Lifecycle flows
 
-These are the locally configured draft journeys. This document is not a live status check. Imports remain held; production enrollment is not deployed. Run `bun run emails:check-loops` to verify the actual Loops drafts.
+These are the locally configured journeys. This document is not a live status check. Imports remain held. Run `bun run emails:check-loops --structure-only --allow-live` to verify the remote workflow structure and status; review custom MJML content in the browser.
 
 | Flow | Audience | Schedule after entry | Emails |
 | --- | --- | --- | --- |
 | [Independent free-user onboarding](https://app.loops.so/workflows/cmtvpih6201fp0jznodf8fpwz) | free | Day 0, Day 2, Day 5, Day 9 | 4 |
 | [Customer onboarding](https://app.loops.so/workflows/cmtvpilm601f40jzwx3474cko) | customer | Day 0, Day 3, Day 7 | 3 |
+| [Free activation and Pro conversion v2](https://app.loops.so/workflows/cmtxlhkcw0dta0jzkd6an7xz0) | free | Day 0, Day 1, Day 3, Day 8, Day 10, Day 12 | 6 |
 | [Teammate onboarding](https://app.loops.so/workflows/cmtvpm0ag01it0j37w02o6wav) | teammate | Day 0, Day 3 | 2 |
 | [Former customer follow-up](https://app.loops.so/workflows/cmtvpm8zm01ii0j01cz7d15qr) | former | Day 14 | 1 |
 
-Completed signups reach Loops through Stripe; SSO uses a small direct fallback. Cap supplies targeting through a durable sync queue, without a separate marketing opt-in step. Existing opt-outs and suppressions take precedence. The integration is not deployed. Historical imports stay held; a new accepted invitation can start teammate help only.
+Completed signups reach Loops through Stripe; SSO uses a small direct fallback. Cap supplies targeting through a durable sync queue, without a separate marketing opt-in step. Existing opt-outs and suppressions take precedence. Historical imports stay held; a new accepted invitation can start teammate help only.
 
-Current draft journeys require global subscription, capConsent=subscribed, the exact audience, lifecycle enabled and onboarding eligible. capConsent is a legacy migration guard, not a separate consent-capture requirement for new signups. These filters continue to apply downstream. Free/former promotional flows additionally exclude teammates and require promotional eligibility.
+Journeys require global subscription, capConsent=subscribed, the exact audience, lifecycle enabled and onboarding eligible. capConsent is a legacy migration guard, not a separate consent-capture requirement for new signups. These filters continue to apply downstream. Free/former promotional flows additionally exclude teammates and require promotional eligibility.
 
 Teammate history takes priority over paid/free classification. Ambiguous contacts receive no journey. [Audience classification and consent](../scripts/loops/README.md#audience-rules).
 
-An independent watchdog can block all four automatic journeys by adding an impossible subscription condition to their downstream guards. Recovery never resumes delivery automatically. This does not cancel manually scheduled campaigns; check sync health before every campaign send. See the [outage and resume procedure](../scripts/loops/README.md#outage-protection).
+The independent watchdog checks every registered journey and alerts when an active flow requires a manual pause. It can hold paused/draft journeys with an impossible subscription condition. Recovery never resumes delivery automatically. Check sync health before campaign sends. See the [outage and resume procedure](../scripts/loops/README.md#outage-protection) and [onboarding runtime](onboarding-runtime.md).
 
 ### Independent free-user onboarding
 
@@ -75,6 +76,53 @@ flowchart TD
 | 0 | [Thanks for choosing {contact.capPlanName}](../emails/marketing/customer-welcome.ts) | Journey guards |
 | 3 | [One less thing to explain twice](../emails/marketing/customer-workflow.ts) | Journey guards |
 | 7 | [How is Cap working for you?](../emails/marketing/customer-feedback.ts) | Journey guards |
+
+### Free activation and Pro conversion v2
+
+Entry: capLifecycleStage changes into free-v2. Re-entry is disabled. Delays below are relative to the previous step; day numbers are cumulative from entry.
+
+Downstream conditions: subscribed isTrue; capConsent equals subscribed; capAudience equals free; capTeammate isFalse; capPromotionalEligible isTrue; capLifecycleEnabled isTrue; capOnboardingEligible isTrue; capLifecycleStage equals free-v2.
+
+```mermaid
+flowchart TD
+  entry["Stage becomes free-v2"] --> guard["Consent and audience guards"]
+  guard --> email0["Day 0: welcome"]
+  email0 --> wait1["Wait 1 days"]
+  wait1 --> branch1{"capNeedsRecordingHelp is true?"}
+  branch1 -->|Yes| email1["Day 1: record"]
+  branch1 -->|No: skip| next1((Continue))
+  email1 --> next1
+  next1 --> wait2["Wait 2 days"]
+  wait2 --> branch2{"capReadyForPro is true?"}
+  branch2 -->|Yes| email2["Day 3: plans"]
+  branch2 -->|No: skip| next2((Continue))
+  email2 --> next2
+  next2 --> wait3["Wait 5 days"]
+  wait3 --> branch3{"capNeedsSharingHelp is true?"}
+  branch3 -->|Yes| email3["Day 8: share"]
+  branch3 -->|No: skip| next3((Continue))
+  email3 --> next3
+  next3 --> wait4["Wait 2 days"]
+  wait4 --> branch4{"capReadyForPro is true?"}
+  branch4 -->|Yes| email4["Day 10: ai"]
+  branch4 -->|No: skip| next4((Continue))
+  email4 --> next4
+  next4 --> wait5["Wait 2 days"]
+  wait5 --> branch5{"capNeedsRecordingHelp is true?"}
+  branch5 -->|Yes| email5["Day 12: help"]
+  branch5 -->|No: skip| next5((Continue))
+  email5 --> next5
+  next5 --> exit["End"]
+```
+
+| Day | Subject and source | Send condition |
+| --- | --- | --- |
+| 0 | [Your first Cap only needs 30 seconds](../emails/marketing/free-v2-welcome.ts) | Journey guards |
+| 1 | [One small thing to record today](../emails/marketing/free-v2-record.ts) | `capNeedsRecordingHelp=true` |
+| 3 | [Some explanations need more than five minutes](../emails/marketing/free-v2-plans.ts) | `capReadyForPro=true` |
+| 8 | [Put your recording to work](../emails/marketing/free-v2-share.ts) | `capNeedsSharingHelp=true` |
+| 10 | [Record the walkthrough. Skip the extra write-up.](../emails/marketing/free-v2-ai.ts) | `capReadyForPro=true` |
+| 12 | [Anything getting in the way?](../emails/marketing/free-v2-help.ts) | `capNeedsRecordingHelp=true` |
 
 ### Teammate onboarding
 
@@ -299,6 +347,142 @@ I'd love to know if there's anything you wish worked differently, or something t
 Just reply here. I read every reply, and hearing how people actually use Cap helps me decide what we should work on next.
 
 Thanks again for backing us :)
+
+### free-v2-welcome
+
+Help a new independent free user record and share one useful explanation.
+
+**Subject:** Your first Cap only needs 30 seconds
+
+**Preview:** Record one thing, send the link, and you're off.
+
+**Variables:** `contact.capGreeting` (fallback: Hey,)
+
+**Edit:** [emails/marketing/free-v2-welcome.ts](../emails/marketing/free-v2-welcome.ts)
+
+{contact.capGreeting}
+
+Richie here, founder of Cap. Thanks for giving it a go :)
+
+For your first recording, pick something you'd normally explain in a long message. Open Cap, choose Instant Mode, and spend 30 seconds showing it on screen.
+
+Once it's ready, send the link to someone who needs that explanation. No polished presentation needed.
+
+Download Cap and make your first recording
+
+If you get stuck, reply here and I'll help.
+
+### free-v2-record
+
+Offer a small first cloud recording task when no completed video is visible.
+
+**Subject:** One small thing to record today
+
+**Preview:** Try explaining something you already know.
+
+**Variables:** `contact.capGreeting` (fallback: Hey,)
+
+**Edit:** [emails/marketing/free-v2-record.ts](../emails/marketing/free-v2-record.ts)
+
+{contact.capGreeting}
+
+If you're still finding your feet with Cap, try recording a quick walkthrough of something you already know: a setting, a page, or a problem you want to show someone.
+
+Choose Instant Mode, keep it short, then send the link when it's ready.
+
+Get started with your first recording
+
+If screen or microphone permissions are getting in the way, reply with what you're seeing and I'll help you sort it.
+
+### free-v2-plans
+
+Offer Pro to active free users through a specific cloud-sharing benefit.
+
+**Subject:** Some explanations need more than five minutes
+
+**Preview:** Share the full walkthrough with Cap Pro.
+
+**Variables:** `contact.capGreeting` (fallback: Hey,)
+
+**Edit:** [emails/marketing/free-v2-plans.ts](../emails/marketing/free-v2-plans.ts)
+
+{contact.capGreeting}
+
+Five minutes works for a quick question. A full walkthrough sometimes needs longer.
+
+Cap Pro removes the five-minute limit on cloud recordings and gives you unlimited shareable links, so you can send the whole explanation in one video.
+
+It also includes the desktop commercial license for work recordings.
+
+Pro is US$12 per user, billed monthly. Annual billing is also available.
+
+Upgrade to Cap Pro
+
+### free-v2-share
+
+Help an active user put a completed recording into a real conversation.
+
+**Subject:** Put your recording to work
+
+**Preview:** Send the link with one sentence about what you need.
+
+**Variables:** `contact.capGreeting` (fallback: Hey,)
+
+**Edit:** [emails/marketing/free-v2-share.ts](../emails/marketing/free-v2-share.ts)
+
+{contact.capGreeting}
+
+A useful way to share a Cap is to add one sentence telling the other person what you need from them.
+
+"Here's the bit I'm stuck on. Can you take a look?"
+
+Or: "Here's how to change that setting. Does that solve it?"
+
+Open your recordings
+
+Send the link wherever you're already having the conversation.
+
+### free-v2-ai
+
+Show active free users how Pro reduces the work around a recording.
+
+**Subject:** Record the walkthrough. Skip the extra write-up.
+
+**Preview:** Give people a summary and chapters alongside your video.
+
+**Variables:** `contact.capGreeting` (fallback: Hey,)
+
+**Edit:** [emails/marketing/free-v2-ai.ts](../emails/marketing/free-v2-ai.ts)
+
+{contact.capGreeting}
+
+A recording saves you typing everything out. Writing a summary afterwards can feel like doing the job twice.
+
+Cap Pro generates a title, summary, transcript and clickable chapters for your recordings. The person watching can get the context, then jump to the part they need.
+
+That's especially useful for walkthroughs people come back to later.
+
+See Cap Pro
+
+### free-v2-help
+
+Invite a reply from users who have not reached a completed cloud recording.
+
+**Subject:** Anything getting in the way?
+
+**Preview:** Reply and tell me where you're getting stuck.
+
+**Variables:** `contact.capGreeting` (fallback: Hey,)
+
+**Edit:** [emails/marketing/free-v2-help.ts](../emails/marketing/free-v2-help.ts)
+
+{contact.capGreeting}
+
+If you haven't found a useful way to fit Cap into your day yet, is anything getting in the way?
+
+Maybe you're not sure what to record, something isn't working, or it isn't quite what you expected.
+
+Reply and let me know. If I can help you get a useful first recording out of it, I'd like to.
 
 ### teammate-welcome
 

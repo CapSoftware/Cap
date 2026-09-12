@@ -124,7 +124,7 @@ describe("independent delivery safety", () => {
 				apply: true,
 			});
 			expect(result[0].action).toBe("manual-pause-required");
-			expect(provider.attemptedWrites).toHaveLength(4);
+			expect(provider.attemptedWrites).toHaveLength(safetyTargets.length);
 		}
 	});
 
@@ -159,7 +159,7 @@ describe("independent delivery safety", () => {
 		expect(recovered.every((item) => item.action === "already-held")).toBe(
 			true,
 		);
-		expect(provider.writes).toHaveLength(4);
+		expect(provider.writes).toHaveLength(safetyTargets.length);
 	});
 
 	test("an unhealthy running journey requires manual pause without attempting forbidden edits", async () => {
@@ -278,7 +278,9 @@ describe("independent delivery safety", () => {
 			apply: true,
 		});
 		expect(result.filter((item) => item.action === "error")).toHaveLength(1);
-		expect(result.filter((item) => item.action === "held")).toHaveLength(3);
+		expect(result.filter((item) => item.action === "held")).toHaveLength(
+			safetyTargets.length - 1,
+		);
 	});
 
 	test("audience drift closes delivery and cannot be silently overwritten on resume", async () => {
