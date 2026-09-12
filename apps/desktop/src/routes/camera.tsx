@@ -504,20 +504,31 @@ function LegacyCameraPreviewPage(props: {
 	let lastFrameTime = 0;
 	let cameraCanvasRef: HTMLCanvasElement | undefined;
 
+	const retainCurrentFrame = (controls: CanvasControls | undefined) => {
+		if (!rawOptions.cameraID || props.issue()) {
+			clearRetainedFrame();
+			return;
+		}
+		try {
+			if (
+				controls?.hasRenderedFrame() &&
+				controls.drawLatestFrameToCanvas(retainedCanvas)
+			) {
+				retainedFrameCapturedAt = performance.now();
+				setHasRetainedFrame(true);
+			}
+		} catch {
+			clearRetainedFrame();
+		}
+	};
+
 	const closeSocket = () => {
 		const socket = ws;
 		const controls = canvasControls;
 		ws = undefined;
 		canvasControls = undefined;
-		const canRetain =
-			controls?.hasRenderedFrame() && rawOptions.cameraID && !props.issue();
+		retainCurrentFrame(controls);
 		controls?.dispose();
-		if (canRetain && retainedCanvas.width > 0) {
-			retainedFrameCapturedAt = performance.now();
-			setHasRetainedFrame(true);
-		} else if (!rawOptions.cameraID || props.issue()) {
-			clearRetainedFrame();
-		}
 		setHasFrame(false);
 		scheduleRetainedFrameExpiry();
 		if (
@@ -586,10 +597,7 @@ function LegacyCameraPreviewPage(props: {
 				if (canvasControls === controls) updateFrameState(frame);
 			},
 			() => commands.refreshCameraFeed().catch(() => {}),
-			{
-				powerPreference: "low-power",
-				retainLastFrameOnDispose: retainedCanvas,
-			},
+			{ powerPreference: "low-power" },
 		);
 		canvasControls = controls;
 		initCanvasControls();
@@ -600,21 +608,22 @@ function LegacyCameraPreviewPage(props: {
 			setHasFrame(false);
 		});
 
+		const captureBeforeCleanup = () => {
+			if (ws !== socket || canvasControls !== controls) return;
+			retainCurrentFrame(controls);
+			setHasFrame(false);
+			scheduleRetainedFrameExpiry();
+		};
+		// Capture listeners run before the transport discards its frame buffers.
+		socket.addEventListener("close", captureBeforeCleanup, { capture: true });
+		socket.addEventListener("error", captureBeforeCleanup, { capture: true });
+
 		socket.addEventListener("close", () => {
 			if (canvasControls === controls) {
 				canvasControls = undefined;
 			}
 			if (ws !== socket) return;
 			ws = undefined;
-			if (
-				controls.hasRenderedFrame() &&
-				retainedCanvas.width > 0 &&
-				rawOptions.cameraID &&
-				!props.issue()
-			) {
-				retainedFrameCapturedAt = performance.now();
-				setHasRetainedFrame(true);
-			}
 			setHasFrame(false);
 			scheduleRetainedFrameExpiry();
 			scheduleReconnect();
