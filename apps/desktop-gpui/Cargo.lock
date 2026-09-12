@@ -1517,6 +1517,7 @@ name = "cap-cursor-info"
 version = "0.0.0"
 dependencies = [
  "serde",
+ "sha2",
  "specta",
  "strum 0.27.2",
  "windows 0.60.0",
