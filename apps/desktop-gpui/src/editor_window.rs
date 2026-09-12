@@ -3276,7 +3276,9 @@ impl EditorWindow {
                     self.close_camera3d_setup(cx);
                     return;
                 }
-                if self.selection.is_some() {
+                if self.split_mode {
+                    self.toggle_split_mode(cx);
+                } else if self.selection.is_some() {
                     self.set_selection(None, cx);
                     self.note_edit("deselect", None);
                 }
@@ -5334,13 +5336,14 @@ impl EditorWindow {
         &mut self,
         kind: TrackKind,
         lane: u32,
-        window_x: f32,
+        event: &MouseMoveEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.drag.is_some() {
             return;
         }
+        let window_x = f32::from(event.position.x);
         let viewport_width: f32 = window.viewport_size().width.into();
         let secs_per_pixel = self.secs_per_pixel(viewport_width);
         let x = self.content_x(window_x);
@@ -5372,7 +5375,12 @@ impl EditorWindow {
 
         let preview = match (self.split_mode, kind, hit) {
             (true, TrackKind::Clip, Hit::Body { index } | Hit::Handle { index, .. }) => {
-                self.split_preview_at(index, x, secs_per_pixel, false)
+                self.split_preview_at(index, x, secs_per_pixel, event.modifiers.alt)
+            }
+            (true, _, Hit::Body { index } | Hit::Handle { index, .. }) => {
+                self.timeline.segments(kind).get(index).and_then(|segment| {
+                    non_clip_split_preview(kind, segment, position, x, secs_per_pixel)
+                })
             }
             _ => None,
         };
@@ -9156,15 +9164,40 @@ impl EditorWindow {
                     .items_center()
                     // The split toggle (`Player.tsx:409-427`).
                     .child(
-                        ui::EditorButton::plain(&theme, "transport-split")
-                            .left_icon("icons/scissors.svg")
-                            .tooltip(&theme, "Toggle Split")
-                            .disabled(!self.project_ready())
-                            .pressed(self.split_mode)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_split_mode(cx);
-                                window.refresh();
-                            })),
+                        div()
+                            .id("transport-split-tooltip")
+                            .tooltip_show_delay(crate::ui::TOOLTIP_SHOW_DELAY)
+                            .tooltip(move |_, cx| {
+                                ui::Tooltip::new(&theme, "Click a segment to split. Esc to finish.")
+                                    .keys(["S"])
+                                    .view(cx)
+                            })
+                            .child(
+                                ui::Button::plain(
+                                    &theme,
+                                    "transport-split",
+                                    if self.split_mode {
+                                        ui::ButtonVariant::Primary
+                                    } else {
+                                        ui::ButtonVariant::Gray
+                                    },
+                                    ui::ButtonSize::Sm,
+                                )
+                                .icon("icons/scissors.svg")
+                                .label(if self.split_mode {
+                                    "Done splitting"
+                                } else {
+                                    "Split"
+                                })
+                                .radius(px(7.))
+                                .disabled(!self.project_ready())
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        this.toggle_split_mode(cx);
+                                        window.refresh();
+                                    },
+                                )),
+                            ),
                     )
                     .child(self.header_divider())
                     // `IconCapZoomOut` -> `updateZoom(zoom * 1.1,
@@ -9398,7 +9431,7 @@ impl EditorWindow {
                 let x = ((time - self.view.transform.position)
                     / self.view.transform.secs_per_pixel(content_width))
                     as f32;
-                Some(render_split_preview(&theme, x, snapped))
+                Some(render_split_preview(&theme, x, snapped, true))
             }))
             // The drag-snap guide: while a trim, move or create is
             // magnetised onto an edge, a 1px accent column marks it.
@@ -9406,7 +9439,8 @@ impl EditorWindow {
                 let x = ((time - self.view.transform.position)
                     / self.view.transform.secs_per_pixel(content_width))
                     as f32;
-                x.is_finite().then(|| render_split_preview(&theme, x, true))
+                x.is_finite()
+                    .then(|| render_split_preview(&theme, x, true, false))
             }))
             .into_any_element()
     }
@@ -9630,7 +9664,7 @@ impl EditorWindow {
                     // and split mode's cut preview.
                     .on_mouse_move(
                         cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
-                            this.track_hover(kind, lane, f32::from(event.position.x), window, cx);
+                            this.track_hover(kind, lane, event, window, cx);
                         }),
                     )
                     // The press: a handle, a body or bare track, resolved by
@@ -9738,8 +9772,9 @@ impl EditorWindow {
                                     .flex_row()
                                     .items_center()
                                     .justify_center()
-                                    .gap(px(5.))
-                                    .px(px(10.))
+                                    .gap(px(10.))
+                                    .pl(px(10.))
+                                    .pr(px(32.))
                                     .rounded(px(8.))
                                     .text_size(px(12.))
                                     .line_height(px(16.))
@@ -9748,7 +9783,6 @@ impl EditorWindow {
                                     } else {
                                         theme.editor.text_3
                                     }))
-                                    .when(!generating, |this| this.cursor_pointer())
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|_, _, _, cx| cx.stop_propagation()),
@@ -9759,25 +9793,29 @@ impl EditorWindow {
                                             cx.notify();
                                         }
                                     }))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        if !generating {
-                                            this.generate_auto_zoom(window, cx);
-                                        }
-                                    }))
-                                    .child(div().min_w_0().truncate().child(if generating {
-                                        "Generating..."
-                                    } else {
-                                        "Generate zoom segments automatically"
-                                    }))
-                                    .when(!generating, |this| {
-                                        this.child("\u{b7}").child(
-                                            div()
-                                                .flex_none()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(Hsla::from(theme.editor.text_2))
-                                                .child("Generate"),
+                                    .child(
+                                        div().min_w_0().truncate().child("Add zooms automatically"),
+                                    )
+                                    .child(
+                                        ui::Button::plain(
+                                            &theme,
+                                            "zoom-generate-button",
+                                            ui::ButtonVariant::Primary,
+                                            ui::ButtonSize::Sm,
                                         )
-                                    }),
+                                        .label(if generating {
+                                            "Generating…"
+                                        } else {
+                                            "Generate"
+                                        })
+                                        .radius(px(7.))
+                                        .disabled(generating)
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.generate_auto_zoom(window, cx);
+                                            }),
+                                        ),
+                                    ),
                             )
                             .child(
                                 div()
@@ -9962,29 +10000,40 @@ impl EditorWindow {
     }
 }
 
-/// The split-mode cut line (`TL/index.tsx:1296-1316`): `absolute bottom-0 z-20
-/// w-px` from `PLAYHEAD_TOP_OFFSET`, the accent when it snapped to a boundary
-/// and `text-3` when it did not, with an 8px `rotate-45` diamond on the
-/// snapped one. gpui has no rotation, so the marker is a small square -- the
-/// same missing transform hook the carousel's hover lift ran into.
-fn render_split_preview(theme: &Theme, x: f32, snapped: bool) -> impl IntoElement {
-    let color = if snapped {
-        Hsla::from(theme.editor.accent)
-    } else {
-        with_alpha(theme.editor.text_3, 0.7)
-    };
+fn render_split_preview(theme: &Theme, x: f32, snapped: bool, splitting: bool) -> impl IntoElement {
+    let color = Hsla::from(theme.editor.accent);
     div()
         .absolute()
         .left(px(TIMELINE_PADDING + TRACK_GUTTER + x))
         .top(px(timeline::PLAYHEAD_TOP_OFFSET))
         .bottom_0()
-        .w(px(1.))
+        .w(px(if splitting { 2. } else { 1. }))
         .bg(color)
-        .when(snapped, |this| {
+        .when(splitting, |this| {
             this.child(
                 div()
                     .absolute()
-                    .top(px(-4.))
+                    .top(px(-20.))
+                    .left(px(-9.))
+                    .size(px(20.))
+                    .rounded(px(5.))
+                    .bg(color)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        svg()
+                            .path("icons/scissors.svg")
+                            .size(px(12.))
+                            .text_color(gpui::white()),
+                    ),
+            )
+        })
+        .when(snapped && !splitting, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .top_0()
                     .left(px(-3.5))
                     .size(px(8.))
                     .rounded(px(2.))
@@ -10617,6 +10666,24 @@ fn aspect_ratio_eq(
     }
 }
 
+fn non_clip_split_preview(
+    kind: TrackKind,
+    segment: &timeline::Segment,
+    position: f64,
+    x: f64,
+    secs_per_pixel: f64,
+) -> Option<(f64, bool)> {
+    let duration = segment.end - segment.start;
+    let left = (segment.start - position) / secs_per_pixel;
+    let width = duration / secs_per_pixel;
+    if width <= 0. {
+        return None;
+    }
+    let local = ((x - left) / width) * duration;
+    let min = edits::min_split_duration(kind);
+    (local >= min && duration - local >= min).then_some((segment.start + local, false))
+}
+
 fn split_camera3d_segment(timeline: &mut TimelineConfiguration, index: usize, at: f64) -> bool {
     let Some(segment) = timeline.camera3d_segments.get(index).cloned() else {
         return false;
@@ -10646,12 +10713,6 @@ fn split_camera3d_segment(timeline: &mut TimelineConfiguration, index: usize, at
     crate::editor_panels::set_motion(left, &start_pose, &mid_pose, (easing.2, easing.3));
     timeline.camera3d_segments.insert(index + 1, right);
     true
-}
-
-fn with_alpha(color: gpui::Rgba, alpha: f32) -> Hsla {
-    let mut hsla = Hsla::from(color);
-    hsla.a = alpha;
-    hsla
 }
 
 /// The instruction that actually produces a picture. `seek_to` and
@@ -10715,6 +10776,42 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_clip_split_preview_respects_track_limits_in_scrolled_timelines() {
+        let segment = timeline::Segment {
+            start: 10.,
+            end: 14.,
+            lane: 0,
+            detail: timeline::SegmentDetail::Zoom {
+                amount: 2.,
+                automatic: false,
+            },
+        };
+        for (kind, near_edge, middle) in [
+            (TrackKind::Zoom, 0.75, 1.),
+            (TrackKind::ThreeD, 0.75, 1.),
+            (TrackKind::Audio, 0.4, 0.5),
+            (TrackKind::Caption, 0.4, 0.5),
+            (TrackKind::Keyboard, 0.2, 0.4),
+        ] {
+            for (local, valid) in [
+                (near_edge, false),
+                (middle, true),
+                (2., true),
+                (4. - middle, true),
+                (4. - near_edge, false),
+            ] {
+                let time = segment.start + local;
+                let preview = non_clip_split_preview(kind, &segment, 8., (time - 8.) / 0.25, 0.25);
+                assert_eq!(
+                    preview,
+                    valid.then_some((time, false)),
+                    "{kind:?} at {local}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn caption_split_and_delete_update_the_source_master() {
