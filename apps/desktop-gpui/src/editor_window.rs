@@ -5368,13 +5368,14 @@ impl EditorWindow {
         &mut self,
         kind: TrackKind,
         lane: u32,
-        window_x: f32,
+        event: &MouseMoveEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.drag.is_some() {
             return;
         }
+        let window_x = f32::from(event.position.x);
         let viewport_width: f32 = window.viewport_size().width.into();
         let secs_per_pixel = self.secs_per_pixel(viewport_width);
         let x = self.content_x(window_x);
@@ -5406,15 +5407,12 @@ impl EditorWindow {
 
         let preview = match (self.split_mode, kind, hit) {
             (true, TrackKind::Clip, Hit::Body { index } | Hit::Handle { index, .. }) => {
-                self.split_preview_at(index, x, secs_per_pixel, false)
+                self.split_preview_at(index, x, secs_per_pixel, event.modifiers.alt)
             }
             (true, _, Hit::Body { index } | Hit::Handle { index, .. }) => {
-                let time = self.view.transform.position + x * secs_per_pixel;
-                self.timeline
-                    .segments(kind)
-                    .get(index)
-                    .filter(|segment| time > segment.start && time < segment.end)
-                    .map(|_| (time, false))
+                self.timeline.segments(kind).get(index).and_then(|segment| {
+                    non_clip_split_preview(kind, segment, position, x, secs_per_pixel)
+                })
             }
             _ => None,
         };
@@ -9757,7 +9755,7 @@ impl EditorWindow {
                     // and split mode's cut preview.
                     .on_mouse_move(
                         cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
-                            this.track_hover(kind, lane, f32::from(event.position.x), window, cx);
+                            this.track_hover(kind, lane, event, window, cx);
                         }),
                     )
                     // The press: a handle, a body or bare track, resolved by
@@ -10740,6 +10738,24 @@ fn aspect_ratio_eq(
     }
 }
 
+fn non_clip_split_preview(
+    kind: TrackKind,
+    segment: &timeline::Segment,
+    position: f64,
+    x: f64,
+    secs_per_pixel: f64,
+) -> Option<(f64, bool)> {
+    let duration = segment.end - segment.start;
+    let left = (segment.start - position) / secs_per_pixel;
+    let width = duration / secs_per_pixel;
+    if width <= 0. {
+        return None;
+    }
+    let local = ((x - left) / width) * duration;
+    let min = edits::min_split_duration(kind);
+    (local >= min && duration - local >= min).then_some((segment.start + local, false))
+}
+
 fn split_camera3d_segment(timeline: &mut TimelineConfiguration, index: usize, at: f64) -> bool {
     let Some(segment) = timeline.camera3d_segments.get(index).cloned() else {
         return false;
@@ -10832,6 +10848,42 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_clip_split_preview_respects_track_limits_in_scrolled_timelines() {
+        let segment = timeline::Segment {
+            start: 10.,
+            end: 14.,
+            lane: 0,
+            detail: timeline::SegmentDetail::Zoom {
+                amount: 2.,
+                automatic: false,
+            },
+        };
+        for (kind, near_edge, middle) in [
+            (TrackKind::Zoom, 0.75, 1.),
+            (TrackKind::ThreeD, 0.75, 1.),
+            (TrackKind::Audio, 0.4, 0.5),
+            (TrackKind::Caption, 0.4, 0.5),
+            (TrackKind::Keyboard, 0.2, 0.4),
+        ] {
+            for (local, valid) in [
+                (near_edge, false),
+                (middle, true),
+                (2., true),
+                (4. - middle, true),
+                (4. - near_edge, false),
+            ] {
+                let time = segment.start + local;
+                let preview = non_clip_split_preview(kind, &segment, 8., (time - 8.) / 0.25, 0.25);
+                assert_eq!(
+                    preview,
+                    valid.then_some((time, false)),
+                    "{kind:?} at {local}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn caption_split_and_delete_update_the_source_master() {
