@@ -432,12 +432,23 @@ function LegacyCameraPreviewPage(props: {
 	const retainedCanvas = document.createElement("canvas");
 	const { rawOptions } = useRecordingOptions();
 	let retainedFrameTimeout: ReturnType<typeof setTimeout> | undefined;
+	let retainedFrameCapturedAt: number | undefined;
 
 	const clearRetainedFrame = () => {
 		clearTimeout(retainedFrameTimeout);
+		retainedFrameCapturedAt = undefined;
 		setHasRetainedFrame(false);
 		retainedCanvas.width = 0;
 		retainedCanvas.height = 0;
+	};
+	const scheduleRetainedFrameExpiry = () => {
+		clearTimeout(retainedFrameTimeout);
+		if (retainedFrameCapturedAt === undefined) return;
+		const remaining = 60_000 - (performance.now() - retainedFrameCapturedAt);
+		retainedFrameTimeout = setTimeout(
+			clearRetainedFrame,
+			Math.max(0, remaining),
+		);
 	};
 	const [frameDimensions, setFrameDimensions] = createSignal<{
 		width: number;
@@ -502,13 +513,13 @@ function LegacyCameraPreviewPage(props: {
 			controls?.hasRenderedFrame() && rawOptions.cameraID && !props.issue();
 		controls?.dispose();
 		if (canRetain && retainedCanvas.width > 0) {
+			retainedFrameCapturedAt = performance.now();
 			setHasRetainedFrame(true);
 		} else if (!rawOptions.cameraID || props.issue()) {
 			clearRetainedFrame();
 		}
 		setHasFrame(false);
-		clearTimeout(retainedFrameTimeout);
-		retainedFrameTimeout = setTimeout(clearRetainedFrame, 60_000);
+		scheduleRetainedFrameExpiry();
 		if (
 			socket &&
 			socket.readyState !== WebSocket.CLOSING &&
@@ -601,11 +612,11 @@ function LegacyCameraPreviewPage(props: {
 				rawOptions.cameraID &&
 				!props.issue()
 			) {
+				retainedFrameCapturedAt = performance.now();
 				setHasRetainedFrame(true);
 			}
 			setHasFrame(false);
-			clearTimeout(retainedFrameTimeout);
-			retainedFrameTimeout = setTimeout(clearRetainedFrame, 60_000);
+			scheduleRetainedFrameExpiry();
 			scheduleReconnect();
 		});
 

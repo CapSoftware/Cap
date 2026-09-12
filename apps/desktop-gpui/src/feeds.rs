@@ -117,6 +117,13 @@ async fn camera_input_operation<T>(
     operation.await.map(Some)
 }
 
+fn camera_preview_frame_is_fresh(
+    timestamp: cap_timestamp::Timestamp,
+    ready_at: Option<cap_timestamp::Timestamps>,
+) -> bool {
+    ready_at.is_some_and(|ready_at| timestamp.checked_duration_since(ready_at).is_some())
+}
+
 fn configuration_result(
     current_epoch: u64,
     epoch: u64,
@@ -642,7 +649,11 @@ fn run_camera_preview_worker(config: CameraPreviewWorkerConfig) {
             recording.publish(&image, dims, frame.timestamp, applied_mask);
         }
         if active.load(Ordering::Acquire) {
-            match preview_tx.try_send(crate::camera_window::CameraPreviewFrame { image, dims }) {
+            match preview_tx.try_send(crate::camera_window::CameraPreviewFrame {
+                image,
+                dims,
+                timestamp: frame.timestamp,
+            }) {
                 Ok(()) | Err(flume::TrySendError::Full(_)) => {}
                 Err(flume::TrySendError::Disconnected(_)) => {
                     #[cfg(target_os = "linux")]
@@ -667,6 +678,7 @@ pub struct Feeds {
     microphone_settings: Option<microphone::MicrophoneDeviceSettings>,
     applied_settings: crate::store::RecordingDeviceSettings,
     camera_input_pending: bool,
+    camera_preview_not_before: Option<cap_timestamp::Timestamps>,
     mic_input_pending: bool,
     mic_input_released: bool,
     microphone_error: Option<String>,
@@ -728,6 +740,7 @@ impl Feeds {
             microphone_settings: None,
             applied_settings: crate::store::RecordingDeviceSettings::default(),
             camera_input_pending: false,
+            camera_preview_not_before: None,
             mic_input_pending: false,
             mic_input_released: false,
             microphone_error: None,
@@ -870,6 +883,7 @@ impl Feeds {
         self.camera_settings = settings;
         self.applied_settings.camera = None;
         self.camera_input_pending = false;
+        self.camera_preview_not_before = None;
         self.camera_error = None;
         cx.notify();
 
@@ -884,6 +898,20 @@ impl Feeds {
             }
         }
         self.camera_epoch
+    }
+
+    pub(crate) fn camera_preview_epoch(&self) -> Option<u64> {
+        (self.camera.is_some()
+            && !self.camera_preview_parked
+            && !self.camera_input_pending
+            && self.camera_error.is_none()
+            && self.camera_preview_not_before.is_some())
+        .then_some(self.camera_epoch)
+    }
+
+    pub(crate) fn accepts_camera_preview(&self, timestamp: cap_timestamp::Timestamp) -> bool {
+        self.camera_preview_epoch().is_some()
+            && camera_preview_frame_is_fresh(timestamp, self.camera_preview_not_before)
     }
 
     pub fn camera_configuration_result(&self, epoch: u64) -> Option<Result<(), String>> {
@@ -910,6 +938,7 @@ impl Feeds {
         }
 
         self.camera_preview_parked = true;
+        self.camera_preview_not_before = None;
         self.applied_settings.camera = None;
         self.camera_input_pending = false;
         self.camera_epoch += 1;
@@ -949,6 +978,7 @@ impl Feeds {
     fn start_camera_preview(&mut self, selection: SelectedCamera, cx: &mut Context<Self>) {
         self.camera_error = None;
         self.camera_input_pending = true;
+        self.camera_preview_not_before = None;
         self.applied_settings.camera = None;
         let epoch = self.camera_epoch;
         let settings = self.camera_settings;
@@ -1010,7 +1040,10 @@ impl Feeds {
                 }
                 this.camera_input_pending = false;
                 match result {
-                    Ok(settings) => this.applied_settings.camera = settings.camera,
+                    Ok(settings) => {
+                        this.applied_settings.camera = settings.camera;
+                        this.camera_preview_not_before = Some(cap_timestamp::Timestamps::now());
+                    }
                     Err(error) => {
                         tracing::error!("camera input failed: {error}");
                         this.camera_error = Some(error);
@@ -1469,6 +1502,43 @@ fn db_fs(samples: &MicrophoneSamples) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_rejects_frames_queued_before_input_readiness() {
+        let ready = cap_timestamp::Timestamps::now();
+        let queued = ready
+            .instant()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        assert!(!camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::Instant(queued),
+            Some(ready)
+        ));
+        assert!(!camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::Instant(ready.instant()),
+            None
+        ));
+        assert!(camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::Instant(ready.instant()),
+            Some(ready)
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn preview_checks_native_camera_capture_clock() {
+        let ready = cap_timestamp::Timestamps::now();
+        assert!(!camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::new(
+                0
+            )),
+            Some(ready)
+        ));
+        assert!(camera_preview_frame_is_fresh(
+            cap_timestamp::Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::now()),
+            Some(ready)
+        ));
+    }
 
     #[tokio::test]
     async fn same_device_format_change_discards_queued_previous_configuration() {

@@ -923,6 +923,7 @@ struct CameraPreviewView {
     frame_dims: Option<(usize, usize)>,
     retained: Option<Arc<gpui::RenderImage>>,
     retained_dims: Option<(usize, usize)>,
+    retained_captured_at: Option<Instant>,
     reveal_started: Option<Instant>,
     retained_invalidated: bool,
     selection_revision: u64,
@@ -963,6 +964,7 @@ impl CameraPreviewView {
                     && retained.captured_at.elapsed() < Duration::from_secs(60)
             });
         let retained_dims = retained.as_ref().map(|retained| retained.frame_dims);
+        let retained_captured_at = retained.as_ref().map(|retained| retained.captured_at);
         if let Some(retained) = &retained {
             let expiry = cx
                 .background_executor()
@@ -1005,6 +1007,7 @@ impl CameraPreviewView {
             frame_dims: None,
             retained,
             retained_dims,
+            retained_captured_at,
             reveal_started: None,
             retained_invalidated: false,
             selection_revision: 0,
@@ -1061,6 +1064,21 @@ impl CameraPreviewView {
 
 impl Render for CameraPreviewView {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        if self
+            .frame_revision
+            .is_some_and(|revision| revision != self.selection_revision)
+        {
+            #[cfg(target_os = "macos")]
+            {
+                self.latest_frame = None;
+            }
+            #[cfg(not(target_os = "macos"))]
+            if let Some(image) = self.latest_frame.take() {
+                let _ = window.drop_image(image);
+            }
+            self.frame_dims = None;
+            self.frame_revision = None;
+        }
         if (self.retained_invalidated
             || self
                 .reveal_started
@@ -1129,6 +1147,7 @@ impl Render for CameraPreviewView {
             let overlay = div().absolute().inset_0().child(
                 gpui::img(image)
                     .size_full()
+                    .rounded(px(radius))
                     .object_fit(gpui::ObjectFit::Cover),
             );
             container = if self.reveal_started.is_some() {
@@ -1211,6 +1230,7 @@ impl Render for CameraPreviewView {
 
 #[cfg(not(target_os = "macos"))]
 pub struct CameraPreviewFrame {
+    pub timestamp: cap_timestamp::Timestamp,
     pub image: Arc<gpui::RenderImage>,
     pub dims: (usize, usize),
 }
@@ -1249,6 +1269,7 @@ impl Render for CameraToolbarView {
 /// `release_blur_resources` behaviour (`camera.rs:1477-1484`).
 #[cfg(target_os = "macos")]
 struct BlurBridge {
+    epoch: u64,
     tx: flume::Sender<camera_blur::BlurJob>,
     /// The first blurred output may land while the window is inactive, where
     /// a notify alone may not present (the unit-2 first-frame finding); the
@@ -1350,13 +1371,19 @@ impl CameraWindow {
         let image = (preview.frame_revision == Some(preview.selection_revision))
             .then(|| preview.latest_frame.clone())
             .flatten();
-        let Some(image) = image.or_else(|| preview.retained.clone()) else {
+        let Some((image, captured_at)) = image
+            .map(|image| (image, Instant::now()))
+            .or_else(|| preview.retained.clone().zip(preview.retained_captured_at))
+        else {
             return;
         };
+        let remaining = Duration::from_secs(60).saturating_sub(captured_at.elapsed());
+        if remaining.is_zero() {
+            return;
+        }
         let Some(frame_dims) = preview.frame_dims.or(preview.retained_dims) else {
             return;
         };
-        let captured_at = Instant::now();
         cx.default_global::<ParkedCameraPreview>().0 = Some(RetainedCameraPreview {
             image,
             camera,
@@ -1364,7 +1391,7 @@ impl CameraWindow {
             captured_at,
             frame_dims,
         });
-        let expiry = cx.background_executor().timer(Duration::from_secs(60));
+        let expiry = cx.background_executor().timer(remaining);
         cx.spawn(async move |_, cx| {
             expiry.await;
             cx.update(|cx| {
@@ -1514,6 +1541,9 @@ impl CameraWindow {
     ) {
         #[cfg(target_os = "macos")]
         {
+            let Some(epoch) = Feeds::global(cx).read(cx).camera_preview_epoch() else {
+                return;
+            };
             use core_foundation::base::TCFType as _;
             use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 
@@ -1544,7 +1574,7 @@ impl CameraWindow {
                         ring_generation: converted.generation,
                         mode,
                     };
-                    match self.ensure_blur_bridge(window, cx).tx.try_send(job) {
+                    match self.ensure_blur_bridge(epoch, window, cx).tx.try_send(job) {
                         Ok(()) => {}
                         // Worker busy: drop this frame and keep the last
                         // painted one -- the bounded(1) latest-wins shape of
@@ -1652,7 +1682,19 @@ impl CameraWindow {
     }
 
     #[cfg(target_os = "macos")]
-    fn ensure_blur_bridge(&mut self, window: &Window, cx: &mut Context<Self>) -> &BlurBridge {
+    fn ensure_blur_bridge(
+        &mut self,
+        epoch: u64,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> &BlurBridge {
+        if self
+            .blur
+            .as_ref()
+            .is_some_and(|bridge| bridge.epoch != epoch)
+        {
+            self.blur = None;
+        }
         if self.blur.is_none() {
             let (job_tx, job_rx) = flume::bounded::<camera_blur::BlurJob>(1);
             let (out_tx, out_rx) = flume::bounded::<camera_blur::BlurOutput>(2);
@@ -1668,7 +1710,7 @@ impl CameraWindow {
             let pump = cx.spawn(async move |this, cx| {
                 while let Ok(output) = out_rx.recv_async().await {
                     let first = match this.update(cx, |this: &mut CameraWindow, cx| {
-                        this.blurred_frame_arrived(output, cx)
+                        this.blurred_frame_arrived(output, epoch, cx)
                     }) {
                         Ok(first) => first,
                         Err(_) => break,
@@ -1685,6 +1727,7 @@ impl CameraWindow {
                 }
             });
             self.blur = Some(BlurBridge {
+                epoch,
                 tx: job_tx,
                 first_output_pending: true,
                 _pump: pump,
@@ -1700,11 +1743,14 @@ impl CameraWindow {
     fn blurred_frame_arrived(
         &mut self,
         output: camera_blur::BlurOutput,
+        epoch: u64,
         cx: &mut Context<Self>,
     ) -> bool {
         // A stale output can land after the mode flips back to Off; the raw
         // path is already painting again, so drop it.
-        if self.state.background_blur == BlurMode::Off {
+        if self.state.background_blur == BlurMode::Off
+            || Feeds::global(cx).read(cx).camera_preview_epoch() != Some(epoch)
+        {
             return false;
         }
         let first = self

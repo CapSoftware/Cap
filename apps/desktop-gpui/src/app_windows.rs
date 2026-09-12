@@ -4507,6 +4507,12 @@ pub fn deliver_camera_frame(
     #[cfg(not(target_os = "macos"))] frame: crate::camera_window::CameraPreviewFrame,
     cx: &mut App,
 ) -> bool {
+    if !crate::feeds::Feeds::global(cx)
+        .read(cx)
+        .accepts_camera_preview(frame.timestamp)
+    {
+        return false;
+    }
     let Some(handle) = cx.global::<AppWindows>().camera else {
         return false;
     };
