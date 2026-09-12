@@ -521,9 +521,16 @@ impl Actor {
         }
         let result = self.handle_stop_inner(discard, ctx).await;
         if let Some(mut diagnostic) = self.diagnostic.take() {
+            let segment_count = match &result {
+                Ok(recording) => match &recording.meta {
+                    StudioRecordingMeta::SingleSegment { .. } => 1,
+                    StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
+                },
+                Err(_) => self.segments.len(),
+            };
             diagnostic.field(cap_utils::operation_diagnostics::Field::number(
                 "segments",
-                self.segments.len() as u64,
+                segment_count as u64,
             ));
             diagnostic.finish(result.is_ok());
         }
