@@ -5867,12 +5867,10 @@ function ZoomSegmentConfig(props: {
 	const { project, setProject, editorInstance, projectHistory } =
 		useEditorContext();
 
-	const states = {
-		manual:
-			props.segment.mode === "auto"
-				? { x: 0.5, y: 0.5 }
-				: props.segment.mode.manual,
-	};
+	const manualPos = () =>
+		props.segment.mode === "auto"
+			? { x: 0.5, y: 0.5 }
+			: { ...props.segment.mode.manual };
 
 	return (
 		<>
@@ -5908,7 +5906,7 @@ function ZoomSegmentConfig(props: {
 							"zoomSegments",
 							props.segmentIndex,
 							"mode",
-							v === "auto" ? "auto" : { manual: states.manual },
+							v === "auto" ? "auto" : { manual: manualPos() },
 						);
 					}}
 				>
@@ -6092,34 +6090,45 @@ function ZoomSegmentConfig(props: {
 											const bounds =
 												downEvent.currentTarget.getBoundingClientRect();
 
+											const updatePosition = (
+												clientX: number,
+												clientY: number,
+											) => {
+												setProject(
+													"timeline",
+													"zoomSegments",
+													props.segmentIndex,
+													"mode",
+													{
+														manual: {
+															x: Math.max(
+																Math.min(
+																	(clientX - bounds.left) / bounds.width,
+																	1,
+																),
+																0,
+															),
+															y: Math.max(
+																Math.min(
+																	(clientY - bounds.top) / bounds.height,
+																	1,
+																),
+																0,
+															),
+														},
+													},
+												);
+											};
+
+											updatePosition(downEvent.clientX, downEvent.clientY);
+
 											createRoot((dispose) =>
 												createEventListenerMap(window, {
 													mouseup: () => dispose(),
 													mousemove: (moveEvent) => {
-														setProject(
-															"timeline",
-															"zoomSegments",
-															props.segmentIndex,
-															"mode",
-															"manual",
-															{
-																x: Math.max(
-																	Math.min(
-																		(moveEvent.clientX - bounds.left) /
-																			bounds.width,
-																		1,
-																	),
-																	0,
-																),
-																y: Math.max(
-																	Math.min(
-																		(moveEvent.clientY - bounds.top) /
-																			bounds.height,
-																		1,
-																	),
-																	0,
-																),
-															},
+														updatePosition(
+															moveEvent.clientX,
+															moveEvent.clientY,
 														);
 													},
 												}),
