@@ -30,6 +30,106 @@ fn init() {
 }
 
 #[tokio::test]
+async fn studio_failed_second_resume_can_save_or_retry_with_real_screen() {
+    init();
+    let shareable_content: SendableShareableContent = cidre::sc::ShareableContent::current()
+        .await
+        .expect("Screen Recording permission is required")
+        .into();
+
+    for (retry, fail_after_screen_start) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let temp = TempDir::new().unwrap();
+        let recording_dir = temp.path().join("failed-resume.cap");
+        let handle = studio_recording::Actor::builder(
+            recording_dir.clone(),
+            ScreenCaptureTarget::Display {
+                id: scap_targets::Display::primary().id(),
+            },
+        )
+        .with_fragmented(false)
+        .with_system_audio(fail_after_screen_start)
+        .with_max_fps(30)
+        .with_keyboard_capture(false)
+        .build(Some(shareable_content.clone()))
+        .await
+        .unwrap();
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        handle.pause().await.unwrap();
+        handle.resume().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        handle.pause().await.unwrap();
+
+        let segments = recording_dir.join("content/segments");
+        let original_bytes: Vec<_> = (0..2)
+            .map(|index| {
+                std::fs::read(segments.join(format!("segment-{index}/display.mp4"))).unwrap()
+            })
+            .collect();
+        let obstruction = if fail_after_screen_start {
+            let path = segments.join("segment-2/system_audio.ogg");
+            std::fs::create_dir_all(&path).unwrap();
+            path
+        } else {
+            let path = segments.join("segment-2");
+            std::fs::write(&path, b"failed segment creation").unwrap();
+            path
+        };
+        for _ in 0..2 {
+            let failure = tokio::time::timeout(Duration::from_secs(5), handle.resume())
+                .await
+                .expect("resume must return its error")
+                .unwrap_err();
+            assert!(failure.to_string().contains("still paused"));
+            if fail_after_screen_start {
+                assert!(failure.to_string().contains("system audio pipeline setup"));
+                assert!(segments.join("segment-2/display.mp4").exists());
+            }
+            assert!(handle.is_paused().await.unwrap());
+        }
+        if fail_after_screen_start {
+            std::fs::remove_dir(&obstruction).unwrap();
+        } else {
+            std::fs::remove_file(&obstruction).unwrap();
+        }
+        if retry {
+            handle.resume().await.unwrap();
+            assert!(!handle.is_paused().await.unwrap());
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+
+        let report = tokio::time::timeout(
+            Duration::from_secs(15),
+            handle.stop_with_intent(studio_recording::StudioStopIntent::Preserve),
+        )
+        .await
+        .expect("Stop must complete after failed resume");
+        assert!(report.accepted_intent && report.stop_acknowledged);
+        let completed = report.result.unwrap();
+        let cap_project::StudioRecordingMeta::MultipleSegments { inner } = completed.meta else {
+            panic!("expected multiple segments");
+        };
+        assert_eq!(inner.segments.len(), if retry { 3 } else { 2 });
+        for (index, original) in original_bytes.iter().enumerate() {
+            let path = segments.join(format!("segment-{index}/display.mp4"));
+            assert_eq!(&std::fs::read(&path).unwrap(), original);
+        }
+        for segment in inner.segments {
+            let path = segment.display.path.to_path(&recording_dir);
+            assert!(probe_media_valid(&path));
+            assert!(probe_video_can_decode(&path).unwrap());
+            let duration = get_media_duration(&path).unwrap().as_secs_f64();
+            assert!(
+                (1.0..3.0).contains(&duration),
+                "segment duration {duration}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn studio_nonfragmented_record_pause_resume_with_real_screen() {
     init();
 

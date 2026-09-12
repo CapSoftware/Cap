@@ -1100,7 +1100,7 @@ async fn spawn_instant_recording_actor_inner(
     #[cfg(windows)]
     {
         let scope = output_pipeline::PipelineBuildScope::new();
-        output_pipeline::finish_windows_pipeline_startup(&scope, startup).await
+        output_pipeline::finish_pipeline_startup(&scope, startup).await
     }
     #[cfg(not(windows))]
     startup.await

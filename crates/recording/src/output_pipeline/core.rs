@@ -1819,13 +1819,13 @@ pub(crate) struct PipelineBuildScope(Arc<PipelineBuildScopeInner>);
 type CaptureCompletion = Shared<BoxFuture<'static, Result<(), String>>>;
 
 struct ScopeError {
-    #[cfg(any(test, target_os = "linux", windows))]
+    #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
     message: String,
-    #[cfg(any(test, target_os = "linux", windows))]
+    #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
     uncertain: bool,
 }
 
-#[cfg(any(test, target_os = "linux", windows))]
+#[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
 #[derive(Debug)]
 pub(crate) struct PipelineJoinReport {
     pub quiescent: bool,
@@ -1835,9 +1835,10 @@ pub(crate) struct PipelineJoinReport {
 struct PipelineBuildScopeInner {
     parent: Option<PipelineBuildScope>,
     strict_lifetime: bool,
+    wait_for_video_start: bool,
     #[cfg(target_os = "linux")]
     required_source_health: bool,
-    #[cfg(any(test, target_os = "linux", windows))]
+    #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
     drain: tokio::sync::Mutex<()>,
     cancelled: CancellationToken,
     committed: AtomicBool,
@@ -1879,6 +1880,11 @@ impl PipelineBuildScope {
         Self::with_lifetime(false)
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn new_macos_segment() -> Self {
+        Self::with_lifetime_policy(false, false, false)
+    }
+
     #[cfg(any(test, target_os = "linux"))]
     pub(crate) fn new_lifetime() -> Self {
         Self::with_lifetime(true)
@@ -1886,19 +1892,24 @@ impl PipelineBuildScope {
 
     #[cfg(any(test, target_os = "linux", windows))]
     fn with_lifetime(strict_lifetime: bool) -> Self {
-        Self::with_lifetime_policy(strict_lifetime, false)
+        Self::with_lifetime_policy(strict_lifetime, false, true)
     }
 
     #[cfg(target_os = "linux")]
     pub(crate) fn new_studio_lifetime() -> Self {
-        Self::with_lifetime_policy(true, true)
+        Self::with_lifetime_policy(true, true, true)
     }
 
-    #[cfg(any(test, target_os = "linux", windows))]
-    fn with_lifetime_policy(strict_lifetime: bool, _required_source_health: bool) -> Self {
+    #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
+    fn with_lifetime_policy(
+        strict_lifetime: bool,
+        _required_source_health: bool,
+        wait_for_video_start: bool,
+    ) -> Self {
         Self(Arc::new(PipelineBuildScopeInner {
             parent: None,
             strict_lifetime,
+            wait_for_video_start,
             #[cfg(target_os = "linux")]
             required_source_health: _required_source_health,
             drain: tokio::sync::Mutex::new(()),
@@ -1915,6 +1926,7 @@ impl PipelineBuildScope {
         Self(Arc::new(PipelineBuildScopeInner {
             parent: Some(self.clone()),
             strict_lifetime: self.requires_joined_stop(),
+            wait_for_video_start: self.0.wait_for_video_start,
             required_source_health: self.0.required_source_health,
             drain: tokio::sync::Mutex::new(()),
             cancelled: self.cancellation().child_token(),
@@ -2008,7 +2020,7 @@ impl PipelineBuildScope {
         });
     }
 
-    #[cfg(any(test, target_os = "linux", windows))]
+    #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
     pub(crate) async fn cancel_and_join_report(&self) -> PipelineJoinReport {
         self.cancel();
         let _drain = self.0.drain.lock().await;
@@ -2050,7 +2062,7 @@ impl PipelineBuildScope {
         self.0.strict_lifetime
     }
 
-    #[cfg(any(test, target_os = "linux", windows))]
+    #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
     pub(crate) fn commit(&self) -> bool {
         let mut tokens = self.0.tokens.lock().unwrap();
         if self.0.cancelled.is_cancelled() {
@@ -2072,9 +2084,9 @@ impl PipelineBuildScope {
         }
         if !self.0.committed.load(Ordering::Acquire) {
             self.0.cleanup_errors.lock().unwrap().push(ScopeError {
-                #[cfg(any(test, target_os = "linux", windows))]
+                #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
                 message: error,
-                #[cfg(any(test, target_os = "linux", windows))]
+                #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
                 uncertain: true,
             });
         }
@@ -2123,9 +2135,9 @@ impl PipelineBuildScope {
         }
         if !self.is_committed() {
             self.0.cleanup_errors.lock().unwrap().push(ScopeError {
-                #[cfg(any(test, target_os = "linux", windows))]
+                #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
                 message: error,
-                #[cfg(any(test, target_os = "linux", windows))]
+                #[cfg(any(test, target_os = "linux", target_os = "macos", windows))]
                 uncertain: !self.requires_joined_stop(),
             });
         }
@@ -2246,14 +2258,14 @@ impl TaskPool {
     }
 }
 
-#[cfg(any(windows, test))]
-struct WindowsStartupGuard {
+#[cfg(any(windows, target_os = "macos", test))]
+struct PipelineStartupGuard {
     scope: PipelineBuildScope,
     armed: bool,
 }
 
-#[cfg(any(windows, test))]
-impl Drop for WindowsStartupGuard {
+#[cfg(any(windows, target_os = "macos", test))]
+impl Drop for PipelineStartupGuard {
     fn drop(&mut self) {
         if self.armed {
             self.scope.cancel();
@@ -2262,7 +2274,7 @@ impl Drop for WindowsStartupGuard {
                 runtime.spawn(async move {
                     let report = scope.cancel_and_join_report().await;
                     if let Some(error) = report.error {
-                        error!(%error, "Dropped Windows startup cleanup failed");
+                        error!(%error, "Dropped capture startup cleanup failed");
                     }
                 });
             }
@@ -2270,12 +2282,17 @@ impl Drop for WindowsStartupGuard {
     }
 }
 
-#[cfg(any(windows, test))]
-pub(crate) async fn finish_windows_pipeline_startup<T>(
+#[cfg(any(windows, target_os = "macos", test))]
+#[derive(Debug, thiserror::Error)]
+#[error("Capture startup cleanup is unconfirmed: {0}")]
+pub(crate) struct PipelineStartupCleanupUnconfirmed(String);
+
+#[cfg(any(windows, target_os = "macos", test))]
+pub(crate) async fn finish_pipeline_startup<T>(
     scope: &PipelineBuildScope,
     startup: impl Future<Output = anyhow::Result<T>>,
 ) -> anyhow::Result<T> {
-    let mut guard = WindowsStartupGuard {
+    let mut guard = PipelineStartupGuard {
         scope: scope.clone(),
         armed: true,
     };
@@ -2294,15 +2311,14 @@ pub(crate) async fn finish_windows_pipeline_startup<T>(
                 Err(error) => error,
                 Ok(output) => {
                     drop(output);
-                    anyhow!("Windows capture startup was cancelled")
+                    anyhow!("Capture startup was cancelled")
                 }
             };
             let report = scope.cancel_and_join_report().await;
             guard.armed = false;
             match (report.quiescent, report.error) {
-                (false, cleanup) => Err(error.context(format!(
-                    "Capture startup cleanup is unconfirmed: {}",
-                    cleanup.unwrap_or_default()
+                (false, cleanup) => Err(error.context(PipelineStartupCleanupUnconfirmed(
+                    cleanup.unwrap_or_default(),
                 ))),
                 (true, Some(cleanup)) => {
                     Err(error.context(format!("Capture startup cleanup: {cleanup}")))
@@ -2321,11 +2337,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         #[cfg(windows)]
         if PipelineBuildScope::current().is_none() {
             let scope = PipelineBuildScope::new();
-            return finish_windows_pipeline_startup(
-                &scope,
-                self.build_inner::<TMuxer>(muxer_config),
-            )
-            .await;
+            return finish_pipeline_startup(&scope, self.build_inner::<TMuxer>(muxer_config)).await;
         }
         self.build_inner::<TMuxer>(muxer_config).await
     }
@@ -2823,12 +2835,13 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     video_start_gate: Option<VideoStartGate>,
 ) -> Option<oneshot::Receiver<Result<(), String>>> {
     let frame_duration_ns = estimate_video_frame_duration_ns(&video_info);
-    let (start_tx, started) = if PipelineBuildScope::current().is_some() {
-        let (sender, receiver) = oneshot::channel();
-        (Some(sender), Some(receiver))
-    } else {
-        (None, None)
-    };
+    let (start_tx, started) =
+        if PipelineBuildScope::current().is_some_and(|scope| scope.0.wait_for_video_start) {
+            let (sender, receiver) = oneshot::channel();
+            (Some(sender), Some(receiver))
+        } else {
+            (None, None)
+        };
     setup_ctx.tasks().spawn("capture-video", {
         let stop_token = stop_token.clone();
         let scope = PipelineBuildScope::current();
@@ -8487,6 +8500,8 @@ mod build_scope_tests {
         MuxerSetup,
         MuxerPending,
         VideoStart,
+        #[cfg(target_os = "macos")]
+        VideoStartPending,
         #[cfg(windows)]
         VideoStop,
         None,
@@ -8566,6 +8581,10 @@ mod build_scope_tests {
             async move {
                 if self.probe.stage == FailureStage::VideoStart {
                     anyhow::bail!("video start fault");
+                }
+                #[cfg(target_os = "macos")]
+                if self.probe.stage == FailureStage::VideoStartPending {
+                    self.probe.setup_pending.notified().await;
                 }
                 Ok(())
             }
@@ -8683,7 +8702,7 @@ mod build_scope_tests {
         let observed = exited.clone();
         let result = tokio::time::timeout(
             Duration::from_secs(2),
-            finish_windows_pipeline_startup(&scope, async move {
+            finish_pipeline_startup(&scope, async move {
                 let build = BuildCtx::new();
                 let mut setup = SetupCtx::new(
                     build.health_tx.clone(),
@@ -8727,7 +8746,7 @@ mod build_scope_tests {
         let scope = PipelineBuildScope::new();
         let probe = Probe::new(FailureStage::VideoStop, &scope);
         let directory = tempfile::tempdir().unwrap();
-        let pipeline = finish_windows_pipeline_startup(
+        let pipeline = finish_pipeline_startup(
             &scope,
             OutputPipeline::builder(directory.path().join("stop-fault.mp4"))
                 .with_video::<Video>(probe.clone())
@@ -8756,7 +8775,7 @@ mod build_scope_tests {
             let directory = tempfile::tempdir().unwrap();
             let result = tokio::time::timeout(
                 Duration::from_secs(3),
-                finish_windows_pipeline_startup(
+                finish_pipeline_startup(
                     &scope,
                     OutputPipeline::builder(directory.path().join("unused.mp4"))
                         .with_video::<Video>(probe.clone())
@@ -8783,7 +8802,7 @@ mod build_scope_tests {
             let screen = Probe::new(FailureStage::None, &scope);
             let requested = Probe::new(stage, &scope);
             let directory = tempfile::tempdir().unwrap();
-            let result = finish_windows_pipeline_startup(&scope, async {
+            let result = finish_pipeline_startup(&scope, async {
                 let _screen = OutputPipeline::builder(directory.path().join("screen.mp4"))
                     .with_video::<Video>(screen.clone())
                     .build::<Encoder>(screen.clone())
@@ -8817,7 +8836,7 @@ mod build_scope_tests {
         let ready = entered.clone();
         let owned = scope.clone();
         let task = tokio::spawn(async move {
-            finish_windows_pipeline_startup(&owned, async {
+            finish_pipeline_startup(&owned, async {
                 ready.notify_one();
                 std::future::pending::<anyhow::Result<()>>().await
             })
@@ -8835,7 +8854,7 @@ mod build_scope_tests {
         let scope = PipelineBuildScope::new();
         let probe = Probe::new(FailureStage::None, &scope);
         let directory = tempfile::tempdir().unwrap();
-        let pipeline = finish_windows_pipeline_startup(
+        let pipeline = finish_pipeline_startup(
             &scope,
             OutputPipeline::builder(directory.path().join("unused.mp4"))
                 .with_video::<Video>(probe.clone())
@@ -8850,6 +8869,33 @@ mod build_scope_tests {
         assert_eq!(probe.stopped.load(Ordering::Acquire), 1);
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn macos_segment_startup_keeps_video_start_concurrent() {
+        let scope = PipelineBuildScope::new_macos_segment();
+        let probe = Probe::new(FailureStage::VideoStartPending, &scope);
+        let directory = tempfile::tempdir().unwrap();
+        let pipeline = tokio::time::timeout(
+            Duration::from_secs(2),
+            finish_pipeline_startup(
+                &scope,
+                OutputPipeline::builder(directory.path().join("screen.mp4"))
+                    .with_video::<Video>(probe.clone())
+                    .build::<Encoder>(probe.clone()),
+            ),
+        )
+        .await
+        .expect("camera and microphone setup must not wait for screen startup")
+        .unwrap();
+        assert!(scope.is_committed());
+        probe.setup_pending.notify_one();
+        tokio::task::yield_now().await;
+        probe.cancel.cancel();
+        pipeline.stop().await.unwrap();
+        assert_eq!(probe.alive.load(Ordering::Acquire), 0);
+        assert_eq!(probe.stopped.load(Ordering::Acquire), 1);
+    }
+
     #[tokio::test]
     async fn windows_failed_startup_does_not_finish_before_held_cleanup() {
         let scope = PipelineBuildScope::new();
@@ -8857,7 +8903,7 @@ mod build_scope_tests {
         let (entered, ready) = oneshot::channel();
         let scoped = scope.clone();
         let task = tokio::spawn(async move {
-            finish_windows_pipeline_startup(&scoped, async {
+            finish_pipeline_startup(&scoped, async {
                 let completion = PipelineBuildScope::current().unwrap().task_completion();
                 tokio::spawn(async move {
                     let _completion = completion;
@@ -8883,7 +8929,7 @@ mod build_scope_tests {
         let scope = PipelineBuildScope::new();
         let token = CancellationToken::new();
         scope.register_token(token.clone());
-        let result = finish_windows_pipeline_startup(&scope, async {
+        let result = finish_pipeline_startup(&scope, async {
             token.cancel();
             Ok(())
         })
@@ -8897,7 +8943,7 @@ mod build_scope_tests {
         let scope = PipelineBuildScope::new();
         scope.cancel();
         assert!(
-            finish_windows_pipeline_startup(&scope, async { Ok(()) })
+            finish_pipeline_startup(&scope, async { Ok(()) })
                 .await
                 .is_err()
         );

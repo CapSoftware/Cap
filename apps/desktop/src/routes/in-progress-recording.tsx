@@ -1,3 +1,5 @@
+import "@radix-ui/colors/amber.css";
+import "@radix-ui/colors/amber-dark.css";
 import { createTimer } from "@solid-primitives/timer";
 import { createMutation } from "@tanstack/solid-query";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
@@ -208,11 +210,13 @@ function InProgressRecordingInner() {
 		if (failure) issues.push(failure);
 		const controlError = pauseError();
 		if (controlError) issues.push(controlError);
+		const degraded = degradedReason();
+		if (degraded) issues.push(degraded);
 		const nativeError = cleanCapture.data?.error;
 		if (nativeError) issues.push(nativeError);
 		const localError = stopError();
 		if (localError) issues.push(localError);
-		return [...new Set(issues)];
+		return [...new Set(issues.map(recordingIssueMessage))];
 	});
 
 	const hasRecordingIssue = () => issueMessages().length > 0;
@@ -579,7 +583,9 @@ function InProgressRecordingInner() {
 					(state().variant === "recording" || state().variant === "paused")
 				) {
 					setPauseError(
-						`Could not ${request.resume ? "resume" : "pause"} recording: ${String(error)}`,
+						String(error).startsWith("Could not ")
+							? String(error)
+							: `Could not ${request.resume ? "resume" : "pause"} recording: ${String(error)}`,
 					);
 				}
 				throw error;
@@ -874,15 +880,18 @@ function InProgressRecordingInner() {
 	};
 
 	return (
-		<div class="flex h-full w-full flex-col justify-end px-3 pb-3">
-			<div ref={setInteractiveAreaRef} class="flex w-full flex-col gap-2">
+		<div class="flex h-full w-full flex-col justify-end p-3">
+			<div
+				ref={setInteractiveAreaRef}
+				class="flex max-h-full w-full min-h-0 flex-col gap-2"
+			>
 				<Show when={hasRecordingIssue() && issuePanelVisible()}>
-					<div class="flex w-full shrink-0 flex-row items-start gap-3 rounded-2xl border border-red-8 bg-gray-1 px-3 py-2 text-[12px] leading-snug text-red-11 shadow-lg">
+					<div class="flex min-h-0 w-full flex-row items-start gap-2 rounded-xl border border-red-8 bg-gray-1 p-2 text-xs leading-snug text-red-11 shadow-lg">
 						<IconLucideAlertTriangle class="mt-0.5 size-5 shrink-0 text-red-9" />
 						<div
 							role="alert"
 							tabIndex={0}
-							class="max-h-16 min-w-0 flex-1 space-y-1 overflow-auto whitespace-pre-wrap break-words"
+							class="max-h-14 min-w-0 flex-1 space-y-1 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere]"
 						>
 							{issueMessages().map((message) => (
 								<p>{message}</p>
@@ -899,27 +908,36 @@ function InProgressRecordingInner() {
 					</div>
 				</Show>
 				<div class="h-10 w-full flex-none rounded-2xl">
-					<div class="flex h-full w-full flex-row items-stretch overflow-hidden rounded-2xl bg-gray-1 border border-gray-5 shadow-[0_1px_3px_rgba(0,0,0,0.1)]">
-						<div class="flex flex-1 flex-col gap-2 p-1">
-							<div class="flex flex-1 flex-row justify-between">
+					<div
+						class="flex h-full w-full flex-row items-stretch overflow-hidden rounded-2xl bg-gray-1 border shadow-[0_1px_3px_rgba(0,0,0,0.1)]"
+						style={{
+							"border-color":
+								state().variant === "paused"
+									? "var(--amber-6)"
+									: "var(--gray-5)",
+						}}
+					>
+						<div class="flex min-w-0 flex-1 flex-col p-1">
+							<div class="flex min-w-0 flex-1 flex-row items-center justify-between gap-1">
 								<Show
 									when={!isInitializing()}
 									fallback={
 										<div class="flex flex-row items-center gap-1.5 rounded-lg py-1 px-2 text-gray-12">
 											<IconLucideLoader2 class="size-4 animate-spin" />
-											<span class="text-[0.875rem] font-medium tabular-nums">
+											<span class="truncate text-sm font-medium tabular-nums">
 												Starting
 											</span>
 										</div>
 									}
 								>
 									<RecordingControlButton
+										flexible
 										disabled={
 											stopRequested() ||
 											stopRecording.isPending ||
 											isCountdown()
 										}
-										class="flex flex-row items-center gap-1 rounded-lg py-1 px-2 text-red-300 transition-colors duration-100 hover:bg-red-500/8 active:bg-red-500/12 disabled:opacity-60 disabled:hover:bg-transparent"
+										class="flex min-w-0 flex-1 flex-row items-center gap-1 rounded-lg py-1 px-1.5 text-red-300 transition-colors duration-100 hover:bg-red-500/8 active:bg-red-500/12 disabled:opacity-60 disabled:hover:bg-transparent"
 										type="button"
 										onPointerDown={(event) => {
 											if (event.button !== 0) return;
@@ -931,8 +949,8 @@ function InProgressRecordingInner() {
 										title="Stop recording"
 										aria-label="Stop recording"
 									>
-										<IconCapStopCircle />
-										<span class="text-[0.875rem] font-medium tabular-nums">
+										<IconCapStopCircle class="size-5 shrink-0" />
+										<span class="truncate text-sm font-medium tabular-nums">
 											<Show
 												when={!isCountdown()}
 												fallback={
@@ -1004,18 +1022,18 @@ function InProgressRecordingInner() {
 									</RecordingControlButton>
 								</Show>
 
-								<div class="flex items-center gap-1">
+								<div class="flex shrink-0 items-center">
 									<Show
 										when={canToggleMicMute()}
 										fallback={
 											<RecordingControlTooltip content={microphoneTitle()}>
 												<div
 													aria-label={microphoneTitle()}
-													class="relative flex h-8 w-8 items-center justify-center"
+													class="relative flex h-8 w-7 shrink-0 items-center justify-center"
 												>
 													{optionsQuery.rawOptions.micName != null ? (
 														disconnectedInputs.microphone ? (
-															<IconLucideMicOff class="size-5 text-amber-11" />
+															<IconLucideMicOff class="size-5 text-[var(--amber-11)]" />
 														) : (
 															<>
 																<IconCapMicrophone class="size-5 text-gray-12" />
@@ -1043,7 +1061,7 @@ function InProgressRecordingInner() {
 									>
 										<RecordingControlButton
 											type="button"
-											class="relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors duration-100 hover:bg-gray-12/6 active:bg-gray-12/10 disabled:opacity-50 disabled:hover:bg-transparent dark:hover:bg-white/8 dark:active:bg-white/12"
+											class="relative flex h-8 w-7 shrink-0 items-center justify-center rounded-lg transition-colors duration-100 hover:bg-gray-12/6 active:bg-gray-12/10 disabled:opacity-50 disabled:hover:bg-transparent dark:hover:bg-white/8 dark:active:bg-white/12"
 											disabled={toggleMicMute.isPending}
 											onClick={() => toggleMicMute.mutate()}
 											title={
@@ -1072,32 +1090,6 @@ function InProgressRecordingInner() {
 												</>
 											)}
 										</RecordingControlButton>
-									</Show>
-									<Show when={hasCameraInput() && disconnectedInputs.camera}>
-										<RecordingControlTooltip
-											content={
-												"Camera disconnected - recording continues without camera overlay"
-											}
-										>
-											<div
-												aria-label="Camera disconnected - recording continues without camera overlay"
-												class="flex h-8 w-8 items-center justify-center"
-											>
-												<IconLucideVideoOff class="size-5 text-amber-11" />
-											</div>
-										</RecordingControlTooltip>
-									</Show>
-									<Show when={degradedReason()}>
-										{(reason) => (
-											<RecordingControlTooltip content={reason()}>
-												<div
-													class="flex h-8 w-8 items-center justify-center"
-													aria-label={`Recording quality degraded: ${reason()}`}
-												>
-													<div class="size-2 rounded-full bg-amber-9 animate-pulse" />
-												</div>
-											</RecordingControlTooltip>
-										)}
 									</Show>
 									<Show
 										when={!isInitializing()}
@@ -1143,7 +1135,7 @@ function InProgressRecordingInner() {
 												class={cx(
 													"active:scale-90 motion-reduce:transform-none",
 													state().variant === "paused" &&
-														"bg-amber-3 text-amber-11 ring-1 ring-amber-6",
+														"bg-[var(--amber-3)] text-[var(--amber-11)] ring-1 ring-[var(--amber-6)]",
 												)}
 												title={
 													state().variant === "paused"
@@ -1204,10 +1196,11 @@ function InProgressRecordingInner() {
 							</div>
 						</div>
 						<div
-							class="non-styled-move flex cursor-move items-center justify-center border-l border-gray-5 p-1 hover:cursor-move transition-colors duration-100 hover:bg-gray-12/4 dark:hover:bg-white/6"
+							aria-label="Move recording controls"
+							class="non-styled-move flex w-6 shrink-0 cursor-move items-center justify-center border-l border-gray-5 p-1 hover:cursor-move transition-colors duration-100 hover:bg-gray-12/4 dark:hover:bg-white/6"
 							data-tauri-drag-region
 						>
-							<IconCapMoreVertical class="pointer-events-none text-gray-10" />
+							<IconCapMoreVertical class="pointer-events-none size-4 text-gray-10" />
 						</div>
 					</div>
 				</div>
@@ -1216,9 +1209,20 @@ function InProgressRecordingInner() {
 	);
 }
 
+function recordingIssueMessage(message: string): string {
+	if (
+		message.includes("Insufficient disk space") &&
+		message.includes("Your recording is still paused")
+	) {
+		return "Not enough disk space to resume. Free up space and try again, or press Stop to save.";
+	}
+	return message;
+}
+
 function RecordingControlTooltip(props: {
 	content: string | undefined;
 	children: JSX.Element;
+	flexible?: boolean;
 }) {
 	const [open, setOpen] = createSignal(false);
 	const boundsPrefix = `recording-control-tooltip-${createUniqueId()}`;
@@ -1284,7 +1288,10 @@ function RecordingControlTooltip(props: {
 					{props.content}
 				</span>
 			}
-			childClass="flex h-full items-center"
+			childClass={cx(
+				"flex h-full min-w-0 items-center",
+				props.flexible ? "flex-1" : "shrink-0",
+			)}
 			placement="top"
 			gutter={6}
 			flip={false}
@@ -1294,7 +1301,7 @@ function RecordingControlTooltip(props: {
 			onOpenChange={setOpen}
 		>
 			<span
-				class="flex h-full items-center"
+				class="flex h-full min-w-0 w-full items-center"
 				onFocusIn={() => setOpen(true)}
 				onFocusOut={(event) => {
 					if (
@@ -1312,13 +1319,18 @@ function RecordingControlTooltip(props: {
 	);
 }
 
-function RecordingControlButton(props: ComponentProps<"button">) {
-	const [local, buttonProps] = splitProps(props, ["title"]);
+function RecordingControlButton(
+	props: ComponentProps<"button"> & { flexible?: boolean },
+) {
+	const [local, buttonProps] = splitProps(props, ["title", "flexible"]);
 	return (
-		<RecordingControlTooltip content={local.title}>
+		<RecordingControlTooltip content={local.title} flexible={local.flexible}>
 			<button
 				{...buttonProps}
-				class={cx(props.class, "disabled:pointer-events-none")}
+				class={cx(
+					props.class,
+					"outline-none focus-visible:ring-2 focus-visible:ring-blue-9 disabled:pointer-events-none",
+				)}
 			/>
 		</RecordingControlTooltip>
 	);
@@ -1333,7 +1345,7 @@ function ActionButton(props: ComponentProps<"button">) {
 				"text-gray-11 hover:text-gray-12",
 				"hover:bg-gray-12/6 dark:hover:bg-white/8",
 				"active:bg-gray-12/10 dark:active:bg-white/12",
-				"h-8 w-8 flex items-center justify-center",
+				"h-8 w-7 shrink-0 flex items-center justify-center",
 				"disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent",
 				props.class,
 			)}
