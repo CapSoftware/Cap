@@ -39,7 +39,6 @@ describe("zoom utilities", () => {
 		expect(second.start).toBe(4);
 		expect(second.end).toBe(10);
 
-		// Must not share the same object reference
 		expect(first.mode).not.toBe(second.mode);
 		if (
 			typeof first.mode === "object" &&
@@ -48,7 +47,6 @@ describe("zoom utilities", () => {
 			"manual" in second.mode
 		) {
 			expect(first.mode.manual).not.toBe(second.mode.manual);
-			// Modifying second segment does not affect first segment
 			second.mode.manual.x = 0.9;
 			expect(first.mode.manual.x).toBe(0.2);
 		}
