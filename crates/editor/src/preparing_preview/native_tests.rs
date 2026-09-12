@@ -1160,7 +1160,10 @@ async fn native_handoff_reuses_pcm_preserves_audio_across_candidate_disposal_and
     use std::sync::atomic::AtomicUsize;
 
     let fixture = handoff_fixture();
-    let root = fixture.metadata.project_path.clone();
+    let entry = fixture.metadata.project_path.join("editor-entry");
+    std::fs::create_dir(&entry).unwrap();
+    let root = entry.join("..");
+    assert_ne!(root, fixture.metadata.project_path);
     let nonzero = Arc::new(AtomicUsize::new(0));
     let tapped = nonzero.clone();
     let output = Arc::new(crate::AudioOutput::new_headless(Box::new(
@@ -1325,6 +1328,141 @@ async fn native_handoff_reuses_pcm_preserves_audio_across_candidate_disposal_and
     drop(session);
     drop(fixture.source);
     assert!(fixture.released.load(Ordering::Acquire));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_silent_handoff_opens_and_renders_through_an_equivalent_editor_path() {
+    for count in [1, 2] {
+        let mut fixture = handoff_fixture();
+        let segments = crate::completed_audio::tests::segments_mut(&mut fixture.metadata);
+        segments.truncate(count);
+        for segment in segments {
+            segment.mic = None;
+            segment.system_audio = None;
+            segment.camera = None;
+        }
+        fixture.project.clips.truncate(count);
+        fixture
+            .project
+            .timeline
+            .as_mut()
+            .unwrap()
+            .segments
+            .truncate(count);
+        fixture.metadata.save_for_project().unwrap();
+        fixture
+            .project
+            .write(&fixture.metadata.project_path)
+            .unwrap();
+        let metadata = fixture.metadata.studio_meta().unwrap();
+        let input = PreparingPreviewInput {
+            recording_meta: fixture.metadata.clone(),
+            project: fixture.project.clone(),
+            segments: (0..count)
+                .map(|index| PreparingPreviewSegment {
+                    video: ManagedSegmentVideoInput::new(
+                        index,
+                        metadata,
+                        ManagedVideoTrackInput::new(
+                            fixture.source.clone(),
+                            fixture.display.clone(),
+                        )
+                        .unwrap(),
+                        None,
+                    )
+                    .unwrap(),
+                    cursor: fixture.cursor.clone(),
+                })
+                .collect(),
+            cursor_assets: fixture.assets.clone(),
+        };
+        let output = Arc::new(crate::AudioOutput::new_headless(Box::new(|_, _| {})));
+        let session = crate::PreparingPlaybackSession::spawn(
+            input,
+            (0..count)
+                .map(|_| crate::PreparingAudioSegmentInput {
+                    mic: None,
+                    system_audio: None,
+                    timing_repair: Default::default(),
+                })
+                .collect(),
+            crate::PreparingPlaybackOptions {
+                preview: PreparingPreviewOptions::default(),
+                fps: 30,
+                resolution: XY::new(320, 240),
+            },
+            output.clone(),
+            Box::new(|_, _, _| {}),
+        )
+        .unwrap();
+        let handoff = session.handoff_handle();
+        let completed_audio =
+            tokio::time::timeout(Duration::from_secs(30), handoff.take_completed_audio())
+                .await
+                .unwrap()
+                .unwrap();
+        let entry = fixture.metadata.project_path.join("editor-entry");
+        std::fs::create_dir(&entry).unwrap();
+        let (frames, mut received) = watch::channel(None);
+        let candidate = crate::EditorInstance::new_with_startup_inputs(
+            entry.join(".."),
+            |_| {},
+            Box::new(move |output, _| {
+                let frame = match output {
+                    crate::EditorFrameOutput::Rgba(frame) => frame.frame_number,
+                    crate::EditorFrameOutput::Nv12(frame) => frame.frame_number,
+                    #[cfg(target_os = "macos")]
+                    crate::EditorFrameOutput::Surface(frame) => frame.frame_number,
+                };
+                frames.send_replace(Some(frame));
+            }),
+            None,
+            crate::EditorFrameFormat::Rgba,
+            output,
+            crate::EditorStartupInputs {
+                recordings: None,
+                completed_audio: Some(completed_audio),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(candidate.segment_medias.len(), count);
+        let mut updates = session.updates();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !updates.borrow_and_update().progress.preview_available {
+                updates.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        candidate.install_preparing_handoff(&handoff).await.unwrap();
+        candidate
+            .preview_tx
+            .send(Some((0, 30, XY::new(320, 240))))
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if received
+                    .borrow_and_update()
+                    .is_some_and(|frame| candidate.commit_preparing_frame(frame, 30))
+                {
+                    break;
+                }
+                received.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        assert!(handoff.committed());
+        candidate.dispose().await;
+        let exit = handoff.stop_and_wait().await;
+        assert!(!exit.cleanup_failed, "{:?}", exit.error);
+        drop(candidate);
+        drop(handoff);
+        drop(session);
+        drop(fixture.source);
+        assert!(fixture.released.load(Ordering::Acquire));
+    }
 }
 
 async fn failed_handoff_installation_retires_native_candidate(cancelled: bool) {

@@ -1,6 +1,9 @@
 use cap_audio::DecodedAudio;
 use cap_project::{AudioGapSummary, AudioMeta, RecordingMeta, StudioRecordingMeta};
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 #[derive(Clone, Default)]
 pub(crate) struct CompletedAudioSegment {
@@ -50,6 +53,14 @@ fn audio_identities(meta: &StudioRecordingMeta) -> Vec<SegmentAudioIdentity> {
     }
 }
 
+fn same_project_path(left: &Path, right: &Path) -> bool {
+    left == right
+        || matches!(
+            (left.canonicalize(), right.canonicalize()),
+            (Ok(left), Ok(right)) if left == right
+        )
+}
+
 #[derive(Clone)]
 pub struct CompletedAudioHandoff {
     project_path: PathBuf,
@@ -63,7 +74,10 @@ impl CompletedAudioHandoff {
         expected_finalized_metadata: &RecordingMeta,
         segments: Vec<CompletedAudioSegment>,
     ) -> Result<Self, String> {
-        if source_metadata.project_path != expected_finalized_metadata.project_path {
+        if !same_project_path(
+            &source_metadata.project_path,
+            &expected_finalized_metadata.project_path,
+        ) {
             return Err("Completed audio belongs to a different project".into());
         }
         let source = audio_identities(
@@ -107,7 +121,7 @@ impl CompletedAudioHandoff {
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
     ) -> Option<Vec<CompletedAudioSegment>> {
-        (self.project_path == recording_meta.project_path
+        (same_project_path(&self.project_path, &recording_meta.project_path)
             && self.identities == audio_identities(meta))
         .then_some(self.segments)
     }
@@ -225,6 +239,98 @@ pub(crate) mod tests {
         assert!(Arc::ptr_eq(matched[0].mic.as_ref().unwrap(), &audio));
         assert!(matched[0].system_audio.is_none());
         assert!(matched[1].mic.is_none());
+    }
+
+    #[test]
+    fn completed_cache_accepts_equivalent_project_paths_and_preserves_pcm() {
+        let directory = tempfile::tempdir().unwrap();
+        let entry = directory.path().join("editor-entry");
+        std::fs::create_dir(&entry).unwrap();
+        let mut original = metadata();
+        original.project_path = entry.join("..");
+        let mut finalized = original.clone();
+        finalized.project_path = directory.path().canonicalize().unwrap();
+        assert_ne!(original.project_path, finalized.project_path);
+        let audio = audio();
+        for expected in [&original, &finalized] {
+            let cache = CompletedAudioHandoff::from_completed_tracks(
+                &original,
+                expected,
+                completed(&audio),
+            )
+            .unwrap();
+            let matched = cache
+                .into_matching(&finalized, finalized.studio_meta().unwrap())
+                .unwrap();
+            assert!(Arc::ptr_eq(matched[0].mic.as_ref().unwrap(), &audio));
+        }
+    }
+
+    #[test]
+    fn silent_completed_cache_accepts_canonical_editor_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let entry = directory.path().join("editor-entry");
+        std::fs::create_dir(&entry).unwrap();
+        for count in [1, 2] {
+            let mut original = metadata();
+            original.project_path = entry.join("..");
+            let segments = segments_mut(&mut original);
+            segments.truncate(count);
+            for segment in segments {
+                segment.mic = None;
+                segment.system_audio = None;
+            }
+            let cache = CompletedAudioHandoff::from_completed_tracks(
+                &original,
+                &original,
+                vec![CompletedAudioSegment::default(); count],
+            )
+            .unwrap();
+            let mut finalized = original.clone();
+            finalized.project_path = directory.path().canonicalize().unwrap();
+            let matched = cache
+                .into_matching(&finalized, finalized.studio_meta().unwrap())
+                .unwrap();
+            assert_eq!(matched.len(), count);
+            assert!(
+                matched
+                    .iter()
+                    .all(|segment| segment.mic.is_none() && segment.system_audio.is_none())
+            );
+        }
+    }
+
+    #[test]
+    fn completed_cache_rejects_different_or_unresolvable_project_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut original = metadata();
+        original.project_path = directory.path().join("original.cap");
+        std::fs::create_dir(&original.project_path).unwrap();
+        let mut other = original.clone();
+        other.project_path = directory.path().join("other.cap");
+        std::fs::create_dir(&other.project_path).unwrap();
+        let audio = audio();
+        for missing in [false, true] {
+            if missing {
+                original.project_path = directory.path().join("missing-original.cap");
+                other.project_path = directory.path().join("missing-other.cap");
+            }
+            assert!(
+                CompletedAudioHandoff::from_completed_tracks(&original, &other, completed(&audio))
+                    .is_err()
+            );
+            let cache = CompletedAudioHandoff::from_completed_tracks(
+                &original,
+                &original,
+                completed(&audio),
+            )
+            .unwrap();
+            assert!(
+                cache
+                    .into_matching(&other, other.studio_meta().unwrap())
+                    .is_none()
+            );
+        }
     }
 
     #[test]

@@ -511,20 +511,29 @@ impl Actor {
         }
     }
 
+    fn update_diagnostic_segment_count(&mut self) {
+        if let Some(diagnostic) = &mut self.diagnostic {
+            diagnostic.field(cap_utils::operation_diagnostics::Field::number(
+                "segments",
+                self.segments.len() as u64,
+            ));
+        }
+    }
+
     async fn handle_stop(
         &mut self,
         discard: bool,
         ctx: &mut Context<Self, anyhow::Result<CompletedRecording>>,
     ) -> anyhow::Result<CompletedRecording> {
+        self.update_diagnostic_segment_count();
         if let Some(diagnostic) = &mut self.diagnostic {
             diagnostic.stage(if discard { "discarding" } else { "finalizing" });
         }
         let result = self.handle_stop_inner(discard, ctx).await;
-        if let Some(mut diagnostic) = self.diagnostic.take() {
-            diagnostic.field(cap_utils::operation_diagnostics::Field::number(
-                "segments",
-                self.segments.len() as u64,
-            ));
+        if !self.segments.is_empty() {
+            self.update_diagnostic_segment_count();
+        }
+        if let Some(diagnostic) = self.diagnostic.take() {
             diagnostic.finish(result.is_ok());
         }
         result
@@ -613,6 +622,7 @@ impl Actor {
             })
         };
 
+        self.update_diagnostic_segment_count();
         let recording = stop_recording(
             self.recording_dir.clone(),
             std::mem::take(&mut self.segments),
@@ -3708,6 +3718,124 @@ mod tests {
             minimum_segment_stop_deadline(false, segment_start),
             Some(segment_start + Duration::from_secs(1))
         );
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    #[tokio::test]
+    async fn stop_diagnostics_retain_segment_counts_when_final_metadata_cannot_be_saved() {
+        use cap_utils::operation_diagnostics::{Operation, snapshot};
+
+        for fail_metadata in [false, true] {
+            for count in [1, 2] {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path();
+                if fail_metadata {
+                    std::fs::create_dir(root.join("recording-meta.json")).unwrap();
+                }
+                let (completion_tx, _) = watch::channel(None);
+                let segment_factory = SegmentPipelineFactory::new(
+                    root.join("content/segments"),
+                    root.join("content/cursors"),
+                    RecordingBaseInputs {
+                        capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
+                        capture_system_audio: false,
+                        mic_feed: None,
+                        camera_feed: None,
+                        #[cfg(target_os = "macos")]
+                        shareable_content: None,
+                        #[cfg(target_os = "macos")]
+                        excluded_windows: Vec::new(),
+                    },
+                    false,
+                    false,
+                    false,
+                    false,
+                    30,
+                    crate::StudioQuality::Balanced,
+                    completion_tx.clone(),
+                );
+                let timestamps = Timestamps::now();
+                let segments = (0..count)
+                    .map(|index| {
+                        let path = root.join(format!("display-{index}.mp4"));
+                        std::fs::write(&path, b"preserved capture").unwrap();
+                        RecordingSegment {
+                            start: index as f64,
+                            end: index as f64 + 1.0,
+                            pipeline: FinishedPipeline {
+                                start_time: timestamps,
+                                screen: test_finished_output_pipeline_at(
+                                    path,
+                                    Timestamp::Instant(timestamps.instant()),
+                                    Some(test_video_info()),
+                                    30,
+                                ),
+                                microphone: None,
+                                camera: None,
+                                system_audio: None,
+                                cursor: None,
+                                track_failures: Vec::new(),
+                            },
+                            camera_device_id: None,
+                            mic_device_id: None,
+                        }
+                    })
+                    .collect();
+                let diagnostic = Operation::start("studio_recording", &[]);
+                let operation_id = serde_json::to_value(diagnostic.id()).unwrap();
+                let actor = Actor::spawn(Actor {
+                    diagnostic: Some(diagnostic),
+                    recording_dir: root.to_path_buf(),
+                    state: Some(ActorState::Paused {
+                        next_index: count,
+                        cursors: Default::default(),
+                        next_cursor_id: 0,
+                    }),
+                    all_tracks_stopped: true,
+                    terminal_stop_failure: None,
+                    #[cfg(windows)]
+                    cancel_error: None,
+                    segment_factory,
+                    segments,
+                    completion_tx,
+                    display_notch: None,
+                });
+                let result = actor.ask(Stop).await;
+                if fail_metadata {
+                    assert!(result.is_err());
+                } else {
+                    assert!(result.is_ok());
+                }
+                let snapshot = serde_json::to_value(snapshot()).unwrap();
+                let record = snapshot["records"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|record| record["operationId"] == operation_id)
+                    .unwrap();
+                assert_eq!(
+                    record["outcome"],
+                    if fail_metadata {
+                        "returned_error"
+                    } else {
+                        "returned_ok"
+                    }
+                );
+                let segments = record["fields"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|field| field["name"] == "segments")
+                    .unwrap();
+                assert_eq!(segments["value"].as_u64(), Some(u64::from(count)));
+                for index in 0..count {
+                    assert_eq!(
+                        std::fs::read(root.join(format!("display-{index}.mp4"))).unwrap(),
+                        b"preserved capture"
+                    );
+                }
+            }
+        }
     }
 
     #[cfg(any(target_os = "macos", windows))]
