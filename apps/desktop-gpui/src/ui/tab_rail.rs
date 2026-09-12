@@ -145,6 +145,7 @@ impl RenderOnce for TabRail {
             .h(height)
             .flex_none()
             .overflow_hidden()
+            .rounded_t(px(11.))
             .justify_around()
             .px(px(10.))
             .border_b_1()

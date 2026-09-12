@@ -554,8 +554,6 @@ fn waveform_amplitude(peaks: &[f32], source_time: Option<f64>) -> f64 {
 /// it by `(canvasWidth, canvasHeight * scale)` after translating down by
 /// `canvasHeight * (1 - scale)` (`:285-290`); gpui has no path transform on
 /// `paint_path`, so the same maths is applied to each point as it is emitted.
-/// The curve, the sample count and the closing segment are otherwise the
-/// source's, cubic-bezier control points included.
 #[allow(clippy::too_many_arguments)]
 pub fn waveform_path(
     peaks: &[f32],
@@ -566,6 +564,7 @@ pub fn waveform_path(
     origin: gpui::Point<Pixels>,
     size: gpui::Size<Pixels>,
     scale: f64,
+    clip_bounds: gpui::Bounds<Pixels>,
 ) -> Option<gpui::Path<Pixels>> {
     if peaks.is_empty() || scale <= 0. {
         return None;
@@ -606,10 +605,19 @@ pub fn waveform_path(
     let top = f32::from(origin.y) as f64 + height * (1. - scale);
     let left = f32::from(origin.x) as f64;
     let scaled_height = height * scale;
+    let clip_left = f32::from(clip_bounds.left()) as f64;
+    let clip_right = f32::from(clip_bounds.right()) as f64;
+    let clip_bottom = f32::from(clip_bounds.bottom()) as f64;
+    let clip_width = clip_right - clip_left;
+    let radius = f64::from(SEGMENT_RADIUS)
+        .min(clip_width / 2.)
+        .min(f32::from(clip_bounds.size.height) as f64 / 2.);
+    let bottom_at = |x: f64| clip_bottom - rounded_corner_inset(x - clip_left, clip_width, radius);
     let map = |x: f64, y: f64| {
+        let x = (left + x * width).clamp(clip_left, clip_right);
         gpui::point(
-            px((left + x * width) as f32),
-            px((top + y * scaled_height) as f32),
+            px(x as f32),
+            px((top + y * scaled_height).min(bottom_at(x)) as f32),
         )
     };
 
@@ -632,8 +640,35 @@ pub fn waveform_path(
 
     let closing_x = (range.1 + WAVEFORM_PADDING_SECONDS - range.0) / duration;
     builder.line_to(map(closing_x, 1.));
+    let baseline_left = left.max(clip_left);
+    let baseline_right = (left + closing_x * width).min(clip_right);
+    // GPUI content masks are rectangular. Keep the waveform's curve and
+    // baseline inside the clip itself, not the virtualized viewport slice.
+    for edge in [clip_right - radius, clip_left] {
+        for step in (0..=16).rev() {
+            let x = edge + radius * f64::from(step) / 16.;
+            if x > baseline_left && x < baseline_right {
+                builder.line_to(gpui::point(px(x as f32), px(bottom_at(x) as f32)));
+            }
+        }
+    }
+    builder.line_to(gpui::point(
+        px(baseline_left as f32),
+        px(bottom_at(baseline_left) as f32),
+    ));
     builder.close();
     builder.build().ok()
+}
+
+fn rounded_corner_inset(x: f64, width: f64, radius: f64) -> f64 {
+    let distance = x.min(width - x).clamp(0., radius);
+    if distance >= radius {
+        return 0.;
+    }
+    radius
+        - (radius * radius - (radius - distance).powi(2))
+            .max(0.)
+            .sqrt()
 }
 
 /// `numSamples = min(ceil(canvasWidth * SAMPLES_PER_PIXEL), MAX_WAVEFORM_SAMPLES)`
@@ -2379,10 +2414,11 @@ fn render_segment(
         .child(
             div()
                 .absolute()
-                .top_0()
-                .bottom_0()
-                .left_0()
+                .top(px(SEGMENT_RADIUS))
+                .bottom(px(SEGMENT_RADIUS))
+                .left(px(2.))
                 .w(px(SEGMENT_ACCENT_BAR))
+                .rounded_full()
                 .bg(color),
         );
 
@@ -2412,12 +2448,13 @@ fn render_segment(
             holds,
             view,
             secs_per_pixel,
+            width,
             height,
         ));
         for (hold_start, hold_end) in holds.iter() {
             let hold_x = ((hold_start - segment.start) / secs_per_pixel) as f32;
             let hold_width = ((hold_end - hold_start) / secs_per_pixel) as f32;
-            fill = fill.child(render_hold(theme, color, hold_x, hold_width));
+            fill = fill.child(render_hold(theme, color, hold_x, hold_width, width, height));
         }
     }
 
@@ -2480,15 +2517,30 @@ fn render_segment(
         // (`TL/Track.tsx:107-108`). That cursor is an inline SVG data-URI;
         // this rev has the standard set only, so a crosshair stands in.
         .when(split_mode, |this| this.cursor(gpui::CursorStyle::Crosshair))
-        .child(if selected {
-            fill.border(px(1.5))
-                .border_color(Hsla::from(theme.editor.accent))
-        } else {
-            fill.border_1()
-                .border_color(seg_border(theme, color, if hovered { 0.10 } else { 0. }))
+        .child(fill)
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .rounded(px(SEGMENT_RADIUS))
+                .map(|border| {
+                    if selected || (split_mode && hovered) {
+                        border
+                            .border(px(1.5))
+                            .border_color(Hsla::from(theme.editor.accent))
+                    } else {
+                        border.border_1().border_color(seg_border(
+                            theme,
+                            color,
+                            if hovered { 0.10 } else { 0. },
+                        ))
+                    }
+                }),
+        )
+        .when(!split_mode, |this| {
+            this.child(render_handle(theme, color, true, handle_opacity))
+                .child(render_handle(theme, color, false, handle_opacity))
         })
-        .child(render_handle(theme, color, true, handle_opacity))
-        .child(render_handle(theme, color, false, handle_opacity))
         .into_any_element()
 }
 
@@ -2540,6 +2592,7 @@ fn render_clip_markings(
     holds: &[(f64, f64)],
     view: TimelineView,
     secs_per_pixel: f64,
+    width: f32,
     height: f32,
 ) -> impl IntoElement {
     let SegmentDetail::Clip { source_start, .. } = segment.detail else {
@@ -2571,25 +2624,40 @@ fn render_clip_markings(
             continue;
         }
         let x = (effective_to_output(&holds_relative, effective) / secs_per_pixel) as f32;
+        let radius = SEGMENT_RADIUS.min(width / 2.).min(height / 2.);
+        let inset = rounded_corner_inset(f64::from(x), f64::from(width), f64::from(radius)).max(
+            rounded_corner_inset(f64::from(x + 1.), f64::from(width), f64::from(radius)),
+        ) as f32;
+        let marking_height = (height - 2. * inset).max(0.);
         root = root.child(
             div()
                 .absolute()
-                .top_0()
+                .top(px(inset))
                 .left(px(x))
                 .w(px(1.))
-                .h(px(height))
+                .h(px(marking_height))
                 .flex()
                 .flex_col()
-                .child(div().w_full().h(px(height / 2.)).bg(gpui::linear_gradient(
-                    180.,
-                    gpui::linear_color_stop(transparent, 0.),
-                    gpui::linear_color_stop(via, 1.),
-                )))
-                .child(div().w_full().h(px(height / 2.)).bg(gpui::linear_gradient(
-                    180.,
-                    gpui::linear_color_stop(via, 0.),
-                    gpui::linear_color_stop(transparent, 1.),
-                ))),
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(marking_height / 2.))
+                        .bg(gpui::linear_gradient(
+                            180.,
+                            gpui::linear_color_stop(transparent, 0.),
+                            gpui::linear_color_stop(via, 1.),
+                        )),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(marking_height / 2.))
+                        .bg(gpui::linear_gradient(
+                            180.,
+                            gpui::linear_color_stop(via, 0.),
+                            gpui::linear_color_stop(transparent, 1.),
+                        )),
+                ),
         );
     }
     root
@@ -2620,15 +2688,7 @@ fn render_fade(
     div()
         .absolute()
         .inset_0()
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left(px(shade_x))
-                .w(px(span))
-                .bg(shade),
-        )
+        .child(rounded_segment_overlay(shade, shade_x, span, width))
         .child(
             // `M 0,100 C 0,68 span*0.55,10 span,0` in, and
             // `M 100,100 C 100,68 endX + span*0.45,10 endX,0` out. The source
@@ -2640,22 +2700,33 @@ fn render_fade(
                 |bounds, _window, _cx| bounds,
                 move |_, bounds, window, _cx| {
                     let mut builder = gpui::PathBuilder::stroke(px(1.5));
-                    let x = |value: f32| bounds.origin.x + px(value);
-                    let y = |percent: f32| bounds.origin.y + px(height * percent / 100.);
+                    let point = |x: f32, percent: f32| {
+                        let x = x.clamp(0., width);
+                        let inset = rounded_corner_inset(
+                            f64::from(x),
+                            f64::from(width),
+                            f64::from(SEGMENT_RADIUS.min(width / 2.).min(height / 2.)),
+                        ) as f32;
+                        gpui::point(
+                            bounds.origin.x + px(x),
+                            bounds.origin.y
+                                + px((height * percent / 100.).clamp(inset, height - inset)),
+                        )
+                    };
                     if edge_in {
-                        builder.move_to(gpui::point(x(0.), y(100.)));
+                        builder.move_to(point(0., 100.));
                         builder.cubic_bezier_to(
-                            gpui::point(x(span), y(0.)),
-                            gpui::point(x(0.), y(68.)),
-                            gpui::point(x(span * 0.55), y(10.)),
+                            point(span, 0.),
+                            point(0., 68.),
+                            point(span * 0.55, 10.),
                         );
                     } else {
                         let end_x = width - span;
-                        builder.move_to(gpui::point(x(width), y(100.)));
+                        builder.move_to(point(width, 100.));
                         builder.cubic_bezier_to(
-                            gpui::point(x(end_x), y(0.)),
-                            gpui::point(x(width), y(68.)),
-                            gpui::point(x(end_x + span * 0.45), y(10.)),
+                            point(end_x, 0.),
+                            point(width, 68.),
+                            point(end_x + span * 0.45, 10.),
                         );
                     }
                     if let Ok(path) = builder.build() {
@@ -2686,15 +2757,27 @@ fn render_fade(
                         |bounds, _window, _cx| bounds,
                         move |_, bounds, window, _cx| {
                             let mut builder = gpui::PathBuilder::fill();
-                            let (x, y) = (bounds.origin.x, bounds.origin.y);
+                            let offset = if edge_in { 0. } else { width - 11. };
+                            let point = |x: f32, y: f32| {
+                                let local_x = (offset + x).clamp(0., width);
+                                let inset = rounded_corner_inset(
+                                    f64::from(local_x),
+                                    f64::from(width),
+                                    f64::from(SEGMENT_RADIUS.min(width / 2.).min(height / 2.)),
+                                ) as f32;
+                                gpui::point(
+                                    bounds.origin.x + px(local_x - offset),
+                                    bounds.origin.y + px(y.clamp(inset, height - inset)),
+                                )
+                            };
                             if edge_in {
-                                builder.move_to(gpui::point(x, y));
-                                builder.line_to(gpui::point(x + px(11.), y));
-                                builder.line_to(gpui::point(x, y + px(11.)));
+                                builder.move_to(point(0., 0.));
+                                builder.line_to(point(11., 0.));
+                                builder.line_to(point(0., 11.));
                             } else {
-                                builder.move_to(gpui::point(x + px(11.), y));
-                                builder.line_to(gpui::point(x, y));
-                                builder.line_to(gpui::point(x + px(11.), y + px(11.)));
+                                builder.move_to(point(11., 0.));
+                                builder.line_to(point(0., 0.));
+                                builder.line_to(point(11., 11.));
                             }
                             builder.close();
                             if let Ok(path) = builder.build() {
@@ -2708,10 +2791,42 @@ fn render_fade(
         )
 }
 
+fn rounded_segment_overlay(
+    color: Hsla,
+    x: f32,
+    width: f32,
+    segment_width: f32,
+) -> impl IntoElement {
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(px(x))
+        .w(px(width))
+        .overflow_hidden()
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(-x))
+                .w(px(segment_width))
+                .rounded(px(SEGMENT_RADIUS))
+                .bg(color),
+        )
+}
+
 /// The paused window a fullscreen text segment inserts inside a clip
 /// (`TL/ClipTrack.tsx:959-1002`): the clip's tint washed back to the card,
 /// ruled off at both edges, with a pause glyph.
-fn render_hold(theme: &Theme, color: Hsla, x: f32, width: f32) -> impl IntoElement {
+fn render_hold(
+    theme: &Theme,
+    color: Hsla,
+    x: f32,
+    width: f32,
+    segment_width: f32,
+    height: f32,
+) -> impl IntoElement {
     let ink = with_alpha(seg_label(theme, color), 0.75);
     div()
         .absolute()
@@ -2725,10 +2840,36 @@ fn render_hold(theme: &Theme, color: Hsla, x: f32, width: f32) -> impl IntoEleme
         .justify_center()
         .gap(px(4.))
         .overflow_hidden()
-        .bg(with_alpha(Hsla::from(theme.editor.card), 0.6))
-        .border_l_1()
-        .border_r_1()
-        .border_color(seg_border(theme, color, 0.))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(-x))
+                .w(px(segment_width))
+                .rounded(px(SEGMENT_RADIUS))
+                .bg(with_alpha(Hsla::from(theme.editor.card), 0.6)),
+        )
+        .children([0., width - 1.].map(|edge| {
+            let radius = SEGMENT_RADIUS.min(segment_width / 2.).min(height / 2.);
+            let inset = rounded_corner_inset(
+                f64::from(x + edge),
+                f64::from(segment_width),
+                f64::from(radius),
+            )
+            .max(rounded_corner_inset(
+                f64::from(x + edge + 1.),
+                f64::from(segment_width),
+                f64::from(radius),
+            )) as f32;
+            div()
+                .absolute()
+                .left(px(edge))
+                .top(px(inset))
+                .bottom(px(inset))
+                .w(px(1.))
+                .bg(seg_border(theme, color, 0.))
+        }))
         .child(
             svg()
                 .path("icons/pause.svg")
@@ -2823,6 +2964,10 @@ fn render_waveform(
                     origin,
                     size,
                     scale,
+                    gpui::Bounds {
+                        origin: gpui::point(bounds.origin.x, bounds.bottom() - px(height)),
+                        size: gpui::size(px(width), px(height)),
+                    },
                 ) {
                     window.paint_path(path, wave_color);
                 }
@@ -3964,6 +4109,53 @@ mod tests {
 
         // An empty track is an empty table, not a panic.
         assert!(waveform_peaks(&[], 1).is_empty());
+    }
+
+    #[test]
+    fn waveform_mesh_stays_inside_real_clip_corners() {
+        for width in [4., 16., 100., 10_000.] {
+            let bounds = gpui::Bounds {
+                origin: gpui::point(px(50.), px(30.)),
+                size: gpui::size(px(width), px(44.)),
+            };
+            for (start, end) in [(0., 10.), (0., 5.), (5., 10.), (2., 8.)] {
+                for gain in [0.1, 0.5, 1., 2.] {
+                    let x = start / 10. * width as f64;
+                    let span = (end - start) / 10. * width as f64;
+                    let path = waveform_path(
+                        &[-6.; 200],
+                        (start, end),
+                        200,
+                        &[],
+                        0.,
+                        gpui::point(px(50. + x as f32), px(56.)),
+                        gpui::size(px(span as f32), px(18.)),
+                        gain,
+                        bounds,
+                    )
+                    .unwrap();
+                    assert!(!path.vertices.is_empty());
+                    for vertex in &path.vertices {
+                        let local_x = f32::from(vertex.xy_position.x) as f64 - 50.;
+                        let y = f32::from(vertex.xy_position.y) as f64;
+                        assert!(
+                            local_x >= -0.001 && local_x <= width as f64 + 0.001,
+                            "x {local_x}, width {width}"
+                        );
+                        let bottom = 74.
+                            - rounded_corner_inset(
+                                local_x,
+                                width as f64,
+                                (width as f64 / 2.).min(8.),
+                            );
+                        assert!(
+                            y <= bottom + 0.05,
+                            "x {local_x}, y {y}, bottom {bottom}, width {width}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
