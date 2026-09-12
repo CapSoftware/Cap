@@ -946,6 +946,11 @@ fn park_idle_camera_preview(cx: &mut App) {
         view.suspend_device_restore();
     })
     .ok();
+    if let Some(handle) = cx.global::<AppWindows>().camera {
+        handle
+            .update(cx, |view, _, cx| view.retain_preview(cx))
+            .ok();
+    }
     close_camera_window(cx);
     crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.park_camera_preview(cx));
 }
@@ -3753,7 +3758,8 @@ pub fn open_camera_window(cx: &mut App) {
     }
 
     let state = crate::store::load().camera_window.unwrap_or_default();
-    let (width, height) = camera_window::window_size(&state, None);
+    let (width, height) =
+        camera_window::window_size(&state, camera_window::retained_preview_aspect(cx));
 
     let main = cx.global::<AppWindows>().main;
     let display = main
@@ -4501,6 +4507,12 @@ pub fn deliver_camera_frame(
     #[cfg(not(target_os = "macos"))] frame: crate::camera_window::CameraPreviewFrame,
     cx: &mut App,
 ) -> bool {
+    if !crate::feeds::Feeds::global(cx)
+        .read(cx)
+        .accepts_camera_preview(frame.timestamp)
+    {
+        return false;
+    }
     let Some(handle) = cx.global::<AppWindows>().camera else {
         return false;
     };
