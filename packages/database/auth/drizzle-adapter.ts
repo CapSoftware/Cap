@@ -456,30 +456,49 @@ export function DrizzleAdapter(
 			return row;
 		},
 		async useVerificationToken({ identifier, token }) {
-			const rows = await db
-				.select()
-				.from(verificationTokens)
-				.where(eq(verificationTokens.token, token))
-				.limit(1);
+			const normalizedIdentifier = identifier?.toLowerCase() ?? "";
+			const rows = normalizedIdentifier
+				? await db
+						.select()
+						.from(verificationTokens)
+						.where(eq(verificationTokens.identifier, normalizedIdentifier))
+						.limit(1)
+				: await db
+						.select()
+						.from(verificationTokens)
+						.where(eq(verificationTokens.token, token))
+						.limit(1);
 			const row = rows[0];
 			if (!row) {
 				console.warn("[useVerificationToken] No token found");
 				return null;
 			}
-			const normalizedIdentifier = identifier?.toLowerCase() ?? "";
-			const storedIdentifier = row.identifier?.toLowerCase() ?? "";
-			if (normalizedIdentifier !== storedIdentifier) {
-				console.warn("[useVerificationToken] Identifier mismatch");
-				return null;
-			}
+
 			await db
 				.delete(verificationTokens)
 				.where(
 					and(
-						eq(verificationTokens.token, token),
 						eq(verificationTokens.identifier, row.identifier),
+						eq(verificationTokens.token, row.token),
 					),
 				);
+
+			const storedIdentifier = row.identifier?.toLowerCase() ?? "";
+			if (normalizedIdentifier && normalizedIdentifier !== storedIdentifier) {
+				console.warn("[useVerificationToken] Identifier mismatch");
+				return null;
+			}
+
+			if (row.expires.valueOf() < Date.now()) {
+				console.warn("[useVerificationToken] Token expired");
+				return null;
+			}
+
+			if (row.token !== token) {
+				console.warn("[useVerificationToken] Token mismatch");
+				return null;
+			}
+
 			return { ...row, identifier: storedIdentifier };
 		},
 	};
