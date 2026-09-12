@@ -75,6 +75,7 @@ use crate::{
 };
 
 mod frame;
+mod loading;
 mod scenes;
 
 // ---------------------------------------------------------------------------
@@ -768,15 +769,23 @@ impl Render for EditorSectionView {
                 // (`Editor.tsx:728-747`).
                 EditorSection::Sidebar => {
                     if !editor.project_ready() {
-                        return editor.render_preparing_sidebar().into_any_element();
+                        return editor.render_preparing_sidebar(!matches!(
+                            editor.state,
+                            LoadState::Failed(_)
+                        ));
                     }
-                    if editor.clips.open {
+                    let sidebar = if editor.clips.open {
                         editor.render_clips_sidebar(cx).into_any_element()
                     } else {
                         editor.with_style_controls(|editor| {
                             editor.render_sidebar(cx).into_any_element()
                         })
-                    }
+                    };
+                    loading::reveal(
+                        "editor-sidebar-ready",
+                        sidebar,
+                        editor.render_preparing_sidebar(false),
+                    )
                 }
                 EditorSection::Timeline => {
                     let viewport_width: f32 = window.viewport_size().width.into();
@@ -8692,12 +8701,8 @@ impl EditorWindow {
             )
     }
 
-    fn render_preparing_sidebar(&self) -> impl IntoElement {
+    fn render_preparing_sidebar(&self, animated: bool) -> gpui::AnyElement {
         let theme = self.theme;
-        let project = self
-            .preparing_seed
-            .as_ref()
-            .map_or(&self.project, |seed| &seed.project);
         div()
             .size_full()
             .flex()
@@ -8735,33 +8740,8 @@ impl EditorWindow {
                             }),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .p(px(16.))
-                    .gap(px(16.))
-                    .text_size(px(12.))
-                    .child(
-                        div()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.editor.text_1))
-                            .child("Background"),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .justify_between()
-                            .text_color(Hsla::from(theme.editor.text_3))
-                            .child("Aspect ratio")
-                            .child(Self::aspect_ratio_label(project.aspect_ratio.as_ref())),
-                    )
-                    .child(
-                        div()
-                            .text_color(Hsla::from(theme.editor.text_3))
-                            .child("Editing is available when your recording is ready."),
-                    ),
-            )
+            .child(loading::sidebar(&theme, animated))
+            .into_any_element()
     }
 
     /// The player's top row: the stage's own triggers on the left, the
@@ -8919,42 +8899,14 @@ impl EditorWindow {
         let theme = self.theme;
         let body = match (&self.state, self.latest_frame.is_some()) {
             (LoadState::Failed(message), _) => self.render_error_state(message).into_any_element(),
-            (_, true) => self
-                .preview
-                .clone()
-                .cached(StyleRefinement::default().size_full())
-                .into_any_element(),
-            (state, false) => {
-                if let Some(poster) = self.poster.clone() {
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            gpui::img(poster)
-                                .size_full()
-                                .object_fit(gpui::ObjectFit::Contain),
-                        )
-                        .into_any_element()
-                } else {
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_size(px(13.))
-                        .text_color(Hsla::from(theme.editor.text_2))
-                        .child(if matches!(state, LoadState::Loading) {
-                            "Loading project..."
-                        } else {
-                            "Rendering first frame..."
-                        })
-                        .into_any_element()
-                }
-            }
+            (_, true) => loading::reveal(
+                "editor-preview-ready",
+                self.preview
+                    .clone()
+                    .cached(StyleRefinement::default().size_full()),
+                self.render_preview_placeholder(false),
+            ),
+            (_, false) => self.render_preview_placeholder(true),
         };
 
         div()
@@ -8991,6 +8943,26 @@ impl EditorWindow {
             } else {
                 None
             })
+    }
+
+    fn render_preview_placeholder(&self, animated: bool) -> gpui::AnyElement {
+        if let Some(poster) = self.poster.clone() {
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(Hsla::from(self.theme.editor.card))
+                .child(
+                    gpui::img(poster)
+                        .size_full()
+                        .object_fit(gpui::ObjectFit::Contain),
+                )
+                .into_any_element()
+        } else {
+            loading::preview(&self.theme, animated)
+        }
     }
 
     /// `EditorErrorScreen` -- what a bundle that will not open shows instead of
@@ -9315,6 +9287,14 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         if !self.project_ready() {
+            if self
+                .preparing_presentation
+                .as_ref()
+                .and_then(|presentation| presentation.progress.total_duration)
+                .is_none()
+            {
+                return loading::timeline(&theme, !matches!(self.state, LoadState::Failed(_)));
+            }
             return div()
                 .size_full()
                 .child(timeline::render_preparing_timeline(
