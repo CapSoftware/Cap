@@ -943,7 +943,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 Ok(TrayItem::Quit) => {
                     let app = app.clone();
                     tokio::spawn(async move {
-                        crate::request_app_exit(app).await;
+                        crate::request_app_exit(app, crate::AppExitSource::TrayMenu).await;
                     });
                 }
                 Ok(TrayItem::PreviousItem(path)) => {
