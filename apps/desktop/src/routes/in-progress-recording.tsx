@@ -481,13 +481,19 @@ function InProgressRecordingInner() {
 				console.error("Failed to sync recording controls hit area", error);
 			})
 			.finally(() => {
-				if (pendingInteractiveBoundsKey === key)
+				if (pendingInteractiveBoundsKey === key) {
 					pendingInteractiveBoundsKey = "";
+					if (lastInteractiveBoundsKey === key) syncInteractiveAreaBounds();
+				}
 			});
 	};
 
 	createEffect(() => {
-		interactiveAreaRef();
+		const area = interactiveAreaRef();
+		if (!area) return;
+		const observer = new ResizeObserver(syncInteractiveAreaBounds);
+		observer.observe(area);
+		onCleanup(() => observer.disconnect());
 		queueMicrotask(syncInteractiveAreaBounds);
 	});
 
