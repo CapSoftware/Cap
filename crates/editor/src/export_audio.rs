@@ -1,6 +1,7 @@
 use crate::{AudioRenderer, SegmentMedia};
 use cap_audio::{
     AudioRendererTrack, AudioSampleSource, AudioStream, AudioStreamError, ChunkRead, StereoMode,
+    VOICE_PREROLL_SAMPLES, VOICE_WINDOW_PADDING_SAMPLES, VoiceAudio, VoiceEnhancer, VoiceSource,
 };
 use cap_project::{ClipOffsets, ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
 use std::{
@@ -15,6 +16,8 @@ use std::{
 
 pub(crate) const EXPORT_AUDIO_BLOCK_SAMPLES: usize = 4_096;
 const MAX_PARALLEL_AUDIO_SOURCES: usize = 4;
+const MAX_ENHANCED_WINDOW_SAMPLES: usize =
+    EXPORT_AUDIO_BLOCK_SAMPLES + VOICE_PREROLL_SAMPLES + VOICE_WINDOW_PADDING_SAMPLES;
 
 #[derive(Clone, Debug)]
 pub enum ExportAudioError {
@@ -466,9 +469,43 @@ impl ExportAudioSources {
             .unwrap_or_default();
         for track in tracks.iter_mut() {
             let start = cursor as i128 + track.offset(&offsets) as i128;
-            track.prepare(start, start + samples as i128)?;
+            let end = start + samples as i128;
+            let improve = track.mic
+                && project.audio.improve
+                && !project.audio.mute
+                && project.audio.mic_volume_db > -30.0
+                && (1..=2).contains(&track.source.channels());
+            if improve {
+                let start =
+                    usize::try_from(start.max(0)).map_err(|_| ExportAudioError::InvalidWindow)?;
+                let end =
+                    usize::try_from(end.max(0)).map_err(|_| ExportAudioError::InvalidWindow)?;
+                let mut enhancer = track
+                    .enhancer
+                    .take()
+                    .unwrap_or_else(|| VoiceEnhancer::new(track.source.channels()));
+                let range = enhancer.source_range(start, end.saturating_sub(start));
+                track.prepare(range.start as i128, range.end as i128)?;
+                track.enhanced =
+                    Some(enhancer.render(&track.view(), start, end.saturating_sub(start)));
+                track.enhancer = Some(enhancer);
+            } else {
+                track.prepare(start, end)?;
+                track.enhanced = None;
+                track.enhancer = None;
+            }
         }
         let views = tracks.iter().map(|track| track.view()).collect::<Vec<_>>();
+        let sources = tracks
+            .iter()
+            .zip(&views)
+            .map(|(track, view)| {
+                track
+                    .enhanced
+                    .as_ref()
+                    .map_or(VoiceSource::Original(view), VoiceSource::Enhanced)
+            })
+            .collect::<Vec<_>>();
         let max_samples = tracks
             .iter()
             .map(|track| (track.available_end as isize - track.offset(&offsets)).max(0) as usize)
@@ -479,7 +516,7 @@ impl ExportAudioSources {
         }
         let tracks = tracks
             .iter()
-            .zip(&views)
+            .zip(&sources)
             .map(|(track, view)| {
                 let gain = if track.mic {
                     project.audio.mic_volume_db
@@ -526,6 +563,8 @@ struct ExportAudioTrack {
     source_start: usize,
     available_end: usize,
     eof: Option<usize>,
+    enhancer: Option<VoiceEnhancer>,
+    enhanced: Option<VoiceAudio>,
 }
 
 impl ExportAudioTrack {
@@ -553,6 +592,8 @@ impl ExportAudioTrack {
             source_start: 0,
             available_end: 0,
             eof: None,
+            enhancer: None,
+            enhanced: None,
         })
     }
 
@@ -568,7 +609,7 @@ impl ExportAudioTrack {
     fn prepare(&mut self, start: i128, end: i128) -> Result<(), ExportAudioError> {
         let start = usize::try_from(start.max(0)).map_err(|_| ExportAudioError::InvalidWindow)?;
         let end = usize::try_from(end.max(0)).map_err(|_| ExportAudioError::InvalidWindow)?;
-        if end < start || end - start > EXPORT_AUDIO_BLOCK_SAMPLES || start < self.source_start {
+        if end < start || end - start > MAX_ENHANCED_WINDOW_SAMPLES || start < self.source_start {
             return Err(ExportAudioError::InvalidWindow);
         }
         let channels = self.source.channels() as usize;
@@ -1063,7 +1104,8 @@ mod tests {
                             cap_project::StereoMode::MonoR => StereoMode::MonoR,
                         },
                         |offset| offset.mic,
-                    ),
+                    )
+                    .with_microphone_enhancement(),
                     AudioSegmentTrack::new(
                         data[1].clone(),
                         |config| config.system_volume_db,
@@ -1073,16 +1115,19 @@ mod tests {
                 ],
             },
             AudioSegment {
-                tracks: vec![AudioSegmentTrack::new(
-                    data[2].clone(),
-                    |config| config.mic_volume_db,
-                    |config| match config.mic_stereo_mode {
-                        cap_project::StereoMode::Stereo => StereoMode::Stereo,
-                        cap_project::StereoMode::MonoL => StereoMode::MonoL,
-                        cap_project::StereoMode::MonoR => StereoMode::MonoR,
-                    },
-                    |offset| offset.mic,
-                )],
+                tracks: vec![
+                    AudioSegmentTrack::new(
+                        data[2].clone(),
+                        |config| config.mic_volume_db,
+                        |config| match config.mic_stereo_mode {
+                            cap_project::StereoMode::Stereo => StereoMode::Stereo,
+                            cap_project::StereoMode::MonoL => StereoMode::MonoL,
+                            cap_project::StereoMode::MonoR => StereoMode::MonoR,
+                        },
+                        |offset| offset.mic,
+                    )
+                    .with_microphone_enhancement(),
+                ],
             },
         ];
         let tracks = vec![
@@ -1273,6 +1318,78 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires CAP_STUDIO_SOUND_BENCH_RECORDING pointing to a local Studio recording"]
+    fn studio_sound_streams_a_real_recording_with_bounded_memory() {
+        ffmpeg::init().unwrap();
+        let path = std::env::var_os("CAP_STUDIO_SOUND_BENCH_RECORDING").unwrap();
+        let recording = RecordingMeta::load_for_project(Path::new(&path)).unwrap();
+        let mut totals = Vec::new();
+        for improve in [false, true] {
+            let started = std::time::Instant::now();
+            let mut preparation = ExportAudioPreparation::open(
+                &recording,
+                recording.studio_meta().unwrap(),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+            let mut project = ProjectConfiguration::default();
+            project.audio.improve = improve;
+            let mut count = 0_usize;
+            let mut peak_window_bytes = 0;
+            let mut output = [0.0; EXPORT_AUDIO_BLOCK_SAMPLES * 2];
+            for clip in 0..preparation.sources.tracks.len() {
+                let mut cursor = 0;
+                loop {
+                    output.fill(0.0);
+                    let rendered = preparation
+                        .sources
+                        .render(
+                            &project,
+                            clip as u32,
+                            cursor,
+                            EXPORT_AUDIO_BLOCK_SAMPLES,
+                            &mut output,
+                        )
+                        .unwrap();
+                    assert!(
+                        output
+                            .iter()
+                            .all(|sample| sample.is_finite() && sample.abs() <= 1.0)
+                    );
+                    let bytes = preparation
+                        .sources
+                        .tracks
+                        .iter()
+                        .flatten()
+                        .map(|track| {
+                            assert!(
+                                track.samples.len() / usize::from(track.source.channels())
+                                    <= MAX_ENHANCED_WINDOW_SAMPLES
+                            );
+                            track.samples.capacity() * size_of::<f32>()
+                        })
+                        .sum::<usize>();
+                    peak_window_bytes = peak_window_bytes.max(bytes);
+                    cursor += rendered;
+                    if rendered == 0 {
+                        break;
+                    }
+                }
+                count += cursor;
+            }
+            assert!(count > 0);
+            totals.push(count);
+            eprintln!(
+                "studio_sound={improve}, audio_seconds={:.3}, elapsed_seconds={:.3}, source_window_bytes={peak_window_bytes}",
+                count as f64 / 48_000.0,
+                started.elapsed().as_secs_f64()
+            );
+        }
+        assert_eq!(totals[0], totals[1]);
+    }
+
+    #[test]
     fn bounded_sink_matches_full_renderer_at_original_request_boundaries() {
         ffmpeg::init().unwrap();
         let directory = tempfile::tempdir().unwrap();
@@ -1285,7 +1402,7 @@ mod tests {
             .iter()
             .map(|path| Arc::new(AudioData::from_file(path).unwrap()))
             .collect::<Vec<_>>();
-        for variant in 0..16 {
+        for variant in 0..20 {
             let mut project = project();
             match variant {
                 0 => project.timeline = None,
@@ -1326,6 +1443,28 @@ mod tests {
                 15 => {
                     project.audio.mic_volume_db = 4.0;
                     project.audio.system_volume_db = -29.9;
+                }
+                16 => project.audio.improve = true,
+                17 => {
+                    project.audio.improve = true;
+                    project.timeline = None;
+                }
+                18 => {
+                    project.audio.improve = true;
+                    project.audio.mic_stereo_mode = cap_project::StereoMode::MonoR;
+                }
+                19 => {
+                    project.audio.improve = true;
+                    project
+                        .timeline
+                        .as_mut()
+                        .unwrap()
+                        .transitions
+                        .push(ClipTransition {
+                            segment_index: 1,
+                            kind: ClipTransitionType::CrossFade,
+                            duration: 0.131_234_567,
+                        });
                 }
                 _ => unreachable!(),
             }
@@ -1371,7 +1510,11 @@ mod tests {
                     for track in candidate.sources.tracks.iter().flatten() {
                         assert!(
                             track.samples.len()
-                                <= EXPORT_AUDIO_BLOCK_SAMPLES * track.source.channels() as usize
+                                <= (if track.enhancer.is_some() {
+                                    MAX_ENHANCED_WINDOW_SAMPLES
+                                } else {
+                                    EXPORT_AUDIO_BLOCK_SAMPLES
+                                }) * track.source.channels() as usize
                         );
                     }
                     if expected.is_none() {

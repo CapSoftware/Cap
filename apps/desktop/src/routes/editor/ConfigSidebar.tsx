@@ -46,7 +46,11 @@ import { createStore, produce } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
 import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
-import { animatedGradientsStore, generalSettingsStore } from "~/store";
+import {
+	animatedGradientsStore,
+	audioEnhancementStore,
+	generalSettingsStore,
+} from "~/store";
 import { listSystemFonts } from "~/utils/fonts";
 import { normalizeOpaqueHexColor } from "~/utils/hex-color";
 import {
@@ -520,6 +524,8 @@ function ConfigSidebarContent() {
 		editorState,
 		meta,
 	} = useEditorContext();
+	const audioEnhancement = audioEnhancementStore.createQuery();
+	const [savingAudioDefault, setSavingAudioDefault] = createSignal(false);
 	const organizationSelection = createSelectedOrganization();
 	const brandColorSwatches = createMemo(() =>
 		getOrganizationBrandColorSwatches(
@@ -791,18 +797,38 @@ function ConfigSidebarContent() {
 							</Subfield>
 						)}
 
-						{/* <Subfield name="Mute Audio">
-                <Toggle
-                  checked={project.audio.mute}
-                  onChange={(v) => setProject("audio", "mute", v)}
-                />
-              </Subfield> */}
-
-						{/* <ComingSoonTooltip>
-                <Subfield name="Improve Mic Quality">
-                  <Toggle disabled />
-                </Subfield>
-              </ComingSoonTooltip> */}
+						<Show when={meta().hasMicrophone}>
+							<Subfield name="Studio Sound">
+								<Toggle
+									checked={project.audio.improve}
+									onChange={(enabled) =>
+										setProject("audio", "improve", enabled)
+									}
+								/>
+							</Subfield>
+							<p class="text-xs text-ed-text-3">
+								Reduce background noise and bring your voice into focus.
+							</p>
+						</Show>
+						<Subfield name="Studio Sound for new recordings">
+							<Toggle
+								checked={audioEnhancement.data?.enabledByDefault ?? false}
+								disabled={audioEnhancement.isPending || savingAudioDefault()}
+								onChange={async (enabled) => {
+									setSavingAudioDefault(true);
+									try {
+										await audioEnhancementStore.set({
+											enabledByDefault: enabled,
+										});
+										await audioEnhancement.refetch();
+									} catch {
+										toast.error("Could not save the Studio Sound default");
+									} finally {
+										setSavingAudioDefault(false);
+									}
+								}}
+							/>
+						</Subfield>
 					</Section>
 					{meta().hasMicrophone && (
 						<Field

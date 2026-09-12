@@ -460,6 +460,14 @@ async fn finalize_studio(
         ))
         .unwrap_or_default();
         apply_animated_gradient_to_project_config(&project_path, &capture_target, &library);
+        if crate::store::store_section("audio_enhancement")
+            .get("enabledByDefault")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            && let Err(error) = enable_studio_sound(&project_path)
+        {
+            tracing::warn!(%error, "Could not apply the Studio Sound default");
+        }
     })
     .await
     .context("studio post-finalize task")?;
@@ -1459,6 +1467,34 @@ fn blur_mode_json(blur: crate::store::BlurMode) -> &'static str {
         crate::store::BlurMode::Light => "light",
         crate::store::BlurMode::Heavy => "heavy",
     }
+}
+
+fn enable_studio_sound(project_path: &std::path::Path) -> std::io::Result<()> {
+    let path = project_path.join("project-config.json");
+    let mut config: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    let object = config.as_object_mut().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Project configuration is not an object",
+        )
+    })?;
+    let audio = object
+        .entry("audio")
+        .or_insert_with(|| serde_json::json!({}));
+    let audio = audio.as_object_mut().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Audio configuration is not an object",
+        )
+    })?;
+    audio.insert("improve".into(), serde_json::Value::Bool(true));
+    let temp = path.with_extension(format!("studio-sound-{}.tmp", crate::store::new_uuid_v4()));
+    let result = std::fs::write(&temp, serde_json::to_vec_pretty(&config)?)
+        .and_then(|()| std::fs::rename(&temp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(temp);
+    }
+    result
 }
 
 fn apply_animated_gradient_to_project_config(

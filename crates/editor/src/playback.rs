@@ -14,7 +14,7 @@ use std::{
     num::NonZeroUsize,
     sync::{
         Arc, RwLock,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc as std_mpsc,
     },
     time::{Duration, Instant},
@@ -134,6 +134,7 @@ pub enum PlaybackEvent {
 
 #[derive(Clone)]
 pub struct PlaybackHandle {
+    preparing_audio_released: Arc<AtomicBool>,
     stop_tx: watch::Sender<bool>,
     event_rx: watch::Receiver<PlaybackEvent>,
     seek_tx: Arc<watch::Sender<(u64, u32)>>,
@@ -579,7 +580,10 @@ impl Playback {
         let (seek_tx, mut seek_rx) = watch::channel((0u64, self.start_frame_number));
         seek_rx.borrow_and_update();
 
+        let preparing_audio_released = Arc::new(AtomicBool::new(false));
+        let runtime = tokio::runtime::Handle::current();
         let handle = PlaybackHandle {
+            preparing_audio_released: preparing_audio_released.clone(),
             stop_tx: stop_tx.clone(),
             event_rx,
             seek_tx: Arc::new(seek_tx),
@@ -860,8 +864,8 @@ impl Playback {
         ));
         diagnostic.stage("preparing_playback");
         let playback_body = move || {
-            let adopted_guard = AdoptedPlaybackGuard(adopted);
-            let adopted = &adopted_guard.0;
+            let mut adopted_guard = AdoptedPlaybackGuard(adopted);
+            let adopted = &mut adopted_guard.0;
             let duration = self
                 .project
                 .borrow()
@@ -1248,22 +1252,22 @@ impl Playback {
             diagnostic.stage("initializing_audio_output");
             let audio_spawn_start = Instant::now();
             let _ = audio_playhead_tx.send(playback_start_frame as f64 / fps_f64);
-            let audio_generation = if adopted.is_some() {
+            let mut audio_generation = if adopted.is_some() {
                 None
             } else if !has_playback_audio(&audio_segments, !self.music.is_empty()) {
                 info!("No audio segments found, skipping audio playback.");
                 None
             } else {
                 self.audio_output.play(PlaySpec {
-                    segments: audio_segments,
+                    segments: audio_segments.clone(),
                     music: self.music.clone(),
                     project: self.project.borrow().clone(),
                     duration_secs: duration,
                     start_playhead_secs: playback_start_frame as f64 / fps_f64,
-                    playhead_rx: audio_playhead_rx,
+                    playhead_rx: audio_playhead_rx.clone(),
                 })
             };
-            let has_audio = audio_generation.is_some();
+            let mut has_audio = audio_generation.is_some();
             if let Some(telemetry) = &self.telemetry {
                 telemetry.emit(PlaybackTelemetryEvent::AudioPipelineReady {
                     elapsed: audio_spawn_start.elapsed(),
@@ -1286,10 +1290,56 @@ impl Playback {
             let mut start = Instant::now();
             let mut clock_anchor_frame = playback_start_frame;
 
+            let mut transitioned_audio = None;
             let mut last_adopted_frame = None;
             'playback: loop {
                 if *stop_rx.borrow() {
                     break;
+                }
+                if self.project.borrow().audio.improve
+                    && adopted.as_ref().is_some_and(|adoption| adoption.is_owner())
+                {
+                    let adoption = adopted.as_ref().unwrap();
+                    frame_number = adoption.frame_number(fps).unwrap_or(frame_number);
+                    let cleaned = runtime.block_on(async {
+                        tokio::select! {
+                            biased;
+                            _ = stop_rx.changed() => false,
+                            result = tokio::time::timeout(Duration::from_secs(2), adoption.stop_and_wait()) => {
+                                matches!(result, Ok(Some(exit)) if !exit.cleanup_failed)
+                            }
+                        }
+                    });
+                    if !cleaned || *stop_rx.borrow() {
+                        break;
+                    }
+                    drop(adopted.take());
+                    preparing_audio_released.store(true, Ordering::Release);
+                    let project = self.project.borrow().clone();
+                    cached_project.audio.improve = project.audio.improve;
+                    let ticket = self.audio_output.prepare_playback(PlaySpec {
+                        segments: audio_segments.clone(),
+                        music: self.music.clone(),
+                        project,
+                        duration_secs: duration,
+                        start_playhead_secs: frame_number as f64 / fps_f64,
+                        playhead_rx: audio_playhead_rx.clone(),
+                    });
+                    let started = runtime.block_on(async {
+                        tokio::select! {
+                            biased;
+                            _ = stop_rx.changed() => false,
+                            result = tokio::time::timeout(Duration::from_secs(2), ticket.wait_started()) => result.unwrap_or(false),
+                        }
+                    });
+                    if !started || *stop_rx.borrow() {
+                        break;
+                    }
+                    audio_generation = Some(ticket.generation());
+                    transitioned_audio = Some(ticket);
+                    has_audio = true;
+                    clock_anchor_frame = frame_number;
+                    start = Instant::now();
                 }
                 if let Some(adoption) = adopted {
                     let Some(snapshot) = adoption.snapshot() else {
@@ -1334,7 +1384,24 @@ impl Playback {
                 }
 
                 if self.project.has_changed().unwrap_or(false) {
+                    let improved = cached_project.audio.improve;
                     cached_project = self.project.borrow_and_update().clone();
+                    if adopted.is_none()
+                        && improved != cached_project.audio.improve
+                        && let Some(generation) = audio_generation
+                    {
+                        self.audio_output.refresh_playback(
+                            PlaySpec {
+                                segments: audio_segments.clone(),
+                                music: self.music.clone(),
+                                project: cached_project.clone(),
+                                duration_secs: duration,
+                                start_playhead_secs: frame_number as f64 / fps_f64,
+                                playhead_rx: audio_playhead_rx.clone(),
+                            },
+                            generation,
+                        );
+                    }
                     cursor_timelines = build_cursor_timelines(&cached_project);
                     zoom_timelines = build_zoom_timelines(&cached_project);
                     outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
@@ -1884,6 +1951,7 @@ impl Playback {
                 self.audio_output.stop_playback(generation);
             }
 
+            drop(transitioned_audio);
             stop_tx.send(true).ok();
 
             event_tx.send(PlaybackEvent::Stop).ok();
@@ -1909,6 +1977,10 @@ impl Drop for AdoptedPlaybackGuard {
 }
 
 impl PlaybackHandle {
+    pub(crate) fn preparing_audio_released(&self) -> bool {
+        self.preparing_audio_released.load(Ordering::Acquire)
+    }
+
     pub fn stop(&self) {
         if let Some(adoption) = &self.adopted {
             adoption.cancel();
@@ -1920,7 +1992,7 @@ impl PlaybackHandle {
     /// re-attach. Returns false once the playback thread is gone, which is the
     /// caller's cue to fall back to a full restart.
     pub fn seek(&self, frame: u32) -> bool {
-        if self.adopted.is_some() {
+        if self.adopted.is_some() && !self.preparing_audio_released() {
             return false;
         }
         let generation = self.seek_generation.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1945,6 +2017,7 @@ mod tests {
             let (seek_tx, _) = watch::channel((0, 0));
             (
                 PlaybackHandle {
+                    preparing_audio_released: Arc::new(AtomicBool::new(false)),
                     adopted: None,
                     stop_tx,
                     event_rx,

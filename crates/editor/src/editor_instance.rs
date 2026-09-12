@@ -888,6 +888,16 @@ impl EditorInstance {
         tokio::spawn(async move {
             loop {
                 let event = *handle.receive_event().await;
+                if this.playback_epoch.load(Ordering::SeqCst) == epoch
+                    && handle.preparing_audio_released()
+                {
+                    drop(
+                        this.preparing_adoption
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .take(),
+                    );
+                }
 
                 match event {
                     playback::PlaybackEvent::Start => {}

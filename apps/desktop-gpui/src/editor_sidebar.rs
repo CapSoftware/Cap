@@ -769,6 +769,8 @@ pub enum ColorPickerDrag {
 /// The sidebar's own state -- everything `ConfigSidebar`'s signals hold that is
 /// not in the project config.
 pub struct SidebarState {
+    pub audio_enhancement_default: bool,
+    pub audio_enhancement_error: Option<String>,
     pub(crate) style_target: Option<(usize, StyleGroup)>,
     pub(crate) image_import_error: Option<String>,
     pub(crate) image_asset_status: Option<(String, bool)>,
@@ -877,6 +879,11 @@ pub struct SidebarState {
 impl SidebarState {
     pub fn new(config: &ProjectConfiguration) -> Self {
         Self {
+            audio_enhancement_default: crate::store::store_section("audio_enhancement")
+                .get("enabledByDefault")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            audio_enhancement_error: None,
             style_target: None,
             image_import_error: None,
             image_asset_status: None,

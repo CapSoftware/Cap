@@ -1559,3 +1559,148 @@ async fn native_cancelled_handoff_installation_joins_and_releases_the_candidate(
 async fn native_rejected_audio_handoff_installation_joins_and_releases_the_candidate() {
     failed_handoff_installation_retires_native_candidate(false).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_studio_sound_releases_preparing_audio_and_preserves_transport() {
+    for initially_enabled in [false, true] {
+        let mut fixture = handoff_fixture();
+        let cap_project::RecordingMetaInner::Studio(studio) = &mut fixture.metadata.inner else {
+            panic!("Expected Studio metadata");
+        };
+        let cap_project::StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+            panic!("Expected indexed metadata");
+        };
+        for segment in &mut inner.segments {
+            segment.display.path = "display".into();
+            segment.camera.as_mut().unwrap().path = "camera".into();
+        }
+        fixture.metadata.save_for_project().unwrap();
+        let output = Arc::new(crate::AudioOutput::new_headless(Box::new(|_, _| {})));
+        let session = crate::PreparingPlaybackSession::spawn(
+            fixture.input(),
+            (0..3)
+                .map(|_| crate::PreparingAudioSegmentInput {
+                    mic: Some(
+                        cap_audio::ManagedAudioInput::new(
+                            fixture.source.clone(),
+                            PathBuf::from("mic.aac"),
+                        )
+                        .unwrap(),
+                    ),
+                    system_audio: None,
+                    timing_repair: Default::default(),
+                })
+                .collect(),
+            crate::PreparingPlaybackOptions {
+                preview: PreparingPreviewOptions::default(),
+                fps: 30,
+                resolution: XY::new(320, 240),
+            },
+            output.clone(),
+            Box::new(|_, _, _| {}),
+        )
+        .unwrap();
+        let handoff = session.handoff_handle();
+        let cache = tokio::time::timeout(Duration::from_secs(30), handoff.take_completed_audio())
+            .await
+            .unwrap()
+            .unwrap();
+        let (frames, mut received) = tokio::sync::watch::channel(None);
+        let candidate = crate::EditorInstance::new_with_startup_inputs(
+            fixture.metadata.project_path.clone(),
+            |_| {},
+            Box::new(move |output, _| {
+                let frame = match output {
+                    crate::EditorFrameOutput::Rgba(frame) => frame.frame_number,
+                    crate::EditorFrameOutput::Nv12(frame) => frame.frame_number,
+                    #[cfg(target_os = "macos")]
+                    crate::EditorFrameOutput::Surface(frame) => frame.frame_number,
+                };
+                frames.send_replace(Some(frame));
+            }),
+            None,
+            crate::EditorFrameFormat::Rgba,
+            output,
+            crate::EditorStartupInputs {
+                recordings: None,
+                completed_audio: Some(cache),
+            },
+        )
+        .await
+        .unwrap();
+        candidate
+            .project_config
+            .0
+            .send_modify(|project| project.audio.improve = initially_enabled);
+        let mut updates = session.updates();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !updates.borrow_and_update().progress.preview_available {
+                updates.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        candidate
+            .preview_tx
+            .send(Some((0, 30, XY::new(320, 240))))
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while received.borrow_and_update().is_none() {
+                received.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        session.controller().seek(0.5).await.unwrap();
+        session.controller().set_playing(true).await.unwrap();
+        candidate.install_preparing_handoff(&handoff).await.unwrap();
+        assert!(
+            candidate
+                .start_preparing_handoff(30, XY::new(320, 240))
+                .await
+                .unwrap()
+        );
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if received
+                    .borrow_and_update()
+                    .is_some_and(|frame| candidate.commit_preparing_frame(frame, 30))
+                {
+                    break;
+                }
+                received.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("Prepared editor did not present a handoff frame");
+        let external_handle = candidate.state.lock().await.playback_task.clone().unwrap();
+        candidate
+            .project_config
+            .0
+            .send_modify(|project| project.audio.improve = true);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while candidate.preparing_adoption().is_some() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            while !external_handle.seek(18) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            while candidate.state.lock().await.playhead_position < 18 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let mut active = candidate.playback_watch();
+        assert!(*active.borrow_and_update());
+        external_handle.stop();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while *active.borrow_and_update() {
+                active.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        candidate.dispose().await;
+    }
+}

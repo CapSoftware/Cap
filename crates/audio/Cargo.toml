@@ -7,6 +7,7 @@ edition = "2024"
 test-support = []
 
 [dependencies]
+nnnoiseless = { version = "0.5.2", default-features = false }
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 ffmpeg = { workspace = true }
 cpal = { workspace = true }
