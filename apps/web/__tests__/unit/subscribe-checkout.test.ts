@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidStripePlanPriceId, STRIPE_PLAN_IDS } from "@cap/utils";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as subscribe } from "@/app/api/settings/billing/subscribe/route";
 
 const checkoutMocks = vi.hoisted(() => ({
@@ -79,6 +79,31 @@ describe("Stripe plan allowlist", () => {
 		expect(isValidStripePlanPriceId("price_arbitrary_attacker_id")).toBe(false);
 		expect(isValidStripePlanPriceId("price_free_tier")).toBe(false);
 		expect(isValidStripePlanPriceId("")).toBe(false);
+	});
+
+	it("validates price IDs against specific deployment environments", () => {
+		expect(
+			isValidStripePlanPriceId(
+				STRIPE_PLAN_IDS.development.yearly,
+				"development",
+			),
+		).toBe(true);
+		expect(
+			isValidStripePlanPriceId(
+				STRIPE_PLAN_IDS.production.yearly,
+				"development",
+			),
+		).toBe(false);
+
+		expect(
+			isValidStripePlanPriceId(STRIPE_PLAN_IDS.production.yearly, "production"),
+		).toBe(true);
+		expect(
+			isValidStripePlanPriceId(
+				STRIPE_PLAN_IDS.development.yearly,
+				"production",
+			),
+		).toBe(false);
 	});
 });
 

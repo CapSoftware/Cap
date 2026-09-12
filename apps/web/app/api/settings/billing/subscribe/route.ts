@@ -13,10 +13,13 @@ export async function POST(request: NextRequest) {
 	let customerId = user?.stripeCustomerId;
 	const { priceId, quantity, isOnBoarding } = await request.json();
 
+	const environment =
+		serverEnv().VERCEL_ENV === "production" ? "production" : "development";
+
 	if (
 		!priceId ||
 		typeof priceId !== "string" ||
-		!isValidStripePlanPriceId(priceId)
+		!isValidStripePlanPriceId(priceId, environment)
 	) {
 		console.error("Invalid or missing priceId");
 		return Response.json(

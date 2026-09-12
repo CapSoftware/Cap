@@ -11,10 +11,13 @@ export async function POST(request: NextRequest) {
 
 	console.log("Received guest checkout request:", { priceId, quantity });
 
+	const environment =
+		serverEnv().VERCEL_ENV === "production" ? "production" : "development";
+
 	if (
 		!priceId ||
 		typeof priceId !== "string" ||
-		!isValidStripePlanPriceId(priceId)
+		!isValidStripePlanPriceId(priceId, environment)
 	) {
 		console.error("Invalid or missing priceId");
 		return Response.json({ error: "Invalid priceId" }, { status: 400 });

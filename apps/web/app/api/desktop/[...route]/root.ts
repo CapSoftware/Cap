@@ -10,8 +10,8 @@ import {
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import {
-	isValidStripePlanPriceId,
 	isProSubscription,
+	isValidStripePlanPriceId,
 	STRIPE_AVAILABLE,
 	stripe,
 	userIsPro,
@@ -706,9 +706,20 @@ app.post(
 	zValidator(
 		"json",
 		z.object({
-			priceId: z.string().refine((id) => isValidStripePlanPriceId(id), {
-				message: "Invalid priceId",
-			}),
+			priceId: z
+				.string()
+				.refine(
+					(id) =>
+						isValidStripePlanPriceId(
+							id,
+							serverEnv().VERCEL_ENV === "production"
+								? "production"
+								: "development",
+						),
+					{
+						message: "Invalid priceId",
+					},
+				),
 			platform: z.literal("mobile").optional(),
 		}),
 	),

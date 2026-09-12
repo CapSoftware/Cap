@@ -27,10 +27,19 @@ export const isValidStripePlanPriceId = (
 	priceId: string,
 	environment?: "development" | "production",
 ): boolean => {
-	if (environment) {
-		const envPlans = STRIPE_PLAN_IDS[environment];
+	const env =
+		environment ??
+		(process.env.VERCEL_ENV === "production"
+			? "production"
+			: process.env.VERCEL_ENV
+				? "development"
+				: undefined);
+
+	if (env) {
+		const envPlans = STRIPE_PLAN_IDS[env];
 		return priceId === envPlans.yearly || priceId === envPlans.monthly;
 	}
+
 	return VALID_STRIPE_PLAN_PRICE_IDS.has(priceId);
 };
 
