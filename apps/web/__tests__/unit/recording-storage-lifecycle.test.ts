@@ -134,13 +134,14 @@ type DatabaseMutation = {
 	values?: Record<string, unknown>;
 };
 
-function databaseFixture(video = recording()) {
+function databaseFixture(video = recording(), password?: string | null) {
 	const encoded = Schema.encodeSync(Video.Video)(video);
 	const original = {
 		...encoded,
 		bucket: encoded.bucketId,
 		createdAt: video.createdAt,
 		updatedAt: video.updatedAt,
+		password: password ?? null,
 	};
 	const rows = new Map<string, Record<string, unknown>>([[videoId, original]]);
 	const jobs = new Map<string, Record<string, unknown>>([
@@ -902,6 +903,12 @@ describe("recording storage lifecycle", () => {
 		expect(database.rows.get("duplicate-video")?.metadata).not.toHaveProperty(
 			"desktopRecordingUpload",
 		);
+		expect(database.rows.get("duplicate-video")).not.toHaveProperty(
+			"createdAt",
+		);
+		expect(database.rows.get("duplicate-video")).not.toHaveProperty(
+			"updatedAt",
+		);
 		expect(database.rows.get("owned-video")?.metadata).toHaveProperty(
 			"desktopRecordingUpload",
 		);
@@ -941,6 +948,32 @@ describe("recording storage lifecycle", () => {
 			type: "webMP4",
 		});
 		expect(storage.objects.get(`${prefix}result.mp4`)).toBe("original");
+	});
+
+	it("preserves password and strips customCreatedAt without copying original createdAt or updatedAt", async () => {
+		const videoWithCustomDate = Video.Video.make({
+			...recording(),
+			metadata: Option.some({
+				sourceName: "Dated recording",
+				customCreatedAt: "2020-01-01T00:00:00.000Z",
+			}),
+		});
+		const database = databaseFixture(videoWithCustomDate, "secret-pass-123");
+		await storageFixture([
+			[outputKey, "verified-video"],
+			[thumbnailKey, "verified-thumbnail"],
+			[previewKey, "verified-preview"],
+		]);
+		const result = await runVideoOperation("duplicate");
+		expect(Exit.isSuccess(result)).toBe(true);
+		const duplicated = database.rows.get("duplicate-video");
+		expect(duplicated).toBeDefined();
+		expect(duplicated).not.toHaveProperty("createdAt");
+		expect(duplicated).not.toHaveProperty("updatedAt");
+		expect(duplicated?.metadata).not.toHaveProperty("customCreatedAt");
+		expect(duplicated).toMatchObject({
+			password: "secret-pass-123",
+		});
 	});
 
 	it("does not duplicate source inventories, raw fragments, or comment attachments across pages", async () => {
