@@ -150,6 +150,7 @@ pub fn audio_segment_from_decoded(
                     },
                     |o| o.mic,
                 )
+                .with_microphone_enhancement()
                 .with_timing_offset_secs(repair.mic_offset_secs)
             }),
             system_audio.map(|a| -> AudioSegmentTrack {

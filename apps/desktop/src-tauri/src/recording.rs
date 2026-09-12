@@ -6407,6 +6407,19 @@ fn project_config_from_recording(
 
     let using_default_config = default_config.is_none();
     let mut config = default_config.unwrap_or_default();
+    if app
+        .store("store")
+        .ok()
+        .and_then(|store| store.get("audio_enhancement"))
+        .and_then(|value| {
+            value
+                .get("enabledByDefault")
+                .and_then(serde_json::Value::as_bool)
+        })
+        .unwrap_or(false)
+    {
+        config.audio.improve = true;
+    }
     if using_default_config {
         let library = app
             .store("store")

@@ -1541,6 +1541,7 @@ impl EditorWindow {
     pub(crate) fn render_audio_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let audio = &self.project.audio;
+        let enabled_by_default = self.sidebar.audio_enhancement_default;
         let summary = self.summary();
         let muted = audio.mute;
         let has_microphone = summary.is_some_and(|summary| summary.has_microphone);
@@ -1586,6 +1587,55 @@ impl EditorWindow {
                         })),
                 ),
             )
+            .children(has_microphone.then(|| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(ui::Subfield::plain(&theme, "Studio Sound").child(
+                        ui::Toggle::plain(&theme, "audio-improve", audio.improve).on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.edit_project("audio-improve", window, cx, |project| {
+                                    project.audio.improve = !project.audio.improve;
+                                    true
+                                });
+                            }),
+                        ),
+                    ))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.gray_10)
+                            .child("Reduce background noise and bring your voice into focus."),
+                    )
+                    .into_any_element()
+            }))
+            .child(
+                ui::Subfield::plain(&theme, "Studio Sound for new recordings").child(
+                    ui::Toggle::plain(&theme, "audio-improve-default", enabled_by_default)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if !store::set_store_setting(
+                                "audio_enhancement",
+                                "enabledByDefault",
+                                serde_json::json!(!enabled_by_default),
+                            ) {
+                                this.sidebar.audio_enhancement_error =
+                                    Some("Could not save the Studio Sound default".into());
+                            } else {
+                                this.sidebar.audio_enhancement_default = !enabled_by_default;
+                                this.sidebar.audio_enhancement_error = None;
+                            }
+                            cx.notify();
+                        })),
+                ),
+            )
+            .children(self.sidebar.audio_enhancement_error.as_ref().map(|error| {
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme.gray_10)
+                    .child(error.clone())
+                    .into_any_element()
+            }))
             .children(has_microphone.then(|| {
                 self.slider_field_disabled(
                     "Microphone Volume",

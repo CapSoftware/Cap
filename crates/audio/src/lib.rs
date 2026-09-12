@@ -6,6 +6,7 @@ mod renderer;
 mod streaming;
 mod sync_analysis;
 mod transcription_timing;
+mod voice;
 
 pub use audio_data::*;
 pub use calibration_store::*;
@@ -15,6 +16,7 @@ pub use renderer::*;
 pub use streaming::*;
 pub use sync_analysis::*;
 pub use transcription_timing::*;
+pub use voice::*;
 
 pub trait FromSampleBytes: cpal::SizedSample + std::fmt::Debug + Send + 'static {
     const BYTE_SIZE: usize;

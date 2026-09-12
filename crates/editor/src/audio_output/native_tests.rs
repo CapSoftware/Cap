@@ -712,3 +712,36 @@ async fn progressive_output_without_a_prefix_never_acknowledges_and_cancels_clea
     .unwrap()
     .unwrap();
 }
+
+#[test]
+fn studio_sound_refresh_changes_live_pcm_and_cannot_restart_stopped_audio() {
+    let (tx, rx) = std_mpsc::channel();
+    let output = AudioOutput::new_headless(Box::new(move |samples, _| {
+        let mean = samples.iter().map(|sample| sample.abs()).sum::<f32>() / samples.len() as f32;
+        let _ = tx.send(mean);
+    }));
+    let generation = output.play(audible_spec()).unwrap();
+    let wait_for = |predicate: fn(f32) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let value = rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .unwrap();
+            if predicate(value) {
+                break;
+            }
+        }
+    };
+    wait_for(|mean| mean > 0.1);
+    let mut enhanced = audible_spec();
+    enhanced.project.audio.improve = true;
+    output.refresh_playback(enhanced, generation);
+    wait_for(|mean| mean > 0.005 && mean < 0.04);
+    output.stop_playback(generation);
+    wait_for(|mean| mean == 0.0);
+    output.refresh_playback(audible_spec(), generation);
+    for _ in 0..30 {
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), 0.0);
+    }
+    output.shutdown();
+}

@@ -102,6 +102,10 @@ function declareStore<T extends object>(name: string, defaults?: T) {
 	};
 }
 
+export const audioEnhancementStore = declareStore<{
+	enabledByDefault: boolean;
+}>("audio_enhancement", { enabledByDefault: false });
+
 export const presetsStore = declareStore<PresetsStore>("presets");
 const animatedGradientDefaults: AnimatedGradientLibrary = {
 	presets: [],
