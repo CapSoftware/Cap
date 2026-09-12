@@ -57,6 +57,7 @@ mod tray;
 mod update_project_names;
 mod updates;
 mod upload;
+mod upload_health;
 pub mod web_api;
 mod window_exclusion;
 mod window_position_persistence;
@@ -1630,6 +1631,7 @@ impl App {
         }
 
         self.recording_state = RecordingState::Pending { mode, target };
+        upload_health::cancel_probe_for_recording(&self.handle);
         CurrentRecordingChanged.emit(&self.handle).ok();
 
         Ok(())
@@ -6692,6 +6694,8 @@ fn specta_builder() -> tauri_specta::Builder {
             recording::restart_recording,
             recording::delete_recording,
             recording::take_screenshot,
+            upload_health::get_upload_health_status,
+            upload_health::refresh_upload_health_status,
             recording::import_current_desktop_background,
             recording::get_default_project_config,
             recording::list_cameras,
@@ -7158,6 +7162,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(editor_preparing::PreparingConsumers::default());
             app.manage(updates::UpdatesState::default());
             updates::spawn_background_loop(app.clone());
+            app.manage(upload_health::UploadHealthCache::default());
 
             #[cfg(unix)]
             {
