@@ -48,8 +48,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-#[cfg(not(target_os = "macos"))]
-use gpui::StyledImage as _;
+use gpui::{Animation, AnimationExt as _, StyledImage as _};
 use gpui::{
     AppContext as _, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
     MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Render,
@@ -828,6 +827,86 @@ mod preview_effect_failure_tests {
     }
 }
 
+#[derive(Default)]
+struct ParkedCameraPreview(Option<RetainedCameraPreview>);
+
+impl gpui::Global for ParkedCameraPreview {}
+
+struct RetainedCameraPreview {
+    image: Arc<gpui::RenderImage>,
+    camera: crate::feeds::SelectedCamera,
+    state: CameraWindowState,
+    captured_at: Instant,
+    frame_dims: (usize, usize),
+}
+
+pub(crate) fn retained_preview_aspect(cx: &gpui::App) -> Option<f32> {
+    let retained = cx.try_global::<ParkedCameraPreview>()?.0.as_ref()?;
+    let feeds = Feeds::global(cx);
+    let feeds = feeds.read(cx);
+    if feeds.camera.as_ref() != Some(&retained.camera)
+        || feeds.camera_error.is_some()
+        || store::load().camera_window.unwrap_or_default() != retained.state
+        || retained.captured_at.elapsed() >= Duration::from_secs(60)
+    {
+        return None;
+    }
+    Some(retained.frame_dims.0 as f32 / retained.frame_dims.1.max(1) as f32)
+}
+
+pub(crate) fn clear_parked_camera_preview(cx: &mut gpui::App) {
+    cx.default_global::<ParkedCameraPreview>().0 = None;
+}
+
+#[cfg(target_os = "macos")]
+fn snapshot_preview(
+    buffer: &core_video::pixel_buffer::CVPixelBuffer,
+) -> Option<Arc<gpui::RenderImage>> {
+    use core_video::pixel_buffer::{kCVPixelBufferLock_ReadOnly, kCVPixelFormatType_32BGRA};
+
+    let width = buffer.get_width();
+    let height = buffer.get_height();
+    let stride = buffer.get_bytes_per_row();
+    let row_bytes = width.checked_mul(4)?;
+    let required_bytes = height
+        .checked_sub(1)?
+        .checked_mul(stride)?
+        .checked_add(row_bytes)?;
+    if buffer.get_pixel_format() != kCVPixelFormatType_32BGRA
+        || width == 0
+        || height == 0
+        || stride < row_bytes
+        || required_bytes > buffer.get_data_size()
+        || buffer.lock_base_address(kCVPixelBufferLock_ReadOnly) != 0
+    {
+        return None;
+    }
+    let image = (|| {
+        let base = unsafe { buffer.get_base_address() }.cast::<u8>();
+        if base.is_null() {
+            return None;
+        }
+        let scale = (960. / width as f64).min(540. / height as f64).min(1.);
+        let target_width = (width as f64 * scale).round().max(1.) as u32;
+        let target_height = (height as f64 * scale).round().max(1.) as u32;
+        let image = image::RgbaImage::from_fn(target_width, target_height, |x, y| {
+            let source_x = x as usize * width / target_width as usize;
+            let source_y = y as usize * height / target_height as usize;
+            let offset = source_y * stride + source_x * 4;
+            let pixel = unsafe { std::slice::from_raw_parts(base.add(offset), 4) };
+            // RenderImage consumes BGRA bytes even though image::Frame wraps RgbaImage.
+            image::Rgba([pixel[0], pixel[1], pixel[2], 255])
+        });
+        Some(Arc::new(gpui::RenderImage::new(smallvec::smallvec![
+            image::Frame::new(image)
+        ])))
+    })();
+    if buffer.unlock_base_address(kCVPixelBufferLock_ReadOnly) != 0 {
+        return None;
+    }
+    image
+}
+
 /// The per-frame half of the window: owns the latest converted (or blurred)
 /// frame and is the only entity notified at camera rate. Chrome invalidation
 /// goes through the parent [`CameraWindow`] instead, so a frame draw reuses
@@ -842,6 +921,13 @@ struct CameraPreviewView {
     #[cfg(not(target_os = "macos"))]
     latest_frame: Option<Arc<gpui::RenderImage>>,
     frame_dims: Option<(usize, usize)>,
+    retained: Option<Arc<gpui::RenderImage>>,
+    retained_dims: Option<(usize, usize)>,
+    reveal_started: Option<Instant>,
+    retained_invalidated: bool,
+    selection_revision: u64,
+    frame_revision: Option<u64>,
+    camera: Option<crate::feeds::SelectedCamera>,
     /// Bumped by the canvas paint callback; the parent's cadence log reads it
     /// to prove notify-driven repaints actually present.
     paints: Arc<AtomicU32>,
@@ -864,10 +950,47 @@ impl CameraPreviewView {
     ) -> Self {
         let feeds = Feeds::global(cx);
         let camera_error = feeds.read(cx).camera_error.clone();
+        let camera = feeds.read(cx).camera.clone();
+        let state = store::load().camera_window.unwrap_or_default();
+        let retained = cx
+            .default_global::<ParkedCameraPreview>()
+            .0
+            .take()
+            .filter(|retained| {
+                camera.as_ref() == Some(&retained.camera)
+                    && state == retained.state
+                    && camera_error.is_none()
+                    && retained.captured_at.elapsed() < Duration::from_secs(60)
+            });
+        let retained_dims = retained.as_ref().map(|retained| retained.frame_dims);
+        if let Some(retained) = &retained {
+            let expiry = cx
+                .background_executor()
+                .timer(Duration::from_secs(60).saturating_sub(retained.captured_at.elapsed()));
+            cx.spawn(async move |this, cx| {
+                expiry.await;
+                this.update(cx, |this: &mut Self, cx| {
+                    if this.retained.is_some() {
+                        this.retained_invalidated = true;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+            .detach();
+        }
+        let retained = retained.map(|retained| retained.image);
         let feeds_subscription = cx.observe(&feeds, |this: &mut Self, feeds, cx| {
-            let error = feeds.read(cx).camera_error.clone();
-            if this.camera_error != error {
+            let feeds = feeds.read(cx);
+            let error = feeds.camera_error.clone();
+            let camera = feeds.camera.clone();
+            if this.camera_error != error || this.camera != camera {
+                if error.is_some() || this.camera != camera {
+                    this.retained_invalidated = true;
+                    this.selection_revision = this.selection_revision.wrapping_add(1);
+                }
                 this.camera_error = error;
+                this.camera = camera;
                 cx.notify();
             }
         });
@@ -880,6 +1003,13 @@ impl CameraPreviewView {
             #[cfg(not(target_os = "macos"))]
             latest_frame: None,
             frame_dims: None,
+            retained,
+            retained_dims,
+            reveal_started: None,
+            retained_invalidated: false,
+            selection_revision: 0,
+            frame_revision: None,
+            camera,
             paints,
             camera_error,
             effect_issue: None,
@@ -896,6 +1026,10 @@ impl CameraPreviewView {
     ) {
         self.latest_frame = Some(frame);
         self.frame_dims = Some(dims);
+        self.frame_revision = Some(self.selection_revision);
+        if self.retained.is_some() && self.reveal_started.is_none() {
+            self.reveal_started = Some(Instant::now());
+        }
         cx.notify();
     }
 
@@ -908,6 +1042,10 @@ impl CameraPreviewView {
     ) -> Option<Arc<gpui::RenderImage>> {
         let previous = self.latest_frame.replace(frame);
         self.frame_dims = Some(dims);
+        self.frame_revision = Some(self.selection_revision);
+        if self.retained.is_some() && self.reveal_started.is_none() {
+            self.reveal_started = Some(Instant::now());
+        }
         cx.notify();
         previous
     }
@@ -922,7 +1060,16 @@ impl CameraPreviewView {
 }
 
 impl Render for CameraPreviewView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        if (self.retained_invalidated
+            || self
+                .reveal_started
+                .is_some_and(|started| started.elapsed() >= Duration::from_millis(180)))
+            && let Some(image) = self.retained.take()
+        {
+            let _ = window.drop_image(image);
+        }
+        self.retained_invalidated = false;
         let theme = self.theme;
         let radius = self.radius;
 
@@ -978,7 +1125,24 @@ impl Render for CameraPreviewView {
             );
         }
 
-        let showing_frame = self.latest_frame.is_some();
+        if let Some(image) = self.retained.clone() {
+            let overlay = div().absolute().inset_0().child(
+                gpui::img(image)
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Cover),
+            );
+            container = if self.reveal_started.is_some() {
+                container.child(overlay.with_animation(
+                    "camera-preview-reveal",
+                    Animation::new(Duration::from_millis(180)),
+                    |element, progress| element.opacity(1. - progress),
+                ))
+            } else {
+                container.child(overlay)
+            };
+        }
+
+        let showing_frame = self.latest_frame.is_some() || self.retained.is_some();
 
         if !showing_frame {
             container = container.child(
@@ -1111,6 +1275,7 @@ pub struct CameraWindow {
     preview: Entity<CameraPreviewView>,
     toolbar: Entity<CameraToolbarView>,
     frame_dims: Option<(usize, usize)>,
+    retained_aspect: Option<f32>,
     // Cadence instrumentation: proves the preview stays live (delivered) and
     // actually presents (painted) while the window is inactive.
     frames_in_window: u32,
@@ -1165,6 +1330,56 @@ impl CameraWindow {
         )
     }
 
+    pub(crate) fn retain_preview(&self, cx: &mut Context<Self>) {
+        let feeds = Feeds::global(cx);
+        let Some(camera) = feeds.read(cx).camera.clone() else {
+            return;
+        };
+        if feeds.read(cx).camera_error.is_some() {
+            return;
+        }
+        let preview = self.preview.read(cx);
+        if preview.retained_invalidated || preview.camera.as_ref() != Some(&camera) {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        let image = (preview.frame_revision == Some(preview.selection_revision))
+            .then(|| preview.latest_frame.as_ref().and_then(snapshot_preview))
+            .flatten();
+        #[cfg(not(target_os = "macos"))]
+        let image = (preview.frame_revision == Some(preview.selection_revision))
+            .then(|| preview.latest_frame.clone())
+            .flatten();
+        let Some(image) = image.or_else(|| preview.retained.clone()) else {
+            return;
+        };
+        let Some(frame_dims) = preview.frame_dims.or(preview.retained_dims) else {
+            return;
+        };
+        let captured_at = Instant::now();
+        cx.default_global::<ParkedCameraPreview>().0 = Some(RetainedCameraPreview {
+            image,
+            camera,
+            state: self.state,
+            captured_at,
+            frame_dims,
+        });
+        let expiry = cx.background_executor().timer(Duration::from_secs(60));
+        cx.spawn(async move |_, cx| {
+            expiry.await;
+            cx.update(|cx| {
+                if cx
+                    .try_global::<ParkedCameraPreview>()
+                    .and_then(|cache| cache.0.as_ref())
+                    .is_some_and(|cached| cached.captured_at == captured_at)
+                {
+                    clear_parked_camera_preview(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // `document.documentElement.classList.toggle("dark", true)`
         // (`camera.tsx:128`): the bubble is always dark, whatever the app
@@ -1189,6 +1404,7 @@ impl CameraWindow {
         Feeds::global(cx).update(cx, |feeds, _| {
             feeds.set_camera_preview_state(state.mirrored, state.background_blur)
         });
+        let retained_aspect = retained_preview_aspect(cx);
         let paints = Arc::new(AtomicU32::new(0));
         let preview = cx.new({
             let paints = paints.clone();
@@ -1225,6 +1441,7 @@ impl CameraWindow {
             preview,
             toolbar,
             frame_dims: None,
+            retained_aspect,
             frames_in_window: 0,
             cadence_window_start: Instant::now(),
             paints,
@@ -1508,6 +1725,7 @@ impl CameraWindow {
     fn frame_aspect(&self) -> Option<f32> {
         self.frame_dims
             .map(|(width, height)| width as f32 / height.max(1) as f32)
+            .or(self.retained_aspect)
     }
 
     fn toolbar_scale(&self) -> f32 {
@@ -2535,5 +2753,58 @@ mod recording_snapshot_tests {
         assert_eq!(snapshot.content_rect.height, 306);
         assert_eq!(snapshot.content_rect.x, client.x);
         assert_eq!(snapshot.content_rect.y, client.y + 75);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod retained_preview_tests {
+    use super::*;
+    use core_video::pixel_buffer::{
+        CVPixelBuffer, kCVPixelFormatType_32ARGB, kCVPixelFormatType_32BGRA,
+    };
+
+    fn buffer(width: usize, height: usize) -> CVPixelBuffer {
+        let buffer = CVPixelBuffer::new(kCVPixelFormatType_32BGRA, width, height, None).unwrap();
+        assert_eq!(buffer.lock_base_address(0), 0);
+        let stride = buffer.get_bytes_per_row();
+        let pixels = unsafe {
+            std::slice::from_raw_parts_mut(buffer.get_base_address().cast::<u8>(), stride * height)
+        };
+        for row in pixels.chunks_exact_mut(stride) {
+            for pixel in row[..width * 4].as_chunks_mut::<4>().0 {
+                pixel.copy_from_slice(&[19, 71, 143, 255]);
+            }
+        }
+        assert_eq!(buffer.unlock_base_address(0), 0);
+        buffer
+    }
+
+    #[test]
+    fn retained_preview_owns_pixels_after_native_surface_changes() {
+        let buffer = buffer(17, 9);
+        let image = snapshot_preview(&buffer).unwrap();
+        assert_eq!(
+            image.as_bytes(0).unwrap(),
+            [19, 71, 143, 255].repeat(17 * 9)
+        );
+        assert_eq!(buffer.lock_base_address(0), 0);
+        unsafe { buffer.get_base_address().cast::<u8>().write(200) };
+        assert_eq!(buffer.unlock_base_address(0), 0);
+        drop(buffer);
+        assert_eq!(image.as_bytes(0).unwrap()[0], 19);
+    }
+
+    #[test]
+    fn retained_preview_bounds_memory_for_large_camera_frames() {
+        let buffer = buffer(3840, 2160);
+        let image = snapshot_preview(&buffer).unwrap();
+        assert_eq!(image.as_bytes(0).unwrap().len(), 960 * 540 * 4);
+        assert_eq!(&image.as_bytes(0).unwrap()[..4], &[19, 71, 143, 255]);
+    }
+
+    #[test]
+    fn retained_preview_rejects_non_bgra_surfaces() {
+        let buffer = CVPixelBuffer::new(kCVPixelFormatType_32ARGB, 32, 16, None).unwrap();
+        assert!(snapshot_preview(&buffer).is_none());
     }
 }

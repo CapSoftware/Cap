@@ -51,7 +51,10 @@ import {
 	type FrameData,
 } from "~/utils/socket";
 import { commands, events } from "~/utils/tauri";
-import { RecordingOptionsProvider } from "./(window-chrome)/OptionsContext";
+import {
+	RecordingOptionsProvider,
+	useRecordingOptions,
+} from "./(window-chrome)/OptionsContext";
 
 type CameraPreviewIssue = {
 	title: string;
@@ -425,6 +428,17 @@ function LegacyCameraPreviewPage(props: {
 	const [hasPositioned, setHasPositioned] = createSignal(isCameraOnlyMode());
 
 	const [hasFrame, setHasFrame] = createSignal(false);
+	const [hasRetainedFrame, setHasRetainedFrame] = createSignal(false);
+	const retainedCanvas = document.createElement("canvas");
+	const { rawOptions } = useRecordingOptions();
+	let retainedFrameTimeout: ReturnType<typeof setTimeout> | undefined;
+
+	const clearRetainedFrame = () => {
+		clearTimeout(retainedFrameTimeout);
+		setHasRetainedFrame(false);
+		retainedCanvas.width = 0;
+		retainedCanvas.height = 0;
+	};
 	const [frameDimensions, setFrameDimensions] = createSignal<{
 		width: number;
 		height: number;
@@ -484,7 +498,17 @@ function LegacyCameraPreviewPage(props: {
 		const controls = canvasControls;
 		ws = undefined;
 		canvasControls = undefined;
+		const canRetain =
+			controls?.hasRenderedFrame() && rawOptions.cameraID && !props.issue();
 		controls?.dispose();
+		if (canRetain && retainedCanvas.width > 0) {
+			setHasRetainedFrame(true);
+		} else if (!rawOptions.cameraID || props.issue()) {
+			clearRetainedFrame();
+		}
+		setHasFrame(false);
+		clearTimeout(retainedFrameTimeout);
+		retainedFrameTimeout = setTimeout(clearRetainedFrame, 60_000);
 		if (
 			socket &&
 			socket.readyState !== WebSocket.CLOSING &&
@@ -511,8 +535,10 @@ function LegacyCameraPreviewPage(props: {
 		) {
 			setFrameDimensions({ width: frame.width, height: frame.height });
 		}
-		if (canvasControls?.hasRenderedFrame()) {
+		if (canvasControls?.hasRenderedFrame() && !hasFrame()) {
 			setHasFrame(true);
+			clearTimeout(retainedFrameTimeout);
+			retainedFrameTimeout = setTimeout(clearRetainedFrame, 180);
 		}
 	};
 
@@ -545,24 +571,41 @@ function LegacyCameraPreviewPage(props: {
 		const instantQuery = isInstantRecording() ? "?instant=true" : "";
 		const [socket, _isConnected, _isWorkerReady, controls] = createImageDataWS(
 			`ws://localhost:${cameraWsPort}${instantQuery}`,
-			updateFrameState,
+			(frame) => {
+				if (canvasControls === controls) updateFrameState(frame);
+			},
 			() => commands.refreshCameraFeed().catch(() => {}),
-			{ powerPreference: "low-power" },
+			{
+				powerPreference: "low-power",
+				retainLastFrameOnDispose: retainedCanvas,
+			},
 		);
 		canvasControls = controls;
 		initCanvasControls();
 
 		socket.addEventListener("open", () => {
+			if (ws !== socket) return;
 			lastFrameTime = Date.now();
 			setHasFrame(false);
-			setFrameDimensions(null);
 		});
 
 		socket.addEventListener("close", () => {
 			if (canvasControls === controls) {
 				canvasControls = undefined;
 			}
-			if (ws === socket) ws = undefined;
+			if (ws !== socket) return;
+			ws = undefined;
+			if (
+				controls.hasRenderedFrame() &&
+				retainedCanvas.width > 0 &&
+				rawOptions.cameraID &&
+				!props.issue()
+			) {
+				setHasRetainedFrame(true);
+			}
+			setHasFrame(false);
+			clearTimeout(retainedFrameTimeout);
+			retainedFrameTimeout = setTimeout(clearRetainedFrame, 60_000);
 			scheduleReconnect();
 		});
 
@@ -654,9 +697,27 @@ function LegacyCameraPreviewPage(props: {
 		),
 	);
 
+	createEffect(
+		on(
+			() => JSON.stringify(rawOptions.cameraID),
+			() => {
+				stopSocket();
+				clearRetainedFrame();
+				setFrameDimensions(null);
+				if (rawOptions.cameraID) startSocket();
+			},
+			{ defer: true },
+		),
+	);
+
+	createEffect(() => {
+		if (props.issue()) clearRetainedFrame();
+	});
+
 	onCleanup(() => {
 		isCleanedUp = true;
 		stopSocket();
+		clearRetainedFrame();
 	});
 
 	const scale = () => cameraToolbarScale(state.size);
@@ -933,7 +994,15 @@ function LegacyCameraPreviewPage(props: {
 						}}
 						containerSize={externalContainerSize() ?? undefined}
 					/>
-					<Show when={!hasFrame()}>
+					<Canvas
+						frameDimensions={frameDimensions}
+						state={state}
+						canvas={retainedCanvas}
+						onCanvas={() => {}}
+						containerSize={externalContainerSize() ?? undefined}
+						opacity={hasRetainedFrame() && !hasFrame() ? 1 : 0}
+					/>
+					<Show when={!hasFrame() && !hasRetainedFrame()}>
 						<CameraLoadingState />
 					</Show>
 				</Suspense>
@@ -952,6 +1021,8 @@ function Canvas(props: {
 	state: CameraWindowState;
 	onCanvas: (canvas: HTMLCanvasElement) => void;
 	containerSize?: { width: number; height: number };
+	canvas?: HTMLCanvasElement;
+	opacity?: number;
 }) {
 	const style = () => {
 		const dimensions = props.frameDimensions();
@@ -978,6 +1049,7 @@ function Canvas(props: {
 		const top = (size.height - targetSize.height) / 2;
 
 		return {
+			opacity: props.opacity,
 			width: `${size.width}px`,
 			height: `${size.height}px`,
 			left: `-${left}px`,
@@ -985,6 +1057,21 @@ function Canvas(props: {
 			transform: props.state.mirrored ? "scaleX(-1)" : "scaleX(1)",
 		};
 	};
+
+	if (props.canvas) {
+		const canvas = props.canvas;
+		canvas.className =
+			"absolute pointer-events-none motion-reduce:transition-none";
+		createEffect(() => {
+			canvas.style.transition =
+				props.opacity === 0 &&
+				!matchMedia("(prefers-reduced-motion: reduce)").matches
+					? "opacity 180ms ease-out"
+					: "none";
+			Object.assign(canvas.style, style());
+		});
+		return canvas;
+	}
 
 	return (
 		<canvas

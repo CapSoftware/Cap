@@ -861,6 +861,7 @@ impl Feeds {
         {
             return self.camera_epoch;
         }
+        crate::camera_window::clear_parked_camera_preview(cx);
         self.camera_epoch += 1;
         self.camera_input_epoch
             .store(self.camera_epoch, Ordering::Release);
