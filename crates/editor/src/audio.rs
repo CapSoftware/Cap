@@ -1665,6 +1665,18 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
         }
     }
 
+    pub(crate) fn try_align_prepared_playhead(&mut self, playhead_secs: f64) -> bool {
+        match &mut self.mode {
+            PrerenderedAudioBufferMode::Progressive(buffer) => {
+                buffer.set_playhead(playhead_secs);
+                true
+            }
+            PrerenderedAudioBufferMode::Streaming(buffer) => {
+                buffer.try_align_prepared_playhead(playhead_secs)
+            }
+        }
+    }
+
     pub fn current_audible_playhead(&self, device_latency_secs: f64) -> f64 {
         match &self.mode {
             PrerenderedAudioBufferMode::Progressive(buffer) => {
@@ -1860,6 +1872,7 @@ struct StreamingAudioBuffer<T: FromSampleBytes> {
     project: ProjectConfiguration,
     sample_rate: u32,
     channels: usize,
+    read_position: usize,
 }
 
 impl<T: FromSampleBytes> StreamingAudioBuffer<T> {
@@ -1887,6 +1900,7 @@ impl<T: FromSampleBytes> StreamingAudioBuffer<T> {
             project,
             sample_rate: output_info.sample_rate,
             channels: output_info.channels,
+            read_position: 0,
         };
         buffer.set_playhead(start_playhead_secs);
         buffer
@@ -1904,20 +1918,38 @@ impl<T: FromSampleBytes> StreamingAudioBuffer<T> {
     fn set_playhead(&mut self, playhead_secs: f64) {
         self.resampler.reset();
         self.resampled_buffer.clear();
+        self.read_position =
+            output_sample_index(playhead_secs, self.sample_rate, self.channels, usize::MAX);
         self.renderer.set_playhead(playhead_secs, &self.project);
         self.prefill(self.ready_window_samples());
     }
 
+    fn try_align_prepared_playhead(&mut self, playhead_secs: f64) -> bool {
+        let delta = playhead_secs - self.current_audible_playhead(0.0);
+        let samples = ((delta.max(0.0) * f64::from(self.sample_rate)).round() as usize)
+            .saturating_mul(self.channels);
+        if delta.is_finite()
+            && delta >= -1.0 / f64::from(self.sample_rate)
+            && samples <= self.resampled_buffer.occupied_len()
+        {
+            self.read_position = self
+                .read_position
+                .saturating_add(self.resampled_buffer.skip(samples));
+            true
+        } else {
+            false
+        }
+    }
+
     fn current_audible_playhead(&self, device_latency_secs: f64) -> f64 {
-        let generated_secs = self.renderer.elapsed_samples_to_playhead();
-        let buffered_frames = self.resampled_buffer.occupied_len() / self.channels;
-        let buffered_secs = buffered_frames as f64 / self.sample_rate as f64;
-        (generated_secs - buffered_secs - device_latency_secs.max(0.0)).max(0.0)
+        let consumed_secs =
+            (self.read_position / self.channels) as f64 / f64::from(self.sample_rate);
+        (consumed_secs - device_latency_secs.max(0.0)).max(0.0)
     }
 
     #[allow(dead_code)]
     fn current_playhead_secs(&self) -> f64 {
-        self.renderer.elapsed_samples_to_playhead()
+        self.current_audible_playhead(0.0)
     }
 
     fn buffer_reaching_limit(&self) -> bool {
@@ -1972,6 +2004,7 @@ impl<T: FromSampleBytes> StreamingAudioBuffer<T> {
         }
 
         let filled = self.resampled_buffer.pop_slice(playback_buffer);
+        self.read_position = self.read_position.saturating_add(filled);
         playback_buffer[filled..].fill(T::EQUILIBRIUM);
 
         self.prefill(self.ready_window_samples().max(playback_buffer.len()));
@@ -2860,6 +2893,48 @@ mod tests {
 
         assert!(mean_abs(&stream) > 0.1);
         assert_eq!(renderer.speed_audio_processors.iter().flatten().count(), 2);
+    }
+
+    #[test]
+    fn studio_sound_prepared_alignment_reuses_samples_without_rendering() {
+        let (_dir, mut renderer, mut project) = build_renderer_fixture();
+        renderer.data[0].tracks[0].is_microphone = true;
+        project.audio.improve = true;
+        for sample_rate in [44_100, 48_000] {
+            let info = AudioInfo::new(AudioRenderer::SAMPLE_FORMAT, sample_rate, 2).unwrap();
+            let make = || {
+                StreamingAudioBuffer::<f32>::new(
+                    renderer.data.clone(),
+                    MusicTracks::new(),
+                    project.clone(),
+                    info,
+                    0.0,
+                )
+            };
+            let mut reference = make();
+            let mut candidate = make();
+            reference.fill(&mut vec![0.0; sample_rate as usize / 8 * 2]);
+            let target = reference.current_audible_playhead(0.0);
+            let rendered_before = candidate.renderer.elapsed_samples;
+            assert!(candidate.try_align_prepared_playhead(target));
+            assert_eq!(candidate.renderer.elapsed_samples, rendered_before);
+            assert!(
+                (candidate.current_audible_playhead(0.0) - target).abs()
+                    <= 1.0 / f64::from(sample_rate)
+            );
+            let mut expected = [0.0; 512 * 2];
+            let mut actual = [0.0; 512 * 2];
+            reference.fill(&mut expected);
+            candidate.fill(&mut actual);
+            assert_eq!(actual, expected);
+            for target in [1.0, 0.0] {
+                let before = candidate.renderer.elapsed_samples;
+                assert!(!candidate.try_align_prepared_playhead(target));
+                assert_eq!(candidate.renderer.elapsed_samples, before);
+                candidate.set_playhead(target);
+                assert!((candidate.current_audible_playhead(0.0) - target).abs() < 0.01);
+            }
+        }
     }
 
     #[test]

@@ -59,9 +59,11 @@ enum ControlMsg {
     Refresh {
         spec: Box<PlaySpec>,
         generation: u64,
+        revision: u64,
         retire_tx: std_mpsc::Sender<ControlMsg>,
     },
     Retire(Box<dyn Send>),
+    Realign(Box<dyn FnOnce() + Send>),
     EnsureStream,
     Play {
         spec: Box<PlaySpec>,
@@ -292,7 +294,7 @@ impl Drop for PreparingAudioPlayTicket {
 }
 
 enum SourceAcknowledgement {
-    Refresh(std_mpsc::Sender<ControlMsg>),
+    Refresh(std_mpsc::Sender<ControlMsg>, u64),
     Ordinary(std_mpsc::Sender<()>),
     Preparing(Arc<PreparingAudioRequest>),
 }
@@ -300,14 +302,14 @@ enum SourceAcknowledgement {
 impl SourceAcknowledgement {
     fn preparing_request(&self) -> Option<Arc<PreparingAudioRequest>> {
         match self {
-            Self::Ordinary(_) | Self::Refresh(_) => None,
+            Self::Ordinary(_) | Self::Refresh(..) => None,
             Self::Preparing(request) => Some(request.clone()),
         }
     }
 
     fn consumed(self) {
         match &self {
-            Self::Refresh(_) => {}
+            Self::Refresh(..) => {}
             Self::Ordinary(sender) => {
                 let _ = sender.send(());
             }
@@ -478,6 +480,7 @@ impl AudioOutput {
         let _ = self.control_tx.send(ControlMsg::Refresh {
             spec: Box::new(spec),
             generation,
+            revision: self.next_generation.fetch_add(1, Ordering::Relaxed),
             retire_tx: self.control_tx.clone(),
         });
     }
@@ -506,6 +509,7 @@ impl Drop for AudioOutput {
 /// Per-playback state owned by the audio callback.
 struct ActiveSource<T: FromSampleBytes> {
     generation: u64,
+    refresh_revision: u64,
     buffer: ActiveSourceBuffer<T>,
     playhead_rx: watch::Receiver<f64>,
     ack: Option<SourceAcknowledgement>,
@@ -543,6 +547,7 @@ enum SourceCommand<T: FromSampleBytes> {
     Refresh {
         source: Box<ActiveSource<T>>,
         retire_tx: std_mpsc::Sender<ControlMsg>,
+        requeue_tx: std_mpsc::Sender<SourceCommand<T>>,
     },
     Install(Box<ActiveSource<T>>),
     Remove {
@@ -575,13 +580,14 @@ fn control_thread(control_rx: std_mpsc::Receiver<ControlMsg>) {
             ControlMsg::Refresh {
                 spec,
                 generation,
+                revision,
                 retire_tx,
             } => {
                 if let Some(stream) = &state
                     && let Err(error) = (stream.handle.install)(
                         spec,
                         generation,
-                        SourceAcknowledgement::Refresh(retire_tx),
+                        SourceAcknowledgement::Refresh(retire_tx, revision),
                     )
                 {
                     error!(%error, "Could not update microphone enhancement during playback");
@@ -654,6 +660,7 @@ fn control_thread(control_rx: std_mpsc::Receiver<ControlMsg>) {
                 );
             }
             ControlMsg::Retire(source) => drop(source),
+            ControlMsg::Realign(realign) => realign(),
             ControlMsg::Shutdown => break,
         }
     }
@@ -676,17 +683,44 @@ fn stop_stream_state<S>(
 
 /// Applies pending install/remove commands to the active source. Shared by
 /// the live cpal callback and the headless sink.
-fn drain_source_commands<T: FromSampleBytes>(
+fn drain_source_commands<T: FromSampleBytes + cpal::FromSample<f32>>(
     active: &mut Option<ActiveSource<T>>,
     source_rx: &std_mpsc::Receiver<SourceCommand<T>>,
 ) {
     while let Ok(command) = source_rx.try_recv() {
         match command {
-            SourceCommand::Refresh { source, retire_tx } => {
-                let retired = if active
-                    .as_ref()
-                    .is_some_and(|current| current.generation == source.generation)
-                {
+            SourceCommand::Refresh {
+                mut source,
+                retire_tx,
+                requeue_tx,
+            } => {
+                let retired = if let Some(current) = active.as_mut().filter(|current| {
+                    current.generation == source.generation
+                        && current.refresh_revision <= source.refresh_revision
+                }) {
+                    current.refresh_revision = source.refresh_revision;
+                    if let (
+                        ActiveSourceBuffer::Ordinary(previous),
+                        ActiveSourceBuffer::Ordinary(replacement),
+                    ) = (&current.buffer, &mut source.buffer)
+                    {
+                        let playhead = previous.current_audible_playhead(0.0);
+                        if !replacement.try_align_prepared_playhead(playhead) {
+                            let sender = retire_tx.clone();
+                            let _ = sender.send(ControlMsg::Realign(Box::new(move || {
+                                if let ActiveSourceBuffer::Ordinary(buffer) = &mut source.buffer {
+                                    buffer.set_playhead(playhead);
+                                }
+                                let sender = requeue_tx.clone();
+                                let _ = sender.send(SourceCommand::Refresh {
+                                    source,
+                                    retire_tx,
+                                    requeue_tx,
+                                });
+                            })));
+                            continue;
+                        }
+                    }
                     active.replace(*source).map(Box::new)
                 } else {
                     Some(source)
@@ -848,7 +882,7 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     };
 
     let start_playhead = start_playhead_secs + initial_latency_secs;
-    let mut buffer = if matches!(ack, SourceAcknowledgement::Refresh(_)) {
+    let mut buffer = if matches!(ack, SourceAcknowledgement::Refresh(..)) {
         PrerenderedAudioBuffer::<T>::bounded(segments, music, &project, output_info, start_playhead)
     } else {
         PrerenderedAudioBuffer::<T>::new(
@@ -860,7 +894,7 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
             start_playhead,
         )
     };
-    if !matches!(ack, SourceAcknowledgement::Refresh(_)) {
+    if !matches!(ack, SourceAcknowledgement::Refresh(..)) {
         buffer.set_playhead(start_playhead);
     }
     // A few ms: guarantees the callback reads real samples at the
@@ -879,11 +913,16 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     }
 
     let retire_tx = match &ack {
-        SourceAcknowledgement::Refresh(sender) => Some(sender.clone()),
+        SourceAcknowledgement::Refresh(sender, _) => Some(sender.clone()),
         _ => None,
+    };
+    let refresh_revision = match &ack {
+        SourceAcknowledgement::Refresh(_, revision) => *revision,
+        _ => 0,
     };
     let source = Box::new(ActiveSource {
         generation,
+        refresh_revision,
         buffer: ActiveSourceBuffer::Ordinary(buffer),
         playhead_rx,
         ack: Some(ack),
@@ -893,7 +932,11 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     });
     install_tx
         .send(if let Some(retire_tx) = retire_tx {
-            SourceCommand::Refresh { source, retire_tx }
+            SourceCommand::Refresh {
+                source,
+                retire_tx,
+                requeue_tx: install_tx.clone(),
+            }
         } else {
             SourceCommand::Install(source)
         })
@@ -943,6 +986,7 @@ fn install_progressive_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     install_tx
         .send(SourceCommand::Install(Box::new(ActiveSource {
             generation,
+            refresh_revision: 0,
             buffer: ActiveSourceBuffer::Preparing(buffer),
             playhead_rx,
             ack: Some(SourceAcknowledgement::Preparing(request.clone())),
@@ -1011,12 +1055,13 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
             ControlMsg::Refresh {
                 spec,
                 generation,
+                revision,
                 retire_tx,
             } => {
                 if let Err(error) = install_source::<f32>(
                     spec,
                     generation,
-                    SourceAcknowledgement::Refresh(retire_tx),
+                    SourceAcknowledgement::Refresh(retire_tx, revision),
                     output_info,
                     false,
                     &source_tx,
@@ -1099,6 +1144,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
                 });
             }
             ControlMsg::Retire(source) => drop(source),
+            ControlMsg::Realign(realign) => realign(),
             ControlMsg::Shutdown => break,
         }
     }
@@ -1366,6 +1412,7 @@ mod tests {
         for (generation, should_replace) in [(7, true), (6, false), (8, false)] {
             let (mut replacement, _playhead) = source(48_000);
             replacement.generation = generation;
+            let replacement_receiver = replacement.playhead_rx.clone();
             let ActiveSourceBuffer::Ordinary(buffer) = &mut replacement.buffer else {
                 panic!("expected ordinary source");
             };
@@ -1373,10 +1420,11 @@ mod tests {
             let ActiveSourceBuffer::Ordinary(buffer) = &mut active.as_mut().unwrap().buffer else {
                 panic!("expected ordinary source");
             };
-            buffer.set_playhead(0.0);
+            buffer.set_playhead(0.125);
             tx.send(SourceCommand::Refresh {
                 source: Box::new(replacement),
                 retire_tx: retire_tx.clone(),
+                requeue_tx: tx.clone(),
             })
             .unwrap();
             drain_source_commands(&mut active, &rx);
@@ -1386,7 +1434,11 @@ mod tests {
             ));
             let actual = active.as_ref().unwrap();
             assert_eq!(actual.generation, 7);
-            assert_eq!(actual.buffer.current_playhead_secs() >= 0.5, should_replace);
+            assert_eq!(
+                actual.playhead_rx.same_channel(&replacement_receiver),
+                should_replace
+            );
+            assert!((actual.buffer.current_playhead_secs() - 0.125).abs() < 1.0 / 48_000.0);
         }
         tx.send(SourceCommand::Remove {
             generation: Some(7),
@@ -1397,10 +1449,77 @@ mod tests {
         tx.send(SourceCommand::Refresh {
             source: Box::new(replacement),
             retire_tx: retire_tx.clone(),
+            requeue_tx: tx.clone(),
         })
         .unwrap();
         drain_source_commands(&mut active, &rx);
         assert!(active.is_none());
+    }
+
+    #[test]
+    fn enhancement_refresh_realigns_off_callback_and_rejects_superseded_work() {
+        for (newer_revision, stopped) in [(false, false), (true, false), (false, true)] {
+            let (mut original, _playhead) = source(48_000);
+            original.generation = 7;
+            let ActiveSourceBuffer::Ordinary(buffer) = &mut original.buffer else {
+                panic!("expected ordinary source");
+            };
+            buffer.set_playhead(1.0);
+            let original_receiver = original.playhead_rx.clone();
+            let mut active = Some(original);
+            let (mut replacement, _playhead) = source(48_000);
+            replacement.generation = 7;
+            replacement.refresh_revision = 1;
+            replacement.buffer = ActiveSourceBuffer::Ordinary(PrerenderedAudioBuffer::bounded(
+                Vec::new(),
+                MusicTracks::new(),
+                &ProjectConfiguration::default(),
+                AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2),
+                0.0,
+            ));
+            let replacement_receiver = replacement.playhead_rx.clone();
+            let (tx, rx) = std_mpsc::channel();
+            let (retire_tx, retire_rx) = std_mpsc::channel();
+            tx.send(SourceCommand::Refresh {
+                source: Box::new(replacement),
+                retire_tx,
+                requeue_tx: tx.clone(),
+            })
+            .unwrap();
+            drain_source_commands(&mut active, &rx);
+            let current = active.as_mut().unwrap();
+            assert!(current.playhead_rx.same_channel(&original_receiver));
+            assert_eq!(current.refresh_revision, 1);
+            let ControlMsg::Realign(realign) = retire_rx.try_recv().unwrap() else {
+                panic!("expected deferred audio preparation");
+            };
+            if newer_revision {
+                current.refresh_revision = 2;
+            }
+            let ActiveSourceBuffer::Ordinary(buffer) = &mut current.buffer else {
+                panic!("expected ordinary source");
+            };
+            buffer.set_playhead(1.025);
+            if stopped {
+                active = None;
+            }
+            realign();
+            drain_source_commands(&mut active, &rx);
+            assert!(matches!(
+                retire_rx.try_recv().unwrap(),
+                ControlMsg::Retire(_)
+            ));
+            if stopped {
+                assert!(active.is_none());
+            } else {
+                let current = active.as_ref().unwrap();
+                assert_eq!(
+                    current.playhead_rx.same_channel(&replacement_receiver),
+                    !newer_revision
+                );
+                assert!((current.buffer.current_playhead_secs() - 1.025).abs() < 1.0 / 48_000.0);
+            }
+        }
     }
 
     #[test]
