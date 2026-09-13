@@ -131,10 +131,10 @@ import {
 } from "./projectConfig";
 import ShadowSettings from "./ShadowSettings";
 import { StyleGroupToggle, StyleSegmentConfig } from "./style-segment-config";
-import { Camera3DShotPanel, camera3DShotSummary } from "./ThreeDPanel";
 import type { TextSegment } from "./text";
 import { TextSegmentConfig } from "./text-segment-config";
 import type { Camera3DSegment } from "./three-d";
+import { Camera3DShotPanel, camera3DShotSummary } from "./three-d-panel";
 import { heldTimeBefore, holdWindows } from "./timeline-holds";
 import {
 	ComingSoonTooltip,

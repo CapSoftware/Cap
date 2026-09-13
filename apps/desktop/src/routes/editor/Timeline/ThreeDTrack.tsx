@@ -13,7 +13,6 @@ import {
 } from "solid-js";
 import { produce } from "solid-js/store";
 import { useEditorContext } from "../context";
-import { ShotCountPills } from "../ThreeDPanel";
 import {
 	camera3DShotLabel,
 	DEFAULT_CAMERA3D_SHOT_DURATION,
@@ -22,6 +21,7 @@ import {
 	maxAutoCamera3DShots,
 	placeCamera3DShot,
 } from "../three-d";
+import { ShotCountPills } from "../three-d-panel";
 import { useTimelineContext, useTrackContext } from "./context";
 import {
 	SegmentContent,
