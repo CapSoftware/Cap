@@ -368,6 +368,7 @@ impl RecordingsTab {
 struct RecordingRow {
     item: RecordingItem,
     thumbnail: Option<Arc<RenderImage>>,
+    thumbnail_stale: bool,
 }
 
 /// Everything the page owns. The Solid route keeps this in a `createQuery` plus
@@ -923,6 +924,7 @@ impl SettingsWindow {
                         if let Some(old) = row.thumbnail.replace(image) {
                             let _ = window.drop_image(old);
                         }
+                        row.thumbnail_stale = false;
                         cx.notify();
                         // An unfocused window only repaints when asked.
                         window.refresh();
@@ -948,22 +950,19 @@ impl SettingsWindow {
     /// (found on the first fixture run). A row that has gone away releases its
     /// image from the sprite atlas, the same explicit drop `set_recents` does.
     ///
-    /// A bundle's `display.jpg` is written once, when the recording finishes,
-    /// so keying the cache on the bundle path cannot serve a stale image: the
-    /// row that gains a thumbnail mid-poll has none cached and decodes.
     fn set_recordings(
         &mut self,
         items: Vec<RecordingItem>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<(usize, PathBuf)> {
-        let mut cached: std::collections::HashMap<PathBuf, Arc<RenderImage>> = self
+        let mut cached: std::collections::HashMap<_, _> = self
             .recordings
             .items
             .take()
             .into_iter()
             .flatten()
-            .filter_map(|row| row.thumbnail.map(|image| (row.item.path, image)))
+            .map(|row| (row.item.path.clone(), row))
             .collect();
 
         let mut pending = Vec::new();
@@ -971,18 +970,29 @@ impl SettingsWindow {
             .into_iter()
             .enumerate()
             .map(|(index, item)| {
-                let thumbnail = cached.remove(&item.path);
-                if thumbnail.is_none()
-                    && let Some(path) = item.thumbnail.clone()
-                {
+                let previous = cached.remove(&item.path);
+                let changed = previous.as_ref().is_none_or(|row| {
+                    row.item.thumbnail != item.thumbnail
+                        || row.item.thumbnail_version != item.thumbnail_version
+                        || row.thumbnail_stale
+                        || row.thumbnail.is_none()
+                });
+                let thumbnail = previous.and_then(|row| row.thumbnail);
+                if changed && let Some(path) = item.thumbnail.clone() {
                     pending.push((index, path));
                 }
-                RecordingRow { item, thumbnail }
+                RecordingRow {
+                    item,
+                    thumbnail,
+                    thumbnail_stale: changed,
+                }
             })
             .collect();
 
-        for (_, image) in cached {
-            let _ = window.drop_image(image);
+        for (_, row) in cached {
+            if let Some(image) = row.thumbnail {
+                let _ = window.drop_image(image);
+            }
         }
 
         self.recordings.items = Some(rows);
@@ -4615,6 +4625,7 @@ mod tests {
 
     fn recording(name: &str, mode: RecordingMode) -> RecordingItem {
         RecordingItem {
+            thumbnail_version: None,
             path: std::path::PathBuf::from(format!("/tmp/{name}.cap")),
             mode,
             status: crate::library::RecordingStatus::Complete,

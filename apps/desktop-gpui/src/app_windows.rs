@@ -5681,7 +5681,19 @@ pub fn editor_closed(project_path: &Path, window_id: gpui::WindowId, cx: &mut Ap
         .ok()
         .flatten();
     if let Some(instance) = instance {
-        gpui_tokio::Tokio::spawn(cx, async move { instance.dispose().await }).detach();
+        let refresh =
+            gpui_tokio::Tokio::spawn(cx, async move { instance.dispose_with_thumbnail().await });
+        cx.spawn(async move |cx| {
+            if refresh.await.unwrap_or(false) {
+                cx.update(|cx| {
+                    refresh_library_after_delete(cx);
+                    let main = cx.global::<AppWindows>().main;
+                    main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
+                        .ok();
+                });
+            }
+        })
+        .detach();
     }
 
     restore_after_editor_close(&key, cx);
