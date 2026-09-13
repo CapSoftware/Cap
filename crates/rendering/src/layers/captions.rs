@@ -734,9 +734,13 @@ impl CaptionsLayer {
         let mut layout_width: f32 = 0.0;
         let mut layout_height: f32 = 0.0;
         let mut highlight_extent: Option<(f32, f32, f32, f32)> = None;
+        let mut min_glyph_x = f32::INFINITY;
         for run in LayoutRunIter::new(&updated_buffer) {
             layout_width = layout_width.max(run.line_w);
             layout_height = layout_height.max(run.line_top + run.line_height);
+            for glyph in run.glyphs.iter() {
+                min_glyph_x = min_glyph_x.min(glyph.x);
+            }
 
             if let Some((word_start, word_end)) = active_word_byte_range {
                 for glyph in run.glyphs.iter() {
@@ -766,6 +770,7 @@ impl CaptionsLayer {
                 }
             }
         }
+        let glyph_offset_x = normalize_glyph_offset(min_glyph_x);
 
         if layout_height == 0.0 {
             layout_height = font_size * 1.2;
@@ -834,13 +839,14 @@ impl CaptionsLayer {
         let draw_text_width = text_width * anim_scale;
         let draw_text_height = text_height * anim_scale;
 
-        let text_left = draw_box_left + padding * anim_scale;
+        let content_left = draw_box_left + padding * anim_scale;
+        let text_left = draw_box_left + padding * anim_scale - glyph_offset_x * render_scale;
         let text_top = draw_box_top + padding * anim_scale;
 
         let bounds = TextBounds {
-            left: (text_left - 2.0).floor() as i32,
+            left: (content_left - 2.0).floor() as i32,
             top: (text_top - 2.0).floor() as i32,
-            right: (text_left + draw_text_width + 2.0).ceil() as i32,
+            right: (content_left + draw_text_width + 2.0).ceil() as i32,
             bottom: (text_top + draw_text_height + 2.0).ceil() as i32,
         };
 
@@ -1164,11 +1170,19 @@ fn calculate_caption_bounce(current_time: f64, start: f64, end: f64, fade_durati
     }
 }
 
+pub(crate) fn normalize_glyph_offset(min_glyph_x: f32) -> f32 {
+    if min_glyph_x.is_finite() && min_glyph_x > 0.0 {
+        min_glyph_x
+    } else {
+        0.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         caption_segment_effective_end, find_active_caption_segment, find_active_word_index,
-        word_byte_range,
+        normalize_glyph_offset, word_byte_range,
     };
     use cap_project::{CaptionTrackSegment, CaptionWord};
 
@@ -1258,5 +1272,49 @@ mod tests {
         }
         assert_eq!(word_byte_range(text, &words, 3, false), None);
         assert_eq!(word_byte_range("missing", &words, 0, false), None);
+    }
+
+    #[test]
+    fn rtl_text_glyph_offset_normalization() {
+        use glyphon::TextBounds;
+
+        assert_eq!(normalize_glyph_offset(f32::INFINITY), 0.0);
+        assert_eq!(normalize_glyph_offset(f32::NEG_INFINITY), 0.0);
+        assert_eq!(normalize_glyph_offset(f32::NAN), 0.0);
+        assert_eq!(normalize_glyph_offset(-10.0), 0.0);
+        assert_eq!(normalize_glyph_offset(0.0), 0.0);
+        assert_eq!(normalize_glyph_offset(450.0), 450.0);
+
+        let draw_box_left = 200.0;
+        let padding = 16.0;
+        let anim_scale = 1.0;
+        let render_scale = 1.0;
+        let draw_text_width = 300.0;
+        let draw_text_height = 40.0;
+
+        let min_glyph_x = 500.0;
+        let glyph_offset_x = normalize_glyph_offset(min_glyph_x);
+
+        let content_left = draw_box_left + padding * anim_scale;
+        let text_left = draw_box_left + padding * anim_scale - glyph_offset_x * render_scale;
+        let text_top = 100.0;
+
+        let bounds = TextBounds {
+            left: (content_left - 2.0).floor() as i32,
+            top: (text_top - 2.0).floor() as i32,
+            right: (content_left + draw_text_width + 2.0).ceil() as i32,
+            bottom: (text_top + draw_text_height + 2.0).ceil() as i32,
+        };
+
+        // Rendered glyphs start flush at the interior left padding
+        let first_glyph_screen_x = text_left + min_glyph_x * render_scale;
+        assert_eq!(first_glyph_screen_x, content_left);
+        assert!(first_glyph_screen_x >= bounds.left as f32);
+        assert!(first_glyph_screen_x <= bounds.right as f32);
+
+        // Rendered glyphs end within bounds
+        let last_glyph_screen_x = text_left + (min_glyph_x + draw_text_width) * render_scale;
+        assert_eq!(last_glyph_screen_x, content_left + draw_text_width);
+        assert!(last_glyph_screen_x <= bounds.right as f32);
     }
 }
