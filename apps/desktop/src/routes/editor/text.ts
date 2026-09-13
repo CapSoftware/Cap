@@ -14,8 +14,18 @@ export type TextAnimation =
 	| "fade"
 	| "slideUp"
 	| "slideDown"
+	| "slideLeft"
+	| "slideRight"
 	| "pop"
+	| "zoom"
+	| "bounce"
+	| "wipe"
+	| "words"
+	| "letters"
+	| "tracking"
 	| "typewriter";
+
+export type TextBackgroundStyle = "box" | "pill" | "highlight";
 
 export type TextLayout = "overlay" | "fullscreen" | "splitLeft" | "splitRight";
 
@@ -34,6 +44,11 @@ export type TextSegment = {
 	uppercase: boolean;
 	color: string;
 	backgroundColor?: string | null;
+	backgroundStyle: TextBackgroundStyle;
+	gradientColor?: string | null;
+	strokeWidth: number;
+	strokeColor: string;
+	glow: number;
 	fadeDuration: number;
 	align: TextAlign;
 	letterSpacing: number;
@@ -124,6 +139,11 @@ export const defaultTextSegment = (
 	uppercase: false,
 	color: "#ffffff",
 	backgroundColor: undefined,
+	backgroundStyle: "box",
+	gradientColor: undefined,
+	strokeWidth: 0,
+	strokeColor: "#000000",
+	glow: 0,
 	fadeDuration: 0.15,
 	align: "center",
 	letterSpacing: 0,
