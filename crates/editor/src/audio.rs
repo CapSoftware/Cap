@@ -360,6 +360,7 @@ impl AudioRenderer {
                                 count,
                                 output,
                             )?;
+                            apply_clip_volume(output, source.segment);
                         }
                     }
                     TimelineFrameMapping::Hold { .. } => {}
@@ -383,6 +384,7 @@ impl AudioRenderer {
                                 count,
                                 outgoing_buffer,
                             )?;
+                            apply_clip_volume(outgoing_buffer, outgoing.segment);
                         }
                         if incoming.segment.speed_audio_mode != Some(ClipSpeedAudioMode::Mute) {
                             sources.render(
@@ -392,6 +394,7 @@ impl AudioRenderer {
                                 count,
                                 incoming_buffer,
                             )?;
+                            apply_clip_volume(incoming_buffer, incoming.segment);
                         }
                         mix_transition_audio_at(
                             outgoing_buffer,
@@ -683,15 +686,20 @@ impl AudioRenderer {
         out_offset: usize,
         out: &mut [f32],
     ) -> usize {
-        if source.segment.timescale == 1.0 {
+        let rendered = if source.segment.timescale == 1.0 {
             if source.segment.speed_audio_mode == Some(ClipSpeedAudioMode::Mute) {
                 return 0;
             }
             let cursor = source_cursor(source, self.playhead_to_samples(source.source_time));
-            return self.render_chunk_at_cursor(project, cursor, samples, out_offset, out);
-        }
-
-        self.render_speed_audio_chunk(project, source, samples, out_offset, out)
+            self.render_chunk_at_cursor(project, cursor, samples, out_offset, out)
+        } else {
+            self.render_speed_audio_chunk(project, source, samples, out_offset, out)
+        };
+        apply_clip_volume(
+            &mut out[out_offset..out_offset + rendered * 2],
+            source.segment,
+        );
+        rendered
     }
 
     fn render_speed_audio_chunk(
@@ -821,6 +829,15 @@ impl AudioRenderer {
             out,
             &mut self.voice_enhancement,
         )
+    }
+}
+
+fn apply_clip_volume(samples: &mut [f32], segment: &cap_project::TimelineSegment) {
+    let volume = segment.volume() as f32;
+    if volume != 1.0 {
+        for sample in samples {
+            *sample *= volume;
+        }
     }
 }
 
@@ -2878,6 +2895,110 @@ mod tests {
         renderer.set_playhead(1.5, &project);
         let (_, samples) = renderer.render_frame_raw(1024, &project).unwrap();
         assert!((samples[0] - expected(8000)).abs() < 0.001);
+    }
+
+    #[test]
+    fn clip_volume_is_local_across_boundaries_playback_and_export() {
+        let (_dir, mut renderer, mut project) = single_clip_fixture(
+            &[4000, 8000, 12000],
+            vec![
+                segment(0, 0.0, 1.0, 1.0),
+                segment(0, 1.0, 2.0, 1.0),
+                segment(0, 2.0, 3.0, 1.0),
+            ],
+        );
+        for volume in [0.0, 0.5, 2.0] {
+            project.timeline.as_mut().unwrap().segments[1].volume = Some(volume);
+            renderer.set_playhead(0.0, &project);
+            let exported = render_export_audio(&mut renderer, &project, 30, 90);
+            for (second, value) in [
+                expected(4000),
+                expected(8000) * volume as f32,
+                expected(12000),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                assert!((left_at_second(&exported, second) - value).abs() < 0.001);
+            }
+            renderer.set_playhead(0.99, &project);
+            let (_, boundary) = renderer.render_frame_raw(1920, &project).unwrap();
+            assert!((boundary[0] - expected(4000)).abs() < 0.001);
+            assert!((boundary[boundary.len() - 1] - expected(8000) * volume as f32).abs() < 0.001);
+
+            for duration in [3.0, 3600.0] {
+                let mut playback = PrerenderedAudioBuffer::<f32>::new(
+                    renderer.data.clone(),
+                    MusicTracks::new(),
+                    &project,
+                    AudioRenderer::info(),
+                    duration,
+                    0.0,
+                );
+                playback.wait_until_fully_rendered();
+                let mut played = vec![0.0; exported.len()];
+                for block in played.chunks_mut(1024) {
+                    assert!(playback.wait_until_ready(std::time::Duration::from_secs(5)));
+                    playback.fill(block);
+                }
+                assert!(
+                    played
+                        .iter()
+                        .zip(&exported)
+                        .all(|(a, b)| (a - b).abs() < 0.000_001)
+                );
+                playback.set_playhead(1.5);
+                let mut seek = [0.0; 1024];
+                assert!(playback.wait_until_ready(std::time::Duration::from_secs(5)));
+                playback.fill(&mut seek);
+                assert!((seek[0] - expected(8000) * volume as f32).abs() < 0.001);
+            }
+        }
+    }
+
+    #[test]
+    fn clip_volume_scales_retimed_audio_without_changing_pitch_processing() {
+        for mode in [
+            ClipSpeedAudioMode::MaintainPitch,
+            ClipSpeedAudioMode::MatchSpeed,
+        ] {
+            let (_dir, mut renderer, mut project) = build_renderer_fixture();
+            let segment = &mut project.timeline.as_mut().unwrap().segments[0];
+            segment.timescale = 2.0;
+            segment.speed_audio_mode = Some(mode);
+            renderer.set_playhead(0.0, &project);
+            let (_, original) = renderer.render_frame_raw(4800, &project).unwrap();
+            assert!(mean_abs(&original) > 0.01);
+            project.timeline.as_mut().unwrap().segments[0].volume = Some(0.5);
+            renderer.set_playhead(0.0, &project);
+            let (_, quieter) = renderer.render_frame_raw(4800, &project).unwrap();
+            assert!(
+                original
+                    .iter()
+                    .zip(quieter)
+                    .all(|(a, b)| (a * 0.5 - b).abs() < 0.000_001)
+            );
+        }
+    }
+
+    #[test]
+    fn clip_volume_does_not_scale_timeline_music() {
+        let (dir, mut renderer, mut project) =
+            single_clip_fixture(&[4000], vec![segment(0, 0.0, 1.0, 1.0)]);
+        let music_path = dir.path().join("music.wav");
+        write_step_wav(&music_path, &[8000]);
+        renderer.music.insert(
+            "music.wav".into(),
+            Arc::new(AudioData::from_file(&music_path).unwrap()),
+        );
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline
+            .audio_segments
+            .push(music_track_segment("music.wav", 0.0, 1.0, 0.0, 0.0));
+        timeline.segments[0].volume = Some(0.5);
+        renderer.set_playhead(0.0, &project);
+        let (_, samples) = renderer.render_frame_raw(4800, &project).unwrap();
+        assert!((samples[0] - expected(4000) * 0.5 - expected(8000)).abs() < 0.001);
     }
 
     #[test]
