@@ -7,7 +7,7 @@ use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{
     AudioConfiguration, ClipOffsets, ClipSpeedAudioMode, ClipTransitionType, ProjectConfiguration,
-    TimelineConfiguration, TimelineFrameMapping, TimelineSource,
+    TimelineConfiguration, TimelineFrameMapping, TimelineSource, VoiceIsolation,
 };
 use ffmpeg::{
     ChannelLayout, Dictionary, filter, format as avformat, frame::Audio as FFAudio,
@@ -144,6 +144,7 @@ struct SpeedAudioProcessorKey {
     segment_end_samples: usize,
     mic_volume_bits: u32,
     improve_microphone: bool,
+    isolation: VoiceIsolation,
     system_volume_bits: u32,
     mic_stereo_mode: u8,
     mic_offset_bits: u32,
@@ -741,6 +742,7 @@ impl AudioRenderer {
             segment_end_samples: self.playhead_to_samples(source.segment.end),
             mic_volume_bits: project.audio.mic_volume_db.to_bits(),
             improve_microphone: project.audio.improve,
+            isolation: project.audio.isolation,
             system_volume_bits: project.audio.system_volume_db.to_bits(),
             mic_stereo_mode: project_stereo_mode_key(&project.audio.mic_stereo_mode),
             mic_offset_bits: offsets.mic.to_bits(),
@@ -938,6 +940,7 @@ fn render_audio_data_chunk(
                     data.data,
                     start,
                     end.saturating_sub(start),
+                    project.audio.isolation,
                 ))
             })
             .collect::<Vec<_>>();
@@ -971,7 +974,7 @@ fn render_audio_data_chunk(
 
 #[derive(Default)]
 struct VoiceEnhancementCache {
-    slots: Vec<((usize, usize), VoiceEnhancer)>,
+    slots: Vec<((usize, usize, VoiceIsolation), VoiceEnhancer)>,
 }
 
 impl VoiceEnhancementCache {
@@ -981,7 +984,9 @@ impl VoiceEnhancementCache {
         source: &DecodedAudio,
         start: usize,
         count: usize,
+        isolation: VoiceIsolation,
     ) -> VoiceAudio {
+        let key = (key.0, key.1, isolation);
         let index = self
             .slots
             .iter()
@@ -989,7 +994,14 @@ impl VoiceEnhancementCache {
         let slot = if let Some(index) = index {
             self.slots.remove(index)
         } else {
-            (key, VoiceEnhancer::new(source.channels()))
+            (
+                key,
+                VoiceEnhancer::with_settings(
+                    source.channels(),
+                    isolation.strength(),
+                    source.voice_profile(),
+                ),
+            )
         };
         if self.slots.len() == 4 {
             self.slots.remove(0);
