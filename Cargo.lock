@@ -1348,6 +1348,7 @@ dependencies = [
  "libloading 0.9.0",
  "ndarray 0.16.1",
  "ort",
+ "tokio",
  "tracing",
  "wgpu",
 ]

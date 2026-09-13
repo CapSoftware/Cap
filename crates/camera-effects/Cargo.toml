@@ -13,6 +13,9 @@ tracing.workspace = true
 bytemuck = { version = "1.7", features = ["derive"] }
 ndarray = "0.16"
 
+[dev-dependencies]
+tokio.workspace = true
+
 [target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
 libloading = "0.9"
 
