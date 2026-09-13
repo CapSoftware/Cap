@@ -425,8 +425,8 @@ mod cursor_only_tests {
 
     #[test]
     fn cursor_only_preserves_style_geometry_without_image_or_background_pixels() {
-        let mut project = ProjectConfiguration::default();
-        project.timeline = Some(serde_json::from_value(serde_json::json!({
+        let project = ProjectConfiguration {
+            timeline: Some(serde_json::from_value(serde_json::json!({
             "segments": [], "zoomSegments": [],
             "imageSegments": [{ "start": 1.0, "end": 2.0, "path": "content/images/example.png" }],
             "styleSegments": [{ "start": 1.0, "end": 2.0, "overrides": {
@@ -435,7 +435,9 @@ mod cursor_only_tests {
                     "padding": 15.0
                 }
             } }]
-        })).expect("timed configuration"));
+            })).expect("timed configuration")),
+            ..Default::default()
+        };
         let cursor_only = make_cursor_only_project(project);
         let timeline = cursor_only.timeline.as_ref().expect("timeline");
         assert!(timeline.image_segments.is_empty());
