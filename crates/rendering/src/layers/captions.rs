@@ -1306,15 +1306,45 @@ mod tests {
             bottom: (text_top + draw_text_height + 2.0).ceil() as i32,
         };
 
-        // Rendered glyphs start flush at the interior left padding
         let first_glyph_screen_x = text_left + min_glyph_x * render_scale;
         assert_eq!(first_glyph_screen_x, content_left);
         assert!(first_glyph_screen_x >= bounds.left as f32);
         assert!(first_glyph_screen_x <= bounds.right as f32);
 
-        // Rendered glyphs end within bounds
         let last_glyph_screen_x = text_left + (min_glyph_x + draw_text_width) * render_scale;
         assert_eq!(last_glyph_screen_x, content_left + draw_text_width);
         assert!(last_glyph_screen_x <= bounds.right as f32);
+    }
+
+    #[test]
+    fn rtl_text_shaping_glyph_offset() {
+        use glyphon::{Attrs, Buffer, FontSystem, Metrics, Shaping};
+        use glyphon::cosmic_text::LayoutRunIter;
+
+        let mut font_system = FontSystem::new();
+        let mut buffer = Buffer::new(&mut font_system, Metrics::new(24.0, 30.0));
+        buffer.set_size(&mut font_system, Some(1000.0), None);
+        buffer.set_text(
+            &mut font_system,
+            "سلام دنیا این یک متن آزمایشی است",
+            &Attrs::new(),
+            Shaping::Advanced,
+        );
+        buffer.shape_until_scroll(&mut font_system, false);
+
+        let mut min_glyph_x = f32::INFINITY;
+        let mut has_glyphs = false;
+        for run in LayoutRunIter::new(&buffer) {
+            for glyph in run.glyphs.iter() {
+                has_glyphs = true;
+                min_glyph_x = min_glyph_x.min(glyph.x);
+            }
+        }
+
+        if has_glyphs {
+            let offset = normalize_glyph_offset(min_glyph_x);
+            assert!(offset >= 0.0);
+            assert!(offset.is_finite());
+        }
     }
 }
