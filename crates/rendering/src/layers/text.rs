@@ -1,5 +1,7 @@
+use std::ops::Range;
+
 use bytemuck::{Pod, Zeroable};
-use cap_project::TextAlign;
+use cap_project::{TextAlign, TextBackgroundStyle};
 use glyphon::cosmic_text::Align;
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style,
@@ -8,7 +10,7 @@ use glyphon::{
 use log::warn;
 use wgpu::{Device, Queue, include_wgsl, util::DeviceExt};
 
-use crate::text::PreparedText;
+use crate::text::{PreparedText, StaggerEdge, stagger_alpha};
 
 pub struct TextLayer {
     font_system: FontSystem,
@@ -17,11 +19,10 @@ pub struct TextLayer {
     text_renderer: TextRenderer,
     viewport: Viewport,
     buffers: Vec<Buffer>,
-    tracks: Vec<u32>,
+    draws: Vec<TextDraw>,
     segment_renderers: Vec<TextRenderer>,
     background: Option<TextBackgroundResources>,
     segmented_render: bool,
-    segment_backgrounds: Vec<bool>,
 }
 
 #[repr(C)]
@@ -146,36 +147,40 @@ impl TextBackgroundResources {
     }
 }
 
-struct AreaSpec {
+/// One `TextArea` per entry of `offsets`, all sharing `buffer` and tinted
+/// `color` unless the buffer carries its own per-glyph colours.
+struct Pass {
+    buffer: usize,
+    color: Color,
+    offsets: Vec<[f32; 2]>,
+}
+
+struct TextDraw {
+    track: u32,
     bounds: TextBounds,
     left: f32,
     top: f32,
     scale: f32,
-    color: Color,
-    shadow: Option<(f32, f32, Color)>,
-    background: Option<TextBackgroundUniforms>,
+    /// Draw order: shadow, glow, outline, then the text itself.
+    passes: Vec<Pass>,
+    background: Range<usize>,
 }
 
-fn text_areas<'a>(buffer: &'a Buffer, spec: &AreaSpec) -> impl Iterator<Item = TextArea<'a>> {
-    let shadow_area = spec.shadow.map(|(dx, dy, shadow_color)| TextArea {
-        buffer,
-        left: spec.left + dx,
-        top: spec.top + dy,
-        scale: spec.scale,
-        bounds: shift_bounds(spec.bounds, dx, dy),
-        default_color: shadow_color,
-        custom_glyphs: &[],
-    });
-    let main_area = TextArea {
-        buffer,
-        left: spec.left,
-        top: spec.top,
-        scale: spec.scale,
-        bounds: spec.bounds,
-        default_color: spec.color,
-        custom_glyphs: &[],
-    };
-    shadow_area.into_iter().chain(std::iter::once(main_area))
+fn text_areas<'a>(
+    buffers: &'a [Buffer],
+    draw: &'a TextDraw,
+) -> impl Iterator<Item = TextArea<'a>> + 'a {
+    draw.passes.iter().flat_map(move |pass| {
+        pass.offsets.iter().map(move |[dx, dy]| TextArea {
+            buffer: &buffers[pass.buffer],
+            left: draw.left + dx,
+            top: draw.top + dy,
+            scale: draw.scale,
+            bounds: shift_bounds(draw.bounds, *dx, *dy),
+            default_color: pass.color,
+            custom_glyphs: &[],
+        })
+    })
 }
 
 fn shift_bounds(bounds: TextBounds, dx: f32, dy: f32) -> TextBounds {
@@ -185,6 +190,162 @@ fn shift_bounds(bounds: TextBounds, dx: f32, dy: f32) -> TextBounds {
         right: bounds.right + dx.ceil() as i32,
         bottom: bounds.bottom + dy.ceil() as i32,
     }
+}
+
+fn to_color(rgb: [f32; 4], alpha: f32) -> Color {
+    Color::rgba(
+        (rgb[0].clamp(0.0, 1.0) * 255.0) as u8,
+        (rgb[1].clamp(0.0, 1.0) * 255.0) as u8,
+        (rgb[2].clamp(0.0, 1.0) * 255.0) as u8,
+        (alpha.clamp(0.0, 1.0) * 255.0) as u8,
+    )
+}
+
+/// Eight compass directions at `radius`, the diagonals pulled in so every
+/// copy sits on the same circle.
+fn ring(radius: f32) -> impl Iterator<Item = [f32; 2]> {
+    let diagonal = radius * std::f32::consts::FRAC_1_SQRT_2;
+    [
+        [radius, 0.0],
+        [-radius, 0.0],
+        [0.0, radius],
+        [0.0, -radius],
+        [diagonal, diagonal],
+        [-diagonal, diagonal],
+        [diagonal, -diagonal],
+        [-diagonal, -diagonal],
+    ]
+    .into_iter()
+}
+
+/// Concentric rings out to `radius`, dense enough that the copies overlap
+/// into a solid outline.
+fn stroke_offsets(radius: f32) -> Vec<[f32; 2]> {
+    let rings = ((radius / 2.5).ceil() as usize).clamp(1, 5);
+    (1..=rings)
+        .flat_map(|step| ring(radius * step as f32 / rings as f32))
+        .collect()
+}
+
+/// Radius (em) and alpha of each halo ring, outermost faintest.
+const GLOW_RINGS: [(f32, f32); 3] = [(0.04, 0.16), (0.09, 0.10), (0.16, 0.06)];
+
+/// Which reveal unit each byte of `content` belongs to, and how many units
+/// there are. Whitespace rides with the unit before it.
+fn unit_map(content: &str, by_word: bool) -> (Vec<usize>, usize) {
+    let mut map = vec![0; content.len()];
+    let mut units = 0usize;
+    let mut in_word = false;
+    for (index, ch) in content.char_indices() {
+        if ch.is_whitespace() {
+            in_word = false;
+        } else if !by_word || !in_word {
+            units += 1;
+            in_word = true;
+        }
+        let unit = units.saturating_sub(1);
+        for byte in map.iter_mut().take(index + ch.len_utf8()).skip(index) {
+            *byte = unit;
+        }
+    }
+    (map, units)
+}
+
+fn stagger_alpha_by_byte(content: &str, edge: Option<StaggerEdge>, out: &mut [f32]) {
+    let Some(edge) = edge else {
+        return;
+    };
+    if edge.progress >= 1.0 {
+        return;
+    }
+    let (map, units) = unit_map(content, edge.by_word);
+    for (alpha, unit) in out.iter_mut().zip(map) {
+        *alpha *= stagger_alpha(edge, unit, units);
+    }
+}
+
+/// Byte offset of every original line's start, matching cosmic-text's own
+/// line split so a glyph's in-line byte range maps back into `content`.
+fn line_starts(content: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    for (index, ch) in content.char_indices() {
+        if ch == '\n' {
+            starts.push(index + 1);
+        }
+    }
+    starts
+}
+
+fn lerp_rgb(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    let t = t.clamp(0.0, 1.0);
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3],
+    ]
+}
+
+/// Per-byte text colour for a horizontal gradient: each laid-out line runs
+/// `from` at its left ink edge to `to` at its right.
+fn gradient_by_byte(buffer: &Buffer, content: &str, from: [f32; 4], to: [f32; 4]) -> Vec<[f32; 4]> {
+    let mut colors = vec![from; content.len()];
+    let starts = line_starts(content);
+    for run in buffer.layout_runs() {
+        let Some(base) = starts.get(run.line_i).copied() else {
+            continue;
+        };
+        let (min_x, max_x) = run
+            .glyphs
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), glyph| {
+                (lo.min(glyph.x), hi.max(glyph.x + glyph.w))
+            });
+        let span = (max_x - min_x).max(1.0);
+        for glyph in run.glyphs {
+            let t = (glyph.x + glyph.w * 0.5 - min_x) / span;
+            let color = lerp_rgb(from, to, t);
+            for byte in colors
+                .iter_mut()
+                .take((base + glyph.end).min(content.len()))
+                .skip(base + glyph.start)
+            {
+                *byte = color;
+            }
+        }
+    }
+    colors
+}
+
+/// Coalesces per-byte colours into the fewest rich-text spans that rebuild
+/// `content` exactly, which is what `set_rich_text` needs.
+fn rich_spans(content: &str, colors: &[Color]) -> Vec<(Range<usize>, Color)> {
+    let mut spans: Vec<(Range<usize>, Color)> = Vec::new();
+    for (index, _) in content.char_indices() {
+        let color = colors[index];
+        match spans.last_mut() {
+            Some((range, last)) if *last == color => range.end = index,
+            _ => spans.push((index..index, color)),
+        }
+    }
+    let mut end = content.len();
+    for (range, _) in spans.iter_mut().rev() {
+        range.end = end;
+        end = range.start;
+    }
+    spans
+}
+
+/// The ink extent of one laid-out line: `(left, right)` from the leftmost
+/// glyph edge to the rightmost, in unscaled buffer space, or `None` for an
+/// empty line.
+fn run_ink(run: &glyphon::LayoutRun<'_>) -> Option<(f32, f32)> {
+    run.glyphs
+        .iter()
+        .fold(None, |extent: Option<(f32, f32)>, glyph| {
+            let (lo, hi) = extent.unwrap_or((f32::MAX, f32::MIN));
+            Some((lo.min(glyph.x), hi.max(glyph.x + glyph.w)))
+        })
 }
 
 impl TextLayer {
@@ -210,11 +371,10 @@ impl TextLayer {
             text_renderer,
             viewport,
             buffers: Vec::new(),
-            tracks: Vec::new(),
+            draws: Vec::new(),
             segment_renderers: Vec::new(),
             background: None,
             segmented_render: false,
-            segment_backgrounds: Vec::new(),
         }
     }
 
@@ -238,6 +398,47 @@ impl TextLayer {
         self.prepare_with_mode(device, queue, output_size, texts, true);
     }
 
+    fn shape(
+        &mut self,
+        content: &str,
+        attrs: &Attrs<'_>,
+        align: Align,
+        metrics: Metrics,
+        wrap_width: f32,
+        colors: Option<&[Color]>,
+    ) -> usize {
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        // The box only constrains wrapping; height is unbounded so every
+        // line is laid out even when the configured box is a little
+        // shorter than the shaped text (e.g. font metric differences
+        // between the editor's measurement and cosmic-text).
+        buffer.set_size(&mut self.font_system, Some(wrap_width), None);
+        buffer.set_wrap(&mut self.font_system, glyphon::Wrap::Word);
+        match colors {
+            Some(colors) => {
+                let spans = rich_spans(content, colors);
+                buffer.set_rich_text(
+                    &mut self.font_system,
+                    spans.iter().map(|(range, color)| {
+                        (&content[range.clone()], attrs.clone().color(*color))
+                    }),
+                    attrs,
+                    Shaping::Advanced,
+                    Some(align),
+                );
+            }
+            None => {
+                buffer.set_text(&mut self.font_system, content, attrs, Shaping::Advanced);
+                for line in buffer.lines.iter_mut() {
+                    line.set_align(Some(align));
+                }
+            }
+        }
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        self.buffers.push(buffer);
+        self.buffers.len() - 1
+    }
+
     fn prepare_with_mode(
         &mut self,
         device: &Device,
@@ -247,19 +448,12 @@ impl TextLayer {
         force_segmented: bool,
     ) {
         self.buffers.clear();
-        self.tracks.clear();
-        self.buffers.reserve(texts.len());
-        self.tracks.reserve(texts.len());
-        let mut specs = Vec::with_capacity(texts.len());
+        self.draws.clear();
+        let mut backgrounds: Vec<TextBackgroundUniforms> = Vec::new();
+        let output_px = [output_size.0.max(1) as f32, output_size.1.max(1) as f32];
 
         for text in texts {
             let alpha = text.color[3].clamp(0.0, 1.0) * text.opacity.clamp(0.0, 1.0);
-            let color = Color::rgba(
-                (text.color[0].clamp(0.0, 1.0) * 255.0) as u8,
-                (text.color[1].clamp(0.0, 1.0) * 255.0) as u8,
-                (text.color[2].clamp(0.0, 1.0) * 255.0) as u8,
-                (alpha * 255.0) as u8,
-            );
 
             let width = (text.bounds[2] - text.bounds[0]).max(1.0);
             let height = (text.bounds[3] - text.bounds[1]).max(1.0);
@@ -271,7 +465,7 @@ impl TextLayer {
             // split for centered text, after for left, before for right.
             // Boxes already spanning the frame keep their exact width — there
             // the editor genuinely wrapped too.
-            let output_width = (output_size.0 as f32).max(1.0);
+            let output_width = output_px[0];
             let wrap_width = if width < output_width * 0.98 {
                 (width * 1.05 + 4.0).min(output_width.max(width))
             } else {
@@ -284,14 +478,6 @@ impl TextLayer {
             };
 
             let metrics = Metrics::new(text.font_size, text.font_size * text.line_height);
-            let mut buffer = Buffer::new(&mut self.font_system, metrics);
-            // The box only constrains wrapping; height is unbounded so every
-            // line is laid out even when the configured box is a little
-            // shorter than the shaped text (e.g. font metric differences
-            // between the editor's measurement and cosmic-text).
-            buffer.set_size(&mut self.font_system, Some(wrap_width), None);
-            buffer.set_wrap(&mut self.font_system, glyphon::Wrap::Word);
-
             let family = match text.font_family.trim() {
                 "" => Family::SansSerif,
                 name => match name.to_ascii_lowercase().as_str() {
@@ -304,8 +490,9 @@ impl TextLayer {
                 },
             };
             let weight = Weight(text.font_weight.round().clamp(100.0, 900.0) as u16);
-            // Glyph color comes from each area's default_color (not Attrs) so
-            // the shadow pass can re-tint the same shaped buffer.
+            // Glyph colour comes from each area's default_color (or, for a
+            // gradient / staggered reveal, from per-span attrs) so the
+            // shadow, glow and outline passes can re-tint the same layout.
             let mut attrs = Attrs::new()
                 .family(family)
                 .weight(weight)
@@ -320,26 +507,65 @@ impl TextLayer {
                 // the attr is in em — convert from our px value.
                 attrs = attrs.letter_spacing(text.letter_spacing / text.font_size.max(1.0));
             }
-
-            buffer.set_text(
-                &mut self.font_system,
-                &text.content,
-                &attrs,
-                Shaping::Advanced,
-            );
-
             let align = match text.align {
                 TextAlign::Left => Align::Left,
                 TextAlign::Center => Align::Center,
                 TextAlign::Right => Align::Right,
             };
-            for line in buffer.lines.iter_mut() {
-                line.set_align(Some(align));
+
+            let content = text.content.as_str();
+            let plain = self.shape(content, &attrs, align, metrics, wrap_width, None);
+            let laid_out_height =
+                self.buffers[plain].layout_runs().count() as f32 * metrics.line_height;
+            // The glyphs' own horizontal extent across every line, so a
+            // background hugs the text rather than the authored box and a
+            // wipe reveals the ink proportionally whatever the alignment.
+            let ink = self.buffers[plain]
+                .layout_runs()
+                .filter_map(|run| run_ink(&run))
+                .fold(None, |extent: Option<(f32, f32)>, (lo, hi)| {
+                    let (min, max) = extent.unwrap_or((lo, hi));
+                    Some((min.min(lo), max.max(hi)))
+                });
+
+            let staggered = text.stagger_in.is_some_and(|edge| edge.progress < 1.0)
+                || text.stagger_out.is_some_and(|edge| edge.progress < 1.0);
+            let mut unit_alpha = vec![1.0f32; content.len()];
+            if staggered {
+                stagger_alpha_by_byte(content, text.stagger_in, &mut unit_alpha);
+                stagger_alpha_by_byte(content, text.stagger_out, &mut unit_alpha);
             }
+            let gradient = text
+                .gradient_color
+                .map(|to| gradient_by_byte(&self.buffers[plain], content, text.color, to));
 
-            buffer.shape_until_scroll(&mut self.font_system, false);
-
-            let laid_out_height = buffer.layout_runs().count() as f32 * metrics.line_height;
+            // A pass whose colour varies per glyph needs its own buffer; a
+            // flat pass re-tints the plain layout through default_color.
+            let pass = |this: &mut Self,
+                        rgb: [f32; 4],
+                        pass_alpha: f32,
+                        offsets: Vec<[f32; 2]>,
+                        is_main: bool| {
+                let gradient = if is_main { gradient.as_deref() } else { None };
+                if !staggered && gradient.is_none() {
+                    return Pass {
+                        buffer: plain,
+                        color: to_color(rgb, pass_alpha),
+                        offsets,
+                    };
+                }
+                let colors: Vec<Color> = (0..content.len())
+                    .map(|byte| {
+                        let rgb = gradient.map_or(rgb, |colors| colors[byte]);
+                        to_color(rgb, pass_alpha * unit_alpha[byte])
+                    })
+                    .collect();
+                Pass {
+                    buffer: this.shape(content, &attrs, align, metrics, wrap_width, Some(&colors)),
+                    color: to_color(rgb, pass_alpha),
+                    offsets,
+                }
+            };
 
             // Animation transform: uniform scale about the box center plus a
             // translation, applied to the buffer origin and clip bounds (the
@@ -351,62 +577,131 @@ impl TextLayer {
             let tx = |x: f32| cx + (x - cx) * scale + text.offset[0];
             let ty = |y: f32| cy + (y - cy) * scale + text.offset[1];
 
-            let origin_left = tx(text.bounds[0] - origin_dx);
+            let block_left = text.bounds[0] - origin_dx;
+            let origin_left = tx(block_left);
             let origin_top = ty(text.bounds[1]);
+            let wipe = text.wipe.clamp(0.0, 1.0);
+            let clip_right = match ink {
+                Some((ink_left, ink_right)) if wipe < 1.0 => {
+                    block_left + ink_left + (ink_right - ink_left) * wipe
+                }
+                _ => block_left + wrap_width,
+            };
 
             // Clip horizontally at the (slack-expanded) wrap box, but extend
             // the bottom to the laid-out text height so descenders and extra
             // lines never get cut off; glyphon intersects these bounds with
-            // the viewport.
+            // the viewport. A wipe narrows the right edge.
             let bounds = TextBounds {
                 left: origin_left.floor() as i32,
                 top: origin_top.floor() as i32,
-                right: tx(text.bounds[0] - origin_dx + wrap_width).ceil() as i32,
+                right: tx(clip_right).ceil() as i32,
                 bottom: ty(text.bounds[1] + height.max(laid_out_height)).ceil() as i32,
             };
 
-            let shadow = (text.shadow > 0.0).then(|| {
+            let mut passes = Vec::new();
+            if text.shadow > 0.0 {
                 let dx = text.font_size * scale * 0.02;
                 let dy = text.font_size * scale * 0.055;
                 let shadow_alpha = alpha * text.shadow.clamp(0.0, 1.0) * 0.85;
-                (dx, dy, Color::rgba(0, 0, 0, (shadow_alpha * 255.0) as u8))
-            });
-
-            let background = text.background_color.map(|background_color| {
-                let (rect, radius) = crate::text::text_background_rect(
-                    text.bounds,
-                    laid_out_height,
-                    text.font_size,
-                    scale,
-                    text.offset,
-                );
-                TextBackgroundUniforms {
-                    rect,
-                    color: [
-                        background_color[0],
-                        background_color[1],
-                        background_color[2],
-                        background_color[3] * text.opacity.clamp(0.0, 1.0),
-                    ],
-                    radius,
-                    _padding0: 0.0,
-                    _padding1: 0.0,
-                    _padding2: 0.0,
-                    output_size: [output_size.0.max(1) as f32, output_size.1.max(1) as f32],
-                    _padding3: [0.0; 2],
+                passes.push(pass(
+                    self,
+                    [0.0, 0.0, 0.0, 1.0],
+                    shadow_alpha,
+                    vec![[dx, dy]],
+                    false,
+                ));
+            }
+            if text.glow > 0.0 {
+                for (radius_em, ring_alpha) in GLOW_RINGS {
+                    let radius = radius_em * text.font_size * scale;
+                    passes.push(pass(
+                        self,
+                        text.color,
+                        alpha * ring_alpha * text.glow,
+                        ring(radius).collect(),
+                        false,
+                    ));
                 }
-            });
+            }
+            if let Some((stroke_px, stroke_color)) = text.stroke {
+                passes.push(pass(
+                    self,
+                    stroke_color,
+                    alpha,
+                    stroke_offsets(stroke_px * scale),
+                    false,
+                ));
+            }
+            passes.push(pass(self, text.color, alpha, vec![[0.0, 0.0]], true));
 
-            self.buffers.push(buffer);
-            self.tracks.push(text.track);
-            specs.push(AreaSpec {
+            let background_start = backgrounds.len();
+            if let Some(background_color) = text.background_color {
+                let color = [
+                    background_color[0],
+                    background_color[1],
+                    background_color[2],
+                    background_color[3] * text.opacity.clamp(0.0, 1.0),
+                ];
+                let uniforms = |(mut rect, radius): ([f32; 4], f32)| {
+                    rect[2] *= wipe;
+                    TextBackgroundUniforms {
+                        rect,
+                        color,
+                        radius: radius.min(rect[2] * 0.5),
+                        _padding0: 0.0,
+                        _padding1: 0.0,
+                        _padding2: 0.0,
+                        output_size: output_px,
+                        _padding3: [0.0; 2],
+                    }
+                };
+                match text.background_style {
+                    TextBackgroundStyle::Highlight => {
+                        for run in self.buffers[plain].layout_runs() {
+                            let Some((ink_left, ink_right)) = run_ink(&run) else {
+                                continue;
+                            };
+                            backgrounds.push(uniforms(crate::text::highlight_rect(
+                                (block_left + ink_left, block_left + ink_right),
+                                (text.bounds[1] + run.line_top, run.line_height),
+                                text.font_size,
+                                [cx, cy],
+                                scale,
+                                text.offset,
+                            )));
+                        }
+                    }
+                    style => {
+                        let hugged = ink.map_or(text.bounds, |(ink_left, ink_right)| {
+                            [
+                                block_left + ink_left,
+                                text.bounds[1],
+                                block_left + ink_right,
+                                text.bounds[3],
+                            ]
+                        });
+                        backgrounds.push(uniforms(crate::text::background_rect(
+                            hugged,
+                            laid_out_height,
+                            text.font_size,
+                            [cx, cy],
+                            scale,
+                            text.offset,
+                            style == TextBackgroundStyle::Pill,
+                        )));
+                    }
+                }
+            }
+
+            self.draws.push(TextDraw {
+                track: text.track,
                 bounds,
                 left: origin_left,
                 top: origin_top,
                 scale,
-                color,
-                shadow,
-                background,
+                passes,
+                background: background_start..backgrounds.len(),
             });
         }
 
@@ -418,21 +713,17 @@ impl TextLayer {
             },
         );
 
-        self.segmented_render =
-            force_segmented || specs.iter().any(|spec| spec.background.is_some());
+        self.segmented_render = force_segmented || !backgrounds.is_empty();
         if self.segmented_render {
-            self.segment_backgrounds = specs.iter().map(|spec| spec.background.is_some()).collect();
             let background = self
                 .background
                 .get_or_insert_with(|| TextBackgroundResources::new(device));
-            background.ensure_capacity(device, specs.len());
-            for (index, spec) in specs.iter().enumerate() {
-                if let Some(uniforms) = spec.background {
-                    background.write(queue, index, &uniforms);
-                }
+            background.ensure_capacity(device, backgrounds.len());
+            for (index, uniforms) in backgrounds.iter().enumerate() {
+                background.write(queue, index, uniforms);
             }
 
-            while self.segment_renderers.len() < specs.len() {
+            while self.segment_renderers.len() < self.draws.len() {
                 self.segment_renderers.push(TextRenderer::new(
                     &mut self.text_atlas,
                     device,
@@ -440,14 +731,14 @@ impl TextLayer {
                     None,
                 ));
             }
-            for (index, spec) in specs.iter().enumerate() {
+            for (index, draw) in self.draws.iter().enumerate() {
                 if let Err(error) = self.segment_renderers[index].prepare(
                     device,
                     queue,
                     &mut self.font_system,
                     &mut self.text_atlas,
                     &self.viewport,
-                    text_areas(&self.buffers[index], spec),
+                    text_areas(&self.buffers, draw),
                     &mut self.swash_cache,
                 ) {
                     warn!("Failed to prepare text: {error:?}");
@@ -459,32 +750,33 @@ impl TextLayer {
             &mut self.font_system,
             &mut self.text_atlas,
             &self.viewport,
-            self.buffers
+            self.draws
                 .iter()
-                .zip(&specs)
-                .flat_map(|(buffer, spec)| text_areas(buffer, spec)),
+                .flat_map(|draw| text_areas(&self.buffers, draw)),
             &mut self.swash_cache,
         ) {
             warn!("Failed to prepare text: {error:?}");
         }
     }
 
+    fn render_draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, index: usize) {
+        let draw = &self.draws[index];
+        if let Some(background) = &self.background {
+            for rect in draw.background.clone() {
+                background.render(pass, rect);
+            }
+        }
+        if let Err(error) =
+            self.segment_renderers[index].render(&self.text_atlas, &self.viewport, pass)
+        {
+            warn!("Failed to render text: {error:?}");
+        }
+    }
+
     pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
         if self.segmented_render {
-            if let Some(background) = &self.background {
-                for (index, (renderer, has_background)) in self
-                    .segment_renderers
-                    .iter()
-                    .zip(&self.segment_backgrounds)
-                    .enumerate()
-                {
-                    if *has_background {
-                        background.render(pass, index);
-                    }
-                    if let Err(error) = renderer.render(&self.text_atlas, &self.viewport, pass) {
-                        warn!("Failed to render text: {error:?}");
-                    }
-                }
+            for index in 0..self.draws.len() {
+                self.render_draw(pass, index);
             }
         } else if let Err(error) = self
             .text_renderer
@@ -498,29 +790,67 @@ impl TextLayer {
         if !self.segmented_render {
             return;
         }
-        let Some(background) = &self.background else {
-            return;
-        };
-        for (index, (renderer, has_background)) in self
-            .segment_renderers
-            .iter()
-            .zip(&self.segment_backgrounds)
-            .enumerate()
-        {
-            if self.tracks.get(index) != Some(&track) {
-                continue;
-            }
-            if *has_background {
-                background.render(pass, index);
-            }
-            if let Err(error) = renderer.render(&self.text_atlas, &self.viewport, pass) {
-                warn!("Failed to render text: {error:?}");
+        for index in 0..self.draws.len() {
+            if self.draws[index].track == track {
+                self.render_draw(pass, index);
             }
         }
     }
 
     pub fn has_track(&self, track: u32) -> bool {
-        self.segmented_render && self.tracks.contains(&track)
+        self.segmented_render && self.draws.iter().any(|draw| draw.track == track)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn words_and_letters_map_bytes_to_reveal_units() {
+        let (map, units) = unit_map("Hi there", true);
+        assert_eq!(units, 2);
+        assert_eq!(map, [0, 0, 0, 1, 1, 1, 1, 1]);
+
+        let (map, units) = unit_map("Hi there", false);
+        assert_eq!(units, 7);
+        assert_eq!(map, [0, 1, 1, 2, 3, 4, 5, 6]);
+
+        let (map, units) = unit_map("é a", false);
+        assert_eq!(units, 2);
+        assert_eq!(map, [0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn rich_spans_rebuild_the_whole_string() {
+        let content = "ab\ncd";
+        let red = Color::rgb(255, 0, 0);
+        let blue = Color::rgb(0, 0, 255);
+        let colors = [red, red, red, blue, blue];
+        let spans = rich_spans(content, &colors);
+        assert_eq!(spans, vec![(0..3, red), (3..5, blue)]);
+        let rebuilt: String = spans
+            .iter()
+            .map(|(range, _)| &content[range.clone()])
+            .collect();
+        assert_eq!(rebuilt, content);
+    }
+
+    #[test]
+    fn stroke_rings_grow_with_the_radius() {
+        assert_eq!(stroke_offsets(1.0).len(), 8);
+        assert_eq!(stroke_offsets(6.0).len(), 24);
+        assert_eq!(stroke_offsets(100.0).len(), 40);
+        let far = stroke_offsets(6.0);
+        assert!(
+            far.iter()
+                .all(|[x, y]| (x * x + y * y).sqrt() <= 6.0 + 1e-4)
+        );
+    }
+
+    #[test]
+    fn line_starts_follow_newlines() {
+        assert_eq!(line_starts("a\nbc\n"), [0, 2, 5]);
     }
 }
 
@@ -561,6 +891,13 @@ mod gpu_tests {
             shadow: 0.0,
             offset: [0.0, 0.0],
             scale: 1.0,
+            stroke: None,
+            glow: 0.0,
+            gradient_color: None,
+            background_style: TextBackgroundStyle::Box,
+            wipe: 1.0,
+            stagger_in: None,
+            stagger_out: None,
         }
     }
 
