@@ -12,6 +12,7 @@ import {
 	Show,
 } from "solid-js";
 import { produce } from "solid-js/store";
+import toast from "solid-toast";
 import { generalSettingsStore } from "~/store";
 import { commands } from "~/utils/tauri";
 import { useEditorContext } from "../context";
@@ -34,6 +35,8 @@ export type ZoomSegmentDragState =
 const MIN_ZOOM_SEGMENT_PIXEL_WIDTH = 40;
 const MIN_NEW_SEGMENT_PIXEL_WIDTH = 80;
 const MIN_NEW_SEGMENT_SECS_WIDTH = 1;
+const NO_AUTO_ZOOM_CLICKS_MESSAGE =
+	"No clicks found to zoom into. Drag across the lane to add one.";
 
 export function ZoomTrack(props: {
 	onDragStateChanged: (v: ZoomSegmentDragState) => void;
@@ -84,9 +87,14 @@ export function ZoomTrack(props: {
 		setIsGeneratingAutoZoom(true);
 		try {
 			const zoomSegments = await commands.generateZoomSegmentsFromClicks();
+			if (zoomSegments.length === 0) {
+				toast.error(NO_AUTO_ZOOM_CLICKS_MESSAGE);
+				return;
+			}
 			setProject("timeline", "zoomSegments", zoomSegments);
 		} catch (error) {
 			console.error("Failed to generate zoom segments:", error);
+			toast.error("Failed to generate zoom segments");
 		} finally {
 			setIsGeneratingAutoZoom(false);
 		}
