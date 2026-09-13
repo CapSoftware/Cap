@@ -174,6 +174,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let camera_color = textureSample(t_camera, s_camera, final_uv);
 
-    let final_alpha = select(1.0, mask, mask < 0.95);
+    let final_alpha = camera_color.a * select(1.0, mask, mask < 0.95);
     return vec4<f32>(camera_color.rgb, final_alpha);
 }
