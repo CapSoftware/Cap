@@ -1558,6 +1558,8 @@ pub struct EditorWindow {
     // -- The canvas display drag (E6) -----------------------------------------
     /// The letterboxed frame rect the preview canvas last painted.
     pub(crate) player_frame_rect: crate::editor_canvas::CanvasRect,
+    pub(crate) player_panel_bounds: ui::SliderTrack,
+    pub(crate) player_panel_hovered: bool,
     /// `editorState.canvasSelection`.
     pub(crate) canvas_selection: Option<crate::editor_canvas::CanvasSelection>,
     /// `hovered` on `ElementBox` (`CanvasElementsOverlay.tsx:790`).
@@ -1885,6 +1887,8 @@ impl EditorWindow {
             player_frame_rect,
             canvas_selection: None,
             hovered_canvas: None,
+            player_panel_bounds: ui::SliderTrack::default(),
+            player_panel_hovered: false,
             canvas_drag: None,
             canvas_drag_rect: None,
             canvas_drag_camera_rect: None,
@@ -8659,11 +8663,21 @@ impl EditorWindow {
     /// `PlayerContent`: one surface -- the actions toolbar, the stage, and the
     /// transport, with no rule between them.
     fn render_player(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let panel_bounds = self.player_panel_bounds.clone();
         div()
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| panel_bounds.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
             .child(
                 self.toolbar.clone().cached(
                     StyleRefinement::default()
@@ -10216,9 +10230,36 @@ impl Render for EditorWindow {
             .child({
                 let move_editor = cx.entity().downgrade();
                 let up_editor = cx.entity().downgrade();
+                let hover_editor = cx.entity().downgrade();
+                let exit_editor = cx.entity().downgrade();
                 gpui::canvas(
                     |_bounds, _window, _cx| (),
                     move |_bounds, (), window, _cx| {
+                        let editor = hover_editor.clone();
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                            if phase != gpui::DispatchPhase::Capture {
+                                return;
+                            }
+                            editor
+                                .update(cx, |this, cx| {
+                                    let hovered = this
+                                        .player_panel_bounds
+                                        .get()
+                                        .is_some_and(|bounds| bounds.contains(&event.position));
+                                    this.set_player_panel_hovered(hovered, cx);
+                                })
+                                .ok();
+                        });
+                        let editor = exit_editor.clone();
+                        window.on_mouse_event(move |_: &gpui::MouseExitEvent, phase, _, cx| {
+                            if phase == gpui::DispatchPhase::Capture {
+                                editor
+                                    .update(cx, |this, cx| {
+                                        this.set_player_panel_hovered(false, cx);
+                                    })
+                                    .ok();
+                            }
+                        });
                         let editor = move_editor.clone();
                         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                             if phase != gpui::DispatchPhase::Bubble {
