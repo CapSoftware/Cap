@@ -547,7 +547,7 @@ function TextSegmentOverlay(props: {
 	const createResizeHandler = (dirX: 1 | 0 | -1, dirY: 1 | 0 | -1) =>
 		props.createMouseDownDrag(
 			() => {
-				if (editing()) return null;
+				if (!props.isSelected) props.onSelect();
 				setResizing(true);
 				const seg = segment();
 				const corner = {
@@ -861,7 +861,10 @@ function TextSegmentOverlay(props: {
 						onBlur={() => endEditing?.()}
 					/>
 				</Show>
-				<Show when={(props.isSelected || hovered()) && !editing()}>
+				{/* The handles stay up while the inline editor is open (a freshly
+				    added segment mounts editing), and the drag's preventDefault
+				    keeps the textarea focused, so a resize never ends the edit. */}
+				<Show when={props.isSelected || hovered()}>
 					<For each={edges}>
 						{(edge) => (
 							<div
