@@ -1259,11 +1259,16 @@ impl<T: Clone> RequestedInput<T> {
         self.revision
     }
 
-    fn begin_or_join(&mut self, value: Option<T>, configuration: serde_json::Value) -> (u64, bool)
+    fn begin_or_join(
+        &mut self,
+        value: Option<T>,
+        configuration: serde_json::Value,
+        recording_starting: bool,
+    ) -> (u64, bool)
     where
         T: PartialEq,
     {
-        if self.pending
+        if (self.pending || (recording_starting && self.error.is_none()))
             && self.value == value
             && self.configuration.as_ref() == Some(&configuration)
         {
@@ -1961,12 +1966,14 @@ async fn set_mic_input(
     let settings = label.as_ref().and_then(|label| {
         recording_settings::RecordingSettingsStore::microphone_settings_for(&app_handle, label)
     });
-    let (revision, joined) = requested
-        .inner
-        .lock()
-        .unwrap()
-        .microphone
-        .begin_or_join(label.clone(), serde_json::json!(settings));
+    let (revision, joined) = {
+        let state = state.read().await;
+        requested.inner.lock().unwrap().microphone.begin_or_join(
+            label.clone(),
+            serde_json::json!(settings),
+            matches!(state.recording_state, RecordingState::Pending { .. }),
+        )
+    };
     if joined {
         return wait_for_existing_input(revision, "Microphone", || {
             requested.inner.lock().unwrap().microphone.clone()
@@ -2365,10 +2372,14 @@ async fn set_camera_input(
     let settings = id.as_ref().and_then(|id| {
         recording_settings::RecordingSettingsStore::camera_settings_for(&app_handle, id)
     });
-    let (revision, joined) = requested.inner.lock().unwrap().camera.begin_or_join(
-        id.clone(),
-        serde_json::json!((settings, skip_camera_window.unwrap_or(false))),
-    );
+    let (revision, joined) = {
+        let state = state.read().await;
+        requested.inner.lock().unwrap().camera.begin_or_join(
+            id.clone(),
+            serde_json::json!((settings, skip_camera_window.unwrap_or(false))),
+            matches!(state.recording_state, RecordingState::Pending { .. }),
+        )
+    };
     if joined {
         return wait_for_existing_input(revision, "Camera", || {
             requested.inner.lock().unwrap().camera.clone()
@@ -10095,24 +10106,131 @@ mod requested_inputs_tests {
     fn matching_pending_requests_share_setup_but_changed_configuration_supersedes_it() {
         let mut input = RequestedInput::new(None::<String>);
         let settings = serde_json::json!({ "sampleRate": 48_000 });
-        let (first, joined) = input.begin_or_join(Some("mic".into()), settings.clone());
+        let (first, joined) = input.begin_or_join(Some("mic".into()), settings.clone(), false);
         assert!(!joined);
         assert_eq!(
-            input.begin_or_join(Some("mic".into()), settings.clone()),
+            input.begin_or_join(Some("mic".into()), settings.clone(), false),
             (first, true)
         );
         let (second, joined) = input.begin_or_join(
             Some("mic".into()),
             serde_json::json!({ "sampleRate": 44_100 }),
+            false,
         );
         assert!(!joined);
         assert_ne!(first, second);
         input.finish(first, &Ok(()));
         assert!(input.pending);
         input.finish(second, &Err("disconnected".into()));
-        let (retry, joined) = input.begin_or_join(Some("mic".into()), settings);
+        let (retry, joined) = input.begin_or_join(Some("mic".into()), settings, false);
         assert!(!joined);
         assert_ne!(retry, second);
+    }
+
+    #[tokio::test]
+    async fn restoring_identical_inputs_during_startup_keeps_recording_publishable() {
+        let state = RequestedInputsState::new(None, None);
+        let mic = Some("MacBook Pro Microphone".to_string());
+        let camera = Some(super::DeviceOrModelID::DeviceID(
+            "MacBook Pro Camera".into(),
+        ));
+        let mic_settings = serde_json::json!(null);
+        let camera_settings = serde_json::json!((None::<serde_json::Value>, false));
+        let (mic_revision, camera_revision) = {
+            let mut inputs = state.inner.lock().unwrap();
+            let (mic_revision, _) =
+                inputs
+                    .microphone
+                    .begin_or_join(mic.clone(), mic_settings.clone(), false);
+            inputs.microphone.finish(mic_revision, &Ok(()));
+            let (camera_revision, _) =
+                inputs
+                    .camera
+                    .begin_or_join(camera.clone(), camera_settings.clone(), false);
+            inputs.camera.finish(camera_revision, &Ok(()));
+            (mic_revision, camera_revision)
+        };
+        let snapshot = state.ready_snapshot().unwrap();
+        let _startup = state.operation.lock().await;
+        {
+            let mut inputs = state.inner.lock().unwrap();
+            assert_eq!(
+                inputs.microphone.begin_or_join(mic, mic_settings, true),
+                (mic_revision, true)
+            );
+            assert_eq!(
+                inputs.camera.begin_or_join(camera, camera_settings, true),
+                (camera_revision, true)
+            );
+        }
+        for (revision, kind) in [(mic_revision, "Microphone"), (camera_revision, "Camera")] {
+            let result = tokio::time::timeout(std::time::Duration::from_millis(100), async {
+                if kind == "Microphone" {
+                    wait_for_existing_input(revision, kind, || state.snapshot().microphone).await
+                } else {
+                    wait_for_existing_input(revision, kind, || state.snapshot().camera).await
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(result, Ok(()));
+        }
+        assert!(state.ready_snapshot().is_ok());
+        assert!(state.is_current(&snapshot));
+        let mut published = false;
+        assert!(state.publish_if_current(&snapshot, || published = true));
+        assert!(published);
+    }
+
+    #[test]
+    fn startup_still_rejects_changed_devices_settings_and_disabled_inputs() {
+        for (value, settings) in [
+            (Some("other".to_string()), serde_json::json!(48_000)),
+            (Some("mic".to_string()), serde_json::json!(44_100)),
+            (None, serde_json::json!(48_000)),
+        ] {
+            let state = RequestedInputsState::new(None, None);
+            {
+                let mut inputs = state.inner.lock().unwrap();
+                let (revision, _) = inputs.microphone.begin_or_join(
+                    Some("mic".into()),
+                    serde_json::json!(48_000),
+                    false,
+                );
+                inputs.microphone.finish(revision, &Ok(()));
+            }
+            let snapshot = state.ready_snapshot().unwrap();
+            let (_, joined) = state
+                .inner
+                .lock()
+                .unwrap()
+                .microphone
+                .begin_or_join(value, settings, true);
+            assert!(!joined);
+            assert!(!state.is_current(&snapshot));
+            assert!(!state.publish_if_current(&snapshot, || panic!("changed input published")));
+        }
+    }
+
+    #[test]
+    fn completed_requests_are_retried_when_idle_or_previously_failed() {
+        for (recording_starting, result) in
+            [(false, Ok(())), (true, Err("disconnected".to_string()))]
+        {
+            let mut input = RequestedInput::new(None::<String>);
+            let (first, _) =
+                input.begin_or_join(Some("mic".into()), serde_json::json!(null), false);
+            input.finish(first, &result);
+            let (retry, joined) = input.begin_or_join(
+                Some("mic".into()),
+                serde_json::json!(null),
+                recording_starting,
+            );
+            assert!(!joined);
+            assert_ne!(retry, first);
+            assert!(input.pending);
+            assert!(input.error.is_none());
+        }
     }
 
     #[tokio::test]
