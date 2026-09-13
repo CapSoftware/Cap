@@ -67,9 +67,7 @@ pub struct InterpolatedScene {
     pub transition_progress: f64,
     pub from_mode: SceneMode,
     pub to_mode: SceneMode,
-    pub screen_blur: f64,
     pub camera_only_zoom: f64,
-    pub camera_only_blur: f64,
     /// 0.0 = no split layout, 1.0 = fully side-by-side. Ramps with
     /// `transition_progress` when entering/leaving [`SceneMode::SplitScreen`]
     /// or [`SceneMode::Floating`] so the compositor morphs the screen+camera
@@ -95,9 +93,7 @@ impl InterpolatedScene {
             transition_progress: 1.0,
             from_mode: scene_mode,
             to_mode: scene_mode,
-            screen_blur: 0.0,
             camera_only_zoom: 1.0,
-            camera_only_blur: 0.0,
             split_factor: if is_split_mode(&scene_mode) { 1.0 } else { 0.0 },
             floating_factor: if matches!(scene_mode, SceneMode::Floating) {
                 1.0
@@ -234,24 +230,6 @@ impl InterpolatedScene {
         );
         let camera_scale = Self::lerp(start_camera_scale, end_camera_scale, transition_progress);
 
-        let screen_blur = if matches!(current_mode, SceneMode::CameraOnly)
-            || matches!(next_mode, SceneMode::CameraOnly)
-        {
-            if matches!(current_mode, SceneMode::CameraOnly)
-                && !matches!(next_mode, SceneMode::CameraOnly)
-            {
-                Self::lerp(1.0, 0.0, transition_progress)
-            } else if !matches!(current_mode, SceneMode::CameraOnly)
-                && matches!(next_mode, SceneMode::CameraOnly)
-            {
-                transition_progress
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
-
         let camera_only_zoom = if matches!(next_mode, SceneMode::CameraOnly)
             && !matches!(current_mode, SceneMode::CameraOnly)
         {
@@ -262,18 +240,6 @@ impl InterpolatedScene {
             Self::lerp(1.0, 1.1, transition_progress)
         } else {
             1.0
-        };
-
-        let camera_only_blur = if matches!(next_mode, SceneMode::CameraOnly)
-            && !matches!(current_mode, SceneMode::CameraOnly)
-        {
-            Self::lerp(1.0, 0.0, transition_progress)
-        } else if matches!(current_mode, SceneMode::CameraOnly)
-            && !matches!(next_mode, SceneMode::CameraOnly)
-        {
-            transition_progress
-        } else {
-            0.0
         };
 
         let from_split = is_split_mode(&current_mode);
@@ -306,9 +272,7 @@ impl InterpolatedScene {
             transition_progress,
             from_mode: current_mode,
             to_mode: next_mode,
-            screen_blur,
             camera_only_zoom,
-            camera_only_blur,
             split_factor,
             floating_factor,
         }
@@ -335,7 +299,7 @@ impl InterpolatedScene {
     }
 
     pub fn should_render_screen(&self) -> bool {
-        self.screen_opacity > 0.01 || self.screen_blur > 0.01
+        self.screen_opacity > 0.01
     }
 
     pub fn is_split(&self) -> bool {
@@ -365,6 +329,19 @@ impl InterpolatedScene {
         }
     }
 
+    pub fn camera_only_motion(&self, previous: &Self) -> f32 {
+        if matches!(self.from_mode, SceneMode::CameraOnly)
+            == matches!(self.to_mode, SceneMode::CameraOnly)
+        {
+            return 0.0;
+        }
+
+        // The invisible camera jumps to 1.1x at entry. Opacity tracks the
+        // continuous part of that 10% zoom without counting the jump as motion.
+        ((self.camera_only_transition_opacity() - previous.camera_only_transition_opacity()).abs()
+            * 0.1) as f32
+    }
+
     pub fn regular_camera_transition_opacity(&self) -> f64 {
         if matches!(self.to_mode, SceneMode::CameraOnly)
             && !matches!(self.from_mode, SceneMode::CameraOnly)
@@ -382,6 +359,60 @@ impl InterpolatedScene {
             0.0
         } else {
             self.camera_opacity
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scene_at(time: f64, segments: &[SceneSegment]) -> InterpolatedScene {
+        InterpolatedScene::new(SceneSegmentsCursor::new(time, segments))
+    }
+
+    fn camera_scene(transition: f64) -> SceneSegment {
+        SceneSegment {
+            start: 2.0,
+            end: 5.0,
+            mode: SceneMode::CameraOnly,
+            split_layout: None,
+            transition_in: transition,
+            transition_out: transition,
+        }
+    }
+
+    #[test]
+    fn camera_only_blur_tracks_motion_at_both_boundaries() {
+        let segments = [camera_scene(0.3)];
+        for fps in [30, 60, 120] {
+            let motion_at = |frame: u32| {
+                let scene = scene_at(f64::from(frame) / f64::from(fps), &segments);
+                let previous = scene_at(f64::from(frame - 1) / f64::from(fps), &segments);
+                scene.camera_only_motion(&previous) * fps as f32 / 60.0
+            };
+            let peak = (fps..6 * fps).map(motion_at).fold(0.0_f32, f32::max);
+            assert!(peak > 0.005 && peak < 0.011, "{fps} fps: {peak}");
+            for time in [1.7, 2.0, 4.7, 5.0] {
+                let frame = (time * f64::from(fps)).round() as u32;
+                assert!(motion_at(frame) < 0.003, "{fps} fps at {time}");
+                assert!(motion_at(frame + 1) < 0.003, "{fps} fps after {time}");
+            }
+            for time in [1, 3, 6] {
+                assert_eq!(motion_at(time * fps), 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn camera_only_cuts_and_contiguous_scenes_do_not_blur() {
+        let mut segments = [camera_scene(0.0), camera_scene(0.3)];
+        segments[1].start = segments[0].end;
+        segments[1].end = 8.0;
+        for time in [2.0, 4.99, 5.0, 5.01] {
+            let scene = scene_at(time, &segments);
+            let previous = scene_at(time - 1.0 / 60.0, &segments);
+            assert_eq!(scene.camera_only_motion(&previous), 0.0);
         }
     }
 }

@@ -2867,10 +2867,6 @@ const MAX_ZOOM_BLUR_AMOUNT: f32 = 0.5;
 const DISPLAY_MOVE_MULTIPLIER: f32 = 1.0;
 const DISPLAY_ZOOM_MULTIPLIER: f32 = 1.0;
 const CAMERA_MULTIPLIER: f32 = 1.0;
-const CAMERA_ONLY_MULTIPLIER: f32 = 0.45;
-/// Ceiling for synthetic transition blur (scene morphs, camera-only
-/// entrances). These are art-directed effects that predate the proportional
-/// model and are tuned to their own visual scale, not to real velocity.
 const TRANSITION_ZOOM_CAP: f32 = 0.08;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3286,9 +3282,6 @@ impl ProjectUniforms {
         analysis.size_delta_px /= frame_span;
         analysis.zoom_magnitude /= frame_span;
         if extra_zoom > 0.0 {
-            // Scene transitions inject synthetic radial blur; they also move
-            // the bounds a lot, so force the zoom branch past the dominance
-            // check or the pan delta would win and hide it.
             analysis.zoom_magnitude = (analysis.zoom_magnitude + extra_zoom).min(3.0);
             analysis.prefer_zoom = true;
         }
@@ -3876,7 +3869,11 @@ impl ProjectUniforms {
             let (prev_start, prev_end) =
                 Self::display_bounds(&motion_prev_zoom, display_offset, display_size);
 
-            let scene_blur_strength = (scene.screen_blur as f32 * 0.8).min(1.2);
+            let scene_blur_strength = if options.camera_size.is_some() && !project.camera.hide {
+                scene.camera_only_motion(&prev_scene)
+            } else {
+                0.0
+            };
 
             // An instant-animation zoom snap is a deliberate hard cut; the
             // bounds delta across it is not motion, so blurring it would smear
@@ -4508,20 +4505,14 @@ impl ProjectUniforms {
                 let crop_bounds =
                     inset_crop_bounds(crop_bounds, frame_size, CAMERA_EDGE_CROP_INSET_PX);
 
-                let camera_only_blur = (scene.camera_only_blur as f32
-                    * CAMERA_ONLY_MULTIPLIER
-                    * normalized_screen_motion)
-                    .clamp(0.0, 1.0);
+                let camera_only_blur =
+                    scene.camera_only_motion(&prev_scene) * normalized_screen_motion;
                 let camera_only_descriptor = if camera_only_blur <= f32::EPSILON {
                     MotionBlurDescriptor::none()
                 } else {
-                    // Synthetic transition blur (not velocity-derived): keep
-                    // its ray length on the old visual scale — the shader no
-                    // longer softens via a sharp/blur crossfade, so the
-                    // amount alone sets the look.
                     MotionBlurDescriptor::zoom(
                         XY::new(0.5, 0.5),
-                        (camera_only_blur * 0.75).min(TRANSITION_ZOOM_CAP),
+                        camera_only_blur.min(TRANSITION_ZOOM_CAP),
                         1.0,
                     )
                 };
