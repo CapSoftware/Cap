@@ -6458,6 +6458,8 @@ fn project_config_from_recording(
             timescale: 1.0,
             name: None,
             speed_audio_mode: None,
+            hide_cursor: None,
+            volume: None,
         })
         .collect::<Vec<_>>();
 
@@ -9908,6 +9910,8 @@ mod preparing_presentation_parity_tests {
             timescale: 1.0,
             name: None,
             speed_audio_mode: None,
+            hide_cursor: None,
+            volume: None,
         }]
     }
 

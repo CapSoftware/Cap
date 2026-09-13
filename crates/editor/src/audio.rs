@@ -2320,6 +2320,8 @@ mod tests {
                         end: 1.0,
                         name: None,
                         speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     },
                     TimelineSegment {
                         recording_clip: 0,
@@ -2328,6 +2330,8 @@ mod tests {
                         end: 2.0,
                         name: None,
                         speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     },
                     TimelineSegment {
                         recording_clip: 0,
@@ -2336,6 +2340,8 @@ mod tests {
                         end: 3.0,
                         name: None,
                         speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     },
                     TimelineSegment {
                         recording_clip: 1,
@@ -2344,6 +2350,8 @@ mod tests {
                         end: 1.0,
                         name: None,
                         speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     },
                     TimelineSegment {
                         recording_clip: 1,
@@ -2352,6 +2360,8 @@ mod tests {
                         end: 2.0,
                         name: None,
                         speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     },
                     TimelineSegment {
                         recording_clip: 1,
@@ -2360,6 +2370,8 @@ mod tests {
                         end: 3.0,
                         name: None,
                         speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     },
                 ],
                 transitions: Vec::new(),
@@ -2711,6 +2723,8 @@ mod tests {
             end,
             name: None,
             speed_audio_mode: None,
+            hide_cursor: None,
+            volume: None,
         }
     }
 

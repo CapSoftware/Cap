@@ -1754,6 +1754,8 @@ pub fn ensure_timeline(project: &mut ProjectConfiguration, clip_display_duration
                 end: *duration,
                 name: None,
                 speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
             })
             .collect(),
         transitions: Vec::new(),

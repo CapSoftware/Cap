@@ -428,6 +428,8 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
                     end: segment.duration(),
                     name: None,
                     speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 })
                 .collect(),
             // `TimelineConfiguration` has no `Default`, so the eight other
@@ -10849,6 +10851,8 @@ mod tests {
                     timescale: 1.0,
                     name: None,
                     speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 }],
                 transitions: Vec::new(),
                 zoom_segments: Vec::new(),
@@ -10902,6 +10906,8 @@ mod tests {
                         timescale: 1.0,
                         name: None,
                         speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     },
                     cap_project::TimelineSegment {
                         recording_clip: 0,
@@ -10910,6 +10916,8 @@ mod tests {
                         timescale: 1.0,
                         name: None,
                         speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     },
                 ],
                 transitions: Vec::new(),
