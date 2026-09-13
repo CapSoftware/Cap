@@ -60,20 +60,20 @@ export function FontPicker(props: {
 					>
 						{itemProps.item.rawValue.label}
 					</KCombobox.ItemLabel>
-					<KCombobox.ItemIndicator class="ml-auto text-blue-9">
+					<KCombobox.ItemIndicator class="ml-auto text-ed-accent">
 						<IconCapCircleCheck />
 					</KCombobox.ItemIndicator>
 				</MenuItem>
 			)}
 		>
-			<KCombobox.Control class="flex w-full items-center justify-between rounded-md border border-gray-3 bg-gray-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus-within:border-blue-9 focus-within:ring-1 focus-within:ring-blue-9">
+			<KCombobox.Control class="flex h-[30px] w-full items-center justify-between rounded-[7px] border-0 bg-ed-ctl px-2.5 text-[12px] text-ed-text-1 transition-colors duration-150 hover:bg-ed-ctl-hover focus-within:bg-ed-ctl-hover focus-within:ring-1 focus-within:ring-ed-accent">
 				<KCombobox.Input
-					class="flex-1 min-w-0 bg-transparent outline-hidden text-gray-12 placeholder:text-gray-10"
+					class="flex-1 min-w-0 bg-transparent outline-hidden text-ed-text-1 placeholder:text-ed-text-3"
 					style={{ "font-family": cssFontFamily(props.value) }}
 				/>
-				<KCombobox.Trigger class="shrink-0 ml-2 text-(--gray-500)">
+				<KCombobox.Trigger class="shrink-0 ml-2 text-ed-text-3">
 					<KCombobox.Icon>
-						<IconCapChevronDown class="size-4 transform transition-transform data-expanded:rotate-180" />
+						<IconCapChevronDown class="size-3.5 transform transition-transform data-expanded:rotate-180" />
 					</KCombobox.Icon>
 				</KCombobox.Trigger>
 			</KCombobox.Control>
