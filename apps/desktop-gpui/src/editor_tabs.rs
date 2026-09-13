@@ -51,11 +51,12 @@ pub const CAMERA_SHAPES: [(CameraShape, &str); 2] = [
     (CameraShape::Source, "Source"),
 ];
 
-/// The three `backgroundBlur` rows (`:3078-3082`).
-pub const CAMERA_BLUR_MODES: [(BackgroundBlurMode, &str); 3] = [
+pub const CAMERA_BLUR_MODES: &[(BackgroundBlurMode, &str)] = &[
     (BackgroundBlurMode::Off, "Off"),
     (BackgroundBlurMode::Light, "Light Blur"),
     (BackgroundBlurMode::Heavy, "Heavy Blur"),
+    #[cfg(target_os = "macos")]
+    (BackgroundBlurMode::Remove, "Remove Background"),
 ];
 
 /// `CORNER_STYLE_OPTIONS` (`:399-402`).
@@ -1266,7 +1267,7 @@ impl EditorWindow {
                                 }),
                             ),
                         ))
-                        .child(ui::Subfield::plain(&theme, "Background Blur").child(
+                        .child(ui::Subfield::plain(&theme, "Background").child(
                             div().w(px(160.)).child(self.menu_select(
                                 SidebarMenu::CameraBlur,
                                 "camera-blur",
@@ -3394,7 +3395,10 @@ mod tests {
         assert_eq!(KEYBOARD_POSITIONS.len(), 6);
         assert_eq!(FONT_OPTIONS.len(), 3);
         assert_eq!(TEXT_WEIGHTS.len(), 3);
-        assert_eq!(CAMERA_BLUR_MODES.len(), 3);
+        assert_eq!(
+            CAMERA_BLUR_MODES.len(),
+            if cfg!(target_os = "macos") { 4 } else { 3 }
+        );
         // `MODEL_OPTIONS` (`CaptionsTab.tsx:87-116`): two Parakeet entries in
         // front of the two Whisper ones, so the Intel-macOS slice keeps
         // exactly the Whisper pair.

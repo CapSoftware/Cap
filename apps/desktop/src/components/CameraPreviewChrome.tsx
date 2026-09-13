@@ -1,4 +1,5 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -26,7 +27,14 @@ export const CAMERA_TOOLBAR_HEIGHT = 56;
 export const CAMERA_WINDOW_STATE_STORAGE_KEY = "cameraWindowState";
 export const CAMERA_WIDE_ASPECT_RATIO = 16 / 9;
 
-const BLUR_MODES: BackgroundBlurMode[] = ["off", "light", "heavy"];
+export const cameraBackgroundOptions = (
+	macOS: boolean,
+): { name: string; value: BackgroundBlurMode }[] => [
+	{ name: "Off", value: "off" },
+	{ name: "Light Blur", value: "light" },
+	{ name: "Heavy Blur", value: "heavy" },
+	...(macOS ? [{ name: "Remove Background", value: "remove" as const }] : []),
+];
 const RESIZE_CORNERS = ["nw", "ne", "sw", "se"] as const;
 
 type ResizeCorner = (typeof RESIZE_CORNERS)[number];
@@ -78,12 +86,14 @@ export const normalizeBackgroundBlurMode = (
 
 export const cycleBlurMode = (
 	current: BackgroundBlurMode | boolean,
+	macOS = false,
 ): BackgroundBlurMode => {
 	if (typeof current === "boolean") {
 		return current ? "heavy" : "light";
 	}
-	const idx = BLUR_MODES.indexOf(current);
-	return BLUR_MODES[(idx + 1) % BLUR_MODES.length];
+	const modes = cameraBackgroundOptions(macOS).map((option) => option.value);
+	const idx = modes.indexOf(current);
+	return modes[(idx + 1) % modes.length];
 };
 
 export const blurModeLabel = (mode: BackgroundBlurMode | boolean): string => {
@@ -93,6 +103,8 @@ export const blurModeLabel = (mode: BackgroundBlurMode | boolean): string => {
 			return "Light";
 		case "heavy":
 			return "Heavy";
+		case "remove":
+			return "Cutout";
 		default:
 			return "";
 	}
@@ -106,6 +118,7 @@ export const cameraToolbarScale = (size: number) => {
 };
 
 export function cameraBorderRadius(state: CameraWindowState) {
+	if (state.backgroundBlur === "remove") return "0px";
 	if (state.shape === "round") return "9999px";
 	const normalized =
 		(clampCameraSize(state.size) - CAMERA_MIN_SIZE) /
@@ -182,7 +195,9 @@ export function CameraPreviewToolbar(props: {
 					props.state.backgroundBlur !== false
 				}
 				onClick={() =>
-					props.setState("backgroundBlur", (mode) => cycleBlurMode(mode))
+					props.setState("backgroundBlur", (mode) =>
+						cycleBlurMode(mode, ostype() === "macos"),
+					)
 				}
 			>
 				<div class="relative">

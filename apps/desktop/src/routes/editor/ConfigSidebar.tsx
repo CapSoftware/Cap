@@ -45,6 +45,7 @@ import {
 import { createStore, produce } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
 import toast from "solid-toast";
+import { cameraBackgroundOptions } from "~/components/CameraPreviewChrome";
 import { Toggle } from "~/components/Toggle";
 import {
 	animatedGradientsStore,
@@ -3257,25 +3258,15 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 								onChange={(mirror) => setProject("camera", "mirror", mirror)}
 							/>
 						</Subfield>
-						<Subfield name="Background Blur">
+						<Subfield name="Background">
 							<KSelect<{ name: string; value: BackgroundBlurMode }>
-								options={[
-									{ name: "Off", value: "off" },
-									{ name: "Light Blur", value: "light" },
-									{ name: "Heavy Blur", value: "heavy" },
-								]}
+								options={cameraBackgroundOptions(ostype() === "macos")}
 								optionValue="value"
 								optionTextValue="name"
 								value={
-									(
-										[
-											{ name: "Off", value: "off" },
-											{ name: "Light Blur", value: "light" },
-											{ name: "Heavy Blur", value: "heavy" },
-										] as const
-									).find(
-										(v) =>
-											v.value ===
+									cameraBackgroundOptions(ostype() === "macos").find(
+										(option) =>
+											option.value ===
 											(project.camera.backgroundBlur?.mode ?? "off"),
 									) ?? { name: "Off", value: "off" }
 								}
