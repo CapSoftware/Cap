@@ -105,6 +105,7 @@ async fn render_sampled_sequence_frames(
         60,
         resolution_base,
         recordings,
+        None,
     )
     .await
     .map_err(std::io::Error::other)?;

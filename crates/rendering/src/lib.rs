@@ -627,6 +627,7 @@ pub async fn render_video_to_channel(
     fps: u32,
     resolution_base: XY<u32>,
     recordings: &ProjectRecordingsMeta,
+    frame_range: Option<std::ops::Range<u32>>,
 ) -> Result<(), RenderingError> {
     ffmpeg::init().unwrap();
 
@@ -635,6 +636,8 @@ pub async fn render_video_to_channel(
     let duration = get_duration(recordings, recording_meta, meta, project);
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
+    let frame_range = frame_range.unwrap_or(0..total_frames);
+    let total_frames = total_frames.min(frame_range.end);
 
     let cursor_smoothing =
         (!project.cursor.raw).then_some(spring_mass_damper::SpringMassDamperSimulationConfig {
@@ -689,7 +692,7 @@ pub async fn render_video_to_channel(
                 .collect::<Vec<_>>()
         });
 
-    let mut frame_number = 0;
+    let mut frame_number = frame_range.start.min(total_frames);
 
     let mut frame_renderer = FrameRenderer::new(constants);
 
@@ -1076,6 +1079,7 @@ pub async fn render_video_to_channel_nv12(
     fps: u32,
     resolution_base: XY<u32>,
     recordings: &ProjectRecordingsMeta,
+    frame_range: Option<std::ops::Range<u32>>,
     stop_after_frames_sent: Option<u32>,
     startup_breakdown_ms: Option<Arc<Mutex<Option<Nv12RenderStartupBreakdownMs>>>>,
 ) -> Result<(), RenderingError> {
@@ -1088,6 +1092,8 @@ pub async fn render_video_to_channel_nv12(
     let duration = get_duration(recordings, recording_meta, meta, project);
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
+    let frame_range = frame_range.unwrap_or(0..total_frames);
+    let total_frames = total_frames.min(frame_range.end);
 
     let cursor_smoothing =
         (!project.cursor.raw).then_some(spring_mass_damper::SpringMassDamperSimulationConfig {
@@ -1144,7 +1150,7 @@ pub async fn render_video_to_channel_nv12(
         });
     let zoom_focus_interpolators_construct_ms = zoom_build_start.elapsed().as_millis() as u64;
 
-    let mut frame_number = 0;
+    let mut frame_number = frame_range.start.min(total_frames);
 
     let renderer_setup_start = Instant::now();
     let mut frame_renderer = FrameRenderer::new(constants);

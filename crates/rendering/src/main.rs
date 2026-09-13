@@ -203,6 +203,7 @@ async fn main() -> Result<()> {
             fps,
             XY::new(output_size.0, output_size.1),
             &recordings,
+            None,
         )
         .await
     });
