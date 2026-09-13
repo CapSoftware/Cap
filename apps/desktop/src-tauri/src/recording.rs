@@ -5076,11 +5076,9 @@ pub async fn restart_recording(
                                 expected.as_deref(),
                                 cleanup_completed
                                     && matches!(state.recording_state, RecordingState::None),
-                            ) && let Some(window) = editor_window_for_path(app, &editor_path)
-                            {
-                                let _ = window.unminimize();
-                                let _ = window.show();
-                                let _ = window.set_focus();
+                            ) {
+                                crate::editor_recording::finish(app);
+                                crate::editor_recording::reveal_editor(app, &editor_path);
                             }
                         }
                     },
@@ -5831,12 +5829,11 @@ async fn handle_recording_end_inner(
     if let Some(editor_path) = take_editor_target_after_recording(
         &EditorRecordingTarget::get(&handle),
         preserve_editor_target,
-    ) && let Some(editor_window) = editor_window_for_path(&handle, &editor_path)
-    {
-        editor_took_foreground = true;
-        let _ = editor_window.unminimize();
-        let _ = editor_window.show();
-        let _ = editor_window.set_focus();
+    ) {
+        crate::editor_recording::finish(&handle);
+        if crate::editor_recording::reveal_editor(&handle, &editor_path) {
+            editor_took_foreground = true;
+        }
     }
 
     CurrentRecordingChanged.emit(&handle).ok();
@@ -5872,11 +5869,8 @@ async fn apply_post_studio_editor_behaviour(
     duration_secs: f64,
 ) -> bool {
     if let Some(editor_path) = EditorRecordingTarget::take(app) {
-        if let Some(editor_window) = editor_window_for_path(app, &editor_path) {
-            let _ = editor_window.unminimize();
-            let _ = editor_window.show();
-            let _ = editor_window.set_focus();
-        }
+        crate::editor_recording::finish(app);
+        crate::editor_recording::reveal_editor(app, &editor_path);
 
         let _ = EditorRecordingAdded {
             editor_path,

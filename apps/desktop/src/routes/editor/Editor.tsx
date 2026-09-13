@@ -976,7 +976,6 @@ function Inner(props: {
 									<Show when={clipsSidebarMounted()}>
 										<Suspense>
 											<ClipsSidebar
-												open={isClipsMode()}
 												class={isClipsMode() ? undefined : "hidden"}
 											/>
 										</Suspense>

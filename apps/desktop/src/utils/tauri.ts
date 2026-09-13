@@ -429,8 +429,14 @@ async getEditorMeta() : Promise<RecordingMeta> {
 async getRecordingMetaByPath(projectPath: string) : Promise<RecordingMeta> {
     return await TAURI_INVOKE("get_recording_meta_by_path", { projectPath });
 },
-async setEditorRecordingTarget(projectPath: string | null) : Promise<null> {
-    return await TAURI_INVOKE("set_editor_recording_target", { projectPath });
+async openEditorRecordingMain(projectPath: string) : Promise<null> {
+    return await TAURI_INVOKE("open_editor_recording_main", { projectPath });
+},
+async cancelEditorRecordingFlow() : Promise<null> {
+    return await TAURI_INVOKE("cancel_editor_recording_flow");
+},
+async getEditorRecordingTarget() : Promise<EditorRecordingFlowInfo | null> {
+    return await TAURI_INVOKE("get_editor_recording_target");
 },
 async deleteRecordingDirectory(path: string) : Promise<null> {
     return await TAURI_INVOKE("delete_recording_directory", { path });
@@ -589,6 +595,7 @@ devicesUpdated: DevicesUpdated,
 diagnosticProgress: DiagnosticProgress,
 downloadProgress: DownloadProgress,
 editorRecordingAdded: EditorRecordingAdded,
+editorRecordingFlowChanged: EditorRecordingFlowChanged,
 editorStateChanged: EditorStateChanged,
 frameLayoutEvent: FrameLayoutEvent,
 newNotification: NewNotification,
@@ -623,6 +630,7 @@ devicesUpdated: "devices-updated",
 diagnosticProgress: "diagnostic-progress",
 downloadProgress: "download-progress",
 editorRecordingAdded: "editor-recording-added",
+editorRecordingFlowChanged: "editor-recording-flow-changed",
 editorStateChanged: "editor-state-changed",
 frameLayoutEvent: "frame-layout-event",
 newNotification: "new-notification",
@@ -1014,6 +1022,8 @@ x: number; width: number; height: number }
 export type DownloadProgress = { progress: number; message: string }
 export type EditorPreviewQuality = "quarter" | "half" | "full"
 export type EditorRecordingAdded = { editor_path: string; recording_path: string }
+export type EditorRecordingFlowChanged = { target: EditorRecordingFlowInfo | null }
+export type EditorRecordingFlowInfo = { projectPath: string; projectName: string }
 export type EditorStateChanged = { playhead_position: number }
 export type ExportCompression = "Maximum" | "Social" | "Web" | "Potato"
 export type ExportDestination = "projectFolder" | { customPath: { dir: string } }

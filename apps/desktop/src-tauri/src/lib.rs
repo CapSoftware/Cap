@@ -18,6 +18,7 @@ mod crash_sentinel;
 mod deeplink_actions;
 mod diagnostics;
 mod editor_preparing;
+mod editor_recording;
 mod editor_window;
 mod exit_shutdown;
 mod export;
@@ -4853,15 +4854,6 @@ async fn get_recording_meta_by_path(project_path: PathBuf) -> Result<RecordingMe
 
 #[tauri::command]
 #[specta::specta]
-async fn set_editor_recording_target(
-    app: AppHandle,
-    project_path: Option<PathBuf>,
-) -> Result<(), String> {
-    EditorRecordingTarget::set(&app, project_path);
-    Ok(())
-}
-#[tauri::command]
-#[specta::specta]
 #[instrument(skip(editor))]
 async fn set_pretty_name(editor: WindowEditorInstance, pretty_name: String) -> Result<(), String> {
     let mut meta = editor.meta().clone();
@@ -6884,7 +6876,9 @@ fn specta_builder() -> tauri_specta::Builder {
             set_window_transparent,
             get_editor_meta,
             get_recording_meta_by_path,
-            set_editor_recording_target,
+            editor_recording::open_editor_recording_main,
+            editor_recording::cancel_editor_recording_flow,
+            editor_recording::get_editor_recording_target,
             delete_recording_directory,
             set_pretty_name,
             set_server_url,
@@ -6939,6 +6933,7 @@ fn specta_builder() -> tauri_specta::Builder {
             RecordingOptionsChanged,
             NewStudioRecordingAdded,
             EditorRecordingAdded,
+            editor_recording::EditorRecordingFlowChanged,
             NewScreenshotAdded,
             RenderFrameEvent,
             EditorStateChanged,
@@ -7244,6 +7239,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(EditorWindowIds::default());
             app.manage(ScreenshotEditorWindowIds::default());
             app.manage(EditorRecordingTarget::default());
+            app.manage(editor_recording::EditorRecordingFlowState::default());
             #[cfg(target_os = "macos")]
             app.manage(crate::platform::ScreenCapturePrewarmer::default());
             #[cfg(target_os = "macos")]
@@ -7616,64 +7612,10 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     });
                                 }
                                 CapWindowId::Main => {
-                                api.prevent_close();
-                                clean_capture::cancel_closed_preflight(app);
-                                hide_main_window(app);
-
-                                #[cfg(target_os = "macos")]
-                                crate::permissions::schedule_macos_dock_visibility_sync(app);
-
-                                let Some(state) = app.try_state::<ArcLock<App>>() else {
-                                    warn!("App state unavailable during main window close request");
-                                    return;
-                                };
-                                let is_recording = state
-                                    .try_read()
-                                    .map(|s| s.is_recording_active_or_pending())
-                                    .unwrap_or(true);
-
-                                if !is_recording {
-                                    if let Some(camera_window) = CapWindowId::Camera.get(app) {
-                                        let _ = camera_window.hide();
-                                    }
-
-                                    close_target_select_overlays(app);
-
-                                    let app = app.clone();
-                                    spawn_on_runtime(async move {
-                                        let Some(state) = app.try_state::<ArcLock<App>>() else {
-                                            warn!("App state unavailable during main window close cleanup");
-                                            return;
-                                        };
-
-                                        let (mic_feed, camera_feed) = {
-                                            let mut app_state = state.write().await;
-                                            app_state.camera_preview.pause();
-                                            app_state.applied_mic_input.invalidate();
-                                            (
-                                                app_state.mic_feed.clone(),
-                                                app_state.camera_feed.clone(),
-                                            )
-                                        };
-
-                                        let _ = tokio::time::timeout(
-                                            APP_EXIT_STEP_TIMEOUT,
-                                            mic_feed.ask(microphone::RemoveInput),
-                                        )
-                                        .await;
-                                        let _ = tokio::time::timeout(
-                                            APP_EXIT_STEP_TIMEOUT,
-                                            camera_feed.ask(feeds::camera::RemoveInput),
-                                        )
-                                        .await;
-
-                                        let mut app_state = state.write().await;
-                                        app_state.selected_mic_label = None;
-                                        app_state.camera_in_use = false;
-                                    });
+                                    api.prevent_close();
+                                    dismiss_main_window(app);
                                 }
-                            }
-                            _ => {}
+                                _ => {}
                         }
                     }
                 }
@@ -7748,6 +7690,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 });
                             }
                             CapWindowId::Editor { .. } | CapWindowId::ScreenshotEditor { .. } => {
+                                editor_recording::abort_if_editor_gone(app);
                                 restore_main_windows_if_no_editors(app);
                             }
                             CapWindowId::Settings => {
@@ -9152,6 +9095,67 @@ fn show_import_error_dialog(app: &AppHandle, message: String) {
         .title("Import Error")
         .kind(tauri_plugin_dialog::MessageDialogKind::Error)
         .show(|_| {});
+}
+
+/// Everything a close request on the main window does -- hide it, drop the
+/// preview inputs when nothing is recording, and hand the foreground back to
+/// the editor that started a "Record a new clip" flow.
+pub(crate) fn dismiss_main_window(app: &AppHandle) {
+    clean_capture::cancel_closed_preflight(app);
+    hide_main_window(app);
+
+    #[cfg(target_os = "macos")]
+    crate::permissions::schedule_macos_dock_visibility_sync(app);
+
+    let Some(state) = app.try_state::<ArcLock<App>>() else {
+        warn!("App state unavailable during main window close request");
+        return;
+    };
+    let is_recording = state
+        .try_read()
+        .map(|s| s.is_recording_active_or_pending())
+        .unwrap_or(true);
+
+    if !is_recording {
+        if let Some(camera_window) = CapWindowId::Camera.get(app) {
+            let _ = camera_window.hide();
+        }
+
+        close_target_select_overlays(app);
+
+        let app_for_cleanup = app.clone();
+        spawn_on_runtime(async move {
+            let app = app_for_cleanup;
+            let Some(state) = app.try_state::<ArcLock<App>>() else {
+                warn!("App state unavailable during main window close cleanup");
+                return;
+            };
+
+            let (mic_feed, camera_feed) = {
+                let mut app_state = state.write().await;
+                app_state.camera_preview.pause();
+                app_state.applied_mic_input.invalidate();
+                (app_state.mic_feed.clone(), app_state.camera_feed.clone())
+            };
+
+            let _ =
+                tokio::time::timeout(APP_EXIT_STEP_TIMEOUT, mic_feed.ask(microphone::RemoveInput))
+                    .await;
+            let _ = tokio::time::timeout(
+                APP_EXIT_STEP_TIMEOUT,
+                camera_feed.ask(feeds::camera::RemoveInput),
+            )
+            .await;
+
+            let mut app_state = state.write().await;
+            app_state.selected_mic_label = None;
+            app_state.camera_in_use = false;
+        });
+
+        if let Some(editor_path) = editor_recording::abort(app) {
+            editor_recording::reveal_editor(app, &editor_path);
+        }
+    }
 }
 
 pub(crate) fn hide_main_window(app: &AppHandle) {
