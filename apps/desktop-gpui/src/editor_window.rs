@@ -10097,9 +10097,6 @@ fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>)
     let indexed = menu.as_ref().is_some_and(|menu| match menu.kind {
         SidebarMenu::TextFontFamily(_)
         | SidebarMenu::TextWeight(_)
-        | SidebarMenu::TextAnimationIn(_)
-        | SidebarMenu::TextAnimationOut(_)
-        | SidebarMenu::Camera3DBlurMode(_)
         | SidebarMenu::Camera3DEasing(_) => true,
         SidebarMenu::BackgroundCornerStyle
         | SidebarMenu::CameraBlur
@@ -11152,9 +11149,6 @@ mod tests {
         for kind in [
             SidebarMenu::TextFontFamily(0),
             SidebarMenu::TextWeight(1),
-            SidebarMenu::TextAnimationIn(2),
-            SidebarMenu::TextAnimationOut(3),
-            SidebarMenu::Camera3DBlurMode(4),
             SidebarMenu::Camera3DEasing(5),
         ] {
             let mut menu = open_sidebar_menu_for_test(kind);

@@ -25,8 +25,8 @@
 use cap_project::{
     AudioTrackSegment, Camera3DBlur, Camera3DBlurMode, Camera3DKeyframe, Camera3DProperties,
     Camera3DSegment, CaptionTrackSegment, KeyboardTrackSegment, MaskKind, MaskSegment, SceneMode,
-    SceneSegment, SplitLayout, TextAlign, TextAnimation, TextLayout, TextSegment,
-    TimelineConfiguration, XY, ZoomMode, ZoomSegment, mask_effect_contract,
+    SceneSegment, SplitLayout, TextAlign, TextAnimation, TextBackgroundStyle, TextLayout,
+    TextSegment, TimelineConfiguration, XY, ZoomMode, ZoomSegment, mask_effect_contract,
 };
 use gpui::{
     AnyElement, AppContext, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -36,7 +36,9 @@ use gpui::{
 
 use crate::{
     editor_edits::Selection,
-    editor_sidebar::{ColorTarget, PadKey, PanelSection, SliderKey, collapsible, dashed_divider},
+    editor_sidebar::{
+        ColorTarget, PadKey, PanelSection, SliderKey, collapsible, dashed_divider, with_alpha,
+    },
     editor_tabs::{OffsetKind, SidebarMenu},
     editor_timeline::TrackKind,
     editor_window::EditorWindow,
@@ -66,21 +68,39 @@ pub const TEXT_SEGMENT_WEIGHTS: [(f32, &str); 7] = [
     (900., "Black"),
 ];
 
-/// `TEXT_ANIMATION_OPTIONS` (`text-style.tsx:52-62`).
-pub const TEXT_ANIMATIONS: [(TextAnimation, &str); 6] = [
+/// `TEXT_ANIMATION_OPTIONS` (`text-style.tsx:52-62`), in the renderer's own
+/// variant order.
+pub const TEXT_ANIMATIONS: [(TextAnimation, &str); 14] = [
     (TextAnimation::None, "None"),
     (TextAnimation::Fade, "Fade"),
     (TextAnimation::SlideUp, "Slide up"),
     (TextAnimation::SlideDown, "Slide down"),
+    (TextAnimation::SlideLeft, "Slide left"),
+    (TextAnimation::SlideRight, "Slide right"),
     (TextAnimation::Pop, "Pop"),
+    (TextAnimation::Zoom, "Zoom"),
+    (TextAnimation::Bounce, "Bounce"),
+    (TextAnimation::Wipe, "Wipe"),
+    (TextAnimation::Words, "Words"),
+    (TextAnimation::Letters, "Letters"),
+    (TextAnimation::Tracking, "Tracking"),
     (TextAnimation::Typewriter, "Typewriter"),
+];
+
+/// `TEXT_BACKGROUND_STYLE_OPTIONS` (`text-style.tsx`). The panel's segmented
+/// control shows a fourth "None" ahead of these, which is `backgroundColor`
+/// cleared rather than a style of its own.
+pub const TEXT_BACKGROUND_STYLES: [(TextBackgroundStyle, &str); 3] = [
+    (TextBackgroundStyle::Box, "Box"),
+    (TextBackgroundStyle::Pill, "Pill"),
+    (TextBackgroundStyle::Highlight, "Highlight"),
 ];
 
 /// `TEXT_LAYOUT_OPTIONS` (`:3583-3590`): the renderer also has `splitLeft` /
 /// `splitRight`, and the source deliberately exposes only these two.
-pub const TEXT_LAYOUTS: [(TextLayout, &str, &str); 2] = [
-    (TextLayout::Overlay, "Overlay", "icons/box-select.svg"),
-    (TextLayout::Fullscreen, "Fullscreen", "icons/maximize.svg"),
+pub const TEXT_LAYOUTS: [(TextLayout, &str); 2] = [
+    (TextLayout::Overlay, "Overlay"),
+    (TextLayout::Fullscreen, "Fullscreen"),
 ];
 
 /// `TEXT_ALIGN_OPTIONS` (`:3596-3600`).
@@ -94,16 +114,28 @@ pub const TEXT_ALIGNS: [(TextAlign, &str); 3] = [
 // Text presets (`text-presets.ts`)
 // ---------------------------------------------------------------------------
 
-/// `TextPresetStyle` (`text-presets.ts:3-16`).
+/// `TextPresetStyle` (`text-presets.ts:3-16`). Every field here is written by
+/// [`apply_text_preset`], so a preset resets the look whole rather than
+/// layering onto whatever the segment carried before.
 pub struct TextPresetStyle {
     pub font_stack: &'static [&'static str],
     pub font_size: f32,
     pub font_weight: f32,
     pub italic: bool,
+    pub uppercase: bool,
     pub align: TextAlign,
     pub letter_spacing: f32,
     pub line_height: f32,
     pub shadow: f32,
+    pub glow: f32,
+    pub stroke_width: f32,
+    pub stroke_color: &'static str,
+    pub background_style: TextBackgroundStyle,
+    /// `None` is no background at all.
+    pub background_color: Option<&'static str>,
+    /// `None` keeps whatever colour the segment already has.
+    pub color: Option<&'static str>,
+    pub gradient_color: Option<&'static str>,
     pub animation_in: TextAnimation,
     pub animation_in_duration: f64,
     pub animation_out: TextAnimation,
@@ -114,6 +146,7 @@ pub struct TextPresetStyle {
 /// placement, and it is the one field that moves the box.
 pub struct TextPreset {
     pub id: &'static str,
+    pub group: &'static str,
     pub name: &'static str,
     pub sample: &'static str,
     pub style: TextPresetStyle,
@@ -124,12 +157,20 @@ const SANS_STACK: &[&str] = &["Helvetica Neue", "Segoe UI", "Inter", "sans-serif
 const SERIF_STACK: &[&str] = &["Georgia", "Times New Roman", "serif"];
 const MONO_STACK: &[&str] = &["Menlo", "Consolas", "monospace"];
 
-/// `TEXT_PRESETS` (`text-presets.ts:27-181`), in order.
+/// The Style section's chip row, in order. The row draws "All" ahead of these.
+pub const TEXT_PRESET_GROUPS: [&str; 5] =
+    ["Titles", "Lower thirds", "Callouts", "Statements", "Code"];
+
+/// The style every preset that does not draw an outline still carries.
+const PRESET_STROKE: &str = "#000000";
+
+/// `TEXT_PRESETS` (`text-presets.ts`), in order.
 pub static TEXT_PRESETS: &[TextPreset] = &[
     TextPreset {
         id: "title",
+        group: "Titles",
         name: "Title",
-        sample: "Big Title",
+        sample: "Introducing Cap",
         center: None,
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -141,6 +182,13 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
             letter_spacing: -1.,
             line_height: 1.1,
             shadow: 0.35,
+            glow: 0.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Box,
+            background_color: None,
+            color: None,
+            gradient_color: None,
             animation_in: TextAnimation::SlideUp,
             animation_in_duration: 0.35,
             animation_out: TextAnimation::Fade,
@@ -148,30 +196,97 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
         },
     },
     TextPreset {
-        id: "subtitle",
-        name: "Subtitle",
-        sample: "A calmer supporting line",
+        id: "headline",
+        group: "Titles",
+        name: "Headline",
+        sample: "Ship faster",
         center: None,
         style: TextPresetStyle {
             font_stack: SANS_STACK,
-            font_size: 44.,
-            font_weight: 500.,
+            font_size: 112.,
+            font_weight: 800.,
             italic: false,
             uppercase: false,
             align: TextAlign::Center,
-            letter_spacing: 0.,
-            line_height: 1.3,
-            shadow: 0.25,
-            animation_in: TextAnimation::Fade,
-            animation_in_duration: 0.3,
+            letter_spacing: -3.,
+            line_height: 1.,
+            shadow: 0.3,
+            glow: 0.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Box,
+            background_color: None,
+            color: None,
+            gradient_color: None,
+            animation_in: TextAnimation::Words,
+            animation_in_duration: 0.6,
             animation_out: TextAnimation::Fade,
             animation_out_duration: 0.25,
         },
     },
     TextPreset {
+        id: "cinematic",
+        group: "Titles",
+        name: "Cinematic",
+        sample: "Chapter one",
+        center: None,
+        style: TextPresetStyle {
+            font_stack: SERIF_STACK,
+            font_size: 64.,
+            font_weight: 400.,
+            italic: false,
+            uppercase: true,
+            align: TextAlign::Center,
+            letter_spacing: 12.,
+            line_height: 1.2,
+            shadow: 0.25,
+            glow: 0.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Box,
+            background_color: None,
+            color: None,
+            gradient_color: None,
+            animation_in: TextAnimation::Tracking,
+            animation_in_duration: 0.9,
+            animation_out: TextAnimation::Tracking,
+            animation_out_duration: 0.6,
+        },
+    },
+    TextPreset {
+        id: "gradient",
+        group: "Titles",
+        name: "Gradient",
+        sample: "Beautiful text",
+        center: None,
+        style: TextPresetStyle {
+            font_stack: SANS_STACK,
+            font_size: 104.,
+            font_weight: 800.,
+            italic: false,
+            uppercase: false,
+            align: TextAlign::Center,
+            letter_spacing: -2.,
+            line_height: 1.05,
+            shadow: 0.,
+            glow: 0.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Box,
+            background_color: None,
+            color: Some("#ffffff"),
+            gradient_color: Some("#b388ff"),
+            animation_in: TextAnimation::Zoom,
+            animation_in_duration: 0.45,
+            animation_out: TextAnimation::Fade,
+            animation_out_duration: 0.3,
+        },
+    },
+    TextPreset {
         id: "lower-third",
-        name: "Lower Third",
-        sample: "Name / Context",
+        group: "Lower thirds",
+        name: "Lower third",
+        sample: "Richie McIlroy",
         center: Some(XY { x: 0.22, y: 0.85 }),
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -183,16 +298,82 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
             letter_spacing: 0.,
             line_height: 1.25,
             shadow: 0.4,
-            animation_in: TextAnimation::SlideUp,
+            glow: 0.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Box,
+            background_color: None,
+            color: None,
+            gradient_color: None,
+            animation_in: TextAnimation::SlideRight,
+            animation_in_duration: 0.35,
+            animation_out: TextAnimation::Fade,
+            animation_out_duration: 0.25,
+        },
+    },
+    TextPreset {
+        id: "name-tag",
+        group: "Lower thirds",
+        name: "Name tag",
+        sample: "Richie \u{b7} Founder",
+        center: Some(XY { x: 0.2, y: 0.86 }),
+        style: TextPresetStyle {
+            font_stack: SANS_STACK,
+            font_size: 32.,
+            font_weight: 600.,
+            italic: false,
+            uppercase: false,
+            align: TextAlign::Left,
+            letter_spacing: 0.5,
+            line_height: 1.2,
+            shadow: 0.,
+            glow: 0.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Pill,
+            background_color: Some("#000000"),
+            color: Some("#ffffff"),
+            gradient_color: None,
+            animation_in: TextAnimation::SlideRight,
             animation_in_duration: 0.3,
-            animation_out: TextAnimation::SlideDown,
+            animation_out: TextAnimation::Fade,
+            animation_out_duration: 0.2,
+        },
+    },
+    TextPreset {
+        id: "caption",
+        group: "Lower thirds",
+        name: "Caption",
+        sample: "Recorded with Cap",
+        center: Some(XY { x: 0.5, y: 0.88 }),
+        style: TextPresetStyle {
+            font_stack: SANS_STACK,
+            font_size: 34.,
+            font_weight: 500.,
+            italic: false,
+            uppercase: false,
+            align: TextAlign::Center,
+            letter_spacing: 0.,
+            line_height: 1.3,
+            shadow: 0.,
+            glow: 0.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Box,
+            background_color: Some("#000000"),
+            color: Some("#ffffff"),
+            gradient_color: None,
+            animation_in: TextAnimation::Fade,
+            animation_in_duration: 0.25,
+            animation_out: TextAnimation::Fade,
             animation_out_duration: 0.25,
         },
     },
     TextPreset {
         id: "kicker",
+        group: "Callouts",
         name: "Kicker",
-        sample: "NEW FEATURE",
+        sample: "New feature",
         center: None,
         style: TextPresetStyle {
             font_stack: SANS_STACK,
@@ -204,6 +385,13 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
             letter_spacing: 6.,
             line_height: 1.2,
             shadow: 0.2,
+            glow: 0.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Box,
+            background_color: None,
+            color: None,
+            gradient_color: None,
             animation_in: TextAnimation::Fade,
             animation_in_duration: 0.2,
             animation_out: TextAnimation::Fade,
@@ -211,8 +399,125 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
         },
     },
     TextPreset {
+        id: "label",
+        group: "Callouts",
+        name: "Label",
+        sample: "Pro tip",
+        center: None,
+        style: TextPresetStyle {
+            font_stack: SANS_STACK,
+            font_size: 28.,
+            font_weight: 600.,
+            italic: false,
+            uppercase: false,
+            align: TextAlign::Center,
+            letter_spacing: 0.3,
+            line_height: 1.2,
+            shadow: 0.,
+            glow: 0.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Pill,
+            background_color: Some("#007aff"),
+            color: Some("#ffffff"),
+            gradient_color: None,
+            animation_in: TextAnimation::Pop,
+            animation_in_duration: 0.3,
+            animation_out: TextAnimation::Fade,
+            animation_out_duration: 0.2,
+        },
+    },
+    TextPreset {
+        id: "highlight",
+        group: "Callouts",
+        name: "Highlight",
+        sample: "the important part",
+        center: None,
+        style: TextPresetStyle {
+            font_stack: SANS_STACK,
+            font_size: 56.,
+            font_weight: 700.,
+            italic: false,
+            uppercase: false,
+            align: TextAlign::Center,
+            letter_spacing: 0.,
+            line_height: 1.25,
+            shadow: 0.,
+            glow: 0.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Highlight,
+            background_color: Some("#ffe14d"),
+            color: Some("#111111"),
+            gradient_color: None,
+            animation_in: TextAnimation::Wipe,
+            animation_in_duration: 0.5,
+            animation_out: TextAnimation::Fade,
+            animation_out_duration: 0.25,
+        },
+    },
+    TextPreset {
+        id: "sticker",
+        group: "Callouts",
+        name: "Sticker",
+        sample: "Boom!",
+        center: None,
+        style: TextPresetStyle {
+            font_stack: SANS_STACK,
+            font_size: 88.,
+            font_weight: 900.,
+            italic: false,
+            uppercase: false,
+            align: TextAlign::Center,
+            letter_spacing: -1.,
+            line_height: 1.1,
+            shadow: 0.3,
+            glow: 0.,
+            stroke_width: 8.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Box,
+            background_color: None,
+            color: Some("#ffffff"),
+            gradient_color: None,
+            animation_in: TextAnimation::Bounce,
+            animation_in_duration: 0.5,
+            animation_out: TextAnimation::Pop,
+            animation_out_duration: 0.25,
+        },
+    },
+    TextPreset {
+        id: "neon",
+        group: "Callouts",
+        name: "Neon",
+        sample: "Glow up",
+        center: None,
+        style: TextPresetStyle {
+            font_stack: SANS_STACK,
+            font_size: 84.,
+            font_weight: 700.,
+            italic: false,
+            uppercase: false,
+            align: TextAlign::Center,
+            letter_spacing: 1.,
+            line_height: 1.1,
+            shadow: 0.,
+            glow: 1.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Box,
+            background_color: None,
+            color: Some("#7df9ff"),
+            gradient_color: None,
+            animation_in: TextAnimation::Fade,
+            animation_in_duration: 0.5,
+            animation_out: TextAnimation::Fade,
+            animation_out_duration: 0.4,
+        },
+    },
+    TextPreset {
         id: "stat",
-        name: "Big Stat",
+        group: "Statements",
+        name: "Big stat",
         sample: "128%",
         center: None,
         style: TextPresetStyle {
@@ -225,6 +530,13 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
             letter_spacing: -2.,
             line_height: 1.,
             shadow: 0.3,
+            glow: 0.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Box,
+            background_color: None,
+            color: None,
+            gradient_color: None,
             animation_in: TextAnimation::Pop,
             animation_in_duration: 0.4,
             animation_out: TextAnimation::Fade,
@@ -233,6 +545,7 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     },
     TextPreset {
         id: "quote",
+        group: "Statements",
         name: "Quote",
         sample: "\u{201c}Make it feel effortless\u{201d}",
         center: None,
@@ -246,14 +559,22 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
             letter_spacing: 0.,
             line_height: 1.35,
             shadow: 0.2,
-            animation_in: TextAnimation::Fade,
-            animation_in_duration: 0.4,
+            glow: 0.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Box,
+            background_color: None,
+            color: None,
+            gradient_color: None,
+            animation_in: TextAnimation::Words,
+            animation_in_duration: 0.8,
             animation_out: TextAnimation::Fade,
             animation_out_duration: 0.3,
         },
     },
     TextPreset {
         id: "code",
+        group: "Code",
         name: "Code",
         sample: "$ cap record",
         center: None,
@@ -267,6 +588,13 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
             letter_spacing: 0.,
             line_height: 1.4,
             shadow: 0.,
+            glow: 0.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Box,
+            background_color: Some("#0f1115"),
+            color: Some("#e6edf3"),
+            gradient_color: None,
             animation_in: TextAnimation::Fade,
             animation_in_duration: 0.2,
             animation_out: TextAnimation::Fade,
@@ -275,6 +603,7 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
     },
     TextPreset {
         id: "typewriter",
+        group: "Code",
         name: "Typewriter",
         sample: "typing it out\u{2026}",
         center: None,
@@ -288,6 +617,13 @@ pub static TEXT_PRESETS: &[TextPreset] = &[
             letter_spacing: 0.,
             line_height: 1.3,
             shadow: 0.,
+            glow: 0.,
+            stroke_width: 0.,
+            stroke_color: PRESET_STROKE,
+            background_style: TextBackgroundStyle::Box,
+            background_color: None,
+            color: None,
+            gradient_color: None,
             animation_in: TextAnimation::Typewriter,
             animation_in_duration: 0.8,
             animation_out: TextAnimation::Fade,
@@ -332,9 +668,10 @@ pub fn pick_font_family(stack: &[&str], installed: &[String]) -> String {
         .map_or_else(|| "sans-serif".to_string(), |family| (*family).to_string())
 }
 
-/// `applyTextPreset` (`text-presets.ts:205-238`). Content, timing and colour
-/// stay the user's; the box is scaled with the font change about its **top**
-/// edge, exactly as the Size slider does.
+/// `applyTextPreset` (`text-presets.ts:205-238`). Timing stays the user's, and
+/// so does the content unless it is still the placeholder a new segment is
+/// born with; the box is scaled with the font change about its **top** edge,
+/// exactly as the Size slider does.
 pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, installed: &[String]) {
     let style = &preset.style;
     let box_scale = f64::from(
@@ -354,11 +691,21 @@ pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, install
     segment.font_size = style.font_size;
     segment.font_weight = style.font_weight;
     segment.italic = style.italic;
+    segment.uppercase = style.uppercase;
     segment.align = style.align;
     segment.letter_spacing = style.letter_spacing;
     segment.line_height = style.line_height;
     segment.opacity = 1.;
     segment.shadow = style.shadow;
+    segment.glow = style.glow;
+    segment.stroke_width = style.stroke_width;
+    segment.stroke_color = style.stroke_color.to_string();
+    segment.background_style = style.background_style;
+    segment.background_color = style.background_color.map(str::to_string);
+    segment.gradient_color = style.gradient_color.map(str::to_string);
+    if let Some(color) = style.color {
+        segment.color = color.to_string();
+    }
     segment.animation_in = style.animation_in;
     segment.animation_out = style.animation_out;
     segment.animation_in_duration = style.animation_in_duration;
@@ -366,14 +713,18 @@ pub fn apply_text_preset(segment: &mut TextSegment, preset: &TextPreset, install
     segment.fade_duration = style
         .animation_in_duration
         .max(style.animation_out_duration);
+    if matches!(segment.content.trim(), "" | "Text") {
+        segment.content = preset.sample.to_string();
+    }
     if let Some(center) = preset.center {
         segment.center = center;
     }
 }
 
 /// `matchTextPreset` (`text-presets.ts:240-265`): which preset, if any, the
-/// segment currently *is*. Everything but content, timing, colour and position
-/// has to agree, with the source's own 0.011 tolerance on the float fields.
+/// segment currently *is*. Everything but font size, colour, content, timing
+/// and position has to agree, with the source's own 0.011 tolerance on the
+/// float fields; `stroke_color` only counts when the preset draws an outline.
 pub fn match_text_preset(segment: &TextSegment, installed: &[String]) -> Option<&'static str> {
     fn near(a: f64, b: f64) -> bool {
         (a - b).abs() < 0.011
@@ -385,10 +736,17 @@ pub fn match_text_preset(segment: &TextSegment, installed: &[String]) -> Option<
             segment.font_family == pick_font_family(style.font_stack, installed)
                 && segment.font_weight == style.font_weight
                 && segment.italic == style.italic
+                && segment.uppercase == style.uppercase
                 && segment.align == style.align
                 && near(segment.letter_spacing.into(), style.letter_spacing.into())
                 && near(segment.line_height.into(), style.line_height.into())
                 && near(segment.shadow.into(), style.shadow.into())
+                && near(segment.glow.into(), style.glow.into())
+                && near(segment.stroke_width.into(), style.stroke_width.into())
+                && (style.stroke_width <= 0. || segment.stroke_color == style.stroke_color)
+                && segment.background_style == style.background_style
+                && segment.background_color.as_deref() == style.background_color
+                && segment.gradient_color.as_deref() == style.gradient_color
                 && segment.animation_in == style.animation_in
                 && segment.animation_out == style.animation_out
                 && near(segment.animation_in_duration, style.animation_in_duration)
@@ -1783,6 +2141,8 @@ pub enum PanelSlider {
     TextLetterSpacing,
     TextOpacity,
     TextShadow,
+    TextStroke,
+    TextGlow,
     TextAnimInDuration,
     TextAnimOutDuration,
 
@@ -2403,7 +2763,10 @@ impl EditorWindow {
             PanelSlider::TextFontSize => (TEXT_FONT_SIZE_MIN, TEXT_FONT_SIZE_MAX, 1.),
             PanelSlider::TextLineHeight => (0.8, 2., 0.05),
             PanelSlider::TextLetterSpacing => (-2., 20., 0.5),
-            PanelSlider::TextOpacity | PanelSlider::TextShadow => (0., 1., 0.01),
+            PanelSlider::TextOpacity | PanelSlider::TextShadow | PanelSlider::TextGlow => {
+                (0., 1., 0.01)
+            }
+            PanelSlider::TextStroke => (0., 12., 0.5),
             PanelSlider::TextAnimInDuration | PanelSlider::TextAnimOutDuration => (0., 3., 0.05),
             PanelSlider::AudioVolume => (MIN_VOLUME_DB, MAX_VOLUME_DB, 1.),
             // `maxValue={fadeMax()}` -- `Math.max(0.1, end - start)`
@@ -2475,6 +2838,8 @@ impl EditorWindow {
             | PanelSlider::TextLetterSpacing
             | PanelSlider::TextOpacity
             | PanelSlider::TextShadow
+            | PanelSlider::TextStroke
+            | PanelSlider::TextGlow
             | PanelSlider::TextAnimInDuration
             | PanelSlider::TextAnimOutDuration => {
                 let Some(segment) = timeline.text_segments.get(index) else {
@@ -2488,6 +2853,8 @@ impl EditorWindow {
                     PanelSlider::TextLetterSpacing => segment.letter_spacing,
                     PanelSlider::TextOpacity => segment.opacity,
                     PanelSlider::TextShadow => segment.shadow,
+                    PanelSlider::TextStroke => segment.stroke_width,
+                    PanelSlider::TextGlow => segment.glow,
                     PanelSlider::TextAnimInDuration => segment.animation_in_duration as f32,
                     _ => segment.animation_out_duration as f32,
                 };
@@ -2609,7 +2976,9 @@ impl EditorWindow {
             | PanelSlider::TextLineHeight
             | PanelSlider::TextLetterSpacing
             | PanelSlider::TextOpacity
-            | PanelSlider::TextShadow => {
+            | PanelSlider::TextShadow
+            | PanelSlider::TextStroke
+            | PanelSlider::TextGlow => {
                 self.edit_text_segment("text-slider", index, window, cx, move |segment| {
                     match slider {
                         PanelSlider::TextLayoutTransition => {
@@ -2636,6 +3005,8 @@ impl EditorWindow {
                             segment.letter_spacing = value.clamp(-2., 20.)
                         }
                         PanelSlider::TextOpacity => segment.opacity = value.clamp(0., 1.),
+                        PanelSlider::TextStroke => segment.stroke_width = value.clamp(0., 12.),
+                        PanelSlider::TextGlow => segment.glow = value.clamp(0., 1.),
                         _ => segment.shadow = value.clamp(0., 1.),
                     }
                     true
@@ -2803,30 +3174,6 @@ impl EditorWindow {
                     })
                     .collect()
             }
-            SidebarMenu::TextAnimationIn(_) | SidebarMenu::TextAnimationOut(_) => {
-                let segment = timeline.text_segments.get(index);
-                let current = segment.map_or(TextAnimation::Fade, |segment| {
-                    if matches!(kind, SidebarMenu::TextAnimationIn(_)) {
-                        segment.animation_in
-                    } else {
-                        segment.animation_out
-                    }
-                });
-                TEXT_ANIMATIONS
-                    .iter()
-                    .map(|(animation, label)| ui::MenuItem::new(*label, *animation == current))
-                    .collect()
-            }
-            SidebarMenu::Camera3DBlurMode(_) => {
-                let current = timeline
-                    .camera3d_segments
-                    .get(index)
-                    .map_or(Camera3DBlurMode::None, |segment| segment.blur.mode);
-                CAMERA3D_BLUR_MODES
-                    .iter()
-                    .map(|(mode, label)| ui::MenuItem::new(*label, *mode == current))
-                    .collect()
-            }
             SidebarMenu::Camera3DEasing(_) => {
                 let current = timeline
                     .camera3d_segments
@@ -2872,34 +3219,6 @@ impl EditorWindow {
                 let weight = *weight;
                 self.edit_text_segment("text-weight", segment, window, cx, move |segment| {
                     segment.font_weight = weight;
-                    true
-                });
-            }
-            SidebarMenu::TextAnimationIn(_) | SidebarMenu::TextAnimationOut(_) => {
-                let Some((animation, _)) = TEXT_ANIMATIONS.get(index) else {
-                    return;
-                };
-                let animation = *animation;
-                let is_in = matches!(kind, SidebarMenu::TextAnimationIn(_));
-                self.edit_text_segment("text-animation", segment, window, cx, move |target| {
-                    if is_in {
-                        target.animation_in = animation;
-                    } else {
-                        target.animation_out = animation;
-                    }
-                    true
-                });
-            }
-            SidebarMenu::Camera3DBlurMode(_) => {
-                let Some((mode, _)) = CAMERA3D_BLUR_MODES.get(index) else {
-                    return;
-                };
-                let mode = *mode;
-                self.edit_camera3d_segment("camera3d-blur-mode", segment, window, cx, move |s| {
-                    if s.blur.mode == mode {
-                        return false;
-                    }
-                    seed_blur_mode(&mut s.blur, mode);
                     true
                 });
             }
@@ -3906,82 +4225,243 @@ impl EditorWindow {
     }
 }
 
+/// A stored `#RRGGBB` as a paintable colour.
+fn hex_color(hex: &str) -> Option<Hsla> {
+    crate::editor_sidebar::hex_to_rgb(hex).map(|rgba| {
+        crate::editor_sidebar::color_to_hsla([
+            u16::from(rgba[0]),
+            u16::from(rgba[1]),
+            u16::from(rgba[2]),
+        ])
+    })
+}
+
+/// What an Animation tile draws above its label. The Solid panel replays a
+/// 0.6s CSS keyframe of the real effect on hover; gpui has no transitions, so
+/// each effect gets one static depiction built from plain text and hairlines,
+/// spelled the same way in both apps.
+fn text_animation_depiction(animation: TextAnimation, color: Hsla, accent: Hsla) -> AnyElement {
+    let faint = with_alpha(color, 0.35);
+    let row = || {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .h(px(20.))
+            .text_size(px(13.))
+            .font_weight(FontWeight::SEMIBOLD)
+    };
+    match animation {
+        TextAnimation::None => row().child("Aa").into_any_element(),
+        TextAnimation::Fade => row()
+            .text_color(with_alpha(color, 0.45))
+            .child("Aa")
+            .into_any_element(),
+        TextAnimation::SlideUp => row()
+            .gap(px(2.))
+            .child("Aa")
+            .child("\u{2191}")
+            .into_any_element(),
+        TextAnimation::SlideDown => row()
+            .gap(px(2.))
+            .child("Aa")
+            .child("\u{2193}")
+            .into_any_element(),
+        TextAnimation::SlideLeft => row()
+            .gap(px(2.))
+            .child("\u{2190}")
+            .child("Aa")
+            .into_any_element(),
+        TextAnimation::SlideRight => row()
+            .gap(px(2.))
+            .child("Aa")
+            .child("\u{2192}")
+            .into_any_element(),
+        TextAnimation::Pop => row().text_size(px(15.)).child("Aa").into_any_element(),
+        TextAnimation::Zoom => row().text_size(px(11.)).child("Aa").into_any_element(),
+        TextAnimation::Bounce => div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .h(px(20.))
+            .gap(px(2.))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Aa"),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(14.))
+                    .h(px(1.5))
+                    .bg(with_alpha(color, 0.4)),
+            )
+            .into_any_element(),
+        TextAnimation::Wipe => row()
+            .gap(px(2.))
+            .child("A")
+            .child(div().flex_none().w(px(1.)).h(px(12.)).bg(color))
+            .child(div().text_color(faint).child("a"))
+            .into_any_element(),
+        TextAnimation::Words => row()
+            .gap(px(3.))
+            .child("Aa")
+            .child(div().text_color(faint).child("Bb"))
+            .into_any_element(),
+        TextAnimation::Letters => row()
+            .child("A")
+            .child(div().text_color(faint).child("a"))
+            .into_any_element(),
+        TextAnimation::Tracking => row().gap(px(4.)).child("A").child("a").into_any_element(),
+        TextAnimation::Typewriter => row()
+            .gap(px(1.))
+            .child("Aa")
+            .child(div().text_color(accent).child("\u{258f}"))
+            .into_any_element(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The six remaining panels
 // ---------------------------------------------------------------------------
 
 impl EditorWindow {
-    /// `TextSegmentConfig` (`:3613-4000`).
-    /// `Templates` (`ConfigSidebar.tsx:3746-3762`) over `TextPresetCard`
-    /// (`:3534-3588`): a two-column grid of `h-16` cards on a
-    /// `linear-gradient(135deg, #17181c, #2a2c33)`, each showing its sample in
-    /// the preset's own family, weight, slant and tracking, with the name in
-    /// `text-[10px] text-white/50` pinned to the bottom. The card in force
-    /// takes `border-blue-9 ring-1 ring-blue-9`.
+    /// The Style section's preset grid.
+    ///
+    /// A card draws the preset's family, weight, slant, case and colour, plus
+    /// the background span with its box / pill / highlight radius. The stroke,
+    /// gradient, glow and shadow the renderer applies have no gpui equivalent
+    /// on a text run, and gpui's text system exposes no letter spacing, so a
+    /// card leaves all five out -- the panel's own controls below still show
+    /// them.
     fn render_text_presets(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let installed = installed_fonts();
+        let group = self.sidebar.text_style_group;
         let active = self
             .timeline()
             .and_then(|timeline| timeline.text_segments.get(index))
             .and_then(|segment| match_text_preset(segment, installed));
 
+        let chip = |slot: usize, label: &'static str, cx: &mut Context<Self>| {
+            let selected = group == slot;
+            div()
+                .id(SharedString::from(format!(
+                    "text-style-group-{index}-{slot}"
+                )))
+                .flex()
+                .flex_none()
+                .items_center()
+                .h(px(22.))
+                .px(px(6.))
+                .rounded_full()
+                .text_size(px(11.))
+                .font_weight(FontWeight::MEDIUM)
+                .when(selected, |this| {
+                    this.bg(Hsla::from(theme.editor.ctl_active))
+                        .text_color(Hsla::from(theme.editor.text_1))
+                })
+                .when(!selected, |this| {
+                    this.text_color(Hsla::from(theme.editor.text_2))
+                        .hover(|style| style.text_color(Hsla::from(theme.editor.text_1)))
+                })
+                .child(label)
+                .on_click(cx.listener(move |this, _, _window, cx| {
+                    this.sidebar.text_style_group = slot;
+                    cx.notify();
+                }))
+        };
+
         // `grid-cols-2 gap-2`: gpui has no grid, so the rows are explicit and
-        // each cell is `flex_1`, which is what a two-column grid of equal
-        // fractions resolves to.
+        // each cell takes the fixed width a two-column grid resolves to.
         let card = |preset: &'static TextPreset, cx: &mut Context<Self>| {
             let style = &preset.style;
             let selected = active == Some(preset.id);
             let id = preset.id;
-            // `font-size: clamp(11, fontSize * 0.22, 24)`.
-            let sample_size = (style.font_size * 0.22).clamp(11., 24.);
+            let sample_size = (style.font_size * 0.2).clamp(11., 22.);
+            let sample_color = style.color.and_then(hex_color).unwrap_or_else(gpui::white);
+            let sample_text: SharedString = if style.uppercase {
+                SharedString::from(preset.sample.to_uppercase())
+            } else {
+                SharedString::from(preset.sample)
+            };
+            let run = div()
+                .max_w_full()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .truncate()
+                .text_size(px(sample_size))
+                .text_color(sample_color)
+                .font_family(preset_font_family(style.font_stack, installed))
+                .font_weight(gpui::FontWeight(style.font_weight))
+                .when(style.italic, |this| this.italic())
+                .child(sample_text);
+            let sample = match style.background_color.and_then(hex_color) {
+                // `0.15em 0.4em` with the style's radius; highlight is the
+                // tighter marker, `0 0.25em`.
+                Some(background) => {
+                    let (radius, pad_x, pad_y) = match style.background_style {
+                        TextBackgroundStyle::Box => (sample_size * 0.2, sample_size * 0.4, 0.15),
+                        TextBackgroundStyle::Pill => (sample_size, sample_size * 0.5, 0.15),
+                        TextBackgroundStyle::Highlight => {
+                            (sample_size * 0.15, sample_size * 0.25, 0.)
+                        }
+                    };
+                    div()
+                        .flex()
+                        .max_w_full()
+                        .overflow_hidden()
+                        .rounded(px(radius))
+                        .bg(background)
+                        .px(px(pad_x))
+                        .py(px(pad_y * sample_size))
+                        .child(run)
+                        .into_any_element()
+                }
+                None => run.into_any_element(),
+            };
+
             div()
                 .id(SharedString::from(format!("text-preset-{index}-{id}")))
-                // Explicit, not `flex_1` -- see `card_grid_width`.
                 .w(px(CARD_GRID_WIDTH_2))
                 .flex_none()
-                .h(px(64.))
+                .h(px(68.))
                 .flex()
-                .flex_col()
                 .items_center()
                 .justify_center()
                 .relative()
                 .overflow_hidden()
-                .rounded(px(8.))
+                .rounded(px(10.))
                 .px(px(8.))
                 .pb(px(12.))
                 .bg(gpui::linear_gradient(
-                    135.,
-                    gpui::linear_color_stop(gpui::rgb(0x17181c), 0.),
-                    gpui::linear_color_stop(gpui::rgb(0x2a2c33), 1.),
+                    160.,
+                    gpui::linear_color_stop(gpui::rgb(0x1e1f26), 0.),
+                    gpui::linear_color_stop(gpui::rgb(0x2c2d36), 1.),
                 ))
                 .border_1()
-                .border_color(if selected {
-                    Hsla::from(theme.blue_9)
-                } else {
-                    Hsla::from(theme.gray_3)
+                .border_color(Hsla::from(theme.editor.line))
+                .when(!selected, |this| {
+                    this.hover(|style| style.border_color(Hsla::from(theme.editor.line_strong)))
                 })
                 .when(selected, |this| {
-                    this.border_2().border_color(Hsla::from(theme.blue_9))
+                    this.border_2()
+                        .border_color(Hsla::from(theme.editor.accent))
                 })
-                .child(
-                    div()
-                        .max_w_full()
-                        .overflow_hidden()
-                        .text_size(px(sample_size))
-                        .text_color(gpui::white())
-                        .font_family(preset_font_family(style.font_stack, installed))
-                        .font_weight(gpui::FontWeight(style.font_weight))
-                        .when(style.italic, |this| this.italic())
-                        .child(preset.sample),
-                )
+                .child(sample)
                 .child(
                     div()
                         .absolute()
-                        .bottom(px(4.))
+                        .left_0()
+                        .right_0()
+                        .bottom(px(6.))
+                        .text_center()
                         .text_size(px(10.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(crate::editor_sidebar::with_alpha(gpui::white(), 0.5))
+                        .text_color(with_alpha(gpui::white(), 0.55))
                         .child(preset.name),
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -3990,11 +4470,31 @@ impl EditorWindow {
                 .into_any_element()
         };
 
+        let shown: Vec<&'static TextPreset> = TEXT_PRESETS
+            .iter()
+            .filter(|preset| group == 0 || TEXT_PRESET_GROUPS.get(group - 1) == Some(&preset.group))
+            .collect();
+
         div()
             .flex()
             .flex_col()
             .gap(px(8.))
-            .children(TEXT_PRESETS.chunks(2).map(|row| {
+            .child(
+                div()
+                    .id(SharedString::from(format!("text-style-groups-{index}")))
+                    .flex()
+                    .flex_row()
+                    .gap(px(4.))
+                    .flex_wrap()
+                    .child(chip(0, "All", cx))
+                    .children(
+                        TEXT_PRESET_GROUPS
+                            .iter()
+                            .enumerate()
+                            .map(|(slot, label)| chip(slot + 1, label, cx)),
+                    ),
+            )
+            .children(shown.chunks(2).map(|row| {
                 div()
                     .flex()
                     .flex_row()
@@ -4022,6 +4522,178 @@ impl EditorWindow {
         });
     }
 
+    /// The Text section's textarea: `min-h-[72px] rounded-[9px] bg-ed-ctl`
+    /// with an accent caret, which is not the shared field box's look.
+    fn render_text_content_input(&self, index: usize) -> AnyElement {
+        let theme = self.theme;
+        let Some(input) = self.field(FieldKey::TextContent(index)) else {
+            return div().into_any_element();
+        };
+        div()
+            .flex()
+            .w_full()
+            .child(
+                ui::TextInput::plain(
+                    &theme,
+                    SharedString::from(format!("text-content-{index}")),
+                    input,
+                )
+                .flex(true)
+                .height(px(72.))
+                .padding_x(px(12.))
+                .padding_y(px(8.))
+                .radius(px(9.))
+                .text_size(px(13.))
+                .line_height(px(18.))
+                .bg(Hsla::from(theme.editor.ctl))
+                .border(gpui::transparent_black())
+                .text_color(Hsla::from(theme.editor.text_1))
+                .caret_color(Hsla::from(theme.editor.accent))
+                .placeholder_color(Hsla::from(theme.editor.text_3)),
+            )
+            .into_any_element()
+    }
+
+    /// One of the Text section's two case chips.
+    fn text_case_chip(
+        &self,
+        id: SharedString,
+        label: &'static str,
+        italic: bool,
+        selected: bool,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> AnyElement {
+        let theme = self.theme;
+        div()
+            .id(id)
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .h(px(28.))
+            .px(px(10.))
+            .rounded(px(7.))
+            .text_size(px(12.))
+            .font_weight(FontWeight::MEDIUM)
+            .when(italic, |this| this.italic())
+            .when(selected, |this| {
+                this.bg(with_alpha(theme.editor.accent, 0.12))
+                    .text_color(Hsla::from(theme.editor.accent))
+            })
+            .when(!selected, |this| {
+                this.bg(Hsla::from(theme.editor.ctl))
+                    .text_color(Hsla::from(theme.editor.text_2))
+                    .hover(|style| {
+                        style
+                            .bg(Hsla::from(theme.editor.ctl_hover))
+                            .text_color(Hsla::from(theme.editor.text_1))
+                    })
+            })
+            .child(label)
+            .on_click(on_click)
+            .into_any_element()
+    }
+
+    /// The Animation section's tile grid, for whichever edge is in force.
+    fn render_text_animation_tiles(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let is_out = self.sidebar.text_anim_edge;
+        let current = self
+            .timeline()
+            .and_then(|timeline| timeline.text_segments.get(index))
+            .map_or(TextAnimation::Fade, |segment| {
+                if is_out {
+                    segment.animation_out
+                } else {
+                    segment.animation_in
+                }
+            });
+        let accent = Hsla::from(theme.editor.accent);
+
+        let tile = |slot: usize,
+                    animation: TextAnimation,
+                    label: &'static str,
+                    cx: &mut Context<Self>| {
+            let selected = animation == current;
+            let color = if selected {
+                accent
+            } else {
+                Hsla::from(theme.editor.text_2)
+            };
+            div()
+                .id(SharedString::from(format!("text-anim-{index}-{slot}")))
+                .w(px(CARD_GRID_WIDTH_3))
+                .flex_none()
+                .h(px(52.))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(4.))
+                .rounded(px(9.))
+                .border_1()
+                .border_color(if selected {
+                    with_alpha(theme.editor.accent, 0.4)
+                } else {
+                    gpui::transparent_black()
+                })
+                .bg(if selected {
+                    with_alpha(theme.editor.accent, 0.12)
+                } else {
+                    Hsla::from(theme.editor.ctl)
+                })
+                .text_color(color)
+                .when(!selected, |this| {
+                    this.hover(|style| style.bg(Hsla::from(theme.editor.ctl_hover)))
+                })
+                .child(text_animation_depiction(animation, color, accent))
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(label),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.edit_text_segment("text-animation", index, window, cx, move |segment| {
+                        if is_out {
+                            if segment.animation_out == animation {
+                                return false;
+                            }
+                            segment.animation_out = animation;
+                        } else {
+                            if segment.animation_in == animation {
+                                return false;
+                            }
+                            segment.animation_in = animation;
+                        }
+                        true
+                    });
+                }))
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .children(TEXT_ANIMATIONS.chunks(3).enumerate().map(|(row, entries)| {
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(6.))
+                    .children(
+                        entries
+                            .iter()
+                            .enumerate()
+                            .map(|(column, (animation, label))| {
+                                tile(row * 3 + column, *animation, label, cx)
+                            }),
+                    )
+            }))
+            .into_any_element()
+    }
+
+    /// `TextSegmentConfig` (`:3613-4000`), rebuilt as the six sections of the
+    /// text-track spec: Text, Style, Font, Look, Animation, Layout.
     fn render_text_panel(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let Some(segment) = self
@@ -4033,10 +4705,14 @@ impl EditorWindow {
         let layout = segment.layout;
         let align = segment.align;
         let italic = segment.italic;
+        let uppercase = segment.uppercase;
         let enabled = segment.enabled;
         let color = segment.color.clone();
         let background_color = segment.background_color.clone();
-        let background_enabled = background_color.is_some();
+        let background_style = segment.background_style;
+        let gradient_color = segment.gradient_color.clone();
+        let stroke_color = segment.stroke_color.clone();
+        let stroke_width = segment.stroke_width;
         let family = segment.font_family.clone();
         let weight_label = TEXT_SEGMENT_WEIGHTS
             .iter()
@@ -4045,84 +4721,367 @@ impl EditorWindow {
                 || SharedString::from(format!("Custom ({})", segment.font_weight)),
                 |(_, label)| SharedString::from(*label),
             );
-        let animation_in = segment.animation_in;
-        let animation_out = segment.animation_out;
-        let in_label = TEXT_ANIMATIONS
-            .iter()
-            .find(|(animation, _)| *animation == animation_in)
-            .map_or("Fade", |(_, label)| *label);
-        let out_label = TEXT_ANIMATIONS
-            .iter()
-            .find(|(animation, _)| *animation == animation_out)
-            .map_or("Fade", |(_, label)| *label);
+        let is_out = self.sidebar.text_anim_edge;
+        let edge_animation = if is_out {
+            segment.animation_out
+        } else {
+            segment.animation_in
+        };
+        let background_slot = if background_color.is_some() {
+            TEXT_BACKGROUND_STYLES
+                .iter()
+                .position(|(style, _)| *style == background_style)
+                .map_or(1, |slot| slot + 1)
+        } else {
+            0
+        };
 
         div()
             .flex()
             .flex_col()
             .gap(px(16.))
+            // -- A. Text ---------------------------------------------------
             .child(
                 ui::Field::section(&theme, SharedString::from(format!("Text {}", index + 1)))
+                    .value(
+                        ui::Toggle::plain(
+                            &theme,
+                            SharedString::from(format!("text-enabled-{index}")),
+                            enabled,
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.edit_text_segment(
+                                "text-enabled",
+                                index,
+                                window,
+                                cx,
+                                move |segment| {
+                                    segment.enabled = !enabled;
+                                    true
+                                },
+                            );
+                        }))
+                        .into_any_element(),
+                    )
+                    .child(self.render_text_content_input(index))
                     .child(
                         div()
                             .flex()
+                            .flex_row()
                             .items_center()
-                            .gap(px(12.))
-                            .child(div().flex_1().min_w_0().child(
-                                self.render_field_input(FieldKey::TextContent(index), Some(80.)),
+                            .gap(px(8.))
+                            .child(self.text_case_chip(
+                                SharedString::from(format!("text-italic-{index}")),
+                                "I",
+                                true,
+                                italic,
+                                cx.listener(move |this, _, window, cx| {
+                                    this.edit_text_segment(
+                                        "text-italic",
+                                        index,
+                                        window,
+                                        cx,
+                                        move |segment| {
+                                            segment.italic = !italic;
+                                            true
+                                        },
+                                    );
+                                }),
+                            ))
+                            .child(self.text_case_chip(
+                                SharedString::from(format!("text-uppercase-{index}")),
+                                "AA",
+                                false,
+                                uppercase,
+                                cx.listener(move |this, _, window, cx| {
+                                    this.edit_text_segment(
+                                        "text-uppercase",
+                                        index,
+                                        window,
+                                        cx,
+                                        move |segment| {
+                                            segment.uppercase = !uppercase;
+                                            true
+                                        },
+                                    );
+                                }),
                             ))
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .items_center()
-                                    .gap(px(8.))
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(Hsla::from(theme.gray_11))
-                                            .child("Enabled"),
+                                div().ml_auto().child(
+                                    ui::SegmentedControl::editor(
+                                        &theme,
+                                        SharedString::from(format!("text-align-{index}")),
+                                        TEXT_ALIGNS
+                                            .iter()
+                                            .map(|(value, icon)| {
+                                                ui::SegmentOption::icon(*icon, *value == align)
+                                            })
+                                            .collect(),
                                     )
-                                    .child(
-                                        ui::Toggle::plain(
-                                            &theme,
-                                            SharedString::from(format!("text-enabled-{index}")),
-                                            enabled,
-                                        )
-                                        .on_click(
-                                            cx.listener(move |this, _, window, cx| {
-                                                this.edit_text_segment(
-                                                    "text-enabled",
-                                                    index,
-                                                    window,
-                                                    cx,
-                                                    move |segment| {
-                                                        segment.enabled = !enabled;
-                                                        true
-                                                    },
-                                                );
-                                            }),
-                                        ),
-                                    ),
+                                    .on_select(cx.listener(
+                                        move |this, choice: &usize, window, cx| {
+                                            let Some((value, _)) = TEXT_ALIGNS.get(*choice) else {
+                                                return;
+                                            };
+                                            let value = *value;
+                                            this.edit_text_segment(
+                                                "text-align",
+                                                index,
+                                                window,
+                                                cx,
+                                                move |segment| {
+                                                    segment.align = value;
+                                                    true
+                                                },
+                                            );
+                                        },
+                                    )),
+                                ),
                             ),
                     ),
             )
+            // -- B. Style --------------------------------------------------
+            .child(ui::Field::section(&theme, "Style").child(self.render_text_presets(index, cx)))
+            // -- C. Font ---------------------------------------------------
+            .child(
+                ui::Field::section(&theme, "Font").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .child(self.menu_select_owned(
+                            SidebarMenu::TextFontFamily(index),
+                            SharedString::from(format!("text-font-{index}")),
+                            SharedString::from(font_family_label(&family)),
+                            cx,
+                        ))
+                        .child(self.menu_select(
+                            SidebarMenu::TextWeight(index),
+                            "text-weight",
+                            weight_label,
+                            cx,
+                        ))
+                        .child(self.slider_field(
+                            "Size",
+                            SliderKey::Panel(PanelSlider::TextFontSize, index),
+                            "int",
+                            cx,
+                        ))
+                        .child(self.slider_field(
+                            "Line height",
+                            SliderKey::Panel(PanelSlider::TextLineHeight, index),
+                            "",
+                            cx,
+                        ))
+                        .child(self.slider_field(
+                            "Letter spacing",
+                            SliderKey::Panel(PanelSlider::TextLetterSpacing, index),
+                            "px",
+                            cx,
+                        )),
+                ),
+            )
+            // -- D. Look ---------------------------------------------------
+            .child(
+                ui::Field::section(&theme, "Look").child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .child(
+                            ui::Field::stacked(&theme, "Color").child(self.render_color_input(
+                                ColorTarget::TextColor(index),
+                                &color,
+                                cx,
+                            )),
+                        )
+                        .child(
+                            ui::Field::inline(&theme, "Gradient").child(
+                                ui::Toggle::plain(
+                                    &theme,
+                                    SharedString::from(format!("text-gradient-{index}")),
+                                    gradient_color.is_some(),
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.edit_text_segment(
+                                            "text-gradient",
+                                            index,
+                                            window,
+                                            cx,
+                                            move |segment| {
+                                                segment.gradient_color =
+                                                    match segment.gradient_color.is_some() {
+                                                        true => None,
+                                                        false => Some("#7c9cff".to_string()),
+                                                    };
+                                                true
+                                            },
+                                        );
+                                    },
+                                )),
+                            ),
+                        )
+                        .children(gradient_color.map(|gradient| {
+                            self.render_color_input(ColorTarget::TextGradient(index), &gradient, cx)
+                        }))
+                        .child(
+                            ui::Field::stacked(&theme, "Background").child(
+                                ui::SegmentedControl::editor(
+                                    &theme,
+                                    SharedString::from(format!("text-background-{index}")),
+                                    std::iter::once(ui::SegmentOption::new(
+                                        "None",
+                                        background_slot == 0,
+                                    ))
+                                    .chain(TEXT_BACKGROUND_STYLES.iter().enumerate().map(
+                                        |(slot, (_, label))| {
+                                            ui::SegmentOption::new(
+                                                *label,
+                                                background_slot == slot + 1,
+                                            )
+                                        },
+                                    ))
+                                    .collect(),
+                                )
+                                .stretch()
+                                .on_select(cx.listener(
+                                    move |this, choice: &usize, window, cx| {
+                                        let style = choice
+                                            .checked_sub(1)
+                                            .and_then(|slot| TEXT_BACKGROUND_STYLES.get(slot))
+                                            .map(|(style, _)| *style);
+                                        this.edit_text_segment(
+                                            "text-background",
+                                            index,
+                                            window,
+                                            cx,
+                                            move |segment| match style {
+                                                None => {
+                                                    if segment.background_color.is_none() {
+                                                        return false;
+                                                    }
+                                                    segment.background_color = None;
+                                                    true
+                                                }
+                                                Some(style) => {
+                                                    segment.background_style = style;
+                                                    if segment.background_color.is_none() {
+                                                        segment.background_color =
+                                                            Some("#000000".to_string());
+                                                    }
+                                                    true
+                                                }
+                                            },
+                                        );
+                                    },
+                                )),
+                            ),
+                        )
+                        .children(background_color.map(|background| {
+                            self.render_color_input(
+                                ColorTarget::TextBackground(index),
+                                &background,
+                                cx,
+                            )
+                        }))
+                        .child(self.slider_field(
+                            "Outline",
+                            SliderKey::Panel(PanelSlider::TextStroke, index),
+                            "px",
+                            cx,
+                        ))
+                        .children((stroke_width > 0.).then(|| {
+                            self.render_color_input(
+                                ColorTarget::TextStroke(index),
+                                &stroke_color,
+                                cx,
+                            )
+                        }))
+                        .child(self.slider_field(
+                            "Shadow",
+                            SliderKey::Panel(PanelSlider::TextShadow, index),
+                            "x100%",
+                            cx,
+                        ))
+                        .child(self.slider_field(
+                            "Glow",
+                            SliderKey::Panel(PanelSlider::TextGlow, index),
+                            "x100%",
+                            cx,
+                        ))
+                        .child(self.slider_field(
+                            "Opacity",
+                            SliderKey::Panel(PanelSlider::TextOpacity, index),
+                            "x100%",
+                            cx,
+                        )),
+                ),
+            )
+            // -- E. Animation ----------------------------------------------
+            .child(
+                ui::Field::section(&theme, "Animation")
+                    .value(
+                        ui::SegmentedControl::editor(
+                            &theme,
+                            SharedString::from(format!("text-anim-edge-{index}")),
+                            vec![
+                                ui::SegmentOption::new("In", !is_out),
+                                ui::SegmentOption::new("Out", is_out),
+                            ],
+                        )
+                        .on_select(cx.listener(move |this, choice: &usize, _window, cx| {
+                            this.sidebar.text_anim_edge = *choice == 1;
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.))
+                            .child(self.render_text_animation_tiles(index, cx))
+                            .children((edge_animation != TextAnimation::None).then(|| {
+                                self.slider_field(
+                                    "Duration",
+                                    SliderKey::Panel(
+                                        if is_out {
+                                            PanelSlider::TextAnimOutDuration
+                                        } else {
+                                            PanelSlider::TextAnimInDuration
+                                        },
+                                        index,
+                                    ),
+                                    "secs",
+                                    cx,
+                                )
+                                .into_any_element()
+                            })),
+                    ),
+            )
+            // -- F. Layout -------------------------------------------------
             .child(
                 ui::Field::section(&theme, "Layout").child(
                     div()
                         .flex()
                         .flex_col()
-                        .gap(px(12.))
+                        .gap(px(8.))
                         .child(
-                            self.icon_toggle_row(
+                            ui::SegmentedControl::editor(
+                                &theme,
                                 SharedString::from(format!("text-layout-{index}")),
                                 TEXT_LAYOUTS
                                     .iter()
-                                    .map(|(value, label, icon)| {
-                                        (*icon, Some(*label), *value == layout)
+                                    .map(|(value, label)| {
+                                        ui::SegmentOption::new(*label, *value == layout)
                                     })
                                     .collect(),
-                                cx.listener(move |this, choice: &usize, window, cx| {
-                                    let Some((value, ..)) = TEXT_LAYOUTS.get(*choice) else {
+                            )
+                            .stretch()
+                            .on_select(cx.listener(
+                                move |this, choice: &usize, window, cx| {
+                                    let Some((value, _)) = TEXT_LAYOUTS.get(*choice) else {
                                         return;
                                     };
                                     let value = *value;
@@ -4136,367 +5095,37 @@ impl EditorWindow {
                                                 return false;
                                             }
                                             segment.layout = value;
-                                            // A takeover layout implies where
-                                            // the text belongs (`:3672-3677`).
+                                            // A takeover layout implies where the
+                                            // text belongs (`:3672-3677`).
                                             if value == TextLayout::Fullscreen {
                                                 segment.center = XY::new(0.5, 0.5);
                                             }
                                             true
                                         },
                                     );
-                                }),
-                            ),
+                                },
+                            )),
                         )
                         .children((layout == TextLayout::Fullscreen).then(|| {
                             div()
                                 .text_size(px(12.))
-                                .text_color(Hsla::from(theme.gray_10))
+                                .text_color(Hsla::from(theme.editor.text_3))
                                 .child(
                                     "Pauses the video while the text is shown, then resumes \
-                                         where it left off.",
+                                     where it left off.",
                                 )
                                 .into_any_element()
                         }))
                         .children((layout != TextLayout::Overlay).then(|| {
-                            self.labelled_small(
+                            self.slider_field(
                                 "Screen transition",
-                                self.slider(
-                                    SliderKey::Panel(PanelSlider::TextLayoutTransition, index),
-                                    "s",
-                                    cx,
-                                )
-                                .into_any_element(),
+                                SliderKey::Panel(PanelSlider::TextLayoutTransition, index),
+                                "secs",
+                                cx,
                             )
+                            .into_any_element()
                         })),
                 ),
-            )
-            // `Templates` (`:3746-3762`): eight `TextPresetCard`s in a
-            // `grid-cols-2`, each drawing its sample in the preset's own family,
-            // weight and tracking.
-            .child(
-                ui::Field::stacked(&theme, "Templates").child(self.render_text_presets(index, cx)),
-            )
-            .child(
-                ui::Field::stacked(&theme, "Font").child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.))
-                        // `<FontPicker />` (`:3764-3771`).
-                        .child(self.menu_select_owned(
-                            SidebarMenu::TextFontFamily(index),
-                            SharedString::from(format!("text-font-{index}")),
-                            SharedString::from(font_family_label(&family)),
-                            cx,
-                        ))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(8.))
-                                .child(div().flex_1().min_w_0().child(self.menu_select(
-                                    SidebarMenu::TextWeight(index),
-                                    "text-weight",
-                                    weight_label,
-                                    cx,
-                                )))
-                                .child(
-                                    div()
-                                        .id(SharedString::from(format!("text-italic-{index}")))
-                                        .flex()
-                                        .justify_center()
-                                        .items_center()
-                                        .size(px(36.))
-                                        .flex_none()
-                                        .rounded(px(6.))
-                                        .border_1()
-                                        .border_color(if italic {
-                                            Hsla::from(theme.blue_9)
-                                        } else {
-                                            Hsla::from(theme.gray_3)
-                                        })
-                                        .when(italic, |this| {
-                                            this.bg(crate::editor_sidebar::with_alpha(
-                                                theme.blue_9,
-                                                0.1,
-                                            ))
-                                        })
-                                        .when(!italic, |this| this.bg(Hsla::from(theme.gray_2)))
-                                        .child(
-                                            svg()
-                                                .path("icons/italic.svg")
-                                                .size(px(16.))
-                                                .text_color(if italic {
-                                                    Hsla::from(theme.blue_9)
-                                                } else {
-                                                    Hsla::from(theme.gray_11)
-                                                }),
-                                        )
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.edit_text_segment(
-                                                "text-italic",
-                                                index,
-                                                window,
-                                                cx,
-                                                move |segment| {
-                                                    segment.italic = !italic;
-                                                    true
-                                                },
-                                            );
-                                        })),
-                                ),
-                        )
-                        .child(
-                            self.labelled_small(
-                                "Size",
-                                self.slider(
-                                    SliderKey::Panel(PanelSlider::TextFontSize, index),
-                                    "",
-                                    cx,
-                                )
-                                .into_any_element(),
-                            ),
-                        ),
-                ),
-            )
-            .child(
-                ui::Field::section(&theme, "Layout").child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(12.))
-                        .child(
-                            self.icon_toggle_row(
-                                SharedString::from(format!("text-align-{index}")),
-                                TEXT_ALIGNS
-                                    .iter()
-                                    .map(|(value, icon)| (*icon, None, *value == align))
-                                    .collect(),
-                                cx.listener(move |this, choice: &usize, window, cx| {
-                                    let Some((value, _)) = TEXT_ALIGNS.get(*choice) else {
-                                        return;
-                                    };
-                                    let value = *value;
-                                    this.edit_text_segment(
-                                        "text-align",
-                                        index,
-                                        window,
-                                        cx,
-                                        move |segment| {
-                                            segment.align = value;
-                                            true
-                                        },
-                                    );
-                                }),
-                            ),
-                        )
-                        .child(
-                            self.labelled_small(
-                                "Line height",
-                                self.slider(
-                                    SliderKey::Panel(PanelSlider::TextLineHeight, index),
-                                    "",
-                                    cx,
-                                )
-                                .into_any_element(),
-                            ),
-                        )
-                        .child(
-                            self.labelled_small(
-                                "Letter spacing",
-                                self.slider(
-                                    SliderKey::Panel(PanelSlider::TextLetterSpacing, index),
-                                    "px",
-                                    cx,
-                                )
-                                .into_any_element(),
-                            ),
-                        ),
-                ),
-            )
-            .child(
-                ui::Field::section(&theme, "Color").child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(12.))
-                        .child(self.render_color_input(ColorTarget::TextColor(index), &color, cx))
-                        .child(
-                            self.labelled_small(
-                                "Background",
-                                ui::Toggle::plain(
-                                    &theme,
-                                    SharedString::from(format!("text-background-enabled-{index}")),
-                                    background_enabled,
-                                )
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.edit_text_segment(
-                                        "text-background",
-                                        index,
-                                        window,
-                                        cx,
-                                        move |segment| {
-                                            segment.background_color = if background_enabled {
-                                                None
-                                            } else {
-                                                Some("#000000".to_string())
-                                            };
-                                            true
-                                        },
-                                    );
-                                }))
-                                .into_any_element(),
-                            ),
-                        )
-                        .when_some(background_color, |this, background_color| {
-                            this.child(self.render_color_input(
-                                ColorTarget::TextBackground(index),
-                                &background_color,
-                                cx,
-                            ))
-                        })
-                        .child(
-                            self.labelled_small(
-                                "Opacity",
-                                self.slider(
-                                    SliderKey::Panel(PanelSlider::TextOpacity, index),
-                                    "",
-                                    cx,
-                                )
-                                .into_any_element(),
-                            ),
-                        )
-                        .child(
-                            self.labelled_small(
-                                "Shadow",
-                                self.slider(
-                                    SliderKey::Panel(PanelSlider::TextShadow, index),
-                                    "",
-                                    cx,
-                                )
-                                .into_any_element(),
-                            ),
-                        ),
-                ),
-            )
-            .child(
-                ui::Field::section(&theme, "Animation").child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(12.))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(8.))
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .text_color(Hsla::from(theme.gray_11))
-                                        .child("In"),
-                                )
-                                .child(self.menu_select(
-                                    SidebarMenu::TextAnimationIn(index),
-                                    "text-anim-in",
-                                    in_label,
-                                    cx,
-                                ))
-                                .children((animation_in != TextAnimation::None).then(|| {
-                                    self.slider(
-                                        SliderKey::Panel(PanelSlider::TextAnimInDuration, index),
-                                        "s",
-                                        cx,
-                                    )
-                                    .into_any_element()
-                                })),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(8.))
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .text_color(Hsla::from(theme.gray_11))
-                                        .child("Out"),
-                                )
-                                .child(self.menu_select(
-                                    SidebarMenu::TextAnimationOut(index),
-                                    "text-anim-out",
-                                    out_label,
-                                    cx,
-                                ))
-                                .children((animation_out != TextAnimation::None).then(|| {
-                                    self.slider(
-                                        SliderKey::Panel(PanelSlider::TextAnimOutDuration, index),
-                                        "s",
-                                        cx,
-                                    )
-                                    .into_any_element()
-                                })),
-                        ),
-                ),
-            )
-            .into_any_element()
-    }
-
-    /// The `grid gap-1 rounded-lg border bg-gray-2 p-1` icon strips the text
-    /// panel uses twice: layout (with labels) and alignment (icons only).
-    fn icon_toggle_row(
-        &self,
-        id: SharedString,
-        items: Vec<(&'static str, Option<&'static str>, bool)>,
-        on_select: impl Fn(&usize, &mut Window, &mut gpui::App) + 'static,
-    ) -> AnyElement {
-        let theme = self.theme;
-        let handler = std::rc::Rc::new(on_select);
-
-        div()
-            .flex()
-            .flex_row()
-            .gap(px(4.))
-            .p(px(4.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .bg(Hsla::from(theme.gray_2))
-            .children(
-                items
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, (icon, label, selected))| {
-                        let handler = handler.clone();
-                        div()
-                            .id(SharedString::from(format!("{id}-{index}")))
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(4.))
-                            .py(px(6.))
-                            .rounded(px(6.))
-                            .when(selected, |this| this.bg(Hsla::from(theme.gray_5)))
-                            .text_color(if selected {
-                                Hsla::from(theme.gray_12)
-                            } else {
-                                Hsla::from(theme.gray_10)
-                            })
-                            .child(svg().path(icon).size(px(16.)).text_color(if selected {
-                                Hsla::from(theme.gray_12)
-                            } else {
-                                Hsla::from(theme.gray_10)
-                            }))
-                            .children(label.map(|label| {
-                                div()
-                                    .text_size(px(9.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(label)
-                            }))
-                            .on_click(move |_, window, cx| handler(&index, window, cx))
-                    }),
             )
             .into_any_element()
     }
@@ -6213,10 +6842,17 @@ impl EditorWindow {
                     }
                     TrackKind::Text => {
                         for index in indices(timeline.text_segments.len()) {
+                            let segment = &timeline.text_segments[index];
                             fields.push(FieldKey::TextContent(index));
                             colors.push(ColorTarget::TextColor(index));
-                            if timeline.text_segments[index].background_color.is_some() {
+                            if segment.background_color.is_some() {
                                 colors.push(ColorTarget::TextBackground(index));
+                            }
+                            if segment.gradient_color.is_some() {
+                                colors.push(ColorTarget::TextGradient(index));
+                            }
+                            if segment.stroke_width > 0. {
+                                colors.push(ColorTarget::TextStroke(index));
                             }
                         }
                     }
@@ -6445,6 +7081,14 @@ mod tests {
         serde_json::from_value(serde_json::json!({ "start": 0.0, "end": 2.0 })).unwrap()
     }
 
+    /// A preset by id, so a test never has to track the table's order.
+    fn preset(id: &str) -> &'static TextPreset {
+        TEXT_PRESETS
+            .iter()
+            .find(|preset| preset.id == id)
+            .unwrap_or_else(|| panic!("no preset {id}"))
+    }
+
     #[test]
     fn the_preset_catalogue_matches_the_source() {
         let ids: Vec<_> = TEXT_PRESETS.iter().map(|preset| preset.id).collect();
@@ -6452,32 +7096,73 @@ mod tests {
             ids,
             [
                 "title",
-                "subtitle",
+                "headline",
+                "cinematic",
+                "gradient",
                 "lower-third",
+                "name-tag",
+                "caption",
                 "kicker",
+                "label",
+                "highlight",
+                "sticker",
+                "neon",
                 "stat",
                 "quote",
                 "code",
                 "typewriter"
             ]
         );
-        // Only "lower-third" implies placement (`text-presets.ts:71`).
+        // Only the three lower-third presets imply placement.
         let placed: Vec<_> = TEXT_PRESETS
             .iter()
             .filter(|preset| preset.center.is_some())
             .map(|preset| preset.id)
             .collect();
-        assert_eq!(placed, ["lower-third"]);
-        // Every stack ends in a generic, which is what makes `pick_font_family`
-        // total.
+        assert_eq!(placed, ["lower-third", "name-tag", "caption"]);
         for preset in TEXT_PRESETS {
+            // Every stack ends in a generic, which is what makes
+            // `pick_font_family` total.
             let last = preset.style.font_stack.last().copied().unwrap();
             assert!(
                 matches!(last, "sans-serif" | "serif" | "monospace"),
                 "{} ends in {last}",
                 preset.id
             );
+            // Every preset is reachable from a chip.
+            assert!(
+                TEXT_PRESET_GROUPS.contains(&preset.group),
+                "{} is in {}",
+                preset.id,
+                preset.group
+            );
         }
+    }
+
+    #[test]
+    fn the_animation_catalogue_is_the_renderers_own_order() {
+        let labels: Vec<_> = TEXT_ANIMATIONS.iter().map(|(_, label)| *label).collect();
+        assert_eq!(
+            labels,
+            [
+                "None",
+                "Fade",
+                "Slide up",
+                "Slide down",
+                "Slide left",
+                "Slide right",
+                "Pop",
+                "Zoom",
+                "Bounce",
+                "Wipe",
+                "Words",
+                "Letters",
+                "Tracking",
+                "Typewriter"
+            ]
+        );
+        assert_eq!(TEXT_ANIMATIONS[0].0, TextAnimation::None);
+        assert_eq!(TEXT_BACKGROUND_STYLES.len(), 3);
     }
 
     #[test]
@@ -6504,8 +7189,7 @@ mod tests {
         assert_eq!(segment.font_size, 48.);
         let top_edge = segment.center.y - segment.size.y / 2.;
 
-        let title = &TEXT_PRESETS[0];
-        apply_text_preset(&mut segment, title, &[]);
+        apply_text_preset(&mut segment, preset("title"), &[]);
 
         // 96 / 48 = 2x.
         assert!((segment.size.x - 0.7).abs() < 1e-9);
@@ -6513,24 +7197,68 @@ mod tests {
         // The top edge did not move; the centre dropped by half the growth.
         assert!((segment.center.y - segment.size.y / 2. - top_edge).abs() < 1e-9);
         assert!((segment.center.y - 0.6).abs() < 1e-9);
-        // `size.x` clamps at 1 (`text-presets.ts:224`).
         assert_eq!(segment.font_size, 96.);
         assert_eq!(segment.font_weight, 700.);
         assert_eq!(segment.align, TextAlign::Center);
         assert_eq!(segment.animation_in, TextAnimation::SlideUp);
         // `fadeDuration` is the larger of the two animation durations.
         assert!((segment.fade_duration - 0.35).abs() < 1e-9);
-        // Content and colour are the user's, untouched.
-        assert_eq!(segment.content, text_segment().content);
+        assert_eq!(segment.opacity, 1.);
+        // A preset with no colour of its own leaves the segment's alone.
         assert_eq!(segment.color, text_segment().color);
+    }
+
+    #[test]
+    fn a_preset_resets_every_style_field_it_owns() {
+        let mut segment = text_segment();
+        apply_text_preset(&mut segment, preset("sticker"), &[]);
+        assert_eq!(segment.stroke_width, 8.);
+        assert_eq!(segment.stroke_color, "#000000");
+        assert_eq!(segment.color, "#ffffff");
+        assert_eq!(segment.background_color, None);
+
+        apply_text_preset(&mut segment, preset("name-tag"), &[]);
+        // The outline the previous preset set is gone, not layered under.
+        assert_eq!(segment.stroke_width, 0.);
+        assert_eq!(segment.background_style, TextBackgroundStyle::Pill);
+        assert_eq!(segment.background_color.as_deref(), Some("#000000"));
+        assert_eq!(segment.gradient_color, None);
+
+        apply_text_preset(&mut segment, preset("gradient"), &[]);
+        assert_eq!(segment.background_color, None);
+        assert_eq!(segment.gradient_color.as_deref(), Some("#b388ff"));
+
+        apply_text_preset(&mut segment, preset("cinematic"), &[]);
+        assert!(segment.uppercase);
+        assert_eq!(segment.animation_out, TextAnimation::Tracking);
+    }
+
+    #[test]
+    fn a_preset_adopts_its_sample_only_while_the_content_is_the_placeholder() {
+        let mut segment = text_segment();
+        assert_eq!(segment.content, "Text");
+        apply_text_preset(&mut segment, preset("title"), &[]);
+        assert_eq!(segment.content, "Introducing Cap");
+
+        // An empty box counts as untouched too.
+        let mut segment = text_segment();
+        segment.content = String::new();
+        apply_text_preset(&mut segment, preset("stat"), &[]);
+        assert_eq!(segment.content, "128%");
+
+        // Anything the user typed survives.
+        let mut segment = text_segment();
+        segment.content = "Shipping today".to_string();
+        apply_text_preset(&mut segment, preset("title"), &[]);
+        assert_eq!(segment.content, "Shipping today");
     }
 
     #[test]
     fn the_box_width_clamps_at_the_whole_frame() {
         let mut segment = text_segment();
         segment.size.x = 0.8;
-        // "Big Stat" is 160px against the 48px default: a 3.33x scale.
-        apply_text_preset(&mut segment, &TEXT_PRESETS[4], &[]);
+        // "Big stat" is 160px against the 48px default: a 3.33x scale.
+        apply_text_preset(&mut segment, preset("stat"), &[]);
         assert_eq!(segment.size.x, 1.);
     }
 
@@ -6538,12 +7266,12 @@ mod tests {
     fn a_placing_preset_moves_the_box_and_the_others_do_not() {
         let mut segment = text_segment();
         segment.center = XY { x: 0.3, y: 0.4 };
-        apply_text_preset(&mut segment, &TEXT_PRESETS[1], &[]);
-        // Subtitle keeps x, and only shifts y by the box growth.
+        apply_text_preset(&mut segment, preset("headline"), &[]);
+        // Headline keeps x, and only shifts y by the box growth.
         assert!((segment.center.x - 0.3).abs() < 1e-9);
 
         let mut segment = text_segment();
-        apply_text_preset(&mut segment, &TEXT_PRESETS[2], &[]);
+        apply_text_preset(&mut segment, preset("lower-third"), &[]);
         assert!((segment.center.x - 0.22).abs() < 1e-9);
         assert!((segment.center.y - 0.85).abs() < 1e-9);
     }
@@ -6563,13 +7291,42 @@ mod tests {
         }
         // A default segment is not any of them.
         assert_eq!(match_text_preset(&text_segment(), &installed), None);
-        // One field off the style and the match is gone -- content is *not*
-        // one of those fields.
+        // Content, font size, colour and position are *not* compared.
         let mut segment = text_segment();
-        apply_text_preset(&mut segment, &TEXT_PRESETS[0], &installed);
+        apply_text_preset(&mut segment, preset("title"), &installed);
         segment.content = "anything else".into();
+        segment.font_size = 42.;
+        segment.color = "#ff0000".into();
+        segment.center = XY { x: 0.1, y: 0.1 };
         assert_eq!(match_text_preset(&segment, &installed), Some("title"));
         segment.letter_spacing += 0.5;
+        assert_eq!(match_text_preset(&segment, &installed), None);
+    }
+
+    #[test]
+    fn the_new_look_fields_are_part_of_the_preset_match() {
+        let installed = vec!["Inter".to_string()];
+        let mut segment = text_segment();
+        apply_text_preset(&mut segment, preset("caption"), &installed);
+        assert_eq!(match_text_preset(&segment, &installed), Some("caption"));
+
+        segment.background_color = None;
+        assert_eq!(match_text_preset(&segment, &installed), None);
+
+        apply_text_preset(&mut segment, preset("caption"), &installed);
+        segment.uppercase = true;
+        assert_eq!(match_text_preset(&segment, &installed), None);
+
+        apply_text_preset(&mut segment, preset("caption"), &installed);
+        segment.gradient_color = Some("#b388ff".to_string());
+        assert_eq!(match_text_preset(&segment, &installed), None);
+
+        // `stroke_color` only counts once there is an outline to colour.
+        apply_text_preset(&mut segment, preset("caption"), &installed);
+        segment.stroke_color = "#ff00ff".to_string();
+        assert_eq!(match_text_preset(&segment, &installed), Some("caption"));
+        apply_text_preset(&mut segment, preset("sticker"), &installed);
+        segment.stroke_color = "#ff00ff".to_string();
         assert_eq!(match_text_preset(&segment, &installed), None);
     }
 

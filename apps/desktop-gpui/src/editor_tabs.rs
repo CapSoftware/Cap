@@ -593,9 +593,6 @@ pub enum SidebarMenu {
     /// See the README's font-picker deviation.
     TextFontFamily(usize),
     TextWeight(usize),
-    TextAnimationIn(usize),
-    TextAnimationOut(usize),
-    Camera3DBlurMode(usize),
     Camera3DEasing(usize),
 }
 
@@ -701,9 +698,6 @@ impl EditorWindow {
                 .collect(),
             SidebarMenu::TextFontFamily(index)
             | SidebarMenu::TextWeight(index)
-            | SidebarMenu::TextAnimationIn(index)
-            | SidebarMenu::TextAnimationOut(index)
-            | SidebarMenu::Camera3DBlurMode(index)
             | SidebarMenu::Camera3DEasing(index) => self.panel_menu_items(kind, index),
         }
     }
@@ -952,9 +946,6 @@ impl EditorWindow {
             }
             SidebarMenu::TextFontFamily(segment)
             | SidebarMenu::TextWeight(segment)
-            | SidebarMenu::TextAnimationIn(segment)
-            | SidebarMenu::TextAnimationOut(segment)
-            | SidebarMenu::Camera3DBlurMode(segment)
             | SidebarMenu::Camera3DEasing(segment) => {
                 self.choose_panel_menu(kind, segment, index, window, cx)
             }

@@ -742,6 +742,11 @@ pub enum ColorTarget {
     /// A text segment's colour, per segment index.
     TextColor(usize),
     TextBackground(usize),
+    /// The outline colour, only reachable while `stroke_width > 0`.
+    TextStroke(usize),
+    /// The right-hand stop of the horizontal gradient, only reachable while
+    /// `gradient_color` is set.
+    TextGradient(usize),
 }
 
 impl ColorTarget {
@@ -838,6 +843,13 @@ pub struct SidebarState {
     /// state in the source too, not project config.
     pub caption_model: &'static str,
     pub caption_language: &'static str,
+    /// The text panel's Style chip row: 0 is "All", `n` is
+    /// `TEXT_PRESET_GROUPS[n - 1]`. Local UI state, like the source's own
+    /// signal, so it survives selecting another text segment.
+    pub text_style_group: usize,
+    /// Which edge the text panel's Animation tiles and Duration row point at:
+    /// `false` is In, `true` is Out.
+    pub text_anim_edge: bool,
     /// `editingEnd` on the 3D panel -- which of the two poses the camera
     /// sliders point at (`ConfigSidebar.tsx:4908`).
     pub editing_end_pose: bool,
@@ -915,6 +927,8 @@ impl SidebarState {
             menu: None,
             caption_model: "best",
             caption_language: "auto",
+            text_style_group: 0,
+            text_anim_edge: false,
             editing_end_pose: false,
             color_target: None,
             color_picker: None,
@@ -1704,6 +1718,18 @@ impl EditorWindow {
                 .as_ref()
                 .and_then(|timeline| timeline.text_segments.get(index))
                 .and_then(|segment| segment.background_color.clone()),
+            ColorTarget::TextStroke(index) => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.text_segments.get(index))
+                .map(|segment| segment.stroke_color.clone()),
+            ColorTarget::TextGradient(index) => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.text_segments.get(index))
+                .and_then(|segment| segment.gradient_color.clone()),
             _ => None,
         }
     }
@@ -1830,6 +1856,24 @@ impl EditorWindow {
                         return false;
                     }
                     segment.background_color = Some(hex);
+                    true
+                })
+            }
+            ColorTarget::TextStroke(index) => {
+                self.edit_text_segment("text-stroke-color", index, window, cx, move |segment| {
+                    if segment.stroke_color == hex {
+                        return false;
+                    }
+                    segment.stroke_color = hex;
+                    true
+                })
+            }
+            ColorTarget::TextGradient(index) => {
+                self.edit_text_segment("text-gradient-color", index, window, cx, move |segment| {
+                    if segment.gradient_color.as_deref() == Some(hex.as_str()) {
+                        return false;
+                    }
+                    segment.gradient_color = Some(hex);
                     true
                 })
             }
