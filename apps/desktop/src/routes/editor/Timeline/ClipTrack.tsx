@@ -10,6 +10,7 @@ import {
 	createSignal,
 	For,
 	Index,
+	type JSX,
 	Match,
 	onCleanup,
 	onMount,
@@ -17,8 +18,19 @@ import {
 	Switch,
 } from "solid-js";
 import { produce } from "solid-js/store";
-
-import type { ClipSpeedAudioMode, TimelineSegment } from "~/utils/tauri";
+import type { TimelineSegment } from "~/utils/tauri";
+import IconLucideArrowLeftToLine from "~icons/lucide/arrow-left-to-line";
+import IconLucideArrowRightToLine from "~icons/lucide/arrow-right-to-line";
+import IconLucideMousePointerBan from "~icons/lucide/mouse-pointer-ban";
+import IconLucideScissors from "~icons/lucide/scissors";
+import IconLucideTrash2 from "~icons/lucide/trash-2";
+import IconLucideVolumeX from "~icons/lucide/volume-x";
+import { clipAudioMuted, clipVolume } from "../clip-audio";
+import {
+	type ClipMergeDirection,
+	clipMergeBlocker,
+	clipMergeBlockerHint,
+} from "../clip-merge";
 import {
 	clampTransitionDuration,
 	clipTimelineDuration,
@@ -30,7 +42,9 @@ import {
 	maxTransitionDuration,
 } from "../clip-transitions";
 import { useEditorContext } from "../context";
+import { TextInput } from "../TextInput";
 import { effectiveToOutput, holdWindows } from "../timeline-holds";
+import { Slider } from "../ui";
 import { useSegmentContext, useTimelineContext } from "./context";
 import { getSectionMarker } from "./sectionMarker";
 import { SPLIT_SNAP_PX, snapSplitTime } from "./split-snapping";
@@ -146,7 +160,7 @@ const SAMPLES_PER_PIXEL = 2;
 function WaveformCanvas(props: {
 	systemWaveform?: number[];
 	micWaveform?: number[];
-	segment: { start: number; end: number };
+	segment: Pick<TimelineSegment, "start" | "end" | "volume">;
 	segmentOffset: number;
 	holds: ReadonlyArray<[number, number]>;
 }) {
@@ -157,6 +171,11 @@ function WaveformCanvas(props: {
 	let canvas: HTMLCanvasElement | undefined;
 	let rafId: number | null = null;
 	let lastRenderKey = "";
+	let pathKey = "";
+	let micPath: Path2D | undefined;
+	let systemPath: Path2D | undefined;
+	let cachedMicWaveform: number[] | undefined;
+	let cachedSystemWaveform: number[] | undefined;
 
 	const renderCanvas = () => {
 		rafId = null;
@@ -215,6 +234,7 @@ function WaveformCanvas(props: {
 				canvas.width = 1;
 				canvas.style.left = "0px";
 				canvas.style.width = "1px";
+				lastRenderKey = "";
 				return;
 			}
 
@@ -244,21 +264,27 @@ function WaveformCanvas(props: {
 			renderRange = { start: 0, end: outputDuration };
 		}
 
-		const micScale = gainToScale(project.audio.micVolumeDb);
-		const systemScale = gainToScale(project.audio.systemVolumeDb);
+		const volume = clipVolume(props.segment);
+		const micScale = gainToScale(project.audio.micVolumeDb) * volume;
+		const systemScale = gainToScale(project.audio.systemVolumeDb) * volume;
 
-		const holdsKey = holds
-			.map(([start, end]) => `${start.toFixed(2)}:${end.toFixed(2)}`)
-			.join(",");
-		const renderKey = `${canvasWidth}-${props.segment.start.toFixed(2)}-${renderRange.start.toFixed(2)}-${renderRange.end.toFixed(2)}-${holdsKey}-${micScale.toFixed(2)}-${systemScale.toFixed(2)}`;
-		if (renderKey === lastRenderKey) {
+		const holdsKey = holds.map(([start, end]) => `${start}:${end}`).join(",");
+		const geometryKey = `${canvasWidth}-${props.segment.start}-${renderRange.start}-${renderRange.end}-${holdsKey}`;
+		const renderKey = `${geometryKey}-${leftOffsetPx}-${renderWidth}-${micScale}-${systemScale}`;
+		const micWaveform = props.micWaveform;
+		const systemWaveform = props.systemWaveform;
+		const micChanged = cachedMicWaveform !== micWaveform;
+		const systemChanged = cachedSystemWaveform !== systemWaveform;
+		if (renderKey === lastRenderKey && !micChanged && !systemChanged) {
 			return;
 		}
 		lastRenderKey = renderKey;
 
-		canvas.width = canvasWidth;
-		canvas.style.left = `${leftOffsetPx}px`;
-		canvas.style.width = `${renderWidth}px`;
+		if (canvas.width !== canvasWidth) canvas.width = canvasWidth;
+		const left = `${leftOffsetPx}px`;
+		const cssWidth = `${renderWidth}px`;
+		if (canvas.style.left !== left) canvas.style.left = left;
+		if (canvas.style.width !== cssWidth) canvas.style.width = cssWidth;
 
 		const canvasHeight = canvas.height;
 		ctx.clearRect(0, 0, canvasWidth, canvasHeight);
@@ -268,36 +294,39 @@ function WaveformCanvas(props: {
 			MAX_WAVEFORM_SAMPLES,
 		);
 
-		const drawWaveform = (
-			waveform: number[] | undefined,
-			color: string,
-			gain?: number,
-		) => {
-			const path = createWaveformPath(
+		if (pathKey !== geometryKey || micChanged) {
+			micPath = createWaveformPath(
 				renderRange,
-				waveform,
+				micWaveform,
 				numSamples,
 				sourceTimeAt,
 			);
-			if (!path) return;
-			const scale = gainToScale(gain);
-			if (scale <= 0) return;
+			cachedMicWaveform = micWaveform;
+		}
+		if (pathKey !== geometryKey || systemChanged) {
+			systemPath = createWaveformPath(
+				renderRange,
+				systemWaveform,
+				numSamples,
+				sourceTimeAt,
+			);
+			cachedSystemWaveform = systemWaveform;
+		}
+		pathKey = geometryKey;
+
+		const drawWaveform = (path: Path2D | undefined, scale: number) => {
+			if (!path || scale <= 0) return;
 			ctx.save();
 			ctx.translate(0, canvasHeight * (1 - scale));
 			ctx.scale(canvasWidth, canvasHeight * scale);
-			ctx.fillStyle = color;
 			ctx.fill(path);
 			ctx.restore();
 		};
 
-		const trackColor = getComputedStyle(canvas).color;
+		ctx.fillStyle = getComputedStyle(canvas).color;
 		ctx.globalAlpha = 0.55;
-		drawWaveform(props.micWaveform, trackColor, project.audio.micVolumeDb);
-		drawWaveform(
-			props.systemWaveform,
-			trackColor,
-			project.audio.systemVolumeDb,
-		);
+		drawWaveform(micPath, micScale);
+		drawWaveform(systemPath, systemScale);
 		ctx.globalAlpha = 1;
 	};
 
@@ -308,6 +337,7 @@ function WaveformCanvas(props: {
 		editorState.timeline.transform.zoom;
 		props.segment.start;
 		props.segment.end;
+		props.segment.volume;
 		props.segmentOffset;
 		props.holds;
 		props.micWaveform;
@@ -322,13 +352,14 @@ function WaveformCanvas(props: {
 	});
 
 	onMount(() => {
-		setTimeout(() => {
+		const timeout = setTimeout(() => {
 			lastRenderKey = "";
 			if (rafId !== null) {
 				cancelAnimationFrame(rafId);
 			}
 			rafId = requestAnimationFrame(renderCanvas);
 		}, 300);
+		onCleanup(() => clearTimeout(timeout));
 	});
 
 	onCleanup(() => {
@@ -349,83 +380,405 @@ function WaveformCanvas(props: {
 	);
 }
 
-// The speed chip is rendered once per label tier so an open popover survives
-// the segment shrinking past a tier boundary; the menu itself lives here so
-// it isn't duplicated per tier.
-function ClipSpeedControl(props: {
-	timescale: number;
-	speedAudioMode?: ClipSpeedAudioMode | null;
-	open: boolean;
-	onOpenChange: (open: boolean) => void;
-	triggerClass?: string;
-	onSetTimescale: (timescale: number) => void;
-	onSetSpeedAudioMode: (mode: ClipSpeedAudioMode) => void;
+const CLIP_SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4, 8] as const;
+
+type ClipMenuAnchor = { x: number; y: number };
+
+function ClipMenuSection(props: { name: string; children: JSX.Element }) {
+	return (
+		<div class="flex flex-col gap-1">
+			<span class="px-2 text-[10px] font-medium uppercase tracking-[0.08em] text-ed-text-3">
+				{props.name}
+			</span>
+			{props.children}
+		</div>
+	);
+}
+
+function ClipMenuChips<T extends string | number>(props: {
+	options: ReadonlyArray<readonly [T, string]>;
+	value: T;
+	onChange: (value: T) => void;
+	label: string;
 }) {
 	return (
+		<div
+			role="radiogroup"
+			aria-label={props.label}
+			class="flex items-center gap-0.5 rounded-lg bg-ed-ctl p-0.5"
+		>
+			<For each={props.options}>
+				{([value, label]) => (
+					<button
+						type="button"
+						role="radio"
+						aria-checked={props.value === value}
+						class={cx(
+							"flex-1 rounded-md px-1.5 py-1 text-[11.5px] whitespace-nowrap tabular-nums transition-colors outline-hidden focus-visible:ring-1 focus-visible:ring-ed-accent",
+							props.value === value
+								? "bg-ed-ctl-active text-ed-text-1"
+								: "text-ed-text-2 hover:text-ed-text-1",
+						)}
+						onClick={() => props.onChange(value)}
+					>
+						{label}
+					</button>
+				)}
+			</For>
+		</div>
+	);
+}
+
+function ClipMenuToggleRow(props: {
+	icon: JSX.Element;
+	label: string;
+	description: string;
+	checked: boolean;
+	onChange: (checked: boolean) => void;
+}) {
+	return (
+		<button
+			type="button"
+			role="switch"
+			aria-checked={props.checked}
+			class="flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-left transition-colors outline-hidden hover:bg-ed-ctl-hover focus-visible:bg-ed-ctl-hover"
+			onClick={() => props.onChange(!props.checked)}
+		>
+			<span
+				class={cx(
+					"flex size-4 shrink-0 items-center justify-center [&_svg]:size-3.5",
+					props.checked ? "text-ed-accent" : "text-ed-text-2",
+				)}
+			>
+				{props.icon}
+			</span>
+			<span class="flex min-w-0 flex-1 flex-col leading-tight">
+				<span class="truncate text-[12.5px] text-ed-text-1">{props.label}</span>
+				<span class="truncate text-[10.5px] text-ed-text-3">
+					{props.description}
+				</span>
+			</span>
+			<span
+				aria-hidden
+				class={cx(
+					"cap-toggle relative h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
+					props.checked ? "bg-ed-accent" : "bg-ed-ctl-active",
+				)}
+			>
+				<span
+					class={cx(
+						"cap-toggle-thumb block size-4 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.22)] transition-transform",
+						props.checked && "translate-x-full",
+					)}
+				/>
+			</span>
+		</button>
+	);
+}
+
+function ClipMenuRow(props: {
+	icon: JSX.Element;
+	label: string;
+	hint?: string;
+	kbd?: string;
+	disabled?: boolean;
+	danger?: boolean;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			disabled={props.disabled}
+			title={props.disabled ? props.hint : undefined}
+			class={cx(
+				"flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12.5px] transition-colors outline-hidden disabled:cursor-default disabled:text-ed-text-3",
+				props.danger
+					? "text-red-400 enabled:hover:bg-red-500/10 focus-visible:bg-red-500/10"
+					: "text-ed-text-1 enabled:hover:bg-ed-ctl-hover focus-visible:bg-ed-ctl-hover",
+			)}
+			onClick={() => props.onClick()}
+		>
+			<span
+				class={cx(
+					"flex size-4 shrink-0 items-center justify-center [&_svg]:size-3.5",
+					!props.danger && !props.disabled && "text-ed-text-2",
+				)}
+			>
+				{props.icon}
+			</span>
+			<span class="min-w-0 flex-1 truncate">{props.label}</span>
+			<Show when={props.disabled && props.hint}>
+				<span class="shrink-0 text-[10.5px] text-ed-text-3">{props.hint}</span>
+			</Show>
+			<Show when={!props.disabled && props.kbd}>
+				<kbd class="shrink-0 rounded-[4px] bg-ed-ctl px-1 font-sans text-[10px] text-ed-text-3">
+					{props.kbd}
+				</kbd>
+			</Show>
+		</button>
+	);
+}
+
+function ClipSettingsControl(props: {
+	index: number;
+	segment: TimelineSegment;
+	label: string;
+	defaultLabel: string;
+	box: { start: number; end: number };
+	open: boolean;
+	anchor: ClipMenuAnchor | null;
+	onOpenChange: (open: boolean) => void;
+	triggerClass?: string;
+}) {
+	const { project, projectActions, editorState } = useEditorContext();
+	const [renaming, setRenaming] = createSignal(false);
+	const [draftName, setDraftName] = createSignal("");
+
+	const segments = () => project.timeline?.segments ?? [];
+	const muted = () => clipAudioMuted(props.segment);
+	const silent = () => muted() || clipVolume(props.segment) === 0;
+	const cursorHidden = () => props.segment.hideCursor === true;
+	const normalSpeed = () => props.segment.timescale === 1;
+
+	const playheadTime = () =>
+		editorState.previewTime ?? editorState.playbackTime;
+	const canSplitAtPlayhead = () => {
+		const time = playheadTime();
+		return time > props.box.start && time < props.box.end;
+	};
+	const mergeBlocker = (direction: ClipMergeDirection) =>
+		clipMergeBlocker(segments(), props.index, direction);
+	const mergeHint = (direction: ClipMergeDirection) => {
+		const blocker = mergeBlocker(direction);
+		return blocker ? clipMergeBlockerHint(blocker) : undefined;
+	};
+	const canDelete = () => segments().length > 1;
+
+	const close = () => props.onOpenChange(false);
+
+	createEffect(() => {
+		if (!props.open) setRenaming(false);
+	});
+
+	const startRename = () => {
+		setDraftName(props.segment.name?.trim() ?? "");
+		setRenaming(true);
+	};
+	const commitRename = () => {
+		if (!renaming()) return;
+		projectActions.setClipSegmentName(props.index, draftName());
+		setRenaming(false);
+	};
+
+	return (
 		<Popover
-			placement="top"
-			gutter={8}
+			placement={props.anchor ? "bottom-start" : "top"}
+			gutter={props.anchor ? 4 : 8}
 			open={props.open}
 			onOpenChange={props.onOpenChange}
+			getAnchorRect={() =>
+				props.anchor
+					? { x: props.anchor.x, y: props.anchor.y, width: 0, height: 0 }
+					: undefined
+			}
 		>
 			<Popover.Trigger
 				class={cx(
 					"pointer-events-auto flex items-center gap-0.5 rounded-full bg-ed-ctl-active px-1.5 py-0.5 text-[10px] font-medium text-ed-text-2 transition-colors hover:bg-ed-ctl-hover hover:text-ed-text-1",
 					props.triggerClass,
 				)}
-				aria-label={`Clip speed: ${props.timescale}x`}
+				aria-label="Clip settings"
 				onMouseDown={(event) => event.stopPropagation()}
 			>
-				<IconLucideFastForward class="size-2.5" />
-				{props.timescale}x
+				<IconLucideSettings class="size-3" />
+				<Show
+					when={silent()}
+					fallback={<span>{props.segment.timescale}x</span>}
+				>
+					<IconLucideVolumeX class="size-3" />
+				</Show>
+				<Show when={cursorHidden()}>
+					<IconLucideMousePointerBan class="size-3" />
+				</Show>
 			</Popover.Trigger>
 			<Popover.Portal>
 				<Popover.Content
 					onMouseDown={(event) => event.stopPropagation()}
-					class="z-50 flex w-max flex-col gap-1.5 rounded-xl bg-ed-card p-2 text-ed-text-1 shadow-ed-pop outline-hidden animate-in fade-in slide-in-from-bottom-2"
+					class="z-50 flex w-[300px] max-w-[calc(100vw-16px)] flex-col gap-2 rounded-xl bg-ed-card p-1.5 text-ed-text-1 shadow-ed-pop outline-hidden animate-in fade-in zoom-in-95 duration-100"
 				>
-					<div class="flex items-center gap-1 rounded-lg bg-gray-2 p-1">
-						{[0.25, 0.5, 1, 1.5, 2, 4, 8].map((mult) => (
-							<button
-								type="button"
-								aria-pressed={props.timescale === mult}
-								class={cx(
-									"rounded-md px-2 py-1 text-xs whitespace-nowrap transition-colors",
-									props.timescale === mult
-										? "bg-gray-4 text-gray-12"
-										: "text-gray-10 hover:text-gray-12",
-								)}
-								onClick={() => props.onSetTimescale(mult)}
-							>
-								{mult}x
-							</button>
-						))}
+					<div class="flex items-center gap-2 px-2 pt-1">
+						<span class="min-w-0 flex-1 truncate text-[12px] font-medium text-ed-text-1">
+							{props.label}
+						</span>
+						<span class="shrink-0 text-[11px] tabular-nums text-ed-text-3">
+							{formatTime(props.segment.end - props.segment.start)}
+							<Show when={!normalSpeed()}>
+								{" · "}
+								{props.segment.timescale}x
+							</Show>
+						</span>
 					</div>
-					<Show when={props.timescale !== 1}>
-						<div class="flex items-center gap-1 rounded-lg bg-gray-2 p-1">
-							{(
-								[
-									["mute", "Mute"],
-									["maintainPitch", "Maintain pitch"],
-									["matchSpeed", "Match speed"],
-								] as const
-							).map(([value, label]) => (
-								<button
-									type="button"
-									aria-pressed={(props.speedAudioMode ?? "mute") === value}
-									class={cx(
-										"flex-1 rounded-md px-2 py-1 text-xs whitespace-nowrap transition-colors",
-										(props.speedAudioMode ?? "mute") === value
-											? "bg-gray-4 text-gray-12"
-											: "text-gray-10 hover:text-gray-12",
-									)}
-									onClick={() => props.onSetSpeedAudioMode(value)}
-								>
-									{label}
-								</button>
-							))}
+
+					<ClipMenuSection name="Speed">
+						<ClipMenuChips
+							label="Clip speed"
+							options={CLIP_SPEEDS.map((mult) => [mult, `${mult}x`] as const)}
+							value={props.segment.timescale}
+							onChange={(mult) =>
+								projectActions.setClipSegmentTimescale(props.index, mult)
+							}
+						/>
+					</ClipMenuSection>
+
+					<ClipMenuSection name="Audio">
+						<div class="flex h-7 items-center gap-2 px-2 text-[11.5px]">
+							<span class="w-12 shrink-0 text-ed-text-2">Volume</span>
+							<Slider
+								class="min-w-0 flex-1"
+								aria-label="Clip volume"
+								value={[Math.round(clipVolume(props.segment) * 100)]}
+								minValue={0}
+								maxValue={200}
+								step={1}
+								disabled={muted()}
+								onChange={([value]) =>
+									projectActions.setClipSegmentVolume(props.index, value / 100)
+								}
+								formatTooltip={(value) => `${value}%`}
+							/>
+							<span class="w-9 shrink-0 text-right tabular-nums text-ed-text-2">
+								{Math.round(clipVolume(props.segment) * 100)}%
+							</span>
 						</div>
-					</Show>
+						<Show
+							when={!normalSpeed()}
+							fallback={
+								<ClipMenuToggleRow
+									icon={<IconLucideVolumeX />}
+									label="Mute clip"
+									description="Silence this clip's audio"
+									checked={muted()}
+									onChange={(checked) =>
+										projectActions.setClipSegmentMuted(props.index, checked)
+									}
+								/>
+							}
+						>
+							<ClipMenuChips
+								label="Audio at this speed"
+								options={
+									[
+										["mute", "Mute"],
+										["maintainPitch", "Keep pitch"],
+										["matchSpeed", "Match speed"],
+									] as const
+								}
+								value={props.segment.speedAudioMode ?? "mute"}
+								onChange={(mode) =>
+									projectActions.setClipSegmentSpeedAudioMode(props.index, mode)
+								}
+							/>
+						</Show>
+					</ClipMenuSection>
+
+					<ClipMenuSection name="Cursor">
+						<ClipMenuToggleRow
+							icon={<IconLucideMousePointerBan />}
+							label="Hide cursor"
+							description="Fades out while this clip plays"
+							checked={cursorHidden()}
+							onChange={(checked) =>
+								projectActions.setClipSegmentHideCursor(props.index, checked)
+							}
+						/>
+					</ClipMenuSection>
+
+					<div class="h-px bg-ed-line" />
+
+					<div class="flex flex-col gap-0.5">
+						<ClipMenuRow
+							icon={<IconLucideScissors />}
+							label="Split at playhead"
+							kbd="C"
+							hint="Move the playhead into this clip"
+							disabled={!canSplitAtPlayhead()}
+							onClick={() => {
+								projectActions.splitClipSegment(playheadTime(), props.index);
+								close();
+							}}
+						/>
+						<ClipMenuRow
+							icon={<IconLucideArrowLeftToLine />}
+							label="Merge with previous clip"
+							hint={mergeHint("previous")}
+							disabled={mergeBlocker("previous") !== null}
+							onClick={() => {
+								projectActions.mergeClipSegment(props.index, "previous");
+								close();
+							}}
+						/>
+						<ClipMenuRow
+							icon={<IconLucideArrowRightToLine />}
+							label="Merge with next clip"
+							hint={mergeHint("next")}
+							disabled={mergeBlocker("next") !== null}
+							onClick={() => {
+								projectActions.mergeClipSegment(props.index, "next");
+								close();
+							}}
+						/>
+						<Show
+							when={renaming()}
+							fallback={
+								<ClipMenuRow
+									icon={<IconLucidePencil />}
+									label="Rename clip"
+									onClick={startRename}
+								/>
+							}
+						>
+							<div class="flex items-center gap-1.5 px-1 py-0.5">
+								<TextInput
+									ref={(el) => {
+										queueMicrotask(() => {
+											el.focus();
+											el.select();
+										});
+									}}
+									class="h-7 min-w-0 flex-1 px-2 text-[12px]"
+									value={draftName()}
+									placeholder={props.defaultLabel}
+									aria-label="Clip name"
+									onInput={(event) => setDraftName(event.currentTarget.value)}
+									onKeyDown={(event) => {
+										if (event.key === "Enter") {
+											event.preventDefault();
+											commitRename();
+										} else if (event.key === "Escape") {
+											event.preventDefault();
+											setRenaming(false);
+										}
+									}}
+									onBlur={commitRename}
+								/>
+							</div>
+						</Show>
+					</div>
+
+					<div class="h-px bg-ed-line" />
+
+					<ClipMenuRow
+						icon={<IconLucideTrash2 />}
+						label="Delete clip"
+						kbd="⌫"
+						hint="Can't delete the only clip"
+						disabled={!canDelete()}
+						danger
+						onClick={() => {
+							projectActions.deleteClipSegment(props.index);
+							close();
+						}}
+					/>
 				</Popover.Content>
 			</Popover.Portal>
 		</Popover>
@@ -612,16 +965,42 @@ export function ClipTrack(
 					const i = segmentIndex;
 					const segment = () => segments()[i()];
 					const [speedOpen, setSpeedOpen] = createSignal(false);
+					const [menuAnchor, setMenuAnchor] =
+						createSignal<ClipMenuAnchor | null>(null);
+					const setMenuOpen = (open: boolean) => {
+						setSpeedOpen(open);
+						if (!open) setMenuAnchor(null);
+					};
 
-					const clipName = () =>
+					const defaultClipName = () =>
 						hasMultipleRecordingSegments()
 							? `Clip ${segment().recordingSegment}`
 							: "Clip";
+					const clipName = () => segment().name?.trim() || defaultClipName();
+
+					const speedControl = (triggerClass?: string) => (
+						<ClipSettingsControl
+							index={i()}
+							segment={segment()}
+							label={clipName()}
+							defaultLabel={defaultClipName()}
+							box={relativeSegment()}
+							open={speedOpen()}
+							anchor={menuAnchor()}
+							onOpenChange={setMenuOpen}
+							triggerClass={triggerClass}
+						/>
+					);
 
 					const clipTitle = () => {
 						const seg = segment();
 						const parts = [clipName(), formatTime(seg.end - seg.start)];
 						if (seg.timescale !== 1) parts.push(`${seg.timescale}x`);
+						if (clipAudioMuted(seg) || clipVolume(seg) === 0)
+							parts.push("Muted");
+						else if (clipVolume(seg) !== 1)
+							parts.push(`${Math.round(clipVolume(seg) * 100)}% volume`);
+						if (seg.hideCursor) parts.push("Cursor hidden");
 						return parts.join(" · ");
 					};
 
@@ -833,6 +1212,24 @@ export function ClipTrack(
 									if (editorState.timeline.splitPreview)
 										setEditorState("timeline", "splitPreview", null);
 								}}
+								onContextMenu={(e) => {
+									e.preventDefault();
+									e.stopPropagation();
+									if (split()) return;
+									const index = i();
+									const selection = editorState.timeline.selection;
+									if (
+										selection?.type !== "clip" ||
+										!selection.indices.includes(index)
+									) {
+										setEditorState("timeline", "selection", {
+											type: "clip",
+											indices: [index],
+										});
+									}
+									setMenuAnchor({ x: e.clientX, y: e.clientY });
+									setSpeedOpen(true);
+								}}
 								onMouseDown={(e) => {
 									e.stopPropagation();
 									if (e.button !== 0) return;
@@ -936,15 +1333,17 @@ export function ClipTrack(
 									}
 								}}
 							>
-								{segment().timescale === 1 && (
-									<WaveformCanvas
-										micWaveform={micWaveform()}
-										systemWaveform={systemAudioWaveform()}
-										segment={segment()}
-										segmentOffset={relativeSegment().start}
-										holds={segmentHolds()}
-									/>
-								)}
+								{segment().timescale === 1 &&
+									!clipAudioMuted(segment()) &&
+									clipVolume(segment()) > 0 && (
+										<WaveformCanvas
+											micWaveform={micWaveform()}
+											systemWaveform={systemAudioWaveform()}
+											segment={segment()}
+											segmentOffset={relativeSegment().start}
+											holds={segmentHolds()}
+										/>
+									)}
 
 								<Markings
 									segment={segment()}
@@ -1233,54 +1632,26 @@ export function ClipTrack(
 									}}
 								/>
 								<SegmentContent class="relative items-center">
-									{(() => {
-										const seg = segment();
-
-										const speedControl = (triggerClass?: string) => (
-											<ClipSpeedControl
-												timescale={seg.timescale}
-												speedAudioMode={seg.speedAudioMode}
-												open={speedOpen()}
-												onOpenChange={setSpeedOpen}
-												triggerClass={triggerClass}
-												onSetTimescale={(mult) =>
-													projectActions.setClipSegmentTimescale(i(), mult)
-												}
-												onSetSpeedAudioMode={(mode) =>
-													projectActions.setClipSegmentSpeedAudioMode(i(), mode)
-												}
-											/>
-										);
-
-										return (
-											<SegmentLabel
-												full={() => (
-													<div class="cap-seg-labels">
-														<span class="cap-seg-label truncate">
-															{clipName()}
-														</span>
-														<span class="cap-seg-sublabel">
-															{formatTime(seg.end - seg.start)}
-														</span>
-														{speedControl("shrink-0")}
-													</div>
-												)}
-												compact={() => (
-													<div class="cap-seg-labels">
-														{speedControl("shrink-0")}
-														<span class="cap-seg-sublabel truncate">
-															{formatTime(seg.end - seg.start)}
-														</span>
-													</div>
-												)}
-												glyph={
-													seg.timescale !== 1
-														? () => speedControl("shrink-0")
-														: undefined
-												}
-											/>
-										);
-									})()}
+									<SegmentLabel
+										full={() => (
+											<div class="cap-seg-labels">
+												<span class="cap-seg-label truncate">{clipName()}</span>
+												<span class="cap-seg-sublabel">
+													{formatTime(segment().end - segment().start)}
+												</span>
+												{speedControl("shrink-0")}
+											</div>
+										)}
+										compact={() => (
+											<div class="cap-seg-labels">
+												{speedControl("shrink-0")}
+												<span class="cap-seg-sublabel truncate">
+													{formatTime(segment().end - segment().start)}
+												</span>
+											</div>
+										)}
+										glyph={() => speedControl("shrink-0")}
+									/>
 								</SegmentContent>
 								<SegmentHandle
 									position="end"

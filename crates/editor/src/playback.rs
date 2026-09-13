@@ -49,6 +49,28 @@ const FRAME_CACHE_SIZE: usize = 4;
 const MAX_FRAME_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const RAMP_UP_FRAME_COUNT: u32 = 15;
 
+fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfiguration) -> bool {
+    let settings = |segment: &cap_project::TimelineSegment| {
+        (
+            segment.recording_clip,
+            segment.start,
+            segment.end,
+            segment.timescale,
+            segment.speed_audio_mode,
+            segment.volume(),
+        )
+    };
+    match (&previous.timeline, &next.timeline) {
+        (Some(previous), Some(next)) => !previous
+            .segments
+            .iter()
+            .map(settings)
+            .eq(next.segments.iter().map(settings)),
+        (None, None) => false,
+        _ => true,
+    }
+}
+
 #[cfg(target_os = "windows")]
 struct WindowsTimerResolution;
 
@@ -1296,9 +1318,12 @@ impl Playback {
                 if *stop_rx.borrow() {
                     break;
                 }
-                if self.project.borrow().audio.improve
-                    && adopted.as_ref().is_some_and(|adoption| adoption.is_owner())
-                {
+                if adopted.as_ref().is_some_and(|adoption| adoption.is_owner()) && {
+                    let project = self.project.borrow();
+                    project.audio.improve
+                        || project.audio != cached_project.audio
+                        || clip_audio_changed(&cached_project, &project)
+                } {
                     let adoption = adopted.as_ref().unwrap();
                     frame_number = adoption.frame_number(fps).unwrap_or(frame_number);
                     let cleaned = runtime.block_on(async {
@@ -1316,7 +1341,7 @@ impl Playback {
                     drop(adopted.take());
                     preparing_audio_released.store(true, Ordering::Release);
                     let project = self.project.borrow().clone();
-                    cached_project.audio.improve = project.audio.improve;
+                    cached_project.audio = project.audio.clone();
                     let ticket = self.audio_output.prepare_playback(PlaySpec {
                         segments: audio_segments.clone(),
                         music: self.music.clone(),
@@ -1384,10 +1409,12 @@ impl Playback {
                 }
 
                 if self.project.has_changed().unwrap_or(false) {
-                    let improved = cached_project.audio.improve;
-                    cached_project = self.project.borrow_and_update().clone();
+                    let next_project = self.project.borrow_and_update().clone();
+                    let audio_changed = cached_project.audio != next_project.audio
+                        || clip_audio_changed(&cached_project, &next_project);
+                    cached_project = next_project;
                     if adopted.is_none()
-                        && improved != cached_project.audio.improve
+                        && audio_changed
                         && let Some(generation) = audio_generation
                     {
                         self.audio_output.refresh_playback(
@@ -2008,6 +2035,28 @@ impl PlaybackHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clip_audio_changes_refresh_playback_without_refreshing_for_names() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": { "zoomSegments": [], "segments": [
+                { "recordingSegment": 0, "start": 0.0, "end": 2.0, "timescale": 1.0 }
+            ] }
+        }))
+        .unwrap();
+        let mut next = project.clone();
+        next.timeline.as_mut().unwrap().segments[0].name = Some("Renamed".into());
+        next.timeline.as_mut().unwrap().segments[0].volume = Some(1.0);
+        assert!(!clip_audio_changed(&project, &next));
+        next.timeline.as_mut().unwrap().segments[0].volume = Some(0.5);
+        assert!(clip_audio_changed(&project, &next));
+        next.timeline.as_mut().unwrap().segments[0].volume = None;
+        next.timeline.as_mut().unwrap().segments[0].speed_audio_mode =
+            Some(cap_project::ClipSpeedAudioMode::Mute);
+        assert!(clip_audio_changed(&project, &next));
+        next.timeline.as_mut().unwrap().segments.clear();
+        assert!(clip_audio_changed(&project, &next));
+    }
 
     #[test]
     fn late_handoff_stop_only_cancels_its_original_playback() {

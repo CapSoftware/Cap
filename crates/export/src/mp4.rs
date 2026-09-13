@@ -326,6 +326,8 @@ impl Mp4ExportSettings {
         mode: ExportNv12Mode,
     ) -> Result<PathBuf, String> {
         let pipeline_start = std::time::Instant::now();
+        let sample_start_frame = base.sample_range.as_ref().map_or(0, |range| range.start);
+        let sample_timing = base.sample_timing.clone();
         let output_path = base.output_path.clone();
         let mut streaming_audio = base.streaming_audio.take();
         let audio_control = base.audio_cancellation.take();
@@ -479,13 +481,16 @@ impl Mp4ExportSettings {
                 .into_iter()
                 .chain(std::iter::from_fn(|| frame_rx.recv().ok()));
             for input in frames {
+                if sample_timing.as_ref().is_some_and(|timing| timing.is_cancelled()) {
+                    return Err(Mp4PipelineError::Interrupted);
+                }
                 if encoder_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) || encoder_user_cancellation.as_ref().is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
                     return Err(Mp4PipelineError::Interrupted);
                 }
                 if encoded_frames == 0
                     && let Some(audio) = &mut audio_renderer
                 {
-                    audio.set_playhead(0.0, &project_for_audio);
+                    audio.set_playhead(sample_start_frame as f64 / fps as f64, &project_for_audio);
                 }
 
                 let audio_frame = audio_renderer.as_mut().and_then(|audio| {
@@ -584,6 +589,9 @@ impl Mp4ExportSettings {
                     }
                 }
                 encoded_frames += 1;
+                if let Some(timing) = &sample_timing {
+                    timing.record_frame();
+                }
                 if encoded_frames == 1
                     && let Some(atom) = record_first_queued_ms.as_ref()
                 {
@@ -668,6 +676,7 @@ impl Mp4ExportSettings {
             fps,
             self.resolution_base,
             &base.recordings,
+            base.sample_range.clone(),
             stop_after_frames_sent,
             nv12_render_startup_breakdown_ms,
             audio_cancellation.is_some(),
@@ -1188,6 +1197,7 @@ async fn export_render_to_channel(
     fps: u32,
     resolution_base: XY<u32>,
     recordings: &ProjectRecordingsMeta,
+    frame_range: Option<std::ops::Range<u32>>,
     stop_after_frames_sent: Option<u32>,
     startup_breakdown_ms: Option<Arc<Mutex<Option<cap_rendering::Nv12RenderStartupBreakdownMs>>>>,
     stop_on_encoder_drop: bool,
@@ -1196,7 +1206,8 @@ async fn export_render_to_channel(
 ) -> Result<(), cap_rendering::RenderingError> {
     let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(8);
 
-    let screenshot_project_path = project_path;
+    let screenshot_project_path = frame_range.is_none().then_some(project_path);
+    let first_frame = frame_range.as_ref().map_or(0, |range| range.start);
 
     let render_result = {
         let render_future = Box::pin(cap_rendering::render_video_to_channel_nv12(
@@ -1209,6 +1220,7 @@ async fn export_render_to_channel(
             fps,
             resolution_base,
             recordings,
+            frame_range,
             stop_after_frames_sent,
             startup_breakdown_ms,
         ));
@@ -1262,9 +1274,11 @@ async fn export_render_to_channel(
                     ));
                 }
 
-                let export_frame = nv12_from_rendered_frame(frame);
+                let mut export_frame = nv12_from_rendered_frame(frame);
+                export_frame.frame_number = export_frame.frame_number.saturating_sub(first_frame);
 
-                if first_frame_data.is_none()
+                if screenshot_project_path.is_some()
+                    && first_frame_data.is_none()
                     && let Some((data, y_stride)) = export_frame.materialize_nv12()
                 {
                     first_frame_data = Some(FirstFrameNv12 {
@@ -1290,8 +1304,9 @@ async fn export_render_to_channel(
 
             drop(sender);
 
-            if let Some(first) = first_frame_data {
-                let pp = screenshot_project_path;
+            if let Some(first) = first_frame_data
+                && let Some(pp) = screenshot_project_path
+            {
                 let _screenshot_task = tokio::task::spawn_blocking(move || {
                     save_screenshot_from_nv12(
                         &first.data,

@@ -127,6 +127,9 @@ async listWindowsWithThumbnails() : Promise<CaptureWindowWithThumbnail[]> {
 async refreshWindowContentProtection() : Promise<null> {
     return await TAURI_INVOKE("refresh_window_content_protection");
 },
+async restoreMainWindowGeometry() : Promise<boolean> {
+    return await TAURI_INVOKE("restore_main_window_geometry");
+},
 async getDefaultExcludedWindows() : Promise<WindowExclusion[]> {
     return await TAURI_INVOKE("get_default_excluded_windows");
 },
@@ -172,8 +175,11 @@ async exportVideoWithId(projectPath: string, progress: TAURI_CHANNEL<FramesRende
 async exportVideoToFile(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings, fileName: string, fileType: string) : Promise<string> {
     return await TAURI_INVOKE("export_video_to_file", { projectPath, progress, settings, fileName, fileType });
 },
-async getExportEstimates(path: string, settings: ExportSettings) : Promise<ExportEstimates> {
-    return await TAURI_INVOKE("get_export_estimates", { path, settings });
+async getExportEstimates(path: string, settings: ExportSettings, onEstimate: TAURI_CHANNEL<ExportEstimates>) : Promise<ExportEstimates> {
+    return await TAURI_INVOKE("get_export_estimates", { path, settings, onEstimate });
+},
+async cancelExportEstimates() : Promise<void> {
+    await TAURI_INVOKE("cancel_export_estimates");
 },
 async generateExportPreview(projectPath: string, frameTime: number, settings: ExportPreviewSettings) : Promise<ExportPreviewResult> {
     return await TAURI_INVOKE("generate_export_preview", { projectPath, frameTime, settings });
@@ -334,8 +340,14 @@ async saveFileDialog(fileName: string, fileType: string) : Promise<string | null
 async listRecordings() : Promise<([string, RecordingMetaWithMetadata])[]> {
     return await TAURI_INVOKE("list_recordings");
 },
+async listRecentRecordings() : Promise<([string, RecordingMetaWithMetadata])[]> {
+    return await TAURI_INVOKE("list_recent_recordings");
+},
 async listScreenshots() : Promise<([string, ScreenshotMetaWithMetadata])[]> {
     return await TAURI_INVOKE("list_screenshots");
+},
+async listRecentScreenshots() : Promise<([string, ScreenshotMetaWithMetadata])[]> {
+    return await TAURI_INVOKE("list_recent_screenshots");
 },
 async checkUpgradedAndUpdate() : Promise<boolean> {
     return await TAURI_INVOKE("check_upgraded_and_update");
@@ -420,8 +432,14 @@ async getEditorMeta() : Promise<RecordingMeta> {
 async getRecordingMetaByPath(projectPath: string) : Promise<RecordingMeta> {
     return await TAURI_INVOKE("get_recording_meta_by_path", { projectPath });
 },
-async setEditorRecordingTarget(projectPath: string | null) : Promise<null> {
-    return await TAURI_INVOKE("set_editor_recording_target", { projectPath });
+async openEditorRecordingMain(projectPath: string) : Promise<null> {
+    return await TAURI_INVOKE("open_editor_recording_main", { projectPath });
+},
+async cancelEditorRecordingFlow() : Promise<null> {
+    return await TAURI_INVOKE("cancel_editor_recording_flow");
+},
+async getEditorRecordingTarget() : Promise<EditorRecordingFlowInfo | null> {
+    return await TAURI_INVOKE("get_editor_recording_target");
 },
 async deleteRecordingDirectory(path: string) : Promise<null> {
     return await TAURI_INVOKE("delete_recording_directory", { path });
@@ -507,6 +525,12 @@ async openTargetSelectOverlays(focusedTarget: ScreenCaptureTarget | null, specif
 async closeTargetSelectOverlays() : Promise<null> {
     return await TAURI_INVOKE("close_target_select_overlays");
 },
+async targetSelectOverlayReady(instance: number) : Promise<void> {
+    await TAURI_INVOKE("target_select_overlay_ready", { instance });
+},
+async suspendTargetSelectOverlays() : Promise<void> {
+    await TAURI_INVOKE("suspend_target_select_overlays");
+},
 async updateCameraOverlayBounds(x: number, y: number, width: number, height: number) : Promise<null> {
     return await TAURI_INVOKE("update_camera_overlay_bounds", { x, y, width, height });
 },
@@ -574,6 +598,7 @@ devicesUpdated: DevicesUpdated,
 diagnosticProgress: DiagnosticProgress,
 downloadProgress: DownloadProgress,
 editorRecordingAdded: EditorRecordingAdded,
+editorRecordingFlowChanged: EditorRecordingFlowChanged,
 editorStateChanged: EditorStateChanged,
 frameLayoutEvent: FrameLayoutEvent,
 newNotification: NewNotification,
@@ -608,6 +633,7 @@ devicesUpdated: "devices-updated",
 diagnosticProgress: "diagnostic-progress",
 downloadProgress: "download-progress",
 editorRecordingAdded: "editor-recording-added",
+editorRecordingFlowChanged: "editor-recording-flow-changed",
 editorStateChanged: "editor-state-changed",
 frameLayoutEvent: "frame-layout-event",
 newNotification: "new-notification",
@@ -655,7 +681,7 @@ export type AnnotationType = "arrow" | "circle" | "rectangle" | "text" | "mask" 
 export type AppTheme = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
-export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb: number; micStereoMode: StereoMode; systemVolumeDb: number }
+export type AudioConfiguration = { mute: boolean; improve: boolean; isolation: VoiceIsolation; micVolumeDb: number; micStereoMode: StereoMode; systemVolumeDb: number }
 /**
  * Overlap-trim accounting captured by the recorder's audio gap tracker, persisted so the
  * editor can compensate for stale-startup audio drift from typed data instead of scraping
@@ -709,7 +735,7 @@ export type AutomationRule = { id: string; name: string; enabled?: boolean; trig
 export type AutomationTestReport = { ruleId: string; ruleName: string; actionChecks: AutomationActionCheck[] }
 export type AutomationsStore = { version?: number; rules?: AutomationRule[] }
 export type BackgroundBlurConfig = { mode: BackgroundBlurMode }
-export type BackgroundBlurMode = "off" | "light" | "heavy"
+export type BackgroundBlurMode = "off" | "light" | "heavy" | "remove"
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; roundingType: CornerStyle; inset: number; crop: Crop | null;
 /**
  * Normalized (0-1) center of the display rect in output-frame space.
@@ -999,10 +1025,12 @@ x: number; width: number; height: number }
 export type DownloadProgress = { progress: number; message: string }
 export type EditorPreviewQuality = "quarter" | "half" | "full"
 export type EditorRecordingAdded = { editor_path: string; recording_path: string }
+export type EditorRecordingFlowChanged = { target: EditorRecordingFlowInfo | null }
+export type EditorRecordingFlowInfo = { projectPath: string; projectName: string }
 export type EditorStateChanged = { playhead_position: number }
 export type ExportCompression = "Maximum" | "Social" | "Web" | "Potato"
 export type ExportDestination = "projectFolder" | { customPath: { dir: string } }
-export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number }
+export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number; time_range_seconds: [number, number]; size_range_mb: [number, number] }
 export type ExportFormat = "mp4" | "gif" | "mov"
 export type ExportPreviewResult = { jpeg_base64: string; estimated_size_mb: number; actual_width: number; actual_height: number; frame_render_time_ms: number; total_frames: number }
 export type ExportPreviewSettings = { fps: number; resolution_base: XY<number>; compression_bpp: number; cursor_only?: boolean }
@@ -1256,7 +1284,23 @@ export type StyleSegment = { start: number; end: number; track: number; enabled:
 export type SystemDiagnostics = { macosVersion: MacOSVersionInfo | null; availableEncoders: string[]; screenCaptureSupported: boolean; metalSupported: boolean; gpuName: string | null }
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
 export type TextAlign = "left" | "center" | "right"
-export type TextAnimation = "none" | "fade" | "slideUp" | "slideDown" | "pop" | "typewriter"
+export type TextAnimation = "none" | "fade" | "slideUp" | "slideDown" | "slideLeft" | "slideRight" | "pop" | "zoom" | "bounce" | "wipe" | "words" | "letters" | "tracking" | "typewriter"
+/**
+ * How a text segment's optional background hugs the text.
+ */
+export type TextBackgroundStyle =
+/**
+ * One rounded rectangle behind the whole block.
+ */
+"box" |
+/**
+ * A capsule: half-height radius and wider side padding.
+ */
+"pill" |
+/**
+ * A marker stroke per laid-out line, hugging each line's ink.
+ */
+"highlight"
 /**
  * How a text segment shares the frame with the display recording. The
  * variants name where the TEXT sits; the display card makes room for it.
@@ -1278,7 +1322,19 @@ export type TextLayout =
  * Text in the right half, display card contained in the left half.
  */
 "splitRight"
-export type TextSegment = { start: number; end: number; track?: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; backgroundColor?: string | null;
+export type TextSegment = { start: number; end: number; track?: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; backgroundColor?: string | null; backgroundStyle?: TextBackgroundStyle; uppercase?: boolean;
+/**
+ * Outline px at the 1080p reference height, like `font_size`; 0 disables.
+ */
+strokeWidth?: number; strokeColor?: string;
+/**
+ * Second colour of a horizontal gradient that starts at `color`.
+ */
+gradientColor?: string | null;
+/**
+ * 0..1 soft halo strength in the text colour.
+ */
+glow?: number;
 /**
  * Legacy symmetric fade. Superseded by the animation fields below; kept
  * so configs written by new builds still fade in old builds. The
@@ -1295,7 +1351,7 @@ letterSpacing?: number; lineHeight?: number; opacity?: number; shadow?: number; 
  */
 layoutTransition?: number }
 export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[]; styleSegments: StyleSegment[]; imageSegments: ImageSegment[]; camera3dSegments?: Camera3DSegment[] }
-export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null; speedAudioMode?: ClipSpeedAudioMode | null }
+export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null; speedAudioMode?: ClipSpeedAudioMode | null; volume?: number | null; hideCursor?: boolean | null }
 export type TranscriptionEngine = "Whisper" | "Parakeet"
 export type Trigger = "screenshotTaken" | "studioRecordingFinished" | "instantRecordingFinished" | "recordingStarted" | "uploadCompleted" | "videoImported" | "recordingDeleted"
 export type UpdateChannel = "stable" | "nightly"
@@ -1312,6 +1368,7 @@ export type VideoImportProgress = { project_path: string; stage: ImportStage; pr
 export type VideoMeta = { path: string; fps?: number; start_time?: number | null; device_id?: string | null }
 export type VideoRecordingMetadata = { duration: number; size: number }
 export type VideoUploadInfo = { id: string; link: string; config: S3UploadMeta }
+export type VoiceIsolation = "light" | "balanced" | "strong"
 export type WindowExclusion = { bundleIdentifier?: string | null; ownerName?: string | null; windowTitle?: string | null }
 export type WindowId = string
 export type WindowPosition = { x: number; y: number; displayId?: DisplayId | null }

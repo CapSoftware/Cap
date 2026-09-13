@@ -906,6 +906,8 @@ impl EditorWindow {
             .id(SharedString::from(format!("animated-gradient-preset-{id}")))
             .size_full()
             .rounded(px(8.))
+            .border_1()
+            .border_color(Hsla::from(theme.editor.line))
             .cursor_pointer()
             .selection_ring(Hsla::from(theme.editor.card), theme.editor.accent, selected)
             .when(!selected, |this| this.hover(|this| this.opacity(0.8)))

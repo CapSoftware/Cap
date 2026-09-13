@@ -10,7 +10,7 @@ STATE_FILE="$PWD/target/dev-restore.json"
 BIN="$PWD/target/debug/cap-gpui"
 BUILD=cargo
 
-WATCH_PATHS=(src assets Cargo.toml)
+WATCH_PATHS=(src assets Cargo.toml ../desktop/src-tauri/sounds)
 [ -d resources ] && WATCH_PATHS+=(resources)
 for crate in camera scap-targets recording timestamp utils project rendering editor export; do
 	[ -d "../../crates/$crate/src" ] && WATCH_PATHS+=("../../crates/$crate/src")

@@ -444,7 +444,8 @@ impl CursorLayer {
         uniforms: &ProjectUniforms,
         constants: &RenderVideoConstants,
     ) {
-        if uniforms.project.cursor.hide {
+        let clip_visibility = uniforms.cursor_clip_visibility.clamp(0.0, 1.0);
+        if uniforms.project.cursor.hide || clip_visibility <= f32::EPSILON {
             self.bind_group = None;
             return;
         }
@@ -515,6 +516,7 @@ impl CursorLayer {
                 cursor_opacity = 0.0;
             }
         }
+        cursor_opacity *= clip_visibility;
 
         let cursor_type = uniforms.project.cursor.cursor_type().clone();
 

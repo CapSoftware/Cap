@@ -177,7 +177,9 @@ function Inner() {
 
 							if (
 								location.pathname === "/" ||
-								location.pathname === "/camera"
+								location.pathname === "/camera" ||
+								location.pathname === "/target-select-overlay" ||
+								location.pathname === "/window-capture-occluder"
 							) {
 								return;
 							}

@@ -10,6 +10,7 @@ import {
 	onMount,
 	Show,
 } from "solid-js";
+import { createRecordingThumbnail } from "~/utils/recording-thumbnail";
 import IconLucideClapperboard from "~icons/lucide/clapperboard";
 import IconLucideHistory from "~icons/lucide/history";
 import IconLucideImage from "~icons/lucide/image";
@@ -126,10 +127,19 @@ function RecentCard(props: {
 		}
 		return <IconLucideZap class="size-2.5" />;
 	};
-	const thumbnailSrc = createMemo(() => {
-		if (!props.item.previewPath || !imageAvailable()) return undefined;
+	const recordingThumbnail = createRecordingThumbnail(() =>
+		props.item.kind === "recording" ? props.item.target.path : undefined,
+	);
+	const source = createMemo(() => {
+		if (props.item.kind === "recording") return recordingThumbnail();
+		if (!props.item.previewPath) return undefined;
 		return `${convertFileSrc(props.item.previewPath)}?v=${props.item.previewVersion ?? 0}`;
 	});
+	createEffect(() => {
+		source();
+		setImageAvailable(true);
+	});
+	const thumbnailSrc = () => (imageAvailable() ? source() : undefined);
 
 	return (
 		<button

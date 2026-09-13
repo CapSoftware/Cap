@@ -884,6 +884,8 @@ function InProgressRecordingInner() {
 		const s = state();
 		return s.variant === "countdown" ? s.current : 0;
 	};
+	const isStarting = () =>
+		isInitializing() || (isCountdown() && countdownCurrent() === 0);
 
 	return (
 		<div class="flex h-full w-full flex-col justify-end p-3">
@@ -926,7 +928,7 @@ function InProgressRecordingInner() {
 						<div class="flex min-w-0 flex-1 flex-col p-1">
 							<div class="flex min-w-0 flex-1 flex-row items-center justify-between gap-1">
 								<Show
-									when={!isInitializing()}
+									when={!isStarting()}
 									fallback={
 										<div class="flex flex-row items-center gap-1.5 rounded-lg py-1 px-2 text-gray-12">
 											<IconLucideLoader2 class="size-4 animate-spin" />

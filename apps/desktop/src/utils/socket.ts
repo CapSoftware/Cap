@@ -219,6 +219,7 @@ export type CanvasControls = {
 };
 
 export type ImageDataWSOptions = {
+	preserveAlpha?: boolean;
 	powerPreference?: GPUPowerPreference;
 	retainLastFrameOnDispose?: HTMLCanvasElement;
 };
@@ -829,7 +830,10 @@ export function createImageDataWS(
 		initCanvas: (canvas: OffscreenCanvas) => {
 			if (isCleanedUp) return;
 			workerCanvasMode = true;
-			ensureWorker().postMessage({ type: "init-canvas", canvas }, [canvas]);
+			ensureWorker().postMessage(
+				{ type: "init-canvas", canvas, preserveAlpha: options.preserveAlpha },
+				[canvas],
+			);
 		},
 		resizeCanvas: (width: number, height: number) => {
 			if (isCleanedUp) return;
@@ -865,6 +869,7 @@ export function createImageDataWS(
 					initWebGPU(
 						directCanvas as unknown as OffscreenCanvas,
 						options.powerPreference,
+						options.preserveAlpha,
 					)
 						.then((renderer) => {
 							if (isCleanedUp || !directCanvas) {
@@ -892,7 +897,9 @@ export function createImageDataWS(
 							mainThreadWebGPUInitializing = false;
 							console.error("[Socket] Main thread WebGPU init failed:", e);
 							directCtx =
-								directCanvas?.getContext("2d", { alpha: false }) ?? null;
+								directCanvas?.getContext("2d", {
+									alpha: options.preserveAlpha ?? false,
+								}) ?? null;
 							if (pendingNv12Frame && directCanvas && directCtx) {
 								renderPendingFrameCanvas2D();
 							}
@@ -903,7 +910,10 @@ export function createImageDataWS(
 						});
 				} else {
 					mainThreadWebGPUInitializing = false;
-					directCtx = directCanvas?.getContext("2d", { alpha: false }) ?? null;
+					directCtx =
+						directCanvas?.getContext("2d", {
+							alpha: options.preserveAlpha ?? false,
+						}) ?? null;
 					if (pendingNv12Frame && directCanvas && directCtx) {
 						renderPendingFrameCanvas2D();
 					}
@@ -975,7 +985,9 @@ export function createImageDataWS(
 
 			if (canvas !== mirrorCanvas) {
 				mirrorCanvas = canvas;
-				mirrorCtx = canvas.getContext("2d", { alpha: false });
+				mirrorCtx = canvas.getContext("2d", {
+					alpha: options.preserveAlpha ?? false,
+				});
 				mirrorImageData = null;
 			}
 			if (!mirrorCtx) return false;
@@ -1294,7 +1306,9 @@ export function createImageDataWS(
 					) as HTMLCanvasElement | null;
 					if (domCanvas && domCanvas !== directCanvas) {
 						directCanvas = domCanvas;
-						directCtx = domCanvas.getContext("2d", { alpha: false });
+						directCtx = domCanvas.getContext("2d", {
+							alpha: options.preserveAlpha ?? false,
+						});
 						if (!directCtx) {
 							console.error(
 								"[Socket] Failed to get 2D context from DOM canvas",

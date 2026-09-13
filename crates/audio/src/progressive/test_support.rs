@@ -55,6 +55,7 @@ impl ProgressiveAudioTestProducer {
             Arc::new(DecodedAudio {
                 channels: pending.channels.ok_or("No published audio channels")?,
                 frames: pending.frames,
+                voice_profile: pending.voice_profile.clone(),
                 storage: AudioStorage::Blocks(std::mem::take(&mut pending.blocks)),
             })
         };

@@ -47,7 +47,7 @@ const CAMERA_PREVIEW_BLUR_MAX_TEXTURE_WIDTH: u32 = 640;
 const CAMERA_PREVIEW_BLUR_MAX_TEXTURE_HEIGHT: u32 = 360;
 const CAMERA_PREVIEW_TARGET_FRAME_INTERVAL: Duration = Duration::from_micros(16_666);
 const CAMERA_PREVIEW_FRAME_INTERVAL_SLACK: Duration = Duration::from_millis(1);
-const CAMERA_PREVIEW_BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(150);
+const CAMERA_PREVIEW_BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(33);
 
 // ── Low-spec preview profile ────────────────────────────────────────────────
 // On low-RAM machines (e.g. an 8GB iMac) the full-quality preview is laggy, so
@@ -1637,10 +1637,14 @@ impl Renderer {
             (clamped_size - MIN_CAMERA_SIZE) / (MAX_CAMERA_SIZE - MIN_CAMERA_SIZE);
 
         let state_uniforms = StateUniforms {
-            shape: match state.shape {
-                CameraPreviewShape::Round => 0.0,
-                CameraPreviewShape::Square => 1.0,
-                CameraPreviewShape::Full => 2.0,
+            shape: if state.background_blur == cap_project::BackgroundBlurMode::Remove {
+                3.0
+            } else {
+                match state.shape {
+                    CameraPreviewShape::Round => 0.0,
+                    CameraPreviewShape::Square => 1.0,
+                    CameraPreviewShape::Full => 2.0,
+                }
             },
             size: normalized_size,
             mirrored: if state.mirrored { 1.0 } else { 0.0 },
@@ -1875,6 +1879,9 @@ fn blur_mode_from_project(
         cap_project::BackgroundBlurMode::Off => None,
         cap_project::BackgroundBlurMode::Light => Some(cap_camera_effects::BlurMode::Light),
         cap_project::BackgroundBlurMode::Heavy => Some(cap_camera_effects::BlurMode::Heavy),
+        cap_project::BackgroundBlurMode::Remove => {
+            cfg!(target_os = "macos").then_some(cap_camera_effects::BlurMode::Remove)
+        }
     }
 }
 

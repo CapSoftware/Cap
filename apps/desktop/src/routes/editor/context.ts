@@ -65,6 +65,13 @@ import {
 } from "./audio";
 import { deriveCaptionTrackSegments, mapEditedTimeToSource } from "./captions";
 import {
+	type ClipMergeDirection,
+	clipMergeBlocker,
+	clipMergeKeptIndex,
+	mergedClipSegment,
+	transitionsAfterClipMerge,
+} from "./clip-merge";
+import {
 	type ClipTransition,
 	type ClipTransitionInput,
 	clampTransitionDuration,
@@ -100,18 +107,22 @@ import {
 } from "./style";
 import type { TextSegment } from "./text";
 import {
+	applyMotionTemplate,
 	applySceneToRange,
+	autoCamera3DScene,
 	CAMERA3D_SCENES,
+	type Camera3DMotionTemplate,
 	type Camera3DSegment,
-	type Camera3DSetup,
-	camera3DSceneRange,
+	camera3DPoseSeekTime,
+	DEFAULT_CAMERA3D_SHOT_DURATION,
 	defaultCamera3DTracks,
 	evaluatePose,
-	findCamera3DScene,
 	getEndPose,
 	getMotionEasing,
 	getStartPose,
+	newCamera3DShot,
 	normalizeCamera3DSegments,
+	placeCamera3DShot,
 	scaleKeyframeTimes,
 	setMotion,
 } from "./three-d";
@@ -512,21 +523,58 @@ export const [EditorContextProvider, useBaseEditorContext] =
 				return cuts;
 			};
 
-			const camera3DScenePreview = (setup: Camera3DSetup) => {
-				const scene = findCamera3DScene(setup.sceneId);
-				const range = camera3DSceneRange(
-					project.timeline?.camera3dSegments ?? [],
-					setup.start,
-					setup.duration,
-					totalDuration(),
-				);
-				if (!scene || !range) return [];
+			// The auto scene laid over the whole recording. Shared by the lane's
+			// picker, the panel's row and both of their hover previews, so what is
+			// previewed is exactly what a click commits.
+			const camera3DAutoSceneSegments = (count: number) => {
+				const total = totalDuration();
+				if (!(total > 0)) return [];
 				return applySceneToRange(
-					scene,
-					range.start,
-					range.end,
-					camera3DClipCuts(range.start, range.end),
+					autoCamera3DScene(count),
+					0,
+					total,
+					camera3DClipCuts(0, total),
 				);
+			};
+
+			const camera3DAutoScenePreview = (count: number) =>
+				camera3DAutoSceneSegments(count).map((segment) => ({
+					start: segment.start,
+					end: segment.end,
+				}));
+
+			// Parking the playhead on a pose is how the canvas shows it, and the
+			// renderer floors the seek onto a frame, so every seek goes through the
+			// frame-accurate time rather than the raw boundary.
+			const seekCamera3DPose = (
+				segment: { start: number; end: number },
+				end = false,
+			) => {
+				setEditorState("playbackTime", camera3DPoseSeekTime(segment, end, FPS));
+				setEditorState("previewTime", null);
+			};
+
+			// Every "Add shot" path lands here: place it, drop it in, and leave the
+			// new shot selected with the playhead on its first frame so the panel
+			// opens on what was just created.
+			const insertCamera3DShots = (shots: Camera3DSegment[]) => {
+				if (shots.length === 0) return;
+				const start = shots[0].start;
+				const index = (project.timeline?.camera3dSegments ?? []).filter(
+					(segment) => segment.start < start,
+				).length;
+				batch(() => {
+					setProject("timeline", "camera3dSegments", (segments) =>
+						[...(segments ?? []), ...shots].sort((a, b) => a.start - b.start),
+					);
+					setEditorState("timeline", "tracks", "3d", true);
+					setEditorState("timeline", "camera3dPose", "start");
+					setEditorState("timeline", "selection", {
+						type: "3d",
+						indices: [index],
+					});
+					seekCamera3DPose(shots[0]);
+				});
 			};
 
 			const overlayPlacement = (
@@ -587,6 +635,12 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					setEditorState("previewTime", null);
 				});
 			};
+			// Set while "Play shot" is running: playback stops itself once the
+			// playhead reaches this time, and any other transport action clears it.
+			const [camera3DShotStop, setCamera3DShotStop] = createSignal<{
+				end: number;
+			} | null>(null);
+
 			const projectActions = {
 				setClipTransition,
 				normalizeClipTransitions: () => {
@@ -826,51 +880,127 @@ export const [EditorContextProvider, useBaseEditorContext] =
 								sortTrackSegments(segments);
 							}),
 						);
+						// Only the first shot stays selected: a multi-selection would
+						// close the panel the click was made from.
 						setEditorState("timeline", "selection", {
 							type: "3d",
-							indices: generated.map((_, offset) => segmentIndex + offset),
+							indices: [segmentIndex],
 						});
-						setEditorState("playbackTime", start);
-						setEditorState("previewTime", null);
+						setEditorState("timeline", "camera3dPose", "start");
+						seekCamera3DPose(generated[0]);
 					});
 				},
-				startCamera3DSetup: (start = editorState.playbackTime) => {
+				applyCamera3DLook: (
+					segmentIndex: number,
+					look: Camera3DMotionTemplate,
+				) => {
+					const segment = project.timeline?.camera3dSegments?.[segmentIndex];
+					if (!segment) return;
+					const range = { start: segment.start, end: segment.end };
 					batch(() => {
-						setEditorState("timeline", "selection", null);
-						setEditorState("timeline", "audioPicker", null);
-						setEditorState("timeline", "audioReplace", null);
-						setEditorState("timeline", "camera3dSetup", {
-							sceneId: "glide-across",
-							start,
-							duration: 6,
-						});
-						setEditorState("timeline", "tracks", "3d", true);
-					});
-				},
-				addCamera3DScene: () => {
-					const setup = editorState.timeline.camera3dSetup;
-					if (!project.timeline || !setup) return;
-					const generated = camera3DScenePreview(setup);
-					if (generated.length === 0) return;
-					const start = generated[0].start;
-					const index = (project.timeline.camera3dSegments ?? []).filter(
-						(segment) => segment.start < start,
-					).length;
-					batch(() => {
-						setProject("timeline", "camera3dSegments", (segments) =>
-							[...(segments ?? []), ...generated].sort(
-								(a, b) => a.start - b.start,
-							),
+						setProject(
+							"timeline",
+							"camera3dSegments",
+							produce((segments) => {
+								const target = segments?.[segmentIndex];
+								if (!target) return;
+								applyMotionTemplate(target, look);
+							}),
 						);
-						setEditorState("timeline", "camera3dSetup", null);
+						setEditorState("timeline", "camera3dPose", "start");
+						seekCamera3DPose(range);
+					});
+				},
+				// Which end of the selected shot the panel edits. The timeline dots
+				// and the panel's pose cards are the same control, so both go
+				// through here and both seek.
+				selectCamera3DPose: (segmentIndex: number, end: boolean) => {
+					const segment = project.timeline?.camera3dSegments?.[segmentIndex];
+					if (!segment) return;
+					const range = { start: segment.start, end: segment.end };
+					batch(() => {
+						const selection = editorState.timeline.selection;
+						if (
+							selection?.type !== "3d" ||
+							selection.indices.length !== 1 ||
+							selection.indices[0] !== segmentIndex
+						)
+							setEditorState("timeline", "selection", {
+								type: "3d",
+								indices: [segmentIndex],
+							});
+						setEditorState("timeline", "camera3dPose", end ? "end" : "start");
+						seekCamera3DPose(range, end);
+					});
+				},
+				addCamera3DShot: (
+					time = editorState.playbackTime,
+					duration = DEFAULT_CAMERA3D_SHOT_DURATION,
+				) => {
+					const placement = placeCamera3DShot(
+						project.timeline?.camera3dSegments ?? [],
+						time,
+						duration,
+						totalDuration(),
+					);
+					if (!placement) {
+						toast.error("No room for another 3D shot");
+						return;
+					}
+					insertCamera3DShots([
+						newCamera3DShot(placement.start, placement.end),
+					]);
+				},
+				// Drag-create hands over the range it drew, so the shot lands exactly
+				// where the pointer left it rather than being re-placed.
+				addCamera3DShotRange: (start: number, end: number) => {
+					if (!(end > start)) return;
+					insertCamera3DShots([newCamera3DShot(start, end)]);
+				},
+				// The auto scene owns the whole track: picking a count re-lays every
+				// shot, so the number on the pill is the number on the timeline.
+				applyCamera3DAutoScene: (count: number) => {
+					const generated = camera3DAutoSceneSegments(count);
+					if (generated.length === 0) {
+						toast.error("This recording is too short for a 3D scene");
+						return;
+					}
+					batch(() => {
+						setProject("timeline", "camera3dSegments", generated);
 						setEditorState("timeline", "tracks", "3d", true);
+						setEditorState("timeline", "camera3dAutoPreview", null);
+						setEditorState("timeline", "camera3dPose", "start");
 						setEditorState("timeline", "selection", {
 							type: "3d",
-							indices: [index],
+							indices: [0],
 						});
+						seekCamera3DPose(generated[0]);
+					});
+				},
+				playCamera3DShot: async (segmentIndex: number) => {
+					const segment = project.timeline?.camera3dSegments?.[segmentIndex];
+					if (!segment) return;
+					const start = camera3DPoseSeekTime(segment, false, FPS);
+					// The stop is driven off the playhead rather than a timer, so a
+					// slow decoder still pauses on the shot's last frame.
+					setCamera3DShotStop({ end: segment.end });
+					const pending = requestHandoffPlayback(true, start);
+					if (pending) {
+						await pending;
+						return;
+					}
+					try {
+						await commands.stopPlayback();
 						setEditorState("playbackTime", start);
 						setEditorState("previewTime", null);
-					});
+						await commands.seekTo(Math.floor(start * FPS));
+						await commands.startPlayback(FPS, previewResolutionBase());
+						setEditorState("playing", true);
+					} catch (error) {
+						console.error("Failed to play 3D shot:", error);
+						setCamera3DShotStop(null);
+						setEditorState("playing", false);
+					}
 				},
 				splitOverlaySegment: (
 					type: "style" | "image",
@@ -1477,6 +1607,86 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						speedAudioMode,
 					);
 				},
+				setClipSegmentVolume: (index: number, volume: number) => {
+					if (!Number.isFinite(volume) || !project.timeline?.segments[index]) {
+						return;
+					}
+					const next = Math.min(2, Math.max(0, volume));
+					setProject(
+						"timeline",
+						"segments",
+						index,
+						"volume",
+						next === 1 ? null : next,
+					);
+				},
+				setClipSegmentMuted: (index: number, muted: boolean) => {
+					const segment = project.timeline?.segments[index];
+					if (!segment) return;
+					setProject(
+						"timeline",
+						"segments",
+						index,
+						"speedAudioMode",
+						muted ? "mute" : segment.timescale === 1 ? null : "maintainPitch",
+					);
+				},
+				setClipSegmentHideCursor: (index: number, hidden: boolean) => {
+					if (!project.timeline?.segments[index]) return;
+					setProject(
+						"timeline",
+						"segments",
+						index,
+						"hideCursor",
+						hidden ? true : undefined,
+					);
+				},
+				setClipSegmentName: (index: number, name: string | null) => {
+					if (!project.timeline?.segments[index]) return;
+					const trimmed = name?.trim();
+					setProject(
+						"timeline",
+						"segments",
+						index,
+						"name",
+						trimmed ? trimmed : null,
+					);
+				},
+				mergeClipSegment: (index: number, direction: ClipMergeDirection) => {
+					const timeline = project.timeline;
+					if (!timeline) return;
+					if (clipMergeBlocker(timeline.segments, index, direction)) return;
+					const kept = clipMergeKeptIndex(index, direction);
+					batch(() => {
+						// Dropping the transition on the merged boundary first lets
+						// setClipTransition ripple the other tracks for the overlap it
+						// gave back; the merge itself is duration-neutral.
+						setClipTransition(kept + 1, null);
+						setProject(
+							produce((project) => {
+								const timeline = project.timeline;
+								if (!timeline) return;
+								const left = timeline.segments[kept];
+								const right = timeline.segments[kept + 1];
+								const settingsFrom = timeline.segments[index];
+								if (!left || !right || !settingsFrom) return;
+								timeline.segments.splice(
+									kept,
+									2,
+									mergedClipSegment(left, right, settingsFrom),
+								);
+								timeline.transitions = transitionsAfterClipMerge(
+									timeline.transitions ?? [],
+									kept,
+								);
+							}),
+						);
+						setEditorState("timeline", "selection", {
+							type: "clip",
+							indices: [kept],
+						});
+					});
+				},
 			};
 
 			const projectSave = createProjectConfigSave({
@@ -1734,7 +1944,12 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					hoveredMaskTime: null as number | null,
 					audioPicker: null as number | null,
 					audioReplace: null as number | null,
-					camera3dSetup: null as Camera3DSetup | null,
+					// Which end of the selected 3D shot is being edited. Shared so the
+					// timeline's pose dots and the sidebar's pose cards stay one control.
+					camera3dPose: "start" as "start" | "end",
+					// Shot count being hovered in an auto-scene picker, previewed on
+					// the lane as ghosts.
+					camera3dAutoPreview: null as number | null,
 					// Index of a just-created text segment that should open its
 					// inline canvas editor as soon as its overlay mounts (set by the
 					// Add-track picker, consumed by TextOverlay).
@@ -1750,11 +1965,34 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						batch(() => {
 							setEditorState("timeline", "audioPicker", null);
 							setEditorState("timeline", "audioReplace", null);
-							setEditorState("timeline", "camera3dSetup", null);
 						});
 					},
 				),
 			);
+
+			// "Play shot" plays one segment and stops on its last frame. The guard
+			// is the playhead rather than a timer, so a slow decoder still lands on
+			// the end of the shot. Pausing by hand disarms it, so the stop can never
+			// carry over into the next, unrelated play.
+			let camera3DShotStopRunning = false;
+			createEffect(() => {
+				const stop = camera3DShotStop();
+				if (!stop) {
+					camera3DShotStopRunning = false;
+					return;
+				}
+				if (!editorState.playing) {
+					if (camera3DShotStopRunning) setCamera3DShotStop(null);
+					return;
+				}
+				camera3DShotStopRunning = true;
+				if (editorState.playbackTime < stop.end) return;
+				setCamera3DShotStop(null);
+				const pending = requestHandoffPlayback(false);
+				if (pending) return;
+				void commands.stopPlayback();
+				setEditorState("playing", false);
+			});
 
 			let selectedStyleIdentity: StyleSegment | undefined;
 			const selectedStyle = () =>
@@ -2256,11 +2494,11 @@ export const [EditorContextProvider, useBaseEditorContext] =
 				styleScopeToken,
 				createStyleProjectSetter,
 				setStyleProject,
+				camera3DAutoScenePreview,
 				selectedStyle,
 				toggleStyleGroup,
 				exitStyleScope,
 				previewStyle,
-				camera3DScenePreview,
 				projectHistory: createStoreHistory(project, setProject, () => {
 					exitStyleScope();
 					setEditorState("timeline", "selection", null);

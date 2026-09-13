@@ -96,6 +96,7 @@ pub struct SegmentedControl {
     idle_text: Hsla,
     idle_bg: Option<Hsla>,
     hover_bg: Option<Hsla>,
+    selected_shadow: Vec<gpui::BoxShadow>,
     stretch: bool,
     on_select: Option<SegmentHandler>,
 }
@@ -123,6 +124,7 @@ impl SegmentedControl {
             idle_text: theme.gray(11),
             idle_bg: None,
             hover_bg: None,
+            selected_shadow: Vec::new(),
             stretch: false,
             on_select: None,
         }
@@ -179,6 +181,11 @@ impl SegmentedControl {
             selected_text: Hsla::from(editor.text_1),
             idle_text: Hsla::from(editor.text_2),
             hover_bg: Some(Hsla::from(editor.ctl_hover)),
+            selected_shadow: if theme.is_dark() {
+                Vec::new()
+            } else {
+                crate::theme::raised_pill_shadow()
+            },
             ..Self::base(theme, id, options)
         }
     }
@@ -254,6 +261,7 @@ impl RenderOnce for SegmentedControl {
             idle_text,
             idle_bg,
             hover_bg,
+            selected_shadow,
             stretch,
             on_select,
         } = self;
@@ -299,7 +307,11 @@ impl RenderOnce for SegmentedControl {
                     .when(disabled, |this| this.opacity(0.5))
                     .map(|this| {
                         if selected {
-                            let this = this.text_color(selected_text);
+                            let this = this
+                                .text_color(selected_text)
+                                .when(!selected_shadow.is_empty(), |this| {
+                                    this.shadow(selected_shadow.clone())
+                                });
                             match selected_bg {
                                 Some(bg) => this.bg(bg),
                                 None => this,

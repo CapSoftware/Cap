@@ -66,6 +66,7 @@ import {
 	createCurrentRecordingQuery,
 	createLicenseQuery,
 	createMicrophoneMutation,
+	getEditorRecordingTarget,
 	getPermissions,
 	listDisplaysWithThumbnails,
 	listRecordings,
@@ -1868,6 +1869,20 @@ function Page() {
 	const { rawOptions, setOptions, getCameraRevision } = useRecordingOptions();
 	const currentRecording = createCurrentRecordingQuery();
 	const cleanCapture = createCleanCaptureQuery();
+	const editorRecordingTarget = useQuery(() => getEditorRecordingTarget);
+	createTauriEventListener(events.editorRecordingFlowChanged, (payload) => {
+		queryClient.setQueryData(getEditorRecordingTarget.queryKey, payload.target);
+	});
+	const editorRecordingFlow = () => editorRecordingTarget.data ?? null;
+	const cancelEditorRecordingFlow = async () => {
+		try {
+			await commands.cancelEditorRecordingFlow();
+		} catch (error) {
+			toast.error(
+				typeof error === "string" ? error : "Could not go back to the editor",
+			);
+		}
+	};
 	const [stopRequested, setStopRequested] = createSignal(false);
 	const [stopError, setStopError] = createSignal<string | null>(null);
 	const recordingErrors = createMemo(() => {
@@ -2074,25 +2089,15 @@ function Page() {
 	const [hasHiddenMainWindowForPicker, setHasHiddenMainWindowForPicker] =
 		createSignal(false);
 	const [canRevealMainWindow, setCanRevealMainWindow] = createSignal(false);
-	const [
-		shouldRevealMainWindowAfterPicker,
-		setShouldRevealMainWindowAfterPicker,
-	] = createSignal(false);
 
 	createEffect(() => {
 		const pickerActive = rawOptions.targetMode != null;
-		const pickerSource = rawOptions.targetModeSource ?? "main";
-		const editorPicker =
-			pickerSource === "editor" || pickerSource === "editorRecording";
 		const hasHidden = hasHiddenMainWindowForPicker();
 		const recording = isRecording();
 
 		if (pickerActive && !hasHidden && !recording) {
 			setHasHiddenMainWindowForPicker(true);
-			setShouldRevealMainWindowAfterPicker(!editorPicker);
 			void hideCurrentWindow();
-		} else if (pickerActive && hasHidden) {
-			setShouldRevealMainWindowAfterPicker(!editorPicker);
 		} else if (recording) {
 			// A recording is active. The backend owns main-window visibility for the
 			// recording lifecycle: it hides the main window on start, and after a
@@ -2100,8 +2105,6 @@ function Page() {
 			// window here is exactly what left it sitting over the editor, so don't.
 		} else if (!pickerActive && hasHidden && canRevealMainWindow()) {
 			setHasHiddenMainWindowForPicker(false);
-			const shouldRevealMainWindow = shouldRevealMainWindowAfterPicker();
-			setShouldRevealMainWindowAfterPicker(false);
 			// Whether the main window may come back is decided by WHY the picker
 			// was dismissed, which travels with the dismissal itself
 			// (targetModeDismissal is written in the same setOptions call that
@@ -2115,7 +2118,7 @@ function Page() {
 				dismissal === "cancelled" ||
 				dismissal === "screenshot" ||
 				dismissal === "recordingInstant";
-			if (shouldRevealMainWindow && dismissalReveals) {
+			if (dismissalReveals) {
 				void revealRecordingWindow();
 			}
 		}
@@ -2126,11 +2129,7 @@ function Page() {
 		// Restore on dispose only when the picker is still open with no recording
 		// in flight (e.g. dev HMR mid-picker). Disposal after a recording started
 		// must not resurface the main window over the recording UI or the editor.
-		if (
-			shouldRevealMainWindowAfterPicker() &&
-			rawOptions.targetMode != null &&
-			!currentRecording.data
-		)
+		if (rawOptions.targetMode != null && !currentRecording.data)
 			void revealRecordingWindow();
 	});
 
@@ -2281,10 +2280,13 @@ function Page() {
 	const recentMedia = useQuery(() => ({
 		queryKey: RECENT_MEDIA_QUERY_KEY,
 		queryFn: async (): Promise<RecentMediaItem[]> => {
-			const [recordingRows, screenshotTargets] = await Promise.all([
-				queryClient.fetchQuery({ ...listRecordings, staleTime: 0 }),
-				queryClient.fetchQuery({ ...listScreenshotsQuery, staleTime: 0 }),
+			const [recordingRows, screenshotRows] = await Promise.all([
+				commands.listRecentRecordings(),
+				commands.listRecentScreenshots().catch(() => []),
 			]);
+			const screenshotTargets = screenshotRows.map(
+				([path, meta]) => ({ ...meta, path }) as ScreenshotWithPath,
+			);
 			const candidates: RecentMediaCandidate[] = [
 				...recordingRows.slice(0, RECENT_MEDIA_LIMIT).map(([path, meta]) => ({
 					kind: "recording" as const,
@@ -2361,12 +2363,10 @@ function Page() {
 	};
 
 	const refreshRecordingsUnlessEditorRecording = () => {
-		if (rawOptions.targetModeSource !== "editorRecording") {
-			refreshRecordings();
-		}
+		if (!editorRecordingFlow()) refreshRecordings();
 	};
 	const invalidateRecordingsUnlessEditorRecording = () => {
-		if (rawOptions.targetModeSource !== "editorRecording") {
+		if (!editorRecordingFlow()) {
 			invalidateRecordings();
 			invalidateRecentMedia();
 		}
@@ -2552,15 +2552,20 @@ function Page() {
 		};
 		const targetMode = __CAP__?.initialTargetMode ?? null;
 		const currentWindow = getCurrentWindow();
-		const storedWindowUI = await mainWindowUIStore.get().catch((error) => {
-			console.error("Failed to load main window size:", error);
-			return undefined;
-		});
-		const expanded = storedWindowUI?.expanded ?? false;
+		const expanded = await commands
+			.restoreMainWindowGeometry()
+			.catch(async (error) => {
+				console.error("Failed to restore main window geometry:", error);
+				const storedWindowUI = await mainWindowUIStore
+					.get()
+					.catch(() => undefined);
+				const expanded = storedWindowUI?.expanded ?? false;
+				await resizeMainWindow(expanded, false).catch((error) => {
+					console.error("Failed to restore main window size:", error);
+				});
+				return expanded;
+			});
 		setIsExpanded(expanded);
-		await resizeMainWindow(expanded, false).catch((error) => {
-			console.error("Failed to restore main window size:", error);
-		});
 
 		if (targetMode) {
 			await commands.openTargetSelectOverlays(null, null, targetMode);
@@ -2860,7 +2865,6 @@ function Page() {
 		mode: "display" | "window" | "area" | "camera",
 	) => {
 		if (isRecording()) return;
-		await commands.setEditorRecordingTarget(null);
 		const nextMode = rawOptions.targetMode === mode ? null : mode;
 		if (nextMode) {
 			if (nextMode === "camera") {
@@ -3412,46 +3416,79 @@ function Page() {
 			</Show>
 			<Show when={!activeMenu()}>
 				<div class="flex items-center justify-between mt-[16px] mb-[6px]">
-					<div class="flex items-center space-x-1">
-						<a
-							class="*:w-[92px] *:h-auto text-(--text-primary)"
-							target="_blank"
-							href={
-								auth.data
-									? new URL("/dashboard", serverUrl()).toString()
-									: serverUrl()
-							}
-						>
-							<IconCapLogoFullDark class="hidden dark:block" />
-							<IconCapLogoFull class="block dark:hidden" />
-						</a>
-						<ErrorBoundary fallback={null}>
-							<Suspense>
-								<Show
-									when={license.data?.type !== "pro"}
-									fallback={
-										<span class="text-[0.6rem] ml-2 rounded-lg border border-gray-5 px-1 py-0.5 bg-(--blue-400) text-gray-1 dark:text-gray-12">
-											{license.data?.type === "commercial"
-												? "Commercial"
-												: "Pro"}
-										</span>
+					<Show
+						when={editorRecordingFlow()}
+						fallback={
+							<div class="flex items-center space-x-1">
+								<a
+									class="*:w-[92px] *:h-auto text-(--text-primary)"
+									target="_blank"
+									href={
+										auth.data
+											? new URL("/dashboard", serverUrl()).toString()
+											: serverUrl()
 									}
 								>
+									<IconCapLogoFullDark class="hidden dark:block" />
+									<IconCapLogoFull class="block dark:hidden" />
+								</a>
+								<ErrorBoundary fallback={null}>
+									<Suspense>
+										<Show
+											when={license.data?.type !== "pro"}
+											fallback={
+												<span class="text-[0.6rem] ml-2 rounded-lg border border-gray-5 px-1 py-0.5 bg-(--blue-400) text-gray-1 dark:text-gray-12">
+													{license.data?.type === "commercial"
+														? "Commercial"
+														: "Pro"}
+												</span>
+											}
+										>
+											<button
+												type="button"
+												onClick={() => {
+													void commands.showWindow("Upgrade");
+												}}
+												class="text-[0.6rem] ml-2 rounded-lg border border-gray-5 px-1 py-0.5 bg-gray-3 hover:bg-gray-5"
+											>
+												Personal
+											</button>
+										</Show>
+									</Suspense>
+								</ErrorBoundary>
+							</div>
+						}
+					>
+						{(flow) => (
+							<div class="flex min-w-0 flex-1 items-center gap-2.5 pr-3 animate-in fade-in slide-in-from-left-1 duration-200">
+								<div class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-blue-3 text-blue-10 dark:bg-blue-4">
+									<IconCapClapperboard class="size-4" />
+								</div>
+								<div class="flex min-w-0 flex-col leading-tight">
+									<span class="truncate text-[13px] font-medium text-gray-12">
+										Record a new clip
+									</span>
+									<span class="truncate text-[11px] text-gray-11">
+										Adds to {flow().projectName}
+									</span>
+								</div>
+								<Tooltip content={<span>Back to editor</span>}>
 									<button
 										type="button"
-										onClick={() => {
-											void commands.showWindow("Upgrade");
-										}}
-										class="text-[0.6rem] ml-2 rounded-lg border border-gray-5 px-1 py-0.5 bg-gray-3 hover:bg-gray-5"
+										onClick={() => void cancelEditorRecordingFlow()}
+										aria-label="Back to editor"
+										class="flex size-6 shrink-0 items-center justify-center rounded-full text-gray-10 transition-colors hover:bg-gray-4 hover:text-gray-12 focus:outline-hidden"
 									>
-										Personal
+										<IconCapX class="size-2.5" />
 									</button>
-								</Show>
-							</Suspense>
-						</ErrorBoundary>
-					</div>
+								</Tooltip>
+							</div>
+						)}
+					</Show>
 					<Mode
+						locked={!!editorRecordingFlow()}
 						onInfoClick={() => {
+							if (editorRecordingFlow()) return;
 							setModeInfoMenuOpen(true);
 							setDisplayMenuOpen(false);
 							setWindowMenuOpen(false);

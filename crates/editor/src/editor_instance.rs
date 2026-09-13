@@ -378,6 +378,8 @@ impl EditorInstance {
                             timescale: 1.0,
                             name: None,
                             speed_audio_mode: None,
+                            hide_cursor: None,
+                            volume: None,
                         }],
                         _ => {
                             warn!(
@@ -411,6 +413,8 @@ impl EditorInstance {
                             timescale: 1.0,
                             name: None,
                             speed_audio_mode: None,
+                            hide_cursor: None,
+                            volume: None,
                         })
                     })
                     .collect(),
@@ -735,6 +739,14 @@ impl EditorInstance {
     }
 
     pub async fn dispose(&self) {
+        self.dispose_inner(false).await;
+    }
+
+    pub async fn dispose_with_thumbnail(&self) -> bool {
+        self.dispose_inner(true).await
+    }
+
+    async fn dispose_inner(&self, refresh_thumbnail: bool) -> bool {
         self.playback_epoch.fetch_add(1, Ordering::SeqCst);
         let mut state = self.state.lock().await;
 
@@ -753,7 +765,9 @@ impl EditorInstance {
             }
         }
 
-        self.renderer.stop().await;
+        if !refresh_thumbnail {
+            self.renderer.stop().await;
+        }
 
         let adoption = self.preparing_adoption();
         let owns_output = adoption.as_ref().is_none_or(|adoption| adoption.is_owner());
@@ -764,9 +778,25 @@ impl EditorInstance {
             self.audio_output.shutdown();
         }
 
+        let thumbnail_updated = if refresh_thumbnail {
+            match self.refresh_thumbnail().await {
+                Ok(updated) => updated,
+                Err(error) => {
+                    warn!(%error, path = %self.project_path.display(), "Recording thumbnail refresh failed");
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        if refresh_thumbnail {
+            self.renderer.stop().await;
+        }
+
         tokio::task::yield_now().await;
 
         drop(state);
+        thumbnail_updated
     }
 
     pub async fn modify_and_emit_state(&self, modify: impl Fn(&mut EditorState)) {

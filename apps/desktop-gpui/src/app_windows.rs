@@ -2971,7 +2971,7 @@ pub(crate) fn refresh_linux_instant_camera(
         effects: LinuxCameraProcessing {
             mirrored: snapshot.state.mirrored,
             blur: match snapshot.state.background_blur {
-                BlurMode::Off => LinuxCameraBlur::Off,
+                BlurMode::Off | BlurMode::Remove => LinuxCameraBlur::Off,
                 BlurMode::Light => LinuxCameraBlur::Light,
                 BlurMode::Heavy => LinuxCameraBlur::Heavy,
             },
@@ -4050,6 +4050,16 @@ fn camera_frame(cx: &mut App) -> Option<CameraFrame> {
         .ok()
         .flatten()
         .filter(|camera| camera.snapshot.bounds.width > 0. && camera.snapshot.bounds.height > 0.)
+}
+
+pub(crate) fn studio_camera_snapshot(
+    target: &ScreenCaptureTarget,
+    cx: &mut App,
+) -> Option<crate::recording::StudioCameraSnapshot> {
+    let handle = cx.global::<AppWindows>().camera?;
+    handle
+        .update(cx, |view, window, _| view.studio_snapshot(window, target))
+        .ok()
 }
 
 fn visible_camera_frame(cx: &mut App) -> Option<CameraFrame> {
@@ -5234,6 +5244,23 @@ fn load_editor_project_candidate(
 }
 
 async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::AsyncApp) {
+    if let Ok(page) = std::env::var("CAP_GPUI_AUTO_EXPORT_PAGE") {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(300))
+            .await;
+        let _ = handle.update(cx, |view, window, cx| {
+            view.open_export(window, cx);
+            if let Some(export) = view.export.as_mut() {
+                let flags: Vec<&str> = page.split(',').collect();
+                export.advanced_open = flags.contains(&"advanced");
+                if flags.contains(&"link") {
+                    export.destination = crate::editor_export::ExportDestination::Link;
+                }
+            }
+            cx.notify();
+        });
+        return;
+    }
     let Some(path) = std::env::var_os("CAP_GPUI_AUTO_EXPORT").map(PathBuf::from) else {
         return;
     };
@@ -5354,8 +5381,9 @@ fn load_editor_waveforms(
 }
 
 /// `CAP_GPUI_AUTO_SIDEBAR=<tab>[:<scroll>]` selects a config-sidebar tab and
-/// optionally scrolls its body, and `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]`
-/// selects timeline segments so their panel opens.
+/// optionally scrolls its body, `CAP_GPUI_AUTO_CAMERA3D=add[:<time>]|auto`
+/// makes a 3D shot, and `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]` selects
+/// timeline segments so their panel opens.
 ///
 /// They exist for the same reason as every other `CAP_GPUI_AUTO_*` hook, plus
 /// one specific to this pane: **a synthetic wheel does not scroll the sidebar's
@@ -5368,7 +5396,17 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     let select = std::env::var("CAP_GPUI_AUTO_SELECT").ok();
     let canvas = std::env::var("CAP_GPUI_AUTO_CANVAS").ok();
     let crop = std::env::var("CAP_GPUI_AUTO_CROP").ok();
-    if tab.is_none() && select.is_none() && canvas.is_none() && crop.is_none() {
+    let clip_menu = std::env::var("CAP_GPUI_AUTO_CLIP_MENU").ok();
+    let camera3d = std::env::var("CAP_GPUI_AUTO_CAMERA3D").ok();
+    let add_track = std::env::var("CAP_GPUI_AUTO_ADD_TRACK").ok();
+    if tab.is_none()
+        && select.is_none()
+        && canvas.is_none()
+        && crop.is_none()
+        && clip_menu.is_none()
+        && camera3d.is_none()
+        && add_track.is_none()
+    {
         return;
     }
     cx.background_executor()
@@ -5384,6 +5422,15 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
             .update(cx, |view, window, cx| {
                 view.auto_select_sidebar_tab(&name, scroll, window, cx)
             })
+            .ok();
+    }
+
+    // `CAP_GPUI_AUTO_CAMERA3D=add[:<time>]|auto`: make a 3D shot the way the
+    // lane's own chips make one. Before the selection hook, so a probe can
+    // create a shot and then photograph its panel.
+    if let Some(spec) = camera3d {
+        handle
+            .update(cx, |view, window, cx| view.auto_camera3d(&spec, window, cx))
             .ok();
     }
 
@@ -5409,6 +5456,28 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     {
         handle
             .update(cx, |view, window, cx| view.auto_crop(&spec, window, cx))
+            .ok();
+    }
+
+    // `CAP_GPUI_AUTO_CLIP_MENU=<index>[:split]`: open clip `<index>`'s settings
+    // menu the way a right-click on it does, optionally splitting the first
+    // clip at 40% first so the merge rows have a neighbour to act on.
+    if let Some(spec) = clip_menu {
+        handle
+            .update(cx, |view, window, cx| {
+                view.auto_clip_menu(&spec, window, cx)
+            })
+            .ok();
+    }
+
+    // `CAP_GPUI_AUTO_ADD_TRACK=1` opens the add-track tray;
+    // `CAP_GPUI_AUTO_ADD_TRACK=<text|mask|style|audio|...>` opens it and picks
+    // that tile, then treats the player as hovered so its overlay draws.
+    if let Some(spec) = add_track {
+        handle
+            .update(cx, |view, window, cx| {
+                view.auto_add_track(&spec, window, cx)
+            })
             .ok();
     }
 }
@@ -5671,7 +5740,19 @@ pub fn editor_closed(project_path: &Path, window_id: gpui::WindowId, cx: &mut Ap
         .ok()
         .flatten();
     if let Some(instance) = instance {
-        gpui_tokio::Tokio::spawn(cx, async move { instance.dispose().await }).detach();
+        let refresh =
+            gpui_tokio::Tokio::spawn(cx, async move { instance.dispose_with_thumbnail().await });
+        cx.spawn(async move |cx| {
+            if refresh.await.unwrap_or(false) {
+                cx.update(|cx| {
+                    refresh_library_after_delete(cx);
+                    let main = cx.global::<AppWindows>().main;
+                    main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
+                        .ok();
+                });
+            }
+        })
+        .detach();
     }
 
     restore_after_editor_close(&key, cx);

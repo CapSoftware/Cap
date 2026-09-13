@@ -9,7 +9,7 @@ use std::{
     },
     time::Instant,
 };
-use tauri::{AppHandle, Listener, Manager, Runtime, Window, ipc::CommandArg};
+use tauri::{AppHandle, Emitter, Listener, Manager, Runtime, Window, ipc::CommandArg};
 use tokio::sync::{RwLock, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -400,12 +400,24 @@ impl PendingEditorInstances {
 
 impl EditorInstance {
     pub async fn dispose(&self) {
+        self.dispose_inner(false).await;
+    }
+
+    async fn dispose_inner(&self, refresh_thumbnail: bool) {
         self.disposed.store(true, Ordering::Release);
         let mut handoff = self.handoff_playback.lock().await;
         if let Some((_, playback)) = handoff.take() {
             playback.stop();
         }
-        self.inner.dispose().await;
+        if refresh_thumbnail {
+            if self.inner.dispose_with_thumbnail().await {
+                let _ = self
+                    .app_handle
+                    .emit("recording-thumbnail-changed", &self.project_path);
+            }
+        } else {
+            self.inner.dispose().await;
+        }
 
         self.ws_shutdown_token.cancel();
         self.app_handle.unlisten(self.render_frame_event_id);
@@ -740,9 +752,9 @@ impl EditorInstances {
             return;
         };
 
-        let mut instances = instances.0.write().await;
-        if let Some(instance) = instances.remove(window.label()) {
-            instance.dispose().await;
+        let instance = instances.0.write().await.remove(window.label());
+        if let Some(instance) = instance {
+            instance.dispose_inner(true).await;
         }
     }
 

@@ -1,4 +1,5 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -26,7 +27,14 @@ export const CAMERA_TOOLBAR_HEIGHT = 56;
 export const CAMERA_WINDOW_STATE_STORAGE_KEY = "cameraWindowState";
 export const CAMERA_WIDE_ASPECT_RATIO = 16 / 9;
 
-const BLUR_MODES: BackgroundBlurMode[] = ["off", "light", "heavy"];
+export const cameraBackgroundOptions = (
+	macOS: boolean,
+): { name: string; value: BackgroundBlurMode }[] => [
+	{ name: "Off", value: "off" },
+	{ name: "Light Blur", value: "light" },
+	{ name: "Heavy Blur", value: "heavy" },
+	...(macOS ? [{ name: "Remove Background", value: "remove" as const }] : []),
+];
 const RESIZE_CORNERS = ["nw", "ne", "sw", "se"] as const;
 
 type ResizeCorner = (typeof RESIZE_CORNERS)[number];
@@ -78,12 +86,14 @@ export const normalizeBackgroundBlurMode = (
 
 export const cycleBlurMode = (
 	current: BackgroundBlurMode | boolean,
+	macOS = false,
 ): BackgroundBlurMode => {
 	if (typeof current === "boolean") {
 		return current ? "heavy" : "light";
 	}
-	const idx = BLUR_MODES.indexOf(current);
-	return BLUR_MODES[(idx + 1) % BLUR_MODES.length];
+	const modes = cameraBackgroundOptions(macOS).map((option) => option.value);
+	const idx = modes.indexOf(current);
+	return modes[(idx + 1) % modes.length];
 };
 
 export const blurModeLabel = (mode: BackgroundBlurMode | boolean): string => {
@@ -93,6 +103,8 @@ export const blurModeLabel = (mode: BackgroundBlurMode | boolean): string => {
 			return "Light";
 		case "heavy":
 			return "Heavy";
+		case "remove":
+			return "Cutout";
 		default:
 			return "";
 	}
@@ -106,6 +118,7 @@ export const cameraToolbarScale = (size: number) => {
 };
 
 export function cameraBorderRadius(state: CameraWindowState) {
+	if (state.backgroundBlur === "remove") return "0px";
 	if (state.shape === "round") return "9999px";
 	const normalized =
 		(clampCameraSize(state.size) - CAMERA_MIN_SIZE) /
@@ -182,7 +195,9 @@ export function CameraPreviewToolbar(props: {
 					props.state.backgroundBlur !== false
 				}
 				onClick={() =>
-					props.setState("backgroundBlur", (mode) => cycleBlurMode(mode))
+					props.setState("backgroundBlur", (mode) =>
+						cycleBlurMode(mode, ostype() === "macos"),
+					)
 				}
 			>
 				<div class="relative">
@@ -329,6 +344,22 @@ function ResizeCornerHandle(props: {
 		}
 	};
 
+	// A thicker dark bracket sits 1px outside the white one on every edge so
+	// the L reads as a contour on light desktops too (cutout mode has no
+	// backdrop behind it). Same construction as the GPUI window.
+	const outlinePositionClass = () => {
+		switch (props.corner) {
+			case "nw":
+				return "top-[5px] left-[5px] border-t-4 border-l-4 rounded-tl-[7px]";
+			case "ne":
+				return "top-[5px] right-[5px] border-t-4 border-r-4 rounded-tr-[7px]";
+			case "sw":
+				return "bottom-[5px] left-[5px] border-b-4 border-l-4 rounded-bl-[7px]";
+			case "se":
+				return "bottom-[5px] right-[5px] border-b-4 border-r-4 rounded-br-[7px]";
+		}
+	};
+
 	return (
 		<div
 			data-tauri-drag-region="false"
@@ -341,18 +372,27 @@ function ResizeCornerHandle(props: {
 		>
 			<div
 				class={cx(
-					"absolute w-3.5 h-3.5 border-white pointer-events-none",
-					"transition-[opacity,transform,border-color] duration-150 ease-out",
+					"absolute inset-0 pointer-events-none",
+					"transition-[opacity,transform] duration-150 ease-out",
 					"opacity-0 scale-90",
-					props.visible && "opacity-70 scale-100",
+					props.visible && "opacity-85 scale-100",
 					"group-hover/handle:!opacity-100 group-hover/handle:!scale-110",
 					props.active && "!opacity-100 !scale-110",
-					bracketPositionClass(),
 				)}
 				style={{
-					filter: "drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6))",
+					filter: "drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5))",
 				}}
-			/>
+			>
+				<div
+					class={cx("absolute w-4 h-4 border-black/50", outlinePositionClass())}
+				/>
+				<div
+					class={cx(
+						"absolute w-3.5 h-3.5 border-white",
+						bracketPositionClass(),
+					)}
+				/>
+			</div>
 		</div>
 	);
 }

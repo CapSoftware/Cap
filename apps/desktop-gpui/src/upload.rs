@@ -1103,6 +1103,9 @@ async fn upload_exported_video_inner(
         .map_err(|error| format!("Failed to load recording metadata: {error}"))?;
     let file_path = meta.output_path();
     if !file_path.exists() {
+        if !defer_completion {
+            crate::app_sounds::play_notification();
+        }
         return Err("Failed to upload video: Rendered video not found".into());
     }
 
@@ -1227,7 +1230,12 @@ async fn upload_exported_video_inner(
         }
         Err(AuthApiError::UpgradeRequired) => Ok((UploadResult::UpgradeRequired, None)),
         Err(AuthApiError::InvalidAuthentication) => Ok((UploadResult::NotAuthenticated, None)),
-        Err(error) => Err(error.to_string()),
+        Err(error) => {
+            if !defer_completion && !cancel.load(Ordering::Relaxed) {
+                crate::app_sounds::play_notification();
+            }
+            Err(error.to_string())
+        }
     }
 }
 

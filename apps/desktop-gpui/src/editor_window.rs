@@ -59,10 +59,11 @@ use core_foundation::base::TCFType;
 #[cfg(target_os = "macos")]
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
-    AppContext as _, Bounds, Context, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
-    Point, Render, RenderImage, SharedString, StatefulInteractiveElement as _, StyleRefinement,
-    Styled, Subscription, WeakEntity, Window, div, point, prelude::FluentBuilder, px, svg,
+    Animation, AnimationExt as _, AppContext as _, Bounds, Context, Entity, FocusHandle,
+    FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Pixels, Point, Render, RenderImage, SharedString,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, Subscription, WeakEntity, Window,
+    div, point, prelude::FluentBuilder, px, svg,
 };
 
 use crate::{
@@ -428,6 +429,8 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
                     end: segment.duration(),
                     name: None,
                     speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 })
                 .collect(),
             // `TimelineConfiguration` has no `Default`, so the eight other
@@ -479,6 +482,9 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
 /// The click half of `generate_zoom_segments_for_project`
 /// (`src-tauri/src/recording.rs:3806-3848`): every recorded cursor click, with
 /// the same short-lived-shape stabilisation the Tauri command applies.
+const NO_AUTO_ZOOM_CLICKS_MESSAGE: &str =
+    "No clicks found to zoom into. Drag across the lane to add one.";
+
 fn load_recording_clicks(project_path: &std::path::Path) -> Vec<cap_project::CursorClickEvent> {
     let Ok(meta) = RecordingMeta::load_for_project(project_path) else {
         return Vec::new();
@@ -1556,6 +1562,8 @@ pub struct EditorWindow {
     // -- The canvas display drag (E6) -----------------------------------------
     /// The letterboxed frame rect the preview canvas last painted.
     pub(crate) player_frame_rect: crate::editor_canvas::CanvasRect,
+    pub(crate) player_panel_bounds: ui::SliderTrack,
+    pub(crate) player_panel_hovered: bool,
     /// `editorState.canvasSelection`.
     pub(crate) canvas_selection: Option<crate::editor_canvas::CanvasSelection>,
     /// `hovered` on `ElementBox` (`CanvasElementsOverlay.tsx:790`).
@@ -1576,8 +1584,19 @@ pub struct EditorWindow {
     toolbar_menu: Option<OpenToolbarMenu>,
     frame_controls: frame::FrameControls,
     add_track: Option<AddTrackMenu>,
+    add_track_opens: usize,
     pub(crate) audio_picker: Option<crate::editor_audio::AudioPicker>,
-    pub(crate) camera3d_setup: Option<Camera3DSetup>,
+    /// A transient line over the player: the one place an action that cannot
+    /// apply says so (the editor has no toast host of its own).
+    pub(crate) notice: Option<EditorNotice>,
+    notice_seq: u64,
+    /// While a shot is being auditioned, the time playback stops itself at.
+    play_until: Option<f64>,
+    /// The empty 3D lane's "How many shots?" picker, and the pill under the
+    /// pointer in it or in the panel's Auto scene row -- which is what the
+    /// lane draws its preview ghosts from.
+    pub(crate) camera3d_picker: bool,
+    pub(crate) camera3d_count_hover: Option<usize>,
     /// The user's drag on the resize grip. `None` means the card hugs its
     /// track rows and re-hugs whenever a track is added or removed.
     timeline_height_override: Option<f32>,
@@ -1618,23 +1637,257 @@ enum PresetDialog {
     Delete { index: usize },
 }
 
-/// The add-track popover's geometry, computed once when it opens. Anchored to
-/// the trigger's top-left with an 8px gutter (Kobalte `placement:
-/// "bottom-start"` flipped upward), growing up and capped so it never leaves
-/// the viewport -- `fitViewport` -- with the list scrolling instead
-/// (`TrackManager.tsx:166-209`).
+/// The add-track tray, computed once when it opens. It slides out of the
+/// gutter's right edge with its bottom on the ruler's baseline (Kobalte
+/// `placement: "right-end"` on the gutter anchor, `TrackManager.tsx`), so
+/// every track type is on screen at once and nothing scrolls.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct AddTrackMenu {
     left: Pixels,
-    /// Distance from the window's bottom edge to the popover's bottom edge.
+    /// Distance from the window's bottom edge to the tray's bottom edge.
     bottom: Pixels,
-    max_height: Pixels,
+    /// Bumped per open so the entrance animation replays each time.
+    generation: usize,
+    hovered: Option<TrackKind>,
 }
 
+const ADD_TRACK_TRAY_ANIMATION: Duration = Duration::from_millis(620);
+const ADD_TRACK_TRAY_IN_MS: f32 = 220.;
+const ADD_TRACK_TRAY_SLIDE: f32 = 12.;
+const ADD_TRACK_TILE_DELAY_MS: f32 = 60.;
+const ADD_TRACK_TILE_STAGGER_MS: f32 = 24.;
+const ADD_TRACK_TILE_IN_MS: f32 = 320.;
+const ADD_TRACK_TILE_SLIDE: f32 = 10.;
+
+fn ease_out_quint(t: f32) -> f32 {
+    1. - (1. - t).powi(5)
+}
+
+/// `cubic-bezier(0.34, 1.35, 0.64, 1)`-style overshoot: lands past 1 and
+/// settles back, which is what makes the tiles feel like they pop in.
+fn ease_out_back(t: f32) -> f32 {
+    let c1 = 1.35;
+    let c3 = c1 + 1.;
+    let x = t - 1.;
+    1. + c3 * x * x * x + c1 * x * x
+}
+
+fn add_track_tray_progress(delta: f32) -> f32 {
+    ease_out_quint(
+        (delta * ADD_TRACK_TRAY_ANIMATION.as_millis() as f32 / ADD_TRACK_TRAY_IN_MS).clamp(0., 1.),
+    )
+}
+
+fn add_track_tile_progress(delta: f32, index: usize) -> f32 {
+    let elapsed = delta * ADD_TRACK_TRAY_ANIMATION.as_millis() as f32
+        - ADD_TRACK_TILE_DELAY_MS
+        - index as f32 * ADD_TRACK_TILE_STAGGER_MS;
+    ease_out_back((elapsed / ADD_TRACK_TILE_IN_MS).clamp(0., 1.))
+}
+
+const CLIP_MENU_WIDTH: f32 = 300.;
+/// Roughly the menu's laid-out height; only decides which side of its anchor
+/// the card opens on.
+const CLIP_MENU_HEIGHT_ESTIMATE: f32 = 440.;
+
+/// The clip settings menu (`ClipSettingsControl`, `TL/ClipTrack.tsx`), opened
+/// from the clip's cog or by right-clicking the clip.
 #[derive(Clone, Copy)]
 struct ClipSpeedMenu {
     index: usize,
+    /// Left edge, clamped so the card stays inside the window.
+    left: Pixels,
+    anchor: ClipMenuAnchor,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ClipMenuAnchor {
+    /// Grows upward from just above the anchor point (the usual case: the
+    /// timeline sits at the bottom of the window).
+    Above { bottom: Pixels },
+    /// Hangs below the anchor when there is no room above it.
+    Below { top: Pixels },
+}
+
+fn clip_menu_placement(
+    index: usize,
     origin: Point<Pixels>,
+    viewport: gpui::Size<Pixels>,
+) -> ClipSpeedMenu {
+    let (width, height) = (f32::from(viewport.width), f32::from(viewport.height));
+    let left = px((f32::from(origin.x) - 8.)
+        .min(width - CLIP_MENU_WIDTH - 12.)
+        .max(12.));
+    let y = f32::from(origin.y);
+    let room_above = y - 20.;
+    let room_below = height - y - 20.;
+    let anchor = if room_above >= CLIP_MENU_HEIGHT_ESTIMATE || room_above >= room_below {
+        ClipMenuAnchor::Above {
+            bottom: px(height - y + 8.),
+        }
+    } else {
+        ClipMenuAnchor::Below { top: px(y + 8.) }
+    };
+    ClipSpeedMenu {
+        index,
+        left,
+        anchor,
+    }
+}
+
+enum ClipMenuTrailing {
+    None,
+    Hint(&'static str),
+    Kbd(&'static str),
+}
+
+fn format_clip_speed(speed: f64) -> String {
+    if (speed - speed.round()).abs() < 1e-6 {
+        format!("{}x", speed.round() as i32)
+    } else {
+        format!("{speed}x")
+    }
+}
+
+fn clip_menu_section(theme: &Theme, label: &'static str) -> gpui::Div {
+    div()
+        .px(px(8.))
+        .text_size(px(10.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(Hsla::from(theme.editor.text_3))
+        .child(label)
+}
+
+fn clip_menu_toggle_row(
+    theme: &Theme,
+    id: &'static str,
+    icon: &'static str,
+    label: &'static str,
+    description: &'static str,
+    checked: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .h(px(40.))
+        .w_full()
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .rounded(px(8.))
+        .px(px(8.))
+        .cursor_pointer()
+        .hover(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
+        .child(
+            svg()
+                .path(icon)
+                .size(px(14.))
+                .flex_none()
+                .text_color(Hsla::from(if checked {
+                    theme.editor.accent
+                } else {
+                    theme.editor.text_2
+                })),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_size(px(12.5))
+                        .text_color(Hsla::from(theme.editor.text_1))
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .text_color(Hsla::from(theme.editor.text_3))
+                        .child(description),
+                ),
+        )
+        .child(ui::Toggle::plain(
+            theme,
+            SharedString::from(format!("{id}-toggle")),
+            checked,
+        ))
+}
+
+fn clip_menu_row(
+    theme: &Theme,
+    id: &'static str,
+    icon: &'static str,
+    label: &'static str,
+    trailing: ClipMenuTrailing,
+    enabled: bool,
+    danger: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let red = Hsla::from(gpui::rgb(0xf87171));
+    let red_wash = Hsla {
+        a: 0.10,
+        ..Hsla::from(gpui::rgb(0xef4444))
+    };
+    let text = if !enabled {
+        Hsla::from(theme.editor.text_3)
+    } else if danger {
+        red
+    } else {
+        Hsla::from(theme.editor.text_1)
+    };
+    let icon_color = if !enabled {
+        Hsla::from(theme.editor.text_3)
+    } else if danger {
+        red
+    } else {
+        Hsla::from(theme.editor.text_2)
+    };
+    let hover_bg = if danger {
+        red_wash
+    } else {
+        Hsla::from(theme.editor.ctl_hover)
+    };
+    let row = div()
+        .id(id)
+        .h(px(32.))
+        .w_full()
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .rounded(px(8.))
+        .px(px(8.))
+        .text_size(px(12.5))
+        .text_color(text)
+        .when(enabled, |this| {
+            this.cursor_pointer().hover(move |this| this.bg(hover_bg))
+        })
+        .child(
+            svg()
+                .path(icon)
+                .size(px(14.))
+                .flex_none()
+                .text_color(icon_color),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(label),
+        );
+    match trailing {
+        ClipMenuTrailing::Hint(hint) if !enabled => row.child(
+            div()
+                .flex_none()
+                .text_size(px(10.5))
+                .text_color(Hsla::from(theme.editor.text_3))
+                .child(hint),
+        ),
+        ClipMenuTrailing::Kbd(key) if enabled => row.child(ui::KbdChip::row(theme, key)),
+        _ => row,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1883,6 +2136,8 @@ impl EditorWindow {
             player_frame_rect,
             canvas_selection: None,
             hovered_canvas: None,
+            player_panel_bounds: ui::SliderTrack::default(),
+            player_panel_hovered: false,
             canvas_drag: None,
             canvas_drag_rect: None,
             canvas_drag_camera_rect: None,
@@ -1893,8 +2148,13 @@ impl EditorWindow {
             toolbar_menu: None,
             frame_controls: frame::FrameControls::default(),
             add_track: None,
+            add_track_opens: 0,
             audio_picker: None,
-            camera3d_setup: None,
+            notice: None,
+            notice_seq: 0,
+            play_until: None,
+            camera3d_picker: false,
+            camera3d_count_hover: None,
             timeline_height_override: None,
             initial_timeline_rows: None,
             timeline_resize: None,
@@ -1908,6 +2168,11 @@ impl EditorWindow {
 
     /// `frameNumberToRender`'s time: `previewTime ?? playbackTime`
     /// (`Editor.tsx:515-519`), floored at zero.
+    /// Where the playhead stands, for the panels that mark the pose on it.
+    pub(crate) fn playhead_time(&self) -> f64 {
+        self.playhead
+    }
+
     pub(crate) fn preview_or_playhead(&self) -> f64 {
         self.view.preview_time.unwrap_or(self.playhead).max(0.0)
     }
@@ -2029,7 +2294,6 @@ impl EditorWindow {
         );
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
-        self.timeline.camera3d_setup_ghosts = self.camera3d_setup_preview();
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
         }
@@ -2732,6 +2996,15 @@ impl EditorWindow {
         // (`Player.tsx:205-210`). The playhead is *not* rewound -- it stays at
         // the end, which is what makes the button show Play again and the next
         // press restart from 0.
+        // `Play shot` stops itself at the shot's own end, the way the
+        // end-of-media effect stops at the timeline's.
+        if self.playing
+            && let Some(until) = self.play_until
+            && next >= until - 1. / f64::from(EDITOR_PREVIEW_FPS)
+        {
+            self.stop_playback(cx);
+        }
+
         if self.playing && self.is_at_end() {
             self.stop_playback(cx);
         }
@@ -2744,6 +3017,7 @@ impl EditorWindow {
     /// effect, by prev/next, and by the clips sidebar's import path
     /// (`ClipsSidebar.tsx:508-511`).
     pub(crate) fn stop_playback(&mut self, cx: &mut Context<Self>) {
+        self.play_until = None;
         self.playback_follow.reset();
         if self.preparing_transport_active() {
             self.preparing_command(None, Some(false));
@@ -2844,6 +3118,35 @@ impl EditorWindow {
         cx.notify();
     }
 
+    /// The 3D panel's `Play shot`: start on the shot's first frame and stop on
+    /// its last, so the move can be watched without scrubbing back.
+    pub(crate) fn play_camera3d_shot(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some((start, end)) = self
+            .project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.camera3d_segments.get(index))
+            .map(|segment| {
+                (
+                    crate::editor_panels::camera3d_pose_seek_time(
+                        segment,
+                        false,
+                        EDITOR_PREVIEW_FPS,
+                    ),
+                    segment.end,
+                )
+            })
+        else {
+            return;
+        };
+        if self.playing {
+            self.stop_playback(cx);
+        }
+        self.start_playback(start, cx);
+        self.play_until = Some(end);
+        cx.notify();
+    }
+
     /// The perf gate's line, emitted every time playback stops.
     fn report_playback(&mut self) {
         let (Some((started, before)), Some(stats)) = (self.play_mark.take(), self.stats.as_ref())
@@ -2893,6 +3196,8 @@ impl EditorWindow {
     /// (`PlaybackHandle::seek`), so a scrub during playback holds the last
     /// picture for one decode instead of paying a warmup per tick.
     pub fn seek_to_time(&mut self, time: f64, cx: &mut Context<Self>) {
+        // Moving the playhead by hand ends any shot audition.
+        self.play_until = None;
         if self.preparing_transport_active() {
             self.preparing_command(Some(time), None);
             return;
@@ -3236,6 +3541,17 @@ impl EditorWindow {
         {
             return;
         }
+        // The Auto scene picker owns the digits while it is open, which is
+        // how a count is chosen without reaching for the pointer.
+        if self.camera3d_picker
+            && let Ok(count) = keystroke.key.parse::<usize>()
+            && (1..=crate::editor_panels::AUTO_CAMERA3D_MAX_SHOTS).contains(&count)
+        {
+            cx.stop_propagation();
+            self.apply_auto_camera3d_scene(count, window, cx);
+            window.refresh();
+            return;
+        }
         match keystroke.key.as_str() {
             // `e.code === "Backspace" || (e.code === "Delete" &&
             // hasNoModifiers)` (`TL/index.tsx:963`). gpui reports the main
@@ -3272,8 +3588,8 @@ impl EditorWindow {
                     cx.notify();
                     return;
                 }
-                if self.camera3d_setup.is_some() {
-                    self.close_camera3d_setup(cx);
+                if self.camera3d_picker {
+                    self.close_camera3d_picker(cx);
                     return;
                 }
                 if self.split_mode {
@@ -3596,6 +3912,25 @@ impl EditorWindow {
             .secs_per_pixel(timeline::content_width(viewport_width))
     }
 
+    /// Which pose dot the press landed on, if any. The dots are drawn inside
+    /// the box, so this is asked only after the handles have had their say.
+    fn camera3d_pose_dot_at(&self, index: usize, x: f64, secs_per_pixel: f64) -> Option<bool> {
+        let segment = self.timeline.segments(TrackKind::ThreeD).get(index)?;
+        let left = (segment.start - self.view.transform.position) / secs_per_pixel;
+        let right = (segment.end - self.view.transform.position) / secs_per_pixel;
+        let inset = f64::from(timeline::CAMERA3D_POSE_DOT_INSET);
+        let size = f64::from(timeline::CAMERA3D_POSE_DOT);
+        if right - left < inset * 2. + size * 2. + 6. {
+            return None;
+        }
+        if (left + inset..=left + inset + size).contains(&x) {
+            return Some(false);
+        }
+        (right - inset - size..=right - inset)
+            .contains(&x)
+            .then_some(true)
+    }
+
     /// A window x as pixels into the track content column, the space every
     /// segment box is laid out in.
     fn content_x(&self, window_x: f32) -> f64 {
@@ -3620,6 +3955,7 @@ impl EditorWindow {
             dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
             self.sidebar.style_target = None;
             self.sidebar.scroll.set_offset(gpui::point(px(0.), px(0.)));
+            self.follow_camera3d_look(selection.as_ref());
             self.canvas_selection = selection.as_ref().and_then(|selection| {
                 if selection.indices.len() != 1 {
                     return None;
@@ -3635,6 +3971,37 @@ impl EditorWindow {
             self.selection = selection;
             self.refresh_image_asset_status();
             cx.notify();
+        }
+    }
+
+    /// A 3D shot arriving in the selection brings its own half of the Look
+    /// grid with it, so the ring on the look it is sitting on is visible
+    /// without hunting for the tab it lives under.
+    ///
+    /// Only on the way in, and only when the shot itself changed: an edit that
+    /// stops a shot matching must not pull the grid out from under the pointer
+    /// mid-drag, and a shot that matches nothing keeps whichever half the user
+    /// was last looking at.
+    fn follow_camera3d_look(&mut self, selection: Option<&Selection>) {
+        let Some(next) =
+            selection.filter(|next| next.track == TrackKind::ThreeD && next.indices.len() == 1)
+        else {
+            return;
+        };
+        let same_shot = self.selection.as_ref().is_some_and(|current| {
+            current.track == TrackKind::ThreeD && current.indices == next.indices
+        });
+        if same_shot {
+            return;
+        }
+        if let Some(look) = self
+            .project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.camera3d_segments.get(next.indices[0]))
+            .and_then(crate::editor_panels::match_camera3d_look)
+        {
+            self.sidebar.camera3d_angles = look.kind == crate::editor_panels::LookKind::Angle;
         }
     }
 
@@ -3718,19 +4085,33 @@ impl EditorWindow {
             "timeline press"
         );
 
+        // The selected 3D shot's pose dots: a press on one picks that pose
+        // instead of starting a move. Only inside the body, so the resize
+        // handles keep the outer pixels.
+        if kind == TrackKind::ThreeD
+            && let edits::Hit::Body { index } = hit
+            && self
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.contains(TrackKind::ThreeD, index))
+            && let Some(end) = self.camera3d_pose_dot_at(index, x, secs_per_pixel)
+        {
+            cx.stop_propagation();
+            self.select_camera3d_pose_from_timeline(index, end, cx);
+            return;
+        }
+
         let index = match hit {
             Hit::Empty => {
-                if kind == TrackKind::Zoom {
+                if matches!(kind, TrackKind::Zoom | TrackKind::ThreeD) {
                     self.begin_gap_create(
-                        TrackKind::Zoom,
+                        kind,
                         secs_per_pixel,
                         f32::from(event.position.x),
                         viewport_width,
+                        window,
                         cx,
                     );
-                } else if kind == TrackKind::ThreeD {
-                    cx.stop_propagation();
-                    self.start_camera3d_setup_at(press_time, cx);
                 } else if kind == TrackKind::Image {
                     cx.stop_propagation();
                     self.import_image_for_lane(lane, press_time, window, cx);
@@ -4166,23 +4547,37 @@ impl EditorWindow {
         secs_per_pixel: f64,
         down_x: f32,
         viewport_width: f32,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let ghost = timeline::preview_time_from_x(down_x, viewport_width, self.view.transform)
             .and_then(|preview| {
-                timeline::new_gap_segment(&self.timeline, kind, preview, secs_per_pixel)
-                    .map(|ghost| (preview, ghost))
+                // The 3D lane's ghost is a four-second shot, not a
+                // minimum-width box, and it never refuses a click: a press
+                // inside a shot lands in the next free gap.
+                match kind {
+                    TrackKind::ThreeD => timeline::new_camera3d_ghost(&self.timeline, preview),
+                    _ => timeline::new_gap_segment(&self.timeline, kind, preview, secs_per_pixel),
+                }
+                .map(|ghost| (preview, ghost))
             });
         let Some((preview, (start, end))) = ghost else {
+            if kind == TrackKind::ThreeD {
+                self.show_notice(scenes::CAMERA3D_NO_ROOM, window, cx);
+            }
             return;
         };
         let max = self
             .timeline
             .segments(kind)
             .iter()
-            .find(|segment| preview <= segment.start)
+            .find(|segment| start <= segment.start)
             .map_or(self.total_duration(), |segment| segment.start);
-        let min_duration = timeline::new_segment_min_duration(secs_per_pixel);
+        let min_duration = if kind == TrackKind::ThreeD {
+            crate::editor_panels::CAMERA3D_MIN_SHOT_DURATION
+        } else {
+            timeline::new_segment_min_duration(secs_per_pixel)
+        };
 
         self.history.pause();
         self.arm_drag_snap(kind, None);
@@ -4694,6 +5089,34 @@ impl EditorWindow {
         .detach();
     }
 
+    /// Say why an action did nothing. A second notice replaces the first, and
+    /// the timer only clears the message it was started for.
+    pub(crate) fn show_notice(
+        &mut self,
+        message: impl Into<SharedString>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.notice_seq += 1;
+        let id = self.notice_seq;
+        self.notice = Some(EditorNotice {
+            id,
+            message: message.into(),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(EDITOR_NOTICE_DURATION).await;
+            this.update(cx, |this, cx| {
+                if this.notice.as_ref().is_some_and(|notice| notice.id == id) {
+                    this.notice = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn ghost_clip_boxes_for(&mut self, draft: ClipDraft) -> Option<GhostClipLayout> {
         self.clip_draft = Some(draft);
         let result = self.ghost_clip_boxes();
@@ -4702,15 +5125,18 @@ impl EditorWindow {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Camera3DSetup {
-    pub scene_id: &'static str,
-    pub start: f64,
-    pub duration: f64,
-    pub sequences_open: bool,
+type GhostClipLayout = (Vec<(f64, f64)>, Option<(f64, f64)>);
+
+/// One transient line under the player. The editor has no toast host -- the
+/// screenshot editor's bubbles are its own -- and exactly one message at a
+/// time is all any editor action needs to say.
+pub(crate) struct EditorNotice {
+    id: u64,
+    message: SharedString,
 }
 
-type GhostClipLayout = (Vec<(f64, f64)>, Option<(f64, f64)>);
+/// How long a notice stays up.
+const EDITOR_NOTICE_DURATION: Duration = Duration::from_millis(2500);
 
 fn caption_text_from_words(words: &[cap_project::CaptionWord]) -> String {
     let mut text = String::new();
@@ -4915,14 +5341,12 @@ impl EditorWindow {
 
     pub(crate) fn open_audio_picker(&mut self, lane: u32, cx: &mut Context<Self>) {
         self.audio_picker = Some(crate::editor_audio::AudioPicker::Add { lane });
-        self.camera3d_setup = None;
         self.set_selection(None, cx);
         cx.notify();
     }
 
     pub(crate) fn open_audio_replace(&mut self, index: usize, cx: &mut Context<Self>) {
         self.audio_picker = Some(crate::editor_audio::AudioPicker::Replace { index });
-        self.camera3d_setup = None;
         cx.notify();
     }
 
@@ -5091,9 +5515,7 @@ impl EditorWindow {
                 this.hovering_generate_zoom = false;
                 if segments.is_empty() {
                     tracing::info!("auto zoom produced no segments");
-                    this.auto_zoom_message = Some(
-                        "No zoom segments could be generated. Click or drag on the track to add one.",
-                    );
+                    this.auto_zoom_message = Some(NO_AUTO_ZOOM_CLICKS_MESSAGE);
                     cx.notify();
                     return;
                 }
@@ -5128,9 +5550,11 @@ impl EditorWindow {
         self.edit(
             |timeline| {
                 index = match kind {
+                    // A shot arrives as a complete look, blur included, the
+                    // same one the ghost's label promised.
                     TrackKind::ThreeD => edits::insert_camera3d_segment(
                         timeline,
-                        edits::default_camera3d_segment(start, end),
+                        crate::editor_panels::new_camera3d_shot(start, end),
                     ),
                     _ => {
                         edits::insert_zoom_segment(timeline, start, end, edits::DEFAULT_ZOOM_AMOUNT)
@@ -5141,6 +5565,10 @@ impl EditorWindow {
             window,
             cx,
         );
+        if kind == TrackKind::ThreeD {
+            self.sidebar.editing_end_pose = false;
+            self.seek_camera3d_pose(index, false, cx);
+        }
         self.set_selection(Some(Selection::single(kind, index)), cx);
         index
     }
@@ -5689,6 +6117,30 @@ impl EditorWindow {
                 cx,
             ) {
                 self.note_edit("split", Some(selection.track));
+            }
+            return;
+        }
+        // A selected 3D shot under the playhead cuts itself rather than the
+        // footage: the shot is what the user is holding.
+        if let Some(selection) = self.selection.clone()
+            && selection.track == TrackKind::ThreeD
+            && selection.indices.len() == 1
+            && let Some(segment) = self
+                .timeline
+                .segments(TrackKind::ThreeD)
+                .get(selection.indices[0])
+            && time > segment.start
+            && time < segment.end
+        {
+            let index = selection.indices[0];
+            let local = time - segment.start;
+            if self.edit(
+                |timeline| split_camera3d_segment(timeline, index, local),
+                window,
+                cx,
+            ) {
+                self.set_selection(None, cx);
+                self.note_edit("split", Some(TrackKind::ThreeD));
             }
             return;
         }
@@ -6446,7 +6898,7 @@ impl EditorWindow {
         Ok(self.take_instance())
     }
 
-    fn open_add_track(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_add_track(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.add_track.is_some() {
             self.add_track = None;
             cx.notify();
@@ -6456,21 +6908,24 @@ impl EditorWindow {
         window.focus(&focus, cx);
         self.toolbar_menu = None;
         let viewport = window.viewport_size();
-        // The trigger is `absolute bottom-0 left-0` in the timeline header,
-        // itself under the card's fixed geometry, so its top edge is a
-        // constant offset from the window's bottom-left corner.
+        // The header strip is the first thing inside the timeline card, whose
+        // geometry is fixed from the window's bottom edge, so the ruler's
+        // baseline is a constant offset from the bottom-left corner.
         let timeline_height = self
             .clamp_timeline_height(self.preferred_timeline_height(), f32::from(viewport.height));
-        let button_top = f32::from(viewport.height) - timeline_height
+        let header_bottom = f32::from(viewport.height) - timeline_height
             + TIMELINE_CARD_BORDER
-            + TIMELINE_TOP_PADDING;
-        let bottom = f32::from(viewport.height) - (button_top - 8.);
-        // `overflowPadding: 64` -- stay clear of the titlebar.
-        let max_height = (button_top - 8. - 64.).max(160.);
+            + TIMELINE_TOP_PADDING
+            + TIMELINE_HEADER_HEIGHT;
+        self.add_track_opens += 1;
         self.add_track = Some(AddTrackMenu {
-            left: px(TIMELINE_SLOT_PADDING + TIMELINE_CARD_BORDER + TIMELINE_PADDING),
-            bottom: px(bottom),
-            max_height: px(max_height),
+            left: px(TIMELINE_SLOT_PADDING
+                + TIMELINE_CARD_BORDER
+                + TIMELINE_PADDING
+                + TRACK_GUTTER),
+            bottom: px(f32::from(viewport.height) - header_bottom),
+            generation: self.add_track_opens,
+            hovered: None,
         });
         cx.notify();
     }
@@ -6676,22 +7131,9 @@ impl EditorWindow {
                 self.tracks.keyboard = next;
             }
             TrackKind::Scene => self.tracks.scene = next,
-            TrackKind::ThreeD => {
-                self.tracks.three_d = next;
-                if next
-                    && self
-                        .project
-                        .timeline
-                        .as_ref()
-                        .is_none_or(|timeline| timeline.camera3d_segments.is_empty())
-                {
-                    self.start_camera3d_setup(cx);
-                    return;
-                }
-                if !next {
-                    self.camera3d_setup = None;
-                }
-            }
+            // Showing the lane is all the tile does: an empty lane draws its
+            // own two openings, and hiding one that has shots keeps them.
+            TrackKind::ThreeD => self.tracks.three_d = next,
             _ => return,
         }
         if !next
@@ -7252,10 +7694,133 @@ impl EditorWindow {
             cx.notify();
             return;
         }
+        self.open_clip_menu_at(index, origin, window, cx);
+    }
+
+    /// Opens (or re-anchors) the clip menu at `origin`: the cog's press, or a
+    /// right-click anywhere on the clip.
+    fn open_clip_menu_at(
+        &mut self,
+        index: usize,
+        origin: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let focus = self.focus_handle_for_menu();
         window.focus(&focus, cx);
-        self.clip_speed = Some(ClipSpeedMenu { index, origin });
+        let menu = clip_menu_placement(index, origin, window.viewport_size());
+        tracing::info!(
+            index,
+            left = f32::from(menu.left),
+            anchor = ?menu.anchor,
+            "clip menu opened"
+        );
+        self.clip_speed = Some(menu);
         cx.notify();
+    }
+
+    /// `CAP_GPUI_AUTO_ADD_TRACK` (see `app_windows::drive_auto_sidebar`).
+    pub(crate) fn auto_add_track(
+        &mut self,
+        spec: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_add_track(window, cx);
+        let kind = match spec {
+            "style" => TrackKind::Style,
+            "image" => TrackKind::Image,
+            "caption" => TrackKind::Caption,
+            "keyboard" => TrackKind::Keyboard,
+            "text" => TrackKind::Text,
+            "mask" => TrackKind::Mask,
+            "audio" => TrackKind::Audio,
+            "scene" => TrackKind::Scene,
+            "3d" => TrackKind::ThreeD,
+            _ => return,
+        };
+        self.add_track = None;
+        if kind.supports_multiple() {
+            self.add_track_kind(kind, window, cx);
+        } else {
+            self.toggle_track(kind, !self.tracks.is_active(kind), window, cx);
+        }
+        self.player_panel_hovered = true;
+        cx.notify();
+    }
+
+    /// `CAP_GPUI_AUTO_CLIP_MENU` (see `app_windows::drive_auto_sidebar`).
+    pub(crate) fn auto_clip_menu(
+        &mut self,
+        spec: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (index, split) = match spec.split_once(':') {
+            Some((index, flag)) => (index, flag == "split"),
+            None => (spec, false),
+        };
+        let index = index.parse::<usize>().unwrap_or(0);
+        if split {
+            let total = self.timeline.total_duration;
+            if self.edit(
+                |timeline| edits::split_clip_segment(timeline, total * 0.4, Some(0)),
+                window,
+                cx,
+            ) {
+                self.note_edit("split", Some(TrackKind::Clip));
+            }
+        }
+        let viewport = window.viewport_size();
+        let Some(clip) = self.timeline.clips.get(index) else {
+            return;
+        };
+        let viewport_width = f32::from(viewport.width);
+        let secs_per_pixel = self.secs_per_pixel(viewport_width);
+        let mid = (clip.start + clip.end) / 2.;
+        let x = timeline::content_left()
+            + ((mid - self.view.transform.position) / secs_per_pixel) as f32;
+        let origin = point(px(x), viewport.height - px(120.));
+        self.set_selection(Some(Selection::single(TrackKind::Clip, index)), cx);
+        self.open_clip_menu_at(index, origin, window, cx);
+    }
+
+    /// `onContextMenu` on a clip's `SegmentRoot` (`TL/ClipTrack.tsx`): select
+    /// the clip unless it is already part of the selection, then open its
+    /// menu at the pointer. Other tracks have no context menu, and split mode
+    /// keeps every press for the cut.
+    fn track_context_menu(
+        &mut self,
+        kind: TrackKind,
+        lane: u32,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if kind != TrackKind::Clip || self.split_mode || self.transport.is_none() {
+            return;
+        }
+        let viewport_width: f32 = window.viewport_size().width.into();
+        let secs_per_pixel = self.secs_per_pixel(viewport_width);
+        let x = self.content_x(f32::from(event.position.x));
+        let hit = edits::hit_test(
+            self.timeline.segments(kind),
+            lane,
+            x,
+            self.view.transform.position,
+            secs_per_pixel,
+        );
+        let (Hit::Body { index } | Hit::Handle { index, .. }) = hit else {
+            return;
+        };
+        cx.stop_propagation();
+        let already_selected = self.selection.as_ref().is_some_and(|selection| {
+            selection.track == TrackKind::Clip && selection.indices.contains(&index)
+        });
+        if !already_selected {
+            self.set_selection(Some(Selection::single(TrackKind::Clip, index)), cx);
+        }
+        self.open_clip_menu_at(index, event.position, window, cx);
     }
 
     fn set_clip_timescale(
@@ -7273,6 +7838,23 @@ impl EditorWindow {
         }
         self.project_changed(window, cx);
         self.note_edit("clip-speed", Some(TrackKind::Clip));
+    }
+
+    pub(crate) fn set_clip_volume(
+        &mut self,
+        index: usize,
+        volume: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(timeline) = self.project.timeline.as_mut() else {
+            return;
+        };
+        if !edits::set_clip_volume(timeline, index, volume) {
+            return;
+        }
+        self.project_changed(window, cx);
+        self.note_edit("clip-volume", Some(TrackKind::Clip));
     }
 
     fn set_clip_muted(
@@ -7307,6 +7889,69 @@ impl EditorWindow {
         }
         self.project_changed(window, cx);
         self.note_edit("clip-speed-audio", Some(TrackKind::Clip));
+    }
+
+    fn set_clip_hide_cursor(
+        &mut self,
+        index: usize,
+        hidden: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(timeline) = self.project.timeline.as_mut() else {
+            return;
+        };
+        if !edits::set_clip_hide_cursor(timeline, index, hidden) {
+            return;
+        }
+        self.project_changed(window, cx);
+        self.note_edit("clip-hide-cursor", Some(TrackKind::Clip));
+    }
+
+    fn merge_clip(
+        &mut self,
+        index: usize,
+        direction: edits::ClipMergeDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.clip_speed = None;
+        let mut merged = None;
+        let changed = self.edit(
+            |timeline| {
+                merged = edits::merge_clip_segments(timeline, index, direction);
+                merged.is_some()
+            },
+            window,
+            cx,
+        );
+        if !changed {
+            cx.notify();
+            return;
+        }
+        if let Some(kept) = merged {
+            self.set_selection(Some(Selection::single(TrackKind::Clip, kept)), cx);
+        }
+        self.note_edit("clip-merge", Some(TrackKind::Clip));
+    }
+
+    fn split_clip_at_playhead(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.clip_speed = None;
+        let time = self.view.preview_time.unwrap_or(self.playhead);
+        if self.edit(
+            |timeline| edits::split_clip_segment(timeline, time, Some(index)),
+            window,
+            cx,
+        ) {
+            self.set_selection(None, cx);
+            self.note_edit("split", Some(TrackKind::Clip));
+        }
+        cx.notify();
     }
 
     fn render_clip_speed_overlays(
@@ -7392,23 +8037,338 @@ impl EditorWindow {
     fn render_clip_speed_popover(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let menu = self.clip_speed?;
         let theme = self.theme;
-        let segment = self
-            .project
-            .timeline
-            .as_ref()
-            .and_then(|timeline| timeline.segments.get(menu.index))?;
+        let timeline = self.project.timeline.as_ref()?;
+        let segment = timeline.segments.get(menu.index)?;
+        let index = menu.index;
         let timescale = segment.timescale;
         let muted = edits::clip_is_muted(segment);
         let audio_mode = segment.speed_audio_mode.unwrap_or_default();
+        let cursor_hidden = segment.hides_cursor();
+        let normal_speed = (timescale - 1.0).abs() < f64::EPSILON;
+        let title = match self.timeline.clips.get(index).map(|clip| &clip.detail) {
+            Some(timeline::SegmentDetail::Clip { name, .. }) => name.clone(),
+            _ => SharedString::from(crate::editor_clips::display_name(&timeline.segments, index)),
+        };
+        let duration = crate::editor_clips::format_clip_duration(segment.end - segment.start);
+        let summary = if normal_speed {
+            duration
+        } else {
+            format!("{duration} · {}", format_clip_speed(timescale))
+        };
+        let playhead = self.view.preview_time.unwrap_or(self.playhead);
+        let can_split = self
+            .timeline
+            .clips
+            .get(index)
+            .is_some_and(|clip| playhead > clip.start && playhead < clip.end);
+        let merge_previous = edits::clip_merge_blocker(
+            &timeline.segments,
+            index,
+            edits::ClipMergeDirection::Previous,
+        );
+        let merge_next =
+            edits::clip_merge_blocker(&timeline.segments, index, edits::ClipMergeDirection::Next);
+        let can_delete = timeline.segments.len() > 1;
+        let rename_input = self
+            .clips
+            .rename_in_progress()
+            .filter(|(editing, _)| *editing == index)
+            .map(|(_, input)| input);
         let speeds = [0.25, 0.5, 1.0, 1.5, 2.0, 4.0, 8.0];
         let audio_modes = [
             (ClipSpeedAudioMode::Mute, "Mute"),
-            (ClipSpeedAudioMode::MaintainPitch, "Maintain pitch"),
+            (ClipSpeedAudioMode::MaintainPitch, "Keep pitch"),
             (ClipSpeedAudioMode::MatchSpeed, "Match speed"),
         ];
-        let normal_speed = (timescale - 1.0).abs() < f64::EPSILON;
-        let index = menu.index;
-        let origin = menu.origin;
+        let chip = |id: SharedString, selected: bool, label: String| {
+            div()
+                .id(id)
+                .flex_1()
+                .rounded(px(6.))
+                .px(px(6.))
+                .py(px(4.))
+                .text_size(px(11.5))
+                .text_center()
+                .whitespace_nowrap()
+                .cursor_pointer()
+                .bg(if selected {
+                    Hsla::from(theme.editor.ctl_active)
+                } else {
+                    gpui::transparent_black()
+                })
+                .text_color(Hsla::from(if selected {
+                    theme.editor.text_1
+                } else {
+                    theme.editor.text_2
+                }))
+                .hover(|this| this.text_color(Hsla::from(theme.editor.text_1)))
+                .child(label)
+        };
+        let chip_row = || {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(2.))
+                .rounded(px(8.))
+                .bg(Hsla::from(theme.editor.ctl))
+                .p(px(2.))
+        };
+        let divider = || div().h(px(1.)).bg(Hsla::from(theme.editor.line));
+
+        let mut card = div()
+            .id("clip-speed-popover")
+            .absolute()
+            .left(menu.left)
+            .w(px(CLIP_MENU_WIDTH))
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .rounded(px(12.))
+            .border_1()
+            .border_color(Hsla::from(theme.editor.line))
+            .bg(Hsla::from(theme.editor.card))
+            .p(px(6.))
+            .shadow(theme.editor.pop_shadow())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _, _, cx| cx.stop_propagation()),
+            );
+        card = match menu.anchor {
+            ClipMenuAnchor::Above { bottom } => card.bottom(bottom),
+            ClipMenuAnchor::Below { top } => card.top(top),
+        };
+
+        let card = card
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .px(px(8.))
+                    .pt(px(4.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(Hsla::from(theme.editor.text_1))
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(11.))
+                            .text_color(Hsla::from(theme.editor.text_3))
+                            .child(summary),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(clip_menu_section(&theme, "SPEED"))
+                    .child(chip_row().children(speeds.into_iter().map(|speed| {
+                        let selected = (timescale - speed).abs() < 1e-6;
+                        chip(
+                            SharedString::from(format!("clip-speed-{speed}")),
+                            selected,
+                            format_clip_speed(speed),
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.set_clip_timescale(index, speed, window, cx);
+                            },
+                        ))
+                    }))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(clip_menu_section(&theme, "AUDIO"))
+                    .child(self.slider_field_disabled(
+                        "Volume",
+                        crate::editor_sidebar::SliderKey::ClipVolume(index),
+                        "%",
+                        muted,
+                        cx,
+                    ))
+                    .child(if normal_speed {
+                        clip_menu_toggle_row(
+                            &theme,
+                            "clip-menu-mute",
+                            "icons/volume-x.svg",
+                            "Mute clip",
+                            "Silence this clip's audio",
+                            muted,
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.set_clip_muted(index, !muted, window, cx);
+                        }))
+                        .into_any_element()
+                    } else {
+                        chip_row()
+                            .children(audio_modes.into_iter().map(|(mode, label)| {
+                                let selected = audio_mode == mode
+                                    || (mode == ClipSpeedAudioMode::Mute && muted);
+                                chip(
+                                    SharedString::from(format!("clip-speed-audio-{label}")),
+                                    selected,
+                                    label.to_string(),
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.set_clip_speed_audio_mode(index, mode, window, cx);
+                                    },
+                                ))
+                            }))
+                            .into_any_element()
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(clip_menu_section(&theme, "CURSOR"))
+                    .child(
+                        clip_menu_toggle_row(
+                            &theme,
+                            "clip-menu-hide-cursor",
+                            "icons/mouse-pointer-ban.svg",
+                            "Hide cursor",
+                            "Fades out while this clip plays",
+                            cursor_hidden,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.set_clip_hide_cursor(index, !cursor_hidden, window, cx);
+                            },
+                        )),
+                    ),
+            )
+            .child(divider())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        clip_menu_row(
+                            &theme,
+                            "clip-menu-split",
+                            "icons/scissors.svg",
+                            "Split at playhead",
+                            if can_split {
+                                ClipMenuTrailing::Kbd("C")
+                            } else {
+                                ClipMenuTrailing::Hint("Move the playhead into this clip")
+                            },
+                            can_split,
+                            false,
+                        )
+                        .when(can_split, |this| {
+                            this.on_click(cx.listener(move |this, _, window, cx| {
+                                this.split_clip_at_playhead(index, window, cx);
+                            }))
+                        }),
+                    )
+                    .child(
+                        clip_menu_row(
+                            &theme,
+                            "clip-menu-merge-previous",
+                            "icons/arrow-left-to-line.svg",
+                            "Merge with previous clip",
+                            merge_previous.map_or(ClipMenuTrailing::None, |blocker| {
+                                ClipMenuTrailing::Hint(blocker.hint())
+                            }),
+                            merge_previous.is_none(),
+                            false,
+                        )
+                        .when(merge_previous.is_none(), |this| {
+                            this.on_click(cx.listener(move |this, _, window, cx| {
+                                this.merge_clip(
+                                    index,
+                                    edits::ClipMergeDirection::Previous,
+                                    window,
+                                    cx,
+                                );
+                            }))
+                        }),
+                    )
+                    .child(
+                        clip_menu_row(
+                            &theme,
+                            "clip-menu-merge-next",
+                            "icons/arrow-right-to-line.svg",
+                            "Merge with next clip",
+                            merge_next.map_or(ClipMenuTrailing::None, |blocker| {
+                                ClipMenuTrailing::Hint(blocker.hint())
+                            }),
+                            merge_next.is_none(),
+                            false,
+                        )
+                        .when(merge_next.is_none(), |this| {
+                            this.on_click(cx.listener(move |this, _, window, cx| {
+                                this.merge_clip(index, edits::ClipMergeDirection::Next, window, cx);
+                            }))
+                        }),
+                    )
+                    .child(match rename_input {
+                        Some(input) => div()
+                            .px(px(4.))
+                            .py(px(2.))
+                            .child(
+                                ui::TextInput::plain(&theme, "clip-menu-rename", &input)
+                                    .text_size(px(12.)),
+                            )
+                            .into_any_element(),
+                        None => clip_menu_row(
+                            &theme,
+                            "clip-menu-rename-row",
+                            "icons/pencil.svg",
+                            "Rename clip",
+                            ClipMenuTrailing::None,
+                            true,
+                            false,
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.start_clip_rename(index, window, cx);
+                        }))
+                        .into_any_element(),
+                    }),
+            )
+            .child(divider())
+            .child(
+                clip_menu_row(
+                    &theme,
+                    "clip-menu-delete",
+                    "icons/trash.svg",
+                    "Delete clip",
+                    if can_delete {
+                        ClipMenuTrailing::Kbd("backspace")
+                    } else {
+                        ClipMenuTrailing::Hint("Can't delete the only clip")
+                    },
+                    can_delete,
+                    true,
+                )
+                .when(can_delete, |this| {
+                    this.on_click(cx.listener(move |this, _, window, cx| {
+                        this.clip_speed = None;
+                        this.delete_clip(index, window, cx);
+                        cx.notify();
+                    }))
+                }),
+            );
+
         Some(
             div()
                 .absolute()
@@ -7427,143 +8387,7 @@ impl EditorWindow {
                             cx.notify();
                         })),
                 )
-                .child(
-                    div()
-                        .id("clip-speed-popover")
-                        .absolute()
-                        .left(px((f32::from(origin.x) - 8.).max(12.)))
-                        .top(px((f32::from(origin.y) - 8. - 86.).max(12.)))
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.))
-                        .rounded(px(12.))
-                        .border_1()
-                        .border_color(Hsla::from(theme.editor.line))
-                        .bg(Hsla::from(theme.editor.card))
-                        .p(px(8.))
-                        .shadow(theme.editor.pop_shadow())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|_, _, _, cx| cx.stop_propagation()),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(4.))
-                                .rounded(px(8.))
-                                .bg(Hsla::from(theme.editor.ctl))
-                                .p(px(4.))
-                                .children(speeds.into_iter().map(|speed| {
-                                    let selected = (timescale - speed).abs() < 1e-6;
-                                    let label = if (speed - speed.round()).abs() < 1e-6 {
-                                        format!("{}x", speed.round() as i32)
-                                    } else {
-                                        format!("{speed}x")
-                                    };
-                                    div()
-                                        .id(SharedString::from(format!("clip-speed-{speed}")))
-                                        .rounded(px(6.))
-                                        .px(px(8.))
-                                        .py(px(4.))
-                                        .text_size(px(12.))
-                                        .cursor_pointer()
-                                        .bg(if selected {
-                                            Hsla::from(theme.editor.ctl_hover)
-                                        } else {
-                                            gpui::transparent_black()
-                                        })
-                                        .text_color(Hsla::from(if selected {
-                                            theme.editor.text_1
-                                        } else {
-                                            theme.editor.text_2
-                                        }))
-                                        .hover(|this| {
-                                            this.text_color(Hsla::from(theme.editor.text_1))
-                                        })
-                                        .child(label)
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.set_clip_timescale(index, speed, window, cx);
-                                        }))
-                                })),
-                        )
-                        .child(if normal_speed {
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(4.))
-                                .rounded(px(8.))
-                                .bg(Hsla::from(theme.editor.ctl))
-                                .p(px(4.))
-                                .child(
-                                    div()
-                                        .id("clip-speed-mute")
-                                        .rounded(px(6.))
-                                        .px(px(8.))
-                                        .py(px(4.))
-                                        .text_size(px(12.))
-                                        .cursor_pointer()
-                                        .bg(if muted {
-                                            Hsla::from(theme.editor.ctl_hover)
-                                        } else {
-                                            gpui::transparent_black()
-                                        })
-                                        .text_color(Hsla::from(if muted {
-                                            theme.editor.text_1
-                                        } else {
-                                            theme.editor.text_2
-                                        }))
-                                        .hover(|this| {
-                                            this.text_color(Hsla::from(theme.editor.text_1))
-                                        })
-                                        .child(if muted { "Unmute clip" } else { "Mute clip" })
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.set_clip_muted(index, !muted, window, cx);
-                                        })),
-                                )
-                                .into_any_element()
-                        } else {
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(4.))
-                                .rounded(px(8.))
-                                .bg(Hsla::from(theme.editor.ctl))
-                                .p(px(4.))
-                                .children(audio_modes.into_iter().map(|(mode, label)| {
-                                    let selected = audio_mode == mode
-                                        || (mode == ClipSpeedAudioMode::Mute && muted);
-                                    div()
-                                        .id(SharedString::from(format!("clip-speed-audio-{label}")))
-                                        .rounded(px(6.))
-                                        .px(px(8.))
-                                        .py(px(4.))
-                                        .text_size(px(12.))
-                                        .cursor_pointer()
-                                        .bg(if selected {
-                                            Hsla::from(theme.editor.ctl_hover)
-                                        } else {
-                                            gpui::transparent_black()
-                                        })
-                                        .text_color(Hsla::from(if selected {
-                                            theme.editor.text_1
-                                        } else {
-                                            theme.editor.text_2
-                                        }))
-                                        .hover(|this| {
-                                            this.text_color(Hsla::from(theme.editor.text_1))
-                                        })
-                                        .child(label)
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.set_clip_speed_audio_mode(index, mode, window, cx);
-                                        }))
-                                }))
-                                .into_any_element()
-                        }),
-                )
+                .child(card)
                 .into_any_element(),
         )
     }
@@ -7572,6 +8396,24 @@ impl EditorWindow {
         let menu = self.add_track?;
         let theme = self.theme;
         let scene_available = self.scene_available();
+        let hint: SharedString = match menu.hovered {
+            None => "Choose a track to add to your timeline.".into(),
+            Some(kind) => {
+                if kind == TrackKind::Scene && !scene_available {
+                    kind.picker_unavailable().into()
+                } else if kind == TrackKind::ThreeD && self.tracks.is_active(kind) {
+                    // The 3D tile only shows and hides the lane; the shots on
+                    // it survive either way.
+                    "Hide the 3D track.".into()
+                } else if !kind.supports_multiple() && self.tracks.is_active(kind) {
+                    format!("Remove the {} track.", kind.picker_label()).into()
+                } else {
+                    kind.picker_description().into()
+                }
+            }
+        };
+        let generation = menu.generation;
+        let left = f32::from(menu.left);
         Some(
             div()
                 .absolute()
@@ -7585,6 +8427,7 @@ impl EditorWindow {
                         .top_0()
                         .left_0()
                         .size_full()
+                        .occlude()
                         .on_click(cx.listener(|this, _, _window, cx| {
                             this.add_track = None;
                             cx.notify();
@@ -7592,230 +8435,213 @@ impl EditorWindow {
                 )
                 .child(
                     div()
-                        .id("add-track-popover")
+                        .id("add-track-tray")
                         .absolute()
                         .left(menu.left)
                         .bottom(menu.bottom)
-                        .w(px(336.))
-                        .max_h(menu.max_height)
+                        .occlude()
                         .flex()
                         .flex_col()
-                        .overflow_hidden()
                         .rounded(px(12.))
                         .border_1()
                         .border_color(Hsla::from(theme.editor.line))
                         .bg(Hsla::from(theme.editor.card))
-                        .shadow_lg()
+                        .shadow(theme.editor.pop_shadow())
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .flex_none()
-                                .gap(px(2.))
-                                .px(px(14.))
-                                .pt(px(12.))
-                                .pb(px(10.))
-                                .border_b_1()
-                                .border_color(Hsla::from(theme.editor.line))
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(Hsla::from(theme.editor.text_1))
-                                        .child("Add a track"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .text_color(Hsla::from(theme.editor.text_2))
-                                        .child("Layer captions, audio, zooms and more onto your timeline."),
+                            div().flex().flex_row().gap(px(4.)).p(px(6.)).children(
+                                ADD_TRACK_OPTIONS.iter().copied().enumerate().map(
+                                    |(index, kind)| {
+                                        self.render_add_track_tile(
+                                            index,
+                                            kind,
+                                            generation,
+                                            scene_available,
+                                            cx,
+                                        )
+                                    },
                                 ),
+                            ),
                         )
                         .child(
                             div()
-                                .id("add-track-list")
                                 .flex()
-                                .flex_col()
-                                .flex_1()
-                                .gap(px(2.))
-                                .p(px(6.))
-                                .min_h_0()
-                                .overflow_y_scroll()
-                                .children(ADD_TRACK_OPTIONS.iter().copied().map(|kind| {
-                                    let available = kind != TrackKind::Scene || scene_available;
-                                    let active = self.tracks.is_active(kind);
-                                    let count = self.tracks.count(kind);
-                                    let description = if available {
-                                        kind.picker_description()
-                                    } else {
-                                        kind.picker_unavailable()
-                                    };
-                                    let color = kind.color();
-                                    div()
-                                        .id(SharedString::from(format!("add-track-{kind:?}")))
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .gap(px(10.))
-                                        .p(px(8.))
-                                        .rounded(px(8.))
-                                        .when(!available, |this| this.opacity(0.55))
-                                        .when(available, |this| {
-                                            this.cursor_pointer().hover(|this| {
-                                                this.bg(Hsla::from(theme.editor.ctl_hover))
-                                            })
-                                        })
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .size(px(22.))
-                                                .rounded(px(6.))
-                                                .flex_none()
-                                                .bg(if available {
-                                                    timeline::tile_bg(&theme, color)
-                                                } else {
-                                                    Hsla::from(theme.editor.ctl)
-                                                })
-                                                .child(
-                                                    svg()
-                                                        .path(kind.icon())
-                                                        .size(px(12.))
-                                                        .text_color(if available {
-                                                            timeline::tile_fg(&theme, color)
-                                                        } else {
-                                                            Hsla::from(theme.editor.text_3)
-                                                        }),
-                                                ),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .child(
-                                                    div()
-                                                        .flex()
-                                                        .flex_row()
-                                                        .items_center()
-                                                        .gap(px(6.))
-                                                        .text_size(px(13.))
-                                                        .font_weight(FontWeight::MEDIUM)
-                                                        .text_color(Hsla::from(theme.editor.text_1))
-                                                        .child(kind.picker_label())
-                                                        .when(kind.supports_multiple() && count > 0, |this| {
-                                                            this.child(
-                                                                div()
-                                                                    .rounded_full()
-                                                                    .min_w(px(16.))
-                                                                    .px(px(6.))
-                                                                    .text_size(px(10.))
-                                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                                    .text_color(timeline::tile_fg(&theme, color))
-                                                                    .bg(timeline::tile_bg(&theme, color))
-                                                                    .child(format!("{count}")),
-                                                            )
-                                                        }),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_size(px(11.))
-                                                        .text_color(Hsla::from(theme.editor.text_3))
-                                                        .child(description),
-                                                ),
-                                        )
-                                        .child(if !kind.supports_multiple() && active {
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .size(px(20.))
-                                                .rounded_full()
-                                                .flex_none()
-                                                .bg(Hsla::from(theme.editor.accent))
-                                                .child(
-                                                    svg()
-                                                        .path("icons/check.svg")
-                                                        .size(px(12.))
-                                                        .text_color(gpui::white()),
-                                                )
-                                                .into_any_element()
-                                        } else {
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .size(px(20.))
-                                                .rounded_full()
-                                                .flex_none()
-                                                .border_1()
-                                                .border_color(Hsla::from(theme.editor.line_strong))
-                                                .child(
-                                                    svg()
-                                                        .path("icons/plus.svg")
-                                                        .size(px(12.))
-                                                        .text_color(Hsla::from(theme.editor.text_3)),
-                                                )
-                                                .into_any_element()
-                                        })
-                                        .when(available, |this| {
-                                            this.on_click(cx.listener(move |this, _, window, cx| {
-                                                this.add_track = None;
-                                                if kind.supports_multiple() {
-                                                    this.add_track_kind(kind, window, cx);
-                                                } else {
-                                                    this.toggle_track(
-                                                        kind,
-                                                        !this.tracks.is_active(kind),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                            }))
-                                        })
-                                })),
-                        )
-                        .child(
-                            div()
-                                .p(px(6.))
-                                .flex_none()
+                                .items_center()
+                                .h(px(30.))
+                                .px(px(12.))
                                 .border_t_1()
                                 .border_color(Hsla::from(theme.editor.line))
-                                .child(
-                                    div()
-                                        .id("add-track-close")
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .justify_center()
-                                        .gap(px(6.))
-                                        .w_full()
-                                        .h(px(30.))
-                                        .rounded(px(8.))
-                                        .bg(Hsla::from(theme.editor.ctl))
-                                        .text_size(px(13.))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(Hsla::from(theme.editor.text_2))
-                                        .cursor_pointer()
-                                        .hover(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
-                                        .child(
-                                            svg()
-                                                .path("icons/x.svg")
-                                                .size(px(13.))
-                                                .text_color(Hsla::from(theme.editor.text_2)),
-                                        )
-                                        .child("Close")
-                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                            this.add_track = None;
-                                            cx.notify();
-                                        })),
-                                ),
+                                .text_size(px(11.))
+                                .text_color(Hsla::from(theme.editor.text_2))
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .child(hint),
+                        )
+                        .with_animation(
+                            ("add-track-tray", generation),
+                            Animation::new(ADD_TRACK_TRAY_ANIMATION),
+                            move |tray, delta| {
+                                let progress = add_track_tray_progress(delta);
+                                tray.opacity(progress)
+                                    .left(px(left - ADD_TRACK_TRAY_SLIDE * (1. - progress)))
+                            },
                         ),
                 )
                 .into_any_element(),
         )
+    }
+
+    fn render_add_track_tile(
+        &self,
+        index: usize,
+        kind: TrackKind,
+        generation: usize,
+        scene_available: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = self.theme;
+        let available = kind != TrackKind::Scene || scene_available;
+        let active = !kind.supports_multiple() && self.tracks.is_active(kind);
+        let count = if kind.supports_multiple() {
+            self.tracks.count(kind)
+        } else {
+            0
+        };
+        let color = kind.color();
+        let group = SharedString::from(format!("add-track-tile-{kind:?}"));
+        let badge = |this: gpui::Div| {
+            this.absolute()
+                .top(px(-4.))
+                .right(px(-4.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .h(px(14.))
+                .min_w(px(14.))
+                .rounded_full()
+                .border_2()
+                .border_color(Hsla::from(theme.editor.card))
+        };
+        div()
+            .id(SharedString::from(format!("add-track-{kind:?}")))
+            .group(group.clone())
+            .relative()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(6.))
+            .w(px(64.))
+            .flex_none()
+            .pt(px(8.))
+            .pb(px(6.))
+            .rounded(px(8.))
+            .when(!available, |this| this.opacity(0.45))
+            .when(available, |this| {
+                this.cursor_pointer()
+                    .hover(|this| this.bg(Hsla::from(theme.editor.ctl)))
+                    .active(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
+            })
+            .child(
+                div()
+                    .relative()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(28.))
+                            .rounded(px(8.))
+                            .bg(if available {
+                                timeline::tile_bg(&theme, color)
+                            } else {
+                                Hsla::from(theme.editor.ctl)
+                            })
+                            .child(svg().path(kind.icon()).size(px(14.)).text_color(
+                                if available {
+                                    timeline::tile_fg(&theme, color)
+                                } else {
+                                    Hsla::from(theme.editor.text_3)
+                                },
+                            )),
+                    )
+                    .when(active, |this| {
+                        this.child(
+                            badge(div())
+                                .w(px(14.))
+                                .bg(Hsla::from(theme.editor.accent))
+                                .child(
+                                    svg()
+                                        .path("icons/check.svg")
+                                        .size(px(8.))
+                                        .text_color(gpui::white()),
+                                ),
+                        )
+                    })
+                    .when(count > 0, |this| {
+                        this.child(
+                            badge(div())
+                                .px(px(4.))
+                                .bg(Hsla::from(theme.editor.text_1))
+                                .text_size(px(9.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(Hsla::from(theme.editor.card))
+                                .child(format!("{count}")),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .whitespace_nowrap()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(Hsla::from(if available {
+                        theme.editor.text_2
+                    } else {
+                        theme.editor.text_3
+                    }))
+                    .when(available, |this| {
+                        this.group_hover(group, |this| {
+                            this.text_color(Hsla::from(theme.editor.text_1))
+                        })
+                    })
+                    .child(kind.picker_label()),
+            )
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                let Some(menu) = this.add_track.as_mut() else {
+                    return;
+                };
+                let next = if *hovered {
+                    Some(kind)
+                } else if menu.hovered == Some(kind) {
+                    None
+                } else {
+                    menu.hovered
+                };
+                if menu.hovered != next {
+                    menu.hovered = next;
+                    cx.notify();
+                }
+            }))
+            .when(available, |this| {
+                this.on_click(cx.listener(move |this, _, window, cx| {
+                    this.add_track = None;
+                    if kind.supports_multiple() {
+                        this.add_track_kind(kind, window, cx);
+                    } else {
+                        this.toggle_track(kind, !this.tracks.is_active(kind), window, cx);
+                    }
+                }))
+            })
+            .with_animation(
+                ("add-track-tile", generation * 32 + index),
+                Animation::new(ADD_TRACK_TRAY_ANIMATION),
+                move |tile, delta| {
+                    let progress = add_track_tile_progress(delta, index);
+                    tile.opacity(progress.clamp(0., 1.))
+                        .left(px(-ADD_TRACK_TILE_SLIDE * (1. - progress)))
+                },
+            )
+            .into_any_element()
     }
 
     /// `PresetsDropdown.tsx`'s menu: `w-72 max-h-56` on the dropdown palette
@@ -8657,11 +9483,21 @@ impl EditorWindow {
     /// `PlayerContent`: one surface -- the actions toolbar, the stage, and the
     /// transport, with no rule between them.
     fn render_player(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let panel_bounds = self.player_panel_bounds.clone();
         div()
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| panel_bounds.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
             .child(
                 self.toolbar.clone().cached(
                     StyleRefinement::default()
@@ -8675,6 +9511,49 @@ impl EditorWindow {
                     .clone()
                     .cached(StyleRefinement::default().w_full().h(px(PLAYER_BAR_HEIGHT))),
             )
+            .children(self.render_notice())
+    }
+
+    /// The transient line, floating over the bottom of the player card.
+    fn render_notice(&self) -> Option<gpui::AnyElement> {
+        let notice = self.notice.as_ref()?;
+        let theme = self.theme;
+        Some(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom(px(PLAYER_BAR_HEIGHT + 10.))
+                .flex()
+                .flex_row()
+                .justify_center()
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(8.))
+                        .px(px(12.))
+                        .h(px(30.))
+                        .rounded(px(9.))
+                        .bg(Hsla::from(theme.editor.card_2))
+                        .border_1()
+                        .border_color(Hsla::from(theme.editor.line_strong))
+                        .shadow(theme.editor.pop_shadow())
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(Hsla::from(theme.editor.text_1))
+                        .child(
+                            svg()
+                                .path("icons/info.svg")
+                                .size(px(13.))
+                                .flex_none()
+                                .text_color(Hsla::from(theme.editor.text_3)),
+                        )
+                        .child(notice.message.clone()),
+                )
+                .into_any_element(),
+        )
     }
 
     fn render_preparing_sidebar(&self, animated: bool) -> gpui::AnyElement {
@@ -9464,9 +10343,10 @@ impl EditorWindow {
                 self.view,
                 viewport_width,
             ))
-            // `TrackManager`'s trigger (`TL/TrackManager.tsx:174-188`), now a
-            // ghost pill in the gutter: it sits over the ruler's leftmost
-            // label (`TL/index.tsx:1227-1236`), so it stays opaque.
+            // `TrackManager`'s trigger (`TL/TrackManager.tsx`): a solid pill
+            // in the gutter (`bg-ed-text-1 text-ed-card`, so black on the
+            // light theme and white on the dark one). Its plus turns into an
+            // x while the tray is open.
             .child(
                 div()
                     .id("add-track")
@@ -9484,18 +10364,22 @@ impl EditorWindow {
                     .pr(px(8.))
                     .rounded(px(6.))
                     .cursor_pointer()
-                    .bg(Hsla::from(theme.editor.ctl))
-                    .hover(|style| style.bg(Hsla::from(theme.editor.ctl_hover)))
-                    .active(|style| style.bg(Hsla::from(theme.editor.ctl_active)))
+                    .bg(Hsla::from(theme.editor.text_1))
+                    .hover(|style| style.opacity(0.85))
+                    .active(|style| style.opacity(0.7))
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.editor.text_2))
+                    .text_color(Hsla::from(theme.editor.card))
                     .child(
                         svg()
-                            .path("icons/plus.svg")
+                            .path(if self.add_track.is_some() {
+                                "icons/x.svg"
+                            } else {
+                                "icons/plus.svg"
+                            })
                             .size(px(12.))
                             .flex_none()
-                            .text_color(Hsla::from(theme.editor.text_2)),
+                            .text_color(Hsla::from(theme.editor.card)),
                     )
                     .child(div().flex_none().whitespace_nowrap().child("Add track"))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -9537,6 +10421,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
+        let camera3d_preview = self.camera3d_auto_preview();
         let ui = timeline::SegmentUi {
             selection: self.selection.as_ref(),
             split_mode: self.split_mode,
@@ -9548,6 +10433,8 @@ impl EditorWindow {
             },
             hovering_generate_zoom: self.hovering_generate_zoom,
             scene_preview_time: self.scene_preview_time,
+            camera3d_preview: &camera3d_preview,
+            camera3d_editing_end: self.sidebar.editing_end_pose,
         };
         // The ghost trim and its release animation draw from a patched copy
         // of the model; everything else draws the real one.
@@ -9560,6 +10447,11 @@ impl EditorWindow {
             .min_h_full()
             .w_full();
 
+        // The empty 3D lane's two openings, drawn like the zoom lane's
+        // Generate row rather than as inert copy: this is where a shot is
+        // made from nothing.
+        let camera3d_prompt =
+            model.segments(TrackKind::ThreeD).is_empty() && self.transport.is_some();
         let zoom_prompt = !self.zoom_prompt_dismissed
             && model.segments(TrackKind::Zoom).is_empty()
             && self
@@ -9684,6 +10576,14 @@ impl EditorWindow {
                             }
                         }),
                     )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            if f32::from(event.position.x) >= timeline::content_left() {
+                                this.track_context_menu(kind, lane, event, window, cx);
+                            }
+                        }),
+                    )
                     .child(timeline::render_row(
                         &theme,
                         model,
@@ -9793,9 +10693,9 @@ impl EditorWindow {
                                             cx.notify();
                                         }
                                     }))
-                                    .child(
-                                        div().min_w_0().truncate().child("Add zooms automatically"),
-                                    )
+                                    .child(div().min_w_0().truncate().child(
+                                        self.auto_zoom_message.unwrap_or("Add zooms automatically"),
+                                    ))
                                     .child(
                                         ui::Button::plain(
                                             &theme,
@@ -9836,15 +10736,100 @@ impl EditorWindow {
                                             })),
                                     ),
                             )
-                            .children(self.auto_zoom_message.map(|message| {
-                                div()
-                                    .absolute()
-                                    .left(px(10.))
-                                    .bottom(px(2.))
-                                    .text_size(px(10.))
-                                    .text_color(Hsla::from(theme.editor.text_3))
-                                    .child(message)
+                    }))
+                    .children((kind == TrackKind::ThreeD && camera3d_prompt).then(|| {
+                        div()
+                            .id("camera3d-empty-prompt")
+                            .absolute()
+                            .left(px(timeline::TRACK_GUTTER))
+                            .right_0()
+                            .top_0()
+                            .bottom_0()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(10.))
+                            .px(px(10.))
+                            .rounded(px(8.))
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(Hsla::from(if row_hovered {
+                                theme.editor.text_2
+                            } else {
+                                theme.editor.text_3
                             }))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                            )
+                            // Closed, the lane offers the two ways in. Open,
+                            // the same row becomes the count picker, so the
+                            // question is asked where the answer will land.
+                            .when(!self.camera3d_picker, |this| {
+                                this.child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .child("Add cinematic 3D shots to your recording"),
+                                )
+                                .child(
+                                    ui::Button::plain(
+                                        &theme,
+                                        "camera3d-auto-scene",
+                                        ui::ButtonVariant::Primary,
+                                        ui::ButtonSize::Sm,
+                                    )
+                                    .label("Auto scene")
+                                    .radius(px(7.))
+                                    .on_click(cx.listener(
+                                        |this, _, _window, cx| {
+                                            this.open_camera3d_picker(cx);
+                                        },
+                                    )),
+                                )
+                            })
+                            .when(self.camera3d_picker, |this| {
+                                let maximum = crate::editor_panels::max_auto_camera3d_shots(
+                                    self.total_duration(),
+                                );
+                                this.child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_color(Hsla::from(theme.editor.text_2))
+                                        .child("How many shots?"),
+                                )
+                                .child(self.render_camera3d_count_pills("lane", 0, maximum, cx))
+                                .child(
+                                    ui::IconButton::new("camera3d-picker-close", "icons/x.svg")
+                                        .size(px(22.))
+                                        .icon_size(px(12.))
+                                        .color(Hsla::from(theme.editor.text_3))
+                                        .hover_bg(Hsla::from(theme.editor.ctl_hover))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.close_camera3d_picker(cx);
+                                        })),
+                                )
+                            })
+                            .child(
+                                ui::Button::plain(
+                                    &theme,
+                                    "camera3d-add-shot",
+                                    ui::ButtonVariant::Outline,
+                                    ui::ButtonSize::Sm,
+                                )
+                                .label("+ Add shot")
+                                .radius(px(7.))
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        // The playhead, not the pointer: the
+                                        // pointer is over this button.
+                                        let time = this.playhead;
+                                        this.add_camera3d_shot_at(time, window, cx);
+                                    },
+                                )),
+                            )
                     }))
                     // The lane's delete: a ghost that only appears with the
                     // row under the pointer, and only turns red under its own.
@@ -10081,9 +11066,6 @@ fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>)
     let indexed = menu.as_ref().is_some_and(|menu| match menu.kind {
         SidebarMenu::TextFontFamily(_)
         | SidebarMenu::TextWeight(_)
-        | SidebarMenu::TextAnimationIn(_)
-        | SidebarMenu::TextAnimationOut(_)
-        | SidebarMenu::Camera3DBlurMode(_)
         | SidebarMenu::Camera3DEasing(_) => true,
         SidebarMenu::BackgroundCornerStyle
         | SidebarMenu::CameraBlur
@@ -10214,9 +11196,36 @@ impl Render for EditorWindow {
             .child({
                 let move_editor = cx.entity().downgrade();
                 let up_editor = cx.entity().downgrade();
+                let hover_editor = cx.entity().downgrade();
+                let exit_editor = cx.entity().downgrade();
                 gpui::canvas(
                     |_bounds, _window, _cx| (),
                     move |_bounds, (), window, _cx| {
+                        let editor = hover_editor.clone();
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                            if phase != gpui::DispatchPhase::Capture {
+                                return;
+                            }
+                            editor
+                                .update(cx, |this, cx| {
+                                    let hovered = this
+                                        .player_panel_bounds
+                                        .get()
+                                        .is_some_and(|bounds| bounds.contains(&event.position));
+                                    this.set_player_panel_hovered(hovered, cx);
+                                })
+                                .ok();
+                        });
+                        let editor = exit_editor.clone();
+                        window.on_mouse_event(move |_: &gpui::MouseExitEvent, phase, _, cx| {
+                            if phase == gpui::DispatchPhase::Capture {
+                                editor
+                                    .update(cx, |this, cx| {
+                                        this.set_player_panel_hovered(false, cx);
+                                    })
+                                    .ok();
+                            }
+                        });
                         let editor = move_editor.clone();
                         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                             if phase != gpui::DispatchPhase::Bubble {
@@ -10497,21 +11506,6 @@ impl Render for EditorWindow {
                         }
                     })
             }))
-            // The config sidebar's sliders take the same layer, for the same
-            // reason -- and its release is what closes the undo bracket, so a
-            // drag that ends outside the 32px row still records exactly one
-            // history entry.
-            .children(self.sidebar_dragging().then(|| {
-                ui::Slider::drag_layer(
-                    "sidebar-slider-drag",
-                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                        this.sidebar_drag_move(event, window, cx);
-                    }),
-                    cx.listener(|this, _: &MouseUpEvent, _window, cx| {
-                        this.sidebar_mouse_up(cx);
-                    }),
-                )
-            }))
             // The `PositionPad`s use it too: `createEventListenerMap(window,
             // {mousemove, mouseup})` is exactly what the pad's own press
             // installs (`ConfigSidebar.tsx:6264-6271`), and its release is
@@ -10575,6 +11569,21 @@ impl Render for EditorWindow {
             .children(self.render_frame_controls(window, cx))
             .children(self.render_add_track_popover(cx))
             .children(self.render_clip_speed_popover(cx))
+            // The config sidebar's sliders take the same layer, for the same
+            // reason -- and its release is what closes the undo bracket, so a
+            // drag that ends outside the 32px row still records exactly one
+            // history entry.
+            .children(self.sidebar_dragging().then(|| {
+                ui::Slider::drag_layer(
+                    "sidebar-slider-drag",
+                    cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.sidebar_drag_move(event, window, cx);
+                    }),
+                    cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                        this.sidebar_mouse_up(cx);
+                    }),
+                )
+            }))
             .children(self.with_style_controls(|this| this.render_color_picker_popover(cx)))
             .children(self.render_presets_menu(cx))
             .children(self.render_preset_dialog(cx))
@@ -10778,6 +11787,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn add_track_tray_and_tiles_animate_in_sequence_and_settle() {
+        let total = ADD_TRACK_TRAY_ANIMATION.as_millis() as f32;
+        let at = |ms: f32| ms / total;
+        let near = |value: f32, target: f32| (value - target).abs() < 1e-3;
+
+        assert!(near(add_track_tray_progress(0.), 0.));
+        assert!(add_track_tray_progress(at(100.)) > 0.6);
+        assert!(near(add_track_tray_progress(at(ADD_TRACK_TRAY_IN_MS)), 1.));
+        assert!(near(add_track_tray_progress(1.), 1.));
+
+        let last = ADD_TRACK_OPTIONS.len() - 1;
+        assert!(near(add_track_tile_progress(0., 0), 0.));
+        assert!(near(
+            add_track_tile_progress(at(ADD_TRACK_TILE_DELAY_MS), 0),
+            0.
+        ));
+        assert!(add_track_tile_progress(at(ADD_TRACK_TILE_DELAY_MS + 100.), 0) > 0.5);
+        assert!(
+            near(
+                add_track_tile_progress(at(ADD_TRACK_TILE_DELAY_MS + 100.), last),
+                0.
+            ),
+            "the last tile must still be waiting while the first is halfway in"
+        );
+        let overshoot = (0..=100)
+            .map(|step| add_track_tile_progress(at(ADD_TRACK_TILE_DELAY_MS + step as f32 * 3.2), 0))
+            .fold(0f32, f32::max);
+        assert!(overshoot > 1.05 && overshoot < 1.2, "{overshoot}");
+        assert!(near(add_track_tile_progress(1., last), 1.));
+        assert!(
+            ADD_TRACK_TILE_DELAY_MS
+                + last as f32 * ADD_TRACK_TILE_STAGGER_MS
+                + ADD_TRACK_TILE_IN_MS
+                <= total
+        );
+    }
+
+    #[test]
     fn non_clip_split_preview_respects_track_limits_in_scrolled_timelines() {
         let segment = timeline::Segment {
             start: 10.,
@@ -10849,6 +11896,8 @@ mod tests {
                     timescale: 1.0,
                     name: None,
                     speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 }],
                 transitions: Vec::new(),
                 zoom_segments: Vec::new(),
@@ -10902,6 +11951,8 @@ mod tests {
                         timescale: 1.0,
                         name: None,
                         speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     },
                     cap_project::TimelineSegment {
                         recording_clip: 0,
@@ -10910,6 +11961,8 @@ mod tests {
                         timescale: 1.0,
                         name: None,
                         speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     },
                 ],
                 transitions: Vec::new(),
@@ -11103,9 +12156,6 @@ mod tests {
         for kind in [
             SidebarMenu::TextFontFamily(0),
             SidebarMenu::TextWeight(1),
-            SidebarMenu::TextAnimationIn(2),
-            SidebarMenu::TextAnimationOut(3),
-            SidebarMenu::Camera3DBlurMode(4),
             SidebarMenu::Camera3DEasing(5),
         ] {
             let mut menu = open_sidebar_menu_for_test(kind);
@@ -11199,7 +12249,7 @@ mod tests {
         dismiss_indexed_sidebar_menu(&mut menu);
         assert!(menu.is_none());
 
-        menu = open_sidebar_menu_for_test(SidebarMenu::Camera3DBlurMode(1));
+        menu = open_sidebar_menu_for_test(SidebarMenu::Camera3DEasing(1));
         project = history.redo().unwrap().clone();
         assert_eq!(
             project.timeline.as_ref().unwrap().camera3d_segments.len(),

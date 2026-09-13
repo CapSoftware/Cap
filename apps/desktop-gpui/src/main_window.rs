@@ -649,6 +649,7 @@ enum LibraryItems {
 struct LibraryRow<T> {
     item: T,
     thumbnail: Option<std::sync::Arc<gpui::RenderImage>>,
+    thumbnail_stale: bool,
 }
 
 #[derive(Clone)]
@@ -814,6 +815,7 @@ impl PlanBadge {
 struct RecentEntry {
     item: RecentItem,
     thumbnail: Option<std::sync::Arc<gpui::RenderImage>>,
+    thumbnail_stale: bool,
 }
 
 impl MainWindow {
@@ -1512,18 +1514,11 @@ impl MainWindow {
                 .await;
             tracing::info!(count = items.len(), "scanned the recordings library");
 
-            let thumbnails: Vec<(usize, std::path::PathBuf)> = items
-                .iter()
-                .enumerate()
-                .filter_map(|(index, item)| item.thumbnail.clone().map(|path| (index, path)))
-                .collect();
-
-            if this
-                .update_in(cx, |this, window, cx| this.set_recents(items, window, cx))
-                .is_err()
-            {
+            let Ok(thumbnails) =
+                this.update_in(cx, |this, window, cx| this.set_recents(items, window, cx))
+            else {
                 return;
-            }
+            };
 
             let (_decodes, results) = library::spawn_decode_pool(
                 cx.background_executor(),
@@ -1544,6 +1539,7 @@ impl MainWindow {
                             if let Some(old) = entry.thumbnail.replace(image) {
                                 let _ = window.drop_image(old);
                             }
+                            entry.thumbnail_stale = false;
                         }
                         cx.notify();
                         // The main window is not necessarily the active one
@@ -1682,23 +1678,51 @@ impl MainWindow {
     /// Install a fresh scan result, releasing the previous thumbnails from the
     /// sprite atlas -- the same explicit drop the camera preview does with
     /// every frame it replaces.
-    fn set_recents(&mut self, items: Vec<RecentItem>, window: &mut Window, cx: &mut Context<Self>) {
-        for entry in self.recents.take().into_iter().flatten() {
+    fn set_recents(
+        &mut self,
+        items: Vec<RecentItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<(usize, std::path::PathBuf)> {
+        let mut cached: std::collections::HashMap<_, _> = self
+            .recents
+            .take()
+            .into_iter()
+            .flatten()
+            .map(|entry| (entry.item.bundle.clone(), entry))
+            .collect();
+        let mut pending = Vec::new();
+        self.recents = Some(
+            items
+                .into_iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let previous = cached.remove(&item.bundle);
+                    let changed = previous.as_ref().is_none_or(|entry| {
+                        entry.item.thumbnail != item.thumbnail
+                            || entry.item.thumbnail_version != item.thumbnail_version
+                            || entry.thumbnail_stale
+                            || entry.thumbnail.is_none()
+                    });
+                    if changed && let Some(path) = item.thumbnail.clone() {
+                        pending.push((index, path));
+                    }
+                    RecentEntry {
+                        item,
+                        thumbnail: previous.and_then(|entry| entry.thumbnail),
+                        thumbnail_stale: changed,
+                    }
+                })
+                .collect(),
+        );
+        for (_, entry) in cached {
             if let Some(image) = entry.thumbnail {
                 let _ = window.drop_image(image);
             }
         }
-        self.recents = Some(
-            items
-                .into_iter()
-                .map(|item| RecentEntry {
-                    item,
-                    thumbnail: None,
-                })
-                .collect(),
-        );
         cx.notify();
         window.refresh();
+        pending
     }
 
     fn toggle_expanded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3586,13 +3610,13 @@ impl MainWindow {
             .pb(px(32.))
             .bg(wash)
             .when_some(countdown, |this, remaining| {
-                this.child(
-                    div()
-                        .mb(px(16.))
-                        .text_size(px(18.))
-                        .text_center()
-                        .child(format!("Recording starts in {remaining}")),
-                )
+                this.child(div().mb(px(16.)).text_size(px(18.)).text_center().child(
+                    if remaining == 0 {
+                        "Starting...".to_string()
+                    } else {
+                        format!("Recording starts in {remaining}")
+                    },
+                ))
             })
             .when_some(self.session.read(cx).error.clone(), |this, error| {
                 this.child(
@@ -4005,7 +4029,18 @@ impl MainWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<(usize, std::path::PathBuf)> {
-        self.drop_library_images(window);
+        let mut cached_recordings: std::collections::HashMap<_, _> =
+            match (kind, self.library.take()) {
+                (LibraryKind::Recordings, Some(LibraryItems::Recordings(rows))) => rows
+                    .into_iter()
+                    .map(|row| (row.item.path.clone(), row))
+                    .collect(),
+                (_, previous) => {
+                    self.library = previous;
+                    self.drop_library_images(window);
+                    std::collections::HashMap::new()
+                }
+            };
         let mut pending = Vec::new();
         self.library = Some(match kind {
             LibraryKind::Recordings => LibraryItems::Recordings(
@@ -4014,12 +4049,20 @@ impl MainWindow {
                     .into_iter()
                     .enumerate()
                     .map(|(index, item)| {
-                        if let Some(path) = item.thumbnail.clone() {
+                        let previous = cached_recordings.remove(&item.path);
+                        let changed = previous.as_ref().is_none_or(|row| {
+                            row.item.thumbnail != item.thumbnail
+                                || row.item.thumbnail_version != item.thumbnail_version
+                                || row.thumbnail_stale
+                                || row.thumbnail.is_none()
+                        });
+                        if changed && let Some(path) = item.thumbnail.clone() {
                             pending.push((index, path));
                         }
                         LibraryRow {
                             item,
-                            thumbnail: None,
+                            thumbnail: previous.and_then(|row| row.thumbnail),
+                            thumbnail_stale: changed,
                         }
                     })
                     .collect(),
@@ -4036,11 +4079,17 @@ impl MainWindow {
                         LibraryRow {
                             item,
                             thumbnail: None,
+                            thumbnail_stale: false,
                         }
                     })
                     .collect(),
             ),
         });
+        for (_, row) in cached_recordings {
+            if let Some(image) = row.thumbnail {
+                let _ = window.drop_image(image);
+            }
+        }
         cx.notify();
         window.refresh();
         pending
@@ -4059,7 +4108,10 @@ impl MainWindow {
             (Some(LibraryItems::Recordings(rows)), LibraryKind::Recordings) => rows
                 .get_mut(index)
                 .filter(|row| row.item.thumbnail.as_deref() == Some(path.as_path()))
-                .and_then(|row| row.thumbnail.replace(image)),
+                .and_then(|row| {
+                    row.thumbnail_stale = false;
+                    row.thumbnail.replace(image)
+                }),
             (Some(LibraryItems::Screenshots(rows)), LibraryKind::Screenshots) => rows
                 .get_mut(index)
                 .filter(|row| row.item.thumbnail.as_deref() == Some(path.as_path()))

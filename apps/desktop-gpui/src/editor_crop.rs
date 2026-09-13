@@ -51,7 +51,7 @@ use cap_project::{Crop, XY};
 use gpui::{
     AnyElement, Context, CursorStyle, FontWeight, Hsla, InteractiveElement, IntoElement,
     MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Point, RenderImage,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, img, px, svg,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px,
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1916,21 +1916,30 @@ impl EditorWindow {
         let Some(choice) = crop_menu_choice(index) else {
             return;
         };
+        if let Some(state) = self.crop.as_mut() {
+            state.menu = None;
+        }
         match choice {
-            CropMenuChoice::Aspect(aspect) => {
-                if let Some(state) = self.crop.as_mut() {
-                    state.menu = None;
-                    state.set_aspect(aspect);
-                }
-                self.start_crop_ticker(window, cx);
-            }
+            CropMenuChoice::Aspect(aspect) => self.set_crop_aspect(aspect, window, cx),
             CropMenuChoice::ToggleSnap => {
                 self.crop_snap_to_ratio = !self.crop_snap_to_ratio;
-                if let Some(state) = self.crop.as_mut() {
-                    state.menu = None;
-                }
+                self.crop_changed(cx);
             }
         }
+    }
+
+    /// Lock (or free) the ratio: the inspector's chips and the menu's ratio
+    /// rows both land here.
+    pub(crate) fn set_crop_aspect(
+        &mut self,
+        aspect: Option<Ratio>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(state) = self.crop.as_mut() {
+            state.set_aspect(aspect);
+        }
+        self.start_crop_ticker(window, cx);
         self.crop_changed(cx);
     }
 
@@ -1990,6 +1999,10 @@ impl EditorWindow {
         }
         if key == "escape" {
             self.cancel_crop("escape", window, cx);
+            return true;
+        }
+        if key == "enter" {
+            self.save_crop(window, cx);
             return true;
         }
         let Some(nudge) = is_nudge_key(key) else {
@@ -2311,15 +2324,22 @@ async fn decode_display_frame(
 // Rendering
 // ---------------------------------------------------------------------------
 
-/// `Dialog.Root`'s `max-w-[1180px]` (`Editor.tsx:809`).
+/// `Dialog.Root`'s `max-w-[1440px]` (`Editor.tsx:1063`).
 const CROP_DIALOG_MAX_WIDTH: f32 = 1440.;
-/// `h-14 px-4` (`ui.tsx:231`).
-const DIALOG_HEADER_HEIGHT: f32 = 56.;
-/// `h-16 px-4 gap-3` (`ui.tsx:213-215`).
-const DIALOG_FOOTER_HEIGHT: f32 = 64.;
-/// `w-13` on each of the four header boxes (`Editor.tsx:1218`).
-const BOUND_INPUT_WIDTH: f32 = 52.;
-/// `bg-black/45` (`:1126`).
+/// The dialog's own header and footer rows.
+const DIALOG_HEADER_HEIGHT: f32 = 52.;
+const DIALOG_FOOTER_HEIGHT: f32 = 56.;
+/// `px-5` on the header, body and footer.
+const DIALOG_PADDING_X: f32 = 20.;
+/// The inspector column: `w-[300px]`.
+const INSPECTOR_WIDTH: f32 = 300.;
+/// `p-3.5` inside the inspector.
+const INSPECTOR_PADDING: f32 = 14.;
+/// `w-[60px]` on each of the four number boxes.
+const BOUND_INPUT_WIDTH: f32 = 60.;
+/// The inspector's control height: chips, fields, actions, toggle rows.
+const INSPECTOR_CONTROL_HEIGHT: f32 = 28.;
+/// `bg-black/45` (`Cropper.tsx:1172`).
 const OCCLUDER_ALPHA: f32 = 0.45;
 
 impl EditorWindow {
@@ -2328,6 +2348,7 @@ impl EditorWindow {
     pub(crate) fn render_crop_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let state = self.crop.as_ref()?;
         let theme = self.theme;
+        let editor = theme.editor;
 
         Some(
             div()
@@ -2348,8 +2369,8 @@ impl EditorWindow {
                         })),
                 )
                 .child(
-                    // `z-50 text-sm rounded-[1.25rem] overflow-hidden border
-                    // border-gray-3 bg-gray-1` (`ui.tsx:185-190`).
+                    // `rounded-[1.25rem] overflow-hidden border-0 bg-ed-card
+                    // shadow-ed-pop` (`ui.tsx:272-275`).
                     div()
                         // The modal's own hit shield. Without it the backdrop's
                         // click handler is still "hovered" under the card --
@@ -2366,135 +2387,52 @@ impl EditorWindow {
                         .flex_col()
                         .max_w(px(CROP_DIALOG_MAX_WIDTH))
                         .rounded(px(20.))
-                        .border_1()
-                        .border_color(Hsla::from(theme.gray_3))
-                        .bg(Hsla::from(theme.gray_1))
+                        .bg(Hsla::from(editor.card))
+                        .shadow(editor.pop_shadow())
                         .overflow_hidden()
-                        .children(state.style_target.as_ref().map(|target| div().px(px(20.)).pt(px(16.)).text_size(px(12.)).child(if target.opting_in { format!("Style {} only · Saving enables its background override. Global settings stay unchanged.",target.index+1) } else { format!("Editing Style {} only · Global settings stay unchanged.",target.index+1) })))
-                        .children(state.error.as_ref().map(|error| div().p(px(16.)).child(error.clone())))
-                        .child(self.render_crop_header(state, cx))
+                        .text_color(Hsla::from(editor.text_1))
+                        .child(self.render_crop_header(cx))
                         .child(self.render_crop_body(state, cx))
-                        .child(self.render_crop_footer(cx)),
+                        .child(self.render_crop_hint())
+                        .child(self.render_crop_footer(state, cx)),
                 )
                 .children(self.render_crop_menu(cx))
                 .into_any_element(),
         )
     }
 
-    fn render_crop_header(&self, state: &CropState, cx: &mut Context<Self>) -> AnyElement {
+    /// The title row: `Crop` and the close button.
+    fn render_crop_header(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
-        let real = state.real();
-        let full =
-            real.width >= f64::from(state.target.0) && real.height >= f64::from(state.target.1);
-        let untouched = real == state.initial;
-
-        let group = |label: &'static str, a: CropField, b: CropField, this: &Self| {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(12.))
-                .text_color(Hsla::from(theme.gray_11))
-                .child(label)
-                .child(this.render_crop_field(a))
-                .child("×")
-                .child(this.render_crop_field(b))
-        };
-
         div()
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(12.))
+            .justify_between()
             .h(px(DIALOG_HEADER_HEIGHT))
-            .px(px(16.))
+            .px(px(DIALOG_PADDING_X))
             .flex_none()
             .child(
-                // `flex flex-row space-x-8`.
                 div()
-                    .flex()
-                    .flex_row()
-                    .gap(px(32.))
-                    .flex_none()
-                    .child(group("Size", CropField::Width, CropField::Height, self))
-                    .child(group("Position", CropField::X, CropField::Y, self)),
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(Hsla::from(theme.editor.text_1))
+                    .child("Crop"),
             )
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .items_center()
-                    .justify_end()
-                    .gap(px(12.))
-                    // The ratio button: `rounded-full h-8 w-8 border`, showing
-                    // the ratio icon when free and `N:M` in `text-blue-10`
-                    // when locked (`Editor.tsx:1218-1258`).
-                    .child(
-                        div()
-                            .id("crop-ratio")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(32.))
-                            .rounded_full()
-                            .border_1()
-                            .border_color(Hsla::from(theme.gray_4))
-                            .bg(Hsla::from(theme.gray_1))
-                            .cursor_pointer()
-                            .child(match state.aspect {
-                                Some(ratio) => div()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(Hsla::from(theme.blue_10))
-                                    .child(SharedString::from(format!("{}:{}", ratio.0, ratio.1)))
-                                    .into_any_element(),
-                                None => svg()
-                                    .path("icons/ratio.svg")
-                                    .size(px(16.))
-                                    .text_color(Hsla::from(theme.gray_12))
-                                    .into_any_element(),
-                            })
-                            .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
-                                // `pos = new LogicalPosition(rect.x, rect.y + 40)`.
-                                let position = event.position();
-                                let origin =
-                                    gpui::point(position.x - px(16.), position.y + px(24.));
-                                this.open_crop_menu(origin, window, cx);
-                            })),
-                    )
-                    .child(
-                        ui::EditorButton::plain(&theme, "crop-full")
-                            .left_icon("icons/maximize.svg")
-                            .label("Full")
-                            .disabled(full)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if let Some(state) = this.crop.as_mut() {
-                                    state.fill();
-                                }
-                                this.start_crop_ticker(window, cx);
-                                this.crop_changed(cx);
-                            })),
-                    )
-                    .child(
-                        ui::EditorButton::plain(&theme, "crop-reset")
-                            .left_icon("icons/circle-x.svg")
-                            .label("Reset")
-                            .disabled(untouched)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if let Some(state) = this.crop.as_mut() {
-                                    state.reset();
-                                }
-                                this.start_crop_ticker(window, cx);
-                                this.crop_changed(cx);
-                            })),
+                ui::EditorButton::plain(&theme, "crop-close")
+                    .left_icon("icons/x.svg")
+                    .icon_size(px(12.))
+                    .width(px(28.))
+                    .tooltip(&theme, "Close")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.cancel_crop("close", window, cx)),
                     ),
             )
             .into_any_element()
     }
 
-    /// One of the four `NumberField.Input` boxes: `w-13`, `h-8`, `rounded-lg
-    /// bg-gray-2` (`Editor.tsx:1200-1215`).
+    /// One of the four `NumberField.Input` boxes (`Editor.tsx` `BoundInput`).
     fn render_crop_field(&self, field: CropField) -> AnyElement {
         let theme = self.theme;
         let key = crate::editor_panels::FieldKey::Crop(field);
@@ -2504,94 +2442,289 @@ impl EditorWindow {
         ui::TextInput::plain(&theme, SharedString::from(format!("crop-{field:?}")), input)
             .width(px(BOUND_INPUT_WIDTH))
             .padding_x(px(8.))
-            .height(px(32.))
-            .text_size(px(14.))
-            .bg(Hsla::from(theme.gray_2))
-            .border(Hsla::from(theme.gray_2))
+            .height(px(INSPECTOR_CONTROL_HEIGHT))
+            .text_size(px(12.5))
             .into_any_element()
     }
 
-    /// `Dialog.Content`: `p-4 flex flex-col border-y border-gray-3`, holding
-    /// the two labelled boxes and the chevron between them.
+    /// The stage and the inspector, side by side.
     fn render_crop_body(&self, state: &CropState, cx: &mut Context<Self>) -> AnyElement {
-        let theme = self.theme;
-        let (w, h) = state.box_size;
+        div()
+            .flex()
+            .flex_row()
+            .items_stretch()
+            .gap(px(16.))
+            .px(px(DIALOG_PADDING_X))
+            .child(self.render_crop_stage(state, cx))
+            .child(self.render_crop_inspector(state, cx))
+            .into_any_element()
+    }
 
-        let labelled = |label: &'static str, body: AnyElement| {
+    /// The right-hand column: preview, aspect ratio, size and position, and
+    /// the three actions.
+    fn render_crop_inspector(&self, state: &CropState, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let real = state.real();
+        let target = state.target_vec();
+        let full = real.width >= target.x && real.height >= target.y;
+        let centered = real.x == js_round((target.x - real.width) / 2.)
+            && real.y == js_round((target.y - real.height) / 2.);
+        let untouched = real == state.initial && state.aspect.is_none();
+        let snap = self.crop_snap_to_ratio;
+
+        let label = |text: &'static str| {
+            div()
+                .text_size(px(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(Hsla::from(editor.text_2))
+                .child(text)
+        };
+        let hairline = || div().h(px(1.)).flex_none().bg(Hsla::from(editor.line));
+        let row_label = |text: &'static str| {
+            div()
+                .text_size(px(12.))
+                .text_color(Hsla::from(editor.text_2))
+                .child(text)
+        };
+        let row = || {
             div()
                 .flex()
-                .flex_col()
-                .gap(px(10.))
-                .child(
-                    // `px-1 text-[11px] font-medium tracking-wide uppercase
-                    // text-gray-10`.
-                    div()
-                        .px(px(4.))
-                        .text_size(px(11.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(Hsla::from(theme.gray_10))
-                        .child(label),
-                )
-                .child(body)
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap(px(12.))
+                .h(px(INSPECTOR_CONTROL_HEIGHT))
         };
+
+        // A fixed 16:9 box: the composited output's own aspect follows the
+        // crop, and a preview that resized with it would re-centre the whole
+        // dialog under the pointer mid-drag.
+        let preview_width = INSPECTOR_WIDTH - 2. * INSPECTOR_PADDING;
+        let preview_height = (preview_width * 9. / 16.).round();
+
+        let ratios: Vec<Option<Ratio>> = std::iter::once(None)
+            .chain(COMMON_RATIOS.iter().copied().map(Some))
+            .collect();
+        let mut chips = div().flex().flex_col().gap(px(6.));
+        for (row_index, chunk) in ratios.chunks(3).enumerate() {
+            let mut chip_row = div().flex().flex_row().gap(px(6.));
+            for (column, ratio) in chunk.iter().enumerate() {
+                chip_row = chip_row.child(self.render_crop_ratio_chip(
+                    row_index * 3 + column,
+                    *ratio,
+                    state.aspect == *ratio,
+                    cx,
+                ));
+            }
+            chips = chips.child(chip_row);
+        }
 
         div()
             .flex()
             .flex_col()
-            .p(px(16.))
-            .border_t_1()
-            .border_b_1()
-            .border_color(Hsla::from(theme.gray_3))
+            .flex_none()
+            .w(px(INSPECTOR_WIDTH))
+            .gap(px(12.))
+            .p(px(INSPECTOR_PADDING))
+            .rounded(px(12.))
+            .bg(Hsla::from(editor.card_2))
+            .child(label("Preview"))
+            .child(self.render_crop_preview(px(preview_width), px(preview_height)))
+            .child(hairline())
+            .child(label("Aspect ratio"))
+            .child(chips)
+            .child(row().child(row_label("Snap to ratios")).child(
+                ui::Toggle::plain(&theme, "crop-snap", snap).on_click(cx.listener(
+                    |this, _, _window, cx| {
+                        this.crop_snap_to_ratio = !this.crop_snap_to_ratio;
+                        cx.notify();
+                    },
+                )),
+            ))
+            .child(hairline())
+            .child(
+                row().child(row_label("Size")).child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(self.render_crop_field(CropField::Width))
+                        .child(
+                            div()
+                                .w(px(8.))
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(editor.text_3))
+                                .child("×"),
+                        )
+                        .child(self.render_crop_field(CropField::Height)),
+                ),
+            )
+            .child(
+                row().child(row_label("Position")).child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(self.render_crop_field(CropField::X))
+                        .child(div().w(px(8.)))
+                        .child(self.render_crop_field(CropField::Y)),
+                ),
+            )
+            .child(hairline())
             .child(
                 div()
                     .flex()
                     .flex_row()
-                    .gap(px(12.))
-                    .justify_center()
-                    .items_stretch()
-                    .child(labelled("Crop area", self.render_crop_stage(state, cx)))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .self_end()
-                            .h(px(h))
-                            .child(
-                                svg()
-                                    .path("icons/chevron-right.svg")
-                                    .size(px(20.))
-                                    .text_color(Hsla::from(theme.gray_8)),
-                            ),
-                    )
-                    .child(labelled("Preview", self.render_crop_preview(px((w * 0.44).round()), px(h + 32.)))),
+                    .gap(px(6.))
+                    .child(self.render_crop_action(
+                        "crop-center",
+                        "Center",
+                        centered,
+                        cx.listener(|this, _, window, cx| {
+                            if let Some(state) = this.crop.as_mut() {
+                                let bounds = state.raw;
+                                let container = state.container_vec();
+                                state.set_raw_and_animate(
+                                    CropBounds::new(
+                                        (container.x - bounds.width) / 2.,
+                                        (container.y - bounds.height) / 2.,
+                                        bounds.width,
+                                        bounds.height,
+                                    ),
+                                    ORIGIN_CENTER,
+                                    CropAnim::DEFAULT,
+                                );
+                            }
+                            this.start_crop_ticker(window, cx);
+                            this.crop_changed(cx);
+                        }),
+                    ))
+                    .child(self.render_crop_action(
+                        "crop-full",
+                        "Full",
+                        full,
+                        cx.listener(|this, _, window, cx| {
+                            if let Some(state) = this.crop.as_mut() {
+                                state.fill();
+                            }
+                            this.start_crop_ticker(window, cx);
+                            this.crop_changed(cx);
+                        }),
+                    ))
+                    .child(self.render_crop_action(
+                        "crop-reset",
+                        "Reset",
+                        untouched,
+                        cx.listener(|this, _, window, cx| {
+                            if let Some(state) = this.crop.as_mut() {
+                                state.reset();
+                            }
+                            this.start_crop_ticker(window, cx);
+                            this.crop_changed(cx);
+                        }),
+                    )),
             )
-            .child(div().flex().items_center().justify_between().gap(px(12.)).pt(px(16.)).text_size(px(12.)).text_color(Hsla::from(theme.gray_11))
-                .child("Drag to move · Snap to center, halves and quarters · Hold Shift to skip snapping")
-                .child(ui::EditorButton::plain(&theme, "crop-center").label("Center crop").on_click(cx.listener(|this, _, window, cx| {
-                    if let Some(state) = this.crop.as_mut() {
-                        let bounds = state.raw;
-                        let container = state.container_vec();
-                        state.set_raw_and_animate(CropBounds::new((container.x - bounds.width) / 2., (container.y - bounds.height) / 2., bounds.width, bounds.height), ORIGIN_CENTER, CropAnim::DEFAULT);
-                    }
-                    this.start_crop_ticker(window, cx);
-                    this.crop_changed(cx);
-                }))))
+            .into_any_element()
+    }
+
+    /// One aspect-ratio chip: `Free` or `N:M`, accent-tinted when it is the
+    /// locked ratio.
+    fn render_crop_ratio_chip(
+        &self,
+        index: usize,
+        ratio: Option<Ratio>,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let editor = self.theme.editor;
+        let label = match ratio {
+            Some((a, b)) => SharedString::from(format!("{a}:{b}")),
+            None => SharedString::from("Free"),
+        };
+        div()
+            .id(("crop-ratio", index))
+            .flex()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .h(px(INSPECTOR_CONTROL_HEIGHT))
+            .rounded(px(7.))
+            .text_size(px(12.))
+            .font_weight(FontWeight::MEDIUM)
+            .cursor_pointer()
+            .when(selected, |chip| {
+                chip.bg(Hsla::from(crate::theme::rgba_alpha(editor.accent, 0.12)))
+                    .border_1()
+                    .border_color(Hsla::from(editor.accent))
+                    .text_color(Hsla::from(editor.accent))
+            })
+            .when(!selected, |chip| {
+                chip.bg(Hsla::from(editor.ctl))
+                    .text_color(Hsla::from(editor.text_2))
+                    .hover(move |chip| {
+                        chip.bg(Hsla::from(editor.ctl_hover))
+                            .text_color(Hsla::from(editor.text_1))
+                    })
+            })
+            .child(label)
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.set_crop_aspect(ratio, window, cx);
+            }))
+            .into_any_element()
+    }
+
+    /// One of the three equal-width actions under the fields.
+    fn render_crop_action(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        disabled: bool,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> AnyElement {
+        let editor = self.theme.editor;
+        div()
+            .id(id)
+            .flex()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .h(px(INSPECTOR_CONTROL_HEIGHT))
+            .rounded(px(7.))
+            .bg(Hsla::from(editor.ctl))
+            .text_size(px(12.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(Hsla::from(editor.text_1))
+            .when(disabled, |button| button.opacity(0.45))
+            .when(!disabled, |button| {
+                button
+                    .cursor_pointer()
+                    .hover(move |button| button.bg(Hsla::from(editor.ctl_hover)))
+                    .active(move |button| button.bg(Hsla::from(editor.ctl_active)))
+                    .on_click(on_click)
+            })
+            .child(label)
             .into_any_element()
     }
 
     /// The cropper itself: the raw frame, the occluder, the region and the
-    /// eight handles.
+    /// eight handles, on the stage surface.
     fn render_crop_stage(&self, state: &CropState, cx: &mut Context<Self>) -> AnyElement {
         div()
             .id("crop-stage")
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
             .p(px(16.))
             .rounded(px(12.))
-            .bg(Hsla::from(self.theme.gray_3))
+            .bg(Hsla::from(self.theme.editor.stage))
             .child(self.render_crop_area(state))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::crop_mouse_down))
             // `onContextMenu={(e) => showCropOptionsMenu(e, true)}` -- anchored
-            // at the cursor (`Editor.tsx:1333-1335`).
+            // at the cursor.
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
@@ -2702,10 +2835,9 @@ impl EditorWindow {
             .relative()
             .w(px(box_w))
             .h(px(box_h))
-            .rounded(px(12.))
             .border_1()
-            .border_color(Hsla::from(theme.gray_3))
-            .bg(Hsla::from(theme.gray_3))
+            .border_color(Hsla::from(theme.editor.stage))
+            .bg(Hsla::from(theme.editor.stage))
             .cursor(base_cursor)
             // The box's painted origin, so a pointer position can be made
             // container-local. gpui has no `getBoundingClientRect`; this is
@@ -2745,7 +2877,7 @@ impl EditorWindow {
             .child(region)
             .child(editor_alignment_guides(state.alignment_guides, w, h))
             .child(layers)
-            // `Loading frame…` (`Editor.tsx:1356-1364`).
+            // `Loading frame…` (`Editor.tsx`).
             .children((state.frame.is_none() && !state.frame_failed).then(|| {
                 div()
                     .absolute()
@@ -2753,10 +2885,10 @@ impl EditorWindow {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(Hsla::from(theme.gray_3))
+                    .bg(Hsla::from(theme.editor.stage))
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.editor.text_2))
                     .child("Loading frame…")
             }))
             .into_any_element()
@@ -2766,11 +2898,10 @@ impl EditorWindow {
         self.project_path.join("screenshots/display.jpg").into()
     }
 
-    /// The right-hand pane: the live composited frame, which is the same
-    /// `latestFrame` the player draws, `object-contain` inside the box
-    /// (`Editor.tsx:1395-1414`).
+    /// The inspector's preview: the live composited frame, which is the same
+    /// `latestFrame` the player draws, `object-contain` inside the box.
     fn render_crop_preview(&self, w: Pixels, h: Pixels) -> AnyElement {
-        let theme = self.theme;
+        let editor = self.theme.editor;
         let frame_size = self
             .frame_layout
             .map(|layout| (layout.output_size[0] as f32, layout.output_size[1] as f32))
@@ -2782,12 +2913,11 @@ impl EditorWindow {
             .w(w)
             .h(h)
             .flex()
+            .flex_none()
             .items_center()
             .justify_center()
-            .rounded(px(12.))
-            .border_1()
-            .border_color(Hsla::from(theme.gray_3))
-            .bg(Hsla::from(theme.gray_3))
+            .rounded(px(8.))
+            .bg(Hsla::from(editor.stage))
             .overflow_hidden()
             .children(match self.latest_frame.clone() {
                 Some(frame) => Some(
@@ -2801,9 +2931,9 @@ impl EditorWindow {
                 ),
                 None => Some(
                     div()
-                        .text_size(px(12.))
+                        .text_size(px(11.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(Hsla::from(theme.gray_10))
+                        .text_color(Hsla::from(editor.text_3))
                         .child("Rendering preview…")
                         .into_any_element(),
                 ),
@@ -2811,28 +2941,146 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// `Dialog.Footer` with the single `Save` button (`Editor.tsx:1412-1434`).
-    fn render_crop_footer(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = self.theme;
+    /// The one-line hint under the stage.
+    fn render_crop_hint(&self) -> AnyElement {
+        let editor = self.theme.editor;
         div()
             .flex()
             .flex_row()
             .items_center()
             .justify_center()
+            .gap(px(4.))
+            .px(px(DIALOG_PADDING_X))
+            .pt(px(12.))
+            .pb(px(DIALOG_PADDING_X))
+            .text_size(px(12.))
+            .text_color(Hsla::from(editor.text_3))
+            .child("Drag to move · Arrow keys nudge · Hold")
+            .child(
+                div()
+                    .px(px(4.))
+                    .rounded(px(4.))
+                    .bg(Hsla::from(editor.ctl))
+                    .text_color(Hsla::from(editor.text_2))
+                    .child("⇧"),
+            )
+            .child("to skip snapping")
+            .into_any_element()
+    }
+
+    /// The footer: the style-scope note or error on the left, Cancel and
+    /// Save on the right.
+    fn render_crop_footer(&self, state: &CropState, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let note: Option<(SharedString, Hsla)> = match (&state.error, &state.style_target) {
+            (Some(error), _) => Some((SharedString::from(error.clone()), Hsla::from(theme.red_11))),
+            (None, Some(target)) => Some((
+                SharedString::from(if target.opting_in {
+                    format!(
+                        "Editing Style {} only · Saving enables its background override",
+                        target.index + 1
+                    )
+                } else {
+                    format!("Editing Style {} only", target.index + 1)
+                }),
+                Hsla::from(editor.text_2),
+            )),
+            (None, None) => None,
+        };
+        let saveable = state.error.is_none()
+            && (state.frame.is_some() || state.frame_failed)
+            && state.real().width > 0.
+            && state.real().height > 0.;
+
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
             .gap(px(12.))
             .h(px(DIALOG_FOOTER_HEIGHT))
-            .px(px(16.))
+            .px(px(DIALOG_PADDING_X))
             .flex_none()
+            .border_t_1()
+            .border_color(Hsla::from(editor.line))
             .child(
-                ui::Button::plain(
-                    &theme,
-                    "crop-save",
-                    ui::ButtonVariant::Primary,
-                    ui::ButtonSize::Md,
-                )
-                .label("Save")
-                .on_click(cx.listener(|this, _, window, cx| this.save_crop(window, cx))),
+                div().min_w(px(0.)).text_size(px(12.)).children(
+                    note.map(|(text, color)| div().truncate().text_color(color).child(text)),
+                ),
             )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        ui::EditorButton::plain(&theme, "crop-cancel")
+                            .label("Cancel")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.cancel_crop("cancel", window, cx)
+                            })),
+                    )
+                    .child(self.render_crop_save_button(saveable, cx)),
+            )
+            .into_any_element()
+    }
+
+    /// The accent-gradient primary, the same one the header's Export uses.
+    fn render_crop_save_button(&self, enabled: bool, cx: &mut Context<Self>) -> AnyElement {
+        let editor = self.theme.editor;
+        let gradient = |top: gpui::Rgba, bottom: gpui::Rgba| {
+            gpui::linear_gradient(
+                180.,
+                gpui::linear_color_stop(top, 0.),
+                gpui::linear_color_stop(bottom, 1.),
+            )
+        };
+        div()
+            .id("crop-save")
+            .relative()
+            .flex()
+            .items_center()
+            .justify_center()
+            .px(px(14.))
+            .h(px(30.))
+            .flex_none()
+            .overflow_hidden()
+            .rounded(px(8.))
+            .bg(gradient(editor.accent_2, editor.accent))
+            .text_size(px(13.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(gpui::white())
+            .when(!enabled, |button| button.opacity(0.45))
+            .when(enabled, |button| {
+                button
+                    .cursor_pointer()
+                    .hover(move |style| {
+                        style.bg(gradient(
+                            crate::theme::mix(editor.accent_2, gpui::rgb(0xffffff), 0.10),
+                            crate::theme::mix(editor.accent, gpui::rgb(0xffffff), 0.10),
+                        ))
+                    })
+                    .active(move |style| {
+                        style.bg(gradient(
+                            crate::theme::mix(editor.accent_2, gpui::rgb(0x000000), 0.06),
+                            crate::theme::mix(editor.accent, gpui::rgb(0x000000), 0.06),
+                        ))
+                    })
+                    .on_click(cx.listener(|this, _, window, cx| this.save_crop(window, cx)))
+            })
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(1.))
+                    .bg(gpui::hsla(0., 0., 1., 0.22)),
+            )
+            .child("Save")
             .into_any_element()
     }
 

@@ -2079,6 +2079,7 @@ impl ScreenshotEditorWindow {
         cx: &mut Context<Self>,
     ) {
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
+        crate::app_sounds::play_notification();
         self.toast_update(
             toast,
             ToastKind::Success,

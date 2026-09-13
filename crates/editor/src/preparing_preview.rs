@@ -355,6 +355,7 @@ pub(crate) fn validate_input(input: &PreparingPreviewInput) -> Result<f64, Prepa
                 || timeline.segments[index].end <= 0.0
                 || timeline.segments[index].name.is_some()
                 || timeline.segments[index].speed_audio_mode.is_some()
+                || timeline.segments[index].volume() != 1.0
         })
     {
         return Err(invalid("Preparing requires the unchanged stopped timeline"));

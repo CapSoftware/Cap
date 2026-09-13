@@ -161,6 +161,9 @@ fn normalized_size(state: &CameraWindowState) -> f32 {
 /// the native page's issue overlay, and the native WGSL mask uses its own
 /// smaller radii; the 24px container is what users see.
 pub(crate) fn preview_radius(state: &CameraWindowState) -> f32 {
+    if cfg!(target_os = "macos") && state.background_blur == BlurMode::Remove {
+        return 0.;
+    }
     match state.shape {
         CameraShape::Round => clamp_size(state.size) / 2.,
         _ => 24.,
@@ -168,6 +171,9 @@ pub(crate) fn preview_radius(state: &CameraWindowState) -> f32 {
 }
 
 fn picker_preview_radius(state: &CameraWindowState, picker_size: Option<(f32, f32)>) -> f32 {
+    if cfg!(target_os = "macos") && state.background_blur == BlurMode::Remove {
+        return 0.;
+    }
     match (state.shape, picker_size) {
         (CameraShape::Round, Some((width, height))) => {
             width.max(0.).min((height - CAMERA_TOOLBAR_HEIGHT).max(0.)) / 2.
@@ -859,7 +865,7 @@ pub(crate) fn clear_parked_camera_preview(cx: &mut gpui::App) {
 }
 
 #[cfg(target_os = "macos")]
-fn snapshot_preview(
+pub(crate) fn snapshot_preview(
     buffer: &core_video::pixel_buffer::CVPixelBuffer,
 ) -> Option<Arc<gpui::RenderImage>> {
     use core_video::pixel_buffer::{kCVPixelBufferLock_ReadOnly, kCVPixelFormatType_32BGRA};
@@ -895,7 +901,7 @@ fn snapshot_preview(
             let offset = source_y * stride + source_x * 4;
             let pixel = unsafe { std::slice::from_raw_parts(base.add(offset), 4) };
             // RenderImage consumes BGRA bytes even though image::Frame wraps RgbaImage.
-            image::Rgba([pixel[0], pixel[1], pixel[2], 255])
+            image::Rgba([pixel[0], pixel[1], pixel[2], pixel[3]])
         });
         Some(Arc::new(gpui::RenderImage::new(smallvec::smallvec![
             image::Frame::new(image)
@@ -912,6 +918,10 @@ fn snapshot_preview(
 /// goes through the parent [`CameraWindow`] instead, so a frame draw reuses
 /// the cached toolbar subtree.
 struct CameraPreviewView {
+    #[cfg(target_os = "macos")]
+    cutout_frame: Option<Arc<gpui::RenderImage>>,
+    #[cfg(target_os = "macos")]
+    painted_cutout_frame: Option<Arc<gpui::RenderImage>>,
     theme: Theme,
     radius: f32,
     /// Clamped bubble size, for the issue overlay's scaled text metrics.
@@ -997,6 +1007,10 @@ impl CameraPreviewView {
             }
         });
         Self {
+            #[cfg(target_os = "macos")]
+            cutout_frame: None,
+            #[cfg(target_os = "macos")]
+            painted_cutout_frame: None,
             theme,
             radius,
             size,
@@ -1027,6 +1041,7 @@ impl CameraPreviewView {
         dims: (usize, usize),
         cx: &mut Context<Self>,
     ) {
+        self.cutout_frame = None;
         self.latest_frame = Some(frame);
         self.frame_dims = Some(dims);
         self.frame_revision = Some(self.selection_revision);
@@ -1064,12 +1079,24 @@ impl CameraPreviewView {
 
 impl Render for CameraPreviewView {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(target_os = "macos")]
+        if self.painted_cutout_frame.as_ref().is_some_and(|painted| {
+            self.cutout_frame
+                .as_ref()
+                .is_none_or(|current| !Arc::ptr_eq(painted, current))
+        }) && let Some(image) = self.painted_cutout_frame.take()
+        {
+            let _ = window.drop_image(image);
+        }
         if self
             .frame_revision
             .is_some_and(|revision| revision != self.selection_revision)
         {
             #[cfg(target_os = "macos")]
             {
+                if let Some(image) = self.cutout_frame.take() {
+                    let _ = window.drop_image(image);
+                }
                 self.latest_frame = None;
             }
             #[cfg(not(target_os = "macos"))]
@@ -1096,11 +1123,15 @@ impl Render for CameraPreviewView {
             .size_full()
             .overflow_hidden()
             .rounded(px(radius))
-            .bg(theme.gray_1)
+            .when(radius > 0., |this| this.bg(theme.gray_1))
             .text_color(theme.gray_12);
 
         #[cfg(target_os = "macos")]
-        if let Some(buffer) = self.latest_frame.clone() {
+        if let Some(buffer) = self
+            .latest_frame
+            .clone()
+            .filter(|_| self.cutout_frame.is_none())
+        {
             let frame_dims = self.frame_dims;
             let paints = self.paints.clone();
             // Cover-fit painted straight from the IOSurface: `ObjectFit::Cover`
@@ -1129,6 +1160,17 @@ impl Render for CameraPreviewView {
                     },
                 )
                 .size_full(),
+            );
+        }
+
+        #[cfg(target_os = "macos")]
+        if let Some(image) = self.cutout_frame.clone() {
+            self.painted_cutout_frame = Some(image.clone());
+            self.paints.fetch_add(1, Ordering::Relaxed);
+            container = container.child(
+                gpui::img(image)
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Cover),
             );
         }
 
@@ -1310,6 +1352,51 @@ pub struct CameraWindow {
 }
 
 impl CameraWindow {
+    pub(crate) fn studio_snapshot(
+        &self,
+        window: &Window,
+        target: &cap_recording::screen_capture::ScreenCaptureTarget,
+    ) -> crate::recording::StudioCameraSnapshot {
+        let placement = (|| {
+            if self.inline {
+                return None;
+            }
+            #[cfg(target_os = "macos")]
+            let bounds = {
+                let bounds = window.bounds();
+                [
+                    f64::from(f32::from(bounds.origin.x)),
+                    f64::from(f32::from(bounds.origin.y)) + f64::from(CAMERA_TOOLBAR_HEIGHT),
+                    f64::from(f32::from(bounds.size.width)),
+                    f64::from(f32::from(bounds.size.height) - CAMERA_TOOLBAR_HEIGHT),
+                ]
+            };
+            #[cfg(target_os = "windows")]
+            let bounds = {
+                let native = platform::native_window(window)?;
+                let (x, y, width, height) = platform::window_frame(&native);
+                let toolbar = f64::from(CAMERA_TOOLBAR_HEIGHT * window.scale_factor());
+                [x, y + toolbar, width, height - toolbar]
+            };
+            #[cfg(target_os = "linux")]
+            let bounds = {
+                let snapshot = self.recording_snapshot(window).ok()?;
+                let rect = snapshot.content_rect;
+                [
+                    f64::from(rect.x),
+                    f64::from(rect.y),
+                    f64::from(rect.width),
+                    f64::from(rect.height),
+                ]
+            };
+            cap_recording::camera_placement::recording_camera_placement(target, bounds)
+        })();
+        crate::recording::StudioCameraSnapshot {
+            blur: self.state.background_blur,
+            placement,
+        }
+    }
+
     #[cfg(target_os = "linux")]
     pub(crate) fn recording_snapshot(
         &self,
@@ -1678,6 +1765,7 @@ impl CameraWindow {
             BlurMode::Off => None,
             BlurMode::Light => Some(cap_camera_effects::BlurMode::Light),
             BlurMode::Heavy => Some(cap_camera_effects::BlurMode::Heavy),
+            BlurMode::Remove => Some(cap_camera_effects::BlurMode::Remove),
         }
     }
 
@@ -1748,7 +1836,7 @@ impl CameraWindow {
     ) -> bool {
         // A stale output can land after the mode flips back to Off; the raw
         // path is already painting again, so drop it.
-        if self.state.background_blur == BlurMode::Off
+        if self.active_blur_mode() != Some(output.mode)
             || Feeds::global(cx).read(cx).camera_preview_epoch() != Some(epoch)
         {
             return false;
@@ -1763,8 +1851,10 @@ impl CameraWindow {
         let dims = (output.width as usize, output.height as usize);
         let raw = &*output.buffer.0 as *const cidre::cv::PixelBuf as CVPixelBufferRef;
         let buffer = unsafe { CVPixelBuffer::wrap_under_get_rule(raw) };
-        self.preview
-            .update(cx, |preview, cx| preview.set_frame(buffer, dims, cx));
+        self.preview.update(cx, |preview, cx| {
+            preview.set_frame(buffer, dims, cx);
+            preview.cutout_frame = output.cutout;
+        });
         first
     }
 
@@ -2138,14 +2228,11 @@ impl CameraWindow {
             )
     }
 
-    /// `CameraResizeHandles` + `ResizeCornerHandle`
-    /// (`CameraPreviewChrome.tsx:218-357`): a 28px hit area per corner, with
-    /// a 14px white 2px-bordered bracket inset 6px, rounded 6px on its outer
-    /// corner. Opacity 0 hidden / 0.7 with chrome visible / 1.0 hovered or
-    /// resizing. The 150ms transition, the hover `scale-110` and the
-    /// `drop-shadow` filter have no hooks here (no animation pass, no
-    /// transform, and a box shadow would shadow the bracket's full rect, not
-    /// its L-shape).
+    /// `CameraResizeHandles` + `ResizeCornerHandle`: a 28px hit area in each
+    /// corner holding a 14px white 2px L-bracket, 85% while the chrome is
+    /// visible and 100% while hovered or resizing. A 50% black bracket sits
+    /// underneath, 1px proud on every edge, so the white L keeps a contour
+    /// over a light desktop (cutout mode has no backdrop behind it).
     fn render_resize_handles(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let visible = self.chrome_visible || self.resizing.is_some();
         let mut layer = div()
@@ -2168,51 +2255,94 @@ impl CameraWindow {
                 .is_some_and(|drag| drag.corner == corner)
                 || self.hovered_handle == Some(corner);
 
-            let mut bracket = div()
+            // 14px white L-bracket 6px in from the corner, with a thicker
+            // 50% black bracket underneath that pokes out 1px on every edge
+            // so the L reads as a contour over a light desktop too (cutout
+            // mode has no backdrop). Mirrors `ResizeCornerHandle` in
+            // `CameraPreviewChrome.tsx`.
+            let outline = div()
                 .absolute()
-                .size(px(14.))
-                .border_color(gpui::white())
+                .size(px(16.))
+                .border_color(gpui::hsla(0., 0., 0., 0.5));
+            let bracket = div().absolute().size(px(14.)).border_color(gpui::white());
+            let (outline, bracket) = match corner {
+                ResizeCorner::NorthWest => (
+                    outline
+                        .top(px(5.))
+                        .left(px(5.))
+                        .border_t_4()
+                        .border_l_4()
+                        .rounded_tl(px(7.)),
+                    bracket
+                        .top(px(6.))
+                        .left(px(6.))
+                        .border_t_2()
+                        .border_l_2()
+                        .rounded_tl(px(6.)),
+                ),
+                ResizeCorner::NorthEast => (
+                    outline
+                        .top(px(5.))
+                        .right(px(5.))
+                        .border_t_4()
+                        .border_r_4()
+                        .rounded_tr(px(7.)),
+                    bracket
+                        .top(px(6.))
+                        .right(px(6.))
+                        .border_t_2()
+                        .border_r_2()
+                        .rounded_tr(px(6.)),
+                ),
+                ResizeCorner::SouthWest => (
+                    outline
+                        .bottom(px(5.))
+                        .left(px(5.))
+                        .border_b_4()
+                        .border_l_4()
+                        .rounded_bl(px(7.)),
+                    bracket
+                        .bottom(px(6.))
+                        .left(px(6.))
+                        .border_b_2()
+                        .border_l_2()
+                        .rounded_bl(px(6.)),
+                ),
+                ResizeCorner::SouthEast => (
+                    outline
+                        .bottom(px(5.))
+                        .right(px(5.))
+                        .border_b_4()
+                        .border_r_4()
+                        .rounded_br(px(7.)),
+                    bracket
+                        .bottom(px(6.))
+                        .right(px(6.))
+                        .border_b_2()
+                        .border_r_2()
+                        .rounded_br(px(6.)),
+                ),
+            };
+            let glyph = div()
+                .absolute()
+                .inset_0()
                 .opacity(if active {
                     1.0
                 } else if visible {
-                    0.7
+                    0.85
                 } else {
                     0.0
-                });
-            bracket = match corner {
-                ResizeCorner::NorthWest => bracket
-                    .top(px(6.))
-                    .left(px(6.))
-                    .border_t_2()
-                    .border_l_2()
-                    .rounded_tl(px(6.)),
-                ResizeCorner::NorthEast => bracket
-                    .top(px(6.))
-                    .right(px(6.))
-                    .border_t_2()
-                    .border_r_2()
-                    .rounded_tr(px(6.)),
-                ResizeCorner::SouthWest => bracket
-                    .bottom(px(6.))
-                    .left(px(6.))
-                    .border_b_2()
-                    .border_l_2()
-                    .rounded_bl(px(6.)),
-                ResizeCorner::SouthEast => bracket
-                    .bottom(px(6.))
-                    .right(px(6.))
-                    .border_b_2()
-                    .border_r_2()
-                    .rounded_br(px(6.)),
-            };
+                })
+                .child(outline)
+                .child(bracket);
 
             // Like the toolbar buttons, no `.occlude()`: it would knock the
             // root's hover flag false over the 28px corner hit areas (even
             // while the brackets are invisible) and hide the chrome mid-
             // travel. The handle's own on_mouse_down stops propagation, which
             // is what keeps a resize press from starting a window move.
-            let mut handle = div().id(id).absolute().size(px(28.)).child(bracket);
-            // `cursor-nw-resize` and friends (`CameraPreviewChrome.tsx:306-317`).
+            let mut handle = div().id(id).absolute().size(px(28.)).child(glyph);
+            // `cursor-nw-resize` and friends (`CameraPreviewChrome.tsx`).
             handle = match corner {
                 ResizeCorner::NorthWest => handle
                     .top_0()
@@ -2846,6 +2976,28 @@ mod retained_preview_tests {
         let image = snapshot_preview(&buffer).unwrap();
         assert_eq!(image.as_bytes(0).unwrap().len(), 960 * 540 * 4);
         assert_eq!(&image.as_bytes(0).unwrap()[..4], &[19, 71, 143, 255]);
+    }
+
+    #[test]
+    fn cutout_preview_preserves_transparent_and_feathered_pixels() {
+        let buffer = buffer(3, 1);
+        assert_eq!(buffer.lock_base_address(0), 0);
+        let base = unsafe { buffer.get_base_address().cast::<u8>() };
+        unsafe {
+            base.add(3).write(0);
+            base.add(7).write(128);
+        }
+        assert_eq!(buffer.unlock_base_address(0), 0);
+        let image = snapshot_preview(&buffer).unwrap();
+        let bytes = image.as_bytes(0).unwrap();
+        assert_eq!([bytes[3], bytes[7], bytes[11]], [0, 128, 255]);
+        let state = CameraWindowState {
+            background_blur: BlurMode::Remove,
+            ..Default::default()
+        };
+        assert_eq!(preview_radius(&state), 0.0);
+        assert_eq!(picker_preview_radius(&state, Some((230.0, 286.0))), 0.0);
+        assert_eq!(state.shape, CameraShape::Round);
     }
 
     #[test]

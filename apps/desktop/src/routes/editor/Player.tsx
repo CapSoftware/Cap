@@ -1,5 +1,6 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
+import { createEventListener } from "@solid-primitives/event-listener";
 import { debounce } from "@solid-primitives/scheduled";
 import { Menu } from "@tauri-apps/api/menu";
 import { type as ostype } from "@tauri-apps/plugin-os";
@@ -63,6 +64,27 @@ export function PlayerContent(props: { compactness?: number }) {
 		requestHandoffPlayback,
 		handoffPlaybackPending,
 	} = useEditorContext();
+
+	let panelRef: HTMLDivElement | undefined;
+	const [panelHovered, setPanelHovered] = createSignal(false);
+	const [previewPointerDown, setPreviewPointerDown] = createSignal(false);
+
+	createEventListener(window, "mouseup", (event) => {
+		if (event.button !== 0 || !previewPointerDown()) return;
+		const bounds = panelRef?.getBoundingClientRect();
+		setPanelHovered(
+			!!bounds &&
+				event.clientX >= bounds.left &&
+				event.clientX < bounds.right &&
+				event.clientY >= bounds.top &&
+				event.clientY < bounds.bottom,
+		);
+		setPreviewPointerDown(false);
+	});
+	createEventListener(window, "blur", () => {
+		setPanelHovered(false);
+		setPreviewPointerDown(false);
+	});
 
 	const previewOptions = [
 		{ label: "Full", value: "full" as EditorPreviewQuality },
@@ -325,7 +347,16 @@ export function PlayerContent(props: { compactness?: number }) {
 	]);
 
 	return (
-		<div class="flex flex-col flex-1 min-h-0">
+		<div
+			ref={panelRef}
+			class="flex flex-col flex-1 min-h-0"
+			style={{
+				"--preview-controls-opacity":
+					panelHovered() || previewPointerDown() ? 1 : 0,
+			}}
+			onMouseEnter={() => setPanelHovered(true)}
+			onMouseLeave={() => setPanelHovered(false)}
+		>
 			<div
 				class="flex overflow-x-auto relative z-10 flex-none flex-row gap-3 items-center px-3"
 				style={{ height: `${44 - 4 * (props.compactness ?? 0)}px` }}
@@ -376,7 +407,11 @@ export function PlayerContent(props: { compactness?: number }) {
 					</div>
 				</div>
 			</div>
-			<PreviewCanvas />
+			<PreviewCanvas
+				onPreviewMouseDown={(event) => {
+					if (event.button === 0) setPreviewPointerDown(true);
+				}}
+			/>
 			<div
 				class="flex overflow-x-auto relative z-10 flex-none flex-row gap-3 items-center px-3.5"
 				style={{ height: `${48 - 4 * (props.compactness ?? 0)}px` }}
@@ -523,7 +558,9 @@ const gridStyle = {
 	"background-color": "rgba(200,200,200,0.08)",
 };
 
-function PreviewCanvas() {
+function PreviewCanvas(props: {
+	onPreviewMouseDown: (event: MouseEvent) => void;
+}) {
 	const preparing = usePreparingEditor();
 	const {
 		latestFrame,
@@ -567,6 +604,14 @@ function PreviewCanvas() {
 
 	const [canvasContainerRef, setCanvasContainerRef] =
 		createSignal<HTMLDivElement>();
+	createEventListener(
+		canvasContainerRef,
+		"mousedown",
+		props.onPreviewMouseDown,
+		{
+			capture: true,
+		},
+	);
 	const containerBounds = createElementBounds(canvasContainerRef);
 
 	const [debouncedBounds, setDebouncedBounds] = createSignal({

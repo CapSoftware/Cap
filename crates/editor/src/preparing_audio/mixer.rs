@@ -1,7 +1,8 @@
 use crate::SegmentAudioTimingRepair;
 use cap_audio::{
     AudioData, AudioRendererTrack, AudioSampleSource, AudioSampleWindow, AudioWindowRead,
-    ProgressiveAudio,
+    ProgressiveAudio, VOICE_PROFILE_SAMPLES, VOICE_WINDOW_PADDING_SAMPLES, VoiceEnhancer,
+    VoiceProfile, VoiceSource,
 };
 use cap_project::ProjectConfiguration;
 use std::{ops::Range, sync::Arc};
@@ -73,6 +74,7 @@ impl PreparingAudioSources {
                 || segment.start != 0.0
                 || segment.timescale != 1.0
                 || segment.speed_audio_mode.is_some()
+                || segment.volume() != 1.0
                 || !segment.end.is_finite()
                 || segment.end <= 0.0
             {
@@ -151,12 +153,25 @@ impl PreparingAudioSources {
                 };
                 let progress = loader.progress();
                 let end = progress.ready_frames;
+                let improve = track == 0
+                    && self.project.audio.improve
+                    && !self.project.audio.mute
+                    && self.project.audio.mic_volume_db > -30.0;
                 let covered = match loader.try_window(end.saturating_sub(1)..end)? {
                     AudioWindowRead::Ready(Some(window)) => {
                         if window.complete_sample_count().is_some() {
                             frames
                         } else if progress.channels.is_some() && window.available_range().end >= end
                         {
+                            let end = if improve {
+                                if end < VOICE_PROFILE_SAMPLES {
+                                    0
+                                } else {
+                                    end.saturating_sub(VOICE_WINDOW_PADDING_SAMPLES)
+                                }
+                            } else {
+                                end
+                            };
                             (end as i128 - clip.offsets[track] as i128).clamp(0, frames as i128)
                                 as usize
                         } else {
@@ -193,6 +208,8 @@ pub(crate) struct PreparingAudioMixer {
     sources: PreparingAudioSources,
     clips: Vec<ClipLayout>,
     position: usize,
+    voice_profiles: Vec<Option<VoiceProfile>>,
+    voice_enhancer: Option<(usize, VoiceEnhancer)>,
 }
 
 struct PreparedSpan {
@@ -214,6 +231,8 @@ impl PreparingAudioMixer {
         }
         let position = (start_seconds * RATE).round() as usize;
         Ok(Self {
+            voice_profiles: vec![None; clips.len()],
+            voice_enhancer: None,
             sources,
             clips,
             position,
@@ -236,6 +255,9 @@ impl PreparingAudioMixer {
         let end = self.position + requested_frames.min(total - self.position);
         let mut spans = Vec::new();
         let mut pending = None;
+        let improve = self.sources.project.audio.improve
+            && !self.sources.project.audio.mute
+            && self.sources.project.audio.mic_volume_db > -30.0;
         for (index, clip) in self.clips.iter().enumerate() {
             let start = self.position.max(clip.start);
             let until = end.min(clip.end);
@@ -244,13 +266,29 @@ impl PreparingAudioMixer {
             }
             let local = start - clip.start;
             let frames = until - start;
+            if improve
+                && self.sources.required[index][0]
+                && self.voice_profiles[index].is_none()
+                && let Some(loader) = &self.sources.tracks[index][0]
+            {
+                self.voice_profiles[index] = loader.try_voice_profile()?;
+                if self.voice_profiles[index].is_none() {
+                    pending.get_or_insert_with(|| PreparingAudioRead::Pending {
+                        loader: Some(loader.clone()),
+                        range: 0..VOICE_PROFILE_SAMPLES,
+                    });
+                }
+            }
             let mut windows = [None, None];
             for (track, slot) in windows.iter_mut().enumerate() {
                 if !self.sources.required[index][track] {
                     continue;
                 }
                 let first = local as i128 + clip.offsets[track] as i128;
-                let range = first.max(0) as usize..(first + frames as i128).max(0) as usize;
+                let mut range = first.max(0) as usize..(first + frames as i128).max(0) as usize;
+                if improve && track == 0 && !range.is_empty() {
+                    range = VoiceEnhancer::initial_source_range(range.start, range.len());
+                }
                 let Some(loader) = &self.sources.tracks[index][track] else {
                     pending.get_or_insert(PreparingAudioRead::Pending {
                         loader: None,
@@ -302,8 +340,55 @@ impl PreparingAudioMixer {
         let frames = end - self.position;
         let mut samples = vec![0.0; frames * 2];
         for span in spans {
-            let tracks = span
+            let enhanced =
+                if improve {
+                    span.windows[0].as_ref().and_then(|window| {
+                        let first = span.local as i128 + self.clips[span.clip].offsets[0] as i128;
+                        let start = first.max(0) as usize;
+                        let end = (first + span.frames as i128).max(0) as usize;
+                        if start == end || start >= window.sample_count() {
+                            return None;
+                        }
+                        if self
+                            .voice_enhancer
+                            .as_ref()
+                            .is_none_or(|(clip, _)| *clip != span.clip)
+                        {
+                            self.voice_enhancer = Some((
+                                span.clip,
+                                VoiceEnhancer::with_settings(
+                                    window.channels(),
+                                    self.sources.project.audio.isolation.strength(),
+                                    self.voice_profiles[span.clip].unwrap_or_default(),
+                                ),
+                            ));
+                        }
+                        Some(self.voice_enhancer.as_mut().unwrap().1.render(
+                            window,
+                            start,
+                            end - start,
+                        ))
+                    })
+                } else {
+                    None
+                };
+            let sources = span
                 .windows
+                .iter()
+                .enumerate()
+                .map(|(track, window)| {
+                    window.as_ref().map(|window| {
+                        if track == 0 {
+                            enhanced
+                                .as_ref()
+                                .map_or(VoiceSource::Original(window), VoiceSource::Enhanced)
+                        } else {
+                            VoiceSource::Original(window)
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+            let tracks = sources
                 .iter()
                 .enumerate()
                 .filter_map(|(track, window)| {
@@ -465,6 +550,47 @@ mod tests {
         assert_eq!(samples.len(), expected.1.len());
         for (index, (actual, expected)) in samples.iter().zip(&expected.1).enumerate() {
             assert_eq!(actual.to_bits(), expected.to_bits(), "sample {index}");
+        }
+    }
+
+    #[test]
+    fn studio_sound_pending_and_completed_audio_match_all_tiers() {
+        ffmpeg::init().unwrap();
+        for isolation in [
+            cap_project::VoiceIsolation::Light,
+            cap_project::VoiceIsolation::Balanced,
+            cap_project::VoiceIsolation::Strong,
+        ] {
+            let mic = audio(VOICE_PROFILE_SAMPLES + 32_768, 1, 17);
+            let (loader, producer) = ProgressiveAudioTestProducer::new();
+            append(&producer, &mic, 0..32_768);
+            let mut sources = sources(
+                &[mic.sample_count() as f64 / RATE],
+                vec![[Some(loader), None]],
+            );
+            let project = Arc::make_mut(&mut sources.project);
+            project.audio.improve = true;
+            project.audio.isolation = isolation;
+            let mut mixer = PreparingAudioMixer::new(sources.clone(), 0.0).unwrap();
+            assert_eq!(sources.playable_prefix().unwrap(), 0.0);
+            assert!(matches!(
+                mixer.next(4096).unwrap(),
+                PreparingAudioRead::Pending { .. }
+            ));
+            let ready = VOICE_PROFILE_SAMPLES.div_ceil(32_768) * 32_768;
+            for start in (32_768..ready).step_by(32_768) {
+                append(&producer, &mic, start..start + 32_768);
+            }
+            let expected = reference(&sources, vec![[Some(mic.clone()), None]], 0.0, 8192);
+            let first = mixer.next(4096).unwrap();
+            assert_samples(first, 0, (4096, expected.1[..8192].to_vec()));
+            append(&producer, &mic, ready..mic.sample_count());
+            producer.finish().unwrap();
+            assert_samples(
+                mixer.next(4096).unwrap(),
+                4096,
+                (4096, expected.1[8192..].to_vec()),
+            );
         }
     }
 

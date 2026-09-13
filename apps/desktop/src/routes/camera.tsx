@@ -597,7 +597,7 @@ function LegacyCameraPreviewPage(props: {
 				if (canvasControls === controls) updateFrameState(frame);
 			},
 			() => commands.refreshCameraFeed().catch(() => {}),
-			{ powerPreference: "low-power" },
+			{ powerPreference: "low-power", preserveAlpha: type() === "macos" },
 		);
 		canvasControls = controls;
 		initCanvasControls();
@@ -999,8 +999,13 @@ function LegacyCameraPreviewPage(props: {
 			<div
 				ref={containerRef}
 				class={cx(
-					"flex flex-col flex-1 relative overflow-hidden pointer-events-none border-none shadow-lg bg-gray-1 text-gray-12",
-					state.shape === "round" ? "rounded-full" : "rounded-3xl",
+					"flex flex-col flex-1 relative overflow-hidden pointer-events-none border-none text-gray-12",
+					state.backgroundBlur !== "remove" && "shadow-lg bg-gray-1",
+					state.backgroundBlur === "remove"
+						? "rounded-none"
+						: state.shape === "round"
+							? "rounded-full"
+							: "rounded-3xl",
 				)}
 				data-tauri-drag-region
 			>

@@ -8,8 +8,7 @@
 //! {name}.cap/` holding `original.png`, a Studio `SingleSegment` meta whose
 //! display track is the PNG at `fps: 0`, and a project config whose
 //! background is transparent white with no shadow (`recording.rs:2963-2985`).
-//! Known deviations from that command: no capture sound (this app has no
-//! sound assets yet), no native notification, and no `ScreenshotTaken`
+//! Known deviations from that command: no native notification and no `ScreenshotTaken`
 //! automations (no automation runner here).
 
 use std::path::PathBuf;
@@ -65,6 +64,8 @@ async fn capture_and_write(target: ScreenCaptureTarget) -> anyhow::Result<PathBu
     let image = cap_recording::screenshot::capture_screenshot(target.clone())
         .await
         .context("capturing the screenshot")?;
+
+    crate::app_sounds::AppSound::Notification.play();
 
     let base = crate::library::screenshots_dir();
     std::fs::create_dir_all(&base)

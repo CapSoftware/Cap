@@ -50,13 +50,12 @@ use tauri::{AppHandle, Listener, Manager, path::BaseDirectory};
 use tauri_plugin_dialog::{
     DialogExt, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind,
 };
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 
-use crate::camera::{CameraPreviewManager, CameraPreviewShape};
+use crate::camera::CameraPreviewShape;
 #[cfg(target_os = "macos")]
 use crate::general_settings;
 use crate::permissions;
@@ -593,6 +592,7 @@ pub struct InProgressRecordingCommon {
     pub inputs: StartRecordingInputs,
     pub recording_dir: PathBuf,
     pub health: Arc<crate::recording_telemetry::RecordingHealthAccumulator>,
+    camera_snapshot: Arc<std::sync::OnceLock<StudioCameraSnapshot>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -2414,14 +2414,16 @@ async fn start_recording_prepared(
         }
     }
     let countdown = general_settings.and_then(|v| v.recording_countdown);
+    let mut countdown_visible = false;
     crate::target_select_overlay::close_target_select_overlay_windows(&app);
     if clean_generation.is_none() {
-        let _ = ShowCapWindow::InProgressRecording {
+        countdown_visible = ShowCapWindow::InProgressRecording {
             countdown,
             capture_target: Some(inputs.capture_target.clone()),
         }
         .show(&app)
-        .await;
+        .await
+        .is_ok();
 
         if let Some(window) = CapWindowId::Main.get(&app) {
             let _ = general_settings
@@ -2430,6 +2432,8 @@ async fn start_recording_prepared(
                 .perform(&window);
         }
     }
+    let play_countdown_sound =
+        crate::audio::should_play_countdown_sound(countdown, countdown_visible);
     crate::windows::apply_content_protection(&app, true);
 
     if let Some(editor_target) = EditorRecordingTarget::current(&app)
@@ -2451,11 +2455,52 @@ async fn start_recording_prepared(
                 value: countdown - t,
             }
             .emit(&app);
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            let tick = tokio::time::sleep(Duration::from_secs(1));
+            tokio::pin!(tick);
+            loop {
+                tokio::select! {
+                    _ = &mut tick => break,
+                    _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+                }
+                if clean_generation.is_some_and(|generation| {
+                    crate::clean_capture::stop_requested(&app, generation)
+                }) {
+                    return Err("Recording cancelled".into());
+                }
+                #[cfg(target_os = "linux")]
+                if inputs.mode == RecordingMode::Instant
+                    && linux_instant::current(&app).is_none_or(|attempt| attempt.cancelled())
+                {
+                    return Err("Instant startup cancelled".into());
+                }
+            }
             if clean_generation
                 .is_some_and(|generation| crate::clean_capture::stop_requested(&app, generation))
             {
                 return Err("Recording cancelled".into());
+            }
+        }
+    }
+
+    if play_countdown_sound {
+        let _ = RecordingEvent::Countdown { value: 0 }.emit(&app);
+        let sound = crate::audio::play_recording_start_sound();
+        tokio::pin!(sound);
+        loop {
+            tokio::select! {
+                _ = &mut sound => break,
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+            if clean_generation
+                .is_some_and(|generation| crate::clean_capture::stop_requested(&app, generation))
+            {
+                return Err("Recording cancelled".into());
+            }
+            #[cfg(target_os = "linux")]
+            if inputs.mode == RecordingMode::Instant
+                && linux_instant::current(&app).is_none_or(|attempt| attempt.cancelled())
+            {
+                return Err("Instant startup cancelled".into());
             }
         }
     }
@@ -2540,6 +2585,7 @@ async fn start_recording_prepared(
                 inputs: inputs.clone(),
                 recording_dir: recording_dir.clone(),
                 health,
+                camera_snapshot: Arc::new(std::sync::OnceLock::new()),
             };
 
             #[cfg(target_os = "macos")]
@@ -3355,7 +3401,9 @@ async fn start_recording_prepared(
         });
     }
 
-    AppSounds::StartRecording.play();
+    if !play_countdown_sound {
+        AppSounds::StartRecording.play();
+    }
 
     Ok(RecordingAction::Started)
 }
@@ -4386,6 +4434,11 @@ async fn control_studio_recording(
         } else {
             None
         };
+        if action == StudioTerminalAction::Stop {
+            common.camera_snapshot.get_or_init(|| {
+                StudioCameraSnapshot::capture(app, &current_state, &common.inputs.capture_target)
+            });
+        }
         (
             handle.clone(),
             common.recording_dir.clone(),
@@ -4584,6 +4637,11 @@ async fn control_studio_recording(
         } else {
             None
         };
+        if action == StudioTerminalAction::Stop {
+            common.camera_snapshot.get_or_init(|| {
+                StudioCameraSnapshot::capture(app, &current_state, &common.inputs.capture_target)
+            });
+        }
         (
             handle.clone(),
             common.recording_dir.clone(),
@@ -4865,6 +4923,14 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     if cancel_recording_storage_prompt(&app, &state).await {
         return Ok(());
     }
+    {
+        let current = state.read().await;
+        if let Some(InProgressRecording::Studio { common, .. }) = current.current_recording() {
+            common.camera_snapshot.get_or_init(|| {
+                StudioCameraSnapshot::capture(&app, &current, &common.inputs.capture_target)
+            });
+        }
+    }
     #[cfg(target_os = "linux")]
     if let Some(attempt) = linux_instant::current(&app) {
         return linux_instant::control(app, attempt, false).await;
@@ -5010,11 +5076,9 @@ pub async fn restart_recording(
                                 expected.as_deref(),
                                 cleanup_completed
                                     && matches!(state.recording_state, RecordingState::None),
-                            ) && let Some(window) = editor_window_for_path(app, &editor_path)
-                            {
-                                let _ = window.unminimize();
-                                let _ = window.show();
-                                let _ = window.set_focus();
+                            ) {
+                                crate::editor_recording::finish(app);
+                                crate::editor_recording::reveal_editor(app, &editor_path);
                             }
                         }
                     },
@@ -5536,6 +5600,24 @@ async fn handle_recording_end_inner(
     if crate::clean_capture::phase(&handle).is_some() && clean_generation.is_none() {
         return Ok(());
     }
+    let camera_snapshot = match &recording {
+        Ok(CompletedRecording::Studio {
+            recording,
+            capture_target,
+            ..
+        }) => {
+            let mut snapshot = app
+                .current_recording()
+                .and_then(|current| current.common().camera_snapshot.get())
+                .cloned()
+                .unwrap_or_else(|| StudioCameraSnapshot::capture(&handle, app, capture_target));
+            if recording.meta.camera_path().is_none() {
+                snapshot.placement = None;
+            }
+            Some(snapshot)
+        }
+        _ => None,
+    };
     let cleared = app.clear_recording_state();
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     if let Some(InProgressRecording::Studio {
@@ -5659,9 +5741,10 @@ async fn handle_recording_end_inner(
     }
     let res = match recording {
         // we delay reporting errors here so that everything else happens first
-        Ok(recording) => {
-            Some(handle_recording_finish(&handle, recording, finalization_project).await)
-        }
+        Ok(recording) => Some(
+            handle_recording_finish(&handle, recording, finalization_project, camera_snapshot)
+                .await,
+        ),
         Err(error) => {
             if let Ok(mut project_meta) =
                 RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
@@ -5698,21 +5781,7 @@ async fn handle_recording_end_inner(
         let _ = window.hide();
     }
 
-    // Destroy any target-select overlays so they don't reappear when the main window comes back.
-    // On Windows, hide() leaves the DirectComposition transparency surface composited on screen
-    // (ghost overlay); closing the window releases the surface entirely.
-    let focus_manager = handle.try_state::<crate::target_select_overlay::WindowFocusManager>();
-    for (label, window) in handle.webview_windows() {
-        if let Ok(CapWindowId::TargetSelectOverlay { display_id }) = CapWindowId::from_str(&label) {
-            #[cfg(windows)]
-            let _ = window.close();
-            #[cfg(not(windows))]
-            hide_overlay(&window);
-            if let Some(ref fm) = focus_manager {
-                fm.destroy(&display_id, handle.global_shortcut());
-            }
-        }
-    }
+    crate::target_select_overlay::close_target_select_overlay_windows(&handle);
 
     if let Some(camera) = CapWindowId::Camera.get(&handle) {
         let _ = camera.hide();
@@ -5760,12 +5829,11 @@ async fn handle_recording_end_inner(
     if let Some(editor_path) = take_editor_target_after_recording(
         &EditorRecordingTarget::get(&handle),
         preserve_editor_target,
-    ) && let Some(editor_window) = editor_window_for_path(&handle, &editor_path)
-    {
-        editor_took_foreground = true;
-        let _ = editor_window.unminimize();
-        let _ = editor_window.show();
-        let _ = editor_window.set_focus();
+    ) {
+        crate::editor_recording::finish(&handle);
+        if crate::editor_recording::reveal_editor(&handle, &editor_path) {
+            editor_took_foreground = true;
+        }
     }
 
     CurrentRecordingChanged.emit(&handle).ok();
@@ -5801,11 +5869,8 @@ async fn apply_post_studio_editor_behaviour(
     duration_secs: f64,
 ) -> bool {
     if let Some(editor_path) = EditorRecordingTarget::take(app) {
-        if let Some(editor_window) = editor_window_for_path(app, &editor_path) {
-            let _ = editor_window.unminimize();
-            let _ = editor_window.show();
-            let _ = editor_window.set_focus();
-        }
+        crate::editor_recording::finish(app);
+        crate::editor_recording::reveal_editor(app, &editor_path);
 
         let _ = EditorRecordingAdded {
             editor_path,
@@ -5868,6 +5933,7 @@ async fn handle_recording_finish(
     app: &AppHandle,
     completed_recording: CompletedRecording,
     finalization_project: Option<Result<Arc<crate::FinalizationProject>, String>>,
+    camera_snapshot: Option<StudioCameraSnapshot>,
 ) -> Result<bool, String> {
     let recording_dir = completed_recording.project_path().clone();
 
@@ -5928,6 +5994,7 @@ async fn handle_recording_finish(
                         default_preset,
                         Some(capture_target),
                         finalization.preparing(),
+                        camera_snapshot,
                     )
                     .await;
 
@@ -5982,6 +6049,7 @@ async fn handle_recording_finish(
                 PresetsStore::get_default_preset(app)?.map(|p| p.config),
                 Some(&capture_target),
                 stored_current_desktop_background_path(&recording_dir),
+                camera_snapshot.as_ref(),
             );
 
             config.write(&recording_dir).map_err(|e| e.to_string())?;
@@ -6167,13 +6235,21 @@ async fn finalize_studio_recording(
     default_preset: Option<ProjectConfiguration>,
     capture_target: Option<ScreenCaptureTarget>,
     preparing: crate::preparing_finalization::FinalizationPreparing,
+    camera_snapshot: Option<StudioCameraSnapshot>,
 ) -> Result<(), String> {
     info!("Starting background finalization for recording");
     project.validate_async().await?;
-    preparing.set_presentation(preparing_presentation_snapshot(
-        default_preset.as_ref(),
-        capture_target.as_ref(),
-    ));
+    preparing.set_presentation(
+        preparing_presentation_snapshot(default_preset.as_ref(), capture_target.as_ref()).map(
+            |mut config| {
+                apply_studio_sound_default(app, &mut config);
+                if let Some(snapshot) = &camera_snapshot {
+                    snapshot.apply(&mut config);
+                }
+                config
+            },
+        ),
+    );
     let recording_dir = project.work_path().to_path_buf();
     let screenshots_dir = recording_dir.join("screenshots");
     let display_path = project.display_path().to_path_buf();
@@ -6235,6 +6311,7 @@ async fn finalize_studio_recording(
         default_preset,
         capture_target.as_ref(),
         stored_current_desktop_background_path(&recording_dir),
+        camera_snapshot.as_ref(),
     );
 
     config
@@ -6393,6 +6470,28 @@ pub fn generate_zoom_segments_for_project(
     )
 }
 
+fn apply_studio_sound_default(app: &AppHandle, config: &mut ProjectConfiguration) {
+    let audio_enhancement = app
+        .store("store")
+        .ok()
+        .and_then(|store| store.get("audio_enhancement"));
+    if audio_enhancement
+        .as_ref()
+        .and_then(|value| {
+            value
+                .get("enabledByDefault")
+                .and_then(serde_json::Value::as_bool)
+        })
+        .unwrap_or(true)
+    {
+        config.audio.improve = true;
+        config.audio.isolation = audio_enhancement
+            .and_then(|value| value.get("isolation").cloned())
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default();
+    }
+}
+
 fn project_config_from_recording(
     app: &AppHandle,
     completed_recording: &studio_recording::CompletedRecording,
@@ -6400,6 +6499,7 @@ fn project_config_from_recording(
     default_config: Option<ProjectConfiguration>,
     capture_target: Option<&ScreenCaptureTarget>,
     stored_desktop_background_path: Option<String>,
+    camera_snapshot: Option<&StudioCameraSnapshot>,
 ) -> ProjectConfiguration {
     let settings = GeneralSettingsStore::get(app)
         .unwrap_or(None)
@@ -6407,19 +6507,7 @@ fn project_config_from_recording(
 
     let using_default_config = default_config.is_none();
     let mut config = default_config.unwrap_or_default();
-    if app
-        .store("store")
-        .ok()
-        .and_then(|store| store.get("audio_enhancement"))
-        .and_then(|value| {
-            value
-                .get("enabledByDefault")
-                .and_then(serde_json::Value::as_bool)
-        })
-        .unwrap_or(false)
-    {
-        config.audio.improve = true;
-    }
+    apply_studio_sound_default(app, &mut config);
     if using_default_config {
         let library = app
             .store("store")
@@ -6442,9 +6530,8 @@ fn project_config_from_recording(
         stored_desktop_background_path,
     );
 
-    let camera_preview_manager = CameraPreviewManager::new(app);
-    if let Ok(camera_preview_state) = camera_preview_manager.get_state() {
-        apply_recording_camera_preview_state(&mut config, &camera_preview_state);
+    if let Some(snapshot) = camera_snapshot {
+        snapshot.apply(&mut config);
     }
 
     let timeline_segments = recordings
@@ -6458,6 +6545,8 @@ fn project_config_from_recording(
             timescale: 1.0,
             name: None,
             speed_audio_mode: None,
+            hide_cursor: None,
+            volume: None,
         })
         .collect::<Vec<_>>();
 
@@ -6507,6 +6596,61 @@ pub(crate) fn recording_timeline(
         audio_segments: Vec::new(),
         camera3d_segments: Vec::new(),
     }
+}
+
+#[derive(Clone)]
+struct StudioCameraSnapshot {
+    state: crate::camera::CameraPreviewState,
+    placement: Option<cap_recording::camera_placement::RecordingCameraPlacement>,
+}
+
+impl StudioCameraSnapshot {
+    fn capture(app: &AppHandle, state: &App, target: &ScreenCaptureTarget) -> Self {
+        Self {
+            state: state.camera_preview.get_state().unwrap_or_default(),
+            placement: state
+                .camera_in_use
+                .then(|| studio_camera_placement(app, target))
+                .flatten(),
+        }
+    }
+
+    fn apply(&self, config: &mut ProjectConfiguration) {
+        apply_recording_camera_preview_state(config, &self.state);
+        if let Some(placement) = self.placement {
+            placement.apply(&mut config.camera);
+        }
+    }
+}
+
+fn studio_camera_placement(
+    app: &AppHandle,
+    target: &ScreenCaptureTarget,
+) -> Option<cap_recording::camera_placement::RecordingCameraPlacement> {
+    if matches!(target, ScreenCaptureTarget::CameraOnly) {
+        return None;
+    }
+    let window = CapWindowId::Camera.get(app)?;
+    let scale = window.scale_factor().ok()?;
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let position = window.inner_position().ok()?;
+    let size = window.inner_size().ok()?;
+    let toolbar = 56.0 * scale;
+    #[cfg(target_os = "macos")]
+    let units = scale;
+    #[cfg(not(target_os = "macos"))]
+    let units = 1.0;
+    cap_recording::camera_placement::recording_camera_placement(
+        target,
+        [
+            f64::from(position.x) / units,
+            (f64::from(position.y) + toolbar) / units,
+            f64::from(size.width) / units,
+            (f64::from(size.height) - toolbar) / units,
+        ],
+    )
 }
 
 fn apply_recording_camera_preview_state(
@@ -9843,6 +9987,48 @@ mod preparing_presentation_tests {
     use super::*;
 
     #[test]
+    fn stopped_camera_snapshot_matches_preparing_and_final_presentation() {
+        let target = ScreenCaptureTarget::Display {
+            id: "1".parse().unwrap(),
+        };
+        for blur in [
+            cap_project::BackgroundBlurMode::Off,
+            cap_project::BackgroundBlurMode::Remove,
+        ] {
+            let snapshot = StudioCameraSnapshot {
+                state: crate::camera::CameraPreviewState {
+                    background_blur: blur,
+                    ..Default::default()
+                },
+                placement: cap_recording::camera_placement::RecordingCameraPlacement::from_bounds(
+                    [860.0, 20.0, 200.0, 200.0],
+                    [0.0, 0.0, 1920.0, 1080.0],
+                ),
+            };
+            let original = ProjectConfiguration::default();
+            let mut preparing =
+                preparing_presentation_snapshot(Some(&original), Some(&target)).unwrap();
+            let mut finished = original.clone();
+            snapshot.apply(&mut preparing);
+            snapshot.apply(&mut finished);
+            assert_eq!(
+                serde_json::to_value(&preparing.camera).unwrap(),
+                serde_json::to_value(&finished.camera).unwrap()
+            );
+            assert!(finished.camera.manual_position.is_none());
+            assert_eq!(
+                serde_json::to_value(&finished.camera.position).unwrap(),
+                serde_json::json!({"x": "center", "y": "top"})
+            );
+            assert_eq!(finished.camera.size, original.camera.size);
+            assert_eq!(
+                serde_json::to_value(&finished.timeline).unwrap(),
+                serde_json::to_value(&original.timeline).unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn preparing_never_guesses_default_wallpaper_or_animated_background() {
         assert!(preparing_presentation_snapshot(None, None).is_err());
         let config = ProjectConfiguration::default();
@@ -9908,6 +10094,8 @@ mod preparing_presentation_parity_tests {
             timescale: 1.0,
             name: None,
             speed_audio_mode: None,
+            hide_cursor: None,
+            volume: None,
         }]
     }
 
