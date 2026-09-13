@@ -6,11 +6,13 @@ mod test_support;
 #[cfg(feature = "test-support")]
 pub use test_support::ProgressiveAudioTestProducer;
 
-use crate::{AudioData, AudioSampleSource, AudioStream, ChunkRead};
+use crate::{
+    AudioData, AudioSampleSource, AudioStream, ChunkRead, VOICE_PROFILE_SAMPLES, VoiceProfile,
+};
 use std::{
     ops::Range,
     path::PathBuf,
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{Arc, Mutex, OnceLock, atomic::AtomicBool},
 };
 use tokio::sync::watch;
 
@@ -47,6 +49,7 @@ pub struct DecodedAudio {
     storage: AudioStorage,
     channels: u16,
     frames: usize,
+    voice_profile: Arc<OnceLock<VoiceProfile>>,
 }
 
 enum AudioStorage {
@@ -55,6 +58,12 @@ enum AudioStorage {
 }
 
 impl DecodedAudio {
+    pub fn voice_profile(&self) -> VoiceProfile {
+        *self
+            .voice_profile
+            .get_or_init(|| VoiceProfile::analyze(self))
+    }
+
     pub fn channels(&self) -> u16 {
         self.channels
     }
@@ -79,6 +88,7 @@ impl From<Arc<AudioData>> for DecodedAudio {
         Self {
             channels: data.channels(),
             frames: data.sample_count(),
+            voice_profile: Arc::default(),
             storage: AudioStorage::Contiguous(data),
         }
     }
@@ -141,6 +151,7 @@ struct PendingBlocks {
     blocks: Vec<Arc<Vec<f32>>>,
     frames: usize,
     channels: Option<u16>,
+    voice_profile: Arc<OnceLock<VoiceProfile>>,
 }
 
 impl PendingBlocks {
@@ -303,6 +314,7 @@ impl ProgressiveAudio {
                     return Ok(Arc::new(DecodedAudio {
                         channels: stream.channels(),
                         frames: pending.frames,
+                        voice_profile: pending.voice_profile.clone(),
                         storage: AudioStorage::Blocks(std::mem::take(&mut pending.blocks)),
                     }));
                 }
@@ -316,6 +328,31 @@ impl ProgressiveAudio {
             progress.error = Some("Audio load task was dropped".into());
         }
         progress
+    }
+
+    pub fn try_voice_profile(&self) -> Result<Option<VoiceProfile>, String> {
+        let result = self.rx.borrow().result.clone();
+        if let Some(result) = result {
+            return result
+                .as_ref()
+                .map(|audio| audio.as_ref().map(|audio| audio.voice_profile()))
+                .map_err(Clone::clone);
+        }
+        let profile = self
+            .pending
+            .lock()
+            .map_err(|error| error.to_string())?
+            .voice_profile
+            .clone();
+        if let Some(profile) = profile.get() {
+            return Ok(Some(*profile));
+        }
+        match self.try_window(0..VOICE_PROFILE_SAMPLES)? {
+            AudioWindowRead::Ready(Some(window)) => Ok(Some(
+                *profile.get_or_init(|| VoiceProfile::analyze(&window)),
+            )),
+            AudioWindowRead::Pending | AudioWindowRead::Ready(None) => Ok(None),
+        }
     }
 
     pub async fn get(&self) -> Result<Option<Arc<DecodedAudio>>, String> {
@@ -609,6 +646,7 @@ mod tests {
             Arc::new(DecodedAudio {
                 channels: 2,
                 frames: pending.frames,
+                voice_profile: pending.voice_profile.clone(),
                 storage: AudioStorage::Blocks(std::mem::take(&mut pending.blocks)),
             })
         };
@@ -980,6 +1018,7 @@ mod tests {
             Arc::new(DecodedAudio {
                 channels: 2,
                 frames: pending.frames,
+                voice_profile: pending.voice_profile.clone(),
                 storage: AudioStorage::Blocks(std::mem::take(&mut pending.blocks)),
             })
         };
