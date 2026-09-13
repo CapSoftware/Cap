@@ -26,6 +26,7 @@ on:
       - "crates/editor/**"
       - "crates/export/**"
       - "crates/audio/**"
+      - "crates/rnnoise/**"
       - "crates/media-info/**"
       - "crates/project/**"
       - "scripts/recording-reliability.py"
@@ -86,6 +87,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+
+      - name: RNNoise lifecycle regression tests
+        run: cargo test --locked -p cap-rnnoise --lib
 
       - name: Recording metadata and harness regression tests
         shell: bash

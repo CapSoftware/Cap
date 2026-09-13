@@ -235,6 +235,7 @@ struct RNNModel {
 RNNModel *rnnoise_model_from_buffer(const void *ptr, int len) {
   RNNModel *model;
   model = malloc(sizeof(*model));
+  model->file = NULL;
   model->blob = NULL;
   model->const_blob = ptr;
   model->blob_len = len;
@@ -502,4 +503,3 @@ float rnnoise_process_frame(DenoiseState *st, float *out, const float *in) {
   RNN_COPY(st->delayed_Exp, Exp, NB_BANDS);
   return vad_prob;
 }
-

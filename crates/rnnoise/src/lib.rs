@@ -69,6 +69,27 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn buffered_model_cleanup_handles_nonzero_allocations() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child.args([
+            "--exact",
+            "tests::bundled_model_is_aligned_and_handles_silence",
+            "--nocapture",
+        ]);
+        #[cfg(target_os = "macos")]
+        child
+            .env("MallocNanoZone", "0")
+            .env("MallocScribble", "1")
+            .env("MallocPreScribble", "1");
+        #[cfg(target_os = "linux")]
+        child
+            .env("MALLOC_PERTURB_", "165")
+            .env("GLIBC_TUNABLES", "glibc.malloc.tcache_count=0");
+        assert!(child.status().unwrap().success());
+    }
+
+    #[test]
     fn bundled_model_is_aligned_and_handles_silence() {
         assert_eq!(MODEL.0.as_ptr() as usize % 64, 0);
         let mut state = DenoiseState::new();
