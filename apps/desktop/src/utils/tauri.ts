@@ -175,8 +175,11 @@ async exportVideoWithId(projectPath: string, progress: TAURI_CHANNEL<FramesRende
 async exportVideoToFile(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings, fileName: string, fileType: string) : Promise<string> {
     return await TAURI_INVOKE("export_video_to_file", { projectPath, progress, settings, fileName, fileType });
 },
-async getExportEstimates(path: string, settings: ExportSettings) : Promise<ExportEstimates> {
-    return await TAURI_INVOKE("get_export_estimates", { path, settings });
+async getExportEstimates(path: string, settings: ExportSettings, onEstimate: TAURI_CHANNEL<ExportEstimates>) : Promise<ExportEstimates> {
+    return await TAURI_INVOKE("get_export_estimates", { path, settings, onEstimate });
+},
+async cancelExportEstimates() : Promise<void> {
+    await TAURI_INVOKE("cancel_export_estimates");
 },
 async generateExportPreview(projectPath: string, frameTime: number, settings: ExportPreviewSettings) : Promise<ExportPreviewResult> {
     return await TAURI_INVOKE("generate_export_preview", { projectPath, frameTime, settings });
@@ -1027,7 +1030,7 @@ export type EditorRecordingFlowInfo = { projectPath: string; projectName: string
 export type EditorStateChanged = { playhead_position: number }
 export type ExportCompression = "Maximum" | "Social" | "Web" | "Potato"
 export type ExportDestination = "projectFolder" | { customPath: { dir: string } }
-export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number }
+export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number; time_range_seconds: [number, number]; size_range_mb: [number, number] }
 export type ExportFormat = "mp4" | "gif" | "mov"
 export type ExportPreviewResult = { jpeg_base64: string; estimated_size_mb: number; actual_width: number; actual_height: number; frame_render_time_ms: number; total_frames: number }
 export type ExportPreviewSettings = { fps: number; resolution_base: XY<number>; compression_bpp: number; cursor_only?: boolean }

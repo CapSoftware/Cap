@@ -6794,6 +6794,7 @@ fn specta_builder() -> tauri_specta::Builder {
             export::export_video_with_id,
             export::export_video_to_file,
             export::get_export_estimates,
+            export::cancel_export_estimates,
             export::generate_export_preview,
             export::generate_export_preview_fast,
             import::start_video_import,
