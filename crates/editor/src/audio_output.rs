@@ -710,6 +710,9 @@ fn drain_source_commands<T: FromSampleBytes + cpal::FromSample<f32>>(
                             let _ = sender.send(ControlMsg::Realign(Box::new(move || {
                                 if let ActiveSourceBuffer::Ordinary(buffer) = &mut source.buffer {
                                     buffer.set_playhead(playhead);
+                                    if !buffer.wait_until_ready(PRERENDER_READY_TIMEOUT) {
+                                        return;
+                                    }
                                 }
                                 let sender = requeue_tx.clone();
                                 let _ = sender.send(SourceCommand::Refresh {
@@ -899,7 +902,9 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     }
     // A few ms: guarantees the callback reads real samples at the
     // playhead, never leading silence.
-    buffer.wait_until_ready(PRERENDER_READY_TIMEOUT);
+    if !buffer.wait_until_ready(PRERENDER_READY_TIMEOUT) {
+        return Err("Audio processing did not become ready in time".into());
+    }
 
     if preparing_request
         .as_ref()
@@ -1475,7 +1480,7 @@ mod tests {
                 MusicTracks::new(),
                 &ProjectConfiguration::default(),
                 AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2),
-                0.0,
+                3.0,
             ));
             let replacement_receiver = replacement.playhead_rx.clone();
             let (tx, rx) = std_mpsc::channel();
