@@ -710,6 +710,7 @@ pub enum SliderKey {
     Grade(GradeTarget, GradeSlider),
     Camera(CameraSlider),
     Audio(AudioSlider),
+    ClipVolume(usize),
     Cursor(CursorSlider),
     Caption(CaptionSlider),
     Keyboard(KeyboardSlider),
@@ -828,7 +829,7 @@ pub struct SidebarState {
     /// The device scale those were rasterised at, sampled once a frame from
     /// `render` -- the only place in the sidebar's chain with a `&Window`.
     cursor_scale: f32,
-    /// The 3D panel's three `Camera3DSection`s and the zoom panel's helper.
+    /// The 3D panel's two disclosures and the zoom panel's helper.
     pub panel_sections: std::cell::RefCell<HashMap<PanelSection, std::rc::Rc<CollapsibleState>>>,
 
     /// The gradient preview's grain, cached by the grain-scale step it was
@@ -853,6 +854,9 @@ pub struct SidebarState {
     /// `editingEnd` on the 3D panel -- which of the two poses the camera
     /// sliders point at (`ConfigSidebar.tsx:4908`).
     pub editing_end_pose: bool,
+    /// Which half of the 3D panel's Look grid is showing. Session state, like
+    /// the source's own `lookTab` signal: it survives selecting another shot.
+    pub camera3d_angles: bool,
 
     /// The open colour picker's target, if any -- drives the swatch's blue
     /// ring while its popover is up.
@@ -927,6 +931,7 @@ impl SidebarState {
             text_style_group: 0,
             text_anim_edge: false,
             editing_end_pose: false,
+            camera3d_angles: false,
             color_target: None,
             color_picker: None,
             color_drag: None,
@@ -1008,13 +1013,16 @@ pub enum PadKey {
     SceneCamera(usize),
     ZoomManual(usize),
     ZoomMulti,
+    /// The 3D panel's orbit pad: x is `tiltY`, y is `tiltX`.
+    Camera3DOrbit(usize),
 }
 
 /// The collapsible sections a segment panel owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PanelSection {
-    Camera3DCamera,
-    Camera3DBlur,
+    /// The Depth blur group's per-mode sliders.
+    Camera3DBlurTune,
+    /// "Timing & advanced".
     Camera3DAdvanced,
     ZoomHelper,
 }
@@ -1209,6 +1217,7 @@ impl EditorWindow {
             SliderKey::Grade(_, slider) => slider.limits(),
             SliderKey::Camera(slider) => slider.limits(),
             SliderKey::Audio(slider) => slider.limits(),
+            SliderKey::ClipVolume(_) => (0., 200., 1.),
             SliderKey::Cursor(slider) => slider.limits(),
             SliderKey::Caption(slider) => slider.limits(),
             SliderKey::Keyboard(slider) => slider.limits(),
@@ -1232,6 +1241,12 @@ impl EditorWindow {
             SliderKey::Grade(target, slider) => (slider.read(self.grade(target)) * 100.).round(),
             SliderKey::Camera(slider) => slider.read(&project),
             SliderKey::Audio(slider) => slider.read(&project),
+            SliderKey::ClipVolume(index) => self
+                .project
+                .timeline
+                .as_ref()
+                .and_then(|timeline| timeline.segments.get(index))
+                .map_or(100., |segment| (segment.volume() * 100.) as f32),
             SliderKey::Cursor(slider) => slider.read(&project),
             SliderKey::Caption(slider) => slider.read(&project),
             SliderKey::Keyboard(slider) => slider.read(&project),
@@ -1260,6 +1275,9 @@ impl EditorWindow {
             }
             SliderKey::Camera(slider) => self.apply_camera_slider(slider, value, window, cx),
             SliderKey::Audio(slider) => self.apply_audio_slider(slider, value, window, cx),
+            SliderKey::ClipVolume(index) => {
+                self.set_clip_volume(index, f64::from(value) / 100., window, cx)
+            }
             SliderKey::Cursor(slider) => self.apply_cursor_slider(slider, value, window, cx),
             SliderKey::Caption(slider) => self.apply_caption_slider(slider, value, window, cx),
             SliderKey::Keyboard(slider) => self.apply_keyboard_slider(slider, value, window, cx),
@@ -2560,8 +2578,6 @@ impl EditorWindow {
                         self.render_style_group(index, group, cx)
                     } else if self.audio_picker.is_some() {
                         self.render_audio_library(cx)
-                    } else if self.camera3d_setup.is_some() {
-                        self.render_camera3d_setup(cx)
                     } else {
                         match selection {
                             Some(selection) => self.render_selection_panel(&selection, cx),
@@ -4057,9 +4073,18 @@ impl EditorWindow {
         window.refresh();
     }
 
-    /// `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]`, through `set_selection` so the
-    /// panel opens exactly as a timeline click opens it.
+    /// `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>][@<scroll>]`, through
+    /// `set_selection` so the panel opens exactly as a timeline click opens it.
+    ///
+    /// The optional `@<scroll>` is the same escape hatch the tab hook has: a
+    /// synthetic wheel does not move the sidebar's scroll body, so a panel
+    /// taller than the pane cannot be photographed below the fold without it.
+    /// It is applied after the selection, which resets the offset.
     pub(crate) fn auto_select_segments(&mut self, spec: &str, cx: &mut Context<Self>) {
+        let (spec, scroll) = match spec.split_once('@') {
+            Some((spec, scroll)) => (spec, scroll.trim().parse::<f32>().ok()),
+            None => (spec, None),
+        };
         let Some((track, indices)) = spec.split_once(':') else {
             tracing::warn!(spec, "auto select needs <track>:<index>");
             return;
@@ -4087,8 +4112,13 @@ impl EditorWindow {
         if indices.is_empty() {
             return;
         }
-        tracing::info!(?track, ?indices, "auto select segments");
+        tracing::info!(?track, ?indices, ?scroll, "auto select segments");
         self.set_selection(Some(crate::editor_edits::Selection { track, indices }), cx);
+        if let Some(offset) = scroll {
+            self.sidebar
+                .scroll
+                .set_offset(gpui::point(px(0.), px(-offset)));
+        }
     }
 }
 
