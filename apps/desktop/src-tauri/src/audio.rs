@@ -1,5 +1,14 @@
 use cap_audio::DecodedAudio;
 
+#[path = "recording_start_sound.rs"]
+mod recording_start_sound;
+
+pub use recording_start_sound::should_play_countdown_sound;
+
+pub async fn play_recording_start_sound() {
+    recording_start_sound::play(AppSounds::StartRecording.get_sound_bytes()).await;
+}
+
 fn play_audio(bytes: &'static [u8]) {
     use rodio::{Decoder, OutputStream, Sink};
     use std::io::Cursor;
