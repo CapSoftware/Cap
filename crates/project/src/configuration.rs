@@ -621,11 +621,31 @@ pub enum StereoMode {
     MonoR,
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum VoiceIsolation {
+    Light,
+    #[default]
+    Balanced,
+    Strong,
+}
+
+impl VoiceIsolation {
+    pub fn strength(self) -> f32 {
+        match self {
+            Self::Light => 0.7,
+            Self::Balanced => 0.9,
+            Self::Strong => 0.98,
+        }
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AudioConfiguration {
     pub mute: bool,
     pub improve: bool,
+    pub isolation: VoiceIsolation,
     pub mic_volume_db: f32,
     pub mic_stereo_mode: StereoMode,
     pub system_volume_db: f32,
@@ -636,6 +656,7 @@ impl Default for AudioConfiguration {
         Self {
             mute: false,
             improve: false,
+            isolation: VoiceIsolation::default(),
             mic_volume_db: 0.0,
             mic_stereo_mode: StereoMode::default(),
             system_volume_db: 0.0,
