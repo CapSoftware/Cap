@@ -12,6 +12,7 @@ mod preparing_playback;
 mod preparing_preview;
 mod segments;
 mod telemetry;
+mod thumbnail;
 
 pub use audio::{AudioRenderer, AudioSegment, MusicTracks};
 pub use audio_output::{
