@@ -236,7 +236,7 @@ impl RenderOnce for Field {
             FieldStyle::Stacked => (px(13.), FontWeight::NORMAL),
             _ => (px(13.), FontWeight::SEMIBOLD),
         };
-        let show_icon = style == FieldStyle::Plain;
+        let show_icon = matches!(style, FieldStyle::Plain | FieldStyle::Section);
 
         div()
             .flex()
