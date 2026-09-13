@@ -49,6 +49,7 @@ mod recording_telemetry;
 mod recordings_locations;
 mod recovery;
 mod screenshot_editor;
+mod startup;
 #[cfg(debug_assertions)]
 mod stop_editor_benchmark;
 mod target_select_overlay;
@@ -6921,6 +6922,7 @@ fn specta_builder() -> tauri_specta::Builder {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
+    let startup = startup::Startup::default();
     // Arm the unexpected-termination sentinel before anything else can crash, and
     // report any previous session that died without a clean shutdown.
     let previous_termination = crash_sentinel::init(&logs_dir, env!("CARGO_PKG_VERSION"));
@@ -7034,6 +7036,14 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .plugin(tauri_nspanel::init());
 
     let builder = builder
+        .manage(startup)
+        .on_page_load(|webview, payload| {
+            if webview.label() == "onboarding"
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
+            {
+                webview.app_handle().state::<startup::Startup>().mark_ready();
+            }
+        })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -7336,6 +7346,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 move |_| {
                     app.state::<MainWindowReadyState>().set_ready(true);
                     tracing::info!("Main window frontend ready");
+                    app.state::<startup::Startup>().mark_ready();
                     #[cfg(debug_assertions)]
                     stop_editor_benchmark::run(app.clone());
                     #[cfg(debug_assertions)]
@@ -7370,10 +7381,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             window_position_persistence::install(&app);
 
             tokio::spawn(check_notification_permissions(app.clone()));
-
-            println!("Checking startup completion and permissions...");
-            let permissions = permissions::do_permissions_check(false);
-            println!("Permissions check result: {permissions:?}");
 
             tokio::spawn({
                 let app = app.clone();
@@ -8593,6 +8600,17 @@ fn load_upload_resume_candidate(
     path: &std::path::Path,
     mark_crashed: bool,
 ) -> Result<Option<(RecordingMeta, cap_recording::upload_resume::UploadLock)>, String> {
+    load_upload_resume_candidate_at(path, mark_crashed, SystemTime::now())
+}
+
+fn load_upload_resume_candidate_at(
+    path: &std::path::Path,
+    mark_crashed: bool,
+    now: SystemTime,
+) -> Result<Option<(RecordingMeta, cap_recording::upload_resume::UploadLock)>, String> {
+    if !mark_crashed && !upload::recovery_age::eligible(path, now) {
+        return Ok(None);
+    }
     let lock = match upload::acquire_upload_lock(path) {
         Ok(lock) => lock,
         Err(_) => return Ok(None),
@@ -8624,59 +8642,90 @@ fn load_upload_resume_candidate(
             meta.save_for_project().map_err(|error| error.to_string())?;
         }
     }
+    if !upload::recovery_age::eligible(path, now) {
+        return Ok(None);
+    }
     upload::lifecycle::reconcile_reupload(&mut meta).map_err(|error| error.to_string())?;
     Ok(instant_upload_may_resume(&meta.inner).then_some((meta, lock)))
 }
 
 async fn resume_uploads(app: AppHandle, mark_crashed: bool) -> Result<(), String> {
     upload::lifecycle::reap().await;
-    for directory in recordings_locations::known_recordings_dirs(&app) {
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("cap") {
+    if app_is_exiting(&app) || !upload::lifecycle::has_capacity() {
+        return Ok(());
+    }
+    let scan_app = app.clone();
+    let paths = tokio::task::spawn_blocking(move || {
+        let mut paths = Vec::new();
+        for directory in recordings_locations::known_recordings_dirs(&scan_app) {
+            let Ok(entries) = std::fs::read_dir(directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                if app_is_exiting(&scan_app) {
+                    return paths;
+                }
+                let path = entry.path();
+                if path.extension().and_then(|value| value.to_str()) == Some("cap")
+                    && (mark_crashed || upload::recovery_age::eligible(&path, SystemTime::now()))
+                {
+                    paths.push(path);
+                }
+            }
+        }
+        paths
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    for path in paths {
+        if app_is_exiting(&app) || !upload::lifecycle::has_capacity() {
+            break;
+        }
+        let candidate_path = path.clone();
+        let candidate_app = app.clone();
+        let candidate = tokio::task::spawn_blocking(move || {
+            let mark_crashed = mark_crashed
+                && candidate_app
+                    .state::<startup::Startup>()
+                    .predates_launch(&candidate_path);
+            load_upload_resume_candidate(&candidate_path, mark_crashed)
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        let (meta, lock) = match candidate {
+            Ok(Some(candidate)) => candidate,
+            Ok(None) => continue,
+            Err(error) => {
+                warn!(%error, recording = %path.display(), "Recording upload state could not be read; files retained");
                 continue;
             }
-            if !upload::lifecycle::has_capacity() {
-                break;
-            }
-            let (meta, lock) = match load_upload_resume_candidate(&path, mark_crashed) {
-                Ok(Some(candidate)) => candidate,
+        };
+        if matches!(
+            meta.upload,
+            None | Some(UploadMeta::Complete | UploadMeta::Failed { .. })
+        ) {
+            continue;
+        }
+        let fallback_audio = matches!(
+            &meta.inner,
+            RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
+                sample_rate: Some(_),
+                ..
+            })
+        );
+        let required_audio =
+            match upload::lifecycle::resume_audio(&app, &path, fallback_audio).await {
+                Ok(Some(required_audio)) => required_audio,
                 Ok(None) => continue,
                 Err(error) => {
-                    warn!(%error, recording = %path.display(), "Recording upload state could not be read; files retained");
+                    warn!(%error, "Recording upload intent could not be read; files retained");
                     continue;
                 }
             };
-            if matches!(
-                meta.upload,
-                None | Some(UploadMeta::Complete | UploadMeta::Failed { .. })
-            ) {
-                continue;
-            }
-            let fallback_audio = matches!(
-                &meta.inner,
-                RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
-                    sample_rate: Some(_),
-                    ..
-                })
-            );
-            let required_audio =
-                match upload::lifecycle::resume_audio(&app, &path, fallback_audio).await {
-                    Ok(Some(required_audio)) => required_audio,
-                    Ok(None) => continue,
-                    Err(error) => {
-                        warn!(%error, "Recording upload intent could not be read; files retained");
-                        continue;
-                    }
-                };
-            if let Err(error) =
-                upload::lifecycle::resume_existing(app.clone(), meta, lock, required_audio).await
-            {
-                warn!(%error, "Upload retry remains local");
-            }
+        if let Err(error) =
+            upload::lifecycle::resume_existing(app.clone(), meta, lock, required_audio).await
+        {
+            warn!(%error, "Upload retry remains local");
         }
     }
     Ok(())
@@ -10540,6 +10589,32 @@ mod typescript_bindings_tests {
 #[cfg(test)]
 mod instant_resume_safety_tests {
     use super::*;
+
+    #[test]
+    fn old_recordings_are_reconciled_once_but_skipped_before_periodic_metadata_reads() {
+        let path = project("old", InstantRecordingMeta::InProgress { recording: true });
+        let later = path.metadata().unwrap().created().unwrap() + Duration::from_secs(25 * 60 * 60);
+        assert!(
+            load_upload_resume_candidate_at(&path, true, later)
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(
+            RecordingMeta::load_for_project(&path).unwrap().inner,
+            RecordingMetaInner::Instant(InstantRecordingMeta::Failed { .. })
+        ));
+        std::fs::write(path.join("recording-meta.json"), b"invalid").unwrap();
+        assert!(
+            load_upload_resume_candidate_at(&path, false, later)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            std::fs::read(path.join("recording-meta.json")).unwrap(),
+            b"invalid"
+        );
+        std::fs::remove_dir_all(path).unwrap();
+    }
     fn project(tag: &str, inner: InstantRecordingMeta) -> PathBuf {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let path = std::env::temp_dir().join(format!(

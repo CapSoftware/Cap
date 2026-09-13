@@ -47,6 +47,7 @@ use tracing::{Span, debug, error, info, info_span, instrument, trace, warn};
 
 pub(crate) mod lifecycle;
 pub(crate) mod preparation;
+pub(crate) mod recovery_age;
 pub(crate) mod resume;
 use tracing_futures::Instrument;
 
