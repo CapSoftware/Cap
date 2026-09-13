@@ -65,6 +65,13 @@ import {
 } from "./audio";
 import { deriveCaptionTrackSegments, mapEditedTimeToSource } from "./captions";
 import {
+	type ClipMergeDirection,
+	clipMergeBlocker,
+	clipMergeKeptIndex,
+	mergedClipSegment,
+	transitionsAfterClipMerge,
+} from "./clip-merge";
+import {
 	type ClipTransition,
 	type ClipTransitionInput,
 	clampTransitionDuration,
@@ -1476,6 +1483,86 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						"speedAudioMode",
 						speedAudioMode,
 					);
+				},
+				setClipSegmentVolume: (index: number, volume: number) => {
+					if (!Number.isFinite(volume) || !project.timeline?.segments[index]) {
+						return;
+					}
+					const next = Math.min(2, Math.max(0, volume));
+					setProject(
+						"timeline",
+						"segments",
+						index,
+						"volume",
+						next === 1 ? null : next,
+					);
+				},
+				setClipSegmentMuted: (index: number, muted: boolean) => {
+					const segment = project.timeline?.segments[index];
+					if (!segment) return;
+					setProject(
+						"timeline",
+						"segments",
+						index,
+						"speedAudioMode",
+						muted ? "mute" : segment.timescale === 1 ? null : "maintainPitch",
+					);
+				},
+				setClipSegmentHideCursor: (index: number, hidden: boolean) => {
+					if (!project.timeline?.segments[index]) return;
+					setProject(
+						"timeline",
+						"segments",
+						index,
+						"hideCursor",
+						hidden ? true : undefined,
+					);
+				},
+				setClipSegmentName: (index: number, name: string | null) => {
+					if (!project.timeline?.segments[index]) return;
+					const trimmed = name?.trim();
+					setProject(
+						"timeline",
+						"segments",
+						index,
+						"name",
+						trimmed ? trimmed : null,
+					);
+				},
+				mergeClipSegment: (index: number, direction: ClipMergeDirection) => {
+					const timeline = project.timeline;
+					if (!timeline) return;
+					if (clipMergeBlocker(timeline.segments, index, direction)) return;
+					const kept = clipMergeKeptIndex(index, direction);
+					batch(() => {
+						// Dropping the transition on the merged boundary first lets
+						// setClipTransition ripple the other tracks for the overlap it
+						// gave back; the merge itself is duration-neutral.
+						setClipTransition(kept + 1, null);
+						setProject(
+							produce((project) => {
+								const timeline = project.timeline;
+								if (!timeline) return;
+								const left = timeline.segments[kept];
+								const right = timeline.segments[kept + 1];
+								const settingsFrom = timeline.segments[index];
+								if (!left || !right || !settingsFrom) return;
+								timeline.segments.splice(
+									kept,
+									2,
+									mergedClipSegment(left, right, settingsFrom),
+								);
+								timeline.transitions = transitionsAfterClipMerge(
+									timeline.transitions ?? [],
+									kept,
+								);
+							}),
+						);
+						setEditorState("timeline", "selection", {
+							type: "clip",
+							indices: [kept],
+						});
+					});
 				},
 			};
 
