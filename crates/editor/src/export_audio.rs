@@ -1,7 +1,8 @@
 use crate::{AudioRenderer, SegmentMedia};
 use cap_audio::{
-    AudioRendererTrack, AudioSampleSource, AudioStream, AudioStreamError, ChunkRead, StereoMode,
-    VOICE_PREROLL_SAMPLES, VOICE_WINDOW_PADDING_SAMPLES, VoiceAudio, VoiceEnhancer, VoiceSource,
+    AudioData, AudioRendererTrack, AudioSampleSource, AudioStream, AudioStreamError, ChunkRead,
+    StereoMode, VOICE_PREROLL_SAMPLES, VOICE_PROFILE_SAMPLES, VOICE_WINDOW_PADDING_SAMPLES,
+    VoiceAudio, VoiceEnhancer, VoiceProfile, VoiceSource,
 };
 use cap_project::{ClipOffsets, ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
 use std::{
@@ -480,10 +481,29 @@ impl ExportAudioSources {
                     usize::try_from(start.max(0)).map_err(|_| ExportAudioError::InvalidWindow)?;
                 let end =
                     usize::try_from(end.max(0)).map_err(|_| ExportAudioError::InvalidWindow)?;
-                let mut enhancer = track
-                    .enhancer
-                    .take()
-                    .unwrap_or_else(|| VoiceEnhancer::new(track.source.channels()));
+                if track.eof.is_some_and(|eof| start >= eof) {
+                    track.enhanced = None;
+                    continue;
+                }
+                if track.isolation != project.audio.isolation {
+                    track.enhancer = None;
+                    track.isolation = project.audio.isolation;
+                }
+                let profile = *track.voice_profile.get_or_insert_with(|| {
+                    AudioData::from_file_range(&track.path, 0, VOICE_PROFILE_SAMPLES)
+                        .map(|audio| VoiceProfile::analyze(&audio))
+                        .unwrap_or_else(|error| {
+                            tracing::warn!(%error, "Could not estimate export voice level");
+                            VoiceProfile::default()
+                        })
+                });
+                let mut enhancer = track.enhancer.take().unwrap_or_else(|| {
+                    VoiceEnhancer::with_settings(
+                        track.source.channels(),
+                        project.audio.isolation.strength(),
+                        profile,
+                    )
+                });
                 let range = enhancer.source_range(start, end.saturating_sub(start));
                 track.prepare(range.start as i128, range.end as i128)?;
                 track.enhanced =
@@ -565,6 +585,8 @@ struct ExportAudioTrack {
     eof: Option<usize>,
     enhancer: Option<VoiceEnhancer>,
     enhanced: Option<VoiceAudio>,
+    voice_profile: Option<VoiceProfile>,
+    isolation: cap_project::VoiceIsolation,
 }
 
 impl ExportAudioTrack {
@@ -594,6 +616,8 @@ impl ExportAudioTrack {
             eof: None,
             enhancer: None,
             enhanced: None,
+            voice_profile: None,
+            isolation: cap_project::VoiceIsolation::default(),
         })
     }
 
@@ -1320,6 +1344,46 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires CAP_STUDIO_SOUND_TEST_AUDIO pointing to a local microphone recording"]
+    fn studio_sound_real_voice_matches_preview_and_export_at_every_tier() {
+        ffmpeg::init().unwrap();
+        let path = PathBuf::from(std::env::var_os("CAP_STUDIO_SOUND_TEST_AUDIO").unwrap());
+        let audio = Arc::new(AudioData::from_file(&path).unwrap());
+        let paths = vec![path; 3];
+        let data = vec![audio.clone(); 3];
+        for isolation in [
+            cap_project::VoiceIsolation::Light,
+            cap_project::VoiceIsolation::Balanced,
+            cap_project::VoiceIsolation::Strong,
+        ] {
+            let (mut preview, mut export) = fixture(&paths, &data);
+            let mut project = ProjectConfiguration::default();
+            project.audio.improve = true;
+            project.audio.isolation = isolation;
+            project.audio.system_volume_db = f32::NEG_INFINITY;
+            let mut count = 0;
+            while let Some((frames, expected)) = preview.render_frame_raw(4096, &project) {
+                let mut actual = Vec::new();
+                let written = export
+                    .render_chunks(4096, &project, |_, samples| {
+                        actual.extend_from_slice(samples);
+                        Ok(())
+                    })
+                    .unwrap();
+                assert_eq!(written, Some(frames));
+                assert_eq!(actual, expected, "tier {isolation:?}, frame {count}");
+                count += frames;
+            }
+            assert_eq!(count, audio.sample_count());
+            assert_ne!(
+                export.sources.tracks[0][0].voice_profile.unwrap(),
+                VoiceProfile::default()
+            );
+            eprintln!("{isolation:?}: {count} microphone frames match exactly");
+        }
+    }
+
+    #[test]
     #[ignore = "requires CAP_STUDIO_SOUND_BENCH_RECORDING pointing to a local Studio recording"]
     fn studio_sound_streams_a_real_recording_with_bounded_memory() {
         ffmpeg::init().unwrap();
@@ -1393,6 +1457,20 @@ mod tests {
 
     #[test]
     fn bounded_sink_matches_full_renderer_at_original_request_boundaries() {
+        assert_bounded_sink_variants(0..22, &[1, 7, 997, 4_096, 4_800, 48_001, 96_000, 384_000]);
+    }
+
+    #[test]
+    fn clip_volume_matches_preview_in_streaming_exports_and_transitions() {
+        assert_bounded_sink_variants(22..26, &[1, 997, 4_800, 48_001]);
+    }
+
+    #[test]
+    fn studio_sound_transition_with_single_sample_requests_keeps_lookahead() {
+        assert_bounded_sink_variants([19], &[1]);
+    }
+
+    fn assert_bounded_sink_variants(variants: impl IntoIterator<Item = usize>, requests: &[usize]) {
         ffmpeg::init().unwrap();
         let directory = tempfile::tempdir().unwrap();
         let paths =
@@ -1404,7 +1482,7 @@ mod tests {
             .iter()
             .map(|path| Arc::new(AudioData::from_file(path).unwrap()))
             .collect::<Vec<_>>();
-        for variant in 0..20 {
+        for variant in variants {
             let mut project = project();
             match variant {
                 0 => project.timeline = None,
@@ -1468,9 +1546,33 @@ mod tests {
                             duration: 0.131_234_567,
                         });
                 }
+                20 | 21 => {
+                    project.audio.improve = true;
+                    project.audio.isolation = if variant == 20 {
+                        cap_project::VoiceIsolation::Light
+                    } else {
+                        cap_project::VoiceIsolation::Strong
+                    };
+                }
+                22..=25 => {
+                    let timeline = project.timeline.as_mut().unwrap();
+                    timeline.segments[0].volume = Some(if variant == 22 { 0.0 } else { 0.5 });
+                    timeline.segments[1].volume = Some(2.0);
+                    if variant >= 24 {
+                        timeline.transitions.push(ClipTransition {
+                            segment_index: 1,
+                            kind: if variant == 24 {
+                                ClipTransitionType::CrossFade
+                            } else {
+                                ClipTransitionType::FadeThroughBlack
+                            },
+                            duration: 0.131_234_567,
+                        });
+                    }
+                }
                 _ => unreachable!(),
             }
-            for request in [1, 7, 997, 4_096, 4_800, 48_001, 96_000, 384_000] {
+            for &request in requests {
                 let (mut reference, mut candidate) = fixture(&paths, &data);
                 reference.set_playhead(0.0, &project);
                 loop {
