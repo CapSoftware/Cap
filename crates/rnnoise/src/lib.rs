@@ -100,4 +100,20 @@ mod tests {
             assert!(output.iter().all(|sample| *sample == 0.0));
         }
     }
+
+    #[test]
+    fn bundled_model_processes_non_silent_audio() {
+        let mut state = DenoiseState::new();
+        let mut output = [0.0; FRAME_SIZE];
+        for frame in 0..30 {
+            let input = std::array::from_fn(|sample| {
+                let phase =
+                    (frame * FRAME_SIZE + sample) as f32 * std::f32::consts::TAU * 220.0 / 48_000.0;
+                phase.sin() * 10_000.0
+            });
+            let probability = state.process_frame(&mut output, &input);
+            assert!(probability.is_finite());
+            assert!(output.iter().all(|sample| sample.is_finite()));
+        }
+    }
 }
