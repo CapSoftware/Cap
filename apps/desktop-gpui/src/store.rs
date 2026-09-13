@@ -453,6 +453,17 @@ pub fn store_section(section: &str) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
+pub fn notification_sounds_enabled() -> bool {
+    read_store(&tauri_store_path())
+        .and_then(|mut store| store.remove(GENERAL_SETTINGS))
+        .and_then(|settings| {
+            settings
+                .as_object()
+                .map(|settings| bool_at(settings, "enableNotifications", true))
+        })
+        .unwrap_or(false)
+}
+
 /// Write one key of one section, preserving every other byte of meaning in
 /// the file.
 ///
@@ -1851,6 +1862,31 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.path);
             TEST_TAURI_STORE_PATH.with(|current| *current.borrow_mut() = None);
+        }
+    }
+
+    #[test]
+    fn notification_sounds_follow_tauri_settings_without_writing() {
+        for (contents, enabled) in [
+            (None, false),
+            (Some("{}"), false),
+            (Some("invalid json"), false),
+            (Some(r#"{"general_settings":{}}"#), true),
+            (
+                Some(r#"{"general_settings":{"enableNotifications":false}}"#),
+                false,
+            ),
+            (
+                Some(r#"{"general_settings":{"enableNotifications":true}}"#),
+                true,
+            ),
+        ] {
+            let store = TempStore::new("notification-sounds", contents);
+            assert_eq!(notification_sounds_enabled(), enabled);
+            assert_eq!(
+                std::fs::read_to_string(&store.path).ok().as_deref(),
+                contents
+            );
         }
     }
 
