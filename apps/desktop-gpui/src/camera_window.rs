@@ -2183,14 +2183,11 @@ impl CameraWindow {
             )
     }
 
-    /// `CameraResizeHandles` + `ResizeCornerHandle`
-    /// (`CameraPreviewChrome.tsx:218-357`): a 28px hit area per corner, with
-    /// a 14px white 2px-bordered bracket inset 6px, rounded 6px on its outer
-    /// corner. Opacity 0 hidden / 0.7 with chrome visible / 1.0 hovered or
-    /// resizing. The 150ms transition, the hover `scale-110` and the
-    /// `drop-shadow` filter have no hooks here (no animation pass, no
-    /// transform, and a box shadow would shadow the bracket's full rect, not
-    /// its L-shape).
+    /// `CameraResizeHandles` + `ResizeCornerHandle`: a 28px hit area in each
+    /// corner holding a 14px white 2px L-bracket, 85% while the chrome is
+    /// visible and 100% while hovered or resizing. A 50% black bracket sits
+    /// underneath, 1px proud on every edge, so the white L keeps a contour
+    /// over a light desktop (cutout mode has no backdrop behind it).
     fn render_resize_handles(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let visible = self.chrome_visible || self.resizing.is_some();
         let mut layer = div()
@@ -2213,51 +2210,94 @@ impl CameraWindow {
                 .is_some_and(|drag| drag.corner == corner)
                 || self.hovered_handle == Some(corner);
 
-            let mut bracket = div()
+            // 14px white L-bracket 6px in from the corner, with a thicker
+            // 50% black bracket underneath that pokes out 1px on every edge
+            // so the L reads as a contour over a light desktop too (cutout
+            // mode has no backdrop). Mirrors `ResizeCornerHandle` in
+            // `CameraPreviewChrome.tsx`.
+            let outline = div()
                 .absolute()
-                .size(px(14.))
-                .border_color(gpui::white())
+                .size(px(16.))
+                .border_color(gpui::hsla(0., 0., 0., 0.5));
+            let bracket = div().absolute().size(px(14.)).border_color(gpui::white());
+            let (outline, bracket) = match corner {
+                ResizeCorner::NorthWest => (
+                    outline
+                        .top(px(5.))
+                        .left(px(5.))
+                        .border_t_4()
+                        .border_l_4()
+                        .rounded_tl(px(7.)),
+                    bracket
+                        .top(px(6.))
+                        .left(px(6.))
+                        .border_t_2()
+                        .border_l_2()
+                        .rounded_tl(px(6.)),
+                ),
+                ResizeCorner::NorthEast => (
+                    outline
+                        .top(px(5.))
+                        .right(px(5.))
+                        .border_t_4()
+                        .border_r_4()
+                        .rounded_tr(px(7.)),
+                    bracket
+                        .top(px(6.))
+                        .right(px(6.))
+                        .border_t_2()
+                        .border_r_2()
+                        .rounded_tr(px(6.)),
+                ),
+                ResizeCorner::SouthWest => (
+                    outline
+                        .bottom(px(5.))
+                        .left(px(5.))
+                        .border_b_4()
+                        .border_l_4()
+                        .rounded_bl(px(7.)),
+                    bracket
+                        .bottom(px(6.))
+                        .left(px(6.))
+                        .border_b_2()
+                        .border_l_2()
+                        .rounded_bl(px(6.)),
+                ),
+                ResizeCorner::SouthEast => (
+                    outline
+                        .bottom(px(5.))
+                        .right(px(5.))
+                        .border_b_4()
+                        .border_r_4()
+                        .rounded_br(px(7.)),
+                    bracket
+                        .bottom(px(6.))
+                        .right(px(6.))
+                        .border_b_2()
+                        .border_r_2()
+                        .rounded_br(px(6.)),
+                ),
+            };
+            let glyph = div()
+                .absolute()
+                .inset_0()
                 .opacity(if active {
                     1.0
                 } else if visible {
-                    0.7
+                    0.85
                 } else {
                     0.0
-                });
-            bracket = match corner {
-                ResizeCorner::NorthWest => bracket
-                    .top(px(6.))
-                    .left(px(6.))
-                    .border_t_2()
-                    .border_l_2()
-                    .rounded_tl(px(6.)),
-                ResizeCorner::NorthEast => bracket
-                    .top(px(6.))
-                    .right(px(6.))
-                    .border_t_2()
-                    .border_r_2()
-                    .rounded_tr(px(6.)),
-                ResizeCorner::SouthWest => bracket
-                    .bottom(px(6.))
-                    .left(px(6.))
-                    .border_b_2()
-                    .border_l_2()
-                    .rounded_bl(px(6.)),
-                ResizeCorner::SouthEast => bracket
-                    .bottom(px(6.))
-                    .right(px(6.))
-                    .border_b_2()
-                    .border_r_2()
-                    .rounded_br(px(6.)),
-            };
+                })
+                .child(outline)
+                .child(bracket);
 
             // Like the toolbar buttons, no `.occlude()`: it would knock the
             // root's hover flag false over the 28px corner hit areas (even
             // while the brackets are invisible) and hide the chrome mid-
             // travel. The handle's own on_mouse_down stops propagation, which
             // is what keeps a resize press from starting a window move.
-            let mut handle = div().id(id).absolute().size(px(28.)).child(bracket);
-            // `cursor-nw-resize` and friends (`CameraPreviewChrome.tsx:306-317`).
+            let mut handle = div().id(id).absolute().size(px(28.)).child(glyph);
+            // `cursor-nw-resize` and friends (`CameraPreviewChrome.tsx`).
             handle = match corner {
                 ResizeCorner::NorthWest => handle
                     .top_0()

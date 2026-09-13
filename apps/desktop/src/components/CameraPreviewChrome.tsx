@@ -344,6 +344,22 @@ function ResizeCornerHandle(props: {
 		}
 	};
 
+	// A thicker dark bracket sits 1px outside the white one on every edge so
+	// the L reads as a contour on light desktops too (cutout mode has no
+	// backdrop behind it). Same construction as the GPUI window.
+	const outlinePositionClass = () => {
+		switch (props.corner) {
+			case "nw":
+				return "top-[5px] left-[5px] border-t-4 border-l-4 rounded-tl-[7px]";
+			case "ne":
+				return "top-[5px] right-[5px] border-t-4 border-r-4 rounded-tr-[7px]";
+			case "sw":
+				return "bottom-[5px] left-[5px] border-b-4 border-l-4 rounded-bl-[7px]";
+			case "se":
+				return "bottom-[5px] right-[5px] border-b-4 border-r-4 rounded-br-[7px]";
+		}
+	};
+
 	return (
 		<div
 			data-tauri-drag-region="false"
@@ -356,18 +372,27 @@ function ResizeCornerHandle(props: {
 		>
 			<div
 				class={cx(
-					"absolute w-3.5 h-3.5 border-white pointer-events-none",
-					"transition-[opacity,transform,border-color] duration-150 ease-out",
+					"absolute inset-0 pointer-events-none",
+					"transition-[opacity,transform] duration-150 ease-out",
 					"opacity-0 scale-90",
-					props.visible && "opacity-70 scale-100",
+					props.visible && "opacity-85 scale-100",
 					"group-hover/handle:!opacity-100 group-hover/handle:!scale-110",
 					props.active && "!opacity-100 !scale-110",
-					bracketPositionClass(),
 				)}
 				style={{
-					filter: "drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6))",
+					filter: "drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5))",
 				}}
-			/>
+			>
+				<div
+					class={cx("absolute w-4 h-4 border-black/50", outlinePositionClass())}
+				/>
+				<div
+					class={cx(
+						"absolute w-3.5 h-3.5 border-white",
+						bracketPositionClass(),
+					)}
+				/>
+			</div>
 		</div>
 	);
 }
