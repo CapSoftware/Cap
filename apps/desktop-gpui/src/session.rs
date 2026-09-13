@@ -6,11 +6,15 @@
 //! engine work runs on tokio via `gpui_tokio` and lands back here with
 //! `cx.notify()`.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::{Arc, Once},
+    time::{Duration, Instant},
+};
 
 use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorageMonitor};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
+use crate::app_sounds::AppSound;
 use crate::recording::{self, ActiveRecording, StartConfig};
 
 /// `Idle -> Starting -> Recording -> Stopping -> Idle`; pause is a flag on
@@ -70,6 +74,7 @@ fn prepares_studio_editor(
 enum CountdownAdvance {
     Ignore,
     Tick(u32),
+    PlaySound,
     Start,
 }
 
@@ -78,13 +83,15 @@ fn countdown_advance(
     current_generation: u64,
     countdown_generation: u64,
     remaining: Option<u32>,
+    play_sound: bool,
 ) -> CountdownAdvance {
     if phase != Phase::Starting || current_generation != countdown_generation {
         return CountdownAdvance::Ignore;
     }
     match remaining {
         Some(remaining) if remaining > 1 => CountdownAdvance::Tick(remaining - 1),
-        Some(1) => CountdownAdvance::Start,
+        Some(1) if play_sound => CountdownAdvance::PlaySound,
+        Some(0 | 1) => CountdownAdvance::Start,
         _ => CountdownAdvance::Ignore,
     }
 }
@@ -428,6 +435,7 @@ pub struct RecordingSession {
     failure_monitor: Option<Task<()>>,
     recording_generation: u64,
     countdown_remaining: Option<u32>,
+    countdown_cue_abort: Option<futures_util::future::AbortHandle>,
     pause_control: PauseControlState,
     pause_control_error: Option<String>,
     #[cfg(target_os = "linux")]
@@ -469,6 +477,7 @@ impl RecordingSession {
             failure_monitor: None,
             recording_generation: 0,
             countdown_remaining: None,
+            countdown_cue_abort: None,
             pause_control: PauseControlState::default(),
             pause_control_error: None,
             #[cfg(target_os = "linux")]
@@ -637,6 +646,10 @@ impl RecordingSession {
         let countdown = crate::store::GeneralSettings::load()
             .recording_countdown
             .unwrap_or(0);
+        let play_countdown_sound = crate::app_sounds::should_play_countdown_sound(
+            Some(countdown),
+            self.controls_open && !crate::app_windows::clean_capture_owned(cx),
+        );
         self.pause_control.invalidate();
         self.pause_control.uncertain = false;
         self.pause_control_error = None;
@@ -658,13 +671,18 @@ impl RecordingSession {
         cx.notify();
 
         if countdown == 0 {
-            self.start_engine(config, generation, cx);
+            self.start_engine(config, generation, true, cx);
             return;
         }
 
         cx.spawn(async move |this, cx| {
+            let mut pending_sound = None;
             loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
+                if let Some(sound) = pending_sound.take() {
+                    let _ = sound.await;
+                } else {
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                }
                 let keep_waiting = this
                     .update(cx, |this, cx| {
                         match countdown_advance(
@@ -672,6 +690,7 @@ impl RecordingSession {
                             this.recording_generation,
                             generation,
                             this.countdown_remaining,
+                            play_countdown_sound,
                         ) {
                             CountdownAdvance::Ignore => false,
                             CountdownAdvance::Tick(remaining) => {
@@ -679,10 +698,31 @@ impl RecordingSession {
                                 cx.notify();
                                 true
                             }
+                            CountdownAdvance::PlaySound => {
+                                this.countdown_remaining = Some(0);
+                                let (abort, registration) =
+                                    futures_util::future::AbortHandle::new_pair();
+                                this.countdown_cue_abort = Some(abort);
+                                pending_sound = Some(gpui_tokio::Tokio::spawn(
+                                    cx,
+                                    futures_util::future::Abortable::new(
+                                        crate::app_sounds::play_recording_start_sound(),
+                                        registration,
+                                    ),
+                                ));
+                                cx.notify();
+                                true
+                            }
                             CountdownAdvance::Start => {
                                 this.countdown_remaining = None;
+                                this.countdown_cue_abort = None;
                                 cx.notify();
-                                this.start_engine(config.clone(), generation, cx);
+                                this.start_engine(
+                                    config.clone(),
+                                    generation,
+                                    !play_countdown_sound,
+                                    cx,
+                                );
                                 false
                             }
                         }
@@ -696,7 +736,13 @@ impl RecordingSession {
         .detach();
     }
 
-    fn start_engine(&mut self, config: StartConfig, generation: u64, cx: &mut Context<Self>) {
+    fn start_engine(
+        &mut self,
+        config: StartConfig,
+        generation: u64,
+        play_started_sound: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.phase != Phase::Starting
             || self.recording_generation != generation
             || self.countdown_remaining.is_some()
@@ -764,6 +810,9 @@ impl RecordingSession {
                         this.paused_since = None;
                         this.monitor_storage(project_dir, cx);
                         this.monitor_recording_failure(done, cx);
+                        if play_started_sound {
+                            AppSound::StartRecording.play();
+                        }
                         #[cfg(target_os = "linux")]
                         if this.stop_requested {
                             this.stop(cx);
@@ -1073,8 +1122,10 @@ impl RecordingSession {
             });
         cx.notify();
 
+        let stop_sound = Arc::new(Once::new());
         let task = gpui_tokio::Tokio::spawn(cx, stop_future);
         if let Some(pending) = self.preparing_studio_editor.clone() {
+            let stop_sound = stop_sound.clone();
             let finalization = pending.finalization.clone();
             let captured =
                 gpui_tokio::Tokio::spawn(cx, async move { finalization.wait_for_capture().await });
@@ -1093,6 +1144,7 @@ impl RecordingSession {
                         && current.finalization.same_job(&pending.finalization)
                     {
                         current.capture_stopped = true;
+                        stop_sound.call_once(|| AppSound::StopRecording.play());
                         tracing::info!(path = %current.project_path.display(), "Studio capture stopped; editor preparation can begin");
                         cx.notify();
                     }
@@ -1165,6 +1217,7 @@ impl RecordingSession {
                         // never does that, so it goes with the placeholder it
                         // was standing in for.
                         tracing::info!(dir = %project_dir.display(), "recording finished");
+                        stop_sound.call_once(|| AppSound::StopRecording.play());
                         if low_storage {
                             this.storage_notice = Some("Recording stopped because storage is low. Your recording was saved.".into());
                         }
@@ -1770,6 +1823,9 @@ impl RecordingSession {
     }
 
     fn finish(&mut self, cx: &mut Context<Self>) {
+        if let Some(abort) = self.countdown_cue_abort.take() {
+            abort.abort();
+        }
         #[cfg(target_os = "linux")]
         if !self.instant_cleanup_safe() {
             self.clean_control.uncertain = true;
@@ -1818,19 +1874,19 @@ mod countdown_tests {
     #[test]
     fn countdown_ticks_until_the_final_step_before_start() {
         assert_eq!(
-            countdown_advance(Phase::Starting, 7, 7, Some(3)),
+            countdown_advance(Phase::Starting, 7, 7, Some(3), false),
             CountdownAdvance::Tick(2)
         );
         assert_eq!(
-            countdown_advance(Phase::Starting, 7, 7, Some(2)),
+            countdown_advance(Phase::Starting, 7, 7, Some(2), false),
             CountdownAdvance::Tick(1)
         );
         assert_eq!(
-            countdown_advance(Phase::Starting, 7, 7, Some(1)),
+            countdown_advance(Phase::Starting, 7, 7, Some(1), false),
             CountdownAdvance::Start
         );
         assert_eq!(
-            countdown_advance(Phase::Starting, 7, 7, None),
+            countdown_advance(Phase::Starting, 7, 7, None, false),
             CountdownAdvance::Ignore
         );
     }
@@ -1838,17 +1894,46 @@ mod countdown_tests {
     #[test]
     fn cancelled_or_superseded_countdown_cannot_start_capture() {
         assert_eq!(
-            countdown_advance(Phase::Idle, 7, 7, Some(1)),
+            countdown_advance(Phase::Idle, 7, 7, Some(1), true),
             CountdownAdvance::Ignore
         );
         assert_eq!(
-            countdown_advance(Phase::Starting, 8, 7, Some(1)),
+            countdown_advance(Phase::Starting, 8, 7, Some(1), true),
             CountdownAdvance::Ignore
         );
         assert_eq!(
-            countdown_advance(Phase::Recording { paused: false }, 7, 7, Some(1)),
+            countdown_advance(Phase::Recording { paused: false }, 7, 7, Some(1), true),
             CountdownAdvance::Ignore
         );
+    }
+
+    #[test]
+    fn completed_cue_can_only_start_its_own_pending_recording() {
+        assert_eq!(
+            countdown_advance(Phase::Starting, 7, 7, Some(0), true),
+            CountdownAdvance::Start
+        );
+        for (phase, current) in [(Phase::Idle, 7), (Phase::Starting, 8)] {
+            assert_eq!(
+                countdown_advance(phase, current, 7, Some(0), true),
+                CountdownAdvance::Ignore
+            );
+        }
+    }
+
+    #[test]
+    fn sound_follows_every_countdown_step_and_precedes_capture() {
+        for (remaining, expected) in [
+            (3, CountdownAdvance::Tick(2)),
+            (2, CountdownAdvance::Tick(1)),
+            (1, CountdownAdvance::PlaySound),
+            (0, CountdownAdvance::Start),
+        ] {
+            assert_eq!(
+                countdown_advance(Phase::Starting, 7, 7, Some(remaining), true),
+                expected
+            );
+        }
     }
 }
 

@@ -3586,13 +3586,13 @@ impl MainWindow {
             .pb(px(32.))
             .bg(wash)
             .when_some(countdown, |this, remaining| {
-                this.child(
-                    div()
-                        .mb(px(16.))
-                        .text_size(px(18.))
-                        .text_center()
-                        .child(format!("Recording starts in {remaining}")),
-                )
+                this.child(div().mb(px(16.)).text_size(px(18.)).text_center().child(
+                    if remaining == 0 {
+                        "Starting...".to_string()
+                    } else {
+                        format!("Recording starts in {remaining}")
+                    },
+                ))
             })
             .when_some(self.session.read(cx).error.clone(), |this, error| {
                 this.child(

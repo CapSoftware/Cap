@@ -130,7 +130,7 @@ impl ControlsWindow {
         let stopping = session.phase == Phase::Stopping;
         let countdown = session.countdown_remaining();
         let can_stop = (!starting && !stopping) || countdown.is_some();
-        let label: SharedString = if let Some(countdown) = countdown {
+        let label: SharedString = if let Some(countdown) = countdown.filter(|value| *value > 0) {
             countdown.to_string().into()
         } else if starting {
             "Starting".into()
