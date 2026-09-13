@@ -2346,6 +2346,11 @@ fn compute_camera_position(
         ];
     }
 
+    let camera_padding = if camera.background_blur.removes_background() {
+        0.0
+    } else {
+        camera_padding
+    };
     let x = match &camera.position.x {
         CameraXPosition::Left => camera_padding,
         CameraXPosition::Center => output_size[0] / 2.0 - subject_size[0] / 2.0,
@@ -3260,6 +3265,13 @@ impl ProjectUniforms {
         let start = display_offset + zoom_start;
         let end = base_end + zoom_end;
         (start, end)
+    }
+
+    fn camera_background_effect_mode(&self) -> Option<cap_camera_effects::BlurMode> {
+        blur_mode_from_config(&self.project.camera.background_blur).filter(|mode| {
+            *mode != cap_camera_effects::BlurMode::Remove
+                || (self.camera.is_some() && self.scene.regular_camera_transition_opacity() > 0.01)
+        })
     }
 
     fn compute_display_motion_blur(
@@ -4580,6 +4592,17 @@ impl ProjectUniforms {
                     grain_params: camera_color_grade.grain_params,
                 }
             });
+        let cutout_uniforms = |mut uniforms: CompositeVideoFrameUniforms| {
+            if project.camera.background_blur.removes_background() {
+                uniforms.preserve_source_alpha = 1.0;
+                uniforms.rounding_px = 0.0;
+                uniforms.shadow = 0.0;
+                uniforms.shadow_opacity = 0.0;
+                uniforms.border_enabled = 0.0;
+            }
+            uniforms
+        };
+        let camera = camera.map(cutout_uniforms);
 
         let masks = project
             .timeline
@@ -5139,6 +5162,55 @@ mod tests {
     }
 
     #[test]
+    fn camera_position_presets_keep_cutouts_flush_at_every_size() {
+        for output in [[1920.0, 1080.0], [1080.0, 1920.0], [1280.0, 720.0]] {
+            for subject in [[200.0, 200.0], [400.0, 250.0], [650.0, 650.0]] {
+                for x in [
+                    CameraXPosition::Left,
+                    CameraXPosition::Center,
+                    CameraXPosition::Right,
+                ] {
+                    for y in [CameraYPosition::Top, CameraYPosition::Bottom] {
+                        let mut camera = Camera::default();
+                        camera.position = cap_project::CameraPosition {
+                            x: x.clone(),
+                            y: y.clone(),
+                        };
+                        camera.background_blur.mode = cap_project::BackgroundBlurMode::Remove;
+                        let padding = if cfg!(target_os = "macos") { 0.0 } else { 50.0 };
+                        let expected_x = match x {
+                            CameraXPosition::Left => padding,
+                            CameraXPosition::Center => (output[0] - subject[0]) / 2.0,
+                            CameraXPosition::Right => output[0] - subject[0] - padding,
+                        };
+                        let expected_y = match y {
+                            CameraYPosition::Top => padding,
+                            CameraYPosition::Bottom => output[1] - subject[1] - padding,
+                        };
+                        assert_eq!(
+                            compute_camera_position(&camera, output, subject, 50.0),
+                            [expected_x, expected_y]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cutout_manual_camera_position_remains_free() {
+        let mut camera = Camera {
+            manual_position: Some(XY::new(0.5, 0.5)),
+            ..Camera::default()
+        };
+        camera.background_blur.mode = cap_project::BackgroundBlurMode::Remove;
+        assert_eq!(
+            compute_camera_position(&camera, [1920.0, 1080.0], [400.0, 400.0], 50.0),
+            [760.0, 340.0]
+        );
+    }
+
+    #[test]
     fn display_zoom_blur_is_symmetric_in_and_out() {
         // Screen Studio treats zoom-in and zoom-out identically: the radial
         // amount is |1 - diag ratio| either way.
@@ -5306,6 +5378,174 @@ pub struct FrameRenderStageTimings {
 mod style_image_tests {
     use super::*;
     use cap_project::{BackgroundSource, ImageSegment, StyleOverrides, StyleSegment};
+
+    #[tokio::test]
+    async fn camera_only_ignores_cutout_and_preserves_background_blur() {
+        let recording_meta: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "camera-only-cutout",
+            "display": { "path": "display.mp4", "fps": 60 },
+            "camera": { "path": "camera.mp4", "fps": 60 },
+            "audio": null, "cursor": null
+        }))
+        .expect("metadata");
+        let meta = recording_meta.studio_meta().expect("studio").clone();
+        let size = XY::new(160, 90);
+        let constants = RenderVideoConstants::new_with_options(
+            RenderOptions {
+                screen_size: size,
+                camera_size: Some(size),
+                preserve_screen_alpha: false,
+            },
+            recording_meta,
+            meta,
+        )
+        .await
+        .expect("graphics device");
+        let mut project = ProjectConfiguration::default();
+        project.background.source = BackgroundSource::Color {
+            value: [0, 255, 0],
+            alpha: 255,
+        };
+        project.camera.background_blur.mode = cap_project::BackgroundBlurMode::Remove;
+        project.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [], "zoomSegments": [],
+                "sceneSegments": [{
+                    "start": 2.0, "end": 5.0, "mode": "cameraOnly",
+                    "transitionIn": 0.3, "transitionOut": 0.3
+                }]
+            }))
+            .expect("timeline"),
+        );
+        let cursor = CursorEvents::default();
+        let frames = DecodedSegmentFrames {
+            screen_size: size,
+            screen_frame: Some(DecodedFrame::new(
+                [0, 0, 255, 255].repeat(160 * 90),
+                160,
+                90,
+            )),
+            camera_frame: Some(DecodedFrame::new(
+                [255, 0, 0, 255].repeat(160 * 90),
+                160,
+                90,
+            )),
+            segment_time: 3.0,
+            recording_time: 3.0,
+            segment_has_camera: true,
+        };
+        let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 6.0, size);
+        let at = |project: &ProjectConfiguration, frame| {
+            ProjectUniforms::new(
+                &constants, project, frame, 60, size, &cursor, &frames, 6.0, &zoom,
+            )
+        };
+        let uniforms = at(&project, 180);
+        assert!(uniforms.camera_background_effect_mode().is_none());
+        assert_eq!(
+            uniforms
+                .camera_only
+                .expect("full camera")
+                .preserve_source_alpha,
+            0.0
+        );
+        let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+        layers
+            .prepare(&constants, &uniforms, &frames, &cursor, true)
+            .await
+            .expect("preview preparation");
+        assert!(layers.camera_blur_processor.is_none());
+        let mut renderer = FrameRenderer::new(&constants);
+        let preview = renderer
+            .render_immediate(frames.clone(), uniforms.clone(), &cursor, true, &mut layers)
+            .await
+            .expect("preview");
+        for row in preview
+            .data
+            .chunks_exact(preview.padded_bytes_per_row as usize)
+            .skip(2)
+            .take(86)
+        {
+            for pixel in row.chunks_exact(4).skip(2).take(156) {
+                assert_eq!(pixel, [255, 0, 0, 255]);
+            }
+        }
+        let export = match renderer
+            .render(frames.clone(), uniforms, &cursor, true, &mut layers)
+            .await
+            .expect("export")
+        {
+            Some(frame) => frame,
+            None => renderer
+                .flush_pipeline()
+                .await
+                .expect("flush")
+                .expect("frame"),
+        };
+        assert_eq!(preview.data, export.data);
+        assert!(layers.camera_blur_processor.is_none());
+
+        for frame in [60, 108, 288, 330] {
+            let uniforms = at(&project, frame);
+            let camera = uniforms.camera.expect("overlay");
+            assert_eq!(
+                camera.preserve_source_alpha,
+                if cfg!(target_os = "macos") { 1.0 } else { 0.0 }
+            );
+            assert_eq!(
+                uniforms.camera_background_effect_mode(),
+                cfg!(target_os = "macos").then_some(cap_camera_effects::BlurMode::Remove)
+            );
+            if let Some(camera_only) = uniforms.camera_only {
+                assert_eq!(camera_only.preserve_source_alpha, 0.0);
+            }
+        }
+        project.screen_motion_blur = 0.0;
+        let transition = at(&project, 108);
+        assert_eq!(transition.display.motion_blur_params, [0.0; 4]);
+        assert_eq!(
+            transition
+                .camera_only
+                .expect("transition camera")
+                .motion_blur_params,
+            [0.0; 4]
+        );
+        project.background.rounding = 50.0;
+        project.background.shadow = 50.0;
+        project
+            .timeline
+            .as_mut()
+            .expect("timeline")
+            .style_segments
+            .push(StyleSegment {
+                start: 2.0,
+                end: 5.0,
+                overrides: StyleOverrides {
+                    camera_only_padding: Some(10.0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+        let padded_camera = at(&project, 180).camera_only.expect("padded camera");
+        assert!(padded_camera.rounding_px > 0.0);
+        assert!(padded_camera.shadow > 0.0);
+        for (setting, mode) in [
+            (
+                cap_project::BackgroundBlurMode::Light,
+                cap_camera_effects::BlurMode::Light,
+            ),
+            (
+                cap_project::BackgroundBlurMode::Heavy,
+                cap_camera_effects::BlurMode::Heavy,
+            ),
+        ] {
+            project.camera.background_blur.mode = setting;
+            assert_eq!(
+                at(&project, 180).camera_background_effect_mode(),
+                Some(mode)
+            );
+        }
+    }
 
     #[tokio::test]
     async fn timed_styles_and_images_share_preview_and_export_canvas() {
@@ -6633,7 +6873,8 @@ impl RendererLayers {
     fn ensure_camera_blur_processor(&mut self, device: &wgpu::Device) {
         if self.camera_blur_processor.is_none() && !self.camera_blur_init_failed {
             match cap_camera_effects::BlurProcessor::new(device, wgpu::TextureFormat::Rgba8Unorm) {
-                Ok(processor) => {
+                Ok(mut processor) => {
+                    processor.set_frame_synchronous(true);
                     self.camera_blur_processor = Some(processor);
                 }
                 Err(e) => {
@@ -6672,13 +6913,22 @@ impl RendererLayers {
 
         let dimensions = (source_texture.width(), source_texture.height());
         reset_camera_blur_for_dimensions(processor, dimensions);
+        if let Some(time) = self
+            .camera
+            .source_time_for_blur()
+            .or_else(|| self.camera_only.source_time_for_blur())
+        {
+            processor.set_frame_time(time);
+        }
         let _ = processor.process(device, queue, source_texture, mode);
         self.camera_blur_unavailable =
             !camera_blur_output_is_available(processor.output_status().as_ref(), mode, dimensions);
 
         let processor: &cap_camera_effects::BlurProcessor = processor;
         self.camera.attach_shared_blur(device, processor, mode);
-        self.camera_only.attach_shared_blur(device, processor, mode);
+        if mode != cap_camera_effects::BlurMode::Remove {
+            self.camera_only.attach_shared_blur(device, processor, mode);
+        }
     }
 
     fn run_shared_camera_blur_with_encoder(
@@ -6710,13 +6960,30 @@ impl RendererLayers {
 
         let dimensions = (source_texture.width(), source_texture.height());
         reset_camera_blur_for_dimensions(processor, dimensions);
+        if let Some(time) = self
+            .camera
+            .source_time_for_blur()
+            .or_else(|| self.camera_only.source_time_for_blur())
+        {
+            processor.set_frame_time(time);
+        }
+        // YUV conversion in the caller's encoder must complete before segmentation reads this frame.
+        let pending = std::mem::replace(
+            encoder,
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Camera effects and composition"),
+            }),
+        );
+        queue.submit([pending.finish()]);
         processor.process_into_encoder(device, queue, source_texture, encoder, mode);
         self.camera_blur_unavailable =
             !camera_blur_output_is_available(processor.output_status().as_ref(), mode, dimensions);
 
         let processor: &cap_camera_effects::BlurProcessor = processor;
         self.camera.attach_shared_blur(device, processor, mode);
-        self.camera_only.attach_shared_blur(device, processor, mode);
+        if mode != cap_camera_effects::BlurMode::Remove {
+            self.camera_only.attach_shared_blur(device, processor, mode);
+        }
     }
 
     pub fn prepare_for_video_dimensions(
@@ -6841,7 +7108,7 @@ impl RendererLayers {
             camera_frame_data,
         );
 
-        if let Some(mode) = blur_mode_from_config(&uniforms.project.camera.background_blur) {
+        if let Some(mode) = uniforms.camera_background_effect_mode() {
             self.run_shared_camera_blur(&constants.device, &constants.queue, mode);
         }
 
@@ -7013,7 +7280,7 @@ impl RendererLayers {
         timings.camera_only_prepare_duration = start.elapsed();
 
         let start = Instant::now();
-        if let Some(mode) = blur_mode_from_config(&uniforms.project.camera.background_blur) {
+        if let Some(mode) = uniforms.camera_background_effect_mode() {
             self.run_shared_camera_blur_with_encoder(
                 &constants.device,
                 &constants.queue,
@@ -7475,6 +7742,9 @@ fn blur_mode_from_config(
         cap_project::BackgroundBlurMode::Off => None,
         cap_project::BackgroundBlurMode::Light => Some(cap_camera_effects::BlurMode::Light),
         cap_project::BackgroundBlurMode::Heavy => Some(cap_camera_effects::BlurMode::Heavy),
+        cap_project::BackgroundBlurMode::Remove => {
+            cfg!(target_os = "macos").then_some(cap_camera_effects::BlurMode::Remove)
+        }
     }
 }
 
