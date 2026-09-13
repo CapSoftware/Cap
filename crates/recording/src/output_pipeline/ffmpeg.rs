@@ -413,7 +413,21 @@ fn send_segmented_frame<T>(
     frame: T,
     frame_drops: &mut FrameDropTracker,
 ) -> anyhow::Result<()> {
-    match sender.send_timeout(frame, Duration::from_millis(STALL_BUDGET_MS)) {
+    send_segmented_frame_with_timeout(
+        sender,
+        frame,
+        frame_drops,
+        Duration::from_millis(STALL_BUDGET_MS),
+    )
+}
+
+fn send_segmented_frame_with_timeout<T>(
+    sender: &flume::Sender<T>,
+    frame: T,
+    frame_drops: &mut FrameDropTracker,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    match sender.send_timeout(frame, timeout) {
         Ok(()) => frame_drops.record_frame(),
         Err(flume::SendTimeoutError::Timeout(_)) => frame_drops.record_drop(),
         Err(flume::SendTimeoutError::Disconnected(_)) => {
@@ -878,7 +892,10 @@ impl AudioMuxer for DashSegmentedAudioMuxer {
 
 #[cfg(test)]
 mod tests {
-    use super::{FFmpegVideoFrame, FrameDropTracker, VideoFrame, send_segmented_frame};
+    use super::{
+        FFmpegVideoFrame, FrameDropTracker, VideoFrame, send_segmented_frame,
+        send_segmented_frame_with_timeout,
+    };
     use cap_timestamp::Timestamp;
     use std::time::Instant;
 
@@ -889,11 +906,19 @@ mod tests {
         let consumer = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(10));
             assert_eq!(receiver.recv().unwrap(), 1);
-            receiver.recv_timeout(std::time::Duration::from_millis(200))
+            receiver.recv_timeout(std::time::Duration::from_secs(5))
         });
         let mut drops = FrameDropTracker::new();
 
-        send_segmented_frame(&sender, 2, &mut drops).unwrap();
+        // Hosted runners can deschedule either thread beyond the production stall budget.
+        // The stalled-queue test below exercises that production deadline separately.
+        send_segmented_frame_with_timeout(
+            &sender,
+            2,
+            &mut drops,
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap();
 
         assert_eq!(consumer.join().unwrap().unwrap(), 2);
         assert_eq!(drops.total_frames, 1);
