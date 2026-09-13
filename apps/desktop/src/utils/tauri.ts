@@ -709,7 +709,7 @@ export type AutomationRule = { id: string; name: string; enabled?: boolean; trig
 export type AutomationTestReport = { ruleId: string; ruleName: string; actionChecks: AutomationActionCheck[] }
 export type AutomationsStore = { version?: number; rules?: AutomationRule[] }
 export type BackgroundBlurConfig = { mode: BackgroundBlurMode }
-export type BackgroundBlurMode = "off" | "light" | "heavy"
+export type BackgroundBlurMode = "off" | "light" | "heavy" | "remove"
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; roundingType: CornerStyle; inset: number; crop: Crop | null;
 /**
  * Normalized (0-1) center of the display rect in output-frame space.

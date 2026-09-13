@@ -433,6 +433,7 @@ pub enum BackgroundBlurMode {
     Off,
     Light,
     Heavy,
+    Remove,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -442,8 +443,15 @@ pub struct BackgroundBlurConfig {
 }
 
 impl BackgroundBlurConfig {
+    pub fn removes_background(&self) -> bool {
+        cfg!(target_os = "macos") && self.mode == BackgroundBlurMode::Remove
+    }
+
     pub fn is_active(&self) -> bool {
-        self.mode != BackgroundBlurMode::Off
+        matches!(
+            self.mode,
+            BackgroundBlurMode::Light | BackgroundBlurMode::Heavy
+        ) || self.removes_background()
     }
 }
 
