@@ -509,7 +509,56 @@ macro_rules! impl_track_segment {
 
 impl_track_segment!(ZoomSegment);
 impl_track_segment!(SceneSegment);
-impl_track_segment!(Camera3DSegment);
+/// The 3D shot is the one segment whose *contents* are timed: its pose tracks
+/// hold keyframes measured from the shot's own start, so an edge that moves
+/// without them leaves a lengthened shot finishing its move early and a
+/// shortened one cutting it off. Every edge write refits the motion, the same
+/// way the clip-speed ripple already rescales it.
+impl TrackSegmentOps for Camera3DSegment {
+    fn start(&self) -> f64 {
+        self.start
+    }
+    fn end(&self) -> f64 {
+        self.end
+    }
+    fn set_start(&mut self, value: f64) {
+        self.start = value;
+        fit_camera3d_motion(self);
+    }
+    fn set_end(&mut self, value: f64) {
+        self.end = value;
+        fit_camera3d_motion(self);
+    }
+}
+
+/// Rescale a shot's keyframe times so its move spans exactly the shot.
+///
+/// The span is measured rather than remembered, which makes this idempotent:
+/// a shot already fitted is left untouched, so a move (two edge writes that
+/// cancel out) cannot creep.
+pub fn fit_camera3d_motion(segment: &mut Camera3DSegment) {
+    let duration = segment.end - segment.start;
+    if !duration.is_finite() || duration <= 0.0 {
+        return;
+    }
+    let mut span = 0.0_f64;
+    for track in segment.tracks.all_tracks_mut() {
+        for keyframe in track.iter() {
+            if keyframe.time.is_finite() {
+                span = span.max(keyframe.time);
+            }
+        }
+    }
+    if span <= 0.0 || (span - duration).abs() <= 1e-9 {
+        return;
+    }
+    let scale = duration / span;
+    for track in segment.tracks.all_tracks_mut() {
+        for keyframe in track.iter_mut() {
+            keyframe.time *= scale;
+        }
+    }
+}
 impl_track_segment!(MaskSegment, lane: track);
 impl_track_segment!(TextSegment, lane: track);
 impl_track_segment!(cap_project::StyleSegment, lane: track);
@@ -3570,6 +3619,60 @@ mod tests {
         let audio = &timeline.audio_segments[0];
         assert_eq!((audio.start, audio.end), (5.0, 7.0));
         assert_eq!(audio.trim_start, 11.5);
+    }
+
+    #[test]
+    fn trimming_a_3d_shot_refits_its_move_to_the_new_length() {
+        let mut timeline: TimelineConfiguration =
+            serde_json::from_value(serde_json::json!({ "segments": [], "zoomSegments": [] }))
+                .unwrap();
+        timeline
+            .camera3d_segments
+            .push(crate::editor_panels::new_camera3d_shot(2.0, 6.0));
+        let span = |timeline: &TimelineConfiguration| {
+            timeline.camera3d_segments[0]
+                .tracks
+                .pan_x
+                .last()
+                .map(|keyframe| keyframe.time)
+                .unwrap()
+        };
+        assert!((span(&timeline) - 4.0).abs() < 1e-9);
+
+        // Lengthening the shot lengthens the move with it.
+        assert!(set_segment_end(&mut timeline, TrackKind::ThreeD, 0, 12.0));
+        assert!((span(&timeline) - 10.0).abs() < 1e-9);
+
+        // And so does dragging the start edge.
+        assert!(set_segment_start(&mut timeline, TrackKind::ThreeD, 0, 4.0));
+        assert!((span(&timeline) - 8.0).abs() < 1e-9);
+
+        // Sliding the whole shot leaves the move alone.
+        assert!(move_segment(&mut timeline, TrackKind::ThreeD, 0, 6.0, 14.0));
+        assert!((span(&timeline) - 8.0).abs() < 1e-9);
+
+        // Refitting a shot that already fits is a no-op.
+        let before = timeline.camera3d_segments[0].tracks.pan_x.clone();
+        fit_camera3d_motion(&mut timeline.camera3d_segments[0]);
+        assert_eq!(
+            before
+                .iter()
+                .map(|keyframe| keyframe.time)
+                .collect::<Vec<_>>(),
+            timeline.camera3d_segments[0]
+                .tracks
+                .pan_x
+                .iter()
+                .map(|keyframe| keyframe.time)
+                .collect::<Vec<_>>()
+        );
+
+        // The poses at the two ends are untouched by any of it.
+        let shot = &timeline.camera3d_segments[0];
+        assert_eq!(
+            crate::editor_panels::match_camera3d_look(shot).map(|look| look.id),
+            Some("glide-across")
+        );
     }
 
     #[test]
