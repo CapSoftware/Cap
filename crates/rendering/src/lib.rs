@@ -5171,10 +5171,12 @@ mod tests {
                     CameraXPosition::Right,
                 ] {
                     for y in [CameraYPosition::Top, CameraYPosition::Bottom] {
-                        let mut camera = Camera::default();
-                        camera.position = cap_project::CameraPosition {
-                            x: x.clone(),
-                            y: y.clone(),
+                        let mut camera = Camera {
+                            position: cap_project::CameraPosition {
+                                x: x.clone(),
+                                y: y.clone(),
+                            },
+                            ..Default::default()
                         };
                         camera.background_blur.mode = cap_project::BackgroundBlurMode::Remove;
                         let padding = if cfg!(target_os = "macos") { 0.0 } else { 50.0 };
