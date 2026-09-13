@@ -74,9 +74,13 @@ impl Drop for HeadlessControl {
 }
 
 fn audible_spec() -> PlaySpec {
+    audible_spec_with_duration(2)
+}
+
+fn audible_spec_with_duration(duration_secs: usize) -> PlaySpec {
     ffmpeg::init().unwrap();
     let mut file = tempfile::Builder::new().suffix(".wav").tempfile().unwrap();
-    let samples = vec![5000i16; 96_000];
+    let samples = vec![5000i16; 48_000 * duration_secs];
     let bytes = (samples.len() * 2) as u32;
     file.write_all(b"RIFF").unwrap();
     file.write_all(&(36 + bytes).to_le_bytes()).unwrap();
@@ -90,9 +94,13 @@ fn audible_spec() -> PlaySpec {
     file.write_all(&16u16.to_le_bytes()).unwrap();
     file.write_all(b"data").unwrap();
     file.write_all(&bytes.to_le_bytes()).unwrap();
-    for sample in samples {
-        file.write_all(&sample.to_le_bytes()).unwrap();
-    }
+    file.write_all(
+        &samples
+            .into_iter()
+            .flat_map(i16::to_le_bytes)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
     file.flush().unwrap();
     let audio = Arc::new(cap_audio::DecodedAudio::from(Arc::new(
         AudioData::from_file(file.path()).unwrap(),
@@ -106,7 +114,7 @@ fn audible_spec() -> PlaySpec {
         )],
         music: MusicTracks::new(),
         project: ProjectConfiguration::default(),
-        duration_secs: 2.0,
+        duration_secs: duration_secs as f64,
         start_playhead_secs: 0.0,
         playhead_rx,
     }
@@ -714,10 +722,69 @@ async fn progressive_output_without_a_prefix_never_acknowledges_and_cancels_clea
 }
 
 #[test]
+fn clip_volume_refresh_changes_live_pcm_and_preserves_mute() {
+    let spec = |volume, muted| {
+        let mut spec = audible_spec_with_duration(10);
+        spec.project = serde_json::from_value(serde_json::json!({
+            "timeline": { "zoomSegments": [], "segments": [{
+                "recordingSegment": 0,
+                "start": 0.0,
+                "end": 10.0,
+                "timescale": 1.0,
+                "volume": volume,
+                "speedAudioMode": if muted { Some("mute") } else { None }
+            }] }
+        }))
+        .unwrap();
+        spec
+    };
+    let (tx, rx) = std_mpsc::channel();
+    let output = AudioOutput::new_headless(Box::new(move |samples, _| {
+        let mean = samples.iter().map(|sample| sample.abs()).sum::<f32>() / samples.len() as f32;
+        let _ = tx.send(mean);
+    }));
+    let generation = output.play(spec(1.0, false)).unwrap();
+    let wait_for = |stage: &str, expected: f32| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut last = None;
+        loop {
+            let mean = rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .unwrap_or_else(|error| {
+                    panic!("{stage}: {error}, expected {expected}, last mean {last:?}")
+                });
+            last = Some(mean);
+            if (mean - expected).abs() < 0.001 {
+                break;
+            }
+        }
+    };
+    let full = 5000.0 / 32768.0 * std::f32::consts::FRAC_1_SQRT_2;
+    wait_for("original", full);
+    output.refresh_playback(spec(0.5, false), generation);
+    wait_for("half", full * 0.5);
+    output.refresh_playback(spec(0.5, true), generation);
+    wait_for("mute", 0.0);
+    output.refresh_playback(spec(0.5, false), generation);
+    wait_for("unmute", full * 0.5);
+    output.refresh_playback(spec(2.0, false), generation);
+    wait_for("double", full * 2.0);
+    output.stop_playback(generation);
+    wait_for("stopped", 0.0);
+    output.shutdown();
+}
+
+#[test]
 fn studio_sound_refresh_changes_live_pcm_and_cannot_restart_stopped_audio() {
-    let original = audible_spec();
-    let mut enhanced = audible_spec();
+    let original = audible_spec_with_duration(10);
+    let mut enhanced = audible_spec_with_duration(10);
     enhanced.project.audio.improve = true;
+    let mut strong = audible_spec_with_duration(10);
+    strong.project.audio.improve = true;
+    strong.project.audio.isolation = cap_project::VoiceIsolation::Strong;
+    let mut light = audible_spec_with_duration(10);
+    light.project.audio.improve = true;
+    light.project.audio.isolation = cap_project::VoiceIsolation::Light;
     let late_refresh = audible_spec();
     let (tx, rx) = std_mpsc::channel();
     let output = AudioOutput::new_headless(Box::new(move |samples, _| {
@@ -725,22 +792,28 @@ fn studio_sound_refresh_changes_live_pcm_and_cannot_restart_stopped_audio() {
         let _ = tx.send(mean);
     }));
     let generation = output.play(original).unwrap();
-    let wait_for = |predicate: fn(f32) -> bool| {
+    let wait_for = |stage: &str, predicate: fn(f32) -> bool| {
         let deadline = Instant::now() + Duration::from_secs(5);
+        let mut last = None;
         loop {
             let value = rx
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .unwrap();
+                .unwrap_or_else(|error| panic!("{stage}: {error}, last audio mean {last:?}"));
+            last = Some(value);
             if predicate(value) {
                 break;
             }
         }
     };
-    wait_for(|mean| mean > 0.1);
+    wait_for("original", |mean| mean > 0.1);
     output.refresh_playback(enhanced, generation);
-    wait_for(|mean| mean > 0.005 && mean < 0.04);
+    wait_for("balanced", |mean| mean > 0.005 && mean < 0.02);
+    output.refresh_playback(strong, generation);
+    wait_for("strong", |mean| mean > 0.0005 && mean < 0.009);
+    output.refresh_playback(light, generation);
+    wait_for("light", |mean| mean > 0.02 && mean < 0.05);
     output.stop_playback(generation);
-    wait_for(|mean| mean == 0.0);
+    wait_for("stopped", |mean| mean == 0.0);
     output.refresh_playback(late_refresh, generation);
     for _ in 0..30 {
         assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), 0.0);
