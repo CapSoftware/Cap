@@ -2421,6 +2421,9 @@ pub struct ProjectUniforms {
     display_outer_bounds: [f32; 4],
     interpolated_cursor: Option<InterpolatedCursorPosition>,
     pub prev_cursor: Option<InterpolatedCursorPosition>,
+    /// 0..1 multiplier from clips that hide the cursor (with the fade at
+    /// their edges); the cursor and click-ripple layers scale by it.
+    pub cursor_clip_visibility: f32,
     pub click_ripples: Vec<ClickRipple>,
     pub project: ProjectConfiguration,
     pub zoom: InterpolatedZoom,
@@ -3563,6 +3566,7 @@ impl ProjectUniforms {
         let fps_f32 = fps.max(1) as f32;
         let timeline_time = f64::from(frame_number) / f64::from(fps.max(1));
         let frame_time = timeline_time as f32;
+        let cursor_clip_visibility = project.cursor_visibility_at(timeline_time) as f32;
         let camera_only_padding = project.camera_only_padding_at(timeline_time);
         let base_crop = Self::get_crop(options, project);
         let base_padding = project.background.padding;
@@ -4632,6 +4636,7 @@ impl ProjectUniforms {
             frame_number,
             recording_time: current_recording_time as f64,
             prev_cursor: prev_interpolated_cursor,
+            cursor_clip_visibility,
             click_ripples,
             display_parent_motion_px: display_motion_parent,
             motion_blur_amount: cursor_motion_blur,
@@ -5513,6 +5518,36 @@ mod style_image_tests {
         assert_eq!(camera.opacity, 0.0);
         assert_eq!(camera.shadow, 0.0);
         assert_eq!(camera.shadow_opacity, 0.0);
+
+        // A clip that hides the cursor reaches the layers as a 0..1 multiplier
+        // on the uniforms: full on the first clip, zero deep inside the hidden
+        // one, ramping in between.
+        let timeline = project.timeline.as_mut().expect("timeline");
+        timeline.text_segments.clear();
+        timeline.segments = serde_json::from_value(serde_json::json!([
+            { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 1.5 },
+            { "recordingSegment": 0, "timescale": 1.0, "start": 1.5, "end": 3.0, "hideCursor": true }
+        ]))
+        .expect("clip segments");
+        let visibility_at = |frame_number: u32| {
+            ProjectUniforms::new(
+                &constants,
+                &project,
+                frame_number,
+                60,
+                XY::new(160, 90),
+                &cursor,
+                &frames,
+                3.0,
+                &zoom,
+            )
+            .cursor_clip_visibility
+        };
+        assert_eq!(visibility_at(30), 1.0);
+        assert_eq!(visibility_at(89), 1.0);
+        let ramp = visibility_at(96);
+        assert!(ramp > 0.0 && ramp < 1.0, "{ramp}");
+        assert_eq!(visibility_at(150), 0.0);
         std::fs::remove_dir_all(directory).expect("remove test assets");
     }
 }
