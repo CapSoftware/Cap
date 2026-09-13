@@ -33,6 +33,7 @@ pub mod linux_instant_camera;
 mod logging;
 #[cfg(target_os = "macos")]
 mod macos_save_panel;
+mod main_window_geometry;
 mod notifications;
 mod panel_manager;
 mod permissions;
@@ -6702,6 +6703,7 @@ fn specta_builder() -> tauri_specta::Builder {
             recording::list_displays_with_thumbnails,
             recording::list_windows_with_thumbnails,
             windows::refresh_window_content_protection,
+            windows::restore_main_window_geometry,
             general_settings::get_default_excluded_windows,
             list_audio_devices,
             list_system_fonts,

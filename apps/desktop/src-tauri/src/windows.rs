@@ -21,6 +21,7 @@ use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition, PhysicalSize,
     WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
 };
+use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument, warn};
@@ -51,6 +52,78 @@ const TELEPROMPTER_PANEL_LEVEL: objc2_app_kit::NSWindowLevel = 101;
 
 const DEFAULT_FALLBACK_DISPLAY_WIDTH: f64 = 1920.0;
 const DEFAULT_FALLBACK_DISPLAY_HEIGHT: f64 = 1080.0;
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn restore_main_window_geometry(window: WebviewWindow) -> Result<bool, String> {
+    if window.label() != "main" {
+        return Err("Only the main window can restore its geometry".into());
+    }
+    let store = window
+        .app_handle()
+        .store("store")
+        .map_err(|error| error.to_string())?;
+    let expanded = store
+        .get("main_window_ui")
+        .and_then(|value| value.get("expanded").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let handle = window.app_handle().clone();
+    handle
+        .run_on_main_thread(move || {
+            let result = restore_main_window_bounds(&window, expanded).map(|()| expanded);
+            let _ = tx.send(result.map_err(|error| error.to_string()));
+        })
+        .map_err(|error| error.to_string())?;
+    rx.await.map_err(|error| error.to_string())?
+}
+
+fn restore_main_window_bounds(window: &WebviewWindow, expanded: bool) -> tauri::Result<()> {
+    let inner = window.inner_size()?;
+    let outer = window.outer_size()?;
+    let scale = window.scale_factor()?;
+    let before = window.outer_position().ok();
+    let monitor = window.current_monitor().ok().flatten();
+    let frame = (
+        (f64::from(outer.width) - f64::from(inner.width)).max(0.0) / scale,
+        (f64::from(outer.height) - f64::from(inner.height)).max(0.0) / scale,
+    );
+    let (width, height) = crate::main_window_geometry::restored_size(
+        expanded,
+        frame,
+        monitor.as_ref().map(|monitor| {
+            let area = monitor.work_area();
+            (
+                f64::from(area.size.width) / scale,
+                f64::from(area.size.height) / scale,
+            )
+        }),
+    );
+    if (width - f64::from(inner.width) / scale).abs() > 0.5
+        || (height - f64::from(inner.height) / scale).abs() > 0.5
+    {
+        window.set_size(LogicalSize::new(width, height))?;
+    }
+    if let Some((before, monitor)) = before.zip(monitor)
+        && let Ok(after) = window.outer_position()
+    {
+        let area = monitor.work_area();
+        let (x, y) = crate::main_window_geometry::restored_position(
+            (f64::from(before.x), f64::from(before.y)),
+            ((width + frame.0) * scale, (height + frame.1) * scale),
+            (f64::from(area.position.x), f64::from(area.position.y)),
+            (f64::from(area.size.width), f64::from(area.size.height)),
+            scale,
+        );
+        if x != f64::from(after.x) || y != f64::from(after.y) {
+            let _ = window.set_position(PhysicalPosition::new(
+                (x + 0.5).floor() as i32,
+                (y + 0.5).floor() as i32,
+            ));
+        }
+    }
+    Ok(())
+}
 
 #[cfg(windows)]
 const WINDOWS_WEBVIEW2_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --disable-vulkan --use-angle=d3d11";

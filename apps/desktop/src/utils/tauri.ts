@@ -127,6 +127,9 @@ async listWindowsWithThumbnails() : Promise<CaptureWindowWithThumbnail[]> {
 async refreshWindowContentProtection() : Promise<null> {
     return await TAURI_INVOKE("refresh_window_content_protection");
 },
+async restoreMainWindowGeometry() : Promise<boolean> {
+    return await TAURI_INVOKE("restore_main_window_geometry");
+},
 async getDefaultExcludedWindows() : Promise<WindowExclusion[]> {
     return await TAURI_INVOKE("get_default_excluded_windows");
 },

@@ -2552,15 +2552,20 @@ function Page() {
 		};
 		const targetMode = __CAP__?.initialTargetMode ?? null;
 		const currentWindow = getCurrentWindow();
-		const storedWindowUI = await mainWindowUIStore.get().catch((error) => {
-			console.error("Failed to load main window size:", error);
-			return undefined;
-		});
-		const expanded = storedWindowUI?.expanded ?? false;
+		const expanded = await commands
+			.restoreMainWindowGeometry()
+			.catch(async (error) => {
+				console.error("Failed to restore main window geometry:", error);
+				const storedWindowUI = await mainWindowUIStore
+					.get()
+					.catch(() => undefined);
+				const expanded = storedWindowUI?.expanded ?? false;
+				await resizeMainWindow(expanded, false).catch((error) => {
+					console.error("Failed to restore main window size:", error);
+				});
+				return expanded;
+			});
 		setIsExpanded(expanded);
-		await resizeMainWindow(expanded, false).catch((error) => {
-			console.error("Failed to restore main window size:", error);
-		});
 
 		if (targetMode) {
 			await commands.openTargetSelectOverlays(null, null, targetMode);
