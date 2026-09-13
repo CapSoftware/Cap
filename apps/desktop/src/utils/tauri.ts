@@ -337,8 +337,14 @@ async saveFileDialog(fileName: string, fileType: string) : Promise<string | null
 async listRecordings() : Promise<([string, RecordingMetaWithMetadata])[]> {
     return await TAURI_INVOKE("list_recordings");
 },
+async listRecentRecordings() : Promise<([string, RecordingMetaWithMetadata])[]> {
+    return await TAURI_INVOKE("list_recent_recordings");
+},
 async listScreenshots() : Promise<([string, ScreenshotMetaWithMetadata])[]> {
     return await TAURI_INVOKE("list_screenshots");
+},
+async listRecentScreenshots() : Promise<([string, ScreenshotMetaWithMetadata])[]> {
+    return await TAURI_INVOKE("list_recent_screenshots");
 },
 async checkUpgradedAndUpdate() : Promise<boolean> {
     return await TAURI_INVOKE("check_upgraded_and_update");

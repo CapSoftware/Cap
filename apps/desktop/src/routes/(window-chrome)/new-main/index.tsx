@@ -2281,10 +2281,13 @@ function Page() {
 	const recentMedia = useQuery(() => ({
 		queryKey: RECENT_MEDIA_QUERY_KEY,
 		queryFn: async (): Promise<RecentMediaItem[]> => {
-			const [recordingRows, screenshotTargets] = await Promise.all([
-				queryClient.fetchQuery({ ...listRecordings, staleTime: 0 }),
-				queryClient.fetchQuery({ ...listScreenshotsQuery, staleTime: 0 }),
+			const [recordingRows, screenshotRows] = await Promise.all([
+				commands.listRecentRecordings(),
+				commands.listRecentScreenshots().catch(() => []),
 			]);
+			const screenshotTargets = screenshotRows.map(
+				([path, meta]) => ({ ...meta, path }) as ScreenshotWithPath,
+			);
 			const candidates: RecentMediaCandidate[] = [
 				...recordingRows.slice(0, RECENT_MEDIA_LIMIT).map(([path, meta]) => ({
 					kind: "recording" as const,

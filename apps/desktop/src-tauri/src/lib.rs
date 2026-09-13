@@ -5705,12 +5705,46 @@ fn media_sort_time_millis(path: &Path) -> f64 {
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
-fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMetadata)>, String> {
+async fn list_recordings(
+    app: AppHandle,
+) -> Result<Vec<(PathBuf, RecordingMetaWithMetadata)>, String> {
+    tokio::task::spawn_blocking(move || list_recordings_inner(&app, usize::MAX))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn list_recent_recordings(
+    app: AppHandle,
+) -> Result<Vec<(PathBuf, RecordingMetaWithMetadata)>, String> {
+    tokio::task::spawn_blocking(move || list_recordings_inner(&app, 9))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn newest_valid_media<T, U>(
+    mut candidates: Vec<(T, f64)>,
+    limit: usize,
+    mut load: impl FnMut(T, f64) -> Option<U>,
+) -> Vec<U> {
+    candidates.sort_by(|(_, a), (_, b)| b.total_cmp(a));
+    candidates
+        .into_iter()
+        .filter_map(|(candidate, timestamp)| load(candidate, timestamp))
+        .take(limit)
+        .collect()
+}
+
+fn list_recordings_inner(
+    app: &AppHandle,
+    limit: usize,
+) -> Vec<(PathBuf, RecordingMetaWithMetadata)> {
     // Recordings can live in multiple folders (the active one, the default
     // one, and any previously used custom folders) — scan them all so
     // switching the storage folder never hides existing recordings.
     let mut result = Vec::new();
-    for recordings_dir in recordings_locations::known_recordings_dirs(&app) {
+    for recordings_dir in recordings_locations::known_recordings_dirs(app) {
         let Ok(entries) = std::fs::read_dir(&recordings_dir) else {
             continue;
         };
@@ -5722,15 +5756,15 @@ fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMeta
                 continue;
             }
 
-            if let Ok(meta) = get_recording_meta(path.clone(), FileType::Recording) {
-                result.push((path, meta));
-            }
+            let timestamp = media_sort_time_millis(&path);
+            result.push((path, timestamp));
         }
     }
 
-    result.sort_by(|(_, a), (_, b)| b.sort_time_millis.total_cmp(&a.sort_time_millis));
-
-    Ok(result)
+    newest_valid_media(result, limit, |path, timestamp| {
+        let meta = RecordingMeta::load_for_project(&path).ok()?;
+        Some((path, RecordingMetaWithMetadata::new(meta, timestamp)))
+    })
 }
 
 fn acquire_recording_delete_lock(
@@ -5813,20 +5847,36 @@ async fn delete_recording_directory(app: AppHandle, path: PathBuf) -> Result<(),
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
-fn list_screenshots(app: AppHandle) -> Result<Vec<(PathBuf, ScreenshotMetaWithMetadata)>, String> {
-    let screenshots_dir = screenshots_path(&app);
+async fn list_screenshots(
+    app: AppHandle,
+) -> Result<Vec<(PathBuf, ScreenshotMetaWithMetadata)>, String> {
+    tokio::task::spawn_blocking(move || list_screenshots_inner(&app, usize::MAX))
+        .await
+        .map_err(|error| error.to_string())?
+}
 
-    let mut result = std::fs::read_dir(&screenshots_dir)
+#[tauri::command]
+#[specta::specta]
+async fn list_recent_screenshots(
+    app: AppHandle,
+) -> Result<Vec<(PathBuf, ScreenshotMetaWithMetadata)>, String> {
+    tokio::task::spawn_blocking(move || list_screenshots_inner(&app, 9))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn list_screenshots_inner(
+    app: &AppHandle,
+    limit: usize,
+) -> Result<Vec<(PathBuf, ScreenshotMetaWithMetadata)>, String> {
+    let screenshots_dir = screenshots_path(app);
+
+    let result = std::fs::read_dir(&screenshots_dir)
         .map_err(|e| format!("Failed to read screenshots directory: {e}"))?
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
             if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
-                let meta = match get_recording_meta(path.clone(), FileType::Screenshot) {
-                    Ok(meta) => meta.inner,
-                    Err(_) => return None,
-                };
-
                 let png_path = std::fs::read_dir(&path)
                     .ok()?
                     .filter_map(|e| e.ok())
@@ -5834,22 +5884,27 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(PathBuf, ScreenshotMetaWithMe
                     .map(|e| e.path())?;
 
                 let sort_time_millis = media_sort_time_millis(&png_path);
-                Some((
-                    png_path,
-                    ScreenshotMetaWithMetadata {
-                        inner: meta,
-                        sort_time_millis,
-                    },
-                ))
+                Some(((path, png_path), sort_time_millis))
             } else {
                 None
             }
         })
         .collect::<Vec<_>>();
 
-    result.sort_by(|(_, a), (_, b)| b.sort_time_millis.total_cmp(&a.sort_time_millis));
-
-    Ok(result)
+    Ok(newest_valid_media(
+        result,
+        limit,
+        |(path, png_path), sort_time_millis| {
+            let inner = RecordingMeta::load_for_project(&path).ok()?;
+            Some((
+                png_path,
+                ScreenshotMetaWithMetadata {
+                    inner,
+                    sort_time_millis,
+                },
+            ))
+        },
+    ))
 }
 
 #[tauri::command]
@@ -6785,7 +6840,9 @@ fn specta_builder() -> tauri_specta::Builder {
             get_recording_meta,
             save_file_dialog,
             list_recordings,
+            list_recent_recordings,
             list_screenshots,
+            list_recent_screenshots,
             check_upgraded_and_update,
             open_external_link,
             hotkeys::set_hotkey,
@@ -10764,6 +10821,42 @@ mod instant_resume_safety_tests {
         );
         drop(ownership);
         std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod recent_media_tests {
+    use super::*;
+
+    #[test]
+    fn limited_history_matches_the_full_list_with_invalid_metadata_and_timestamp_ties() {
+        let candidates = vec![
+            ("old", 1.0),
+            ("first tie", 4.0),
+            ("broken", 5.0),
+            ("second tie", 4.0),
+            ("middle", 2.0),
+        ];
+        let load = |path, timestamp| (path != "broken").then_some((path, timestamp));
+        let full = newest_valid_media(candidates.clone(), usize::MAX, load);
+        let recent = newest_valid_media(candidates, 2, load);
+        assert_eq!(recent, full[..2]);
+        assert_eq!(recent, vec![("first tie", 4.0), ("second tie", 4.0)]);
+    }
+
+    #[test]
+    fn a_large_library_only_loads_metadata_for_the_requested_recent_items() {
+        let mut loads = 0;
+        let recent = newest_valid_media(
+            (0..10_000).map(|id| (id, f64::from(id))).collect(),
+            9,
+            |id, _| {
+                loads += 1;
+                Some(id)
+            },
+        );
+        assert_eq!(loads, 9);
+        assert_eq!(recent, (9991..10_000).rev().collect::<Vec<_>>());
     }
 }
 
