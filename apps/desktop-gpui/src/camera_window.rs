@@ -1352,6 +1352,51 @@ pub struct CameraWindow {
 }
 
 impl CameraWindow {
+    pub(crate) fn studio_snapshot(
+        &self,
+        window: &Window,
+        target: &cap_recording::screen_capture::ScreenCaptureTarget,
+    ) -> crate::recording::StudioCameraSnapshot {
+        let placement = (|| {
+            if self.inline {
+                return None;
+            }
+            #[cfg(target_os = "macos")]
+            let bounds = {
+                let bounds = window.bounds();
+                [
+                    f64::from(f32::from(bounds.origin.x)),
+                    f64::from(f32::from(bounds.origin.y)) + f64::from(CAMERA_TOOLBAR_HEIGHT),
+                    f64::from(f32::from(bounds.size.width)),
+                    f64::from(f32::from(bounds.size.height) - CAMERA_TOOLBAR_HEIGHT),
+                ]
+            };
+            #[cfg(target_os = "windows")]
+            let bounds = {
+                let native = platform::native_window(window)?;
+                let (x, y, width, height) = platform::window_frame(&native);
+                let toolbar = f64::from(CAMERA_TOOLBAR_HEIGHT * window.scale_factor());
+                [x, y + toolbar, width, height - toolbar]
+            };
+            #[cfg(target_os = "linux")]
+            let bounds = {
+                let snapshot = self.recording_snapshot(window).ok()?;
+                let rect = snapshot.content_rect;
+                [
+                    f64::from(rect.x),
+                    f64::from(rect.y),
+                    f64::from(rect.width),
+                    f64::from(rect.height),
+                ]
+            };
+            cap_recording::camera_placement::recording_camera_placement(target, bounds)
+        })();
+        crate::recording::StudioCameraSnapshot {
+            blur: self.state.background_blur,
+            placement,
+        }
+    }
+
     #[cfg(target_os = "linux")]
     pub(crate) fn recording_snapshot(
         &self,

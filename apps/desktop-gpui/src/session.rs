@@ -1066,6 +1066,11 @@ impl RecordingSession {
             cx.open_url(&format!("{link}{separator}recordingStopped=1"));
         }
         let studio_project_path = active.project_dir.clone();
+        let camera_snapshot = self.last_config.as_ref().and_then(|config| {
+            (config.mode == recording::RecordingMode::Studio && config.camera.is_some())
+                .then(|| crate::app_windows::studio_camera_snapshot(&config.target, cx))
+                .flatten()
+        });
         let (studio_progress, studio_finalization) = if prepares_studio_editor(
             self.mode(),
             low_storage,
@@ -1078,6 +1083,7 @@ impl RecordingSession {
                 studio_project_path.clone(),
                 self.recording_generation,
             );
+            publisher.set_camera_snapshot(camera_snapshot);
             (Some(publisher), Some(finalization))
         } else {
             (None, None)
@@ -1085,15 +1091,15 @@ impl RecordingSession {
         #[cfg(target_os = "linux")]
         let retained_stop = active
             .instant_stop_handle(low_storage || recording_failed, recording_failed)
-            .or_else(|| active.clean_studio_stop_handle(studio_progress));
+            .or_else(|| active.clean_studio_stop_handle(studio_progress, camera_snapshot));
         #[cfg(windows)]
         let retained_stop = recording_failed
             .then(|| active.failed_stop_handle())
-            .or_else(|| active.clean_studio_stop_handle(studio_progress));
+            .or_else(|| active.clean_studio_stop_handle(studio_progress, camera_snapshot));
         #[cfg(target_os = "macos")]
         let retained_stop = recording_failed
             .then(|| active.failed_stop_handle())
-            .or_else(|| active.clean_studio_stop_handle(studio_progress));
+            .or_else(|| active.clean_studio_stop_handle(studio_progress, camera_snapshot));
         #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         let retained_stop: Option<recording::CaptureStopFuture> = None;
         let retains_active = retained_stop.is_some();
@@ -1101,7 +1107,14 @@ impl RecordingSession {
             Some(future) => future,
             None => {
                 let active = self.active.take().unwrap();
-                Box::pin(async move { (true, active.stop(low_storage || recording_failed).await) })
+                Box::pin(async move {
+                    (
+                        true,
+                        active
+                            .stop(low_storage || recording_failed, camera_snapshot)
+                            .await,
+                    )
+                })
             }
         };
         #[cfg(target_os = "linux")]

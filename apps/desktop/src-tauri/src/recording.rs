@@ -56,7 +56,7 @@ use tauri_specta::Event;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 
-use crate::camera::{CameraPreviewManager, CameraPreviewShape};
+use crate::camera::CameraPreviewShape;
 #[cfg(target_os = "macos")]
 use crate::general_settings;
 use crate::permissions;
@@ -593,6 +593,7 @@ pub struct InProgressRecordingCommon {
     pub inputs: StartRecordingInputs,
     pub recording_dir: PathBuf,
     pub health: Arc<crate::recording_telemetry::RecordingHealthAccumulator>,
+    camera_snapshot: Arc<std::sync::OnceLock<StudioCameraSnapshot>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -2585,6 +2586,7 @@ async fn start_recording_prepared(
                 inputs: inputs.clone(),
                 recording_dir: recording_dir.clone(),
                 health,
+                camera_snapshot: Arc::new(std::sync::OnceLock::new()),
             };
 
             #[cfg(target_os = "macos")]
@@ -4433,6 +4435,11 @@ async fn control_studio_recording(
         } else {
             None
         };
+        if action == StudioTerminalAction::Stop {
+            common.camera_snapshot.get_or_init(|| {
+                StudioCameraSnapshot::capture(app, &current_state, &common.inputs.capture_target)
+            });
+        }
         (
             handle.clone(),
             common.recording_dir.clone(),
@@ -4631,6 +4638,11 @@ async fn control_studio_recording(
         } else {
             None
         };
+        if action == StudioTerminalAction::Stop {
+            common.camera_snapshot.get_or_init(|| {
+                StudioCameraSnapshot::capture(app, &current_state, &common.inputs.capture_target)
+            });
+        }
         (
             handle.clone(),
             common.recording_dir.clone(),
@@ -4911,6 +4923,14 @@ async fn queue_studio_stop(
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     if cancel_recording_storage_prompt(&app, &state).await {
         return Ok(());
+    }
+    {
+        let current = state.read().await;
+        if let Some(InProgressRecording::Studio { common, .. }) = current.current_recording() {
+            common.camera_snapshot.get_or_init(|| {
+                StudioCameraSnapshot::capture(&app, &current, &common.inputs.capture_target)
+            });
+        }
     }
     #[cfg(target_os = "linux")]
     if let Some(attempt) = linux_instant::current(&app) {
@@ -5583,6 +5603,24 @@ async fn handle_recording_end_inner(
     if crate::clean_capture::phase(&handle).is_some() && clean_generation.is_none() {
         return Ok(());
     }
+    let camera_snapshot = match &recording {
+        Ok(CompletedRecording::Studio {
+            recording,
+            capture_target,
+            ..
+        }) => {
+            let mut snapshot = app
+                .current_recording()
+                .and_then(|current| current.common().camera_snapshot.get())
+                .cloned()
+                .unwrap_or_else(|| StudioCameraSnapshot::capture(&handle, app, capture_target));
+            if recording.meta.camera_path().is_none() {
+                snapshot.placement = None;
+            }
+            Some(snapshot)
+        }
+        _ => None,
+    };
     let cleared = app.clear_recording_state();
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     if let Some(InProgressRecording::Studio {
@@ -5706,9 +5744,10 @@ async fn handle_recording_end_inner(
     }
     let res = match recording {
         // we delay reporting errors here so that everything else happens first
-        Ok(recording) => {
-            Some(handle_recording_finish(&handle, recording, finalization_project).await)
-        }
+        Ok(recording) => Some(
+            handle_recording_finish(&handle, recording, finalization_project, camera_snapshot)
+                .await,
+        ),
         Err(error) => {
             if let Ok(mut project_meta) =
                 RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
@@ -5915,6 +5954,7 @@ async fn handle_recording_finish(
     app: &AppHandle,
     completed_recording: CompletedRecording,
     finalization_project: Option<Result<Arc<crate::FinalizationProject>, String>>,
+    camera_snapshot: Option<StudioCameraSnapshot>,
 ) -> Result<bool, String> {
     let recording_dir = completed_recording.project_path().clone();
 
@@ -5975,6 +6015,7 @@ async fn handle_recording_finish(
                         default_preset,
                         Some(capture_target),
                         finalization.preparing(),
+                        camera_snapshot,
                     )
                     .await;
 
@@ -6029,6 +6070,7 @@ async fn handle_recording_finish(
                 PresetsStore::get_default_preset(app)?.map(|p| p.config),
                 Some(&capture_target),
                 stored_current_desktop_background_path(&recording_dir),
+                camera_snapshot.as_ref(),
             );
 
             config.write(&recording_dir).map_err(|e| e.to_string())?;
@@ -6214,13 +6256,21 @@ async fn finalize_studio_recording(
     default_preset: Option<ProjectConfiguration>,
     capture_target: Option<ScreenCaptureTarget>,
     preparing: crate::preparing_finalization::FinalizationPreparing,
+    camera_snapshot: Option<StudioCameraSnapshot>,
 ) -> Result<(), String> {
     info!("Starting background finalization for recording");
     project.validate_async().await?;
-    preparing.set_presentation(preparing_presentation_snapshot(
-        default_preset.as_ref(),
-        capture_target.as_ref(),
-    ));
+    preparing.set_presentation(
+        preparing_presentation_snapshot(default_preset.as_ref(), capture_target.as_ref()).map(
+            |mut config| {
+                apply_studio_sound_default(app, &mut config);
+                if let Some(snapshot) = &camera_snapshot {
+                    snapshot.apply(&mut config);
+                }
+                config
+            },
+        ),
+    );
     let recording_dir = project.work_path().to_path_buf();
     let screenshots_dir = recording_dir.join("screenshots");
     let display_path = project.display_path().to_path_buf();
@@ -6282,6 +6332,7 @@ async fn finalize_studio_recording(
         default_preset,
         capture_target.as_ref(),
         stored_current_desktop_background_path(&recording_dir),
+        camera_snapshot.as_ref(),
     );
 
     config
@@ -6469,6 +6520,7 @@ fn project_config_from_recording(
     default_config: Option<ProjectConfiguration>,
     capture_target: Option<&ScreenCaptureTarget>,
     stored_desktop_background_path: Option<String>,
+    camera_snapshot: Option<&StudioCameraSnapshot>,
 ) -> ProjectConfiguration {
     let settings = GeneralSettingsStore::get(app)
         .unwrap_or(None)
@@ -6499,9 +6551,8 @@ fn project_config_from_recording(
         stored_desktop_background_path,
     );
 
-    let camera_preview_manager = CameraPreviewManager::new(app);
-    if let Ok(camera_preview_state) = camera_preview_manager.get_state() {
-        apply_recording_camera_preview_state(&mut config, &camera_preview_state);
+    if let Some(snapshot) = camera_snapshot {
+        snapshot.apply(&mut config);
     }
 
     let timeline_segments = recordings
@@ -6566,6 +6617,61 @@ pub(crate) fn recording_timeline(
         audio_segments: Vec::new(),
         camera3d_segments: Vec::new(),
     }
+}
+
+#[derive(Clone)]
+struct StudioCameraSnapshot {
+    state: crate::camera::CameraPreviewState,
+    placement: Option<cap_recording::camera_placement::RecordingCameraPlacement>,
+}
+
+impl StudioCameraSnapshot {
+    fn capture(app: &AppHandle, state: &App, target: &ScreenCaptureTarget) -> Self {
+        Self {
+            state: state.camera_preview.get_state().unwrap_or_default(),
+            placement: state
+                .camera_in_use
+                .then(|| studio_camera_placement(app, target))
+                .flatten(),
+        }
+    }
+
+    fn apply(&self, config: &mut ProjectConfiguration) {
+        apply_recording_camera_preview_state(config, &self.state);
+        if let Some(placement) = self.placement {
+            placement.apply(&mut config.camera);
+        }
+    }
+}
+
+fn studio_camera_placement(
+    app: &AppHandle,
+    target: &ScreenCaptureTarget,
+) -> Option<cap_recording::camera_placement::RecordingCameraPlacement> {
+    if matches!(target, ScreenCaptureTarget::CameraOnly) {
+        return None;
+    }
+    let window = CapWindowId::Camera.get(app)?;
+    let scale = window.scale_factor().ok()?;
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let position = window.inner_position().ok()?;
+    let size = window.inner_size().ok()?;
+    let toolbar = 56.0 * scale;
+    #[cfg(target_os = "macos")]
+    let units = scale;
+    #[cfg(not(target_os = "macos"))]
+    let units = 1.0;
+    cap_recording::camera_placement::recording_camera_placement(
+        target,
+        [
+            f64::from(position.x) / units,
+            (f64::from(position.y) + toolbar) / units,
+            f64::from(size.width) / units,
+            (f64::from(size.height) - toolbar) / units,
+        ],
+    )
 }
 
 fn apply_recording_camera_preview_state(
@@ -9900,6 +10006,48 @@ pub(crate) fn preparing_presentation_snapshot(
 #[cfg(test)]
 mod preparing_presentation_tests {
     use super::*;
+
+    #[test]
+    fn stopped_camera_snapshot_matches_preparing_and_final_presentation() {
+        let target = ScreenCaptureTarget::Display {
+            id: "1".parse().unwrap(),
+        };
+        for blur in [
+            cap_project::BackgroundBlurMode::Off,
+            cap_project::BackgroundBlurMode::Remove,
+        ] {
+            let snapshot = StudioCameraSnapshot {
+                state: crate::camera::CameraPreviewState {
+                    background_blur: blur,
+                    ..Default::default()
+                },
+                placement: cap_recording::camera_placement::RecordingCameraPlacement::from_bounds(
+                    [860.0, 20.0, 200.0, 200.0],
+                    [0.0, 0.0, 1920.0, 1080.0],
+                ),
+            };
+            let original = ProjectConfiguration::default();
+            let mut preparing =
+                preparing_presentation_snapshot(Some(&original), Some(&target)).unwrap();
+            let mut finished = original.clone();
+            snapshot.apply(&mut preparing);
+            snapshot.apply(&mut finished);
+            assert_eq!(
+                serde_json::to_value(&preparing.camera).unwrap(),
+                serde_json::to_value(&finished.camera).unwrap()
+            );
+            assert!(finished.camera.manual_position.is_none());
+            assert_eq!(
+                serde_json::to_value(&finished.camera.position).unwrap(),
+                serde_json::json!({"x": "center", "y": "top"})
+            );
+            assert_eq!(finished.camera.size, original.camera.size);
+            assert_eq!(
+                serde_json::to_value(&finished.timeline).unwrap(),
+                serde_json::to_value(&original.timeline).unwrap()
+            );
+        }
+    }
 
     #[test]
     fn preparing_never_guesses_default_wallpaper_or_animated_background() {

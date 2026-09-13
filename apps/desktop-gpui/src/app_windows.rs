@@ -4052,6 +4052,16 @@ fn camera_frame(cx: &mut App) -> Option<CameraFrame> {
         .filter(|camera| camera.snapshot.bounds.width > 0. && camera.snapshot.bounds.height > 0.)
 }
 
+pub(crate) fn studio_camera_snapshot(
+    target: &ScreenCaptureTarget,
+    cx: &mut App,
+) -> Option<crate::recording::StudioCameraSnapshot> {
+    let handle = cx.global::<AppWindows>().camera?;
+    handle
+        .update(cx, |view, window, _| view.studio_snapshot(window, target))
+        .ok()
+}
+
 fn visible_camera_frame(cx: &mut App) -> Option<CameraFrame> {
     if camera_preview_is_inline(cx) {
         return None;

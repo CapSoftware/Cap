@@ -664,8 +664,10 @@ fn adapt(
     let live = sources.live().ok_or_else(ended)?;
     let recording_meta = live.metadata().ok_or_else(ended)?.clone();
     let studio = recording_meta.studio_meta().ok_or_else(ended)?;
-    let mut project =
-        crate::recording::preparing_presentation(live.configuration().ok_or_else(ended)?)?;
+    let mut project = crate::recording::preparing_presentation(
+        live.configuration().ok_or_else(ended)?,
+        control.finalization.camera_snapshot(),
+    )?;
     if project.clips.is_empty() {
         project.clips =
             cap_editor::initial_clip_configuration(&recording_meta.project_path, studio);

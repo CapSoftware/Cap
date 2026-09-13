@@ -411,6 +411,7 @@ async fn finalize_studio(
     completed: studio_recording::CompletedRecording,
     capture_target: ScreenCaptureTarget,
     progress: Option<StudioFinalizationPublisher>,
+    camera_snapshot: Option<StudioCameraSnapshot>,
 ) -> anyhow::Result<PathBuf> {
     let started = std::time::Instant::now();
     let project_path = completed.project_path.clone();
@@ -454,16 +455,21 @@ async fn finalize_studio(
             elapsed_ms = thumbnail_started.elapsed().as_secs_f64() * 1000.0,
             "Studio stop thumbnail complete"
         );
-        apply_camera_blur_to_project_config(&project_path, current_camera_blur());
+        let placement = completed
+            .meta
+            .camera_path()
+            .and_then(|_| camera_snapshot.and_then(|snapshot| snapshot.placement));
+        apply_camera_preview_to_project_config(
+            &project_path,
+            camera_snapshot.map_or_else(current_camera_blur, |snapshot| snapshot.blur),
+            placement,
+        );
         let library = serde_json::from_value(serde_json::Value::Object(
             crate::store::store_section("animated_gradients"),
         ))
         .unwrap_or_default();
         apply_animated_gradient_to_project_config(&project_path, &capture_target, &library);
-        if crate::store::store_section("audio_enhancement")
-            .get("enabledByDefault")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
+        if crate::store::studio_sound_by_default()
             && let Err(error) = enable_studio_sound(&project_path)
         {
             tracing::warn!(%error, "Could not apply the Studio Sound default");
@@ -543,8 +549,15 @@ where
 pub(crate) type CaptureStopFuture =
     std::pin::Pin<Box<dyn Future<Output = (bool, anyhow::Result<PathBuf>)> + Send>>;
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StudioCameraSnapshot {
+    pub blur: crate::store::BlurMode,
+    pub placement: Option<cap_recording::camera_placement::RecordingCameraPlacement>,
+}
+
 #[derive(Clone, Default)]
 struct StudioFinalizationState {
+    camera_snapshot: Option<StudioCameraSnapshot>,
     capture_stopped: bool,
     preparing_decided: bool,
     preparing: Option<PreparingStudioObserver>,
@@ -568,6 +581,10 @@ struct StudioFinalizationTarget {
 }
 
 impl StudioFinalization {
+    pub(crate) fn camera_snapshot(&self) -> Option<StudioCameraSnapshot> {
+        self.state.borrow().camera_snapshot
+    }
+
     pub(crate) fn channel(
         project_path: PathBuf,
         generation: u64,
@@ -670,6 +687,11 @@ impl StudioFinalization {
 }
 
 impl StudioFinalizationPublisher {
+    pub(crate) fn set_camera_snapshot(&self, snapshot: Option<StudioCameraSnapshot>) {
+        self.state
+            .send_modify(|state| state.camera_snapshot = snapshot);
+    }
+
     fn claim_preparing(
         &self,
         completed: &studio_recording::CompletedRecording,
@@ -831,6 +853,7 @@ impl ActiveRecording {
     pub(crate) fn clean_studio_stop_handle(
         &self,
         progress: Option<StudioFinalizationPublisher>,
+        camera_snapshot: Option<StudioCameraSnapshot>,
     ) -> Option<CaptureStopFuture> {
         let Handle::Studio(handle) = &self.handle else {
             return None;
@@ -842,7 +865,7 @@ impl ActiveRecording {
                 if let Some(progress) = &progress {
                     progress.capture_stopped();
                 }
-                finalize_studio(completed, capture_target, progress.clone())
+                finalize_studio(completed, capture_target, progress.clone(), camera_snapshot)
             })
             .await;
             if let Some(progress) = progress {
@@ -856,6 +879,7 @@ impl ActiveRecording {
     pub(crate) fn clean_studio_stop_handle(
         &self,
         progress: Option<StudioFinalizationPublisher>,
+        camera_snapshot: Option<StudioCameraSnapshot>,
     ) -> Option<CaptureStopFuture> {
         let Handle::Studio(handle) = &self.handle else {
             return None;
@@ -875,7 +899,7 @@ impl ActiveRecording {
                     if let Some(progress) = &progress {
                         progress.capture_stopped();
                     }
-                    finalize_studio(completed, capture_target, progress.clone())
+                    finalize_studio(completed, capture_target, progress.clone(), camera_snapshot)
                 },
             )
             .await;
@@ -943,7 +967,7 @@ impl ActiveRecording {
                     })
                     .await
                 } else {
-                    joined_instant_result(lifecycle, active.stop(preserve_local)).await
+                    joined_instant_result(lifecycle, active.stop(preserve_local, None)).await
                 }
             },
             cancel,
@@ -1129,7 +1153,11 @@ impl ActiveRecording {
         Ok(())
     }
 
-    pub async fn stop(self, preserve_local: bool) -> anyhow::Result<PathBuf> {
+    pub(crate) async fn stop(
+        self,
+        preserve_local: bool,
+        camera_snapshot: Option<StudioCameraSnapshot>,
+    ) -> anyhow::Result<PathBuf> {
         #[cfg(target_os = "linux")]
         let _operation = self.instant_operation.lock().await;
         let mut upload_guard = match self.instant_upload.as_ref() {
@@ -1141,7 +1169,7 @@ impl ActiveRecording {
             Handle::Studio(handle) => {
                 let capture_target = handle.capture_target.clone();
                 let completed = handle.stop().await?;
-                finalize_studio(completed, capture_target, None).await
+                finalize_studio(completed, capture_target, None, camera_snapshot).await
             }
             Handle::Instant(handle) => {
                 let result = async {
@@ -1422,12 +1450,25 @@ fn write_bundle_thumbnail(project_dir: &std::path::Path, source_video: &std::pat
 
 pub(crate) fn preparing_presentation(
     project: &cap_project::ProjectConfiguration,
+    camera_snapshot: Option<StudioCameraSnapshot>,
 ) -> Result<cap_project::ProjectConfiguration, String> {
     let library = serde_json::from_value(serde_json::Value::Object(crate::store::store_section(
         "animated_gradients",
     )))
     .map_err(|error| format!("Preparing appearance preferences did not parse: {error}"))?;
-    preparing_presentation_for(project, current_camera_blur(), &library)
+    let mut config = preparing_presentation_for(
+        project,
+        camera_snapshot.map_or_else(current_camera_blur, |snapshot| snapshot.blur),
+        &library,
+    )?;
+    if crate::store::studio_sound_by_default() {
+        config.audio.improve = true;
+        config.audio.isolation = crate::store::studio_sound_isolation();
+    }
+    if let Some(placement) = camera_snapshot.and_then(|snapshot| snapshot.placement) {
+        placement.apply(&mut config.camera);
+    }
+    Ok(config)
 }
 
 fn preparing_presentation_for(
@@ -1466,6 +1507,7 @@ fn blur_mode_json(blur: crate::store::BlurMode) -> &'static str {
         crate::store::BlurMode::Off => "off",
         crate::store::BlurMode::Light => "light",
         crate::store::BlurMode::Heavy => "heavy",
+        crate::store::BlurMode::Remove => "remove",
     }
 }
 
@@ -1488,6 +1530,10 @@ fn enable_studio_sound(project_path: &std::path::Path) -> std::io::Result<()> {
         )
     })?;
     audio.insert("improve".into(), serde_json::Value::Bool(true));
+    audio.insert(
+        "isolation".into(),
+        serde_json::to_value(crate::store::studio_sound_isolation())?,
+    );
     let temp = path.with_extension(format!("studio-sound-{}.tmp", crate::store::new_uuid_v4()));
     let result = std::fs::write(&temp, serde_json::to_vec_pretty(&config)?)
         .and_then(|()| std::fs::rename(&temp, path));
@@ -1612,9 +1658,18 @@ fn apply_initial_animated_gradient(
 /// discipline applied to the other shared file, including its refusal: a config
 /// that does not parse, or whose `camera` is not an object, is left alone
 /// rather than replaced.
-pub fn apply_camera_blur_to_project_config(
+#[cfg(test)]
+fn apply_camera_blur_to_project_config(
     project_dir: &std::path::Path,
     blur: crate::store::BlurMode,
+) -> bool {
+    apply_camera_preview_to_project_config(project_dir, blur, None)
+}
+
+fn apply_camera_preview_to_project_config(
+    project_dir: &std::path::Path,
+    blur: crate::store::BlurMode,
+    placement: Option<cap_recording::camera_placement::RecordingCameraPlacement>,
 ) -> bool {
     use serde_json::{Map, Value};
 
@@ -1655,6 +1710,23 @@ pub fn apply_camera_blur_to_project_config(
         "mode".to_string(),
         Value::String(blur_mode_json(blur).to_string()),
     );
+
+    if let Some(placement) = placement {
+        let mut positioned = cap_project::Camera::default();
+        placement.apply(&mut positioned);
+        let Ok(Value::Object(position)) = serde_json::to_value(positioned.position) else {
+            return false;
+        };
+        let Some(saved_position) = camera
+            .entry("position")
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+        else {
+            return false;
+        };
+        saved_position.extend(position);
+        camera.insert("manualPosition".into(), Value::Null);
+    }
 
     // Same shape `ProjectConfiguration::write` produces (serde_json pretty),
     // via a temp file so a crash mid-write cannot leave a project whose config
@@ -3283,6 +3355,45 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[test]
+    fn bridging_camera_placement_preserves_unknown_fields_and_saved_edits() {
+        let dir = temp_project("camera-placement");
+        let path = dir.join("project-config.json");
+        let original = serde_json::json!({
+            "camera": {
+                "size": 41.0,
+                "mirror": true,
+                "manualPosition": { "x": 0.1, "y": 0.9 },
+                "position": { "x": "right", "y": "bottom", "futureAxis": 1 },
+                "backgroundBlur": { "mode": "light", "futureSetting": 123 },
+                "futureCameraSetting": "retained"
+            },
+            "timeline": { "segments": [{ "start": 1.0, "end": 7200.0 }] },
+            "futureProjectSetting": [1, 2, 3]
+        });
+        let placement = cap_recording::camera_placement::RecordingCameraPlacement::from_bounds(
+            [860.0, 20.0, 200.0, 200.0],
+            [0.0, 0.0, 1920.0, 1080.0],
+        )
+        .unwrap();
+        for blur in [BlurMode::Off, BlurMode::Remove] {
+            std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+            assert!(apply_camera_preview_to_project_config(
+                &dir,
+                blur,
+                Some(placement)
+            ));
+            let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let mut expected = original.clone();
+            expected["camera"]["backgroundBlur"]["mode"] = blur_mode_json(blur).into();
+            expected["camera"]["manualPosition"] = Value::Null;
+            expected["camera"]["position"]["x"] = "center".into();
+            expected["camera"]["position"]["y"] = "top".into();
+            assert_eq!(written, expected);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// A config written by a build that predates `backgroundBlur` (or one that
     /// never had a camera section at all) gets the key created rather than
     /// being skipped.
@@ -3350,6 +3461,7 @@ mod tests {
             (BlurMode::Off, "off"),
             (BlurMode::Light, "light"),
             (BlurMode::Heavy, "heavy"),
+            (BlurMode::Remove, "remove"),
         ] {
             assert_eq!(blur_mode_json(mode), json);
             let parsed: cap_project::BackgroundBlurMode =
