@@ -1159,6 +1159,7 @@ impl SpeedAudioProcessor {
             let byte_len = value_count * f32::BYTE_SIZE;
             let values = unsafe { cast_bytes_to_f32_slice(&frame.data(0)[..byte_len]) };
             self.pending.extend(values.iter().copied());
+            unsafe { ffmpeg::ffi::av_frame_unref(frame.as_mut_ptr()) };
         }
 
         Ok(())
