@@ -230,6 +230,11 @@ pub(crate) fn drop_clip_transition(
     ripple_track(&mut timeline.mask_segments, boundary, effective.duration);
     ripple_track(&mut timeline.text_segments, boundary, effective.duration);
     ripple_track(&mut timeline.caption_segments, boundary, effective.duration);
+    ripple_track(
+        &mut timeline.camera3d_segments,
+        boundary,
+        effective.duration,
+    );
     ripple_keyboard_track(
         &mut timeline.keyboard_segments,
         boundary,
@@ -3887,6 +3892,21 @@ mod tests {
             }
         ]))
         .unwrap();
+        config.camera3d_segments = [(2.0, 4.0), (11.0, 15.0), (15.0, 18.0)]
+            .into_iter()
+            .map(|(start, end)| {
+                serde_json::from_value(serde_json::json!({
+                    "start": start,
+                    "end": end,
+                    "tracks": { "zoom": [
+                        { "time": 0.0, "value": 1.0 },
+                        { "time": (end - start) / 2.0, "value": 1.5 },
+                        { "time": end - start, "value": 2.0 }
+                    ] }
+                }))
+                .unwrap()
+            })
+            .collect();
         // Moving clip 0 to the end separates the 0|1 pair, dropping the 1s
         // transition whose boundary sat at offset(1) + 1.0 = 10.0.
         assert!(move_clip(&mut config, 0, 3));
@@ -3918,6 +3938,22 @@ mod tests {
         );
         assert_eq!(config.keyboard_segments[1].keys[0].time_offset, 500.0);
         assert_eq!(config.keyboard_segments[1].keys[1].time_offset, 2500.0);
+        for (shot, (start, end)) in
+            config
+                .camera3d_segments
+                .iter()
+                .zip([(2.0, 4.0), (11.0, 16.0), (16.0, 19.0)])
+        {
+            assert_eq!((shot.start, shot.end), (start, end));
+            for (keyframe, (time, value)) in shot.tracks.zoom.iter().zip([
+                (0.0, 1.0),
+                ((end - start) / 2.0, 1.5),
+                (end - start, 2.0),
+            ]) {
+                assert!((keyframe.time - time).abs() < 1e-9);
+                assert_eq!(keyframe.value, value);
+            }
+        }
     }
 
     /// `computeDropIndex` (`:692-703`): the insertion point is after every

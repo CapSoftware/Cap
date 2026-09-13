@@ -3968,6 +3968,16 @@ mod tests {
             instant_animation: false,
             edge_snap_ratio: 0.0,
         }];
+        timeline.camera3d_segments = serde_json::from_value(serde_json::json!([
+            {
+                "start": 12.0, "end": 14.0,
+                "tracks": { "zoom": [
+                    { "time": 0.0, "value": 1.0 },
+                    { "time": 2.0, "value": 1.5 }
+                ] }
+            }
+        ]))
+        .unwrap();
         let before = clip_timeline_duration(timeline);
         assert_eq!(
             merge_clip_segments(timeline, 0, ClipMergeDirection::Next),
@@ -3977,6 +3987,11 @@ mod tests {
         assert!(timeline.transitions.is_empty());
         assert!((timeline.zoom_segments[0].start - 13.0).abs() < 1e-9);
         assert!((timeline.zoom_segments[0].end - 15.0).abs() < 1e-9);
+        let shot = &timeline.camera3d_segments[0];
+        assert_eq!((shot.start, shot.end), (13.0, 15.0));
+        assert_eq!(shot.tracks.zoom[0].time, 0.0);
+        assert_eq!(shot.tracks.zoom[1].time, 2.0);
+        assert_eq!(shot.tracks.zoom[1].value, 1.5);
     }
 
     #[test]
