@@ -274,7 +274,11 @@ function normalizeSegment(segment: TauriTextSegment): SegmentWithDefaults {
 		Partial<
 			Pick<
 				TextSegment,
-				"align" | "backgroundColor" | "letterSpacing" | "lineHeight"
+				| "align"
+				| "backgroundColor"
+				| "letterSpacing"
+				| "lineHeight"
+				| "uppercase"
 			>
 		>;
 	return {
@@ -737,6 +741,7 @@ function TextSegmentOverlay(props: {
 		"font-style": segment().italic ? "italic" : "normal",
 		"line-height": segment().lineHeight,
 		"letter-spacing": `${letterSpacingPx()}px`,
+		"text-transform": segment().uppercase ? "uppercase" : "none",
 	});
 
 	return (
