@@ -532,6 +532,15 @@ function Inner(props: {
 				} catch {
 					return;
 				}
+				try {
+					await flushProjectConfig();
+				} catch (error) {
+					console.error("Failed to save the project before closing", error);
+					toast.error(
+						"Could not save your edits. Keep the editor open and try again.",
+					);
+					return;
+				}
 
 				if (exportState.type === "idle" || exportState.type === "done") {
 					allowExportClose = true;
