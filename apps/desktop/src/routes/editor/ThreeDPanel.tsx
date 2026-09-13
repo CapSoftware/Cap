@@ -69,7 +69,6 @@ import {
 	topSlideAnimateClasses,
 } from "./ui";
 
-/** "3D shot · Glide across · 3.0s" for the selection panel's header row. */
 export const camera3DShotSummary = (segment: Camera3DSegment) =>
 	`3D shot · ${camera3DShotLabel(segment)} · ${(segment.end - segment.start).toFixed(1)}s`;
 
@@ -88,8 +87,6 @@ const BLUR_MODE_LABELS: Record<Exclude<Camera3DBlurMode, "none">, string> = {
 	tiltShift: "Tilt shift",
 };
 
-// The parameters each mode actually reads, minus strength: that one is the
-// group's own Amount row.
 const BLUR_FINE_SLIDERS: Record<
 	Exclude<Camera3DBlurMode, "none">,
 	Array<{ key: Camera3DBlurScalarKey; label: string; unit: string }>
@@ -115,10 +112,6 @@ const BLUR_FINE_SLIDERS: Record<
 
 const DEFAULT_BLUR_STRENGTH = 19;
 
-/**
- * 1 to 6, the counts an auto scene can be laid out with. Shared by the lane's
- * picker and the shot panel's row so both offer exactly the same thing.
- */
 export function ShotCountPills(props: {
 	max: number;
 	current?: number | null;
@@ -161,7 +154,6 @@ export function ShotCountPills(props: {
 	);
 }
 
-/** One hairline group: label row on top, content underneath. */
 function PanelGroup(
 	props: ParentProps<{ name: string; action?: JSX.Element }>,
 ) {
@@ -361,11 +353,6 @@ function SequenceCard(props: { scene: Camera3DScene; onClick: () => void }) {
 	);
 }
 
-/**
- * Orbit by dragging: the x axis is yaw and the y axis is pitch, both linear
- * across their limits with the centre on zero. The card inside is the pose
- * being edited, so the pad is the preview as well as the control.
- */
 function OrbitPad(props: {
 	pose: Camera3DProperties;
 	onChange: (tiltX: number, tiltY: number) => void;
@@ -379,7 +366,6 @@ function OrbitPad(props: {
 			(props.pose.tiltY - CAMERA3D_LIMITS.tiltY.min) /
 				(CAMERA3D_LIMITS.tiltY.max - CAMERA3D_LIMITS.tiltY.min),
 		);
-	// Up is a higher camera, so the pitch axis reads top-down.
 	const y = () =>
 		clamp01(
 			(CAMERA3D_LIMITS.tiltX.max - props.pose.tiltX) /
@@ -441,12 +427,10 @@ function OrbitPad(props: {
 	);
 }
 
-/** The "Timing & advanced" drill row: closed, it is one more line in the column. */
 function DrillSection(
 	props: ParentProps<{
 		name: string;
 		summary?: string;
-		/** Nested inside a group: no ring of its own, and quieter type. */
 		subtle?: boolean;
 		open: boolean;
 		onOpenChange: (open: boolean) => void;
@@ -483,7 +467,6 @@ function DrillSection(
 	);
 }
 
-/** mm:ss.s, so a caption can name the exact moment a pose happens. */
 const formatShotTime = (seconds: number) => {
 	const clamped = Math.max(seconds, 0);
 	const minutes = Math.floor(clamped / 60);
@@ -515,22 +498,15 @@ export function Camera3DShotPanel(props: {
 		);
 	};
 
-	// A shot is one move: the pose it opens on and the pose it lands on.
-	// Everything here reads and writes that pair; the keyframe tracks
-	// underneath are only how the renderer is fed.
 	const startPose = () => getStartPose(props.segment);
 	const endPose = () => getEndPose(props.segment);
 	const isStill = () => camera3DPosesEqual(startPose(), endPose());
 
-	// Which pose is being edited lives in editor state: the timeline's pose dots
-	// are the same control as this panel's pose cards.
 	const editingEnd = () => editorState.timeline.camera3dPose === "end";
 	const setEditingEnd = (end: boolean) =>
 		setEditorState("timeline", "camera3dPose", end ? "end" : "start");
 	const selectedPose = () => (editingEnd() ? endPose() : startPose());
 
-	// Selecting another shot reuses this panel, so the pose tab has to fall
-	// back to Start rather than carry over.
 	createEffect(
 		on(
 			() => props.segmentIndex,
@@ -552,12 +528,9 @@ export function Camera3DShotPanel(props: {
 		),
 	);
 
-	// Selecting a pose parks the playhead on it, frame-accurately, which is what
-	// makes the canvas show that pose rather than the frame before the shot.
 	const selectPose = (end: boolean) =>
 		projectActions.selectCamera3DPose(props.segmentIndex, end);
 
-	// Whether the playhead is sitting on one of the two poses right now.
 	const playheadOnPose = (end: boolean) =>
 		Math.abs(
 			editorState.playbackTime - camera3DPoseSeekTime(props.segment, end, FPS),
@@ -610,8 +583,6 @@ export function Camera3DShotPanel(props: {
 	);
 	const activeLook = () => matchCamera3DLook(props.segment);
 
-	// A look owns the whole camera animation: the existing move is replaced and
-	// the playhead returns to the start so the result plays from its first pose.
 	const applyLook = (look: Camera3DMotionTemplate) =>
 		batch(() => {
 			projectActions.applyCamera3DLook(props.segmentIndex, look);
@@ -626,7 +597,6 @@ export function Camera3DShotPanel(props: {
 			? "radial"
 			: (blur().mode as Exclude<Camera3DBlurMode, "none">);
 
-	// The mode to come back to when the group is switched on again.
 	const [lastBlurMode, setLastBlurMode] =
 		createSignal<Exclude<Camera3DBlurMode, "none">>("radial");
 
@@ -688,7 +658,6 @@ export function Camera3DShotPanel(props: {
 	const [fineTuneOpen, setFineTuneOpen] = createSignal(false);
 	const [advancedOpen, setAdvancedOpen] = createSignal(false);
 
-	// A pill left hovered when the panel closes must not leave ghosts behind.
 	onCleanup(() => setEditorState("timeline", "camera3dAutoPreview", null));
 
 	const shotCount = () => project.timeline?.camera3dSegments?.length ?? 0;
@@ -737,7 +706,6 @@ export function Camera3DShotPanel(props: {
 				>
 					{poseCaption(end)}
 				</span>
-				{/* The playhead is on this pose right now. */}
 				<Show when={playheadOnPose(end)}>
 					<span class="rounded-full shrink-0 size-1.5 bg-ed-accent" />
 				</Show>
@@ -858,8 +826,6 @@ export function Camera3DShotPanel(props: {
 					</div>
 				}
 			>
-				{/* The two poses, side by side and live: the shot is what these two
-				    cards say it is, and clicking one puts the playhead on it. */}
 				<div class="flex flex-row gap-2 items-start">
 					{poseTile(false)}
 					<div
