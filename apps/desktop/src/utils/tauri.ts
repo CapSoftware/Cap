@@ -516,6 +516,12 @@ async openTargetSelectOverlays(focusedTarget: ScreenCaptureTarget | null, specif
 async closeTargetSelectOverlays() : Promise<null> {
     return await TAURI_INVOKE("close_target_select_overlays");
 },
+async targetSelectOverlayReady(instance: number) : Promise<void> {
+    await TAURI_INVOKE("target_select_overlay_ready", { instance });
+},
+async suspendTargetSelectOverlays() : Promise<void> {
+    await TAURI_INVOKE("suspend_target_select_overlays");
+},
 async updateCameraOverlayBounds(x: number, y: number, width: number, height: number) : Promise<null> {
     return await TAURI_INVOKE("update_camera_overlay_bounds", { x, y, width, height });
 },

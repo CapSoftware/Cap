@@ -6567,16 +6567,31 @@ pub async fn open_target_picker(
     let state = app.state::<target_select_overlay::WindowFocusManager>();
     let display_id = None;
 
-    let _ = target_select_overlay::open_target_select_overlays(
+    let session = match target_select_overlay::open_target_select_overlays_for_session(
         app.clone(),
-        state,
+        state.inner(),
         None,
         display_id.clone(),
         Some(target_mode),
     )
-    .await;
+    .await
+    {
+        Ok(session) => session,
+        Err(error) => {
+            warn!(%error, "Failed to open target picker");
+            let _ = ShowCapWindow::Main {
+                init_target_mode: None,
+            }
+            .show(app)
+            .await;
+            return;
+        }
+    };
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    if !state.picker_is_current(session) {
+        return;
+    }
 
     let _ = RequestSetTargetMode {
         target_mode: Some(target_mode),
@@ -6898,6 +6913,8 @@ fn specta_builder() -> tauri_specta::Builder {
             captions::export_captions_srt,
             target_select_overlay::open_target_select_overlays,
             target_select_overlay::close_target_select_overlays,
+            target_select_overlay::target_select_overlay_ready,
+            target_select_overlay::suspend_target_select_overlays,
             target_select_overlay::update_camera_overlay_bounds,
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,

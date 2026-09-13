@@ -292,6 +292,7 @@ pub fn init(app: &AppHandle) {
                 }
 
                 if shortcut.key == Code::Escape {
+                    crate::target_select_overlay::dismiss_picker_from_escape(app);
                     OnEscapePress.emit(app).ok();
                 }
 
