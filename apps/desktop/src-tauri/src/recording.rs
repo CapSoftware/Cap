@@ -6440,6 +6440,28 @@ pub fn generate_zoom_segments_for_project(
     )
 }
 
+fn apply_studio_sound_default(app: &AppHandle, config: &mut ProjectConfiguration) {
+    let audio_enhancement = app
+        .store("store")
+        .ok()
+        .and_then(|store| store.get("audio_enhancement"));
+    if audio_enhancement
+        .as_ref()
+        .and_then(|value| {
+            value
+                .get("enabledByDefault")
+                .and_then(serde_json::Value::as_bool)
+        })
+        .unwrap_or(true)
+    {
+        config.audio.improve = true;
+        config.audio.isolation = audio_enhancement
+            .and_then(|value| value.get("isolation").cloned())
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default();
+    }
+}
+
 fn project_config_from_recording(
     app: &AppHandle,
     completed_recording: &studio_recording::CompletedRecording,
@@ -6454,19 +6476,7 @@ fn project_config_from_recording(
 
     let using_default_config = default_config.is_none();
     let mut config = default_config.unwrap_or_default();
-    if app
-        .store("store")
-        .ok()
-        .and_then(|store| store.get("audio_enhancement"))
-        .and_then(|value| {
-            value
-                .get("enabledByDefault")
-                .and_then(serde_json::Value::as_bool)
-        })
-        .unwrap_or(false)
-    {
-        config.audio.improve = true;
-    }
+    apply_studio_sound_default(app, &mut config);
     if using_default_config {
         let library = app
             .store("store")

@@ -14,6 +14,7 @@ import type {
 	HotkeysStore,
 	PresetsStore,
 	RecordingSettingsStore,
+	VoiceIsolation,
 } from "~/utils/tauri";
 
 export type TeleprompterStore = {
@@ -104,7 +105,8 @@ function declareStore<T extends object>(name: string, defaults?: T) {
 
 export const audioEnhancementStore = declareStore<{
 	enabledByDefault: boolean;
-}>("audio_enhancement", { enabledByDefault: false });
+	isolation: VoiceIsolation;
+}>("audio_enhancement", { enabledByDefault: true, isolation: "balanced" });
 
 export const presetsStore = declareStore<PresetsStore>("presets");
 const animatedGradientDefaults: AnimatedGradientLibrary = {
