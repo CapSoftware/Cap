@@ -814,6 +814,7 @@ function TextSegmentOverlay(props: {
 				</Show>
 				<div
 					class="absolute inset-0 border-2 transition-colors rounded-md pointer-events-none"
+					style={{ opacity: "var(--preview-controls-opacity, 1)" }}
 					classList={{
 						"border-blue-9": props.isSelected,
 						"border-blue-6": !props.isSelected && hovered(),
@@ -823,7 +824,10 @@ function TextSegmentOverlay(props: {
 				<Show when={(props.isSelected || hovered()) && !editing()}>
 					<div
 						class="absolute px-1.5 py-0.5 text-[11px] font-medium text-white bg-blue-9 rounded pointer-events-none select-none"
-						style={labelStyle()}
+						style={{
+							...labelStyle(),
+							opacity: "var(--preview-controls-opacity, 1)",
+						}}
 					>
 						Text
 					</div>
@@ -881,7 +885,10 @@ function TextSegmentOverlay(props: {
 								)}
 								onMouseDown={createResizeHandler(corner.dirX, corner.dirY)}
 							>
-								<span class="w-3 h-3 rounded-full border border-white shadow-xs pointer-events-none bg-blue-9 transition-transform group-hover/handle:scale-125" />
+								<span
+									class="w-3 h-3 rounded-full border border-white shadow-xs pointer-events-none bg-blue-9 transition-transform group-hover/handle:scale-125"
+									style={{ opacity: "var(--preview-controls-opacity, 1)" }}
+								/>
 							</div>
 						)}
 					</For>

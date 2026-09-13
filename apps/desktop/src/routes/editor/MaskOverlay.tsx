@@ -129,7 +129,10 @@ export function MaskOverlay(props: MaskOverlayProps) {
 	};
 
 	return (
-		<div class="absolute inset-0 pointer-events-none">
+		<div
+			class="absolute inset-0 pointer-events-none"
+			style={{ opacity: "var(--preview-controls-opacity, 1)" }}
+		>
 			<Show when={shouldRenderHoveredMask() ? hoveredMask() : null}>
 				{(hovered) => {
 					const rect = () =>
