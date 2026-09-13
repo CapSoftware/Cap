@@ -3278,6 +3278,26 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     self.setting_row(
+                        "Studio Sound on new recordings",
+                        Some(
+                            "Clean up microphone audio automatically. You can still turn it \
+                             off for any recording in the editor.",
+                        ),
+                        self.toggle(
+                            "studio-sound-default",
+                            settings.studio_sound_by_default,
+                            cx,
+                            |this, cx| {
+                                let value = !this.settings.studio_sound_by_default;
+                                if store::set_studio_sound_by_default(value) {
+                                    this.settings.studio_sound_by_default = value;
+                                }
+                                cx.notify();
+                            },
+                        )
+                        .into_any_element(),
+                    ),
+                    self.setting_row(
                         "Main window when recording starts",
                         Some("What happens to the main window once a recording begins."),
                         self.select(

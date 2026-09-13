@@ -937,11 +937,58 @@ pub struct GeneralSettings {
     /// (`RECORDING_START_SAFETY_DEFAULTS`), and the page renders it in the
     /// middle of the Recording card as if it were one of them.
     pub confirm_without_microphone: bool,
+    /// Also outside `general_settings`: the `audio_enhancement` section's
+    /// `enabledByDefault`, rendered in the Recording card next to it.
+    pub studio_sound_by_default: bool,
 }
 
 /// The section names, so the write calls read as the store keys they are.
 pub const GENERAL_SETTINGS: &str = "general_settings";
 pub const RECORDING_START_SAFETY: &str = "recording_start_safety";
+/// `audioEnhancementStore` (`apps/desktop/src/store.ts`): whether new Studio
+/// recordings start with Studio Sound on. Defaults on; the editor's Audio tab
+/// and the Recording settings card both write it.
+pub const AUDIO_ENHANCEMENT: &str = "audio_enhancement";
+pub const STUDIO_SOUND_BY_DEFAULT_KEY: &str = "enabledByDefault";
+
+pub fn studio_sound_by_default() -> bool {
+    bool_at(
+        &store_section(AUDIO_ENHANCEMENT),
+        STUDIO_SOUND_BY_DEFAULT_KEY,
+        true,
+    )
+}
+
+pub fn set_studio_sound_by_default(enabled: bool) -> bool {
+    set_store_setting(
+        AUDIO_ENHANCEMENT,
+        STUDIO_SOUND_BY_DEFAULT_KEY,
+        Value::Bool(enabled),
+    )
+}
+
+pub fn studio_sound_isolation() -> cap_project::VoiceIsolation {
+    store_section(AUDIO_ENHANCEMENT)
+        .get("isolation")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
+}
+
+pub fn set_studio_sound_isolation(isolation: cap_project::VoiceIsolation) -> bool {
+    set_store_setting(
+        AUDIO_ENHANCEMENT,
+        "isolation",
+        serde_json::to_value(isolation).unwrap(),
+    )
+}
+
+pub fn set_studio_sound_defaults(enabled: bool, isolation: cap_project::VoiceIsolation) -> bool {
+    let mut section = store_section(AUDIO_ENHANCEMENT);
+    section.insert(STUDIO_SOUND_BY_DEFAULT_KEY.into(), Value::Bool(enabled));
+    section.insert("isolation".into(), serde_json::to_value(isolation).unwrap());
+    set_store_value(AUDIO_ENHANCEMENT, Value::Object(section))
+}
 /// `RecordingSettingsStore::KEY` (`src-tauri/src/recording_settings.rs:37`) --
 /// the section the tray's Select Mode submenu reads and writes.
 pub const RECORDING_SETTINGS: &str = "recording_settings";
@@ -1146,7 +1193,7 @@ pub fn should_show_onboarding() -> bool {
 
 impl Default for GeneralSettings {
     fn default() -> Self {
-        Self::from_sections(&Map::new(), &Map::new())
+        Self::from_sections(&Map::new(), &Map::new(), &Map::new())
     }
 }
 
@@ -1155,10 +1202,15 @@ impl GeneralSettings {
         Self::from_sections(
             &store_section(GENERAL_SETTINGS),
             &store_section(RECORDING_START_SAFETY),
+            &store_section(AUDIO_ENHANCEMENT),
         )
     }
 
-    fn from_sections(general: &Map<String, Value>, safety: &Map<String, Value>) -> Self {
+    fn from_sections(
+        general: &Map<String, Value>,
+        safety: &Map<String, Value>,
+        audio_enhancement: &Map<String, Value>,
+    ) -> Self {
         Self {
             theme: enum_at(general, "theme"),
             hide_dock_icon: bool_at(general, "hideDockIcon", false),
@@ -1217,6 +1269,7 @@ impl GeneralSettings {
                 "confirmBeforeRecordingWithoutMicrophone",
                 true,
             ),
+            studio_sound_by_default: bool_at(audio_enhancement, STUDIO_SOUND_BY_DEFAULT_KEY, true),
         }
     }
 }
@@ -2163,9 +2216,11 @@ mod tests {
             "confirmBeforeRecordingWithoutMicrophone",
             Value::Bool(false)
         ));
+        assert!(super::set_studio_sound_by_default(false));
         let settings = GeneralSettings::load();
         assert!(settings.hide_dock_icon);
         assert!(!settings.confirm_without_microphone);
+        assert!(!settings.studio_sound_by_default);
         // The section it created did not disturb the others.
         assert_eq!(store.read()["auth"]["user_id"], "u_1");
     }
@@ -2230,6 +2285,7 @@ mod tests {
         assert!(settings.enable_notifications);
         assert!(settings.crash_recovery_recording);
         assert!(settings.confirm_without_microphone);
+        assert!(settings.studio_sound_by_default);
         assert_eq!(settings.instant_mode_max_resolution, 1920);
     }
 
@@ -2673,7 +2729,7 @@ mod tests {
     /// default); key present but empty -> the user cleared every entry.
     #[test]
     fn excluded_windows_default_only_when_key_is_absent() {
-        let absent = GeneralSettings::from_sections(&Map::new(), &Map::new());
+        let absent = GeneralSettings::from_sections(&Map::new(), &Map::new(), &Map::new());
         assert_eq!(absent.excluded_windows, default_excluded_windows());
         assert!(
             absent
@@ -2684,7 +2740,7 @@ mod tests {
 
         let mut general = Map::new();
         general.insert("excludedWindows".to_string(), Value::Array(Vec::new()));
-        let cleared = GeneralSettings::from_sections(&general, &Map::new());
+        let cleared = GeneralSettings::from_sections(&general, &Map::new(), &Map::new());
         assert!(cleared.excluded_windows.is_empty());
     }
 }
