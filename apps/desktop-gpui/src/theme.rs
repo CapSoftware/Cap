@@ -599,6 +599,27 @@ pub fn preview_shadow() -> Vec<BoxShadow> {
     }]
 }
 
+/// The lift under a selected segmented-control pill on the light editor
+/// surface (`shadow-[0_1px_2px_rgba(0,0,0,.12),0_0_0_.5px_rgba(0,0,0,.06)]`).
+pub fn raised_pill_shadow() -> Vec<BoxShadow> {
+    vec![
+        BoxShadow {
+            color: gpui::hsla(0., 0., 0., 0.12),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(2.),
+            spread_radius: px(0.),
+            inset: false,
+        },
+        BoxShadow {
+            color: gpui::hsla(0., 0., 0., 0.06),
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(0.),
+            spread_radius: px(0.5),
+            inset: false,
+        },
+    ]
+}
+
 /// The drop shadow under a slider knob.
 pub fn thumb_shadow() -> Vec<BoxShadow> {
     vec![BoxShadow {
