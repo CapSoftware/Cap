@@ -8,6 +8,7 @@ import {
 	createRoot,
 	createSignal,
 	Index,
+	onCleanup,
 	Show,
 } from "solid-js";
 import { produce } from "solid-js/store";
@@ -336,6 +337,8 @@ export function ZoomTrack(props: {
 				<Index each={project.timeline?.zoomSegments}>
 					{(segment, i) => {
 						const { setTrackState } = useTrackContext();
+						let cancelDrag: (() => void) | undefined;
+						onCleanup(() => cancelDrag?.());
 
 						const zoomPercentage = () => {
 							const amount = segment().amount;
@@ -400,11 +403,17 @@ export function ZoomTrack(props: {
 							_update: (e: MouseEvent, v: T, initialMouseX: number) => void,
 						) {
 							return (downEvent: MouseEvent) => {
-								if (editorState.timeline.interactMode !== "seek") return;
+								if (
+									downEvent.button !== 0 ||
+									editorState.timeline.interactMode !== "seek"
+								)
+									return;
 
 								downEvent.stopPropagation();
+								cancelDrag?.();
 
 								const initial = setup();
+								const draggedSegment = segment();
 
 								let moved = false;
 								let initialMouseX: null | number = null;
@@ -416,7 +425,6 @@ export function ZoomTrack(props: {
 								props.onDragStateChanged({ type: "movePending" });
 
 								function finish(e: MouseEvent) {
-									resumeHistory();
 									if (!moved) {
 										e.stopPropagation();
 
@@ -474,8 +482,6 @@ export function ZoomTrack(props: {
 										}
 										props.handleUpdatePlayhead(e);
 									}
-									props.onDragStateChanged({ type: "idle" });
-									setTrackState("draggingSegment", false);
 								}
 
 								function update(event: MouseEvent) {
@@ -495,15 +501,30 @@ export function ZoomTrack(props: {
 								}
 
 								createRoot((dispose) => {
+									cancelDrag = dispose;
+									onCleanup(() => {
+										cancelDrag = undefined;
+										resumeHistory();
+										props.onDragStateChanged({ type: "idle" });
+										setTrackState("draggingSegment", false);
+									});
+									const isCurrentSegment = () =>
+										zoomSegments()[i] === draggedSegment;
+									createEffect(() => {
+										if (!isCurrentSegment()) dispose();
+									});
 									createEventListenerMap(window, {
 										mousemove: (e) => {
+											if (!isCurrentSegment()) return dispose();
 											update(e);
 										},
 										mouseup: (e) => {
+											if (!isCurrentSegment()) return dispose();
 											update(e);
 											finish(e);
 											dispose();
 										},
+										blur: dispose,
 									});
 								});
 							};
@@ -524,6 +545,7 @@ export function ZoomTrack(props: {
 								segment={segment()}
 								onMouseDown={(e) => {
 									e.stopPropagation();
+									if (e.button !== 0) return;
 
 									if (editorState.timeline.interactMode === "split") {
 										const rect = e.currentTarget.getBoundingClientRect();
@@ -538,6 +560,8 @@ export function ZoomTrack(props: {
 								onContextMenu={async (e: MouseEvent) => {
 									e.preventDefault();
 									e.stopPropagation();
+									// Native menus can consume mouseup before deleting the dragged segment.
+									cancelDrag?.();
 
 									// Right-clicking an unselected segment selects it first,
 									// so the menu always acts on what's highlighted.
