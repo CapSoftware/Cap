@@ -37,6 +37,10 @@ pub struct EditorButton {
     icon_size: Pixels,
     right_icon_size: Pixels,
     width: Option<Pixels>,
+    /// `h-7` by default; the 3D panel's group-row actions are `h-6`.
+    height: Pixels,
+    padding_x: Pixels,
+    text_size: Pixels,
     variant: EditorButtonVariant,
     disabled: bool,
     /// `data-pressed` / `data-expanded`.
@@ -65,6 +69,9 @@ impl EditorButton {
             icon_size: px(16.),
             right_icon_size: px(10.),
             width: None,
+            height: px(28.),
+            padding_x: px(7.),
+            text_size: px(13.),
             variant: EditorButtonVariant::Primary,
             disabled: false,
             pressed: false,
@@ -122,6 +129,22 @@ impl EditorButton {
         self
     }
 
+    /// A shorter button, for a control sitting on a group's own label row.
+    pub fn height(mut self, height: Pixels) -> Self {
+        self.height = height;
+        self
+    }
+
+    pub fn padding_x(mut self, padding: Pixels) -> Self {
+        self.padding_x = padding;
+        self
+    }
+
+    pub fn text_size(mut self, size: Pixels) -> Self {
+        self.text_size = size;
+        self
+    }
+
     pub fn width(mut self, width: Pixels) -> Self {
         self.width = Some(width);
         self
@@ -170,6 +193,9 @@ impl RenderOnce for EditorButton {
             icon_size,
             right_icon_size,
             width,
+            height,
+            padding_x,
+            text_size,
             variant: _,
             disabled,
             pressed,
@@ -209,15 +235,15 @@ impl RenderOnce for EditorButton {
             .flex_row()
             .items_center()
             .justify_center()
-            .px(px(7.))
+            .px(padding_x)
             .gap(px(6.))
-            .h(px(28.))
-            .min_w(px(28.))
+            .h(height)
+            .min_w(height)
             .rounded(px(7.))
             .flex_shrink_0()
             .when(right_icon_end, |this| this.justify_between())
             .when_some(width, |this, width| this.w(width))
-            .text_size(px(13.))
+            .text_size(text_size)
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(foreground)
             .when(disabled, |this| this.opacity(0.45))
