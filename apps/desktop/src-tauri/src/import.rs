@@ -925,7 +925,9 @@ fn source_timeline_segments_for_import(
             start,
             end,
             name: None,
-            speed_audio_mode: None,
+            speed_audio_mode: segment.speed_audio_mode,
+            hide_cursor: segment.hide_cursor,
+            volume: segment.volume,
         });
     }
 
