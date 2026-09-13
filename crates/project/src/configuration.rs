@@ -2986,6 +2986,51 @@ mod notch_tests {
 mod tests {
     use super::*;
 
+    #[test]
+    fn studio_sound_defaults_old_projects_to_balanced_and_round_trips_tiers() {
+        let legacy: AudioConfiguration =
+            serde_json::from_str(r#"{"improve":true,"micVolumeDb":-3.0}"#).unwrap();
+        assert!(legacy.improve);
+        assert_eq!(legacy.isolation, VoiceIsolation::Balanced);
+        assert_eq!(legacy.mic_volume_db, -3.0);
+        for isolation in [
+            VoiceIsolation::Light,
+            VoiceIsolation::Balanced,
+            VoiceIsolation::Strong,
+        ] {
+            let audio = AudioConfiguration {
+                isolation,
+                ..legacy.clone()
+            };
+            let restored: AudioConfiguration =
+                serde_json::from_slice(&serde_json::to_vec(&audio).unwrap()).unwrap();
+            assert_eq!(audio, restored);
+        }
+    }
+
+    #[test]
+    fn camera_background_removal_round_trips_without_rewriting_framing() {
+        let camera: Camera = serde_json::from_value(serde_json::json!({
+            "backgroundBlur": { "mode": "remove" },
+            "rounding": 100.0,
+            "shadow": 65.0,
+            "shape": "square"
+        }))
+        .unwrap();
+        let round_trip: Camera =
+            serde_json::from_slice(&serde_json::to_vec(&camera).unwrap()).unwrap();
+        assert_eq!(round_trip.background_blur.mode, BackgroundBlurMode::Remove);
+        assert_eq!(round_trip.rounding, 100.0);
+        assert_eq!(round_trip.shadow, 65.0);
+        assert!(matches!(round_trip.shape, CameraShape::Square));
+        let legacy: Camera = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.background_blur.mode, BackgroundBlurMode::Off);
+        assert_eq!(
+            round_trip.background_blur.is_active(),
+            cfg!(target_os = "macos")
+        );
+    }
+
     fn timeline_with_transitions(transitions: Vec<ClipTransition>) -> TimelineConfiguration {
         TimelineConfiguration {
             segments: vec![
