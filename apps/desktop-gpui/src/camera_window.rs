@@ -161,6 +161,9 @@ fn normalized_size(state: &CameraWindowState) -> f32 {
 /// the native page's issue overlay, and the native WGSL mask uses its own
 /// smaller radii; the 24px container is what users see.
 pub(crate) fn preview_radius(state: &CameraWindowState) -> f32 {
+    if cfg!(target_os = "macos") && state.background_blur == BlurMode::Remove {
+        return 0.;
+    }
     match state.shape {
         CameraShape::Round => clamp_size(state.size) / 2.,
         _ => 24.,
@@ -168,6 +171,9 @@ pub(crate) fn preview_radius(state: &CameraWindowState) -> f32 {
 }
 
 fn picker_preview_radius(state: &CameraWindowState, picker_size: Option<(f32, f32)>) -> f32 {
+    if cfg!(target_os = "macos") && state.background_blur == BlurMode::Remove {
+        return 0.;
+    }
     match (state.shape, picker_size) {
         (CameraShape::Round, Some((width, height))) => {
             width.max(0.).min((height - CAMERA_TOOLBAR_HEIGHT).max(0.)) / 2.
@@ -859,7 +865,7 @@ pub(crate) fn clear_parked_camera_preview(cx: &mut gpui::App) {
 }
 
 #[cfg(target_os = "macos")]
-fn snapshot_preview(
+pub(crate) fn snapshot_preview(
     buffer: &core_video::pixel_buffer::CVPixelBuffer,
 ) -> Option<Arc<gpui::RenderImage>> {
     use core_video::pixel_buffer::{kCVPixelBufferLock_ReadOnly, kCVPixelFormatType_32BGRA};
@@ -895,7 +901,7 @@ fn snapshot_preview(
             let offset = source_y * stride + source_x * 4;
             let pixel = unsafe { std::slice::from_raw_parts(base.add(offset), 4) };
             // RenderImage consumes BGRA bytes even though image::Frame wraps RgbaImage.
-            image::Rgba([pixel[0], pixel[1], pixel[2], 255])
+            image::Rgba([pixel[0], pixel[1], pixel[2], pixel[3]])
         });
         Some(Arc::new(gpui::RenderImage::new(smallvec::smallvec![
             image::Frame::new(image)
@@ -912,6 +918,10 @@ fn snapshot_preview(
 /// goes through the parent [`CameraWindow`] instead, so a frame draw reuses
 /// the cached toolbar subtree.
 struct CameraPreviewView {
+    #[cfg(target_os = "macos")]
+    cutout_frame: Option<Arc<gpui::RenderImage>>,
+    #[cfg(target_os = "macos")]
+    painted_cutout_frame: Option<Arc<gpui::RenderImage>>,
     theme: Theme,
     radius: f32,
     /// Clamped bubble size, for the issue overlay's scaled text metrics.
@@ -997,6 +1007,10 @@ impl CameraPreviewView {
             }
         });
         Self {
+            #[cfg(target_os = "macos")]
+            cutout_frame: None,
+            #[cfg(target_os = "macos")]
+            painted_cutout_frame: None,
             theme,
             radius,
             size,
@@ -1027,6 +1041,7 @@ impl CameraPreviewView {
         dims: (usize, usize),
         cx: &mut Context<Self>,
     ) {
+        self.cutout_frame = None;
         self.latest_frame = Some(frame);
         self.frame_dims = Some(dims);
         self.frame_revision = Some(self.selection_revision);
@@ -1064,12 +1079,24 @@ impl CameraPreviewView {
 
 impl Render for CameraPreviewView {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(target_os = "macos")]
+        if self.painted_cutout_frame.as_ref().is_some_and(|painted| {
+            self.cutout_frame
+                .as_ref()
+                .is_none_or(|current| !Arc::ptr_eq(painted, current))
+        }) && let Some(image) = self.painted_cutout_frame.take()
+        {
+            let _ = window.drop_image(image);
+        }
         if self
             .frame_revision
             .is_some_and(|revision| revision != self.selection_revision)
         {
             #[cfg(target_os = "macos")]
             {
+                if let Some(image) = self.cutout_frame.take() {
+                    let _ = window.drop_image(image);
+                }
                 self.latest_frame = None;
             }
             #[cfg(not(target_os = "macos"))]
@@ -1096,11 +1123,15 @@ impl Render for CameraPreviewView {
             .size_full()
             .overflow_hidden()
             .rounded(px(radius))
-            .bg(theme.gray_1)
+            .when(radius > 0., |this| this.bg(theme.gray_1))
             .text_color(theme.gray_12);
 
         #[cfg(target_os = "macos")]
-        if let Some(buffer) = self.latest_frame.clone() {
+        if let Some(buffer) = self
+            .latest_frame
+            .clone()
+            .filter(|_| self.cutout_frame.is_none())
+        {
             let frame_dims = self.frame_dims;
             let paints = self.paints.clone();
             // Cover-fit painted straight from the IOSurface: `ObjectFit::Cover`
@@ -1129,6 +1160,17 @@ impl Render for CameraPreviewView {
                     },
                 )
                 .size_full(),
+            );
+        }
+
+        #[cfg(target_os = "macos")]
+        if let Some(image) = self.cutout_frame.clone() {
+            self.painted_cutout_frame = Some(image.clone());
+            self.paints.fetch_add(1, Ordering::Relaxed);
+            container = container.child(
+                gpui::img(image)
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Cover),
             );
         }
 
@@ -1678,6 +1720,7 @@ impl CameraWindow {
             BlurMode::Off => None,
             BlurMode::Light => Some(cap_camera_effects::BlurMode::Light),
             BlurMode::Heavy => Some(cap_camera_effects::BlurMode::Heavy),
+            BlurMode::Remove => Some(cap_camera_effects::BlurMode::Remove),
         }
     }
 
@@ -1748,7 +1791,7 @@ impl CameraWindow {
     ) -> bool {
         // A stale output can land after the mode flips back to Off; the raw
         // path is already painting again, so drop it.
-        if self.state.background_blur == BlurMode::Off
+        if self.active_blur_mode() != Some(output.mode)
             || Feeds::global(cx).read(cx).camera_preview_epoch() != Some(epoch)
         {
             return false;
@@ -1763,8 +1806,10 @@ impl CameraWindow {
         let dims = (output.width as usize, output.height as usize);
         let raw = &*output.buffer.0 as *const cidre::cv::PixelBuf as CVPixelBufferRef;
         let buffer = unsafe { CVPixelBuffer::wrap_under_get_rule(raw) };
-        self.preview
-            .update(cx, |preview, cx| preview.set_frame(buffer, dims, cx));
+        self.preview.update(cx, |preview, cx| {
+            preview.set_frame(buffer, dims, cx);
+            preview.cutout_frame = output.cutout;
+        });
         first
     }
 
@@ -2846,6 +2891,28 @@ mod retained_preview_tests {
         let image = snapshot_preview(&buffer).unwrap();
         assert_eq!(image.as_bytes(0).unwrap().len(), 960 * 540 * 4);
         assert_eq!(&image.as_bytes(0).unwrap()[..4], &[19, 71, 143, 255]);
+    }
+
+    #[test]
+    fn cutout_preview_preserves_transparent_and_feathered_pixels() {
+        let buffer = buffer(3, 1);
+        assert_eq!(buffer.lock_base_address(0), 0);
+        let base = unsafe { buffer.get_base_address().cast::<u8>() };
+        unsafe {
+            base.add(3).write(0);
+            base.add(7).write(128);
+        }
+        assert_eq!(buffer.unlock_base_address(0), 0);
+        let image = snapshot_preview(&buffer).unwrap();
+        let bytes = image.as_bytes(0).unwrap();
+        assert_eq!([bytes[3], bytes[7], bytes[11]], [0, 128, 255]);
+        let state = CameraWindowState {
+            background_blur: BlurMode::Remove,
+            ..Default::default()
+        };
+        assert_eq!(preview_radius(&state), 0.0);
+        assert_eq!(picker_preview_radius(&state, Some((230.0, 286.0))), 0.0);
+        assert_eq!(state.shape, CameraShape::Round);
     }
 
     #[test]

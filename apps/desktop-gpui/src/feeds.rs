@@ -845,6 +845,7 @@ impl Feeds {
                 crate::store::BlurMode::Off => 0,
                 crate::store::BlurMode::Light => 1,
                 crate::store::BlurMode::Heavy => 2,
+                crate::store::BlurMode::Remove => 0,
             },
             Ordering::Relaxed,
         );

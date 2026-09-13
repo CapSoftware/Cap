@@ -42,6 +42,7 @@ pub enum BlurMode {
     Off,
     Light,
     Heavy,
+    Remove,
 }
 
 impl BlurMode {
@@ -49,7 +50,8 @@ impl BlurMode {
         match self {
             Self::Off => Self::Light,
             Self::Light => Self::Heavy,
-            Self::Heavy => Self::Off,
+            Self::Heavy if cfg!(target_os = "macos") => Self::Remove,
+            Self::Heavy | Self::Remove => Self::Off,
         }
     }
 
@@ -60,6 +62,7 @@ impl BlurMode {
             Self::Off => None,
             Self::Light => Some("Light"),
             Self::Heavy => Some("Heavy"),
+            Self::Remove => Some("Cutout"),
         }
     }
 }

@@ -512,6 +512,7 @@ impl DeepLinkAction {
                     cap_project::BackgroundBlurMode::Off => crate::store::BlurMode::Off,
                     cap_project::BackgroundBlurMode::Light => crate::store::BlurMode::Light,
                     cap_project::BackgroundBlurMode::Heavy => crate::store::BlurMode::Heavy,
+                    cap_project::BackgroundBlurMode::Remove => crate::store::BlurMode::Remove,
                 };
                 crate::store::update(|persisted| {
                     persisted.camera_window = Some(crate::store::CameraWindowState {

@@ -2971,7 +2971,7 @@ pub(crate) fn refresh_linux_instant_camera(
         effects: LinuxCameraProcessing {
             mirrored: snapshot.state.mirrored,
             blur: match snapshot.state.background_blur {
-                BlurMode::Off => LinuxCameraBlur::Off,
+                BlurMode::Off | BlurMode::Remove => LinuxCameraBlur::Off,
                 BlurMode::Light => LinuxCameraBlur::Light,
                 BlurMode::Heavy => LinuxCameraBlur::Heavy,
             },
