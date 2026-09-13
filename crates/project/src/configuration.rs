@@ -1134,8 +1134,29 @@ pub enum TextAnimation {
     Fade,
     SlideUp,
     SlideDown,
+    SlideLeft,
+    SlideRight,
     Pop,
+    Zoom,
+    Bounce,
+    Wipe,
+    Words,
+    Letters,
+    Tracking,
     Typewriter,
+}
+
+/// How a text segment's optional background hugs the text.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TextBackgroundStyle {
+    /// One rounded rectangle behind the whole block.
+    #[default]
+    Box,
+    /// A capsule: half-height radius and wider side padding.
+    Pill,
+    /// A marker stroke per laid-out line, hugging each line's ink.
+    Highlight,
 }
 
 /// How a text segment shares the frame with the display recording. The
@@ -1181,6 +1202,21 @@ pub struct TextSegment {
     pub color: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_color: Option<String>,
+    #[serde(default)]
+    pub background_style: TextBackgroundStyle,
+    #[serde(default)]
+    pub uppercase: bool,
+    /// Outline px at the 1080p reference height, like `font_size`; 0 disables.
+    #[serde(default)]
+    pub stroke_width: f32,
+    #[serde(default = "TextSegment::default_stroke_color")]
+    pub stroke_color: String,
+    /// Second colour of a horizontal gradient that starts at `color`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient_color: Option<String>,
+    /// 0..1 soft halo strength in the text colour.
+    #[serde(default)]
+    pub glow: f32,
     /// Legacy symmetric fade. Superseded by the animation fields below; kept
     /// so configs written by new builds still fade in old builds. The
     /// `text_anim_version` migration seeds the animation durations from it.
@@ -1244,6 +1280,10 @@ impl TextSegment {
 
     fn default_color() -> String {
         "#ffffff".to_string()
+    }
+
+    fn default_stroke_color() -> String {
+        "#000000".to_string()
     }
 
     fn default_fade_duration() -> f64 {
@@ -3582,6 +3622,12 @@ mod tests {
             italic: false,
             color: "#ffffff".to_string(),
             background_color: None,
+            background_style: TextBackgroundStyle::Box,
+            uppercase: false,
+            stroke_width: 0.0,
+            stroke_color: "#000000".to_string(),
+            gradient_color: None,
+            glow: 0.0,
             fade_duration: 0.15,
             align: TextAlign::Center,
             letter_spacing: 0.0,
@@ -4191,6 +4237,12 @@ mod tests {
                     italic: false,
                     color: "#ffffff".to_string(),
                     background_color: None,
+                    background_style: TextBackgroundStyle::Box,
+                    uppercase: false,
+                    stroke_width: 0.0,
+                    stroke_color: "#000000".to_string(),
+                    gradient_color: None,
+                    glow: 0.0,
                     fade_duration: 0.15,
                     align: TextAlign::Center,
                     letter_spacing: 0.0,
@@ -4294,6 +4346,12 @@ mod tests {
                     italic: false,
                     color: "#ffffff".to_string(),
                     background_color: None,
+                    background_style: TextBackgroundStyle::Box,
+                    uppercase: false,
+                    stroke_width: 0.0,
+                    stroke_color: "#000000".to_string(),
+                    gradient_color: None,
+                    glow: 0.0,
                     fade_duration,
                     align: TextAlign::Center,
                     letter_spacing: 0.0,

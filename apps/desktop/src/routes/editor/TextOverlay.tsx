@@ -259,6 +259,7 @@ type SegmentWithDefaults = {
 	fontSize: number;
 	fontWeight: number;
 	italic: boolean;
+	uppercase: boolean;
 	color: string;
 	backgroundColor: string | null;
 	align: TextAlign;
@@ -287,6 +288,7 @@ function normalizeSegment(segment: TauriTextSegment): SegmentWithDefaults {
 		fontSize: segment.fontSize ?? 48,
 		fontWeight: segment.fontWeight ?? 700,
 		italic: segment.italic ?? false,
+		uppercase: styled.uppercase ?? false,
 		color: segment.color ?? "#ffffff",
 		backgroundColor: styled.backgroundColor ?? null,
 		align: styled.align ?? "center",

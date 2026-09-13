@@ -1256,7 +1256,23 @@ export type StyleSegment = { start: number; end: number; track: number; enabled:
 export type SystemDiagnostics = { macosVersion: MacOSVersionInfo | null; availableEncoders: string[]; screenCaptureSupported: boolean; metalSupported: boolean; gpuName: string | null }
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
 export type TextAlign = "left" | "center" | "right"
-export type TextAnimation = "none" | "fade" | "slideUp" | "slideDown" | "pop" | "typewriter"
+export type TextAnimation = "none" | "fade" | "slideUp" | "slideDown" | "slideLeft" | "slideRight" | "pop" | "zoom" | "bounce" | "wipe" | "words" | "letters" | "tracking" | "typewriter"
+/**
+ * How a text segment's optional background hugs the text.
+ */
+export type TextBackgroundStyle =
+/**
+ * One rounded rectangle behind the whole block.
+ */
+"box" |
+/**
+ * A capsule: half-height radius and wider side padding.
+ */
+"pill" |
+/**
+ * A marker stroke per laid-out line, hugging each line's ink.
+ */
+"highlight"
 /**
  * How a text segment shares the frame with the display recording. The
  * variants name where the TEXT sits; the display card makes room for it.
@@ -1278,7 +1294,19 @@ export type TextLayout =
  * Text in the right half, display card contained in the left half.
  */
 "splitRight"
-export type TextSegment = { start: number; end: number; track?: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; backgroundColor?: string | null;
+export type TextSegment = { start: number; end: number; track?: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; backgroundColor?: string | null; backgroundStyle?: TextBackgroundStyle; uppercase?: boolean;
+/**
+ * Outline px at the 1080p reference height, like `font_size`; 0 disables.
+ */
+strokeWidth?: number; strokeColor?: string;
+/**
+ * Second colour of a horizontal gradient that starts at `color`.
+ */
+gradientColor?: string | null;
+/**
+ * 0..1 soft halo strength in the text colour.
+ */
+glow?: number;
 /**
  * Legacy symmetric fade. Superseded by the animation fields below; kept
  * so configs written by new builds still fade in old builds. The

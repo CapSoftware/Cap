@@ -5,6 +5,7 @@ export type TextPresetStyle = {
 	fontSize: number;
 	fontWeight: number;
 	italic: boolean;
+	uppercase: boolean;
 	align: TextAlign;
 	letterSpacing: number;
 	lineHeight: number;
@@ -34,6 +35,7 @@ export const TEXT_PRESETS: TextPreset[] = [
 			fontSize: 96,
 			fontWeight: 700,
 			italic: false,
+			uppercase: false,
 			align: "center",
 			letterSpacing: -1,
 			lineHeight: 1.1,
@@ -53,6 +55,7 @@ export const TEXT_PRESETS: TextPreset[] = [
 			fontSize: 44,
 			fontWeight: 500,
 			italic: false,
+			uppercase: false,
 			align: "center",
 			letterSpacing: 0,
 			lineHeight: 1.3,
@@ -73,6 +76,7 @@ export const TEXT_PRESETS: TextPreset[] = [
 			fontSize: 40,
 			fontWeight: 600,
 			italic: false,
+			uppercase: false,
 			align: "left",
 			letterSpacing: 0,
 			lineHeight: 1.25,
@@ -92,6 +96,7 @@ export const TEXT_PRESETS: TextPreset[] = [
 			fontSize: 26,
 			fontWeight: 700,
 			italic: false,
+			uppercase: true,
 			align: "center",
 			letterSpacing: 6,
 			lineHeight: 1.2,
@@ -111,6 +116,7 @@ export const TEXT_PRESETS: TextPreset[] = [
 			fontSize: 160,
 			fontWeight: 800,
 			italic: false,
+			uppercase: false,
 			align: "center",
 			letterSpacing: -2,
 			lineHeight: 1,
@@ -130,6 +136,7 @@ export const TEXT_PRESETS: TextPreset[] = [
 			fontSize: 56,
 			fontWeight: 500,
 			italic: true,
+			uppercase: false,
 			align: "center",
 			letterSpacing: 0,
 			lineHeight: 1.35,
@@ -149,6 +156,7 @@ export const TEXT_PRESETS: TextPreset[] = [
 			fontSize: 36,
 			fontWeight: 400,
 			italic: false,
+			uppercase: false,
 			align: "left",
 			letterSpacing: 0,
 			lineHeight: 1.4,
@@ -168,6 +176,7 @@ export const TEXT_PRESETS: TextPreset[] = [
 			fontSize: 44,
 			fontWeight: 500,
 			italic: false,
+			uppercase: false,
 			align: "left",
 			letterSpacing: 0,
 			lineHeight: 1.3,

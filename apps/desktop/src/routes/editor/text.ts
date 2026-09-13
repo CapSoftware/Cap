@@ -31,6 +31,7 @@ export type TextSegment = {
 	fontSize: number;
 	fontWeight: number;
 	italic: boolean;
+	uppercase: boolean;
 	color: string;
 	backgroundColor?: string | null;
 	fadeDuration: number;
@@ -120,6 +121,7 @@ export const defaultTextSegment = (
 	fontSize: 48,
 	fontWeight: 700,
 	italic: false,
+	uppercase: false,
 	color: "#ffffff",
 	backgroundColor: undefined,
 	fadeDuration: 0.15,
