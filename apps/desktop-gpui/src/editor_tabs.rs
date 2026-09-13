@@ -38,7 +38,9 @@ use crate::{
     editor_color::GradeTarget,
     editor_sidebar::{SliderKey, collapsible, dashed_divider},
     editor_window::EditorWindow,
-    store, transcription, ui,
+    store,
+    theme::Theme,
+    transcription, ui,
 };
 
 // ---------------------------------------------------------------------------
@@ -1533,7 +1535,6 @@ impl EditorWindow {
     pub(crate) fn render_audio_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let audio = &self.project.audio;
-        let enabled_by_default = self.sidebar.audio_enhancement_default;
         let summary = self.summary();
         let muted = audio.mute;
         let has_microphone = summary.is_some_and(|summary| summary.has_microphone);
@@ -1579,55 +1580,7 @@ impl EditorWindow {
                         })),
                 ),
             )
-            .children(has_microphone.then(|| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .child(ui::Subfield::plain(&theme, "Studio Sound").child(
-                        ui::Toggle::plain(&theme, "audio-improve", audio.improve).on_click(
-                            cx.listener(|this, _, window, cx| {
-                                this.edit_project("audio-improve", window, cx, |project| {
-                                    project.audio.improve = !project.audio.improve;
-                                    true
-                                });
-                            }),
-                        ),
-                    ))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(theme.gray_10)
-                            .child("Reduce background noise and bring your voice into focus."),
-                    )
-                    .into_any_element()
-            }))
-            .child(
-                ui::Subfield::plain(&theme, "Studio Sound for new recordings").child(
-                    ui::Toggle::plain(&theme, "audio-improve-default", enabled_by_default)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if !store::set_store_setting(
-                                "audio_enhancement",
-                                "enabledByDefault",
-                                serde_json::json!(!enabled_by_default),
-                            ) {
-                                this.sidebar.audio_enhancement_error =
-                                    Some("Could not save the Studio Sound default".into());
-                            } else {
-                                this.sidebar.audio_enhancement_default = !enabled_by_default;
-                                this.sidebar.audio_enhancement_error = None;
-                            }
-                            cx.notify();
-                        })),
-                ),
-            )
-            .children(self.sidebar.audio_enhancement_error.as_ref().map(|error| {
-                div()
-                    .text_size(px(12.))
-                    .text_color(theme.gray_10)
-                    .child(error.clone())
-                    .into_any_element()
-            }))
+            .children(has_microphone.then(|| self.render_studio_sound_card(cx)))
             .children(has_microphone.then(|| {
                 self.slider_field_disabled(
                     "Microphone Volume",
@@ -1649,6 +1602,206 @@ impl EditorWindow {
                 .into_any_element()
             }))
             .children(self.render_sync_offsets(cx))
+            .into_any_element()
+    }
+
+    /// The Studio Sound card: an icon tile that tints accent while the
+    /// enhancement is on, the per-recording toggle, and under a hairline the
+    /// store-backed default every new Studio recording starts from.
+    fn render_studio_sound_card(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let isolation_options = [
+            (
+                cap_project::VoiceIsolation::Light,
+                "Light",
+                "Keep more of your original voice and room sound.",
+            ),
+            (
+                cap_project::VoiceIsolation::Balanced,
+                "Balanced",
+                "Clearer isolation with natural voice detail.",
+            ),
+            (
+                cap_project::VoiceIsolation::Strong,
+                "Strong",
+                "More isolation for noisy spaces. May change voice texture.",
+            ),
+        ];
+        let enabled = self.project.audio.improve;
+        let enabled_by_default = self.sidebar.audio_enhancement_default;
+        let accent = Hsla::from(theme.editor.accent);
+        let line = Hsla::from(theme.editor.line);
+
+        div()
+            .flex()
+            .flex_col()
+            .rounded(px(12.))
+            .bg(Hsla::from(theme.editor.card_2))
+            .p(px(14.))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .justify_center()
+                            .size(px(30.))
+                            .rounded(px(9.))
+                            .bg(if enabled {
+                                Theme::with_alpha(theme.editor.accent, 0.12)
+                            } else {
+                                Hsla::from(theme.editor.ctl)
+                            })
+                            .child(svg().path("icons/microphone.svg").size(px(16.)).text_color(
+                                if enabled {
+                                    accent
+                                } else {
+                                    Hsla::from(theme.editor.text_2)
+                                },
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(Hsla::from(theme.editor.text_1))
+                                    .child("Studio Sound"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
+                                    .text_color(Hsla::from(theme.editor.text_3))
+                                    .child(
+                                        "Reduces background noise and balances your voice level.",
+                                    ),
+                            ),
+                    )
+                    .child(
+                        ui::Toggle::plain(&theme, "audio-improve", enabled).on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.edit_project("audio-improve", window, cx, move |project| {
+                                    project.audio.improve = !enabled;
+                                    true
+                                });
+                            },
+                        )),
+                    ),
+            )
+            .children(enabled.then(|| {
+                div()
+                    .mt(px(12.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(
+                        ui::SegmentedControl::editor(
+                            &theme,
+                            "voice-isolation",
+                            isolation_options
+                                .iter()
+                                .map(|(value, label, _)| {
+                                    ui::SegmentOption::new(
+                                        *label,
+                                        self.project.audio.isolation == *value,
+                                    )
+                                })
+                                .collect(),
+                        )
+                        .stretch()
+                        .on_select(cx.listener(
+                            move |this, index: &usize, window, cx| {
+                                let Some(&(isolation, _, _)) = isolation_options.get(*index) else {
+                                    return;
+                                };
+                                this.edit_project("voice-isolation", window, cx, move |project| {
+                                    if project.audio.isolation == isolation {
+                                        return false;
+                                    }
+                                    project.audio.isolation = isolation;
+                                    true
+                                });
+                                if this.sidebar.audio_enhancement_default {
+                                    this.sidebar.audio_enhancement_error =
+                                        if store::set_studio_sound_isolation(isolation) {
+                                            None
+                                        } else {
+                                            Some("Could not save the Studio Sound default".into())
+                                        };
+                                    cx.notify();
+                                }
+                            },
+                        )),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(Hsla::from(theme.editor.text_3))
+                            .child(
+                                isolation_options
+                                    .iter()
+                                    .find(|(value, _, _)| *value == self.project.audio.isolation)
+                                    .map(|(_, _, description)| *description)
+                                    .unwrap_or_default(),
+                            ),
+                    )
+            }))
+            .child(
+                div()
+                    .mt(px(12.))
+                    .pt(px(12.))
+                    .border_t_1()
+                    .border_color(line)
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(10.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(Hsla::from(theme.editor.text_2))
+                            .child("Use for new recordings"),
+                    )
+                    .child(
+                        ui::Toggle::plain(&theme, "audio-improve-default", enabled_by_default)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let next = !enabled_by_default;
+                                if store::set_studio_sound_defaults(
+                                    next,
+                                    this.project.audio.isolation,
+                                ) {
+                                    this.sidebar.audio_enhancement_default = next;
+                                    this.sidebar.audio_enhancement_error = None;
+                                } else {
+                                    this.sidebar.audio_enhancement_error =
+                                        Some("Could not save the Studio Sound default".into());
+                                }
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .children(self.sidebar.audio_enhancement_error.as_ref().map(|error| {
+                div()
+                    .mt(px(8.))
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.editor.playhead))
+                    .child(error.clone())
+                    .into_any_element()
+            }))
             .into_any_element()
     }
 

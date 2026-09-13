@@ -891,10 +891,7 @@ pub struct SidebarState {
 impl SidebarState {
     pub fn new(config: &ProjectConfiguration) -> Self {
         Self {
-            audio_enhancement_default: crate::store::store_section("audio_enhancement")
-                .get("enabledByDefault")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false),
+            audio_enhancement_default: crate::store::studio_sound_by_default(),
             audio_enhancement_error: None,
             style_target: None,
             image_import_error: None,
