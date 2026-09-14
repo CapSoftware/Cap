@@ -10607,7 +10607,6 @@ dependencies = [
 [[package]]
 name = "tauri-nspanel"
 version = "2.0.1"
-source = "git+https://github.com/ahkohd/tauri-nspanel?branch=v2#18ffb9a201fbf6fedfaa382fd4b92315ea30ab1a"
 dependencies = [
  "bitflags 2.13.1",
  "block",
@@ -10616,6 +10615,7 @@ dependencies = [
  "core-graphics 0.25.0",
  "objc",
  "objc-foundation",
+ "objc_exception",
  "objc_id",
  "tauri",
 ]
