@@ -219,6 +219,16 @@ fn create_log_appender(
     }
 }
 
+#[cfg(target_os = "windows")]
+fn windows_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_stack_size(16 * 1024 * 1024)
+        .enable_all()
+        .build()
+        .expect("Failed to initialize Tokio")
+}
+
 fn main() {
     #[cfg(target_os = "linux")]
     if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {
@@ -259,7 +269,15 @@ fn main() {
             crate::deeplink::submit_deep_link(&url);
         }
     });
-    app.run(|cx: &mut App| {
+    #[cfg(target_os = "windows")]
+    let runtime = windows_runtime();
+    #[cfg(target_os = "windows")]
+    let runtime_handle = runtime.handle().clone();
+
+    app.run(move |cx: &mut App| {
+        #[cfg(target_os = "windows")]
+        gpui_tokio::init_from_handle(cx, runtime_handle);
+        #[cfg(not(target_os = "windows"))]
         gpui_tokio::init(cx);
         gpui_tokio::Tokio::spawn(cx, cap_utils::operation_diagnostics::run_checkpoints()).detach();
         // The dock icon: an unbundled dev binary shows the generic terminal
@@ -335,7 +353,7 @@ fn main() {
                         gpui::WindowBackgroundAppearance::Transparent
                     },
                     is_resizable: false,
-                    is_minimizable: false,
+                    is_minimizable: cfg!(target_os = "windows"),
                     ..Default::default()
                 },
                 {
@@ -682,6 +700,39 @@ fn main() {
             cx.activate(true);
         }
     });
+    #[cfg(target_os = "windows")]
+    runtime.shutdown_background();
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod runtime_tests {
+    fn current_stack_size() -> usize {
+        let (mut low, mut high) = (0, 0);
+        unsafe {
+            windows_sys::Win32::System::Threading::GetCurrentThreadStackLimits(&mut low, &mut high);
+        }
+        high.saturating_sub(low)
+    }
+
+    #[test]
+    fn media_workers_and_blocking_tasks_have_large_windows_stacks() {
+        let runtime = super::windows_runtime();
+        runtime.block_on(async {
+            let worker_size = tokio::spawn(async { current_stack_size() }).await.unwrap();
+            let blocking_size = tokio::task::spawn_blocking(current_stack_size)
+                .await
+                .unwrap();
+            assert!(
+                worker_size >= 16 * 1024 * 1024,
+                "worker stack: {worker_size}"
+            );
+            assert!(
+                blocking_size >= 16 * 1024 * 1024,
+                "blocking stack: {blocking_size}"
+            );
+        });
+        runtime.shutdown_background();
+    }
 }
 
 #[cfg(test)]

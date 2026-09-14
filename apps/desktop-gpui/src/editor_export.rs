@@ -1366,6 +1366,8 @@ impl EditorWindow {
                 div().flex_1().flex().flex_row().items_center().child(
                     div()
                         .id("export-back")
+                        .when(cfg!(target_os = "windows"), |button| button.occlude())
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .flex()
                         .flex_row()
                         .items_center()

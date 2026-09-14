@@ -7,6 +7,11 @@ fn main() {
         return;
     }
 
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        // Export dispatch constructs media futures on the UI thread before Tokio can poll them.
+        println!("cargo:rustc-link-arg-bin=cap-gpui=/STACK:16777216");
+    }
+
     let icon = "../desktop/src-tauri/icons/icon.ico";
     println!("cargo:rerun-if-changed={icon}");
     tauri_winres::WindowsResource::new()
