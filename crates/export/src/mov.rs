@@ -61,7 +61,6 @@ impl MovExportSettings {
 
         let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
         let fps = self.fps;
-        let first_frame = base.sample_range.as_ref().map_or(0, |range| range.start);
 
         let output_size = ProjectUniforms::get_output_size(
             &base.render_constants.options,
@@ -102,9 +101,12 @@ impl MovExportSettings {
 
                 fill_rgba_frame(&mut reusable_frame, &frame)
                     .map_err(|e| ExportError::Other(format!("Failed to prepare frame: {e}")))?;
-                let timestamp = Duration::from_secs_f64(
-                    frame_number.saturating_sub(first_frame) as f64 / fps as f64,
-                );
+                let encoded_frame = if sample_timing.is_some() {
+                    frame_count
+                } else {
+                    frame_number
+                };
+                let timestamp = Duration::from_secs_f64(encoded_frame as f64 / fps as f64);
 
                 mov_encoder
                     .queue_video_frame(&mut reusable_frame, timestamp)
@@ -118,7 +120,7 @@ impl MovExportSettings {
                 }
                 frame_count += 1;
                 if let Some(timing) = &sample_timing {
-                    timing.record_frame();
+                    timing.record_frame(frame.frame_number);
                 }
             }
 
@@ -151,7 +153,7 @@ impl MovExportSettings {
             fps,
             self.resolution_base,
             &base.recordings,
-            base.sample_range.clone(),
+            base.sample_windows.clone(),
         )
         .then(|f| async { f.map_err(|v| v.to_string()) });
 

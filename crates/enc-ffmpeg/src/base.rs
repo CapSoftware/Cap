@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use ffmpeg::{
     Packet, Rational,
@@ -7,8 +10,38 @@ use ffmpeg::{
     frame,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EncodedPacket {
+    pub bytes: u64,
+    pub key: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct EncodedPacketStats {
+    packets: Mutex<Vec<EncodedPacket>>,
+}
+
+impl EncodedPacketStats {
+    pub fn record(&self, packet: &Packet) {
+        if let Ok(mut packets) = self.packets.lock() {
+            packets.push(EncodedPacket {
+                bytes: packet.size() as u64,
+                key: packet.is_key(),
+            });
+        }
+    }
+
+    pub fn snapshot(&self) -> Vec<EncodedPacket> {
+        self.packets
+            .lock()
+            .map(|packets| packets.clone())
+            .unwrap_or_default()
+    }
+}
+
 pub struct EncoderBase {
     packet: ffmpeg::Packet,
+    packet_stats: Option<Arc<EncodedPacketStats>>,
     stream_index: usize,
     first_pts: Option<i64>,
     last_frame_pts: Option<i64>,
@@ -27,12 +60,17 @@ impl EncoderBase {
     pub(crate) fn new(stream_index: usize) -> Self {
         Self {
             packet: Packet::empty(),
+            packet_stats: None,
             first_pts: None,
             last_frame_pts: None,
             stream_index,
             last_written_dts: None,
             held_packet: None,
         }
+    }
+
+    pub fn set_packet_stats(&mut self, stats: Arc<EncodedPacketStats>) {
+        self.packet_stats = Some(stats);
     }
 
     pub fn update_pts(
@@ -161,6 +199,9 @@ impl EncoderBase {
             }
 
             self.last_written_dts = self.packet.dts();
+            if let Some(stats) = &self.packet_stats {
+                stats.record(&self.packet);
+            }
 
             let current = std::mem::replace(&mut self.packet, Packet::empty());
             if let Some((mut previous, previous_synthesized)) = self.held_packet.take() {

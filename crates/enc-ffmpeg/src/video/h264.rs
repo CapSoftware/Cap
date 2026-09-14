@@ -15,7 +15,6 @@ use crate::base::EncoderBase;
 use crate::video::h264_packet::H264PacketEncoder;
 #[cfg(target_os = "macos")]
 use crate::video::videotoolbox_hw::VideoToolboxHwFrames;
-#[cfg(target_os = "macos")]
 use std::sync::Arc;
 
 fn is_420(format: ffmpeg::format::Pixel) -> bool {
@@ -1009,6 +1008,10 @@ impl H264Encoder {
 
     pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
         self.base.process_eof(output, &mut self.encoder)
+    }
+
+    pub fn set_packet_stats(&mut self, stats: Arc<crate::EncodedPacketStats>) {
+        self.base.set_packet_stats(stats);
     }
 }
 

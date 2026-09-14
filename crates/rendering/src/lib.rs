@@ -42,6 +42,7 @@ pub mod d3d_texture;
 pub mod decoder;
 pub mod frame_chrome;
 mod frame_pipeline;
+mod frame_windows;
 #[cfg(target_os = "macos")]
 pub mod iosurface_texture;
 mod layers;
@@ -71,6 +72,7 @@ pub use frame_pipeline::SurfaceFrame;
 pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, SharedNv12Buffer};
 #[cfg(target_os = "macos")]
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
+pub use frame_windows::FrameWindows;
 pub use layers::{BackgroundTextureCache, clean_background_path};
 pub use managed_segment::{
     ManagedRecordingSegmentDecoders, ManagedSegmentDecoderStatus, ManagedSegmentStopHandles,
@@ -627,7 +629,7 @@ pub async fn render_video_to_channel(
     fps: u32,
     resolution_base: XY<u32>,
     recordings: &ProjectRecordingsMeta,
-    frame_range: Option<std::ops::Range<u32>>,
+    frame_windows: Option<FrameWindows>,
 ) -> Result<(), RenderingError> {
     ffmpeg::init().unwrap();
 
@@ -636,8 +638,9 @@ pub async fn render_video_to_channel(
     let duration = get_duration(recordings, recording_meta, meta, project);
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
-    let frame_range = frame_range.unwrap_or(0..total_frames);
-    let total_frames = total_frames.min(frame_range.end);
+    let frame_windows = frame_windows
+        .unwrap_or_else(|| FrameWindows::all(total_frames))
+        .clamped_to(total_frames);
 
     let cursor_smoothing =
         (!project.cursor.raw).then_some(spring_mass_damper::SpringMassDamperSimulationConfig {
@@ -692,7 +695,9 @@ pub async fn render_video_to_channel(
                 .collect::<Vec<_>>()
         });
 
-    let mut frame_number = frame_range.start.min(total_frames);
+    let mut next_frame = frame_windows.first();
+    let mut frames_rendered = 0u32;
+    let mut last_frame_number = 0u32;
 
     let mut frame_renderer = FrameRenderer::new(constants);
 
@@ -722,11 +727,11 @@ pub async fn render_video_to_channel(
     let mut prefetched_decode: Option<(u32, f64, usize, Option<DecodedSegmentFrames>)> = None;
 
     loop {
-        if frame_number >= total_frames {
+        let Some(current_frame_number) = next_frame else {
             break;
-        }
+        };
 
-        let frame_time = frame_number as f64 / fps as f64;
+        let frame_time = current_frame_number as f64 / fps as f64;
         let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
             if timeline.transitions.is_empty() {
                 return None;
@@ -751,10 +756,9 @@ pub async fn render_video_to_channel(
             .iter()
             .find(|v| v.index == segment.recording_clip);
 
-        let current_frame_number = {
-            let prev = frame_number;
-            std::mem::replace(&mut frame_number, prev + 1)
-        };
+        next_frame = frame_windows.next_after(current_frame_number);
+        last_frame_number = current_frame_number;
+        frames_rendered += 1;
 
         let render_segment = &render_segments[segment.recording_clip as usize];
         let is_initial_frame = current_frame_number == 0 || last_successful_frame.is_none();
@@ -833,14 +837,15 @@ pub async fn render_video_to_channel(
                 precomputed_cursor,
             );
 
-            let next_frame_number = frame_number;
-            let mut next_prefetch_meta: Option<(f64, usize)> = None;
-            let prefetch_future = if next_frame_number < total_frames {
+            let mut next_prefetch_meta: Option<(u32, f64, usize)> = None;
+            let prefetch_future = if let Some(next_frame_number) = next_frame
+                && next_frame_number == current_frame_number + 1
+            {
                 if let Some((next_seg_time, next_segment)) =
                     project.get_segment_time(next_frame_number as f64 / fps as f64)
                 {
                     let next_clip_index = next_segment.recording_clip as usize;
-                    next_prefetch_meta = Some((next_seg_time, next_clip_index));
+                    next_prefetch_meta = Some((next_frame_number, next_seg_time, next_clip_index));
                     let next_render_segment = &render_segments[next_clip_index];
                     let next_clip_config = project
                         .clips
@@ -894,7 +899,9 @@ pub async fn render_video_to_channel(
                 );
                 if let Some(prefetch) = prefetch_future {
                     let (render, decoded) = tokio::join!(render_future, prefetch);
-                    if let Some((next_seg_time, next_clip_index)) = next_prefetch_meta {
+                    if let Some((next_frame_number, next_seg_time, next_clip_index)) =
+                        next_prefetch_meta
+                    {
                         prefetched_decode =
                             Some((next_frame_number, next_seg_time, next_clip_index, decoded));
                     }
@@ -914,7 +921,9 @@ pub async fn render_video_to_channel(
                     prefetch
                 );
 
-                if let Some((next_seg_time, next_clip_index)) = next_prefetch_meta {
+                if let Some((next_frame_number, next_seg_time, next_clip_index)) =
+                    next_prefetch_meta
+                {
                     prefetched_decode =
                         Some((next_frame_number, next_seg_time, next_clip_index, decoded));
                 }
@@ -1039,14 +1048,12 @@ pub async fn render_video_to_channel(
         && final_frame.width > 0
         && final_frame.height > 0
     {
-        sender
-            .send((final_frame, frame_number.saturating_sub(1)))
-            .await?;
+        sender.send((final_frame, last_frame_number)).await?;
     }
 
     let total_time = start_time.elapsed();
     tracing::info!(
-        frames = frame_number,
+        frames = frames_rendered,
         elapsed_secs = format!("{:.2}", total_time.as_secs_f32()),
         "Render complete"
     );
@@ -1079,7 +1086,7 @@ pub async fn render_video_to_channel_nv12(
     fps: u32,
     resolution_base: XY<u32>,
     recordings: &ProjectRecordingsMeta,
-    frame_range: Option<std::ops::Range<u32>>,
+    frame_windows: Option<FrameWindows>,
     stop_after_frames_sent: Option<u32>,
     startup_breakdown_ms: Option<Arc<Mutex<Option<Nv12RenderStartupBreakdownMs>>>>,
 ) -> Result<(), RenderingError> {
@@ -1092,8 +1099,9 @@ pub async fn render_video_to_channel_nv12(
     let duration = get_duration(recordings, recording_meta, meta, project);
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
-    let frame_range = frame_range.unwrap_or(0..total_frames);
-    let total_frames = total_frames.min(frame_range.end);
+    let frame_windows = frame_windows
+        .unwrap_or_else(|| FrameWindows::all(total_frames))
+        .clamped_to(total_frames);
 
     let cursor_smoothing =
         (!project.cursor.raw).then_some(spring_mass_damper::SpringMassDamperSimulationConfig {
@@ -1150,7 +1158,9 @@ pub async fn render_video_to_channel_nv12(
         });
     let zoom_focus_interpolators_construct_ms = zoom_build_start.elapsed().as_millis() as u64;
 
-    let mut frame_number = frame_range.start.min(total_frames);
+    let mut next_frame = frame_windows.first();
+    let mut frames_rendered = 0u32;
+    let mut last_frame_number = 0u32;
 
     let renderer_setup_start = Instant::now();
     let mut frame_renderer = FrameRenderer::new(constants);
@@ -1192,11 +1202,11 @@ pub async fn render_video_to_channel_nv12(
     let mut record_first_frame_nv12_phases = startup_breakdown_ms.is_some();
 
     loop {
-        if frame_number >= total_frames {
+        let Some(current_frame_number) = next_frame else {
             break;
-        }
+        };
 
-        let frame_time = frame_number as f64 / fps as f64;
+        let frame_time = current_frame_number as f64 / fps as f64;
         let transition_mapping = project.timeline.as_ref().and_then(|timeline| {
             if timeline.transitions.is_empty() {
                 return None;
@@ -1221,10 +1231,9 @@ pub async fn render_video_to_channel_nv12(
             .iter()
             .find(|v| v.index == segment.recording_clip);
 
-        let current_frame_number = {
-            let prev = frame_number;
-            std::mem::replace(&mut frame_number, prev + 1)
-        };
+        next_frame = frame_windows.next_after(current_frame_number);
+        last_frame_number = current_frame_number;
+        frames_rendered += 1;
 
         let render_segment = &render_segments[segment.recording_clip as usize];
         let is_initial_frame = current_frame_number == 0 || last_successful_frame.is_none();
@@ -1307,14 +1316,15 @@ pub async fn render_video_to_channel_nv12(
                 precomputed_cursor,
             );
 
-            let next_frame_number = frame_number;
-            let mut next_prefetch_meta: Option<(f64, usize)> = None;
-            let prefetch_future = if next_frame_number < total_frames {
+            let mut next_prefetch_meta: Option<(u32, f64, usize)> = None;
+            let prefetch_future = if let Some(next_frame_number) = next_frame
+                && next_frame_number == current_frame_number + 1
+            {
                 if let Some((next_seg_time, next_segment)) =
                     project.get_segment_time(next_frame_number as f64 / fps as f64)
                 {
                     let next_clip_index = next_segment.recording_clip as usize;
-                    next_prefetch_meta = Some((next_seg_time, next_clip_index));
+                    next_prefetch_meta = Some((next_frame_number, next_seg_time, next_clip_index));
                     let next_render_segment = &render_segments[next_clip_index];
                     let next_clip_config = project
                         .clips
@@ -1386,7 +1396,9 @@ pub async fn render_video_to_channel_nv12(
                         };
                         let ((render_elapsed, render), (prefetch_elapsed, decoded)) =
                             tokio::join!(render_fut, prefetch_fut);
-                        if let Some((next_seg_time, next_clip_index)) = next_prefetch_meta {
+                        if let Some((next_frame_number, next_seg_time, next_clip_index)) =
+                            next_prefetch_meta
+                        {
                             prefetched_decode =
                                 Some((next_frame_number, next_seg_time, next_clip_index, decoded));
                         }
@@ -1398,7 +1410,9 @@ pub async fn render_video_to_channel_nv12(
                         )
                     } else {
                         let (render, decoded) = tokio::join!(render_future, prefetch);
-                        if let Some((next_seg_time, next_clip_index)) = next_prefetch_meta {
+                        if let Some((next_frame_number, next_seg_time, next_clip_index)) =
+                            next_prefetch_meta
+                        {
                             prefetched_decode =
                                 Some((next_frame_number, next_seg_time, next_clip_index, decoded));
                         }
@@ -1437,7 +1451,9 @@ pub async fn render_video_to_channel_nv12(
                     };
                     let ((render_elapsed, render), (prefetch_elapsed, decoded)) =
                         tokio::join!(render_fut, prefetch_fut);
-                    if let Some((next_seg_time, next_clip_index)) = next_prefetch_meta {
+                    if let Some((next_frame_number, next_seg_time, next_clip_index)) =
+                        next_prefetch_meta
+                    {
                         prefetched_decode =
                             Some((next_frame_number, next_seg_time, next_clip_index, decoded));
                     }
@@ -1459,7 +1475,9 @@ pub async fn render_video_to_channel_nv12(
                         prefetch
                     );
 
-                    if let Some((next_seg_time, next_clip_index)) = next_prefetch_meta {
+                    if let Some((next_frame_number, next_seg_time, next_clip_index)) =
+                        next_prefetch_meta
+                    {
                         prefetched_decode =
                             Some((next_frame_number, next_seg_time, next_clip_index, decoded));
                     }
@@ -1657,14 +1675,12 @@ pub async fn render_video_to_channel_nv12(
         && final_frame.width > 0
         && final_frame.height > 0
     {
-        sender
-            .send((final_frame, frame_number.saturating_sub(1)))
-            .await?;
+        sender.send((final_frame, last_frame_number)).await?;
     }
 
     let total_time = start_time.elapsed();
     tracing::info!(
-        frames = frame_number,
+        frames = frames_rendered,
         elapsed_secs = format!("{:.2}", total_time.as_secs_f32()),
         "NV12 render complete"
     );

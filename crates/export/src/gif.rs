@@ -143,7 +143,7 @@ impl GifExportSettings {
                 }
                 frame_count += 1;
                 if let Some(timing) = &sample_timing {
-                    timing.record_frame();
+                    timing.record_frame(frame.frame_number);
                 }
             }
 
@@ -176,7 +176,7 @@ impl GifExportSettings {
             fps,
             self.resolution_base,
             &base.recordings,
-            base.sample_range.clone(),
+            base.sample_windows.clone(),
         )
         .then(|f| async { f.map_err(|v| v.to_string()) });
 

@@ -326,7 +326,6 @@ impl Mp4ExportSettings {
         mode: ExportNv12Mode,
     ) -> Result<PathBuf, String> {
         let pipeline_start = std::time::Instant::now();
-        let sample_start_frame = base.sample_range.as_ref().map_or(0, |range| range.start);
         let sample_timing = base.sample_timing.clone();
         let output_path = base.output_path.clone();
         let mut streaming_audio = base.streaming_audio.take();
@@ -453,6 +452,9 @@ impl Mp4ExportSettings {
                 },
             )
             .map_err(|v| v.to_string())?;
+            if let Some(timing) = &sample_timing {
+                encoder.video_mut().set_packet_stats(timing.packet_stats());
+            }
 
             info!(
                 zero_copy_input = encoder_is_hw,
@@ -476,6 +478,7 @@ impl Mp4ExportSettings {
             let sample_rate = u64::from(AudioRenderer::SAMPLE_RATE);
             let fps_u64 = u64::from(fps);
             let mut audio_sample_cursor = 0u64;
+            let mut last_timeline_frame: Option<u32> = None;
 
             let frames = first_frame
                 .into_iter()
@@ -490,8 +493,18 @@ impl Mp4ExportSettings {
                 if encoded_frames == 0
                     && let Some(audio) = &mut audio_renderer
                 {
-                    audio.set_playhead(sample_start_frame as f64 / fps as f64, &project_for_audio);
+                    audio.set_playhead(
+                        if sample_timing.is_some() { input.timeline_frame as f64 / fps as f64 } else { 0.0 },
+                        &project_for_audio,
+                    );
+                } else if sample_timing.is_some()
+                    && let Some(audio) = &mut audio_renderer
+                    && last_timeline_frame.is_some_and(|last| input.timeline_frame != last + 1)
+                {
+                    audio.set_playhead(input.timeline_frame as f64 / fps as f64, &project_for_audio);
+                    audio_sample_cursor = u64::from(input.frame_number) * sample_rate / fps_u64;
                 }
+                last_timeline_frame = Some(input.timeline_frame);
 
                 let audio_frame = audio_renderer.as_mut().and_then(|audio| {
                     let n = u64::from(input.frame_number);
@@ -590,7 +603,7 @@ impl Mp4ExportSettings {
                 }
                 encoded_frames += 1;
                 if let Some(timing) = &sample_timing {
-                    timing.record_frame();
+                    timing.record_frame(input.timeline_frame);
                 }
                 if encoded_frames == 1
                     && let Some(atom) = record_first_queued_ms.as_ref()
@@ -676,7 +689,7 @@ impl Mp4ExportSettings {
             fps,
             self.resolution_base,
             &base.recordings,
-            base.sample_range.clone(),
+            base.sample_windows.clone(),
             stop_after_frames_sent,
             nv12_render_startup_breakdown_ms,
             audio_cancellation.is_some(),
@@ -754,6 +767,7 @@ struct ExportFrame {
     height: u32,
     y_stride: u32,
     frame_number: u32,
+    timeline_frame: u32,
 }
 
 impl ExportFrame {
@@ -796,6 +810,7 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
             height: frame.height,
             y_stride: frame.y_stride,
             frame_number: frame.frame_number,
+            timeline_frame: frame.frame_number,
             payload: ExportFramePayload::Surface(surface),
         };
     }
@@ -806,6 +821,7 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
             height: frame.height,
             y_stride: frame.y_stride,
             frame_number: frame.frame_number,
+            timeline_frame: frame.frame_number,
             payload: ExportFramePayload::Cpu(frame.data),
         };
     }
@@ -874,6 +890,7 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
                 height,
                 y_stride: width,
                 frame_number: frame.frame_number,
+                timeline_frame: frame.frame_number,
             };
         }
     }
@@ -894,6 +911,7 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
         height,
         y_stride: width,
         frame_number: frame.frame_number,
+        timeline_frame: frame.frame_number,
     }
 }
 
@@ -1197,7 +1215,7 @@ async fn export_render_to_channel(
     fps: u32,
     resolution_base: XY<u32>,
     recordings: &ProjectRecordingsMeta,
-    frame_range: Option<std::ops::Range<u32>>,
+    frame_windows: Option<cap_rendering::FrameWindows>,
     stop_after_frames_sent: Option<u32>,
     startup_breakdown_ms: Option<Arc<Mutex<Option<cap_rendering::Nv12RenderStartupBreakdownMs>>>>,
     stop_on_encoder_drop: bool,
@@ -1206,8 +1224,8 @@ async fn export_render_to_channel(
 ) -> Result<(), cap_rendering::RenderingError> {
     let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(Nv12RenderedFrame, u32)>(8);
 
-    let screenshot_project_path = frame_range.is_none().then_some(project_path);
-    let first_frame = frame_range.as_ref().map_or(0, |range| range.start);
+    let screenshot_project_path = frame_windows.is_none().then_some(project_path);
+    let sampling = frame_windows.is_some();
 
     let render_result = {
         let render_future = Box::pin(cap_rendering::render_video_to_channel_nv12(
@@ -1220,7 +1238,7 @@ async fn export_render_to_channel(
             fps,
             resolution_base,
             recordings,
-            frame_range,
+            frame_windows,
             stop_after_frames_sent,
             startup_breakdown_ms,
         ));
@@ -1275,7 +1293,9 @@ async fn export_render_to_channel(
                 }
 
                 let mut export_frame = nv12_from_rendered_frame(frame);
-                export_frame.frame_number = export_frame.frame_number.saturating_sub(first_frame);
+                if sampling {
+                    export_frame.frame_number = frame_count;
+                }
 
                 if screenshot_project_path.is_some()
                     && first_frame_data.is_none()

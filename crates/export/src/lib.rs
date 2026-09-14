@@ -211,7 +211,7 @@ impl ExporterBuilder {
             streaming_audio,
             streaming_output,
             audio_cancellation,
-            sample_range: None,
+            sample_windows: None,
             sample_timing: None,
         })
     }
@@ -392,7 +392,7 @@ pub struct ExporterBase {
     streaming_audio: Option<ExportAudioRenderer>,
     streaming_output: Option<mp4::TemporaryMp4Output>,
     audio_cancellation: Option<ExportAudioCancellation>,
-    sample_range: Option<std::ops::Range<u32>>,
+    sample_windows: Option<cap_rendering::FrameWindows>,
     sample_timing: Option<Arc<estimates::SampleTiming>>,
 }
 
