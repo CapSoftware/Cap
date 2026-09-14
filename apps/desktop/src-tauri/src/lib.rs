@@ -3590,10 +3590,13 @@ fn with_idle_app_for_title_flush<T>(
             if has_pending_finalizations(&recordings) {
                 return Err(ExitBlocked::FinalizationActive);
             }
-            if include_exports
-                && (export::export_session_active() || upload::upload_session_active())
-            {
-                return Err(ExitBlocked::ExportActive);
+            if include_exports {
+                if export::export_session_active() {
+                    return Err(ExitBlocked::ExportActive);
+                }
+                if upload::upload_session_active() {
+                    return Err(ExitBlocked::UploadActive);
+                }
             }
             Ok(())
         },

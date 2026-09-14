@@ -26,6 +26,7 @@ fn exit_refusals_do_not_start_shutdown_or_disable_active_watchers() {
         ExitBlocked::RecordingActive,
         ExitBlocked::FinalizationActive,
         ExitBlocked::ExportActive,
+        ExitBlocked::UploadActive,
         ExitBlocked::UpdateInstalling,
     ] {
         let state = tokio::sync::RwLock::new(());
