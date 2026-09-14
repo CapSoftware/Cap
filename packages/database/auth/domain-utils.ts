@@ -1,3 +1,4 @@
+import { serverEnv } from "@cap/env";
 import { z } from "zod";
 
 export function isEmailAllowedForSignup(
@@ -16,6 +17,46 @@ export function isEmailAllowedForSignup(
 
 	const allowedDomains = parseAllowedDomains(allowedDomainsConfig);
 	return allowedDomains.includes(emailDomain.toLowerCase());
+}
+
+/**
+ * Whether an account email is refused everywhere: sign-in, existing sessions,
+ * and API keys. Reads CAP_BLOCKED_SIGNUP_DOMAINS.
+ */
+export function isBlockedAccountEmail(
+	email: string | null | undefined,
+): boolean {
+	if (!email) return false;
+	return isEmailBlockedFromSignup(
+		email,
+		serverEnv().CAP_BLOCKED_SIGNUP_DOMAINS,
+	);
+}
+
+/**
+ * Whether an email is refused at sign-in. Entries are domains ("example.com")
+ * or full addresses ("someone@example.com"), comma-separated. Unlike the
+ * allowlist this applies to existing users too, so a blocked account cannot
+ * sign back in after it has been removed.
+ */
+export function isEmailBlockedFromSignup(
+	email: string,
+	blockedConfig?: string,
+): boolean {
+	if (!blockedConfig || blockedConfig.trim() === "") return false;
+	const normalized = email.trim().toLowerCase();
+	const emailDomain = extractDomainFromEmail(normalized);
+	if (!emailDomain) return false;
+	for (const raw of blockedConfig.split(",")) {
+		const entry = raw.trim().toLowerCase();
+		if (!entry) continue;
+		if (entry.includes("@")) {
+			if (entry === normalized) return true;
+		} else if (isValidDomain(entry) && entry === emailDomain.toLowerCase()) {
+			return true;
+		}
+	}
+	return false;
 }
 
 function extractDomainFromEmail(email: string): string | null {

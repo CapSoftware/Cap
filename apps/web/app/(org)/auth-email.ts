@@ -63,6 +63,13 @@ export async function requestEmailCode({
 		return normalizedEmail;
 	}
 
+	if (response?.error === "SignupBlocked") {
+		const params = new URLSearchParams(window.location.search);
+		params.set("error", "SignupBlocked");
+		window.location.assign(`${window.location.pathname}?${params.toString()}`);
+		return null;
+	}
+
 	toast.error(
 		response?.error === "EmailSignin"
 			? "Please wait 30 seconds before requesting a new code."
