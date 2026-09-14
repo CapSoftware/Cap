@@ -113,9 +113,17 @@ opt-level = 2
 [profile.release]
 panic = "unwind"
 codegen-units = 1 # Compile crates one after another so the compiler can optimize better
-lto = true        # Enables link to optimizations
+# Thin LTO runs the cross-crate optimisation in parallel across crates. Fat LTO
+# serialised the whole program through one thread and one address space, which
+# cost ~60 minutes of the Windows release job (18m for the CLI link + 41m for
+# the desktop link) and needed the swapfile / pagefile workarounds in
+# desktop-release.yml to survive 16GB runners.
+lto = "thin"
 opt-level = "s"   # Optimize for binary size
-debug = true
+# Line tables are all Sentry needs to symbolicate the uploaded dSYM / PDB
+# (function names + file:line). Full debuginfo multiplied rlib size and link
+# memory for variable/type info nothing consumes.
+debug = "line-tables-only"
 
 [patch.crates-io]
 # screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"

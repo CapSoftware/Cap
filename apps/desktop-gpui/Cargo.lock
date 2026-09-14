@@ -848,7 +848,6 @@ checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
 dependencies = [
  "async-trait",
  "axum-core",
- "axum-macros",
  "base64 0.22.1",
  "bytes",
  "futures-util",
@@ -897,17 +896,6 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
-]
-
-[[package]]
-name = "axum-macros"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d123550fa8d071b7255cb0cc04dc302baa6c8c4a79f55701552684d8399bce"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -1458,6 +1446,7 @@ dependencies = [
  "ort",
  "tracing",
  "wgpu 25.0.2",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1957,6 +1946,7 @@ name = "cap-rnnoise"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3364,6 +3354,9 @@ name = "dpi"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "dtoa"
@@ -6038,6 +6031,12 @@ checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
 
 [[package]]
 name = "linux-raw-sys"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039"
+
+[[package]]
+name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
@@ -6959,6 +6958,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a12a8ed07aefc768292f076dc3ac8c48f3781c8f2d5851dd3d98950e8c5a89f"
 dependencies = [
  "objc2-encode",
+ "objc2-exception-helper",
 ]
 
 [[package]]
@@ -7188,6 +7188,15 @@ name = "objc2-encode"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef25abbcd74fb2609453eb695bd2f860d389e457f67dc17cafc8b8cbc89d0c33"
+
+[[package]]
+name = "objc2-exception-helper"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7a1c5fbb72d7735b076bb47b578523aedc40f3c439bea6dfd595c089d79d98a"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "objc2-foundation"
@@ -7485,6 +7494,7 @@ version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9cfef937e9c486488c7e3d949ae31c0f1d06bdacd75b99c086cb35356e30408"
 dependencies = [
+ "dunce",
  "is-wsl",
  "libc",
 ]
@@ -10063,6 +10073,9 @@ name = "smol_str"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "smol_str"
@@ -11094,6 +11107,15 @@ dependencies = [
 
 [[package]]
 name = "toml_datetime"
+version = "0.7.5+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92e1cfed4a3038bc5a127e35a2d360f145e1f4b971b551a2ba5fd7aedf7e1347"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "toml_datetime"
 version = "1.1.1+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
@@ -11134,6 +11156,19 @@ dependencies = [
  "serde_spanned 0.6.9",
  "toml_datetime 0.6.11",
  "toml_write",
+ "winnow 0.7.15",
+]
+
+[[package]]
+name = "toml_edit"
+version = "0.23.10+spec-1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84c8b9f757e028cee9fa244aea147aab2a9ec09d5325a9b01e0a49730c2b5269"
+dependencies = [
+ "indexmap 2.14.0",
+ "toml_datetime 0.7.5+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
  "winnow 0.7.15",
 ]
 
@@ -13356,40 +13391,50 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "workspace-hack"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "arrayvec",
- "axum",
  "bitflags 2.13.1",
  "bytemuck",
  "chrono",
  "clang-sys",
  "clap",
  "clap_builder",
+ "concurrent-queue",
  "deranged",
+ "digest",
+ "dispatch2",
+ "dpi",
  "either",
  "flate2",
  "form_urlencoded",
  "futures-channel",
  "futures-core",
  "futures-executor",
+ "futures-io",
  "futures-sink",
  "futures-task",
  "futures-util",
- "getrandom 0.2.17",
  "gif 0.13.3",
- "hashbrown 0.15.5",
  "idna",
- "itertools 0.12.1",
- "itertools 0.13.0",
  "libc",
+ "linux-raw-sys 0.11.0",
+ "linux-raw-sys 0.4.15",
  "log",
  "memchr",
  "miniz_oxide",
+ "ndarray 0.17.2",
  "nom 7.1.3",
+ "num-complex",
+ "num-integer",
  "num-rational",
- "num-traits",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "open",
+ "ort",
+ "ort-sys",
  "percent-encoding",
- "phf_shared 0.10.0",
- "phf_shared 0.11.3",
+ "prettyplease",
  "proc-macro2",
  "profiling",
  "quote",
@@ -13400,25 +13445,44 @@ dependencies = [
  "reqwest 0.12.24",
  "rgb",
  "rustc-hash 1.1.0",
+ "rustix 0.38.44",
+ "rustix 1.1.4",
  "schemars 0.8.22",
+ "scopeguard",
  "semver",
  "serde",
  "serde_core",
- "serde_json",
  "simd-adler32",
- "smallvec",
+ "smol_str 0.2.2",
  "specta",
  "specta-macros",
  "stable_deref_trait",
- "syn 2.0.119",
  "tauri-utils",
  "thiserror 2.0.20",
  "time",
- "tokio",
+ "toml_datetime 0.7.5+spec-1.1.0",
+ "toml_edit 0.23.10+spec-1.0.0",
+ "toml_parser",
+ "toml_writer",
  "tracing",
  "tracing-core",
  "tracing-subscriber",
- "uuid",
+ "ttf-parser 0.25.1",
+ "wayland-backend",
+ "windows 0.54.0",
+ "windows 0.58.0",
+ "windows 0.60.0",
+ "windows 0.61.3",
+ "windows-core 0.60.1",
+ "windows-core 0.61.2",
+ "windows-result 0.3.4",
+ "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
+ "winnow 0.7.15",
+ "x11rb",
+ "x11rb-protocol",
 ]
 
 [[package]]
@@ -13456,6 +13520,8 @@ dependencies = [
  "as-raw-xcb-connection",
  "gethostname",
  "libc",
+ "libloading 0.8.9",
+ "once_cell",
  "rustix 1.1.4",
  "x11rb-protocol",
  "xcursor",

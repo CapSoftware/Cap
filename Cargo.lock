@@ -706,7 +706,6 @@ checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
 dependencies = [
  "async-trait",
  "axum-core 0.4.5",
- "axum-macros 0.4.2",
  "base64 0.22.1",
  "bytes",
  "futures-util",
@@ -743,7 +742,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core 0.5.6",
- "axum-macros 0.5.1",
+ "axum-macros",
  "base64 0.22.1",
  "bytes",
  "form_urlencoded",
@@ -811,17 +810,6 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
-]
-
-[[package]]
-name = "axum-macros"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d123550fa8d071b7255cb0cc04dc302baa6c8c4a79f55701552684d8399bce"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.106",
 ]
 
 [[package]]
@@ -1361,6 +1349,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1418,6 +1407,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wgpu",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2060,6 +2050,7 @@ name = "cap-rnnoise"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -13638,40 +13629,50 @@ dependencies = [
 name = "workspace-hack"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "arrayvec",
- "axum 0.7.9",
  "bitflags 2.13.1",
  "bytemuck",
  "chrono",
  "clang-sys",
  "clap",
  "clap_builder",
+ "concurrent-queue",
  "deranged",
+ "digest",
+ "dispatch2",
+ "dpi",
  "either",
  "flate2",
  "form_urlencoded",
  "futures-channel",
  "futures-core",
  "futures-executor",
+ "futures-io",
  "futures-sink",
  "futures-task",
  "futures-util",
- "getrandom 0.2.16",
  "gif",
- "hashbrown 0.15.5",
  "idna",
- "itertools 0.12.1",
- "itertools 0.13.0",
  "libc",
+ "linux-raw-sys 0.11.0",
+ "linux-raw-sys 0.4.15",
  "log",
  "memchr",
  "miniz_oxide",
+ "ndarray 0.17.2",
  "nom 7.1.3",
+ "num-complex",
+ "num-integer",
  "num-rational",
- "num-traits",
+ "objc2 0.6.2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "open",
+ "ort",
+ "ort-sys",
  "percent-encoding",
- "phf_shared 0.10.0",
- "phf_shared 0.11.3",
+ "prettyplease",
  "proc-macro2",
  "profiling",
  "quote",
@@ -13682,25 +13683,44 @@ dependencies = [
  "reqwest",
  "rgb",
  "rustc-hash 1.1.0",
+ "rustix 0.38.44",
+ "rustix 1.1.2",
  "schemars 0.8.22",
+ "scopeguard",
  "semver",
  "serde",
  "serde_core",
- "serde_json",
  "simd-adler32",
- "smallvec",
+ "smol_str",
  "specta",
  "specta-macros",
  "stable_deref_trait",
- "syn 2.0.106",
  "tauri-utils",
  "thiserror 2.0.16",
  "time",
- "tokio",
+ "toml_datetime 0.7.5+spec-1.1.0",
+ "toml_edit 0.23.10+spec-1.0.0",
+ "toml_parser",
+ "toml_writer",
  "tracing",
  "tracing-core",
  "tracing-subscriber",
- "uuid",
+ "ttf-parser 0.25.1",
+ "wayland-backend",
+ "windows 0.54.0",
+ "windows 0.58.0",
+ "windows 0.60.0",
+ "windows 0.61.3",
+ "windows-core 0.60.1",
+ "windows-core 0.61.2",
+ "windows-result 0.3.4",
+ "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
+ "winnow 0.7.13",
+ "x11rb",
+ "x11rb-protocol",
 ]
 
 [[package]]
