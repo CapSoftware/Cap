@@ -309,23 +309,44 @@ export function PlayerContent(props: { compactness?: number }) {
 		);
 	}
 
-	const seekToBoundary = async (targetSeconds: number) => {
-		if (!Number.isFinite(targetSeconds) || targetSeconds < 0) return;
-		const targetFrame = Math.max(0, Math.floor(targetSeconds * FPS));
-		try {
-			const pending = requestHandoffPlayback(false);
-			if (pending) await pending;
-			if (editorState.playing) {
-				await commands.stopPlayback();
-				setEditorState("playing", false);
-			}
-			setEditorState("playbackTime", targetSeconds);
-			setEditorState("previewTime", null);
-			await commands.seekTo(targetFrame);
-		} catch (error) {
-			console.error("Failed to seek to boundary:", error);
-			setEditorState("playing", false);
+	const seekToStart = async () => {
+		const pending = requestHandoffPlayback(false, 0);
+		if (pending) {
+			editorState.timeline.transform.setPosition(0);
+			await pending;
+			return;
 		}
+		await commands.stopPlayback();
+		setEditorState("playing", false);
+		setEditorState("playbackTime", 0);
+		setEditorState("previewTime", null);
+		editorState.timeline.transform.setPosition(0);
+		if (!handoffPlaybackPending()) {
+			await commands.seekTo(0);
+		}
+	};
+
+	const seekToEnd = async () => {
+		const total = totalDuration();
+		if (!Number.isFinite(total) || total < 0) return;
+		const pending = requestHandoffPlayback(false, total);
+		if (pending) {
+			await pending;
+			return;
+		}
+		await commands.stopPlayback();
+		setEditorState("playing", false);
+		setEditorState("playbackTime", total);
+		setEditorState("previewTime", null);
+		if (!handoffPlaybackPending()) {
+			await commands.seekTo(Math.floor(total * FPS));
+		}
+	};
+
+	const hasActiveOverlayNudge = () => {
+		if (editorState.canvasSelection) return true;
+		const selType = editorState.timeline.selection?.type;
+		return selType === "text" || selType === "image";
 	};
 
 	useEditorShortcuts(() => {
@@ -385,19 +406,25 @@ export function PlayerContent(props: { compactness?: number }) {
 		},
 		{
 			combo: "ArrowUp",
-			handler: () => seekToBoundary(0),
+			handler: () => {
+				if (hasActiveOverlayNudge()) return;
+				void seekToStart();
+			},
 		},
 		{
 			combo: "Home",
-			handler: () => seekToBoundary(0),
+			handler: () => void seekToStart(),
 		},
 		{
 			combo: "ArrowDown",
-			handler: () => seekToBoundary(totalDuration()),
+			handler: () => {
+				if (hasActiveOverlayNudge()) return;
+				void seekToEnd();
+			},
 		},
 		{
 			combo: "End",
-			handler: () => seekToBoundary(totalDuration()),
+			handler: () => void seekToEnd(),
 		},
 	]);
 
@@ -486,18 +513,7 @@ export function PlayerContent(props: { compactness?: number }) {
 					<button
 						type="button"
 						class="text-ed-text-2 transition-opacity hover:opacity-70 will-change-[opacity]"
-						onClick={async () => {
-							const pending = requestHandoffPlayback(false, 0);
-							if (pending) {
-								editorState.timeline.transform.setPosition(0);
-								await pending;
-								return;
-							}
-							await commands.stopPlayback();
-							setEditorState("playing", false);
-							setEditorState("playbackTime", 0);
-							editorState.timeline.transform.setPosition(0);
-						}}
+						onClick={seekToStart}
 					>
 						<IconCapPrev class="size-3.5" />
 					</button>
@@ -517,16 +533,7 @@ export function PlayerContent(props: { compactness?: number }) {
 					<button
 						type="button"
 						class="text-ed-text-2 transition-opacity hover:opacity-70 will-change-[opacity]"
-						onClick={async () => {
-							const pending = requestHandoffPlayback(false, totalDuration());
-							if (pending) {
-								await pending;
-								return;
-							}
-							await commands.stopPlayback();
-							setEditorState("playing", false);
-							setEditorState("playbackTime", totalDuration());
-						}}
+						onClick={seekToEnd}
 					>
 						<IconCapNext class="size-3.5" />
 					</button>

@@ -65,13 +65,51 @@ export type TimelineKeyAction =
 	| { type: "togglePlay" }
 	| null;
 
+export function isIgnoredTimelineKeyboardTarget(
+	target: HTMLElement | null,
+): boolean {
+	if (!target) return false;
+	const tagName = target.tagName?.toLowerCase();
+	const role = target.getAttribute?.("role");
+	return (
+		tagName === "input" ||
+		tagName === "textarea" ||
+		tagName === "select" ||
+		target.isContentEditable ||
+		role === "listbox" ||
+		role === "menu"
+	);
+}
+
 export function resolveTimelineKeyAction(
 	key: string,
 	hasModifier: boolean,
 	duration: number,
 	isNodeButton: boolean,
+	isSlider = false,
 ): TimelineKeyAction {
 	if (hasModifier) return null;
+
+	if (isSlider) {
+		if (key === "ArrowRight" || key === "ArrowUp") {
+			return { type: "seekDelta", delta: KEYBOARD_SEEK_STEP };
+		}
+		if (key === "ArrowLeft" || key === "ArrowDown") {
+			return { type: "seekDelta", delta: -KEYBOARD_SEEK_STEP };
+		}
+		if (key === "Home") {
+			return { type: "seekTo", time: 0 };
+		}
+		if (key === "End") {
+			const safeDuration =
+				Number.isFinite(duration) && duration >= 0 ? duration : 0;
+			return { type: "seekTo", time: safeDuration };
+		}
+		if (key === " " || key === "Spacebar") {
+			return { type: "togglePlay" };
+		}
+		return null;
+	}
 
 	if (key === "ArrowLeft" || key === "ArrowRight") {
 		return {
@@ -85,7 +123,8 @@ export function resolveTimelineKeyAction(
 	}
 
 	if (key === "ArrowDown" || key === "End") {
-		const safeDuration = Number.isFinite(duration) && duration >= 0 ? duration : 0;
+		const safeDuration =
+			Number.isFinite(duration) && duration >= 0 ? duration : 0;
 		return { type: "seekTo", time: safeDuration };
 	}
 
@@ -446,20 +485,13 @@ function TimelineBand({
 	const handleKeyDown = useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
 			const target = event.target as HTMLElement | null;
-			const tagName = target?.tagName?.toLowerCase();
-			const role = target?.getAttribute?.("role");
-			if (
-				tagName === "input" ||
-				tagName === "textarea" ||
-				tagName === "select" ||
-				target?.isContentEditable ||
-				role === "slider" ||
-				role === "listbox" ||
-				role === "menu"
-			) {
+			if (isIgnoredTimelineKeyboardTarget(target)) {
 				return;
 			}
 
+			const role = target?.getAttribute?.("role");
+			const isSlider =
+				role === "slider" || Boolean(target?.closest?.("[data-timeline-rail]"));
 			const hasModifier =
 				event.shiftKey || event.altKey || event.ctrlKey || event.metaKey;
 			const isNodeButton = Boolean(target?.closest("[data-timeline-node]"));
@@ -468,6 +500,7 @@ function TimelineBand({
 				hasModifier,
 				playback.getDuration(),
 				isNodeButton,
+				isSlider,
 			);
 
 			if (!action) return;
