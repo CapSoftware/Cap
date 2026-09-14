@@ -575,7 +575,7 @@ pub async fn create_camera_preview_ws(
                     });
                 frame_counter = frame_counter.wrapping_add(1);
                 let _previous_frame = frame_tx_clone.send_replace(Some(Arc::new(WSFrame {
-                    data,
+                    data: data.into(),
                     width,
                     height,
                     stride,

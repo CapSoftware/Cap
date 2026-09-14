@@ -154,7 +154,19 @@ export async function initWebGPU(
 	}
 
 	const device = await adapter.requestDevice();
+	try {
+		return createWebGPURenderer(device, canvas, preserveAlpha);
+	} catch (error) {
+		device.destroy();
+		throw error;
+	}
+}
 
+function createWebGPURenderer(
+	device: GPUDevice,
+	canvas: OffscreenCanvas,
+	preserveAlpha: boolean,
+): WebGPURenderer {
 	device.lost.then((info) => {
 		if (info.reason !== "destroyed") {
 			self.postMessage({

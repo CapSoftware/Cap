@@ -423,7 +423,12 @@ pub fn capture_ws_frame(kind: CaptureKind, project: &Path, frame: &crate::frame_
             kind,
             project,
             CapturedFrame {
-                data: frame.data.clone(),
+                data: match &frame.data {
+                    crate::frame_ws::WSFrameData::Raw(data) => data.clone(),
+                    crate::frame_ws::WSFrameData::Packed(data) => {
+                        Arc::new(data[..data.len() - 24].to_vec())
+                    }
+                },
                 width: frame.width,
                 height: frame.height,
                 stride: frame.stride,

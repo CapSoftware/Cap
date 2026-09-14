@@ -58,3 +58,41 @@ describe("camera preview transparency", () => {
 		},
 	);
 });
+
+describe("failed WebGPU initialization", () => {
+	it.each(["missing context", "context throws", "configuration", "pipeline"])(
+		"releases the acquired device after %s failure",
+		async (failure) => {
+			const error = new Error(failure);
+			const device = {
+				lost: new Promise(() => {}),
+				destroy: vi.fn(),
+				createBindGroupLayout: vi.fn(() => {
+					throw error;
+				}),
+			};
+			vi.stubGlobal("GPUShaderStage", { FRAGMENT: 2 });
+			vi.stubGlobal("navigator", {
+				gpu: {
+					requestAdapter: async () => ({ requestDevice: async () => device }),
+					getPreferredCanvasFormat: () => "rgba8unorm",
+				},
+			});
+			const canvas = {
+				getContext: () => {
+					if (failure === "missing context") return null;
+					if (failure === "context throws") throw error;
+					return {
+						configure: () => {
+							if (failure === "configuration") throw error;
+						},
+					};
+				},
+			} as unknown as OffscreenCanvas;
+			await expect(initWebGPU(canvas)).rejects.toThrow(
+				failure === "missing context" ? "Failed to get WebGPU context" : error,
+			);
+			expect(device.destroy).toHaveBeenCalledTimes(1);
+		},
+	);
+});

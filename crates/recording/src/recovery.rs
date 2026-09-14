@@ -25,6 +25,13 @@ use crate::studio_recording::CompletedRecording;
 
 mod preparing_observer;
 mod preparing_projection;
+#[cfg(unix)]
+mod retirement;
+
+#[cfg(unix)]
+type PreparingRecoveryLock = retirement::RecoveryLease;
+#[cfg(not(unix))]
+type PreparingRecoveryLock = RecoveryLock;
 
 pub use preparing_observer::{
     LivePreparingStudioSources, PreparingAudioLease, PreparingAudioTrack, PreparingSidecarKind,
@@ -1167,7 +1174,14 @@ impl RecoveryManager {
             elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
             "Studio finalization complete"
         );
-        finalization_info!(path = %workspace.display(), "Recovered recording retains original media backup");
+        #[cfg(unix)]
+        if matches!(purpose, RecoveryPurpose::Finalize)
+            && preparing_source.is_some()
+            && let HeldRecoveryLock::Shared(lease) = &lock
+            && let Err(error) = lease.retire_originals(project, &workspace)
+        {
+            warn!(path = %workspace.display(), %error, "Original media backup retained");
+        }
         Ok(RecoveredRecording {
             project_path: project.clone(),
             meta,
@@ -2654,12 +2668,14 @@ const RECOVERY_INPUTS: [&str; 4] = [
 
 enum HeldRecoveryLock {
     Owned { _lock: RecoveryLock },
-    Shared(Arc<RecoveryLock>),
+    Shared(Arc<PreparingRecoveryLock>),
 }
 
 impl HeldRecoveryLock {
     fn new(lock: RecoveryLock, preparing: bool) -> Self {
         if preparing {
+            #[cfg(unix)]
+            let lock = retirement::RecoveryLease::new(lock);
             Self::Shared(Arc::new(lock))
         } else {
             Self::Owned { _lock: lock }
@@ -3851,6 +3867,19 @@ mod clean_studio_snapshot_tests {
     use cap_enc_ffmpeg::segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig};
     use std::{cell::Cell, cell::RefCell, fs, io};
 
+    fn wait_for_recovery_lock(project: &Path) -> RecoveryLock {
+        let started = Instant::now();
+        loop {
+            match RecoveryLock::acquire(project) {
+                Ok(lock) => return lock,
+                Err(error) => {
+                    assert!(started.elapsed() < Duration::from_secs(5), "{error}");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+    }
+
     const DISPLAY: &str = "content/segments/segment-0/display";
     const FRAGMENT: &str = "content/segments/segment-0/display/segment_001.m4s";
     const OUTPUT: &str = "content/segments/segment-0/display.mp4";
@@ -4109,7 +4138,7 @@ mod clean_studio_snapshot_tests {
         };
         assert_eq!(*transitions.lock().unwrap(), expected_transitions);
         drop(held_locks);
-        assert!(RecoveryLock::acquire(candidate.path()).is_ok());
+        drop(wait_for_recovery_lock(candidate.path()));
         assert!(RecoveryLock::acquire(ordinary.path()).is_ok());
         if matches!(
             case,
@@ -4142,6 +4171,71 @@ mod clean_studio_snapshot_tests {
     #[test]
     fn inspected_preparing_finalization_matches_ordinary_outputs_and_metadata() {
         assert_preparing_entry_point_matches_ordinary(PreparingEntryCase::Supported);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preparing_retirement_preserves_every_encoded_video_packet() {
+        fn packets(path: &Path) -> Vec<Vec<u8>> {
+            let mut input = ffmpeg::format::input(path).unwrap();
+            let video = input
+                .streams()
+                .best(ffmpeg::media::Type::Video)
+                .unwrap()
+                .index();
+            input
+                .packets()
+                .filter_map(|(stream, packet)| {
+                    (stream.index() == video).then(|| packet.data().unwrap().to_vec())
+                })
+                .collect()
+        }
+
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let completed = completed_preparing_fixture(project);
+        let (job, observer) = PreparingStudioJob::claim(&completed, 42).unwrap();
+        let metadata = RecordingMeta::load_for_project(project).unwrap();
+        let recording = RecoveryManager::analyze_incomplete(project, &metadata).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let original = scratch.path().join("original.mp4");
+        let mut joined = fs::File::create(&original).unwrap();
+        let segment = &recording.recoverable_segments[0];
+        for path in segment
+            .display_init_segment
+            .iter()
+            .chain(&segment.display_fragments)
+        {
+            std::io::copy(&mut fs::File::open(path).unwrap(), &mut joined).unwrap();
+        }
+        drop(joined);
+        let expected = packets(&original);
+        assert_eq!(expected.len(), 60);
+        RecoveryManager::finalize_with_preparing(&recording, job).unwrap();
+        assert!(observer.publication_succeeded());
+        drop(observer);
+        drop(wait_for_recovery_lock(project));
+        assert_eq!(packets(&project.join(OUTPUT)), expected);
+        let workspaces: Vec<_> = fs::read_dir(project)
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".recovery-")
+            })
+            .collect();
+        assert_eq!(workspaces.len(), 1);
+        assert!(!workspaces[0].path().join("original-segments").exists());
+        assert!(matches!(
+            RecordingMeta::load_for_project(project)
+                .unwrap()
+                .studio_meta()
+                .unwrap()
+                .status(),
+            StudioRecordingStatus::Complete
+        ));
     }
 
     #[test]
@@ -4222,8 +4316,7 @@ mod clean_studio_snapshot_tests {
         reader.read_to_end(&mut remaining).unwrap();
         assert_eq!(remaining, expected[8..]);
         drop(reader);
-        let lock = RecoveryLock::acquire(project).unwrap();
-        drop(lock);
+        drop(wait_for_recovery_lock(project));
         let finalized = RecordingMeta::load_for_project(project).unwrap();
         assert!(matches!(
             finalized.studio_meta().unwrap().status(),

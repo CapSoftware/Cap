@@ -3,6 +3,7 @@ import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { debounce } from "@solid-primitives/scheduled";
 import { Menu } from "@tauri-apps/api/menu";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
@@ -16,6 +17,7 @@ import {
 } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
+import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
 import {
@@ -291,6 +293,21 @@ export function PlayerContent(props: { compactness?: number }) {
 			setEditorState("playing", false);
 		}
 	};
+
+	if (import.meta.env.DEV) {
+		createTauriEventListener<boolean>(
+			{
+				listen: (callback) =>
+					getCurrentWebviewWindow().listen(
+						"cap-dev-set-editor-playback",
+						callback,
+					),
+			},
+			(playing) => {
+				if (playbackIntent() !== playing) void handlePlayPauseClick();
+			},
+		);
+	}
 
 	// Register keyboard shortcuts in one place
 	useEditorShortcuts(() => {

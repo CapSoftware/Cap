@@ -50,7 +50,7 @@ pub(crate) fn frame_for_websocket(output: cap_editor::EditorFrameOutput) -> Opti
                 GpuOutputFormat::Rgba => WSFrameFormat::Rgba,
             };
             WSFrame {
-                data: Arc::new(frame.data.into_vec()),
+                data: Arc::new(frame.data.into_vec()).into(),
                 width: frame.width,
                 height: frame.height,
                 stride: frame.y_stride,
@@ -61,7 +61,7 @@ pub(crate) fn frame_for_websocket(output: cap_editor::EditorFrameOutput) -> Opti
             }
         }
         cap_editor::EditorFrameOutput::Rgba(frame) => WSFrame {
-            data: frame.data,
+            data: frame.data.into(),
             width: frame.width,
             height: frame.height,
             stride: frame.padded_bytes_per_row,
@@ -75,7 +75,7 @@ pub(crate) fn frame_for_websocket(output: cap_editor::EditorFrameOutput) -> Opti
         #[cfg(target_os = "macos")]
         cap_editor::EditorFrameOutput::Surface(_) => return None,
     };
-    Some(frame)
+    Some(frame.into_packed())
 }
 
 pub struct EditorInstance {
