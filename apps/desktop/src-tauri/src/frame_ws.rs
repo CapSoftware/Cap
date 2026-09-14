@@ -1,3 +1,4 @@
+use axum::body::Bytes;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -33,8 +34,20 @@ pub enum WSFrameFormat {
 }
 
 #[derive(Clone)]
+pub enum WSFrameData {
+    Raw(Arc<Vec<u8>>),
+    Packed(Bytes),
+}
+
+impl From<Arc<Vec<u8>>> for WSFrameData {
+    fn from(data: Arc<Vec<u8>>) -> Self {
+        Self::Raw(data)
+    }
+}
+
+#[derive(Clone)]
 pub struct WSFrame {
-    pub data: std::sync::Arc<Vec<u8>>,
+    pub data: WSFrameData,
     pub width: u32,
     pub height: u32,
     pub stride: u32,
@@ -45,38 +58,68 @@ pub struct WSFrame {
     pub created_at: Instant,
 }
 
-fn pack_ws_frame(frame: &WSFrame) -> Vec<u8> {
+impl WSFrame {
+    pub fn into_packed(mut self) -> Self {
+        if let WSFrameData::Raw(data) = self.data {
+            self.data = WSFrameData::Packed(pack_frame_payload(
+                Arc::unwrap_or_clone(data),
+                self.stride,
+                self.height,
+                self.width,
+                self.frame_number,
+                self.target_time_ns,
+                self.format,
+            ));
+        }
+        self
+    }
+}
+
+fn pack_ws_frame(frame: &WSFrame) -> Bytes {
+    let data = match &frame.data {
+        WSFrameData::Raw(data) => data,
+        WSFrameData::Packed(data) => return data.clone(),
+    };
     let metadata_size = match frame.format {
         WSFrameFormat::Nv12 { .. } => 28usize,
         WSFrameFormat::Rgba => 24,
     };
-    let mut buf = Vec::with_capacity(frame.data.len() + metadata_size);
-    buf.extend_from_slice(&frame.data);
+    let mut buf = Vec::with_capacity(data.len() + metadata_size);
+    buf.extend_from_slice(data);
+    pack_frame_payload(
+        buf,
+        frame.stride,
+        frame.height,
+        frame.width,
+        frame.frame_number,
+        frame.target_time_ns,
+        frame.format,
+    )
+}
 
-    match frame.format {
-        WSFrameFormat::Nv12 { full_range } => {
-            buf.extend_from_slice(&frame.stride.to_le_bytes());
-            buf.extend_from_slice(&frame.height.to_le_bytes());
-            buf.extend_from_slice(&frame.width.to_le_bytes());
-            buf.extend_from_slice(&frame.frame_number.to_le_bytes());
-            buf.extend_from_slice(&frame.target_time_ns.to_le_bytes());
-            let magic = if full_range {
-                NV12_FULL_FORMAT_MAGIC
-            } else {
-                NV12_VIDEO_FORMAT_MAGIC
-            };
-            buf.extend_from_slice(&magic.to_le_bytes());
-        }
-        WSFrameFormat::Rgba => {
-            buf.extend_from_slice(&frame.stride.to_le_bytes());
-            buf.extend_from_slice(&frame.height.to_le_bytes());
-            buf.extend_from_slice(&frame.width.to_le_bytes());
-            buf.extend_from_slice(&frame.frame_number.to_le_bytes());
-            buf.extend_from_slice(&frame.target_time_ns.to_le_bytes());
-        }
+fn pack_frame_payload(
+    mut data: Vec<u8>,
+    stride: u32,
+    height: u32,
+    width: u32,
+    frame_number: u32,
+    target_time_ns: u64,
+    format: WSFrameFormat,
+) -> Bytes {
+    if matches!(format, WSFrameFormat::Nv12 { .. }) {
+        data.reserve_exact(28);
+    }
+    let mut buf = pack_frame_data(data, stride, height, width, frame_number, target_time_ns);
+    if let WSFrameFormat::Nv12 { full_range } = format {
+        let magic = if full_range {
+            NV12_FULL_FORMAT_MAGIC
+        } else {
+            NV12_VIDEO_FORMAT_MAGIC
+        };
+        buf.extend_from_slice(&magic.to_le_bytes());
     }
 
-    buf
+    buf.into()
 }
 
 fn duration_ns(duration: std::time::Duration) -> u64 {
@@ -214,13 +257,14 @@ async fn create_watch_frame_ws_inner(
         State((state, subscribers, instant_subscribers, shutdown)): State<RouterState>,
     ) -> impl IntoResponse {
         let instant_subscribers = query.instant.then_some(instant_subscribers).flatten();
-        ws.on_upgrade(move |socket| async move {
-            tokio::select! {
-                biased;
-                _ = shutdown.cancelled() => {},
-                _ = handle_socket(socket, state, subscribers, instant_subscribers) => {},
-            }
-        })
+        ws.read_buffer_size(4096)
+            .on_upgrade(move |socket| async move {
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => {},
+                    _ = handle_socket(socket, state, subscribers, instant_subscribers) => {},
+                }
+            })
     }
 
     async fn handle_socket(
@@ -423,13 +467,14 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
         State((state, shutdown)): State<RouterState>,
     ) -> impl IntoResponse {
         let rx = state.subscribe();
-        ws.on_upgrade(move |socket| async move {
-            tokio::select! {
-                biased;
-                _ = shutdown.cancelled() => {},
-                _ = handle_socket(socket, rx) => {},
-            }
-        })
+        ws.read_buffer_size(4096)
+            .on_upgrade(move |socket| async move {
+                tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => {},
+                    _ = handle_socket(socket, rx) => {},
+                }
+            })
     }
 
     async fn handle_socket(mut socket: WebSocket, mut camera_rx: broadcast::Receiver<WSFrame>) {
@@ -460,14 +505,7 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
                 incoming_frame = camera_rx.recv() => {
                     match incoming_frame {
                         Ok(frame) => {
-                            let packed = pack_frame_data(
-                                std::sync::Arc::unwrap_or_clone(frame.data),
-                                frame.stride,
-                                frame.height,
-                                frame.width,
-                                frame.frame_number,
-                                frame.target_time_ns,
-                            );
+                            let packed = pack_ws_frame(&frame.into_packed());
 
                             if let Err(e) = socket.send(Message::Binary(packed)).await {
                                 if is_normal_socket_disconnect(&e) {
@@ -541,7 +579,7 @@ mod tests {
 
     fn frame(format: WSFrameFormat) -> WSFrame {
         WSFrame {
-            data: Arc::new(vec![1, 2, 3, 4, 5, 6]),
+            data: Arc::new(vec![1, 2, 3, 4, 5, 6]).into(),
             width: 2,
             height: 2,
             stride: 2,
@@ -575,6 +613,41 @@ mod tests {
     }
 
     #[test]
+    fn owned_frame_packing_reuses_pixels_and_replay_shares_the_packet() {
+        for format in [
+            WSFrameFormat::Rgba,
+            WSFrameFormat::Nv12 { full_range: false },
+            WSFrameFormat::Nv12 { full_range: true },
+        ] {
+            let mut frame = frame(format);
+            let mut pixels = Vec::with_capacity(6 + 28);
+            pixels.extend_from_slice(&[1, 2, 3, 4, 5, 6]);
+            let allocation = pixels.as_ptr();
+            frame.data = Arc::new(pixels).into();
+            let expected = pack_ws_frame(&frame);
+            let packed_frame = frame.into_packed();
+            let first = pack_ws_frame(&packed_frame);
+            let replay = pack_ws_frame(&packed_frame.clone().into_packed());
+            assert_eq!(first, expected);
+            assert_eq!(replay, expected);
+            assert_eq!(first.as_ptr(), allocation);
+            assert_eq!(replay.as_ptr(), allocation);
+        }
+    }
+
+    #[test]
+    fn packing_shared_pixels_preserves_other_readers_and_camera_pool_contents() {
+        let pixels = Arc::new(vec![1, 2, 3, 4, 5, 6]);
+        let mut frame = frame(WSFrameFormat::Rgba);
+        frame.data = pixels.clone().into();
+        let expected = pack_ws_frame(&frame);
+        let packed = pack_ws_frame(&frame.into_packed());
+        assert_eq!(packed, expected);
+        assert_eq!(pixels.as_slice(), &[1, 2, 3, 4, 5, 6]);
+        assert_ne!(packed.as_ptr(), pixels.as_ptr());
+    }
+
+    #[test]
     fn subscriber_guard_decrements_both_counts() {
         let subscribers = Arc::new(AtomicUsize::new(1));
         let instant_subscribers = Arc::new(AtomicUsize::new(1));
@@ -598,7 +671,7 @@ mod shutdown_tests {
 
     fn frame() -> WSFrame {
         WSFrame {
-            data: Arc::new(vec![1, 2, 3, 4]),
+            data: Arc::new(vec![1, 2, 3, 4]).into(),
             width: 1,
             height: 1,
             stride: 4,
@@ -755,6 +828,32 @@ mod shutdown_tests {
     }
 
     #[tokio::test]
+    async fn packed_frames_replay_to_late_clients_and_deliver_replacements() {
+        let initial = frame();
+        let expected_initial = pack_ws_frame(&initial);
+        let (tx, rx) = watch::channel(Some(Arc::new(initial.into_packed())));
+        let subscribers = Arc::new(AtomicUsize::new(0));
+        let (port, shutdown) = create_watch_frame_ws(rx, subscribers.clone()).await;
+        let mut first = connect(port, false).await;
+        assert_eq!(read_binary(&mut first).await, expected_initial);
+        let mut second = connect(port, false).await;
+        assert_eq!(read_binary(&mut second).await, expected_initial);
+        let mut replacement = frame();
+        replacement.frame_number += 1;
+        replacement.target_time_ns += 1;
+        replacement.data = Arc::new(vec![5, 6, 7, 8]).into();
+        let expected_replacement = pack_ws_frame(&replacement);
+        tx.send(Some(Arc::new(replacement.into_packed()))).unwrap();
+        assert_eq!(read_binary(&mut first).await, expected_replacement);
+        assert_eq!(read_binary(&mut second).await, expected_replacement);
+        shutdown.cancel();
+        assert_disconnected(&mut first).await;
+        assert_disconnected(&mut second).await;
+        wait_until(|| subscribers.load(Ordering::Acquire) == 0 && tx.receiver_count() == 0).await;
+        assert_listener_closed(port).await;
+    }
+
+    #[tokio::test]
     async fn watch_source_close_does_not_resend_retained_frame() {
         let frame = Arc::new(frame());
         let (tx, rx) = watch::channel(Some(frame.clone()));
@@ -775,8 +874,9 @@ mod shutdown_tests {
         frame.width = 4096;
         frame.height = 1024;
         frame.stride = 4096 * 4;
-        frame.data = Arc::new(vec![0; frame.stride as usize * frame.height as usize]);
-        let weak_data = Arc::downgrade(&frame.data);
+        let data = Arc::new(vec![0; frame.stride as usize * frame.height as usize]);
+        let weak_data = Arc::downgrade(&data);
+        frame.data = data.into();
         let (tx, rx) = watch::channel(Some(Arc::new(frame)));
         let subscribers = Arc::new(AtomicUsize::new(0));
         let (port, shutdown) = create_watch_frame_ws(rx, subscribers.clone()).await;
@@ -1031,7 +1131,7 @@ pub(crate) async fn create_owned_watch_frame_ws(
                                 let frame = frames.borrow_and_update().clone();
                                 if let Some(frame) = frame
                                     && accepts()
-                                    && socket.send(Message::Binary(pack_ws_frame(&frame))).await.is_err()
+                                    && socket.send(Message::Binary(pack_ws_frame(&frame).to_vec())).await.is_err()
                                 {
                                     return;
                                 }
@@ -1105,7 +1205,7 @@ mod owned_preparing_tests {
     #[tokio::test]
     async fn owned_transport_keeps_exact_frame_encoding_and_joins_live_client() {
         let frame = Arc::new(WSFrame {
-            data: Arc::new(vec![1, 2, 3, 4]),
+            data: Arc::new(vec![1, 2, 3, 4]).into(),
             width: 1,
             height: 1,
             stride: 4,
@@ -1133,7 +1233,7 @@ mod owned_preparing_tests {
     #[tokio::test]
     async fn owned_transport_cancellation_joins_stalled_large_frame_send() {
         let frame = Arc::new(WSFrame {
-            data: Arc::new(vec![1; 16 * 1024 * 1024]),
+            data: Arc::new(vec![1; 16 * 1024 * 1024]).into(),
             width: 2048,
             height: 2048,
             stride: 8192,

@@ -54,7 +54,7 @@ image = "0.25.2"
 futures-intrusive = "0.5.0"
 anyhow.workspace = true
 futures = { workspace = true }
-axum = { version = "0.7.5", features = ["ws", "macros"] }
+axum = { version = "0.8.9", features = ["ws", "macros"] }
 tracing.workspace = true
 tempfile = "3.9.0"
 ffmpeg.workspace = true

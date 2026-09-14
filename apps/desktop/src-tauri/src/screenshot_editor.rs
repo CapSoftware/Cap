@@ -542,7 +542,7 @@ impl ScreenshotEditorInstances {
                             );
                         }
                         let _ = frame_tx.send(Some(std::sync::Arc::new(WSFrame {
-                            data: frame.data,
+                            data: frame.data.into(),
                             width: frame.width,
                             height: frame.height,
                             stride: frame.padded_bytes_per_row,
