@@ -97,9 +97,11 @@ docker compose logs cap-web
 | --- | --- |
 | Docker Compose | VPS, home servers, and any Docker-capable host |
 | [Railway](https://railway.com/new/template/PwpGcf) | One-click managed hosting |
+| [Easypanel](https://easypanel.io/templates/cap) | One-click managed hosting, provisions MySQL and object storage automatically |
 | Coolify | Self-hosted PaaS deployments with `docker-compose.coolify.yml` |
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf)
+[![Deploy on Easypanel](https://easypanel.io/img/deploy-on-easypanel-40.svg)](https://easypanel.io/templates/cap)
 
 For production, configure public URLs and replace the default secrets before exposing the deployment to the internet:
 
