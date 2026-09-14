@@ -2414,16 +2414,14 @@ async fn start_recording_prepared(
         }
     }
     let countdown = general_settings.and_then(|v| v.recording_countdown);
-    let mut countdown_visible = false;
     crate::target_select_overlay::close_target_select_overlay_windows(&app);
     if clean_generation.is_none() {
-        countdown_visible = ShowCapWindow::InProgressRecording {
+        let _ = ShowCapWindow::InProgressRecording {
             countdown,
             capture_target: Some(inputs.capture_target.clone()),
         }
         .show(&app)
-        .await
-        .is_ok();
+        .await;
 
         if let Some(window) = CapWindowId::Main.get(&app) {
             let _ = general_settings
@@ -2432,8 +2430,9 @@ async fn start_recording_prepared(
                 .perform(&window);
         }
     }
-    let play_countdown_sound =
-        crate::audio::should_play_countdown_sound(countdown, countdown_visible);
+    let start_gate = cap_recording::RecordingStartGate::new();
+    let start_cue = crate::audio::prime_recording_start_sound();
+    let start_cancelled: Arc<std::sync::OnceLock<&'static str>> = Arc::default();
     crate::windows::apply_content_protection(&app, true);
 
     if let Some(editor_target) = EditorRecordingTarget::current(&app)
@@ -2443,67 +2442,69 @@ async fn start_recording_prepared(
         let _ = editor_window.minimize();
     }
 
-    if let Some(countdown) = countdown {
-        for t in 0..countdown {
-            #[cfg(target_os = "linux")]
-            if inputs.mode == RecordingMode::Instant
-                && linux_instant::current(&app).is_none_or(|attempt| attempt.cancelled())
-            {
-                return Err("Instant startup cancelled".into());
-            }
-            let _ = RecordingEvent::Countdown {
-                value: countdown - t,
-            }
-            .emit(&app);
-            let tick = tokio::time::sleep(Duration::from_secs(1));
-            tokio::pin!(tick);
-            loop {
-                tokio::select! {
-                    _ = &mut tick => break,
-                    _ = tokio::time::sleep(Duration::from_millis(50)) => {}
-                }
-                if clean_generation.is_some_and(|generation| {
-                    crate::clean_capture::stop_requested(&app, generation)
-                }) {
-                    return Err("Recording cancelled".into());
-                }
-                #[cfg(target_os = "linux")]
-                if inputs.mode == RecordingMode::Instant
-                    && linux_instant::current(&app).is_none_or(|attempt| attempt.cancelled())
-                {
-                    return Err("Instant startup cancelled".into());
-                }
-            }
+    let start_cancel_reason = {
+        let app = app.clone();
+        #[cfg(target_os = "linux")]
+        let mode = inputs.mode;
+        move || -> Option<&'static str> {
             if clean_generation
                 .is_some_and(|generation| crate::clean_capture::stop_requested(&app, generation))
             {
-                return Err("Recording cancelled".into());
+                return Some("Recording cancelled");
             }
+            #[cfg(target_os = "linux")]
+            if mode == RecordingMode::Instant
+                && linux_instant::current(&app).is_none_or(|attempt| attempt.cancelled())
+            {
+                return Some("Instant startup cancelled");
+            }
+            None
         }
+    };
+
+    let countdown = countdown.unwrap_or(0);
+    // Every countdown second but the last elapses before the pipeline is
+    // primed; the last one overlaps its warm-up so capture is live at the cue.
+    for t in 0..countdown.saturating_sub(1) {
+        if let Some(reason) = start_cancel_reason() {
+            return Err(reason.into());
+        }
+        let _ = RecordingEvent::Countdown {
+            value: countdown - t,
+        }
+        .emit(&app);
+        countdown_tick(&start_cancel_reason).await?;
     }
 
-    if play_countdown_sound {
-        let _ = RecordingEvent::Countdown { value: 0 }.emit(&app);
-        let sound = crate::audio::play_recording_start_sound();
-        tokio::pin!(sound);
-        loop {
-            tokio::select! {
-                _ = &mut sound => break,
-                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+    let start_cue_flow = {
+        let app = app.clone();
+        let start_gate = start_gate.clone();
+        let start_cancelled = start_cancelled.clone();
+        let start_cancel_reason = start_cancel_reason.clone();
+        async move {
+            if countdown >= 1 {
+                let _ = RecordingEvent::Countdown { value: 1 }.emit(&app);
+                if let Err(reason) = countdown_tick(&start_cancel_reason).await {
+                    let _ = start_cancelled.set(reason);
+                    start_gate.arm();
+                    return;
+                }
+                let _ = RecordingEvent::Countdown { value: 0 }.emit(&app);
             }
-            if clean_generation
-                .is_some_and(|generation| crate::clean_capture::stop_requested(&app, generation))
-            {
-                return Err("Recording cancelled".into());
-            }
-            #[cfg(target_os = "linux")]
-            if inputs.mode == RecordingMode::Instant
-                && linux_instant::current(&app).is_none_or(|attempt| attempt.cancelled())
-            {
-                return Err("Instant startup cancelled".into());
+            let cue = crate::audio::play_recording_start_sound(start_cue, start_gate);
+            tokio::pin!(cue);
+            loop {
+                tokio::select! {
+                    _ = &mut cue => break,
+                    _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+                }
+                if let Some(reason) = start_cancel_reason() {
+                    let _ = start_cancelled.set(reason);
+                    break;
+                }
             }
         }
-    }
+    };
 
     let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);
     #[cfg(target_os = "linux")]
@@ -2524,6 +2525,8 @@ async fn start_recording_prepared(
         let general_settings = general_settings.cloned();
         let recording_dir = project_file_path.clone();
         let inputs = inputs.clone();
+        let start_gate = start_gate.clone();
+        let start_cancelled = start_cancelled.clone();
         async move {
             fail!("recording::spawn_actor");
 
@@ -2686,6 +2689,8 @@ async fn start_recording_prepared(
                                 None,
                             );
 
+                            builder = builder.with_start_gate(start_gate.clone());
+
                             #[cfg(target_os = "macos")]
                             {
                                 builder = builder.with_excluded_windows(excluded_windows.clone());
@@ -2730,6 +2735,8 @@ async fn start_recording_prepared(
                             )
                             .with_system_audio(inputs.capture_system_audio)
                             .with_max_output_size(instant_mode_max_resolution);
+
+                            builder = builder.with_start_gate(start_gate.clone());
 
                             #[cfg(target_os = "macos")]
                             {
@@ -2866,6 +2873,11 @@ async fn start_recording_prepared(
                 match actor_result {
                     Ok(mut actor) => {
                         let mut state = state_mtx.write().await;
+                        if let Some(reason) = start_cancelled.get().copied() {
+                            drop(state);
+                            let _ = cancel_discarded_recording(&app_handle, actor).await;
+                            return Err(anyhow!(reason));
+                        }
                         if clean_generation.is_some_and(|generation| {
                             !crate::clean_capture::is_current(&app_handle, generation)
                         }) || !matches!(state.recording_state, RecordingState::Pending { .. })
@@ -2979,10 +2991,18 @@ async fn start_recording_prepared(
         }
     };
 
-    let actor_task_res = AssertUnwindSafe(actor_task).catch_unwind().await;
+    let (actor_task_res, ()) =
+        futures::join!(AssertUnwindSafe(actor_task).catch_unwind(), start_cue_flow);
 
     let (actor_done_fut, health_rx, automatic_stop) = match actor_task_res {
         Ok(Ok(v)) => v,
+        Ok(Err(_)) if start_cancelled.get().is_some() => {
+            return Err(start_cancelled
+                .get()
+                .copied()
+                .unwrap_or("Recording cancelled")
+                .into());
+        }
         Ok(Err(err)) => {
             let message = format!("{err:#}");
             handle_spawn_failure(
@@ -3401,11 +3421,24 @@ async fn start_recording_prepared(
         });
     }
 
-    if !play_countdown_sound {
-        AppSounds::StartRecording.play();
-    }
-
     Ok(RecordingAction::Started)
+}
+
+async fn countdown_tick(
+    cancel_reason: &impl Fn() -> Option<&'static str>,
+) -> Result<(), &'static str> {
+    let tick = tokio::time::sleep(Duration::from_secs(1));
+    tokio::pin!(tick);
+    loop {
+        tokio::select! {
+            _ = &mut tick => break,
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+        if let Some(reason) = cancel_reason() {
+            return Err(reason);
+        }
+    }
+    cancel_reason().map_or(Ok(()), Err)
 }
 
 #[tauri::command]

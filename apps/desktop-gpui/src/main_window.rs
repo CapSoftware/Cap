@@ -2048,6 +2048,7 @@ impl MainWindow {
             mic_feed,
             #[cfg(target_os = "linux")]
             linux_instant_camera: None,
+            start_gate: None,
         };
 
         self.start_recording_config(config, cx);

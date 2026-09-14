@@ -6,10 +6,14 @@ use rodio::{Decoder, OutputStream, Sink};
 #[path = "../../desktop/src-tauri/src/recording_start_sound.rs"]
 mod recording_start_sound;
 
-pub use recording_start_sound::should_play_countdown_sound;
+pub use recording_start_sound::StartCue;
 
-pub async fn play_recording_start_sound() {
-    recording_start_sound::play(AppSound::StartRecording.bytes()).await;
+pub fn prime_recording_start_sound() -> StartCue {
+    recording_start_sound::prime(AppSound::StartRecording.bytes())
+}
+
+pub async fn play_recording_start_sound(cue: StartCue, gate: cap_recording::RecordingStartGate) {
+    recording_start_sound::play(cue, gate).await;
 }
 
 #[derive(Clone, Copy, Debug)]

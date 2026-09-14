@@ -1,4 +1,5 @@
 #[cfg(target_os = "macos")]
+use crate::RecordingStartGate;
 use crate::SendableShareableContent;
 #[cfg(target_os = "macos")]
 use crate::output_pipeline::{
@@ -567,6 +568,12 @@ impl Actor {
                 segment_start_instant,
                 ..
             }) => {
+                let segment_start_instant = self
+                    .segment_factory
+                    .start_gate()
+                    .and_then(RecordingStartGate::armed_at)
+                    .map(|armed| armed.instant().max(segment_start_instant))
+                    .unwrap_or(segment_start_instant);
                 if let Some(deadline) =
                     minimum_segment_stop_deadline(discard, segment_start_instant)
                 {
@@ -2029,6 +2036,7 @@ pub struct ActorBuilder {
     quality: crate::StudioQuality,
     #[cfg(target_os = "macos")]
     excluded_windows: Vec<scap_targets::WindowId>,
+    start_gate: Option<RecordingStartGate>,
 }
 
 impl ActorBuilder {
@@ -2052,11 +2060,20 @@ impl ActorBuilder {
             quality: crate::StudioQuality::Balanced,
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
+            start_gate: None,
         }
     }
 
     pub fn with_system_audio(mut self, system_audio: bool) -> Self {
         self.system_audio = system_audio;
+        self
+    }
+
+    /// Prime the capture pipeline ahead of the start cue: every source, encoder
+    /// and muxer is live once `build` returns, but nothing is recorded until the
+    /// gate is armed. See [`RecordingStartGate`].
+    pub fn with_start_gate(mut self, start_gate: RecordingStartGate) -> Self {
+        self.start_gate = Some(start_gate);
         self
     }
 
@@ -2132,6 +2149,7 @@ impl ActorBuilder {
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,
                 camera_feed: self.camera_feed,
+                start_gate: self.start_gate,
                 #[cfg(target_os = "macos")]
                 shareable_content,
                 #[cfg(target_os = "macos")]
@@ -2936,7 +2954,7 @@ impl SegmentPipelineFactory {
             &self.segments_dir,
             &self.cursors_dir,
             self.index,
-            self.base_inputs.clone(),
+            self.segment_base_inputs(),
             cursors,
             next_cursors_id,
             self.custom_cursor_capture,
@@ -2973,7 +2991,7 @@ impl SegmentPipelineFactory {
                 &self.segments_dir,
                 &self.cursors_dir,
                 self.index,
-                self.base_inputs.clone(),
+                self.segment_base_inputs(),
                 cursors,
                 next_cursors_id,
                 self.custom_cursor_capture,
@@ -3003,6 +3021,20 @@ impl SegmentPipelineFactory {
         pipeline.spawn_watcher(self.completion_tx.clone());
 
         Ok(pipeline)
+    }
+
+    /// Only the first segment is primed behind the start gate; resumed
+    /// segments record from their own build instant.
+    fn segment_base_inputs(&self) -> RecordingBaseInputs {
+        let mut inputs = self.base_inputs.clone();
+        if self.index > 0 {
+            inputs.start_gate = None;
+        }
+        inputs
+    }
+
+    pub fn start_gate(&self) -> Option<&RecordingStartGate> {
+        self.base_inputs.start_gate.as_ref()
     }
 
     pub fn set_mic_feed(&mut self, mic_feed: Option<Arc<MicrophoneFeedLock>>) {
@@ -3097,6 +3129,8 @@ async fn create_segment_pipeline(
 
     trace!("preparing segment pipeline {index}");
 
+    let start_gate = base_inputs.start_gate.clone();
+
     let camera_active = base_inputs.camera_feed.is_some();
     #[cfg(target_os = "macos")]
     let segment_fragmented = fragmented && !camera_active;
@@ -3138,7 +3172,8 @@ async fn create_segment_pipeline(
                 OutputPipeline::builder(screen_output_path.clone())
             }
             .with_video::<sources::Camera>(camera_feed)
-            .with_timestamps(start_time);
+            .with_timestamps(start_time)
+            .with_start_gate(start_gate.clone());
 
             let screen = if segment_fragmented {
                 builder
@@ -3177,6 +3212,7 @@ async fn create_segment_pipeline(
             let screen = OutputPipeline::builder(screen_output_path.clone())
                 .with_video::<sources::NativeCamera>(camera_feed.clone())
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig::default())
                 .instrument(error_span!("screen-out"))
                 .await
@@ -3186,6 +3222,7 @@ async fn create_segment_pipeline(
             let screen = OutputPipeline::builder(screen_output_path.clone())
                 .with_video::<sources::NativeCamera>(camera_feed.clone())
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
                     encoder_preferences: encoder_preferences.clone(),
                     ..Default::default()
@@ -3252,6 +3289,7 @@ async fn create_segment_pipeline(
             capture_source,
             screen_output_path.clone(),
             start_time,
+            start_gate.clone(),
             segment_fragmented,
             use_oop_muxer,
             shared_pause_state.clone(),
@@ -3276,6 +3314,7 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(fragments_dir)
                 .with_video::<sources::NativeCamera>(camera_feed)
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .build::<MacOSFragmentedM4SCameraMuxer>(MacOSFragmentedM4SCameraMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
                     ..Default::default()
@@ -3286,6 +3325,7 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(dir.join("camera.mp4"))
                 .with_video::<sources::NativeCamera>(camera_feed)
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig {
                     compatibility_quality: matches!(quality, crate::StudioQuality::Compatibility),
                     ..Default::default()
@@ -3307,6 +3347,7 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(fragments_dir)
                 .with_video::<sources::NativeCamera>(camera_feed)
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .build::<WindowsFragmentedM4SCameraMuxer>(WindowsFragmentedM4SCameraMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
                     ..Default::default()
@@ -3317,6 +3358,7 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(dir.join("camera.mp4"))
                 .with_video::<sources::NativeCamera>(camera_feed)
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
                     encoder_preferences: encoder_preferences.clone(),
                     ..Default::default()
@@ -3337,6 +3379,7 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(dir.join("camera"))
                 .with_video::<sources::Camera>(camera_feed)
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .build::<crate::ffmpeg::SegmentedVideoMuxer>(
                     crate::ffmpeg::SegmentedVideoMuxerConfig {
                         segment_duration: Duration::from_secs(2),
@@ -3350,6 +3393,7 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(dir.join("camera.mp4"))
                 .with_video::<sources::Camera>(camera_feed)
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .build::<crate::ffmpeg::Mp4Muxer>(())
                 .instrument(error_span!("camera-out"))
                 .await
@@ -3365,6 +3409,7 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(output_path)
                 .with_audio_source::<sources::Microphone>(mic_feed)
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
                 })
@@ -3374,6 +3419,7 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(dir.join("audio-input.ogg"))
                 .with_audio_source::<sources::Microphone>(mic_feed)
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .build::<OggMuxer>(())
                 .instrument(error_span!("mic-out"))
                 .await
@@ -3394,6 +3440,7 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(output_path)
                 .with_audio_source::<screen_capture::SystemAudioSource>(system_audio_source)
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .with_audio_anchor(AudioAnchor::PipelineEpoch)
                 .build::<FragmentedAudioMuxer>(FragmentedAudioMuxerConfig {
                     shared_pause_state: shared_pause_state.clone(),
@@ -3404,6 +3451,7 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(dir.join("system_audio.ogg"))
                 .with_audio_source::<screen_capture::SystemAudioSource>(system_audio_source)
                 .with_timestamps(start_time)
+                .with_start_gate(start_gate.clone())
                 .with_audio_anchor(AudioAnchor::PipelineEpoch)
                 .build::<OggMuxer>(())
                 .instrument(error_span!("system-audio-out"))
@@ -3743,6 +3791,7 @@ mod tests {
                         capture_system_audio: false,
                         mic_feed: None,
                         camera_feed: None,
+                        start_gate: None,
                         #[cfg(target_os = "macos")]
                         shareable_content: None,
                         #[cfg(target_os = "macos")]
@@ -3852,6 +3901,7 @@ mod tests {
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
+                start_gate: None,
                 #[cfg(target_os = "macos")]
                 shareable_content: None,
                 #[cfg(target_os = "macos")]
@@ -3949,6 +3999,7 @@ mod tests {
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
+                start_gate: None,
                 shareable_content: None,
                 excluded_windows: Vec::new(),
             },
@@ -4085,6 +4136,7 @@ mod tests {
                     capture_system_audio: false,
                     mic_feed: None,
                     camera_feed: None,
+                    start_gate: None,
                     #[cfg(target_os = "macos")]
                     shareable_content: None,
                     #[cfg(target_os = "macos")]
@@ -4328,6 +4380,7 @@ mod tests {
                     capture_system_audio: false,
                     mic_feed: None,
                     camera_feed: None,
+                    start_gate: None,
                     #[cfg(target_os = "macos")]
                     shareable_content: None,
                     #[cfg(target_os = "macos")]
@@ -5822,6 +5875,7 @@ mod tests {
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
+                start_gate: None,
             },
             false,
             false,
@@ -6067,6 +6121,7 @@ mod windows_cancel_tests {
                 capture_system_audio: false,
                 mic_feed: None,
                 camera_feed: None,
+                start_gate: None,
             },
             false,
             false,

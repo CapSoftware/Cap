@@ -1,3 +1,4 @@
+use super::start_gate::{AudioAdmission, RecordingStartGate};
 use crate::sources::audio_mixer::AudioMixer;
 use anyhow::{Context, anyhow};
 use cap_media_info::{AudioInfo, VideoInfo};
@@ -1667,6 +1668,7 @@ impl OutputPipeline {
             timestamps,
             master_clock: None,
             audio_anchor: AudioAnchor::FirstFrame,
+            start_gate: None,
         }
     }
 }
@@ -1750,6 +1752,7 @@ pub struct OutputPipelineBuilder<TVideo> {
     timestamps: Timestamps,
     master_clock: Option<Arc<MasterClock>>,
     audio_anchor: AudioAnchor,
+    start_gate: Option<RecordingStartGate>,
 }
 
 pub struct NoVideo;
@@ -1795,6 +1798,12 @@ impl<THasVideo> OutputPipelineBuilder<THasVideo> {
         self.audio_anchor = anchor;
         self
     }
+
+    /// Hold every captured frame until `gate` is armed. See [`RecordingStartGate`].
+    pub fn with_start_gate(mut self, gate: Option<RecordingStartGate>) -> Self {
+        self.start_gate = gate;
+        self
+    }
 }
 
 impl OutputPipelineBuilder<NoVideo> {
@@ -1809,6 +1818,7 @@ impl OutputPipelineBuilder<NoVideo> {
             timestamps: self.timestamps,
             master_clock: self.master_clock,
             audio_anchor: self.audio_anchor,
+            start_gate: self.start_gate,
         }
     }
 }
@@ -2353,6 +2363,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             path,
             master_clock,
             audio_anchor,
+            start_gate,
             ..
         } = self;
 
@@ -2414,6 +2425,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             master_clock.clone(),
             video_info,
             video_start_gate.clone(),
+            start_gate.clone(),
         );
 
         let audio_gap_summary = Arc::new(OnceLock::new());
@@ -2430,6 +2442,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             shared_pause,
             true,
             video_start_gate,
+            start_gate,
             build_ctx.stop_signal,
             audio_gap_summary.clone(),
             audio_anchor,
@@ -2472,6 +2485,7 @@ impl OutputPipelineBuilder<NoVideo> {
             path,
             master_clock,
             audio_anchor,
+            start_gate,
             ..
         } = self;
 
@@ -2525,6 +2539,7 @@ impl OutputPipelineBuilder<NoVideo> {
             shared_pause,
             false,
             None,
+            start_gate,
             build_ctx.stop_signal,
             audio_gap_summary.clone(),
             audio_anchor,
@@ -2602,6 +2617,7 @@ async fn finish_build(
     shared_pause: SharedWallClockPause,
     has_video: bool,
     video_start_gate: Option<VideoStartGate>,
+    start_gate: Option<RecordingStartGate>,
     stop_signal: PipelineStopSignal,
     gap_summary_slot: Arc<OnceLock<AudioGapSummary>>,
     audio_anchor: AudioAnchor,
@@ -2616,6 +2632,7 @@ async fn finish_build(
             shared_pause,
             has_video,
             video_start_gate,
+            start_gate,
             gap_summary_slot,
             audio_anchor,
         );
@@ -2833,6 +2850,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     master_clock: Arc<MasterClock>,
     video_info: VideoInfo,
     video_start_gate: Option<VideoStartGate>,
+    start_gate: Option<RecordingStartGate>,
 ) -> Option<oneshot::Receiver<Result<(), String>>> {
     let frame_duration_ns = estimate_video_frame_duration_ns(&video_info);
     let (start_tx, started) =
@@ -2909,6 +2927,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let mut dropped_during_pause: u64 = 0;
         let mut last_frame = None;
         let mut first_frame_offset = None;
+        let mut start_gate = start_gate;
+        let mut held_before_start: u64 = 0;
 
         let res = stop_token
             .run_until_cancelled(async {
@@ -2920,9 +2940,23 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         continue;
                     }
 
-                    frame_count += 1;
-
                     let timestamp = frame.timestamp();
+
+                    if let Some(gate) = &start_gate {
+                        if !gate.admits_video(timestamp) {
+                            held_before_start += 1;
+                            continue;
+                        }
+                        info!(
+                            held_frames = held_before_start,
+                            admitted_after_arm_ms =
+                                gate.offset_secs(timestamp).unwrap_or_default() * 1000.0,
+                            "Start gate admitted first video frame"
+                        );
+                        start_gate = None;
+                    }
+
+                    frame_count += 1;
 
                     let is_first_frame = first_tx.is_some();
                     if let Some(first_tx) = first_tx.take() {
@@ -3254,6 +3288,7 @@ impl PreparedAudioSources {
         shared_pause: SharedWallClockPause,
         has_video: bool,
         video_start_gate: Option<VideoStartGate>,
+        start_gate: Option<RecordingStartGate>,
         gap_summary_slot: Arc<OnceLock<AudioGapSummary>>,
         audio_anchor: AudioAnchor,
     ) {
@@ -3285,6 +3320,7 @@ impl PreparedAudioSources {
                 let mut frame_count: u64 = 0;
                 let mut gap_tracker = AudioGapTracker::new(has_wireless_source, timestamps);
                 let mut gate_applied = video_start_gate.is_none();
+                let mut start_gate = StartGateState::new(start_gate);
 
                 let mut audio_degraded = false;
 
@@ -3300,6 +3336,7 @@ impl PreparedAudioSources {
                                     health_tx: &health_tx,
                                     shared_pause: &shared_pause,
                                     video_start_gate: video_start_gate.as_ref(),
+                                    start_gate: &start_gate.gate,
                                     allow_audio_degradation,
                                     origin: FrameProcessOrigin::Live,
                                     observed_at: Instant::now(),
@@ -3310,6 +3347,8 @@ impl PreparedAudioSources {
                                     timestamp_generator: &mut timestamp_generator,
                                     gap_tracker: &mut gap_tracker,
                                     gate_applied: &mut gate_applied,
+                                    held_before_start: &mut start_gate.held,
+                                    start_admitted: &mut start_gate.admitted,
                                     first_tx: &mut first_tx,
                                     frame_count: &mut frame_count,
                                     dropped_during_pause: &mut dropped_during_pause,
@@ -3372,6 +3411,7 @@ impl PreparedAudioSources {
                                     health_tx: &health_tx,
                                     shared_pause: &shared_pause,
                                     video_start_gate: video_start_gate.as_ref(),
+                                    start_gate: &start_gate.gate,
                                     allow_audio_degradation,
                                     origin: FrameProcessOrigin::Drain,
                                     observed_at: Instant::now(),
@@ -3382,6 +3422,8 @@ impl PreparedAudioSources {
                                     timestamp_generator: &mut timestamp_generator,
                                     gap_tracker: &mut gap_tracker,
                                     gate_applied: &mut gate_applied,
+                                    held_before_start: &mut start_gate.held,
+                                    start_admitted: &mut start_gate.admitted,
                                     first_tx: &mut first_tx,
                                     frame_count: &mut frame_count,
                                     dropped_during_pause: &mut dropped_during_pause,
@@ -3449,8 +3491,9 @@ impl PreparedAudioSources {
                     // the fill below covers the full duration and the track
                     // reports a valid start.
                     if audio_anchor == AudioAnchor::PipelineEpoch && !gap_tracker.started() {
-                        let epoch_ts = Timestamp::Instant(timestamps.instant());
-                        gap_tracker.mark_started(epoch_ts, timestamps.instant());
+                        let epoch = audio_epoch(timestamps, start_gate.gate.as_ref());
+                        let epoch_ts = Timestamp::Instant(epoch.instant());
+                        gap_tracker.mark_started(epoch_ts, epoch.instant());
                         if let Some(first_tx) = first_tx.take() {
                             let _ = first_tx.send(epoch_ts);
                         }
@@ -3592,6 +3635,7 @@ struct AudioFrameProcessContext<'a, TMutex: AudioMuxer> {
     health_tx: &'a HealthSender,
     shared_pause: &'a SharedWallClockPause,
     video_start_gate: Option<&'a VideoStartGate>,
+    start_gate: &'a Option<RecordingStartGate>,
     allow_audio_degradation: bool,
     origin: FrameProcessOrigin,
     observed_at: Instant,
@@ -3603,9 +3647,37 @@ struct AudioFrameProcessState<'a> {
     timestamp_generator: &'a mut AudioTimestampGenerator,
     gap_tracker: &'a mut AudioGapTracker,
     gate_applied: &'a mut bool,
+    held_before_start: &'a mut u64,
+    start_admitted: &'a mut bool,
     first_tx: &'a mut Option<oneshot::Sender<Timestamp>>,
     frame_count: &'a mut u64,
     dropped_during_pause: &'a mut u64,
+}
+
+struct StartGateState {
+    gate: Option<RecordingStartGate>,
+    held: u64,
+    admitted: bool,
+}
+
+impl StartGateState {
+    fn new(gate: Option<RecordingStartGate>) -> Self {
+        Self {
+            gate,
+            held: 0,
+            admitted: false,
+        }
+    }
+}
+
+/// The instant an epoch-anchored audio track treats as time zero: the start
+/// gate's arm point when the pipeline was primed ahead of the recording, else
+/// the pipeline epoch.
+fn audio_epoch(timestamps: Timestamps, start_gate: Option<&RecordingStartGate>) -> Timestamps {
+    start_gate
+        .and_then(RecordingStartGate::armed_at)
+        .filter(|armed| armed.instant() > timestamps.instant())
+        .unwrap_or(timestamps)
 }
 
 async fn process_audio_frame<TMutex: AudioMuxer>(
@@ -3618,6 +3690,42 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
     if is_paused {
         *state.dropped_during_pause += 1;
         return Ok(AudioFrameOutcome::DroppedPaused);
+    }
+
+    if let Some(gate) = ctx.start_gate {
+        match gate.admit_audio(frame.timestamp, frame.inner.samples(), ctx.sample_rate) {
+            AudioAdmission::Drop => {
+                *state.held_before_start += 1;
+                return Ok(AudioFrameOutcome::DropFrame);
+            }
+            AudioAdmission::Trim { samples } => {
+                let Some(trimmed) = trim_audio_frame_front(&frame.inner, samples) else {
+                    *state.held_before_start += 1;
+                    return Ok(AudioFrameOutcome::DropFrame);
+                };
+                let trim_duration = Duration::from_nanos(
+                    samples as u64 * 1_000_000_000 / u64::from(ctx.sample_rate.max(1)),
+                );
+                if !std::mem::replace(state.start_admitted, true) {
+                    info!(
+                        held_frames = *state.held_before_start,
+                        trimmed_samples = samples,
+                        "Start gate admitted first audio frame at the arm point"
+                    );
+                }
+                frame = AudioFrame::new(trimmed, frame.timestamp + trim_duration);
+            }
+            AudioAdmission::Admit => {
+                if !std::mem::replace(state.start_admitted, true) {
+                    info!(
+                        held_frames = *state.held_before_start,
+                        admitted_after_arm_ms =
+                            gate.offset_secs(frame.timestamp).unwrap_or_default() * 1000.0,
+                        "Start gate admitted first audio frame"
+                    );
+                }
+            }
+        }
     }
 
     if !*state.gate_applied
@@ -3660,17 +3768,16 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
         && ctx.video_start_gate.is_none()
         && !state.gap_tracker.started()
     {
-        let epoch_ts = Timestamp::Instant(ctx.timestamps.instant());
-        state
-            .gap_tracker
-            .mark_started(epoch_ts, ctx.timestamps.instant());
+        let epoch = audio_epoch(ctx.timestamps, ctx.start_gate.as_ref());
+        let epoch_ts = Timestamp::Instant(epoch.instant());
+        state.gap_tracker.mark_started(epoch_ts, epoch.instant());
 
-        let head_secs = frame.timestamp.signed_duration_since_secs(ctx.timestamps);
+        let head_secs = frame.timestamp.signed_duration_since_secs(epoch);
         let head = Duration::from_secs_f64(head_secs.max(0.0))
             .saturating_sub(total_pause_duration)
             // A capture timestamp can't credibly predate more wall time than
             // has actually elapsed since the epoch.
-            .min(observed_at.saturating_duration_since(ctx.timestamps.instant()));
+            .min(observed_at.saturating_duration_since(epoch.instant()));
 
         if !head.is_zero() {
             let start_samples = state.timestamp_generator.total_samples;
@@ -3715,7 +3822,7 @@ async fn process_audio_frame<TMutex: AudioMuxer>(
     if let Some(first_tx) = state.first_tx.take() {
         let anchor_ts =
             if ctx.anchor == AudioAnchor::PipelineEpoch && ctx.video_start_gate.is_none() {
-                Timestamp::Instant(ctx.timestamps.instant())
+                Timestamp::Instant(audio_epoch(ctx.timestamps, ctx.start_gate.as_ref()).instant())
             } else {
                 frame.timestamp
             };
@@ -6877,6 +6984,59 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn primed_pipeline_discards_video_captured_before_the_start_gate_arms() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let gate = RecordingStartGate::new();
+            let (sender, receiver) = flume::bounded(8);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = OutputPipeline::builder(temp_dir.path().join("primed.mp4"))
+                .with_video::<ChannelVideoSource<StaticFrame>>(ChannelVideoSourceConfig::new(
+                    VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 16, 16, 30),
+                    receiver,
+                ))
+                .with_timestamps(Timestamps::now())
+                .with_start_gate(Some(gate.clone()))
+                .build::<ObservedMuxer>(sent.clone())
+                .await
+                .unwrap();
+
+            for _ in 0..3 {
+                sender
+                    .send_async(StaticFrame {
+                        timestamp: Timestamp::Instant(Instant::now()),
+                    })
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            assert!(sent.lock().unwrap().is_empty());
+
+            assert!(gate.arm());
+            let first_admitted = Instant::now();
+            for frame in 0..3u32 {
+                sender
+                    .send_async(StaticFrame {
+                        timestamp: Timestamp::Instant(
+                            first_admitted + Duration::from_millis(33 * u64::from(frame)),
+                        ),
+                    })
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            let outcome = pipeline.stop().await.unwrap();
+
+            match outcome.first_timestamp {
+                Timestamp::Instant(instant) => assert_eq!(instant, first_admitted),
+                other => panic!("unexpected first timestamp {other:?}"),
+            }
+            let timestamps = sent.lock().unwrap().clone();
+            assert_eq!(timestamps.first(), Some(&Duration::ZERO));
+            assert!(timestamps.len() >= 3, "{timestamps:?}");
+        }
+
+        #[tokio::test]
         async fn static_capture_finishes_with_two_nominally_spaced_frames() {
             let (timestamps, _) = record_static_capture(Duration::ZERO).await;
             assert_eq!(timestamps.len(), 3);
@@ -7564,6 +7724,9 @@ mod tests {
             timestamp_generator: AudioTimestampGenerator,
             gap_tracker: AudioGapTracker,
             gate_applied: bool,
+            start_gate: Option<RecordingStartGate>,
+            held_before_start: u64,
+            start_admitted: bool,
             first_tx: Option<oneshot::Sender<Timestamp>>,
             frame_count: u64,
             dropped_during_pause: u64,
@@ -7591,10 +7754,20 @@ mod tests {
                     timestamp_generator: AudioTimestampGenerator::from_master_clock(master_clock),
                     gap_tracker: AudioGapTracker::new(false, timestamps),
                     gate_applied: true,
+                    start_gate: None,
+                    held_before_start: 0,
+                    start_admitted: false,
                     first_tx: None,
                     frame_count: 0,
                     dropped_during_pause: 0,
                     anchor: AudioAnchor::FirstFrame,
+                }
+            }
+
+            fn primed(start_gate: RecordingStartGate) -> Self {
+                Self {
+                    start_gate: Some(start_gate),
+                    ..Self::new()
                 }
             }
 
@@ -7637,6 +7810,7 @@ mod tests {
                         health_tx: &self.health_tx,
                         shared_pause: &self.shared_pause,
                         video_start_gate: None,
+                        start_gate: &self.start_gate,
                         allow_audio_degradation: true,
                         origin: FrameProcessOrigin::Live,
                         observed_at,
@@ -7647,6 +7821,8 @@ mod tests {
                         timestamp_generator: &mut self.timestamp_generator,
                         gap_tracker: &mut self.gap_tracker,
                         gate_applied: &mut self.gate_applied,
+                        held_before_start: &mut self.held_before_start,
+                        start_admitted: &mut self.start_admitted,
                         first_tx: &mut self.first_tx,
                         frame_count: &mut self.frame_count,
                         dropped_during_pause: &mut self.dropped_during_pause,
@@ -7672,6 +7848,81 @@ mod tests {
             fn sent(&self) -> Vec<SentAudioFrame> {
                 self.sent.lock().unwrap().clone()
             }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn primed_track_holds_audio_until_the_start_gate_arms() {
+            let gate = RecordingStartGate::new();
+            let mut harness = AudioTimelineHarness::primed(gate.clone());
+
+            assert!(matches!(
+                harness.process(Duration::ZERO, 480).await,
+                AudioFrameOutcome::DropFrame
+            ));
+            assert!(matches!(
+                harness.process(Duration::from_millis(10), 480).await,
+                AudioFrameOutcome::DropFrame
+            ));
+            assert!(harness.sent().is_empty());
+            assert_eq!(harness.held_before_start, 2);
+
+            gate.arm_at(harness.timestamps + Duration::from_millis(25));
+
+            assert!(matches!(
+                harness.process(Duration::from_millis(20), 480).await,
+                AudioFrameOutcome::Sent
+            ));
+            assert!(matches!(
+                harness.process(Duration::from_millis(30), 480).await,
+                AudioFrameOutcome::Sent
+            ));
+
+            assert_eq!(
+                harness.sent(),
+                vec![
+                    SentAudioFrame {
+                        samples: 240,
+                        timestamp: Duration::ZERO,
+                    },
+                    SentAudioFrame {
+                        samples: 480,
+                        timestamp: Duration::from_millis(5),
+                    },
+                ]
+            );
+            assert_eq!(harness.committed_audio(), Duration::from_millis(15));
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn primed_epoch_anchored_track_anchors_at_the_arm_point() {
+            let gate = RecordingStartGate::new();
+            let mut harness = AudioTimelineHarness {
+                start_gate: Some(gate.clone()),
+                ..AudioTimelineHarness::new_epoch_anchored()
+            };
+
+            assert!(matches!(
+                harness.process(Duration::from_millis(500), 480).await,
+                AudioFrameOutcome::DropFrame
+            ));
+            gate.arm_at(harness.timestamps + Duration::from_millis(1_000));
+
+            assert!(matches!(
+                harness.process(Duration::from_millis(1_020), 480).await,
+                AudioFrameOutcome::Sent
+            ));
+
+            let sent = harness.sent();
+            let (frame, head) = sent.split_last().unwrap();
+            let head_samples: usize = head.iter().map(|frame| frame.samples).sum();
+            assert_eq!(head_samples, 960);
+            assert_eq!(
+                *frame,
+                SentAudioFrame {
+                    samples: 480,
+                    timestamp: Duration::from_millis(20),
+                }
+            );
         }
 
         #[tokio::test(flavor = "current_thread")]

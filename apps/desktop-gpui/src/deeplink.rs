@@ -427,6 +427,7 @@ impl DeepLinkAction {
                                     mic_feed,
                                     #[cfg(target_os = "linux")]
                                     linux_instant_camera: None,
+                                    start_gate: None,
                                 },
                                 permit.clone(),
                                 cx,

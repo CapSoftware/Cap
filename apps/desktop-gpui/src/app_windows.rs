@@ -6811,6 +6811,7 @@ mod tests {
                 camera_feed: None,
                 mic_feed: None,
                 linux_instant_camera: None,
+                start_gate: None,
             }),
             gate: CleanCaptureGate::default(),
             camera: None,

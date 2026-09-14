@@ -1,192 +1,130 @@
-use std::{
-    io::Cursor,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{io::Cursor, sync::mpsc, time::Duration};
 
-use rodio::{Decoder, OutputStream, Sink, Source};
+use cap_recording::RecordingStartGate;
+use rodio::{Decoder, OutputStream, Sink};
 
 const PLAYBACK_TIMEOUT: Duration = Duration::from_secs(3);
-const OUTPUT_SETTLING_TIME: Duration = Duration::from_millis(500);
-static ACTIVE_WORKER: Mutex<Option<Arc<PlaybackControl>>> = Mutex::new(None);
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(5);
+// Rodio reports an empty sink once the mixer has consumed the last sample; that
+// buffer still has to play out through the device before the cue is audible-done.
+const FALLBACK_OUTPUT_LATENCY: Duration = Duration::from_millis(40);
 
-pub fn should_play_countdown_sound(countdown: Option<u32>, visible: bool) -> bool {
-    visible && countdown.is_some_and(|seconds| seconds > 1)
+struct PlayCommand {
+    gate: RecordingStartGate,
+    done: tokio::sync::oneshot::Sender<Result<(), String>>,
 }
 
-#[derive(Default)]
-struct PlaybackState {
-    cancelled: bool,
-    started: bool,
-    sink: Option<Arc<Sink>>,
-}
-
-#[derive(Default)]
-struct PlaybackControl(Mutex<PlaybackState>);
-
-impl PlaybackControl {
-    fn start<S>(&self, sink: Arc<Sink>, source: S) -> bool
-    where
-        S: Source<Item = i16> + Send + 'static,
-    {
-        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
-        if state.cancelled {
-            return false;
-        }
-        sink.append(source);
-        state.started = true;
-        state.sink = Some(sink);
-        true
-    }
-
-    #[cfg(target_os = "macos")]
-    fn start_native(&self, start: impl FnOnce()) -> bool {
-        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
-        if state.cancelled {
-            return false;
-        }
-        state.started = true;
-        start();
-        true
-    }
-
-    #[cfg(target_os = "macos")]
-    fn started(&self) -> bool {
-        self.0
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .started
-    }
-
+impl PlayCommand {
     fn cancelled(&self) -> bool {
-        self.0
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .cancelled
+        self.done.is_closed()
     }
 
-    fn cancel(&self) -> bool {
-        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
-        state.cancelled = true;
-        if let Some(sink) = state.sink.take() {
-            sink.stop();
+    fn finish(self, result: Result<(), String>) {
+        if result.is_ok() {
+            self.gate.arm();
         }
-        std::mem::take(&mut state.started)
+        let _ = self.done.send(result);
     }
 }
 
-struct CancelOnDrop(Arc<PlaybackControl>);
+/// An output device opened ahead of the start cue so `play` begins instantly.
+/// Dropping it unused releases the device.
+pub struct StartCue {
+    command: mpsc::Sender<PlayCommand>,
+}
 
-impl Drop for CancelOnDrop {
-    fn drop(&mut self) {
-        self.0.cancel();
+impl StartCue {
+    #[cfg(test)]
+    fn stub() -> (Self, mpsc::Receiver<PlayCommand>) {
+        let (command, rx) = mpsc::channel();
+        (Self { command }, rx)
     }
 }
 
-struct WorkerSlot;
-
-impl Drop for WorkerSlot {
-    fn drop(&mut self) {
-        *ACTIVE_WORKER
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = None;
-    }
-}
-
-pub async fn play(bytes: &'static [u8]) {
-    let control = {
-        let mut active = ACTIVE_WORKER
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        match active.as_ref() {
-            Some(control) => Err(control.clone()),
-            None => {
-                let control = Arc::new(PlaybackControl::default());
-                *active = Some(control.clone());
-                Ok(control)
-            }
-        }
-    };
-    let control = match control {
-        Ok(control) => control,
-        Err(control) => {
-            tracing::warn!("Previous start sound worker is still stopping; skipping start sound");
-            control.cancel();
-            tokio::time::sleep(OUTPUT_SETTLING_TIME).await;
-            return;
-        }
-    };
-    let slot = WorkerSlot;
-    play_with_worker(
-        control,
-        PLAYBACK_TIMEOUT,
-        OUTPUT_SETTLING_TIME,
-        move |control| {
-            let _slot = slot;
-            #[cfg(target_os = "macos")]
-            match native::play(bytes, &control) {
-                Ok(()) => return Ok(()),
-                Err(error) if control.started() || control.cancelled() => return Err(error),
-                Err(error) => {
-                    tracing::warn!(%error, "Native start sound unavailable; using fallback")
-                }
-            }
-            let (_stream, handle) =
-                OutputStream::try_default().map_err(|error| error.to_string())?;
-            let source = Decoder::new(Cursor::new(bytes)).map_err(|error| error.to_string())?;
-            let sink = Arc::new(Sink::try_new(&handle).map_err(|error| error.to_string())?);
-            if !control.start(sink.clone(), source) {
-                return Ok(());
-            }
-            while !sink.empty() && !control.cancelled() {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            // Rodio drains its queue before buffered output reaches the speakers.
-            // Keep the stream alive through a quiet interval before admitting capture.
-            std::thread::sleep(OUTPUT_SETTLING_TIME);
-            Ok(())
-        },
-    )
-    .await;
-}
-
-async fn play_with_worker(
-    control: Arc<PlaybackControl>,
-    timeout: Duration,
-    settling_time: Duration,
-    worker: impl FnOnce(Arc<PlaybackControl>) -> Result<(), String> + Send + 'static,
-) {
-    let _cancel_on_drop = CancelOnDrop(control.clone());
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    let worker_control = control.clone();
+pub fn prime(bytes: &'static [u8]) -> StartCue {
+    let (command, rx) = mpsc::channel();
     if let Err(error) = std::thread::Builder::new()
         .name("recording-start-sound".into())
-        .spawn(move || {
-            let result = worker(worker_control);
-            let _ = sender.send(result);
-        })
+        .spawn(move || worker(bytes, rx))
     {
         tracing::warn!(%error, "Could not start recording sound worker");
+    }
+    StartCue { command }
+}
+
+fn worker(bytes: &'static [u8], rx: mpsc::Receiver<PlayCommand>) {
+    #[cfg(target_os = "macos")]
+    match native::Output::prepare(bytes) {
+        Ok(output) => return output.run(rx),
+        Err(error) => tracing::warn!(%error, "Native start sound unavailable; using fallback"),
+    }
+    fallback::run(bytes, rx);
+}
+
+/// Plays the start cue and arms `gate` the instant its last sample has left the
+/// output device. The gate is always armed before this returns, including when
+/// playback fails, times out, or the future is dropped mid-cue.
+pub async fn play(cue: StartCue, gate: RecordingStartGate) {
+    play_with_timeout(cue, gate, PLAYBACK_TIMEOUT).await;
+}
+
+async fn play_with_timeout(cue: StartCue, gate: RecordingStartGate, timeout: Duration) {
+    let _arm_on_drop = ArmOnDrop(gate.clone());
+    let (done, done_rx) = tokio::sync::oneshot::channel();
+    if cue.command.send(PlayCommand { gate, done }).is_err() {
+        tracing::warn!("Recording start sound worker is not running");
         return;
     }
+    match tokio::time::timeout(timeout, done_rx).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(error))) => tracing::warn!(%error, "Recording start sound unavailable"),
+        Ok(Err(_)) => tracing::warn!("Recording start sound worker stopped"),
+        Err(_) => tracing::warn!("Recording start sound timed out"),
+    }
+}
 
-    let failed = match tokio::time::timeout(timeout, receiver).await {
-        Ok(Ok(Ok(()))) => false,
-        Ok(Ok(Err(error))) => {
-            tracing::warn!(%error, "Recording start sound unavailable");
-            true
+struct ArmOnDrop(RecordingStartGate);
+
+impl Drop for ArmOnDrop {
+    fn drop(&mut self) {
+        self.0.arm();
+    }
+}
+
+mod fallback {
+    use super::*;
+
+    pub fn run(bytes: &'static [u8], rx: mpsc::Receiver<PlayCommand>) {
+        let output = OutputStream::try_default()
+            .map_err(|error| error.to_string())
+            .and_then(|(stream, handle)| {
+                let sink = Sink::try_new(&handle).map_err(|error| error.to_string())?;
+                let source = Decoder::new(Cursor::new(bytes)).map_err(|error| error.to_string())?;
+                Ok((stream, sink, source))
+            });
+        let Ok(command) = rx.recv() else {
+            return;
+        };
+        let (_stream, sink, source) = match output {
+            Ok(output) => output,
+            Err(error) => return command.finish(Err(error)),
+        };
+        let started = std::time::Instant::now();
+        sink.append(source);
+        tracing::info!("Recording start cue playing");
+        while !sink.empty() {
+            if command.cancelled() {
+                sink.stop();
+                return;
+            }
+            std::thread::sleep(CANCEL_POLL_INTERVAL);
         }
-        Ok(Err(error)) => {
-            tracing::warn!(%error, "Recording start sound worker stopped");
-            true
-        }
-        Err(_) => {
-            tracing::warn!("Recording start sound timed out");
-            true
-        }
-    };
-    if control.cancel() && failed {
-        tokio::time::sleep(settling_time).await;
+        std::thread::sleep(FALLBACK_OUTPUT_LATENCY);
+        tracing::info!(
+            played_back_after_ms = started.elapsed().as_millis() as u64,
+            "Recording start cue finished"
+        );
+        command.finish(Ok(()));
     }
 }
 
@@ -194,9 +132,7 @@ async fn play_with_worker(
 mod native {
     use super::*;
     use cidre::{av, blocks, objc};
-    use std::sync::mpsc;
-
-    const ACOUSTIC_SETTLING_TIME: Duration = Duration::from_millis(100);
+    use rodio::Source;
 
     trait PlayedBackScheduling: objc::Obj {
         #[objc::msg_send(scheduleBuffer:completionCallbackType:completionHandler:)]
@@ -210,9 +146,11 @@ mod native {
 
     impl PlayedBackScheduling for av::AudioPlayerNode {}
 
-    struct Output {
+    pub struct Output {
         engine: cidre::arc::R<av::AudioEngine>,
         player: cidre::arc::R<av::AudioPlayerNode>,
+        buffer: cidre::arc::R<av::AudioPcmBuf>,
+        sample_rate: u64,
     }
 
     impl Drop for Output {
@@ -224,79 +162,110 @@ mod native {
         }
     }
 
-    pub fn play(bytes: &'static [u8], control: &PlaybackControl) -> Result<(), String> {
-        objc::try_catch(|| play_inner(bytes, control))
-            .map_err(|error| format!("Start sound output exception: {error:?}"))?
-    }
+    impl Output {
+        pub fn prepare(bytes: &'static [u8]) -> Result<Self, String> {
+            objc::try_catch(|| Self::prepare_inner(bytes))
+                .map_err(|error| format!("Start sound output exception: {error:?}"))?
+        }
 
-    fn play_inner(bytes: &'static [u8], control: &PlaybackControl) -> Result<(), String> {
-        let source = Decoder::new(Cursor::new(bytes)).map_err(|error| error.to_string())?;
-        let channels = usize::from(source.channels());
-        let rate = source.sample_rate();
-        let samples: Vec<i16> = source.collect();
-        let frames = u32::try_from(samples.len() / channels).map_err(|error| error.to_string())?;
-        let format = av::AudioFormat::standard_with_sample_rate_and_channels(
-            f64::from(rate),
-            channels as u32,
-        )
-        .ok_or("Could not create start sound format")?;
-        let mut buffer = av::AudioPcmBuf::with_format(&format, frames)
-            .ok_or("Could not create start sound buffer")?;
-        buffer
-            .set_frame_len(frames)
-            .map_err(|error| format!("{error:?}"))?;
-        for channel in 0..channels {
-            let target = buffer
-                .data_f32_mut_at(channel)
-                .ok_or("Could not access start sound samples")?;
-            for (frame, sample) in target.iter_mut().enumerate() {
-                *sample = f32::from(samples[frame * channels + channel]) / 32768.0;
+        fn prepare_inner(bytes: &'static [u8]) -> Result<Self, String> {
+            let source = Decoder::new(Cursor::new(bytes)).map_err(|error| error.to_string())?;
+            let channels = usize::from(source.channels());
+            let rate = source.sample_rate();
+            let samples: Vec<i16> = source.collect();
+            let frames =
+                u32::try_from(samples.len() / channels).map_err(|error| error.to_string())?;
+            let format = av::AudioFormat::standard_with_sample_rate_and_channels(
+                f64::from(rate),
+                channels as u32,
+            )
+            .ok_or("Could not create start sound format")?;
+            let mut buffer = av::AudioPcmBuf::with_format(&format, frames)
+                .ok_or("Could not create start sound buffer")?;
+            buffer
+                .set_frame_len(frames)
+                .map_err(|error| format!("{error:?}"))?;
+            for channel in 0..channels {
+                let target = buffer
+                    .data_f32_mut_at(channel)
+                    .ok_or("Could not access start sound samples")?;
+                for (frame, sample) in target.iter_mut().enumerate() {
+                    *sample = f32::from(samples[frame * channels + channel]) / 32768.0;
+                }
+            }
+
+            let mut output = Output {
+                engine: av::AudioEngine::new(),
+                player: av::AudioPlayerNode::new(),
+                buffer,
+                sample_rate: u64::from(rate),
+            };
+            output.engine.attach_node(&output.player);
+            let mixer = output.engine.main_mixer_node().retained();
+            output
+                .engine
+                .connect_node_to_node(&output.player, &mixer, Some(&format));
+            output.engine.prepare();
+            output
+                .engine
+                .start()
+                .map_err(|error| format!("{error:?}"))?;
+            Ok(output)
+        }
+
+        pub fn run(self, rx: mpsc::Receiver<PlayCommand>) {
+            let Ok(command) = rx.recv() else {
+                return;
+            };
+            let result = objc::try_catch(|| self.play(&command))
+                .map_err(|error| format!("Start sound playback exception: {error:?}"))
+                .and_then(|result| result);
+            match result {
+                Ok(true) => command.finish(Ok(())),
+                Ok(false) => {}
+                Err(error) => command.finish(Err(error)),
             }
         }
 
-        let mut output = Output {
-            engine: av::AudioEngine::new(),
-            player: av::AudioPlayerNode::new(),
-        };
-        output.engine.attach_node(&output.player);
-        let mixer = output.engine.main_mixer_node().retained();
-        output
-            .engine
-            .connect_node_to_node(&output.player, &mixer, Some(&format));
-        output.engine.prepare();
-        output
-            .engine
-            .start()
-            .map_err(|error| format!("{error:?}"))?;
-        let (sender, receiver) = mpsc::channel();
-        let mut callback = blocks::EscBlock::new1(move |kind| {
-            let _ = sender.send(kind);
-        });
-        output.player.schedule_played_back(
-            &buffer,
-            av::audio::PlayerNodeCompletionCbType::DataPlayedBack,
-            &mut callback,
-        );
-        if !control.start_native(|| output.player.play()) {
-            return Ok(());
-        }
-
-        loop {
-            if control.cancelled() {
-                return Ok(());
-            }
-            match receiver.recv_timeout(Duration::from_millis(10)) {
-                Ok(av::audio::PlayerNodeCompletionCbType::DataPlayedBack) => break,
-                Ok(_) => return Err("Unexpected start sound completion".into()),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err("Start sound completion disconnected".into());
+        fn play(&self, command: &PlayCommand) -> Result<bool, String> {
+            let (sender, receiver) = mpsc::channel();
+            let gate = command.gate.clone();
+            let started = std::time::Instant::now();
+            let mut callback = blocks::EscBlock::new1(move |kind| {
+                if kind == av::audio::PlayerNodeCompletionCbType::DataPlayedBack {
+                    gate.arm();
+                    tracing::info!(
+                        played_back_after_ms = started.elapsed().as_millis() as u64,
+                        "Recording start cue finished"
+                    );
+                }
+                let _ = sender.send(kind);
+            });
+            self.player.schedule_played_back(
+                &self.buffer,
+                av::audio::PlayerNodeCompletionCbType::DataPlayedBack,
+                &mut callback,
+            );
+            self.player.play();
+            tracing::info!(
+                buffer_ms = self.buffer.frame_len() as u64 * 1000 / self.sample_rate.max(1),
+                "Recording start cue playing"
+            );
+            loop {
+                if command.cancelled() {
+                    self.player.stop();
+                    return Ok(false);
+                }
+                match receiver.recv_timeout(CANCEL_POLL_INTERVAL) {
+                    Ok(av::audio::PlayerNodeCompletionCbType::DataPlayedBack) => return Ok(true),
+                    Ok(_) => return Err("Unexpected start sound completion".into()),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        return Err("Start sound completion disconnected".into());
+                    }
                 }
             }
         }
-        // DataPlayedBack includes device latency; allow the speaker's acoustic tail to clear too.
-        std::thread::sleep(ACOUSTIC_SETTLING_TIME);
-        Ok(())
     }
 }
 
@@ -304,141 +273,63 @@ mod native {
 mod tests {
     use super::*;
 
-    #[test]
-    fn pre_capture_sound_requires_a_visible_multi_second_countdown() {
-        for countdown in [None, Some(0), Some(1), Some(2), Some(3), Some(5), Some(10)] {
-            assert!(!should_play_countdown_sound(countdown, false));
-        }
-        for countdown in [None, Some(0), Some(1)] {
-            assert!(!should_play_countdown_sound(countdown, true));
-        }
-        for countdown in [Some(2), Some(3), Some(5), Some(10)] {
-            assert!(should_play_countdown_sound(countdown, true));
-        }
-    }
-
     #[tokio::test]
-    async fn waits_for_playback_worker_before_returning() {
-        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
-        let (finish_tx, finish_rx) = std::sync::mpsc::channel();
-        let playback = tokio::spawn(play_with_worker(
-            Arc::new(PlaybackControl::default()),
-            Duration::from_secs(2),
-            Duration::ZERO,
-            move |_| {
-                entered_tx.send(()).unwrap();
-                finish_rx.recv().unwrap();
-                Ok(())
-            },
-        ));
-        entered_rx.await.unwrap();
-        assert!(!playback.is_finished());
-        finish_tx.send(()).unwrap();
+    async fn successful_playback_arms_the_gate_from_the_worker() {
+        let (cue, rx) = StartCue::stub();
+        let gate = RecordingStartGate::new();
+        let playback = tokio::spawn(play(cue, gate.clone()));
+        let command = tokio::task::spawn_blocking(move || rx.recv().unwrap())
+            .await
+            .unwrap();
+        assert!(!gate.is_armed());
+        command.finish(Ok(()));
+        assert!(gate.is_armed());
         playback.await.unwrap();
     }
 
     #[tokio::test]
-    async fn timeout_prevents_a_delayed_worker_from_playing() {
-        let (control_tx, control_rx) = tokio::sync::oneshot::channel();
-        let (finish_tx, finish_rx) = std::sync::mpsc::channel();
-        play_with_worker(
-            Arc::new(PlaybackControl::default()),
-            Duration::from_millis(20),
-            Duration::ZERO,
-            move |control| {
-                control_tx.send(control).ok().unwrap();
-                finish_rx.recv().unwrap();
-                Ok(())
-            },
-        )
-        .await;
-        let control = control_rx.await.unwrap();
-        let (sink, _output) = Sink::new_idle();
-        assert!(!control.start(
-            Arc::new(sink),
-            rodio::buffer::SamplesBuffer::new(1, 48000, vec![1i16; 10])
-        ));
-        finish_tx.send(()).unwrap();
+    async fn failed_playback_still_arms_the_gate() {
+        let (cue, rx) = StartCue::stub();
+        let gate = RecordingStartGate::new();
+        let playback = tokio::spawn(play(cue, gate.clone()));
+        let command = tokio::task::spawn_blocking(move || rx.recv().unwrap())
+            .await
+            .unwrap();
+        command.finish(Err("No audio output device".into()));
+        playback.await.unwrap();
+        assert!(gate.is_armed());
     }
 
     #[tokio::test]
-    async fn dropping_startup_cancels_playback() {
-        let (control_tx, control_rx) = tokio::sync::oneshot::channel();
-        let (finish_tx, finish_rx) = std::sync::mpsc::channel();
-        let playback = tokio::spawn(play_with_worker(
-            Arc::new(PlaybackControl::default()),
-            Duration::from_secs(2),
-            Duration::ZERO,
-            move |control| {
-                control_tx.send(control).ok().unwrap();
-                finish_rx.recv().unwrap();
-                Ok(())
-            },
-        ));
-        let control = control_rx.await.unwrap();
+    async fn timed_out_playback_arms_the_gate() {
+        let (cue, rx) = StartCue::stub();
+        let gate = RecordingStartGate::new();
+        play_with_timeout(cue, gate.clone(), Duration::from_millis(20)).await;
+        assert!(gate.is_armed());
+        assert!(rx.recv().unwrap().cancelled());
+    }
+
+    #[tokio::test]
+    async fn dropping_playback_arms_the_gate_and_cancels_the_worker() {
+        let (cue, rx) = StartCue::stub();
+        let gate = RecordingStartGate::new();
+        let playback = tokio::spawn(play(cue, gate.clone()));
+        let command = tokio::task::spawn_blocking(move || rx.recv().unwrap())
+            .await
+            .unwrap();
+        assert!(!command.cancelled());
         playback.abort();
         assert!(playback.await.unwrap_err().is_cancelled());
-        assert!(control.cancelled());
-        finish_tx.send(()).unwrap();
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn cancellation_prevents_late_native_playback() {
-        let control = PlaybackControl::default();
-        assert!(!control.cancel());
-        assert!(!control.start_native(|| panic!("Cancelled output must not play")));
-        assert!(!control.started());
-    }
-
-    #[cfg(target_os = "macos")]
-    #[tokio::test]
-    async fn native_playback_timeout_waits_for_buffered_audio_to_settle() {
-        let control = Arc::new(PlaybackControl::default());
-        assert!(control.start_native(|| {}));
-        let (finish_tx, finish_rx) = std::sync::mpsc::channel();
-        let timeout = Duration::from_millis(20);
-        let settling_time = Duration::from_millis(30);
-        let started = std::time::Instant::now();
-        play_with_worker(control.clone(), timeout, settling_time, move |_| {
-            finish_rx.recv().unwrap();
-            Ok(())
-        })
-        .await;
-        assert!(control.cancelled());
-        assert!(started.elapsed() >= timeout + settling_time);
-        finish_tx.send(()).unwrap();
+        assert!(gate.is_armed());
+        assert!(command.cancelled());
     }
 
     #[tokio::test]
-    async fn unavailable_output_does_not_fail_recording_startup() {
-        play_with_worker(
-            Arc::new(PlaybackControl::default()),
-            Duration::from_secs(1),
-            Duration::ZERO,
-            |_| Err("No audio output device".into()),
-        )
-        .await;
-    }
-
-    #[tokio::test]
-    async fn failed_playback_waits_for_buffered_audio_to_settle() {
-        let started = std::time::Instant::now();
-        let settling_time = Duration::from_millis(30);
-        play_with_worker(
-            Arc::new(PlaybackControl::default()),
-            Duration::from_secs(1),
-            settling_time,
-            |control| {
-                let (sink, _output) = Sink::new_idle();
-                assert!(control.start(
-                    Arc::new(sink),
-                    rodio::buffer::SamplesBuffer::new(1, 48000, vec![1i16; 10]),
-                ));
-                Err("Output disconnected after playback began".into())
-            },
-        )
-        .await;
-        assert!(started.elapsed() >= settling_time);
+    async fn missing_worker_arms_the_gate() {
+        let (cue, rx) = StartCue::stub();
+        drop(rx);
+        let gate = RecordingStartGate::new();
+        play(cue, gate.clone()).await;
+        assert!(gate.is_armed());
     }
 }

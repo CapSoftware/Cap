@@ -52,6 +52,9 @@ pub struct StartConfig {
     pub mic_feed: Option<ActorRef<MicrophoneFeed>>,
     #[cfg(target_os = "linux")]
     pub linux_instant_camera: Option<LinuxInstantCameraRequest>,
+    /// When set, the pipeline is primed behind this gate and records nothing
+    /// until the session arms it at the end of the start cue.
+    pub start_gate: Option<cap_recording::RecordingStartGate>,
 }
 
 #[cfg(target_os = "linux")]
@@ -86,6 +89,7 @@ impl<A: Actor> Drop for RecordingOwnedFeed<A> {
 pub struct ActiveRecording {
     handle: Handle,
     pub project_dir: PathBuf,
+    start_gate: Option<cap_recording::RecordingStartGate>,
     instant_upload: Option<SharedInstantUpload>,
     instant_share_link: Option<String>,
     #[cfg(target_os = "linux")]
@@ -1089,6 +1093,9 @@ impl ActiveRecording {
     /// delete and restart flows. Deleting a directory this app just created is
     /// app behavior, same as the Tauri delete button.
     pub async fn cancel_and_delete(self) -> anyhow::Result<()> {
+        if let Some(gate) = &self.start_gate {
+            gate.arm();
+        }
         #[cfg(target_os = "linux")]
         if let Some(completion) = &self.instant_completion {
             completion.deny();
@@ -2225,6 +2232,9 @@ async fn start_attempt_with_upload(
                 camera_lock.is_some(),
                 None,
             );
+            if let Some(gate) = config.start_gate.clone() {
+                builder = builder.with_start_gate(gate);
+            }
             #[cfg(target_os = "macos")]
             {
                 builder = builder.with_excluded_windows(excluded_windows.clone());
@@ -2250,6 +2260,9 @@ async fn start_attempt_with_upload(
                 instant_recording::Actor::builder(project_dir.clone(), config.target.clone())
                     .with_system_audio(config.system_audio)
                     .with_max_output_size(instant_max_resolution);
+            if let Some(gate) = config.start_gate.clone() {
+                builder = builder.with_start_gate(gate);
+            }
             #[cfg(target_os = "macos")]
             {
                 builder = builder.with_excluded_windows(excluded_windows.clone());
@@ -2328,6 +2341,7 @@ async fn start_attempt_with_upload(
     Ok(ActiveRecording {
         handle,
         project_dir,
+        start_gate: config.start_gate.clone(),
         instant_upload,
         instant_share_link,
         #[cfg(target_os = "linux")]
