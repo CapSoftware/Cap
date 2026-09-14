@@ -2952,8 +2952,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                                 None => break,
                             },
                             _ = tokio::time::sleep(STATIC_SOURCE_RELEASE_POLL) => {
-                                let static_since_arm = gate.armed_at().is_some_and(|armed| {
-                                    armed.instant().elapsed() >= STATIC_SOURCE_RELEASE_DELAY
+                                let static_since_arm = gate.armed_instant().is_some_and(|armed| {
+                                    armed.elapsed() >= STATIC_SOURCE_RELEASE_DELAY
                                 });
                                 if !static_since_arm {
                                     continue;
@@ -2978,8 +2978,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
                     if let Some(gate) = &start_gate {
                         if released_at_arm {
-                            let armed = gate.armed_at().expect("released only once armed");
-                            timestamp = Timestamp::Instant(armed.instant());
+                            let armed = gate.armed_instant().expect("released only once armed");
+                            timestamp = Timestamp::Instant(armed);
                             info!(
                                 held_frames = held_before_start,
                                 "Start gate released the frame on screen at the arm point"
@@ -2997,8 +2997,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             );
                         }
                         wall_clock_origin = gate
-                            .armed_at()
-                            .map_or(timestamps.instant(), |armed| armed.instant());
+                            .armed_instant()
+                            .unwrap_or(timestamps.instant());
                         start_gate = None;
                         held_frame = None;
                     }
@@ -3136,8 +3136,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                                 continue;
                             }
                             wall_clock_origin = gate
-                                .armed_at()
-                                .map_or(timestamps.instant(), |armed| armed.instant());
+                                .armed_instant()
+                                .unwrap_or(timestamps.instant());
                             start_gate = None;
                         }
                         frame_count += 1;

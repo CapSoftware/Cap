@@ -298,7 +298,9 @@ fn keycode_to_string(key: &device_query::Keycode) -> (String, String) {
 /// epoch. `None` while a primed recording is still waiting for its cue.
 fn input_epoch(start_gate: Option<&RecordingStartGate>, start_time: Timestamps) -> Option<Instant> {
     match start_gate {
-        Some(gate) => gate.armed_at().map(|armed| armed.instant()),
+        Some(gate) => gate
+            .armed_instant()
+            .map(|armed| armed.max(start_time.instant())),
         None => Some(start_time.instant()),
     }
 }
@@ -392,6 +394,9 @@ pub fn spawn_cursor_recorder(
             }
 
             let Some(epoch) = input_epoch(start_gate.as_ref(), start_time) else {
+                last_position = cap_cursor_capture::RawCursorPosition::get();
+                last_mouse_state = device_state.get_mouse();
+                last_keys = device_state.get_keys();
                 continue;
             };
             let elapsed = epoch.elapsed().as_secs_f64() * 1000.0;
@@ -1089,5 +1094,16 @@ mod input_epoch_tests {
         let armed = Timestamps::now() + std::time::Duration::from_millis(250);
         gate.arm_at(armed);
         assert_eq!(input_epoch(Some(&gate), start_time), Some(armed.instant()));
+    }
+
+    #[test]
+    fn an_arm_point_before_the_pipeline_epoch_is_clamped_to_it() {
+        let gate = RecordingStartGate::new();
+        gate.arm();
+        let start_time = Timestamps::now() + std::time::Duration::from_millis(250);
+        assert_eq!(
+            input_epoch(Some(&gate), start_time),
+            Some(start_time.instant())
+        );
     }
 }

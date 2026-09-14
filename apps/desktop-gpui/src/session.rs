@@ -805,8 +805,12 @@ impl RecordingSession {
         let start = recording::start(config);
         let discarding = self.discarding.take();
         let task = gpui_tokio::Tokio::spawn(cx, async move {
-            if let Some(discarding) = discarding {
-                let _ = discarding.await;
+            if let Some(discarding) = discarding
+                && tokio::time::timeout(Duration::from_secs(5), discarding)
+                    .await
+                    .is_err()
+            {
+                tracing::warn!("previous recording start is still tearing down; starting anyway");
             }
             start.await
         });

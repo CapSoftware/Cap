@@ -88,6 +88,11 @@ impl RecordingStartGate {
         self.0.armed_at.get().copied()
     }
 
+    /// The arm instant, once the gate is armed or its failsafe has expired.
+    pub(crate) fn armed_instant(&self) -> Option<Instant> {
+        self.armed_at_or_failsafe().map(|armed| armed.instant())
+    }
+
     /// Seconds from the arm point to `timestamp`, negative for media captured
     /// before it. `None` while the gate is still closed.
     pub(crate) fn offset_secs(&self, timestamp: Timestamp) -> Option<f64> {
