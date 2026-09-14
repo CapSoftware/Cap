@@ -15,7 +15,6 @@ import {
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv, serverEnv } from "@cap/env";
-import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import {
 	Database,
@@ -36,7 +35,6 @@ import { and, eq, type InferSelectModel, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import {
@@ -76,6 +74,7 @@ import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { PendingRecordingShare } from "./_components/PendingRecordingShare";
+import { PolicyDeniedView } from "./_components/PolicyDeniedView";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
 
@@ -184,41 +183,10 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	};
 }
 
-function PolicyDeniedView({ reason }: { reason?: string }) {
-	let title = "This video is private";
-	let description: React.ReactNode = (
-		<>
-			If you own this video, please <Link href="/login">sign in</Link> to manage
-			sharing.
-		</>
-	);
-
-	if (reason === "email_restriction_login_required") {
-		title = "This video requires sign-in";
-		description = (
-			<>
-				The owner of this video has restricted access. Please{" "}
-				<Link href="/login">sign in</Link> with an authorized email address to
-				view.
-			</>
-		);
-	} else if (reason === "email_restriction_denied") {
-		title = "Access restricted";
-		description =
-			"Your email address does not meet the requirements set by the video owner.";
-	}
-
-	return (
-		<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
-			<Logo className="size-32" />
-			<h1 className="mb-2 text-2xl font-semibold">{title}</h1>
-			<p className="text-gray-400">{description}</p>
-		</div>
-	);
-}
-
 const renderPolicyDenied = (videoId: Video.VideoId, reason?: string) =>
-	Effect.succeed(<PolicyDeniedView key={videoId} reason={reason} />);
+	Effect.succeed(
+		<PolicyDeniedView key={videoId} videoId={videoId} reason={reason} />,
+	);
 
 const renderNoSuchElement = (awaitRecording: boolean) =>
 	awaitRecording
