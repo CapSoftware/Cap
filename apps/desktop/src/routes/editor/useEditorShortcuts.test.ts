@@ -3,12 +3,19 @@ import { normalizeCombo } from "./useEditorShortcuts";
 
 function createKeyboardEvent(
 	code: string,
-	options: { metaKey?: boolean; ctrlKey?: boolean } = {},
+	options: {
+		metaKey?: boolean;
+		ctrlKey?: boolean;
+		altKey?: boolean;
+		shiftKey?: boolean;
+	} = {},
 ): KeyboardEvent {
 	return {
 		code,
 		metaKey: options.metaKey ?? false,
 		ctrlKey: options.ctrlKey ?? false,
+		altKey: options.altKey ?? false,
+		shiftKey: options.shiftKey ?? false,
 	} as KeyboardEvent;
 }
 
@@ -30,5 +37,12 @@ describe("useEditorShortcuts: normalizeCombo", () => {
 		expect(normalizeCombo(createKeyboardEvent("Equal", { metaKey: true }))).toBe("Mod+=");
 		expect(normalizeCombo(createKeyboardEvent("Minus", { ctrlKey: true }))).toBe("Mod+-");
 		expect(normalizeCombo(createKeyboardEvent("KeyS", { metaKey: true }))).toBe("Mod+S");
+	});
+
+	it("preserves Shift and Alt modifiers to avoid collision with bare navigation keys", () => {
+		expect(normalizeCombo(createKeyboardEvent("ArrowUp", { shiftKey: true }))).toBe("Shift+ArrowUp");
+		expect(normalizeCombo(createKeyboardEvent("ArrowDown", { altKey: true }))).toBe("Alt+ArrowDown");
+		expect(normalizeCombo(createKeyboardEvent("Home", { ctrlKey: true, shiftKey: true }))).toBe("Mod+Shift+Home");
+		expect(normalizeCombo(createKeyboardEvent("KeyS", { altKey: true }))).toBe("Alt+S");
 	});
 });

@@ -59,6 +59,43 @@ const EMPTY_CHAPTERS: TimelineChapter[] = [];
 const WHEEL_ZOOM_RATE = 0.012;
 const WHEEL_ZOOM_MAX = 1.6;
 
+export type TimelineKeyAction =
+	| { type: "seekDelta"; delta: number }
+	| { type: "seekTo"; time: number }
+	| { type: "togglePlay" }
+	| null;
+
+export function resolveTimelineKeyAction(
+	key: string,
+	hasModifier: boolean,
+	duration: number,
+	isNodeButton: boolean,
+): TimelineKeyAction {
+	if (hasModifier) return null;
+
+	if (key === "ArrowLeft" || key === "ArrowRight") {
+		return {
+			type: "seekDelta",
+			delta: key === "ArrowLeft" ? -KEYBOARD_SEEK_STEP : KEYBOARD_SEEK_STEP,
+		};
+	}
+
+	if (key === "ArrowUp" || key === "Home") {
+		return { type: "seekTo", time: 0 };
+	}
+
+	if (key === "ArrowDown" || key === "End") {
+		const safeDuration = Number.isFinite(duration) && duration >= 0 ? duration : 0;
+		return { type: "seekTo", time: safeDuration };
+	}
+
+	if ((key === " " || key === "Spacebar") && !isNodeButton) {
+		return { type: "togglePlay" };
+	}
+
+	return null;
+}
+
 export interface TimelineViewProps {
 	comments: CommentType[];
 	videoId: Video.VideoId;
@@ -409,40 +446,44 @@ function TimelineBand({
 	const handleKeyDown = useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
 			const target = event.target as HTMLElement | null;
+			const tagName = target?.tagName?.toLowerCase();
+			const role = target?.getAttribute?.("role");
 			if (
-				target instanceof HTMLInputElement ||
-				target instanceof HTMLTextAreaElement ||
-				target?.isContentEditable
+				tagName === "input" ||
+				tagName === "textarea" ||
+				tagName === "select" ||
+				target?.isContentEditable ||
+				role === "slider" ||
+				role === "listbox" ||
+				role === "menu"
 			) {
 				return;
 			}
 
-			if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-				event.preventDefault();
-				const delta =
-					event.key === "ArrowLeft" ? -KEYBOARD_SEEK_STEP : KEYBOARD_SEEK_STEP;
-				playback.seek(playback.getCurrentTime() + delta);
-				return;
-			}
+			const hasModifier =
+				event.shiftKey || event.altKey || event.ctrlKey || event.metaKey;
+			const isNodeButton = Boolean(target?.closest("[data-timeline-node]"));
+			const action = resolveTimelineKeyAction(
+				event.key,
+				hasModifier,
+				playback.getDuration(),
+				isNodeButton,
+			);
 
-			if (event.key === "ArrowUp" || event.key === "Home") {
-				event.preventDefault();
-				playback.seek(0);
-				return;
-			}
+			if (!action) return;
 
-			if (event.key === "ArrowDown" || event.key === "End") {
-				event.preventDefault();
-				playback.seek(playback.getDuration());
-				return;
-			}
-
-			// Space over a branch node belongs to that button, not to playback.
-			if (event.key === " " || event.key === "Spacebar") {
-				if (target?.closest("[data-timeline-node]")) return;
-				event.preventDefault();
-				if (playback.getPlaying()) playback.pause();
-				else playback.play();
+			event.preventDefault();
+			switch (action.type) {
+				case "seekDelta":
+					playback.seek(playback.getCurrentTime() + action.delta);
+					break;
+				case "seekTo":
+					playback.seek(action.time);
+					break;
+				case "togglePlay":
+					if (playback.getPlaying()) playback.pause();
+					else playback.play();
+					break;
 			}
 		},
 		[playback],

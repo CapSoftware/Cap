@@ -1,17 +1,19 @@
 import { createEventListener } from "@solid-primitives/event-listener";
 
 export type ShortcutBinding = {
-	combo: string; // e.g. "Mod+=", "Mod+-", "Space", "S", "C"
+	combo: string;
 	handler: (e: KeyboardEvent) => void | Promise<void>;
-	preventDefault?: boolean; // default: true
-	when?: () => boolean; // optional enablement gate
+	preventDefault?: boolean;
+	when?: () => boolean;
 };
 
-const isMod = (e: KeyboardEvent) => e.metaKey || e.ctrlKey; // treat Cmd/Ctrl as Mod
+const isMod = (e: KeyboardEvent) => e.metaKey || e.ctrlKey;
 
 export function normalizeCombo(e: KeyboardEvent): string {
 	const parts: string[] = [];
 	if (isMod(e)) parts.push("Mod");
+	if (e.altKey) parts.push("Alt");
+	if (e.shiftKey) parts.push("Shift");
 
 	let key: string;
 	switch (e.code) {
@@ -38,7 +40,6 @@ export function useEditorShortcuts(
 	);
 
 	createEventListener(document, "keydown", async (e: KeyboardEvent) => {
-		// Basic guards
 		if (!getScopeActive()) return;
 		if (e.repeat) return;
 

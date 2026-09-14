@@ -1,132 +1,68 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { resolveTimelineKeyAction } from "@/app/s/[videoId]/_components/timeline/TimelineView";
 
-type KeyHandler = (event: {
-	key: string;
-	target: unknown;
-	preventDefault: () => void;
-}) => void;
-
-function createTimelineKeyHandler(playback: {
-	seek: (time: number) => void;
-	getCurrentTime: () => number;
-	getDuration: () => number;
-	getPlaying: () => boolean;
-	play: () => void;
-	pause: () => void;
-}): KeyHandler {
-	const KEYBOARD_SEEK_STEP = 5;
-
-	return (event) => {
-		const target = event.target as {
-			tagName?: string;
-			isContentEditable?: boolean;
-			closest?: (sel: string) => unknown;
-		} | null;
-
-		if (
-			target?.tagName === "INPUT" ||
-			target?.tagName === "TEXTAREA" ||
-			target?.isContentEditable
-		) {
-			return;
-		}
-
-		if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-			event.preventDefault();
-			const delta =
-				event.key === "ArrowLeft" ? -KEYBOARD_SEEK_STEP : KEYBOARD_SEEK_STEP;
-			playback.seek(playback.getCurrentTime() + delta);
-			return;
-		}
-
-		if (event.key === "ArrowUp" || event.key === "Home") {
-			event.preventDefault();
-			playback.seek(0);
-			return;
-		}
-
-		if (event.key === "ArrowDown" || event.key === "End") {
-			event.preventDefault();
-			playback.seek(playback.getDuration());
-			return;
-		}
-
-		if (event.key === " " || event.key === "Spacebar") {
-			if (target?.closest?.("[data-timeline-node]")) return;
-			event.preventDefault();
-			if (playback.getPlaying()) playback.pause();
-			else playback.play();
-		}
-	};
-}
-
-describe("timeline keyboard navigation", () => {
-	it("seeks to start (0) on ArrowUp and Home with preventDefault", () => {
-		const seek = vi.fn();
-		const preventDefault = vi.fn();
-		const playback = {
-			seek,
-			getCurrentTime: () => 45,
-			getDuration: () => 120,
-			getPlaying: () => false,
-			play: vi.fn(),
-			pause: vi.fn(),
-		};
-
-		const handler = createTimelineKeyHandler(playback);
-
-		handler({ key: "ArrowUp", target: null, preventDefault });
-		expect(preventDefault).toHaveBeenCalledTimes(1);
-		expect(seek).toHaveBeenCalledWith(0);
-
-		handler({ key: "Home", target: null, preventDefault });
-		expect(preventDefault).toHaveBeenCalledTimes(2);
-		expect(seek).toHaveBeenLastCalledWith(0);
+describe("resolveTimelineKeyAction", () => {
+	it("seeks to start (0) on bare ArrowUp and Home", () => {
+		expect(resolveTimelineKeyAction("ArrowUp", false, 120, false)).toEqual({
+			type: "seekTo",
+			time: 0,
+		});
+		expect(resolveTimelineKeyAction("Home", false, 120, false)).toEqual({
+			type: "seekTo",
+			time: 0,
+		});
 	});
 
-	it("seeks to end (duration) on ArrowDown and End with preventDefault", () => {
-		const seek = vi.fn();
-		const preventDefault = vi.fn();
-		const playback = {
-			seek,
-			getCurrentTime: () => 10,
-			getDuration: () => 120,
-			getPlaying: () => false,
-			play: vi.fn(),
-			pause: vi.fn(),
-		};
-
-		const handler = createTimelineKeyHandler(playback);
-
-		handler({ key: "ArrowDown", target: null, preventDefault });
-		expect(preventDefault).toHaveBeenCalledTimes(1);
-		expect(seek).toHaveBeenCalledWith(120);
-
-		handler({ key: "End", target: null, preventDefault });
-		expect(preventDefault).toHaveBeenCalledTimes(2);
-		expect(seek).toHaveBeenLastCalledWith(120);
+	it("seeks to end on bare ArrowDown and End", () => {
+		expect(resolveTimelineKeyAction("ArrowDown", false, 120, false)).toEqual({
+			type: "seekTo",
+			time: 120,
+		});
+		expect(resolveTimelineKeyAction("End", false, 120, false)).toEqual({
+			type: "seekTo",
+			time: 120,
+		});
 	});
 
-	it("does not navigate or prevent default when typing in inputs, textareas, or contenteditable", () => {
-		const seek = vi.fn();
-		const preventDefault = vi.fn();
-		const playback = {
-			seek,
-			getCurrentTime: () => 10,
-			getDuration: () => 120,
-			getPlaying: () => false,
-			play: vi.fn(),
-			pause: vi.fn(),
-		};
+	it("handles non-finite or negative durations safely", () => {
+		expect(resolveTimelineKeyAction("ArrowDown", false, Number.NaN, false)).toEqual({
+			type: "seekTo",
+			time: 0,
+		});
+		expect(resolveTimelineKeyAction("End", false, -10, false)).toEqual({
+			type: "seekTo",
+			time: 0,
+		});
+	});
 
-		const handler = createTimelineKeyHandler(playback);
+	it("seeks delta on ArrowLeft and ArrowRight", () => {
+		expect(resolveTimelineKeyAction("ArrowLeft", false, 120, false)).toEqual({
+			type: "seekDelta",
+			delta: -5,
+		});
+		expect(resolveTimelineKeyAction("ArrowRight", false, 120, false)).toEqual({
+			type: "seekDelta",
+			delta: 5,
+		});
+	});
 
-		handler({ key: "ArrowUp", target: { tagName: "INPUT" }, preventDefault });
-		handler({ key: "ArrowDown", target: { tagName: "TEXTAREA" }, preventDefault });
-		handler({ key: "Home", target: { isContentEditable: true }, preventDefault });
-		handler({ key: "End", target: { isContentEditable: true }, preventDefault });
+	it("toggles play on Space unless focused over a branch node button", () => {
+		expect(resolveTimelineKeyAction(" ", false, 120, false)).toEqual({
+			type: "togglePlay",
+		});
+		expect(resolveTimelineKeyAction("Spacebar", false, 120, false)).toEqual({
+			type: "togglePlay",
+		});
+		expect(resolveTimelineKeyAction(" ", false, 120, true)).toBeNull();
+	});
 
-		expect(seek).not.toHaveBeenCalled();
-		expect(preventDefault).not.toHaveBeenCalled();
+	it("strictly ignores actions when any modifier is pressed", () => {
+		expect(resolveTimelineKeyAction("ArrowUp", true, 120, false)).toBeNull();
+		expect(resolveTimelineKeyAction("ArrowDown", true, 120, false)).toBeNull();
+		expect(resolveTimelineKeyAction("Home", true, 120, false)).toBeNull();
+		expect(resolveTimelineKeyAction("End", true, 120, false)).toBeNull();
+		expect(resolveTimelineKeyAction("ArrowLeft", true, 120, false)).toBeNull();
+		expect(resolveTimelineKeyAction("ArrowRight", true, 120, false)).toBeNull();
+		expect(resolveTimelineKeyAction(" ", true, 120, false)).toBeNull();
 	});
 });

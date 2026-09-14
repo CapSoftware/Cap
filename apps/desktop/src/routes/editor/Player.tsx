@@ -309,16 +309,38 @@ export function PlayerContent(props: { compactness?: number }) {
 		);
 	}
 
-	// Register keyboard shortcuts in one place
+	const seekToBoundary = async (targetSeconds: number) => {
+		if (!Number.isFinite(targetSeconds) || targetSeconds < 0) return;
+		const targetFrame = Math.max(0, Math.floor(targetSeconds * FPS));
+		try {
+			const pending = requestHandoffPlayback(false);
+			if (pending) await pending;
+			if (editorState.playing) {
+				await commands.stopPlayback();
+				setEditorState("playing", false);
+			}
+			setEditorState("playbackTime", targetSeconds);
+			setEditorState("previewTime", null);
+			await commands.seekTo(targetFrame);
+		} catch (error) {
+			console.error("Failed to seek to boundary:", error);
+			setEditorState("playing", false);
+		}
+	};
+
 	useEditorShortcuts(() => {
-		const el = document.activeElement;
+		const el = document.activeElement as HTMLElement | null;
 		if (!el) return true;
 		const tagName = el.tagName.toLowerCase();
-		const isContentEditable = el.getAttribute("contenteditable") === "true";
+		const role = el.getAttribute("role");
 		return !(
 			tagName === "input" ||
 			tagName === "textarea" ||
-			isContentEditable
+			tagName === "select" ||
+			el.isContentEditable ||
+			role === "slider" ||
+			role === "listbox" ||
+			role === "menu"
 		);
 	}, [
 		{
@@ -363,61 +385,19 @@ export function PlayerContent(props: { compactness?: number }) {
 		},
 		{
 			combo: "ArrowUp",
-			handler: async () => {
-				if (editorState.playing) {
-					await commands.stopPlayback();
-					setEditorState("playing", false);
-				}
-				setEditorState("playbackTime", 0);
-				setEditorState("previewTime", null);
-				if (!handoffPlaybackPending()) {
-					await commands.seekTo(0);
-				}
-			},
+			handler: () => seekToBoundary(0),
 		},
 		{
 			combo: "Home",
-			handler: async () => {
-				if (editorState.playing) {
-					await commands.stopPlayback();
-					setEditorState("playing", false);
-				}
-				setEditorState("playbackTime", 0);
-				setEditorState("previewTime", null);
-				if (!handoffPlaybackPending()) {
-					await commands.seekTo(0);
-				}
-			},
+			handler: () => seekToBoundary(0),
 		},
 		{
 			combo: "ArrowDown",
-			handler: async () => {
-				if (editorState.playing) {
-					await commands.stopPlayback();
-					setEditorState("playing", false);
-				}
-				const endTime = totalDuration();
-				setEditorState("playbackTime", endTime);
-				setEditorState("previewTime", null);
-				if (!handoffPlaybackPending()) {
-					await commands.seekTo(Math.floor(endTime * FPS));
-				}
-			},
+			handler: () => seekToBoundary(totalDuration()),
 		},
 		{
 			combo: "End",
-			handler: async () => {
-				if (editorState.playing) {
-					await commands.stopPlayback();
-					setEditorState("playing", false);
-				}
-				const endTime = totalDuration();
-				setEditorState("playbackTime", endTime);
-				setEditorState("previewTime", null);
-				if (!handoffPlaybackPending()) {
-					await commands.seekTo(Math.floor(endTime * FPS));
-				}
-			},
+			handler: () => seekToBoundary(totalDuration()),
 		},
 	]);
 
