@@ -1911,9 +1911,6 @@ pub(crate) enum SwitchBack {
     /// The sequence, timed from its start. One clock drives the sentence, its
     /// fade and the countdown, so nothing can drift apart.
     Running(std::time::Instant),
-    /// Dev only: the switch is committed and the supervisor is rebuilding the
-    /// classic app; this app stays up until the classic one deletes the
-    /// pending file to say it is on screen (`store::classic_pending_path`).
     WaitingForClassic,
     /// The switch was refused; the overlay stays up with the reason and the
     /// toggle goes back to on, because nothing was switched.
@@ -2308,11 +2305,7 @@ impl SettingsWindow {
                             .text_size(px(14.))
                             .text_center()
                             .text_color(gpui::hsla(0., 0., 1., 0.7))
-                            .child(
-                                "The dev build is compiling. This window closes by itself when \
-                                 the classic app is on screen; a cold build can take a few \
-                                 minutes.",
-                            ),
+                            .child("This window will close when the classic Cap app is ready."),
                     );
             }
             SwitchBack::Failed(error) => {
@@ -2437,80 +2430,110 @@ impl SettingsWindow {
             return;
         }
 
+        if !store::set_store_setting(GENERAL_SETTINGS, "enableGpuiApp", Value::Bool(false)) {
+            self.pages.switch_back = Some(SwitchBack::Failed(
+                "Couldn't save your app preference. Cap is still open.".to_string(),
+            ));
+            cx.notify();
+            return;
+        }
         self.settings.enable_gpui_app = false;
-        self.write_bool("enableGpuiApp", false, cx);
-
-        let started = match &target {
-            ClassicTarget::Bundle(_) | ClassicTarget::Executable(_) => launch_classic(&target)
-                .map_err(|error| format!("Couldn't open the Cap app: {error}")),
-            ClassicTarget::DevSupervisor => store::mark_classic_pending()
-                .and_then(|()| store::request_classic_reopen())
-                .map_err(|error| format!("Couldn't request the dev app restart: {error}")),
+        let dev = matches!(target, ClassicTarget::DevSupervisor);
+        let timeout = if dev {
+            CLASSIC_WAIT_TIMEOUT
+        } else {
+            Duration::from_secs(30)
         };
+        let pending = store::mark_classic_pending();
+        self.pages.switch_back = Some(SwitchBack::WaitingForClassic);
+        self.pages.switch_back_ticker = None;
+        cx.notify();
 
-        match (started, target) {
-            // An installed bundle opens in a moment; quit right away.
-            (Ok(()), ClassicTarget::Bundle(_) | ClassicTarget::Executable(_)) => {
-                tracing::info!("handing back to the classic app");
-                quit_after_flushing_editors(cx);
-            }
-            // The dev harness has to rebuild first, which can take minutes.
-            // Stay up until the classic app deletes the pending file to say
-            // it is on screen, so the user is never staring at no app at all.
-            (Ok(()), ClassicTarget::DevSupervisor) => {
-                tracing::info!("handing back to the classic app; waiting for the dev build");
-                self.pages.switch_back = Some(SwitchBack::WaitingForClassic);
-                self.pages.switch_back_ticker = None;
-                cx.notify();
-                // A committed handoff must finish even if its settings window closes.
-                cx.spawn(async move |this, cx| {
-                    let started = std::time::Instant::now();
-                    loop {
-                        cx.background_executor()
-                            .timer(Duration::from_millis(500))
-                            .await;
-                        if !store::classic_pending_path().exists() {
-                            tracing::info!("classic app is up; quitting");
-                            cx.update(quit_after_flushing_editors);
-                            break;
-                        }
-                        if started.elapsed() > CLASSIC_WAIT_TIMEOUT {
-                            this.update(cx, |this, cx| {
-                                this.pages.switch_back = Some(SwitchBack::Failed(
-                                    "The classic app hasn't come up. Check the dev terminal for \
-                                     build errors, then toggle again."
-                                        .to_string(),
-                                ));
-                                cx.notify();
-                            })
-                            .ok();
-                            break;
-                        }
+        // The handoff must finish even if its settings window closes.
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    pending?;
+                    match target {
+                        ClassicTarget::DevSupervisor => store::request_classic_reopen(),
+                        _ => launch_classic(&target),
                     }
                 })
-                .detach();
+                .await;
+            let mut failure = result.err().map(|error| format!("Couldn't open Cap: {error}"));
+            let started = std::time::Instant::now();
+            while failure.is_none() {
+                match store::classic_pending_path().try_exists() {
+                    Ok(false) => {
+                        tracing::info!("classic app is visible; quitting GPUI");
+                        cx.update(quit_after_flushing_editors);
+                        return;
+                    }
+                    Ok(true) => {}
+                    Err(error) => {
+                        failure = Some(format!("Couldn't check whether Cap opened: {error}"));
+                        break;
+                    }
+                }
+                if started.elapsed() >= timeout {
+                    failure = Some(if dev {
+                        "The classic app hasn't opened. Check the dev terminal for build errors, then try again."
+                            .to_string()
+                    } else {
+                        "The classic app hasn't opened. Cap is still here; please try again."
+                            .to_string()
+                    });
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
             }
-            (Err(message), _) => {
-                tracing::error!("{message}");
-                self.settings.enable_gpui_app = true;
-                self.write_bool("enableGpuiApp", true, cx);
-                self.pages.switch_back = Some(SwitchBack::Failed(message));
+            let message = failure.unwrap_or_else(|| "Couldn't open Cap.".to_string());
+            tracing::error!("{message}");
+            store::clear_classic_pending();
+            store::set_store_setting(GENERAL_SETTINGS, "enableGpuiApp", Value::Bool(true));
+            this.update(cx, |this, cx| {
+                this.settings = store::GeneralSettings::load();
+                this.pages.switch_back = Some(SwitchBack::Failed(message));
                 cx.notify();
-            }
+            })
+            .ok();
+        })
+        .detach();
+    }
+}
+
+fn classic_launch_command(target: &ClassicTarget) -> Option<std::process::Command> {
+    match target {
+        ClassicTarget::Bundle(bundle) => {
+            let mut command = std::process::Command::new("/usr/bin/open");
+            // GPUI shares Cap's bundle identity, so a normal open can reactivate GPUI.
+            command.arg("-n").arg(bundle);
+            Some(command)
         }
+        ClassicTarget::Executable(executable) => Some(std::process::Command::new(executable)),
+        ClassicTarget::DevSupervisor => None,
     }
 }
 
 fn launch_classic(target: &ClassicTarget) -> std::io::Result<()> {
-    match target {
-        ClassicTarget::Bundle(bundle) => std::process::Command::new("/usr/bin/open")
-            .arg(bundle)
-            .spawn()
-            .map(drop),
-        ClassicTarget::Executable(executable) => {
-            std::process::Command::new(executable).spawn().map(drop)
+    let Some(mut command) = classic_launch_command(target) else {
+        return Ok(());
+    };
+    if matches!(target, ClassicTarget::Bundle(_)) {
+        let output = command.output()?;
+        if !output.status.success() {
+            return Err(std::io::Error::other(format!(
+                "Cap launcher failed ({}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
         }
-        ClassicTarget::DevSupervisor => Ok(()),
+        Ok(())
+    } else {
+        command.spawn().map(drop)
     }
 }
 
@@ -8473,6 +8496,23 @@ mod tests {
                 "/Users/x/Cap/target/debug/bundle/osx/Cap.app"
             )))
         );
+    }
+
+    #[test]
+    fn installed_handoff_launches_a_new_bundle_instance() {
+        let bundle = std::path::PathBuf::from("/Applications/Cap Preview.app");
+        let command = classic_launch_command(&ClassicTarget::Bundle(bundle.clone())).unwrap();
+        assert_eq!(command.get_program(), "/usr/bin/open");
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [std::ffi::OsStr::new("-n"), bundle.as_os_str()]
+        );
+        assert!(classic_launch_command(&ClassicTarget::DevSupervisor).is_none());
+        let executable = std::path::PathBuf::from("/opt/cap/Cap");
+        let command =
+            classic_launch_command(&ClassicTarget::Executable(executable.clone())).unwrap();
+        assert_eq!(command.get_program(), executable.as_os_str());
+        assert_eq!(command.get_args().count(), 0);
     }
 
     /// The takeover's whole timeline, read off its one clock.

@@ -2229,7 +2229,6 @@ impl ShowCapWindow {
                         move || {
                             let _panel_activation_guard = panel_activation_guard;
                             use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                            use tauri_nspanel::panel_delegate;
                             use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
 
                             #[link(name = "CoreGraphics", kind = "framework")]
@@ -2239,13 +2238,6 @@ impl ShowCapWindow {
 
                             #[allow(non_upper_case_globals)]
                             const kCGMaximumWindowLevelKey: i32 = 10;
-
-                            let delegate = panel_delegate!(TargetSelectOverlayPanelDelegate {
-                                window_did_become_key,
-                                window_did_resign_key
-                            });
-
-                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
 
                             let panel = match window.to_panel() {
                                 Ok(p) => p,
@@ -2262,8 +2254,6 @@ impl ShowCapWindow {
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
                                     | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
                             );
-
-                            panel.set_delegate(delegate);
 
                             #[allow(non_upper_case_globals)]
                             const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
@@ -2715,7 +2705,6 @@ impl ShowCapWindow {
                             move || {
                                 let _panel_activation_guard = panel_activation_guard;
                                 use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                                use tauri_nspanel::panel_delegate;
                                 use crate::panel_manager::try_to_panel;
 
                                 #[link(name = "CoreGraphics", kind = "framework")]
@@ -2725,13 +2714,6 @@ impl ShowCapWindow {
 
                                 #[allow(non_upper_case_globals)]
                                 const kCGMaximumWindowLevelKey: i32 = 10;
-
-                                let delegate = panel_delegate!(CameraPanelDelegate {
-                                    window_did_become_key,
-                                    window_did_resign_key
-                                });
-
-                                delegate.set_listener(Box::new(|_delegate_name: String| {}));
 
                                 let panel = match try_to_panel(&window) {
                                     Ok(p) => p,
@@ -2747,8 +2729,6 @@ impl ShowCapWindow {
                                     NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
                                         | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
                                 );
-
-                                panel.set_delegate(delegate);
 
                                 let max_level =
                                     unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
@@ -3219,7 +3199,6 @@ impl ShowCapWindow {
                                 return;
                             }
                             use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-                            use tauri_nspanel::panel_delegate;
                             use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
 
                             #[link(name = "CoreGraphics", kind = "framework")]
@@ -3229,13 +3208,6 @@ impl ShowCapWindow {
 
                             #[allow(non_upper_case_globals)]
                             const kCGMaximumWindowLevelKey: i32 = 10;
-
-                            let delegate = panel_delegate!(RecordingControlsPanelDelegate {
-                                window_did_become_key,
-                                window_did_resign_key
-                            });
-
-                            delegate.set_listener(Box::new(|_delegate_name: String| {}));
 
                             let panel = match window.to_panel() {
                                 Ok(p) => p,
@@ -3251,8 +3223,6 @@ impl ShowCapWindow {
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
                                     | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenPrimary,
                             );
-
-                            panel.set_delegate(delegate);
 
                             let max_level = unsafe { CGWindowLevelForKey(kCGMaximumWindowLevelKey) };
                             panel.set_level(max_level);

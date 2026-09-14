@@ -338,13 +338,6 @@ pub fn request_classic_reopen() -> std::io::Result<()> {
     std::fs::write(&path, std::process::id().to_string())
 }
 
-/// The dev switch-back's readiness handshake. A dev rebuild of the classic app
-/// takes anywhere from seconds to many minutes, and quitting immediately
-/// leaves the user with no app and no feedback for all of it. So the
-/// switch-back writes this file next to the reopen sentinel and stays up
-/// "waiting for the classic app"; the Tauri app deletes it when it starts and
-/// decides to keep the session (`gpui_app.rs`), and only then does this app
-/// quit.
 pub fn classic_pending_path() -> PathBuf {
     app_data_dir().join("cap-classic.pending")
 }
@@ -355,6 +348,14 @@ pub fn mark_classic_pending() -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&path, std::process::id().to_string())
+}
+
+pub fn clear_classic_pending() {
+    if let Err(error) = std::fs::remove_file(classic_pending_path())
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(%error, "couldn't clear classic handoff readiness");
+    }
 }
 
 fn state_path() -> PathBuf {
