@@ -782,6 +782,10 @@ impl MainWindow {
     ) -> Self {
         crate::theme::bind_window(window, cx);
         window.on_window_should_close(cx, |_, cx| {
+            // The custom Windows X minimizes; native close requests must still quit.
+            #[cfg(target_os = "windows")]
+            cx.defer(crate::menus::quit);
+            #[cfg(not(target_os = "windows"))]
             cx.defer(app_windows::request_close_main);
             false
         });
@@ -2885,11 +2889,8 @@ impl MainWindow {
                     .on_click(|_, window, _| window.minimize_window()),
             )
             .child(
-                button("caption-close", "icons/caption-close-windows.svg", 10.).on_click(
-                    cx.listener(|_, _, _, cx| {
-                        cx.defer(app_windows::request_close_main);
-                    }),
-                ),
+                button("caption-close", "icons/caption-close-windows.svg", 10.)
+                    .on_click(|_, window, _| window.minimize_window()),
             )
     }
 
