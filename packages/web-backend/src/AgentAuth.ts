@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
 import * as Db from "@cap/database/schema";
 import { Agent } from "@cap/web-domain";
 import { HttpServerRequest } from "@effect/platform";
@@ -125,7 +126,8 @@ export const AgentHttpAuthMiddlewareLive = Layer.effect(
 							.where(eq(Db.agentApiKeys.tokenHash, hashToken(token)))
 							.limit(1),
 					);
-					if (!row) return yield* authRequired();
+					if (!row || isBlockedAccountEmail(row.email))
+						return yield* authRequired();
 					if (row.revokedAt || row.expiresAt.getTime() <= Date.now()) {
 						return yield* tokenExpired();
 					}
@@ -179,7 +181,8 @@ export const AgentHttpAuthMiddlewareLive = Layer.effect(
 						.where(eq(Db.authApiKeys.id, token))
 						.limit(1),
 				);
-				if (!row) return yield* authRequired();
+				if (!row || isBlockedAccountEmail(row.email))
+					return yield* authRequired();
 				if (!isLegacyAgentKeySource(row.source)) return yield* authRequired();
 
 				return Agent.AgentPrincipal.of({

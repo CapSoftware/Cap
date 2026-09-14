@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { isBlockedAccountEmail } from "@cap/database/auth/domain-utils";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	authApiKeys,
@@ -79,6 +80,7 @@ async function getAuth(c: Context) {
 			.leftJoin(authApiKeys, eq(users.id, authApiKeys.userId))
 			.where(eq(authApiKeys.id, authHeader));
 		user = res[0]?.users;
+		if (user && isBlockedAccountEmail(user.email)) user = undefined;
 	} else {
 		user = await getCurrentUser();
 	}
