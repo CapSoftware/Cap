@@ -2872,6 +2872,12 @@ async fn start_recording_prepared(
 
                 match actor_result {
                     Ok(mut actor) => {
+                        // The recording stays out of app state until the cue has
+                        // armed the gate, so nothing reports "recording" while the
+                        // primed pipeline is still discarding frames.
+                        while !start_gate.is_armed() && start_cancelled.get().is_none() {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
                         let mut state = state_mtx.write().await;
                         if let Some(reason) = start_cancelled.get().copied() {
                             drop(state);
@@ -2996,12 +3002,12 @@ async fn start_recording_prepared(
 
     let (actor_done_fut, health_rx, automatic_stop) = match actor_task_res {
         Ok(Ok(v)) => v,
-        Ok(Err(_)) if start_cancelled.get().is_some() => {
-            return Err(start_cancelled
+        Ok(Err(err))
+            if start_cancelled
                 .get()
-                .copied()
-                .unwrap_or("Recording cancelled")
-                .into());
+                .is_some_and(|reason| err.to_string() == *reason) =>
+        {
+            return Err(err.to_string());
         }
         Ok(Err(err)) => {
             let message = format!("{err:#}");

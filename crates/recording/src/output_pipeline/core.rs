@@ -40,6 +40,10 @@ pub const STALL_BUDGET_MS: u64 = 50;
 pub(crate) const STALL_POLL_INTERVAL: Duration = Duration::from_micros(500);
 
 pub const VIDEO_START_GATE_TIMEOUT: Duration = Duration::from_millis(500);
+/// How long a primed video track waits after the arm point for a fresh frame
+/// before releasing the last pre-arm frame as the recording's first frame.
+const STATIC_SOURCE_RELEASE_DELAY: Duration = Duration::from_millis(50);
+const STATIC_SOURCE_RELEASE_POLL: Duration = Duration::from_millis(10);
 
 fn remap_video_timestamp(
     source_clock: &mut SourceClockState,
@@ -2929,10 +2933,40 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let mut first_frame_offset = None;
         let mut start_gate = start_gate;
         let mut held_before_start: u64 = 0;
+        // Screen capture only delivers on change, so a static screen may never
+        // produce a frame after the arm point. The last frame captured before it
+        // is kept and released, stamped at the arm point, once no fresh frame has
+        // followed the arm within a frame interval.
+        let mut held_frame: Option<TVideo::Frame> = None;
+        let mut wall_clock_origin = timestamps.instant();
 
         let res = stop_token
             .run_until_cancelled(async {
-                while let Some(frame) = video_rx.next().await {
+                loop {
+                    let (frame, released_at_arm) = if let Some(gate) = &start_gate
+                        && held_frame.is_some()
+                    {
+                        tokio::select! {
+                            next = video_rx.next() => match next {
+                                Some(frame) => (frame, false),
+                                None => break,
+                            },
+                            _ = tokio::time::sleep(STATIC_SOURCE_RELEASE_POLL) => {
+                                let static_since_arm = gate.armed_at().is_some_and(|armed| {
+                                    armed.instant().elapsed() >= STATIC_SOURCE_RELEASE_DELAY
+                                });
+                                if !static_since_arm {
+                                    continue;
+                                }
+                                (held_frame.take().expect("held frame presence checked"), true)
+                            }
+                        }
+                    } else {
+                        match video_rx.next().await {
+                            Some(frame) => (frame, false),
+                            None => break,
+                        }
+                    };
                     let (is_paused, total_pause_duration) = shared_pause.check();
 
                     if is_paused {
@@ -2940,20 +2974,33 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         continue;
                     }
 
-                    let timestamp = frame.timestamp();
+                    let mut timestamp = frame.timestamp();
 
                     if let Some(gate) = &start_gate {
-                        if !gate.admits_video(timestamp) {
+                        if released_at_arm {
+                            let armed = gate.armed_at().expect("released only once armed");
+                            timestamp = Timestamp::Instant(armed.instant());
+                            info!(
+                                held_frames = held_before_start,
+                                "Start gate released the frame on screen at the arm point"
+                            );
+                        } else if !gate.admits_video(timestamp) {
                             held_before_start += 1;
+                            held_frame = Some(frame);
                             continue;
+                        } else {
+                            info!(
+                                held_frames = held_before_start,
+                                admitted_after_arm_ms =
+                                    gate.offset_secs(timestamp).unwrap_or_default() * 1000.0,
+                                "Start gate admitted first video frame"
+                            );
                         }
-                        info!(
-                            held_frames = held_before_start,
-                            admitted_after_arm_ms =
-                                gate.offset_secs(timestamp).unwrap_or_default() * 1000.0,
-                            "Start gate admitted first video frame"
-                        );
+                        wall_clock_origin = gate
+                            .armed_at()
+                            .map_or(timestamps.instant(), |armed| armed.instant());
                         start_gate = None;
+                        held_frame = None;
                     }
 
                     frame_count += 1;
@@ -2994,8 +3041,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                             + remap.duration().saturating_sub(total_pause_duration),
                     );
 
-                    let wall_clock_elapsed = timestamps
-                        .instant()
+                    let wall_clock_elapsed = wall_clock_origin
                         .elapsed()
                         .saturating_sub(total_pause_duration);
 
@@ -3083,10 +3129,19 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
                 match tokio::time::timeout_at(drain_deadline, video_rx.next()).await {
                     Ok(Some(frame)) => {
+                        let timestamp = frame.timestamp();
+                        if let Some(gate) = &start_gate {
+                            if !gate.admits_video(timestamp) {
+                                held_before_start += 1;
+                                continue;
+                            }
+                            wall_clock_origin = gate
+                                .armed_at()
+                                .map_or(timestamps.instant(), |armed| armed.instant());
+                            start_gate = None;
+                        }
                         frame_count += 1;
                         drained += 1;
-
-                        let timestamp = frame.timestamp();
 
                         let is_first_frame = first_tx.is_some();
                         if let Some(first_tx) = first_tx.take() {
@@ -3115,8 +3170,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                                     .saturating_sub(shared_pause.total_pause_duration()),
                         );
 
-                        let wall_clock_elapsed = timestamps
-                            .instant()
+                        let wall_clock_elapsed = wall_clock_origin
                             .elapsed()
                             .saturating_sub(shared_pause.total_pause_duration());
 
@@ -7034,6 +7088,45 @@ mod tests {
             let timestamps = sent.lock().unwrap().clone();
             assert_eq!(timestamps.first(), Some(&Duration::ZERO));
             assert!(timestamps.len() >= 3, "{timestamps:?}");
+        }
+
+        #[tokio::test]
+        async fn primed_static_screen_opens_on_the_frame_held_at_the_arm_point() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let gate = RecordingStartGate::new();
+            let (sender, receiver) = flume::bounded(8);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = OutputPipeline::builder(temp_dir.path().join("static-primed.mp4"))
+                .with_video::<ChannelVideoSource<StaticFrame>>(ChannelVideoSourceConfig::new(
+                    VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 16, 16, 30),
+                    receiver,
+                ))
+                .with_timestamps(Timestamps::now())
+                .with_start_gate(Some(gate.clone()))
+                .build::<ObservedMuxer>(sent.clone())
+                .await
+                .unwrap();
+
+            sender
+                .send_async(StaticFrame {
+                    timestamp: Timestamp::Instant(Instant::now()),
+                })
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            assert!(sent.lock().unwrap().is_empty());
+
+            let armed = Timestamps::now();
+            assert!(gate.arm_at(armed));
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let outcome = pipeline.stop().await.unwrap();
+
+            match outcome.first_timestamp {
+                Timestamp::Instant(instant) => assert_eq!(instant, armed.instant()),
+                other => panic!("unexpected first timestamp {other:?}"),
+            }
+            let timestamps = sent.lock().unwrap().clone();
+            assert_eq!(timestamps.first(), Some(&Duration::ZERO));
         }
 
         #[tokio::test]

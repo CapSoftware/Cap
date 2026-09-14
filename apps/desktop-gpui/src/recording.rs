@@ -1061,6 +1061,9 @@ impl ActiveRecording {
 
     #[cfg(target_os = "linux")]
     pub(crate) async fn cancel_preserving(self) -> anyhow::Result<()> {
+        if let Some(gate) = &self.start_gate {
+            gate.arm();
+        }
         if let Some(completion) = &self.instant_completion {
             completion.deny();
         }

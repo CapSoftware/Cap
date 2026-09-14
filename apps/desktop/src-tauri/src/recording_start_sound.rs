@@ -3,11 +3,15 @@ use std::{io::Cursor, sync::mpsc, time::Duration};
 use cap_recording::RecordingStartGate;
 use rodio::{Decoder, OutputStream, Sink};
 
-const PLAYBACK_TIMEOUT: Duration = Duration::from_secs(3);
+// The cue is under half a second; a device that has not finished it by now
+// (route change mid-countdown, stalled engine) must not hold the recording back.
+const PLAYBACK_TIMEOUT: Duration = Duration::from_millis(1500);
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(5);
 // Rodio reports an empty sink once the mixer has consumed the last sample; that
-// buffer still has to play out through the device before the cue is audible-done.
-const FALLBACK_OUTPUT_LATENCY: Duration = Duration::from_millis(40);
+// buffer still has to play out through the device before the cue is audibly
+// done. Shared-mode WASAPI and PulseAudio devices commonly sit at 30-100ms, so
+// err towards the cue preceding capture rather than landing inside it.
+const FALLBACK_OUTPUT_LATENCY: Duration = Duration::from_millis(150);
 
 struct PlayCommand {
     gate: RecordingStartGate,

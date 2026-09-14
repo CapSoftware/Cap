@@ -440,6 +440,9 @@ pub struct RecordingSession {
     /// A capture pipeline that finished warming up while the countdown or the
     /// start cue was still running; activated the moment the cue ends.
     primed: Option<ActiveRecording>,
+    /// Teardown of a cancelled primed start still releasing its devices; the
+    /// next start waits for it before locking the mic and camera again.
+    discarding: Option<Task<Result<(), tokio::task::JoinError>>>,
     pause_control: PauseControlState,
     pause_control_error: Option<String>,
     #[cfg(target_os = "linux")]
@@ -485,6 +488,7 @@ impl RecordingSession {
             start_gate: None,
             start_cue: None,
             primed: None,
+            discarding: None,
             pause_control: PauseControlState::default(),
             pause_control_error: None,
             #[cfg(target_os = "linux")]
@@ -799,7 +803,13 @@ impl RecordingSession {
         };
         #[cfg(not(target_os = "linux"))]
         let start = recording::start(config);
-        let task = gpui_tokio::Tokio::spawn(cx, start);
+        let discarding = self.discarding.take();
+        let task = gpui_tokio::Tokio::spawn(cx, async move {
+            if let Some(discarding) = discarding {
+                let _ = discarding.await;
+            }
+            start.await
+        });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             #[cfg(target_os = "linux")]
@@ -927,15 +937,19 @@ impl RecordingSession {
     }
 
     fn discard_stale_start(&mut self, active: ActiveRecording, cx: &mut Context<Self>) {
-        #[cfg(target_os = "linux")]
-        gpui_tokio::Tokio::spawn(cx, active.cancel_preserving()).detach();
-        #[cfg(not(target_os = "linux"))]
-        gpui_tokio::Tokio::spawn(cx, async move {
-            if let Err(error) = active.cancel_and_delete().await {
+        let previous = self.discarding.take();
+        self.discarding = Some(gpui_tokio::Tokio::spawn(cx, async move {
+            if let Some(previous) = previous {
+                let _ = previous.await;
+            }
+            #[cfg(target_os = "linux")]
+            let discarded = active.cancel_preserving().await;
+            #[cfg(not(target_os = "linux"))]
+            let discarded = active.cancel_and_delete().await;
+            if let Err(error) = discarded {
                 tracing::warn!(%error, "discarding a cancelled recording start failed");
             }
-        })
-        .detach();
+        }));
     }
 
     fn monitor_recording_failure(&mut self, done: cap_recording::DoneFut, cx: &mut Context<Self>) {

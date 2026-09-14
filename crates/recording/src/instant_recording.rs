@@ -1,5 +1,5 @@
-#[cfg(target_os = "macos")]
 use crate::RecordingStartGate;
+#[cfg(target_os = "macos")]
 use crate::SendableShareableContent;
 #[cfg(target_os = "linux")]
 mod linux_camera;

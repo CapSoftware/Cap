@@ -1,5 +1,5 @@
-#[cfg(target_os = "macos")]
 use crate::RecordingStartGate;
+#[cfg(target_os = "macos")]
 use crate::SendableShareableContent;
 #[cfg(target_os = "macos")]
 use crate::output_pipeline::{
@@ -1247,6 +1247,9 @@ pub struct ScreenPipelineOutput {
 
 struct Pipeline {
     pub start_time: Timestamps,
+    /// Present for a primed first segment; its arm point is the epoch every
+    /// persisted start time and input event is measured from.
+    pub start_gate: Option<RecordingStartGate>,
     // sources
     pub screen: OutputPipeline,
     pub microphone: Option<OutputPipeline>,
@@ -1438,6 +1441,14 @@ fn write_recording_failure_diagnostics(
 }
 
 impl Pipeline {
+    fn epoch(&self) -> Timestamps {
+        self.start_gate
+            .as_ref()
+            .and_then(RecordingStartGate::armed_at)
+            .filter(|armed| armed.instant() > self.start_time.instant())
+            .unwrap_or(self.start_time)
+    }
+
     #[cfg(target_os = "linux")]
     fn completed_before_resume(&self) -> Option<String> {
         [
@@ -1461,6 +1472,7 @@ impl Pipeline {
 
     pub async fn stop(mut self) -> anyhow::Result<PipelineStopOutcome> {
         let stop_started = Instant::now();
+        let epoch = self.epoch();
         #[cfg(any(target_os = "linux", windows))]
         self.stopping
             .store(true, std::sync::atomic::Ordering::Release);
@@ -1581,7 +1593,7 @@ impl Pipeline {
 
         Ok(PipelineStopOutcome {
             pipeline: FinishedPipeline {
-                start_time: self.start_time,
+                start_time: epoch,
                 screen: screen.context("display")?.finished,
                 microphone: finalize_optional_track(
                     RecordingTrackKind::Microphone,
@@ -3130,6 +3142,7 @@ async fn create_segment_pipeline(
     trace!("preparing segment pipeline {index}");
 
     let start_gate = base_inputs.start_gate.clone();
+    let pipeline_start_gate = start_gate.clone();
 
     let camera_active = base_inputs.camera_feed.is_some();
     #[cfg(target_os = "macos")]
@@ -3498,6 +3511,7 @@ async fn create_segment_pipeline(
                     prev_cursors,
                     next_cursors_id,
                     start_time,
+                    start_gate.clone(),
                     IncrementalCaptureOutputs {
                         cursor: incremental_output,
                         keyboard: keyboard_incremental_output,
@@ -3517,6 +3531,7 @@ async fn create_segment_pipeline(
 
     Ok(Pipeline {
         start_time,
+        start_gate: pipeline_start_gate,
         screen,
         microphone,
         camera,
@@ -5004,6 +5019,7 @@ mod tests {
             .unwrap();
         let pipeline = Pipeline {
             start_time: timestamps,
+            start_gate: None,
             screen,
             microphone: Some(microphone),
             camera: None,
@@ -5126,6 +5142,7 @@ mod tests {
                 .unwrap();
             let pipeline = Pipeline {
                 start_time: timestamps,
+                start_gate: None,
                 screen,
                 microphone: Some(microphone),
                 camera: Some(camera),
@@ -5750,6 +5767,7 @@ mod tests {
         actor.state = Some(ActorState::Recording {
             pipeline: Pipeline {
                 start_time: timestamps,
+                start_gate: None,
                 screen,
                 microphone: None,
                 camera: None,
@@ -5837,6 +5855,7 @@ mod tests {
         let microphone_done = microphone.done_fut();
         let mut pipeline = Pipeline {
             start_time: timestamps,
+            start_gate: None,
             screen,
             microphone: None,
             camera: None,
@@ -6022,6 +6041,7 @@ mod tests {
 
         let mut pipeline = Pipeline {
             start_time: timestamps,
+            start_gate: None,
             screen,
             microphone: Some(microphone),
             camera: None,
