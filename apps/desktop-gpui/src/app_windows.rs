@@ -819,12 +819,6 @@ pub(crate) fn show_main_window_after_capture_pause(cx: &mut App) {
                 view.show_recorder(cx);
                 view.clear_target(cx);
             }
-            // Every path back to the main window is a path a new capture may
-            // have arrived on -- a finished recording most of all. The Tauri
-            // app gets this from `invalidateRecentMedia` plus the query's
-            // focus gate; here the reshow *is* the trigger, so a recording
-            // made a moment ago is in the list without a restart.
-            view.refresh_recents(window, cx);
             #[cfg(target_os = "linux")]
             if window.retained_visibility().is_some() {
                 match window.set_retained_visibility(true) {
@@ -6348,7 +6342,7 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
             .ok();
     }
     let main = cx.global::<AppWindows>().main;
-    main.update(cx, |view, window, cx| view.refresh_recents(window, cx))
+    main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
         .ok();
 
     // The editor owns the foreground now, the way a stopped studio recording
@@ -6485,8 +6479,6 @@ pub fn close_screenshot_editor_after_delete(bundle: &Path, cx: &mut App) {
     refresh_screenshot_surfaces(cx);
 }
 
-/// Every surface that lists screenshots: the tray's Previous, the settings
-/// Screenshots page, and the main window's Recents.
 pub fn refresh_screenshot_surfaces(cx: &mut App) {
     crate::tray::refresh_previous(cx);
     if let Some(settings) = cx.global::<AppWindows>().settings {
@@ -6495,7 +6487,7 @@ pub fn refresh_screenshot_surfaces(cx: &mut App) {
             .ok();
     }
     let main = cx.global::<AppWindows>().main;
-    main.update(cx, |view, window, cx| view.refresh_recents(window, cx))
+    main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
         .ok();
 }
 
@@ -6536,7 +6528,7 @@ pub fn screenshot_editor_closed(bundle: &Path, cx: &mut App) {
 pub fn refresh_library_after_delete(cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     let settings = cx.global::<AppWindows>().settings;
-    main.update(cx, |view, window, cx| view.refresh_recents(window, cx))
+    main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
         .ok();
     if let Some(settings) = settings {
         settings

@@ -21,7 +21,6 @@ use tauri::{
     AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition, PhysicalSize,
     WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
 };
-use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument, warn};
@@ -59,26 +58,18 @@ pub(crate) async fn restore_main_window_geometry(window: WebviewWindow) -> Resul
     if window.label() != "main" {
         return Err("Only the main window can restore its geometry".into());
     }
-    let store = window
-        .app_handle()
-        .store("store")
-        .map_err(|error| error.to_string())?;
-    let expanded = store
-        .get("main_window_ui")
-        .and_then(|value| value.get("expanded").and_then(serde_json::Value::as_bool))
-        .unwrap_or(false);
     let (tx, rx) = tokio::sync::oneshot::channel();
     let handle = window.app_handle().clone();
     handle
         .run_on_main_thread(move || {
-            let result = restore_main_window_bounds(&window, expanded).map(|()| expanded);
+            let result = restore_main_window_bounds(&window).map(|()| false);
             let _ = tx.send(result.map_err(|error| error.to_string()));
         })
         .map_err(|error| error.to_string())?;
     rx.await.map_err(|error| error.to_string())?
 }
 
-fn restore_main_window_bounds(window: &WebviewWindow, expanded: bool) -> tauri::Result<()> {
+fn restore_main_window_bounds(window: &WebviewWindow) -> tauri::Result<()> {
     let inner = window.inner_size()?;
     let outer = window.outer_size()?;
     let scale = window.scale_factor()?;
@@ -88,17 +79,7 @@ fn restore_main_window_bounds(window: &WebviewWindow, expanded: bool) -> tauri::
         (f64::from(outer.width) - f64::from(inner.width)).max(0.0) / scale,
         (f64::from(outer.height) - f64::from(inner.height)).max(0.0) / scale,
     );
-    let (width, height) = crate::main_window_geometry::restored_size(
-        expanded,
-        frame,
-        monitor.as_ref().map(|monitor| {
-            let area = monitor.work_area();
-            (
-                f64::from(area.size.width) / scale,
-                f64::from(area.size.height) / scale,
-            )
-        }),
-    );
+    let (width, height) = crate::main_window_geometry::SIZE;
     if (width - f64::from(inner.width) / scale).abs() > 0.5
         || (height - f64::from(inner.height) / scale).abs() > 0.5
     {
@@ -1384,7 +1365,7 @@ impl CapWindowId {
 
     pub fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
-            Self::Main => (330.0, 395.0),
+            Self::Main => crate::main_window_geometry::SIZE,
             Self::Editor { .. } => (1275.0, 800.0),
             Self::ScreenshotEditor { .. } => (800.0, 600.0),
             Self::Settings => (780.0, 560.0),

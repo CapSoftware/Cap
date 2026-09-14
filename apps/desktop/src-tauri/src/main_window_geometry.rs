@@ -1,26 +1,5 @@
-const COMPACT: (f64, f64) = (330.0, 395.0);
-const EXPANDED: (f64, f64) = (600.0, 660.0);
+pub(crate) const SIZE: (f64, f64) = (330.0, 395.0);
 const PADDING: f64 = 12.0;
-
-pub(crate) fn restored_size(
-    expanded: bool,
-    frame: (f64, f64),
-    work_area: Option<(f64, f64)>,
-) -> (f64, f64) {
-    let preferred = if expanded { EXPANDED } else { COMPACT };
-    let available = work_area
-        .map(|area| {
-            (
-                area.0 - frame.0 - PADDING * 2.0,
-                area.1 - frame.1 - PADDING * 2.0,
-            )
-        })
-        .unwrap_or(preferred);
-    (
-        available.0.clamp(COMPACT.0, preferred.0),
-        available.1.clamp(COMPACT.1, preferred.1),
-    )
-}
 
 pub(crate) fn restored_position(
     before: (f64, f64),
@@ -44,27 +23,6 @@ pub(crate) fn restored_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn preserves_compact_expanded_and_small_screen_dimensions() {
-        assert_eq!(
-            restored_size(false, (0.0, 0.0), Some((1440.0, 900.0))),
-            COMPACT
-        );
-        assert_eq!(
-            restored_size(true, (0.0, 0.0), Some((1440.0, 900.0))),
-            EXPANDED
-        );
-        assert_eq!(
-            restored_size(true, (16.0, 40.0), Some((500.0, 650.0))),
-            (460.0, 586.0)
-        );
-        assert_eq!(
-            restored_size(true, (0.0, 0.0), Some((200.0, 200.0))),
-            COMPACT
-        );
-        assert_eq!(restored_size(true, (0.0, 0.0), None), EXPANDED);
-    }
 
     #[test]
     fn preserves_top_left_and_clamps_on_scaled_negative_coordinate_screens() {

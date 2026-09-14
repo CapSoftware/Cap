@@ -46,36 +46,6 @@ pub enum MediaKind {
     Screenshot,
 }
 
-impl MediaKind {
-    /// `typeLabel()` in `Recents.tsx:116-119`.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Studio => "Studio Mode",
-            Self::Instant => "Instant Mode",
-            Self::Screenshot => "Screenshot",
-        }
-    }
-
-    /// `TypeIcon()` in `Recents.tsx:120-128`, the `size-2.5` glyph in the pill.
-    pub fn pill_icon(self) -> &'static str {
-        match self {
-            Self::Studio => "icons/clapperboard.svg",
-            Self::Instant => "icons/zap.svg",
-            Self::Screenshot => "icons/image.svg",
-        }
-    }
-
-    /// The `size-7` glyph the card falls back to with no thumbnail
-    /// (`Recents.tsx:148-155`): square-play for recordings, image for
-    /// screenshots.
-    pub fn fallback_icon(self) -> &'static str {
-        match self {
-            Self::Studio | Self::Instant => "icons/square-play.svg",
-            Self::Screenshot => "icons/image.svg",
-        }
-    }
-}
-
 /// One `RecentMediaItem`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecentItem {

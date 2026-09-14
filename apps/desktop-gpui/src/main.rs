@@ -1,7 +1,5 @@
 //! Cap desktop, rewritten in gpui.
 //!
-//! Milestone 1 is the main recording window (compact + expanded) with real
-//! device enumeration. No tauri, no webview: the whole UI is gpui.
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -472,8 +470,6 @@ fn main() {
                 );
                 view.start_enumeration(window, cx);
                 view.start_recovery_check(window, cx);
-                view.auto_expand(window, cx);
-                view.auto_open_recent(window, cx);
                 // The AppKit work below must not run inside this update:
                 // inserting a subview and mutating the content view's layer
                 // synchronously re-enters gpui's own window callbacks, which
