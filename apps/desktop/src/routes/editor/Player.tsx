@@ -361,6 +361,64 @@ export function PlayerContent(props: { compactness?: number }) {
 				await handlePlayPauseClick();
 			},
 		},
+		{
+			combo: "ArrowUp",
+			handler: async () => {
+				if (editorState.playing) {
+					await commands.stopPlayback();
+					setEditorState("playing", false);
+				}
+				setEditorState("playbackTime", 0);
+				setEditorState("previewTime", null);
+				if (!handoffPlaybackPending()) {
+					await commands.seekTo(0);
+				}
+			},
+		},
+		{
+			combo: "Home",
+			handler: async () => {
+				if (editorState.playing) {
+					await commands.stopPlayback();
+					setEditorState("playing", false);
+				}
+				setEditorState("playbackTime", 0);
+				setEditorState("previewTime", null);
+				if (!handoffPlaybackPending()) {
+					await commands.seekTo(0);
+				}
+			},
+		},
+		{
+			combo: "ArrowDown",
+			handler: async () => {
+				if (editorState.playing) {
+					await commands.stopPlayback();
+					setEditorState("playing", false);
+				}
+				const endTime = totalDuration();
+				setEditorState("playbackTime", endTime);
+				setEditorState("previewTime", null);
+				if (!handoffPlaybackPending()) {
+					await commands.seekTo(Math.floor(endTime * FPS));
+				}
+			},
+		},
+		{
+			combo: "End",
+			handler: async () => {
+				if (editorState.playing) {
+					await commands.stopPlayback();
+					setEditorState("playing", false);
+				}
+				const endTime = totalDuration();
+				setEditorState("playbackTime", endTime);
+				setEditorState("previewTime", null);
+				if (!handoffPlaybackPending()) {
+					await commands.seekTo(Math.floor(endTime * FPS));
+				}
+			},
+		},
 	]);
 
 	return (

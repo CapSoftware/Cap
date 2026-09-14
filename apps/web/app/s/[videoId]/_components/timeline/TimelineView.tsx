@@ -411,7 +411,8 @@ function TimelineBand({
 			const target = event.target as HTMLElement | null;
 			if (
 				target instanceof HTMLInputElement ||
-				target instanceof HTMLTextAreaElement
+				target instanceof HTMLTextAreaElement ||
+				target?.isContentEditable
 			) {
 				return;
 			}
@@ -421,6 +422,18 @@ function TimelineBand({
 				const delta =
 					event.key === "ArrowLeft" ? -KEYBOARD_SEEK_STEP : KEYBOARD_SEEK_STEP;
 				playback.seek(playback.getCurrentTime() + delta);
+				return;
+			}
+
+			if (event.key === "ArrowUp" || event.key === "Home") {
+				event.preventDefault();
+				playback.seek(0);
+				return;
+			}
+
+			if (event.key === "ArrowDown" || event.key === "End") {
+				event.preventDefault();
+				playback.seek(playback.getDuration());
 				return;
 			}
 

@@ -9,7 +9,7 @@ export type ShortcutBinding = {
 
 const isMod = (e: KeyboardEvent) => e.metaKey || e.ctrlKey; // treat Cmd/Ctrl as Mod
 
-function normalizeCombo(e: KeyboardEvent): string {
+export function normalizeCombo(e: KeyboardEvent): string {
 	const parts: string[] = [];
 	if (isMod(e)) parts.push("Mod");
 
