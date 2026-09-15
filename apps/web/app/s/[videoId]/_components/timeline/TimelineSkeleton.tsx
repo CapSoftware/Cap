@@ -11,7 +11,7 @@ export function TimelineSkeleton() {
 	return (
 		<div className="flex w-full flex-col">
 			<div className="h-11 shrink-0 animate-pulse bg-gray-3 lg:h-16" />
-			<div className="flex h-14 shrink-0 items-center rounded-b-xl border-t border-gray-4 bg-white pl-4">
+			<div className="flex h-14 shrink-0 items-center rounded-b-xl border-t border-gray-4 bg-gray-1 pl-4">
 				<div className="size-8 rounded-full bg-gray-4" />
 			</div>
 		</div>

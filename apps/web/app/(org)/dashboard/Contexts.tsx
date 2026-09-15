@@ -3,7 +3,7 @@
 import { buildEnv } from "@cap/env";
 import Cookies from "js-cookie";
 import { redirect, usePathname } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { InviteDialog } from "@/app/(org)/dashboard/settings/organization/components/InviteDialog";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
@@ -114,7 +114,7 @@ export function DashboardContexts({
 		},
 		[],
 	);
-	useEffect(() => {
+	useLayoutEffect(() => {
 		if (Cookies.get("theme")) {
 			document.body.className = Cookies.get("theme") as ITheme;
 		}
