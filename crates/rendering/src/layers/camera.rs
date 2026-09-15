@@ -528,6 +528,10 @@ impl CameraLayer {
         }
     }
 
+    pub fn source_time_for_blur(&self) -> Option<f32> {
+        self.last_recording_time.filter(|_| !self.hidden)
+    }
+
     pub fn source_texture_for_blur(&self) -> Option<&wgpu::Texture> {
         if self.hidden || self.last_recording_time.is_none() {
             return None;

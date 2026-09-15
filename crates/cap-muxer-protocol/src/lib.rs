@@ -81,13 +81,13 @@ pub struct StartParams {
 }
 
 #[derive(Debug, Clone)]
-pub struct Packet {
+pub struct Packet<T = Vec<u8>> {
     pub stream_index: u8,
     pub pts: i64,
     pub dts: i64,
     pub duration: u64,
     pub flags: u8,
-    pub data: Vec<u8>,
+    pub data: T,
 }
 
 impl Frame {
@@ -183,26 +183,57 @@ fn encode_body(frame: &Frame) -> Vec<u8> {
 }
 
 pub fn write_frame<W: Write>(w: &mut W, frame: &Frame) -> Result<(), ProtocolError> {
+    if let Frame::Packet(packet) = frame {
+        return write_packet(w, packet);
+    }
     let body = encode_body(frame);
-    if body.len() > MAX_PAYLOAD_BYTES as usize {
-        return Err(ProtocolError::PayloadTooLarge(
-            body.len() as u32,
-            MAX_PAYLOAD_BYTES,
-        ));
+    write_frame_parts(w, frame.kind(), &[&body])
+}
+
+pub fn write_packet<W: Write, T: AsRef<[u8]>>(
+    w: &mut W,
+    packet: &Packet<T>,
+) -> Result<(), ProtocolError> {
+    let data = packet.data.as_ref();
+    let mut metadata = [0; 32];
+    metadata[0] = packet.stream_index;
+    metadata[1] = packet.flags;
+    metadata[4..12].copy_from_slice(&packet.pts.to_le_bytes());
+    metadata[12..20].copy_from_slice(&packet.dts.to_le_bytes());
+    metadata[20..28].copy_from_slice(&packet.duration.to_le_bytes());
+    let data_len = u32::try_from(data.len())
+        .map_err(|_| ProtocolError::PayloadTooLarge(u32::MAX, MAX_PAYLOAD_BYTES))?;
+    metadata[28..32].copy_from_slice(&data_len.to_le_bytes());
+    write_frame_parts(w, FRAME_KIND_PACKET, &[&metadata, data])
+}
+
+fn write_frame_parts<W: Write>(w: &mut W, kind: u8, parts: &[&[u8]]) -> Result<(), ProtocolError> {
+    let body_len = parts.iter().try_fold(0u32, |total, part| {
+        u32::try_from(part.len())
+            .ok()
+            .and_then(|length| total.checked_add(length))
+            .ok_or(ProtocolError::PayloadTooLarge(u32::MAX, MAX_PAYLOAD_BYTES))
+    })?;
+    if body_len > MAX_PAYLOAD_BYTES {
+        return Err(ProtocolError::PayloadTooLarge(body_len, MAX_PAYLOAD_BYTES));
     }
     let mut hasher = crc32fast::Hasher::new();
-    hasher.update(&[frame.kind()]);
-    hasher.update(&(body.len() as u32).to_le_bytes());
-    hasher.update(&body);
+    hasher.update(&[kind]);
+    hasher.update(&body_len.to_le_bytes());
+    for part in parts {
+        hasher.update(part);
+    }
     let crc = hasher.finalize();
 
     w.write_u32::<LittleEndian>(MAGIC)?;
     w.write_u16::<LittleEndian>(PROTOCOL_VERSION)?;
-    w.write_u8(frame.kind())?;
+    w.write_u8(kind)?;
     w.write_u8(0)?;
-    w.write_u32::<LittleEndian>(body.len() as u32)?;
+    w.write_u32::<LittleEndian>(body_len)?;
     w.write_u32::<LittleEndian>(crc)?;
-    w.write_all(&body)?;
+    for part in parts {
+        w.write_all(part)?;
+    }
     Ok(())
 }
 
@@ -223,20 +254,26 @@ pub fn read_frame<R: Read>(r: &mut R) -> Result<Frame, ProtocolError> {
     }
     let received_crc = r.read_u32::<LittleEndian>()?;
 
+    let mut packet_metadata = [0; 32];
+    let prefix_len = if kind == FRAME_KIND_PACKET && body_len >= 32 {
+        r.read_exact(&mut packet_metadata)?;
+        let data_len = (&packet_metadata[28..]).read_u32::<LittleEndian>()?;
+        if data_len == body_len - 32 {
+            let mut data = vec![0; data_len as usize];
+            r.read_exact(&mut data)?;
+            verify_frame_crc(kind, body_len, &[&packet_metadata, &data], received_crc)?;
+            let mut packet = read_packet_header(&mut packet_metadata.as_slice())?;
+            packet.data = data;
+            return Ok(Frame::Packet(packet));
+        }
+        packet_metadata.len()
+    } else {
+        0
+    };
     let mut body = vec![0u8; body_len as usize];
-    r.read_exact(&mut body)?;
-
-    let mut hasher = crc32fast::Hasher::new();
-    hasher.update(&[kind]);
-    hasher.update(&body_len.to_le_bytes());
-    hasher.update(&body);
-    let computed_crc = hasher.finalize();
-    if computed_crc != received_crc {
-        return Err(ProtocolError::CrcMismatch {
-            computed: computed_crc,
-            received: received_crc,
-        });
-    }
+    body[..prefix_len].copy_from_slice(&packet_metadata[..prefix_len]);
+    r.read_exact(&mut body[prefix_len..])?;
+    verify_frame_crc(kind, body_len, &[&body], received_crc)?;
 
     let mut body_reader = &body[..];
     match kind {
@@ -291,21 +328,9 @@ pub fn read_frame<R: Read>(r: &mut R) -> Result<Frame, ProtocolError> {
             }))
         }
         FRAME_KIND_PACKET => {
-            let stream_index = body_reader.read_u8()?;
-            let flags = body_reader.read_u8()?;
-            let _reserved = body_reader.read_u16::<LittleEndian>()?;
-            let pts = body_reader.read_i64::<LittleEndian>()?;
-            let dts = body_reader.read_i64::<LittleEndian>()?;
-            let duration = body_reader.read_u64::<LittleEndian>()?;
-            let data = read_bytes(&mut body_reader)?;
-            Ok(Frame::Packet(Packet {
-                stream_index,
-                pts,
-                dts,
-                duration,
-                flags,
-                data,
-            }))
+            let mut packet = read_packet_header(&mut body_reader)?;
+            packet.data = read_bytes(&mut body_reader)?;
+            Ok(Frame::Packet(packet))
         }
         FRAME_KIND_FINISH => Ok(Frame::Finish),
         FRAME_KIND_ABORT => {
@@ -316,10 +341,291 @@ pub fn read_frame<R: Read>(r: &mut R) -> Result<Frame, ProtocolError> {
     }
 }
 
+fn verify_frame_crc(
+    kind: u8,
+    body_len: u32,
+    parts: &[&[u8]],
+    received_crc: u32,
+) -> Result<(), ProtocolError> {
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(&[kind]);
+    hasher.update(&body_len.to_le_bytes());
+    for part in parts {
+        hasher.update(part);
+    }
+    let computed_crc = hasher.finalize();
+    if computed_crc != received_crc {
+        return Err(ProtocolError::CrcMismatch {
+            computed: computed_crc,
+            received: received_crc,
+        });
+    }
+    Ok(())
+}
+
+fn read_packet_header<R: Read>(r: &mut R) -> Result<Packet, ProtocolError> {
+    let stream_index = r.read_u8()?;
+    let flags = r.read_u8()?;
+    let _reserved = r.read_u16::<LittleEndian>()?;
+    let pts = r.read_i64::<LittleEndian>()?;
+    let dts = r.read_i64::<LittleEndian>()?;
+    let duration = r.read_u64::<LittleEndian>()?;
+    Ok(Packet {
+        stream_index,
+        pts,
+        dts,
+        duration,
+        flags,
+        data: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    fn replace_test_crc(bytes: &mut [u8]) {
+        let mut checked = vec![bytes[6]];
+        checked.extend_from_slice(&bytes[8..12]);
+        checked.extend_from_slice(&bytes[16..]);
+        bytes[12..16].copy_from_slice(&crc32fast::hash(&checked).to_le_bytes());
+    }
+
+    #[test]
+    fn packet_reads_directly_into_the_returned_media_buffer_with_short_reads() {
+        struct ShortReader<'a> {
+            input: Cursor<&'a [u8]>,
+            payload_buffer: Option<usize>,
+        }
+
+        impl Read for ShortReader<'_> {
+            fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+                if self.input.position() == 48 {
+                    self.payload_buffer = Some(bytes.as_ptr() as usize);
+                }
+                let count = bytes.len().min(7);
+                self.input.read(&mut bytes[..count])
+            }
+        }
+
+        let data: Vec<_> = (0..4096).map(|index| index as u8).collect();
+        let mut wire = Vec::new();
+        write_packet(
+            &mut wire,
+            &Packet {
+                stream_index: STREAM_INDEX_AUDIO,
+                pts: i64::MAX,
+                dts: i64::MIN,
+                duration: u64::MAX,
+                flags: PACKET_FLAG_KEYFRAME | PACKET_FLAG_DISCARD,
+                data: data.as_slice(),
+            },
+        )
+        .unwrap();
+        let mut reader = ShortReader {
+            input: Cursor::new(&wire),
+            payload_buffer: None,
+        };
+        let Frame::Packet(packet) = read_frame(&mut reader).unwrap() else {
+            panic!("Expected packet");
+        };
+        assert_eq!(reader.payload_buffer, Some(packet.data.as_ptr() as usize));
+        assert_eq!(packet.data, data);
+        assert_eq!(packet.stream_index, STREAM_INDEX_AUDIO);
+        assert_eq!(packet.pts, i64::MAX);
+        assert_eq!(packet.dts, i64::MIN);
+        assert_eq!(packet.duration, u64::MAX);
+        assert_eq!(packet.flags, PACKET_FLAG_KEYFRAME | PACKET_FLAG_DISCARD);
+    }
+
+    #[test]
+    fn packet_reads_preserve_trailing_bytes_and_checksum_error_precedence() {
+        let mut wire = Vec::new();
+        write_packet(
+            &mut wire,
+            &Packet {
+                stream_index: STREAM_INDEX_VIDEO,
+                pts: 0,
+                dts: 0,
+                duration: 1,
+                flags: 0,
+                data: &[1, 2, 3],
+            },
+        )
+        .unwrap();
+        for length in 0..wire.len() {
+            assert!(matches!(
+                read_frame(&mut &wire[..length]),
+                Err(ProtocolError::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof
+            ));
+        }
+        wire.extend_from_slice(&[9, 8, 7]);
+        let body_len = (wire.len() - 16) as u32;
+        wire[8..12].copy_from_slice(&body_len.to_le_bytes());
+        replace_test_crc(&mut wire);
+        let mut joined = wire.clone();
+        write_frame(&mut joined, &Frame::Finish).unwrap();
+        let mut reader = joined.as_slice();
+        let Frame::Packet(packet) = read_frame(&mut reader).unwrap() else {
+            panic!("Expected packet");
+        };
+        assert_eq!(packet.data, [1, 2, 3]);
+        assert!(matches!(read_frame(&mut reader), Ok(Frame::Finish)));
+        assert!(reader.is_empty());
+
+        wire[44..48].copy_from_slice(&(MAX_PAYLOAD_BYTES + 1).to_le_bytes());
+        assert!(matches!(
+            read_frame(&mut wire.as_slice()),
+            Err(ProtocolError::CrcMismatch { .. })
+        ));
+        replace_test_crc(&mut wire);
+        assert!(matches!(
+            read_frame(&mut wire.as_slice()),
+            Err(ProtocolError::PayloadTooLarge(..))
+        ));
+        wire[44..48].copy_from_slice(&7u32.to_le_bytes());
+        replace_test_crc(&mut wire);
+        assert!(matches!(
+            read_frame(&mut wire.as_slice()),
+            Err(ProtocolError::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof
+        ));
+    }
+
+    #[test]
+    fn incomplete_packet_metadata_preserves_checksum_and_eof_errors() {
+        for body_len in 0..32u32 {
+            let mut wire = Vec::new();
+            wire.extend_from_slice(&MAGIC.to_le_bytes());
+            wire.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
+            wire.extend_from_slice(&[FRAME_KIND_PACKET, 0]);
+            wire.extend_from_slice(&body_len.to_le_bytes());
+            wire.extend_from_slice(&0u32.to_le_bytes());
+            wire.resize(16 + body_len as usize, 0);
+            replace_test_crc(&mut wire);
+            assert!(matches!(
+                read_frame(&mut wire.as_slice()),
+                Err(ProtocolError::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof
+            ));
+            wire[12] ^= 1;
+            assert!(matches!(
+                read_frame(&mut wire.as_slice()),
+                Err(ProtocolError::CrcMismatch { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn packet_writes_preserve_the_original_wire_format() {
+        for length in [0, 1, 257, 64 * 1024, MAX_PAYLOAD_BYTES as usize - 32] {
+            for stream_index in [STREAM_INDEX_VIDEO, STREAM_INDEX_AUDIO] {
+                let frame = Frame::Packet(Packet {
+                    stream_index,
+                    pts: i64::MAX,
+                    dts: -123456789,
+                    duration: u64::MAX,
+                    flags: PACKET_FLAG_KEYFRAME | PACKET_FLAG_DISCARD,
+                    data: (0..length).map(|index| index as u8).collect(),
+                });
+                let body = encode_body(&frame);
+                let mut checked = vec![frame.kind()];
+                checked.extend_from_slice(&(body.len() as u32).to_le_bytes());
+                checked.extend_from_slice(&body);
+                let mut expected = Vec::new();
+                expected.extend_from_slice(&MAGIC.to_le_bytes());
+                expected.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
+                expected.extend_from_slice(&[frame.kind(), 0]);
+                expected.extend_from_slice(&(body.len() as u32).to_le_bytes());
+                expected.extend_from_slice(&crc32fast::hash(&checked).to_le_bytes());
+                expected.extend_from_slice(&body);
+
+                let mut actual = Vec::new();
+                write_frame(&mut actual, &frame).unwrap();
+                assert_eq!(actual, expected);
+                let Frame::Packet(decoded) = read_frame(&mut actual.as_slice()).unwrap() else {
+                    panic!("Expected packet");
+                };
+                let Frame::Packet(original) = frame else {
+                    unreachable!();
+                };
+                assert_eq!(decoded.data, original.data);
+                assert_eq!(decoded.stream_index, original.stream_index);
+                assert_eq!(decoded.pts, original.pts);
+                assert_eq!(decoded.dts, original.dts);
+                assert_eq!(decoded.duration, original.duration);
+                assert_eq!(decoded.flags, original.flags);
+            }
+        }
+    }
+
+    #[test]
+    fn packet_writes_borrow_encoded_media_and_handle_short_writes() {
+        struct ShortWriter<'a> {
+            packet: &'a [u8],
+            borrowed_packet: bool,
+            output: Vec<u8>,
+        }
+
+        impl Write for ShortWriter<'_> {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if bytes.as_ptr() == self.packet.as_ptr() {
+                    self.borrowed_packet = true;
+                }
+                let count = bytes.len().min(7);
+                self.output.extend_from_slice(&bytes[..count]);
+                Ok(count)
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let packet = Packet {
+            stream_index: STREAM_INDEX_AUDIO,
+            pts: 789,
+            dts: 456,
+            duration: 123,
+            flags: 0,
+            data: (0..4096).map(|index| index as u8).collect(),
+        };
+        let frame = Frame::Packet(packet);
+        let Frame::Packet(packet) = &frame else {
+            unreachable!();
+        };
+        let mut writer = ShortWriter {
+            packet: &packet.data,
+            borrowed_packet: false,
+            output: Vec::new(),
+        };
+        write_frame(&mut writer, &frame).unwrap();
+        assert!(writer.borrowed_packet);
+        let Frame::Packet(decoded) = read_frame(&mut writer.output.as_slice()).unwrap() else {
+            panic!("Expected packet");
+        };
+        assert_eq!(decoded.data, packet.data);
+        assert_eq!(decoded.pts, packet.pts);
+        assert_eq!(decoded.dts, packet.dts);
+        assert_eq!(decoded.duration, packet.duration);
+    }
+
+    #[test]
+    fn oversized_packet_writes_leave_the_stream_untouched() {
+        let frame = Frame::Packet(Packet {
+            stream_index: STREAM_INDEX_VIDEO,
+            pts: 0,
+            dts: 0,
+            duration: 1,
+            flags: 0,
+            data: vec![0; MAX_PAYLOAD_BYTES as usize - 31],
+        });
+        let mut bytes = Vec::new();
+        assert!(matches!(
+            write_frame(&mut bytes, &frame),
+            Err(ProtocolError::PayloadTooLarge(..))
+        ));
+        assert!(bytes.is_empty());
+    }
 
     #[test]
     fn round_trips_init_video() {

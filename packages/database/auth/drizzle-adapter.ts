@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { isProSubscription, STRIPE_AVAILABLE, stripe } from "@cap/utils";
+import { STRIPE_AVAILABLE } from "@cap/utils";
 import { type ImageUpload, Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { Adapter } from "next-auth/adapters";
-import type Stripe from "stripe";
 import { nanoId } from "../helpers.ts";
+import { enqueueLoopsSync } from "../loops/queue.ts";
 import {
 	accounts,
 	organizationInvites,
@@ -16,6 +16,7 @@ import {
 	verificationTokens,
 } from "../schema.ts";
 import type { ValidatedSsoIdentity } from "./sso.ts";
+import { provisionStripeCustomer } from "./stripe-customer.ts";
 
 type CreateUserData = Parameters<NonNullable<Adapter["createUser"]>>[0];
 type LinkAccountData = Parameters<NonNullable<Adapter["linkAccount"]>>[0];
@@ -118,6 +119,7 @@ export function DrizzleAdapter(
 						await tx.update(users).set(userUpdate).where(eq(users.id, userId));
 					}
 
+					await enqueueLoopsSync(tx, userId);
 					return;
 				}
 
@@ -139,6 +141,8 @@ export function DrizzleAdapter(
 					name: userData.name,
 					image: userData.image as ImageUpload.ImageUrlOrKey | null,
 					activeOrganizationId: Organisation.OrganisationId.make(""),
+					marketingOrigin:
+						pendingInvite || ssoIdentity ? "teammate" : "independent",
 				});
 				if (ssoIdentity) {
 					await insertUser.onDuplicateKeyUpdate({
@@ -155,6 +159,7 @@ export function DrizzleAdapter(
 					await insertUser;
 				}
 
+				await enqueueLoopsSync(tx, userId);
 				if (pendingInvite || ssoIdentity) {
 					return;
 				}
@@ -192,69 +197,7 @@ export function DrizzleAdapter(
 			if (!row) throw new Error("User not found");
 
 			if (STRIPE_AVAILABLE() && !ssoIdentity) {
-				const existingCustomers = await stripe().customers.list({
-					email: normalizedEmail,
-					limit: 1,
-				});
-
-				let customer: Stripe.Customer;
-				if (existingCustomers.data.length > 0 && existingCustomers.data[0]) {
-					customer = existingCustomers.data[0];
-
-					customer = await stripe().customers.update(customer.id, {
-						metadata: {
-							...customer.metadata,
-							userId: row.id,
-						},
-					});
-				} else {
-					customer = await stripe().customers.create({
-						email: normalizedEmail,
-						metadata: {
-							userId: row.id,
-						},
-					});
-				}
-
-				const subscriptions = await stripe().subscriptions.list({
-					customer: customer.id,
-					status: "active",
-					limit: 100,
-				});
-
-				const proSubscriptions = subscriptions.data.filter(isProSubscription);
-				const inviteQuota = proSubscriptions.reduce((total, sub) => {
-					return (
-						total +
-						sub.items.data.reduce(
-							(subTotal, item) => subTotal + (item.quantity || 1),
-							0,
-						)
-					);
-				}, 0);
-
-				const mostRecentSubscription = proSubscriptions[0];
-
-				await db
-					.update(users)
-					.set({
-						stripeCustomerId: customer.id,
-						...(mostRecentSubscription && {
-							stripeSubscriptionId: mostRecentSubscription.id,
-							stripeSubscriptionStatus: mostRecentSubscription.status,
-							inviteQuota: inviteQuota || 1,
-						}),
-					})
-					.where(eq(users.id, row.id));
-
-				const [updatedRow] = await db
-					.select()
-					.from(users)
-					.where(eq(users.id, row.id))
-					.limit(1);
-				if (updatedRow) {
-					row = updatedRow;
-				}
+				row = await provisionStripeCustomer(db, row);
 			}
 
 			return row;
@@ -307,13 +250,16 @@ export function DrizzleAdapter(
 		},
 		async updateUser({ id, image, ...userData }) {
 			if (!id) throw new Error("User not found");
-			await db
-				.update(users)
-				.set({
-					...userData,
-					image: image as ImageUpload.ImageUrlOrKey | null,
-				})
-				.where(eq(users.id, User.UserId.make(id)));
+			await db.transaction(async (tx) => {
+				await tx
+					.update(users)
+					.set({
+						...userData,
+						image: image as ImageUpload.ImageUrlOrKey | null,
+					})
+					.where(eq(users.id, User.UserId.make(id)));
+				await enqueueLoopsSync(tx, User.UserId.make(id));
+			});
 			const rows = await db
 				.select()
 				.from(users)

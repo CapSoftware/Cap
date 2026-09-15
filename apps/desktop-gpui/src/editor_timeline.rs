@@ -38,8 +38,8 @@ mod playback_follow;
 pub use playback_follow::PlaybackFollow;
 
 use cap_project::{
-    Camera3DSegment, CaptionTrackSegment, MaskKind, OverlayTrack, OverlayTrackKind,
-    ProjectConfiguration, SceneMode, TextLayout, TimelineConfiguration, ZoomMode,
+    CaptionTrackSegment, MaskKind, OverlayTrack, OverlayTrackKind, ProjectConfiguration, SceneMode,
+    TextLayout, TimelineConfiguration, ZoomMode,
 };
 use gpui::{
     AnyElement, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
@@ -120,6 +120,10 @@ const SEGMENT_RADIUS: f32 = 8.;
 const SEGMENT_ACCENT_BAR: f32 = 3.;
 const SEGMENT_PADDING_LEFT: f32 = 13.;
 const SEGMENT_PADDING_RIGHT: f32 = 10.;
+/// The selected 3D shot's pose dots: 6px, 5px inside each edge, so the resize
+/// handles still own the outer pixels.
+pub const CAMERA3D_POSE_DOT: f32 = 6.;
+pub const CAMERA3D_POSE_DOT_INSET: f32 = 5.;
 /// The waveform's ceiling inside a row, so it never climbs into the labels.
 const WAVEFORM_MAX_HEIGHT: f32 = 18.;
 
@@ -345,6 +349,11 @@ impl Transform {
         if content_width <= 0. {
             return;
         }
+        // Fast finalization can skip the preparing duration update, leaving
+        // the viewport uninitialized even after the project is ready.
+        if self.zoom <= 0. {
+            *self = Self::initial(total_duration);
+        }
         let desired = content_width as f64 / 80.;
         if self.zoom > desired {
             self.update_zoom(desired, 0., total_duration);
@@ -503,44 +512,8 @@ fn visible_box(start: f64, end: f64, transform: Transform, secs_per_pixel: f64) 
 // Waveform peaks
 // ---------------------------------------------------------------------------
 
-/// `AudioData::SAMPLE_RATE` (`crates/audio/src/audio_data.rs:20`). Spelled out
-/// rather than imported because `cap-audio` is not a direct dependency here --
-/// the decoded track arrives through `cap_editor::AudioLoader`, and its
-/// inherent methods are all this needs.
-const AUDIO_SAMPLE_RATE: usize = 48_000;
-
-/// `get_waveform` (`apps/desktop/src-tauri/src/audio.rs:42-73`), transcribed:
-/// one absolute-dBFS value per ~100 ms chunk of the decoded track, with digital
-/// silence pinned to -60 dBFS rather than -inf.
-///
-/// It lives in the Tauri *app*, not in a crate, which is the only reason it is
-/// copied here rather than called. The data path itself needs nothing new:
-/// `EditorInstance::segment_medias[i].audio` is an `AudioLoader` whose `get()`
-/// resolves once the background decode finishes, exactly as
-/// `get_mic_waveforms` (`lib.rs:4395-4412`) awaits it.
-pub fn waveform_peaks(samples: &[f32], channels: u16) -> Vec<f32> {
-    const CHUNK_SIZE: usize = AUDIO_SAMPLE_RATE / 10; // ~100ms
-
-    let channels = (channels as usize).max(1);
-    let mut waveform = Vec::new();
-
-    let mut i = 0;
-    while i < samples.len() {
-        let end = (i + CHUNK_SIZE * channels).min(samples.len());
-        let mut sum = 0.0f32;
-        for s in &samples[i..end] {
-            sum += s.abs();
-        }
-        let avg = if end > i { sum / (end - i) as f32 } else { 0.0 };
-        waveform.push(avg);
-        i += CHUNK_SIZE * channels;
-    }
-
-    for v in waveform.iter_mut() {
-        *v = if *v > 0.0 { 20.0 * v.log10() } else { -60.0 };
-    }
-
-    waveform
+pub fn waveform_peaks<'a>(samples: impl IntoIterator<Item = &'a f32>, channels: u16) -> Vec<f32> {
+    cap_editor::waveform_peaks(samples.into_iter(), channels)
 }
 
 /// `WAVEFORM_MIN_DB` / `WAVEFORM_SAMPLE_STEP` / `WAVEFORM_MUTE_DB`
@@ -590,8 +563,6 @@ fn waveform_amplitude(peaks: &[f32], source_time: Option<f64>) -> f64 {
 /// it by `(canvasWidth, canvasHeight * scale)` after translating down by
 /// `canvasHeight * (1 - scale)` (`:285-290`); gpui has no path transform on
 /// `paint_path`, so the same maths is applied to each point as it is emitted.
-/// The curve, the sample count and the closing segment are otherwise the
-/// source's, cubic-bezier control points included.
 #[allow(clippy::too_many_arguments)]
 pub fn waveform_path(
     peaks: &[f32],
@@ -602,6 +573,7 @@ pub fn waveform_path(
     origin: gpui::Point<Pixels>,
     size: gpui::Size<Pixels>,
     scale: f64,
+    clip_bounds: gpui::Bounds<Pixels>,
 ) -> Option<gpui::Path<Pixels>> {
     if peaks.is_empty() || scale <= 0. {
         return None;
@@ -642,10 +614,19 @@ pub fn waveform_path(
     let top = f32::from(origin.y) as f64 + height * (1. - scale);
     let left = f32::from(origin.x) as f64;
     let scaled_height = height * scale;
+    let clip_left = f32::from(clip_bounds.left()) as f64;
+    let clip_right = f32::from(clip_bounds.right()) as f64;
+    let clip_bottom = f32::from(clip_bounds.bottom()) as f64;
+    let clip_width = clip_right - clip_left;
+    let radius = f64::from(SEGMENT_RADIUS)
+        .min(clip_width / 2.)
+        .min(f32::from(clip_bounds.size.height) as f64 / 2.);
+    let bottom_at = |x: f64| clip_bottom - rounded_corner_inset(x - clip_left, clip_width, radius);
     let map = |x: f64, y: f64| {
+        let x = (left + x * width).clamp(clip_left, clip_right);
         gpui::point(
-            px((left + x * width) as f32),
-            px((top + y * scaled_height) as f32),
+            px(x as f32),
+            px((top + y * scaled_height).min(bottom_at(x)) as f32),
         )
     };
 
@@ -668,8 +649,35 @@ pub fn waveform_path(
 
     let closing_x = (range.1 + WAVEFORM_PADDING_SECONDS - range.0) / duration;
     builder.line_to(map(closing_x, 1.));
+    let baseline_left = left.max(clip_left);
+    let baseline_right = (left + closing_x * width).min(clip_right);
+    // GPUI content masks are rectangular. Keep the waveform's curve and
+    // baseline inside the clip itself, not the virtualized viewport slice.
+    for edge in [clip_right - radius, clip_left] {
+        for step in (0..=16).rev() {
+            let x = edge + radius * f64::from(step) / 16.;
+            if x > baseline_left && x < baseline_right {
+                builder.line_to(gpui::point(px(x as f32), px(bottom_at(x) as f32)));
+            }
+        }
+    }
+    builder.line_to(gpui::point(
+        px(baseline_left as f32),
+        px(bottom_at(baseline_left) as f32),
+    ));
     builder.close();
     builder.build().ok()
+}
+
+fn rounded_corner_inset(x: f64, width: f64, radius: f64) -> f64 {
+    let distance = x.min(width - x).clamp(0., radius);
+    if distance >= radius {
+        return 0.;
+    }
+    radius
+        - (radius * radius - (radius - distance).powi(2))
+            .max(0.)
+            .sqrt()
 }
 
 /// `numSamples = min(ceil(canvasWidth * SAMPLES_PER_PIXEL), MAX_WAVEFORM_SAMPLES)`
@@ -943,6 +951,9 @@ pub enum SegmentDetail {
         source_duration: f64,
         timescale: f64,
         muted: bool,
+        /// `hideCursor`: the cursor (and its ripples) fade out for this clip.
+        cursor_hidden: bool,
+        volume: f64,
         recording_clip: u32,
         /// Held (paused) windows inside this clip's on-screen box, in output
         /// time (`TL/ClipTrack.tsx:658-666`).
@@ -957,9 +968,9 @@ pub enum SegmentDetail {
     Scene {
         mode: SceneMode,
     },
-    /// `TL/ThreeDTrack.tsx:648-651`.
+    /// A 3D shot, named by the look it is sitting on (`camera3d_shot_label`).
     ThreeD {
-        motion: bool,
+        look: &'static str,
     },
     /// `TL/TextTrack.tsx:428-450`.
     Text {
@@ -1052,7 +1063,6 @@ pub struct TimelineModel {
     /// (`TL/ClipTrack.tsx:713-730`).
     pub mic_waveforms: Vec<Arc<Vec<f32>>>,
     pub system_waveforms: Vec<Arc<Vec<f32>>>,
-    pub camera3d_setup_ghosts: Vec<(f64, f64, String)>,
     /// The span a live ghost trim is removing, in output time. Drawn as a gap
     /// with a red duration badge, the way Blip's ghost resize marks the cut.
     pub clip_ghost_gap: Option<(f64, f64)>,
@@ -1135,7 +1145,7 @@ impl TimelineModel {
                 end: segment.end,
                 lane: 0,
                 detail: SegmentDetail::ThreeD {
-                    motion: has_camera3d_motion(segment),
+                    look: crate::editor_panels::camera3d_shot_label(segment),
                 },
             })
             .collect();
@@ -1282,7 +1292,6 @@ impl TimelineModel {
             system_volume_db: config.audio.system_volume_db as f64,
             mic_waveforms: Vec::new(),
             system_waveforms: Vec::new(),
-            camera3d_setup_ghosts: Vec::new(),
             clip_ghost_gap: None,
         };
         model.rows = build_rows(
@@ -1459,43 +1468,29 @@ fn clip_rows(
                 end,
                 lane: 0,
                 detail: SegmentDetail::Clip {
-                    name: if multiple_clips {
-                        SharedString::from(format!("Clip {}", segment.recording_clip))
-                    } else {
-                        SharedString::new_static("Clip")
+                    // A custom name wins over the derived label, as in the
+                    // clips sidebar (`displayName`).
+                    name: match segment.name.as_deref().map(str::trim) {
+                        Some(name) if !name.is_empty() => SharedString::from(name.to_string()),
+                        _ if multiple_clips => {
+                            SharedString::from(format!("Clip {}", segment.recording_clip))
+                        }
+                        _ => SharedString::new_static("Clip"),
                     },
                     source_start: segment.start,
                     // The label shows `formatTime(seg.end - seg.start)` -- the
                     // *source* span, not the output one (`TL/ClipTrack.tsx:1261`).
                     source_duration: segment.end - segment.start,
                     timescale: segment.timescale,
-                    muted: clip_is_muted(segment),
+                    muted: clip_is_muted(segment) || segment.volume() == 0.0,
+                    cursor_hidden: segment.hides_cursor(),
+                    volume: segment.volume(),
                     recording_clip: segment.recording_clip,
                     holds: inner_holds,
                 },
             }
         })
         .collect()
-}
-
-/// `hasCamera3DMotion` (`ED/three-d.ts:1253-1254`): a segment moves when any
-/// of the nine pose tracks carries a keyframe. Blur is segment-level and never
-/// counts.
-fn has_camera3d_motion(segment: &Camera3DSegment) -> bool {
-    let tracks = &segment.tracks;
-    ![
-        &tracks.tilt_x,
-        &tracks.tilt_y,
-        &tracks.roll,
-        &tracks.rotate_x,
-        &tracks.rotate_y,
-        &tracks.fov,
-        &tracks.zoom,
-        &tracks.pan_x,
-        &tracks.pan_y,
-    ]
-    .iter()
-    .all(|track| track.is_empty())
 }
 
 /// `#rrggbb` / `#rgb`, the form every colour in the config takes.
@@ -1593,6 +1588,12 @@ pub struct SegmentUi<'a> {
     /// `isHoveringGenerateZoomButton` (`TL/ZoomTrack.tsx:308-309, 784`).
     pub hovering_generate_zoom: bool,
     pub scene_preview_time: Option<f64>,
+    /// The shots a hovered Auto scene pill would lay down, drawn as ghosts so
+    /// a count can be judged against the footage before it is committed.
+    pub camera3d_preview: &'a [(f64, f64)],
+    /// Which end of the selected 3D shot the panel is editing, for the pose
+    /// dots on its box.
+    pub camera3d_editing_end: bool,
 }
 
 impl SegmentUi<'_> {
@@ -1998,7 +1999,6 @@ fn render_track_content(
     let mut content = div().relative().size_full();
 
     if !segments.iter().any(|segment| segment.lane == row.lane)
-        && (row.kind != TrackKind::ThreeD || model.camera3d_setup_ghosts.is_empty())
         && let Some(empty) = render_empty_track(
             theme,
             row.kind,
@@ -2032,6 +2032,7 @@ fn render_track_content(
             ui.is_selected(row.kind, index),
             ui.is_hovered(row.kind, row.lane, index),
             ui.split_mode,
+            ui.camera3d_editing_end,
         ));
     }
 
@@ -2072,12 +2073,35 @@ fn render_track_content(
         ));
     }
 
+    // The 3D lane's create ghost: the shot a click would make, following the
+    // pointer. Unlike the zoom lane's it is a whole four-second shot, and it
+    // carries the name of the move it would land with.
+    if row.kind == TrackKind::ThreeD
+        && !ui.dragging
+        && ui.camera3d_preview.is_empty()
+        && !segments.is_empty()
+        && view.hovered_track == Some(TrackKind::ThreeD)
+        && let Some(preview) = view.preview_time
+        && let Some(ghost) = new_camera3d_ghost(model, preview)
+    {
+        content = content.child(render_camera3d_ghost(
+            theme,
+            ghost,
+            true,
+            view,
+            secs_per_pixel,
+            height,
+        ));
+    }
+
+    // The Auto scene picker's preview: the whole track as the hovered count
+    // would rebuild it.
     if row.kind == TrackKind::ThreeD {
-        for (start, end, label) in &model.camera3d_setup_ghosts {
-            content = content.child(render_camera3d_setup_ghost(
+        for range in ui.camera3d_preview {
+            content = content.child(render_camera3d_ghost(
                 theme,
-                (*start, *end),
-                label,
+                *range,
+                false,
                 view,
                 secs_per_pixel,
                 height,
@@ -2197,10 +2221,50 @@ pub fn new_gap_segment(
     Some((preview, preview + min_duration))
 }
 
-fn render_camera3d_setup_ghost(
+/// The 3D lane's create ghost: where a click would put a shot, and what it
+/// would be. Pointer-events-none, like the zoom lane's -- the press is the
+/// row's own.
+pub fn new_camera3d_ghost(model: &TimelineModel, preview: f64) -> Option<(f64, f64)> {
+    let existing: Vec<(f64, f64)> = model
+        .three_d
+        .iter()
+        .map(|segment| (segment.start, segment.end))
+        .collect();
+    // Over a shot there is nothing to add here: the ghost would jump to a gap
+    // somewhere else, which reads as a glitch rather than an offer.
+    if existing
+        .iter()
+        .any(|(start, end)| preview >= *start && preview < *end)
+    {
+        return None;
+    }
+    crate::editor_panels::place_camera3d_shot(
+        &existing,
+        preview,
+        crate::editor_panels::CAMERA3D_DEFAULT_SHOT_DURATION,
+        model.total_duration,
+    )
+}
+
+/// What the create ghost can say at this width: the whole offer, its name, or
+/// nothing but the plus.
+fn camera3d_ghost_label(width: f32, duration: f64) -> Option<String> {
+    if width >= 208. {
+        Some(format!(
+            "Add shot \u{b7} {} \u{b7} {duration:.1}s",
+            crate::editor_panels::CAMERA3D_DEFAULT_LOOK_NAME
+        ))
+    } else if width >= 84. {
+        Some("Add shot".to_string())
+    } else {
+        None
+    }
+}
+
+fn render_camera3d_ghost(
     theme: &Theme,
     (start, end): (f64, f64),
-    label: &str,
+    offer: bool,
     view: TimelineView,
     secs_per_pixel: f64,
     height: f32,
@@ -2224,16 +2288,29 @@ fn render_camera3d_setup_ghost(
                 .h(px(height))
                 .w_full()
                 .flex()
+                .flex_row()
                 .items_center()
                 .justify_center()
+                .gap(px(4.))
                 .px(px(8.))
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(seg_label(theme, color))
-                        .child(SharedString::from(label.to_string())),
-                ),
+                .overflow_hidden()
+                .text_size(px(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(seg_label(theme, color))
+                .when(offer, |this| {
+                    this.child(
+                        svg()
+                            .path("icons/plus.svg")
+                            .size(px(12.))
+                            .flex_none()
+                            .text_color(seg_label(theme, color)),
+                    )
+                    .children(
+                        camera3d_ghost_label(width, end - start).map(|label| {
+                            div().whitespace_nowrap().child(SharedString::from(label))
+                        }),
+                    )
+                }),
         )
         .into_any_element()
 }
@@ -2343,10 +2420,6 @@ fn render_empty_track(
             kind.picker_description().trim_end_matches('.'),
             Some("Add audio"),
         ),
-        TrackKind::ThreeD => (
-            kind.picker_description().trim_end_matches('.'),
-            Some("Add 3D scene"),
-        ),
         TrackKind::Scene => (
             kind.picker_description().trim_end_matches('.'),
             Some("Add scene"),
@@ -2378,6 +2451,7 @@ fn render_segment(
     selected: bool,
     hovered: bool,
     split_mode: bool,
+    camera3d_editing_end: bool,
 ) -> AnyElement {
     let color = if matches!(segment.detail, SegmentDetail::Clip { muted: true, .. }) {
         muted_clip_color(theme)
@@ -2415,10 +2489,11 @@ fn render_segment(
         .child(
             div()
                 .absolute()
-                .top_0()
-                .bottom_0()
-                .left_0()
+                .top(px(SEGMENT_RADIUS))
+                .bottom(px(SEGMENT_RADIUS))
+                .left(px(2.))
                 .w(px(SEGMENT_ACCENT_BAR))
+                .rounded_full()
                 .bg(color),
         );
 
@@ -2448,12 +2523,13 @@ fn render_segment(
             holds,
             view,
             secs_per_pixel,
+            width,
             height,
         ));
         for (hold_start, hold_end) in holds.iter() {
             let hold_x = ((hold_start - segment.start) / secs_per_pixel) as f32;
             let hold_width = ((hold_end - hold_start) / secs_per_pixel) as f32;
-            fill = fill.child(render_hold(theme, color, hold_x, hold_width));
+            fill = fill.child(render_hold(theme, color, hold_x, hold_width, width, height));
         }
     }
 
@@ -2491,6 +2567,33 @@ fn render_segment(
         }
     }
 
+    // The selected 3D shot's two pose dots: the end the panel is editing, and
+    // the other one a click away. They sit `CAMERA3D_POSE_DOT_INSET` inside
+    // the box so the resize handles keep the edges themselves.
+    if selected
+        && matches!(segment.detail, SegmentDetail::ThreeD { .. })
+        && width >= CAMERA3D_POSE_DOT_INSET * 2. + CAMERA3D_POSE_DOT * 2. + 6.
+    {
+        for end in [false, true] {
+            let mut dot = div()
+                .absolute()
+                .top(px((height - CAMERA3D_POSE_DOT) / 2.))
+                .size(px(CAMERA3D_POSE_DOT))
+                .rounded_full();
+            dot = if end {
+                dot.right(px(CAMERA3D_POSE_DOT_INSET))
+            } else {
+                dot.left(px(CAMERA3D_POSE_DOT_INSET))
+            };
+            fill = fill.child(if end == camera3d_editing_end {
+                dot.bg(Hsla::from(theme.editor.accent))
+            } else {
+                dot.border(px(1.5))
+                    .border_color(Hsla::from(theme.editor.accent))
+            });
+        }
+    }
+
     // `SegmentHandle` (`TL/Track.tsx:236-258`): a 20px hit target with a 3px
     // visible bar, half-overhanging each edge. A *compact* handle carries no
     // `group-hover` class over there, so it stays visible with the pointer on
@@ -2516,15 +2619,30 @@ fn render_segment(
         // (`TL/Track.tsx:107-108`). That cursor is an inline SVG data-URI;
         // this rev has the standard set only, so a crosshair stands in.
         .when(split_mode, |this| this.cursor(gpui::CursorStyle::Crosshair))
-        .child(if selected {
-            fill.border(px(1.5))
-                .border_color(Hsla::from(theme.editor.accent))
-        } else {
-            fill.border_1()
-                .border_color(seg_border(theme, color, if hovered { 0.10 } else { 0. }))
+        .child(fill)
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .rounded(px(SEGMENT_RADIUS))
+                .map(|border| {
+                    if selected || (split_mode && hovered) {
+                        border
+                            .border(px(1.5))
+                            .border_color(Hsla::from(theme.editor.accent))
+                    } else {
+                        border.border_1().border_color(seg_border(
+                            theme,
+                            color,
+                            if hovered { 0.10 } else { 0. },
+                        ))
+                    }
+                }),
+        )
+        .when(!split_mode, |this| {
+            this.child(render_handle(theme, color, true, handle_opacity))
+                .child(render_handle(theme, color, false, handle_opacity))
         })
-        .child(render_handle(theme, color, true, handle_opacity))
-        .child(render_handle(theme, color, false, handle_opacity))
         .into_any_element()
 }
 
@@ -2576,6 +2694,7 @@ fn render_clip_markings(
     holds: &[(f64, f64)],
     view: TimelineView,
     secs_per_pixel: f64,
+    width: f32,
     height: f32,
 ) -> impl IntoElement {
     let SegmentDetail::Clip { source_start, .. } = segment.detail else {
@@ -2607,25 +2726,40 @@ fn render_clip_markings(
             continue;
         }
         let x = (effective_to_output(&holds_relative, effective) / secs_per_pixel) as f32;
+        let radius = SEGMENT_RADIUS.min(width / 2.).min(height / 2.);
+        let inset = rounded_corner_inset(f64::from(x), f64::from(width), f64::from(radius)).max(
+            rounded_corner_inset(f64::from(x + 1.), f64::from(width), f64::from(radius)),
+        ) as f32;
+        let marking_height = (height - 2. * inset).max(0.);
         root = root.child(
             div()
                 .absolute()
-                .top_0()
+                .top(px(inset))
                 .left(px(x))
                 .w(px(1.))
-                .h(px(height))
+                .h(px(marking_height))
                 .flex()
                 .flex_col()
-                .child(div().w_full().h(px(height / 2.)).bg(gpui::linear_gradient(
-                    180.,
-                    gpui::linear_color_stop(transparent, 0.),
-                    gpui::linear_color_stop(via, 1.),
-                )))
-                .child(div().w_full().h(px(height / 2.)).bg(gpui::linear_gradient(
-                    180.,
-                    gpui::linear_color_stop(via, 0.),
-                    gpui::linear_color_stop(transparent, 1.),
-                ))),
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(marking_height / 2.))
+                        .bg(gpui::linear_gradient(
+                            180.,
+                            gpui::linear_color_stop(transparent, 0.),
+                            gpui::linear_color_stop(via, 1.),
+                        )),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(marking_height / 2.))
+                        .bg(gpui::linear_gradient(
+                            180.,
+                            gpui::linear_color_stop(via, 0.),
+                            gpui::linear_color_stop(transparent, 1.),
+                        )),
+                ),
         );
     }
     root
@@ -2656,15 +2790,7 @@ fn render_fade(
     div()
         .absolute()
         .inset_0()
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left(px(shade_x))
-                .w(px(span))
-                .bg(shade),
-        )
+        .child(rounded_segment_overlay(shade, shade_x, span, width))
         .child(
             // `M 0,100 C 0,68 span*0.55,10 span,0` in, and
             // `M 100,100 C 100,68 endX + span*0.45,10 endX,0` out. The source
@@ -2676,22 +2802,33 @@ fn render_fade(
                 |bounds, _window, _cx| bounds,
                 move |_, bounds, window, _cx| {
                     let mut builder = gpui::PathBuilder::stroke(px(1.5));
-                    let x = |value: f32| bounds.origin.x + px(value);
-                    let y = |percent: f32| bounds.origin.y + px(height * percent / 100.);
+                    let point = |x: f32, percent: f32| {
+                        let x = x.clamp(0., width);
+                        let inset = rounded_corner_inset(
+                            f64::from(x),
+                            f64::from(width),
+                            f64::from(SEGMENT_RADIUS.min(width / 2.).min(height / 2.)),
+                        ) as f32;
+                        gpui::point(
+                            bounds.origin.x + px(x),
+                            bounds.origin.y
+                                + px((height * percent / 100.).clamp(inset, height - inset)),
+                        )
+                    };
                     if edge_in {
-                        builder.move_to(gpui::point(x(0.), y(100.)));
+                        builder.move_to(point(0., 100.));
                         builder.cubic_bezier_to(
-                            gpui::point(x(span), y(0.)),
-                            gpui::point(x(0.), y(68.)),
-                            gpui::point(x(span * 0.55), y(10.)),
+                            point(span, 0.),
+                            point(0., 68.),
+                            point(span * 0.55, 10.),
                         );
                     } else {
                         let end_x = width - span;
-                        builder.move_to(gpui::point(x(width), y(100.)));
+                        builder.move_to(point(width, 100.));
                         builder.cubic_bezier_to(
-                            gpui::point(x(end_x), y(0.)),
-                            gpui::point(x(width), y(68.)),
-                            gpui::point(x(end_x + span * 0.45), y(10.)),
+                            point(end_x, 0.),
+                            point(width, 68.),
+                            point(end_x + span * 0.45, 10.),
                         );
                     }
                     if let Ok(path) = builder.build() {
@@ -2722,15 +2859,27 @@ fn render_fade(
                         |bounds, _window, _cx| bounds,
                         move |_, bounds, window, _cx| {
                             let mut builder = gpui::PathBuilder::fill();
-                            let (x, y) = (bounds.origin.x, bounds.origin.y);
+                            let offset = if edge_in { 0. } else { width - 11. };
+                            let point = |x: f32, y: f32| {
+                                let local_x = (offset + x).clamp(0., width);
+                                let inset = rounded_corner_inset(
+                                    f64::from(local_x),
+                                    f64::from(width),
+                                    f64::from(SEGMENT_RADIUS.min(width / 2.).min(height / 2.)),
+                                ) as f32;
+                                gpui::point(
+                                    bounds.origin.x + px(local_x - offset),
+                                    bounds.origin.y + px(y.clamp(inset, height - inset)),
+                                )
+                            };
                             if edge_in {
-                                builder.move_to(gpui::point(x, y));
-                                builder.line_to(gpui::point(x + px(11.), y));
-                                builder.line_to(gpui::point(x, y + px(11.)));
+                                builder.move_to(point(0., 0.));
+                                builder.line_to(point(11., 0.));
+                                builder.line_to(point(0., 11.));
                             } else {
-                                builder.move_to(gpui::point(x + px(11.), y));
-                                builder.line_to(gpui::point(x, y));
-                                builder.line_to(gpui::point(x + px(11.), y + px(11.)));
+                                builder.move_to(point(11., 0.));
+                                builder.line_to(point(0., 0.));
+                                builder.line_to(point(11., 11.));
                             }
                             builder.close();
                             if let Ok(path) = builder.build() {
@@ -2744,10 +2893,42 @@ fn render_fade(
         )
 }
 
+fn rounded_segment_overlay(
+    color: Hsla,
+    x: f32,
+    width: f32,
+    segment_width: f32,
+) -> impl IntoElement {
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(px(x))
+        .w(px(width))
+        .overflow_hidden()
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(-x))
+                .w(px(segment_width))
+                .rounded(px(SEGMENT_RADIUS))
+                .bg(color),
+        )
+}
+
 /// The paused window a fullscreen text segment inserts inside a clip
 /// (`TL/ClipTrack.tsx:959-1002`): the clip's tint washed back to the card,
 /// ruled off at both edges, with a pause glyph.
-fn render_hold(theme: &Theme, color: Hsla, x: f32, width: f32) -> impl IntoElement {
+fn render_hold(
+    theme: &Theme,
+    color: Hsla,
+    x: f32,
+    width: f32,
+    segment_width: f32,
+    height: f32,
+) -> impl IntoElement {
     let ink = with_alpha(seg_label(theme, color), 0.75);
     div()
         .absolute()
@@ -2761,10 +2942,36 @@ fn render_hold(theme: &Theme, color: Hsla, x: f32, width: f32) -> impl IntoEleme
         .justify_center()
         .gap(px(4.))
         .overflow_hidden()
-        .bg(with_alpha(Hsla::from(theme.editor.card), 0.6))
-        .border_l_1()
-        .border_r_1()
-        .border_color(seg_border(theme, color, 0.))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(-x))
+                .w(px(segment_width))
+                .rounded(px(SEGMENT_RADIUS))
+                .bg(with_alpha(Hsla::from(theme.editor.card), 0.6)),
+        )
+        .children([0., width - 1.].map(|edge| {
+            let radius = SEGMENT_RADIUS.min(segment_width / 2.).min(height / 2.);
+            let inset = rounded_corner_inset(
+                f64::from(x + edge),
+                f64::from(segment_width),
+                f64::from(radius),
+            )
+            .max(rounded_corner_inset(
+                f64::from(x + edge + 1.),
+                f64::from(segment_width),
+                f64::from(radius),
+            )) as f32;
+            div()
+                .absolute()
+                .left(px(edge))
+                .top(px(inset))
+                .bottom(px(inset))
+                .w(px(1.))
+                .bg(seg_border(theme, color, 0.))
+        }))
         .child(
             svg()
                 .path("icons/pause.svg")
@@ -2814,16 +3021,23 @@ fn render_waveform(
         return div().into_any_element();
     }
 
-    let mic_scale = gain_to_scale(model.mic_volume_db);
-    let system_scale = gain_to_scale(model.system_volume_db);
-    let source_start = segment.start;
+    let SegmentDetail::Clip {
+        source_start: segment_start,
+        volume,
+        ..
+    } = segment.detail
+    else {
+        return div().into_any_element();
+    };
+    let mic_scale = gain_to_scale(model.mic_volume_db) * volume;
+    let system_scale = gain_to_scale(model.system_volume_db) * volume;
+    let timeline_start = segment.start;
     let output_duration = (segment.end - segment.start).max(0.0001);
     let holds: Vec<(f64, f64)> = holds
         .iter()
         .map(|(start, end)| (start - segment.start, end - segment.start))
         .collect();
     let transform = view.transform;
-    let segment_start = segment.start;
     let full_width = width.max(1.) as f64;
     let wave_height = height.min(WAVEFORM_MAX_HEIGHT);
     let wave_color = waveform_color(color);
@@ -2835,8 +3049,8 @@ fn render_waveform(
             // (`TL/ClipTrack.tsx:202-245`). Off screen entirely: nothing.
             let view_start = transform.position;
             let view_end = view_start + transform.zoom;
-            let visible_start = view_start.max(source_start) - source_start;
-            let visible_end = view_end.min(source_start + output_duration) - source_start;
+            let visible_start = view_start.max(timeline_start) - timeline_start;
+            let visible_end = view_end.min(timeline_start + output_duration) - timeline_start;
             if visible_end <= visible_start {
                 return;
             }
@@ -2859,8 +3073,14 @@ fn render_waveform(
                     origin,
                     size,
                     scale,
+                    gpui::Bounds {
+                        origin: gpui::point(bounds.origin.x, bounds.bottom() - px(height)),
+                        size: gpui::size(px(width), px(height)),
+                    },
                 ) {
-                    window.paint_path(path, wave_color);
+                    window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+                        window.paint_path(path, wave_color)
+                    });
                 }
             }
         },
@@ -3005,18 +3225,30 @@ fn label_body(
                 name,
                 source_duration,
                 muted,
+                cursor_hidden,
                 ..
             },
             LabelTier::Full,
         ) => label_row()
             .child(label_primary(theme, color).child(name.clone()))
-            .when(*muted, |this| this.child(muted_badge(theme, color)))
+            .when(*muted, |this| {
+                this.child(clip_badge(theme, color, "icons/volume-x.svg", "Muted"))
+            })
+            .when(*cursor_hidden, |this| {
+                this.child(clip_badge(
+                    theme,
+                    color,
+                    "icons/mouse-pointer-ban.svg",
+                    "Cursor hidden",
+                ))
+            })
             .child(label_secondary(theme, color).child(format_clip_time(*source_duration)))
             .into_any_element(),
         (
             SegmentDetail::Clip {
                 source_duration,
                 muted,
+                cursor_hidden,
                 ..
             },
             LabelTier::Compact,
@@ -3026,6 +3258,15 @@ fn label_body(
                 this.child(
                     svg()
                         .path("icons/volume-x.svg")
+                        .size(px(12.))
+                        .flex_none()
+                        .text_color(seg_label(theme, color)),
+                )
+            })
+            .when(*cursor_hidden, |this| {
+                this.child(
+                    svg()
+                        .path("icons/mouse-pointer-ban.svg")
                         .size(px(12.))
                         .flex_none()
                         .text_color(seg_label(theme, color)),
@@ -3079,17 +3320,18 @@ fn label_body(
             label_glyph(theme, color, scene_icon(*mode), 12.)
         }
 
-        // -- 3D (`TL/ThreeDTrack.tsx:655-687`) ----------------------------
-        (SegmentDetail::ThreeD { motion }, LabelTier::Full) => label_row()
-            .child(label_primary(theme, color).child(if visible_width >= 140. {
-                "3D Perspective"
-            } else {
-                "3D"
-            }))
-            .child(label_secondary(theme, color).child(if *motion { "Motion" } else { "Still" }))
+        // -- 3D: the look's own name, then how long it runs ---------------
+        (SegmentDetail::ThreeD { look }, LabelTier::Full) => label_row()
+            .child(label_primary(theme, color).child(*look))
+            .child(
+                label_secondary(theme, color).child(format!("{:.1}s", segment.end - segment.start)),
+            )
             .into_any_element(),
-        (SegmentDetail::ThreeD { .. }, LabelTier::Compact) => label_row()
-            .child(label_primary(theme, color).child("3D"))
+        // Too narrow for both: the first word of the look ("Glide", "Still").
+        (SegmentDetail::ThreeD { look }, LabelTier::Compact) => label_row()
+            .child(
+                label_primary(theme, color).child(look.split_whitespace().next().unwrap_or("3D")),
+            )
             .into_any_element(),
         (SegmentDetail::ThreeD { .. }, LabelTier::Glyph) => {
             label_glyph(theme, color, "icons/rotate-3d.svg", 12.)
@@ -3183,8 +3425,13 @@ fn label_body(
     })
 }
 
-/// The muted clip's badge (`TL/ClipTrack.tsx:1265-1276`).
-fn muted_badge(theme: &Theme, color: Hsla) -> impl IntoElement {
+/// The clip's state badges -- muted, cursor hidden (`TL/ClipTrack.tsx`).
+fn clip_badge(
+    theme: &Theme,
+    color: Hsla,
+    icon: &'static str,
+    label: &'static str,
+) -> impl IntoElement {
     div()
         .flex()
         .flex_none()
@@ -3199,12 +3446,12 @@ fn muted_badge(theme: &Theme, color: Hsla) -> impl IntoElement {
         .text_color(seg_label(theme, color))
         .child(
             svg()
-                .path("icons/volume-x.svg")
+                .path(icon)
                 .size(px(10.))
                 .flex_none()
                 .text_color(seg_label(theme, color)),
         )
-        .child("Muted")
+        .child(label)
 }
 
 /// The playhead's own x is clamped to the timeline width so it parks at the
@@ -3289,6 +3536,8 @@ pub fn wheel_zoom_delta(dom_delta_y: f64, zoom: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const AUDIO_SAMPLE_RATE: usize = 48_000;
 
     // -- The ruler ----------------------------------------------------------
 
@@ -3485,6 +3734,42 @@ mod tests {
         let before = wide.zoom;
         wide.fit_on_mount(1111., 5.0);
         assert_eq!(wide.zoom, before);
+    }
+
+    #[test]
+    fn mount_without_preparing_duration_matches_reopened_timeline() {
+        let viewport_width = 1200.;
+        let width = content_width(viewport_width);
+        for total in [0.5, 9.5, 60., 8_637.] {
+            let mut first_open = Transform::default();
+            first_open.fit_on_mount(width, total);
+            let mut reopened = Transform::initial(total);
+            reopened.fit_on_mount(width, total);
+
+            assert_eq!(first_open, reopened, "duration {total}");
+            let visible_end = total.min(first_open.zoom);
+            let clip_width = (visible_end / first_open.secs_per_pixel(width)) as f32;
+            assert!(clip_width.is_finite() && clip_width > 0.);
+            let midpoint = time_from_x(
+                content_left() + clip_width / 2.,
+                viewport_width,
+                first_open,
+                total,
+            );
+            assert!((midpoint - visible_end / 2.).abs() < 0.0001);
+        }
+    }
+
+    #[test]
+    fn mount_preserves_an_existing_preparing_timeline_viewport() {
+        let mut transform = Transform::initial(60.);
+        transform.update_zoom(5., 0., 60.);
+        transform.set_position(20., 60.);
+        let before = transform;
+
+        transform.fit_on_mount(content_width(1200.), 60.);
+
+        assert_eq!(transform, before);
     }
 
     // -- Geometry -----------------------------------------------------------
@@ -3820,6 +4105,59 @@ mod tests {
     }
 
     #[test]
+    fn clip_waveform_volumes_stay_independent_after_splitting() {
+        let mut config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "timescale": 1.0, "start": 20.0, "end": 30.0, "volume": 0.75 }],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap();
+        let timeline = config.timeline.as_mut().unwrap();
+        assert!(crate::editor_edits::split_clip_segment(
+            timeline,
+            5.0,
+            Some(0)
+        ));
+        assert!(crate::editor_edits::set_clip_volume(timeline, 1, 0.25));
+
+        let model = TimelineModel::build(&config, false, false);
+        for (clip, expected_start, expected_volume) in
+            [(&model.clips[0], 20.0, 0.75), (&model.clips[1], 25.0, 0.25)]
+        {
+            let SegmentDetail::Clip {
+                source_start,
+                volume,
+                ..
+            } = clip.detail
+            else {
+                panic!("not a clip");
+            };
+            assert_eq!(source_start, expected_start);
+            assert_eq!(volume, expected_volume);
+            assert!(clip.detail.shows_waveform());
+        }
+
+        for volume in [0.0, 2.0, 1.0] {
+            assert!(crate::editor_edits::set_clip_volume(
+                config.timeline.as_mut().unwrap(),
+                1,
+                volume,
+            ));
+            let model = TimelineModel::build(&config, false, false);
+            assert!(model.clips[0].detail.shows_waveform());
+            assert_eq!(model.clips[1].detail.shows_waveform(), volume > 0.0);
+            assert!(matches!(
+                model.clips[0].detail,
+                SegmentDetail::Clip { volume: 0.75, .. }
+            ));
+            assert!(
+                matches!(model.clips[1].detail, SegmentDetail::Clip { volume: value, .. } if value == volume)
+            );
+        }
+    }
+
+    #[test]
     fn clip_mute_indicators_follow_speed_audio_modes() {
         let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
             "timeline": {
@@ -3841,6 +4179,41 @@ mod tests {
             ));
             assert!(!clip.detail.shows_waveform());
         }
+    }
+
+    #[test]
+    fn clip_labels_prefer_custom_names_and_carry_the_cursor_flag() {
+        let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 2.0, "name": " Intro " },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 2.0, "end": 4.0, "hideCursor": true }
+                ],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap();
+        let model = TimelineModel::build(&config, false, false);
+        let SegmentDetail::Clip {
+            name,
+            cursor_hidden,
+            ..
+        } = &model.clips[0].detail
+        else {
+            panic!("clip");
+        };
+        assert_eq!(name.as_ref(), "Intro");
+        assert!(!cursor_hidden);
+        let SegmentDetail::Clip {
+            name,
+            cursor_hidden,
+            ..
+        } = &model.clips[1].detail
+        else {
+            panic!("clip");
+        };
+        assert_eq!(name.as_ref(), "Clip");
+        assert!(cursor_hidden);
     }
 
     #[test]
@@ -3956,6 +4329,58 @@ mod tests {
     // -- Waveforms ----------------------------------------------------------
 
     #[test]
+    fn waveform_height_combines_clip_volume_and_track_gain() {
+        let bounds = gpui::Bounds {
+            origin: gpui::point(px(0.), px(0.)),
+            size: gpui::size(px(200.), px(44.)),
+        };
+        let mut peaks = vec![-60.; 220];
+        peaks[200..].fill(-30.);
+        for volume in [0.25, 0.5, 1.0, 2.0] {
+            for gain in [-15., 0.] {
+                let scale = gain_to_scale(gain) * volume;
+                let path = waveform_path(
+                    &peaks,
+                    (0., 2.),
+                    400,
+                    &[],
+                    20.,
+                    gpui::point(px(0.), px(26.)),
+                    gpui::size(px(200.), px(18.)),
+                    scale,
+                    bounds,
+                )
+                .unwrap();
+                let top = path
+                    .vertices
+                    .iter()
+                    .filter(|vertex| {
+                        let x = f32::from(vertex.xy_position.x);
+                        (20.0..180.0).contains(&x)
+                    })
+                    .map(|vertex| f32::from(vertex.xy_position.y))
+                    .fold(f32::INFINITY, f32::min);
+                let expected_top = 44. - 9. * scale as f32;
+                assert!((top - expected_top).abs() < 0.01, "{top} != {expected_top}");
+            }
+        }
+        assert!(
+            waveform_path(
+                &peaks,
+                (0., 2.),
+                400,
+                &[],
+                20.,
+                gpui::point(px(0.), px(26.)),
+                gpui::size(px(200.), px(18.)),
+                0.,
+                bounds,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn gain_scales_the_waveform_and_mutes_below_thirty_db() {
         assert_eq!(gain_to_scale(0.), 1.);
         assert_eq!(gain_to_scale(-15.), 0.5);
@@ -3998,6 +4423,53 @@ mod tests {
 
         // An empty track is an empty table, not a panic.
         assert!(waveform_peaks(&[], 1).is_empty());
+    }
+
+    #[test]
+    fn waveform_mesh_stays_inside_real_clip_corners() {
+        for width in [4., 16., 100., 10_000.] {
+            let bounds = gpui::Bounds {
+                origin: gpui::point(px(50.), px(30.)),
+                size: gpui::size(px(width), px(44.)),
+            };
+            for (start, end) in [(0., 10.), (0., 5.), (5., 10.), (2., 8.)] {
+                for gain in [0.1, 0.5, 1., 2.] {
+                    let x = start / 10. * width as f64;
+                    let span = (end - start) / 10. * width as f64;
+                    let path = waveform_path(
+                        &[-6.; 200],
+                        (start, end),
+                        200,
+                        &[],
+                        0.,
+                        gpui::point(px(50. + x as f32), px(56.)),
+                        gpui::size(px(span as f32), px(18.)),
+                        gain,
+                        bounds,
+                    )
+                    .unwrap();
+                    assert!(!path.vertices.is_empty());
+                    for vertex in &path.vertices {
+                        let local_x = f32::from(vertex.xy_position.x) as f64 - 50.;
+                        let y = f32::from(vertex.xy_position.y) as f64;
+                        assert!(
+                            local_x >= -0.001 && local_x <= width as f64 + 0.001,
+                            "x {local_x}, width {width}"
+                        );
+                        let bottom = 74.
+                            - rounded_corner_inset(
+                                local_x,
+                                width as f64,
+                                (width as f64 / 2.).min(8.),
+                            );
+                        assert!(
+                            y <= bottom + 0.05,
+                            "x {local_x}, y {y}, bottom {bottom}, width {width}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -4180,5 +4652,162 @@ mod style_image_tests {
         );
         assert!(scene_available(&project, true));
         assert!(!scene_available(&project, false));
+    }
+}
+
+pub(crate) fn preparing_frontier_offset(
+    playable_until: f64,
+    view: TimelineView,
+    width: f32,
+) -> f32 {
+    if !playable_until.is_finite() || !width.is_finite() || width <= 0.0 {
+        return 0.0;
+    }
+    let seconds_per_pixel = view.transform.secs_per_pixel(width);
+    if !seconds_per_pixel.is_finite() || seconds_per_pixel <= 0.0 {
+        return 0.0;
+    }
+    ((playable_until - view.transform.position) / seconds_per_pixel).clamp(0.0, f64::from(width))
+        as f32
+}
+
+pub(crate) fn render_preparing_timeline(
+    theme: &Theme,
+    model: &TimelineModel,
+    view: TimelineView,
+    viewport_width: f32,
+    progress: Option<&cap_editor::PreparingEditorProgress>,
+) -> AnyElement {
+    let known_duration = progress.and_then(|progress| progress.total_duration);
+    let playable_until = progress.map_or(0.0, |progress| progress.playable_until);
+    let content_width = content_width(viewport_width);
+    let frontier = preparing_frontier_offset(playable_until, view, content_width);
+    let mut rows = div()
+        .flex()
+        .flex_col()
+        .gap(px(TRACK_ROW_GAP))
+        .w_full()
+        .pr(px(SCROLL_BODY_PADDING_RIGHT));
+    if known_duration.is_some() {
+        for row in &model.rows {
+            rows = rows.child(render_row(
+                theme,
+                model,
+                *row,
+                view,
+                viewport_width,
+                SegmentUi::default(),
+            ));
+        }
+    } else {
+        rows = rows.child(
+            div()
+                .flex()
+                .flex_row()
+                .h(px(TRACK_HEIGHT))
+                .rounded(px(TRACK_BAND_RADIUS))
+                .bg(Hsla::from(theme.editor.ctl))
+                .child(
+                    div()
+                        .w(px(TRACK_GUTTER))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .pl(px(10.))
+                        .text_size(px(12.))
+                        .child("Clip"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .m(px(8.))
+                        .rounded(px(6.))
+                        .bg(Hsla::from(theme.editor.ctl_hover)),
+                ),
+        );
+    }
+    let mut veil = theme.editor.card;
+    veil.a = 0.88;
+    let mut edge = theme.editor.card;
+    edge.a = 0.35;
+    let mut clear = theme.editor.card;
+    clear.a = 0.0;
+    div()
+        .size_full()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .relative()
+        .overflow_hidden()
+        .pt(px(TIMELINE_TOP_PADDING))
+        .px(px(TIMELINE_PADDING))
+        .pb(px(TIMELINE_BOTTOM_PADDING))
+        .gap(px(TIMELINE_HEADER_GAP))
+        .child(
+            div()
+                .relative()
+                .h(px(TIMELINE_HEADER_HEIGHT))
+                .flex_none()
+                .children(known_duration.map(|_| render_ruler(theme, view, viewport_width)))
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(4.))
+                        .bottom_0()
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.editor.text_3))
+                        .child("Timeline"),
+                ),
+        )
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .overflow_hidden()
+                .child(rows)
+                .children((frontier < content_width).then(|| {
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(px(TRACK_GUTTER + frontier))
+                        .right_0()
+                        .bg(gpui::linear_gradient(
+                            90.,
+                            gpui::linear_color_stop(edge, 0.),
+                            gpui::linear_color_stop(veil, 1.),
+                        ))
+                        .child(div().absolute().left_0().top_0().bottom_0().w(px(20.)).bg(
+                            gpui::linear_gradient(
+                                90.,
+                                gpui::linear_color_stop(clear, 0.),
+                                gpui::linear_color_stop(veil, 1.),
+                            ),
+                        ))
+                })),
+        )
+        .child(render_playhead(
+            theme,
+            playhead_offset(view, content_width),
+            0.65,
+        ))
+        .into_any_element()
+}
+
+#[cfg(test)]
+mod preparing_frontier_tests {
+    use super::*;
+
+    #[test]
+    fn confirmed_boundary_stays_inside_visible_timeline() {
+        let mut view = TimelineView::default();
+        view.transform.zoom = 20.0;
+        view.transform.position = 10.0;
+        assert_eq!(preparing_frontier_offset(5.0, view, 400.0), 0.0);
+        assert_eq!(preparing_frontier_offset(20.0, view, 400.0), 200.0);
+        assert_eq!(preparing_frontier_offset(35.0, view, 400.0), 400.0);
+        assert_eq!(preparing_frontier_offset(f64::NAN, view, 400.0), 0.0);
+        assert_eq!(preparing_frontier_offset(20.0, view, 0.0), 0.0);
     }
 }

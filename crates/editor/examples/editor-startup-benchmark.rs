@@ -165,6 +165,8 @@ async fn main() {
         })
         .unwrap_or(0);
     let profile_stages = has_flag(&args, "--profile-stages");
+    let profile_stages_only = has_flag(&args, "--profile-stages-only");
+    let prewarm_fonts = has_flag(&args, "--prewarm-fonts");
     let resolution_base = cap_project::XY::new(1248, 702);
 
     println!("{}", "=".repeat(64));
@@ -174,6 +176,21 @@ async fn main() {
     println!("Runs: {runs}");
     println!("Preview frame: {preview_frame}");
     println!("Profile stages: {profile_stages}");
+    println!("Profile stages only: {profile_stages_only}");
+    if prewarm_fonts {
+        let started = Instant::now();
+        tokio::task::spawn_blocking(cap_rendering::prewarm_fonts)
+            .await
+            .expect("Font preparation failed");
+        println!(
+            "Font preparation before startup timing: {:.3}ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    if profile_stages_only {
+        run_stage_profile(recording_path, runs).await;
+        return;
+    }
 
     let mut values_ms = Vec::with_capacity(runs);
     let mut preview_values_ms = Vec::with_capacity(runs);
@@ -204,11 +221,10 @@ async fn main() {
             .preview_tx
             .send(Some((preview_frame, fps, resolution_base)))
             .expect("Failed to request preview frame");
-        let preview_elapsed = if frame_rx.recv_timeout(Duration::from_secs(10)).is_ok() {
-            preview_start.elapsed().as_secs_f64() * 1000.0
-        } else {
-            f64::INFINITY
-        };
+        frame_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("Preview did not produce a frame within 10 seconds");
+        let preview_elapsed = preview_start.elapsed().as_secs_f64() * 1000.0;
         preview_values_ms.push(preview_elapsed);
 
         editor.dispose().await;

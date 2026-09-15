@@ -920,33 +920,6 @@ pub fn reveal_now(window: &WebviewWindow, expected_generation: u32) -> tauri::Re
     reveal_now_with_options(window, expected_generation, false, false)
 }
 
-pub fn schedule_overlay_reveal(window: &WebviewWindow, generation: u32, focus: bool) {
-    let handle = window.clone();
-    let _ = window.run_on_main_thread(move || {
-        let result = reveal_now_with_options(&handle, generation, focus, false);
-        if matches!(result, Ok(true)) {
-            let _ = handle.set_ignore_cursor_events(false);
-        }
-    });
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn schedule_overlay_focus(window: &WebviewWindow, generation: u32) {
-    let handle = window.clone();
-    let _ = window.run_on_main_thread(move || {
-        let allowed = handle
-            .app_handle()
-            .state::<State>()
-            .inner
-            .lock()
-            .unwrap()
-            .may_reveal(generation, handle.label());
-        if allowed {
-            let _ = handle.set_focus();
-        }
-    });
-}
-
 fn reveal_now_with_options(
     window: &WebviewWindow,
     expected_generation: u32,

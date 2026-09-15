@@ -11,12 +11,6 @@
 //! first `RECENT_MEDIA_LIMIT` of each list, merges them, re-sorts by the same
 //! key and re-slices.
 //!
-//! Thumbnails are pre-baked files inside the bundle, so nothing here decodes
-//! video: a recording's card draws `<bundle>/screenshots/display.jpg` (written
-//! once at recording finish, `recording.rs:3424-3429`), a screenshot's card
-//! draws the bundle's own PNG. All of it is ordinary `std::fs` work, so it is
-//! transcribed here rather than reached for through a Tauri command.
-//!
 //! Everything in this module runs on the background executor --
 //! [`spawn_decode_pool`] is the one function called from the foreground, and
 //! all it does is fan jobs out to that executor. Nothing here touches gpui
@@ -52,36 +46,6 @@ pub enum MediaKind {
     Screenshot,
 }
 
-impl MediaKind {
-    /// `typeLabel()` in `Recents.tsx:116-119`.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Studio => "Studio Mode",
-            Self::Instant => "Instant Mode",
-            Self::Screenshot => "Screenshot",
-        }
-    }
-
-    /// `TypeIcon()` in `Recents.tsx:120-128`, the `size-2.5` glyph in the pill.
-    pub fn pill_icon(self) -> &'static str {
-        match self {
-            Self::Studio => "icons/clapperboard.svg",
-            Self::Instant => "icons/zap.svg",
-            Self::Screenshot => "icons/image.svg",
-        }
-    }
-
-    /// The `size-7` glyph the card falls back to with no thumbnail
-    /// (`Recents.tsx:148-155`): square-play for recordings, image for
-    /// screenshots.
-    pub fn fallback_icon(self) -> &'static str {
-        match self {
-            Self::Studio | Self::Instant => "icons/square-play.svg",
-            Self::Screenshot => "icons/image.svg",
-        }
-    }
-}
-
 /// One `RecentMediaItem`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecentItem {
@@ -101,6 +65,7 @@ pub struct RecentItem {
     /// existence check happens here instead, on the same background pass that
     /// already stat'd the directory.
     pub thumbnail: Option<PathBuf>,
+    pub thumbnail_version: Option<u128>,
     /// `meta.sharing.link` -- Instant Mode cards open this in the browser.
     pub sharing: Option<String>,
 }
@@ -192,6 +157,7 @@ fn scan_recordings(dir: &Path, out: &mut Vec<RecentItem>) {
                 clip_count: item.clip_count,
                 sort_time_millis: item.sort_time_millis,
                 thumbnail: item.thumbnail,
+                thumbnail_version: item.thumbnail_version,
                 sharing: item.sharing,
                 bundle: item.path,
             }),
@@ -286,6 +252,7 @@ pub struct RecordingItem {
     /// `${path}/screenshots/display.jpg`, existence-checked here rather than
     /// left to an `<img onError>`.
     pub thumbnail: Option<PathBuf>,
+    pub thumbnail_version: Option<u128>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -354,7 +321,12 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
         }
     };
 
-    let thumbnail = bundle_thumbnail_path(&path);
+    let preview = path.join("screenshots/preview.jpg");
+    let thumbnail = if preview.is_file() {
+        preview
+    } else {
+        bundle_thumbnail_path(&path)
+    };
     let upload = crate::upload::queue::status(&path, &meta);
     RecordingItem {
         upload,
@@ -364,6 +336,7 @@ fn recording_item(path: PathBuf, meta: RecordingMeta, sort_time_millis: f64) -> 
         pretty_name: meta.pretty_name,
         sharing: meta.sharing.map(|sharing| sharing.link),
         sort_time_millis,
+        thumbnail_version: source_mtime_nanos(&thumbnail),
         thumbnail: thumbnail.is_file().then_some(thumbnail),
         path,
     }
@@ -774,6 +747,7 @@ fn scan_screenshots(dir: &Path, out: &mut Vec<RecentItem>) {
         pretty_name: item.pretty_name,
         clip_count: 1,
         sort_time_millis: item.sort_time_millis,
+        thumbnail_version: item.thumbnail.as_deref().and_then(source_mtime_nanos),
         thumbnail: item.thumbnail,
         sharing: None,
     }));
@@ -939,7 +913,8 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 /// it -- the extension scans in both apps are over the *screenshot* bundle
 /// root and the app-data screenshots dir, neither of which is this.
 fn is_bundle_display(path: &Path) -> bool {
-    path.file_name().is_some_and(|name| name == "display.jpg")
+    path.file_name()
+        .is_some_and(|name| name == "display.jpg" || name == "preview.jpg")
         && path
             .parent()
             .and_then(Path::file_name)
@@ -968,7 +943,11 @@ impl CacheSlot {
         if is_bundle_display(source) {
             return Some(Self {
                 dir: source.parent()?.to_path_buf(),
-                prefix: "thumbnail".to_string(),
+                prefix: if source.file_name().is_some_and(|name| name == "preview.jpg") {
+                    "preview-thumbnail".to_string()
+                } else {
+                    "thumbnail".to_string()
+                },
                 mtime,
             });
         }
@@ -1219,8 +1198,6 @@ pub fn create_screenshot(
     Err("Failed to create screenshot".to_string())
 }
 
-/// `<bundle>/screenshots/display.jpg` -- the one path both apps' Recents look
-/// for.
 pub fn bundle_thumbnail_path(project_dir: &Path) -> PathBuf {
     project_dir.join("screenshots").join("display.jpg")
 }
@@ -1387,6 +1364,27 @@ mod tests {
         assert_eq!(items[0].thumbnail.as_deref(), Some(thumbnail.as_path()));
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn edited_thumbnails_take_precedence_and_change_the_library_revision() {
+        let root = temp_dir("edited-thumbnail");
+        let bundle = write_studio_bundle(&root, "edited", 1);
+        let original = bundle_thumbnail_path(&bundle);
+        std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+        std::fs::write(&original, b"original").unwrap();
+        let before = list_recordings_in(std::slice::from_ref(&root)).remove(0);
+        let preview = bundle.join("screenshots/preview.jpg");
+        std::fs::write(&preview, b"edited preview").unwrap();
+        let after = list_recordings_in(std::slice::from_ref(&root)).remove(0);
+        assert_eq!(before.thumbnail.as_ref(), Some(&original));
+        assert_eq!(after.thumbnail.as_ref(), Some(&preview));
+        assert!(after.thumbnail_version.is_some());
+        assert_ne!(before, after);
+        let recent = recent_media_in(std::slice::from_ref(&root), &root.join("missing"));
+        assert_eq!(recent[0].thumbnail.as_ref(), Some(&preview));
+        assert_eq!(recent[0].thumbnail_version, after.thumbnail_version);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     // -- The settings page's listing ------------------------------------

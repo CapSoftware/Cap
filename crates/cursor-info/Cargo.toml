@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+sha2 = "0.10"
 serde = { version = "1.0.219", features = ["derive"] }
 specta = { workspace = true, features = ["derive"] }
 strum = { version = "0.27.2", features = ["derive"] }
@@ -18,7 +19,6 @@ windows = { workspace = true, features = [
 
 [dev-dependencies]
 hex = "0.4"
-sha2 = "0.10"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc2 = "0.6"

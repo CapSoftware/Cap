@@ -1,3 +1,4 @@
+use crate::RecordingStartGate;
 use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
 use cap_project::{
@@ -292,6 +293,18 @@ fn keycode_to_string(key: &device_query::Keycode) -> (String, String) {
     (display.to_string(), code.to_string())
 }
 
+/// Time zero for cursor, click and key events: the start gate's arm point
+/// when the pipeline was primed ahead of the recording, else the pipeline
+/// epoch. `None` while a primed recording is still waiting for its cue.
+fn input_epoch(start_gate: Option<&RecordingStartGate>, start_time: Timestamps) -> Option<Instant> {
+    match start_gate {
+        Some(gate) => gate
+            .armed_instant()
+            .map(|armed| armed.max(start_time.instant())),
+        None => Some(start_time.instant()),
+    }
+}
+
 #[tracing::instrument(name = "cursor", skip_all)]
 pub fn spawn_cursor_recorder(
     target: CursorCaptureTarget,
@@ -299,6 +312,7 @@ pub fn spawn_cursor_recorder(
     prev_cursors: Cursors,
     next_cursor_id: u32,
     start_time: Timestamps,
+    start_gate: Option<RecordingStartGate>,
     incremental_outputs: IncrementalCaptureOutputs,
 ) -> CursorActor {
     #[cfg(target_os = "linux")]
@@ -365,6 +379,7 @@ pub fn spawn_cursor_recorder(
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
         let mut last_cursor_id: Option<String> = None;
+        let mut awaiting_start = start_gate.is_some();
 
         loop {
             if stop_token_child.is_cancelled() {
@@ -378,11 +393,19 @@ pub fn spawn_cursor_recorder(
                 break;
             }
 
-            let elapsed = start_time.instant().elapsed().as_secs_f64() * 1000.0;
+            let Some(epoch) = input_epoch(start_gate.as_ref(), start_time) else {
+                last_position = cap_cursor_capture::RawCursorPosition::get();
+                last_mouse_state = device_state.get_mouse();
+                last_keys = device_state.get_keys();
+                continue;
+            };
+            let elapsed = epoch.elapsed().as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
 
             let position = cap_cursor_capture::RawCursorPosition::get();
-            let position_changed = position != last_position;
+            // The first sample after the gate opens is always recorded so the
+            // cursor has a known position at the recording's time zero.
+            let position_changed = position != last_position || std::mem::take(&mut awaiting_start);
 
             if position_changed {
                 last_position = position;
@@ -1053,5 +1076,34 @@ fn get_cursor_data() -> Option<CursorData> {
             hotspot: XY::new(hotspot_x, hotspot_y),
             shape: CursorShape::try_from(&cursor_info.hCursor).ok(),
         })
+    }
+}
+
+#[cfg(test)]
+mod input_epoch_tests {
+    use super::*;
+
+    #[test]
+    fn primed_input_waits_for_the_gate_and_then_starts_at_the_arm_point() {
+        let start_time = Timestamps::now();
+        assert_eq!(input_epoch(None, start_time), Some(start_time.instant()));
+
+        let gate = RecordingStartGate::new();
+        assert_eq!(input_epoch(Some(&gate), start_time), None);
+
+        let armed = Timestamps::now() + std::time::Duration::from_millis(250);
+        gate.arm_at(armed);
+        assert_eq!(input_epoch(Some(&gate), start_time), Some(armed.instant()));
+    }
+
+    #[test]
+    fn an_arm_point_before_the_pipeline_epoch_is_clamped_to_it() {
+        let gate = RecordingStartGate::new();
+        gate.arm();
+        let start_time = Timestamps::now() + std::time::Duration::from_millis(250);
+        assert_eq!(
+            input_epoch(Some(&gate), start_time),
+            Some(start_time.instant())
+        );
     }
 }

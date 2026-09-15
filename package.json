@@ -1,6 +1,11 @@
 {
 	"type": "module",
 	"scripts": {
+		"emails:catalog": "bun scripts/emails/manage.ts",
+		"emails:check": "bun scripts/emails/manage.ts --check",
+		"emails:check-loops": "bun scripts/loops/verify.ts",
+		"emails:export": "bun scripts/emails/export-mjml.ts",
+		"emails:logo": "bun scripts/emails/export-logo.ts",
 		"build": "dotenv -e .env -- turbo run build",
 		"build:web": "turbo run build:web",
 		"build:web:docker": "bun run --filter=@cap/web build:docker",
@@ -16,7 +21,7 @@
 		"db:push": "dotenv -e .env -- bun run --filter @cap/database db:push",
 		"db:studio": "dotenv -e .env -- bun run --filter @cap/database db:studio",
 		"dev": "bun run docker:up && trap 'bun run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --env-mode=loose --ui tui",
-		"dev:desktop": "bun run --filter=@cap/desktop dev",
+		"dev:desktop": "bun run --cwd apps/desktop dev",
 		"dev:extension": "bun run docker:up && trap 'bun run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/chrome-extension --env-mode=loose --ui tui",
 		"dev:manual": "bun run docker:up && trap 'bun run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/chrome-extension --no-cache --concurrency 1",
 		"dev:mobile": "bun run docker:up && trap 'bun run docker:stop' EXIT && CAP_MOBILE_DISABLE_ASSOCIATED_DOMAINS=1 EXPO_PUBLIC_CAP_WEB_URL=${EXPO_PUBLIC_CAP_WEB_URL:-http://localhost:3000} dotenv -e .env -- turbo run dev --filter=@cap/web --filter=@cap/mobile --env-mode=loose --ui tui",
@@ -58,11 +63,12 @@
 		"@effect/language-service": "^0.44.0",
 		"dotenv-cli": "latest",
 		"mysql2": "^3.15.2",
+		"react": "19.2.0",
+		"react-dom": "19.2.0",
+		"sharp": "0.35.3",
 		"tsdown": "^0.15.6",
 		"turbo": "^2.3.4",
-		"typescript": "^5.8.3",
-		"react": "19.2.0",
-		"react-dom": "19.2.0"
+		"typescript": "^5.8.3"
 	},
 	"packageManager": "bun@1.4.0",
 	"name": "cap",

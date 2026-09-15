@@ -34,6 +34,7 @@ import {
 	rangeIntersectsClipTransition,
 } from "./clip-transitions";
 import { FPS, useEditorContext } from "./context";
+import { routeEditorPlaybackIntent } from "./playback-intent-routing";
 import { rippleDeleteAllTracks } from "./timeline-utils";
 
 function formatTimePrecise(secs: number) {
@@ -73,6 +74,8 @@ export function TranscriptPanel() {
 		meta,
 		totalDuration,
 		previewResolutionBase,
+		playbackIntent,
+		requestHandoffPlayback,
 	} = useEditorContext();
 
 	const recordingSegments = () => editorInstance.recordings.segments;
@@ -300,12 +303,19 @@ export function TranscriptPanel() {
 				project.timeline?.textSegments,
 			);
 			if (outputTime === null) return;
-			if (editorState.playing) {
-				await commands.stopPlayback();
-				setEditorState("playing", false);
-			}
-			const frame = Math.max(Math.floor(outputTime * FPS), 0);
-			await commands.seekTo(frame);
+			const accepted = await routeEditorPlaybackIntent(
+				requestHandoffPlayback,
+				{ playing: false, seconds: outputTime },
+				async () => {
+					if (editorState.playing) {
+						await commands.stopPlayback();
+						setEditorState("playing", false);
+					}
+					const frame = Math.max(Math.floor(outputTime * FPS), 0);
+					await commands.seekTo(frame);
+				},
+			);
+			if (!accepted) return;
 			batch(() => {
 				setEditorState("previewTime", null);
 				setEditorState("playbackTime", outputTime);
@@ -460,21 +470,30 @@ export function TranscriptPanel() {
 
 	const handlePlayPause = async () => {
 		try {
-			if (isAtEnd()) {
-				await commands.stopPlayback();
-				setEditorState("playbackTime", 0);
-				await commands.seekTo(0);
-				await commands.startPlayback(FPS, previewResolutionBase());
-				setEditorState("playing", true);
-			} else if (editorState.playing) {
-				await commands.stopPlayback();
-				setEditorState("playing", false);
-			} else {
-				await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
-				await commands.startPlayback(FPS, previewResolutionBase());
-				setEditorState("playing", true);
-			}
-			if (editorState.playing) setEditorState("previewTime", null);
+			await routeEditorPlaybackIntent(
+				requestHandoffPlayback,
+				{
+					playing: isAtEnd() || !playbackIntent(),
+					seconds: isAtEnd() ? 0 : editorState.playbackTime,
+				},
+				async () => {
+					if (isAtEnd()) {
+						await commands.stopPlayback();
+						setEditorState("playbackTime", 0);
+						await commands.seekTo(0);
+						await commands.startPlayback(FPS, previewResolutionBase());
+						setEditorState("playing", true);
+					} else if (editorState.playing) {
+						await commands.stopPlayback();
+						setEditorState("playing", false);
+					} else {
+						await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
+						await commands.startPlayback(FPS, previewResolutionBase());
+						setEditorState("playing", true);
+					}
+					if (editorState.playing) setEditorState("previewTime", null);
+				},
+			);
 		} catch (error) {
 			console.error("Error handling play/pause:", error);
 			setEditorState("playing", false);
@@ -482,16 +501,18 @@ export function TranscriptPanel() {
 	};
 
 	createEffect(() => {
-		if (isAtEnd() && editorState.playing) {
-			void commands
-				.stopPlayback()
-				.then(() => {
+		if (isAtEnd() && playbackIntent()) {
+			void routeEditorPlaybackIntent(
+				requestHandoffPlayback,
+				{ playing: false },
+				async () => {
+					await commands.stopPlayback();
 					setEditorState("playing", false);
-				})
-				.catch((error) => {
-					console.error("Error stopping playback:", error);
-					setEditorState("playing", false);
-				});
+				},
+			).catch((error) => {
+				console.error("Error stopping playback:", error);
+				setEditorState("playing", false);
+			});
 		}
 	});
 

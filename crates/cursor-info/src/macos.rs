@@ -225,7 +225,29 @@ impl CursorShapeMacOS {
         })
     }
 
-    /// Derive the cursor type from a hash
+    pub fn from_rgba(width: u32, height: u32, rgba: &[u8]) -> Option<Self> {
+        use sha2::{Digest, Sha256};
+
+        if (width, height) != (64, 64) || rgba.len() != 64 * 64 * 4 {
+            return None;
+        }
+
+        // Older recordings saved these Tahoe images without shape metadata.
+        // Match decoded pixels so PNG encoding differences do not prevent SVG recovery.
+        match format!("{:x}", Sha256::digest(rgba)).as_str() {
+            "396c2b7efc0851133f7803d78a155bf667cc3b74a848470ed16d3f3a34092c04" => {
+                Some(Self::TahoePointingHand)
+            }
+            "e0f0be82a751b8fe54402e760e53c304e77f34f29854ca305a599d0852ab041a" => {
+                Some(Self::TahoeOpenHand)
+            }
+            "02eb891a826aaf55e4d52d6b9359d3c38e0bdbe8884a9a4169134afa54ec0def" => {
+                Some(Self::TahoeClosedHand)
+            }
+            _ => None,
+        }
+    }
+
     /// macOS doesn't allow comparing `NSCursor` instances directly so we hash the image data.
     /// macOS cursor are also resolution-independent so this works.
     pub fn from_hash(hash: &str) -> Option<Self> {
@@ -268,7 +290,8 @@ impl CursorShapeMacOS {
             "24ae740b1b618e08ccf3f54375e6f072da5eb47048426460d0500e21a8be0963" => {
                 Self::ContextualMenu
             }
-            "e8dcb6cb19ebfa9336297a61950674a365e19ff01b8bf1a327a2f83851f3bc6c" => {
+            "e8dcb6cb19ebfa9336297a61950674a365e19ff01b8bf1a327a2f83851f3bc6c"
+            | "96c9bc41e07a6aa881f8026505e04ae5aaa3ae2699cbb4ddd3590ec416feef65" => {
                 Self::TahoeClosedHand
             }
             "c5bc204d864e56fce70bca01f309b6cf21e1c77b4389c32883c1c140621bc024" => {
@@ -284,13 +307,15 @@ impl CursorShapeMacOS {
                 Self::TahoeDragLink
             }
             "3de4a52b22f76f28db5206dc4c2219dff28a6ee5abfb9c5656a469f2140f7eaa" => Self::TahoeIBeam,
-            "e335333967dc50a93683f85da145e3e4858f0618a81e5d2ca93d496d9159fbf1" => {
+            "e335333967dc50a93683f85da145e3e4858f0618a81e5d2ca93d496d9159fbf1"
+            | "472712b01b8a560f40e726a2360e06b395238fa4a289787c7ff8935ba90f5151" => {
                 Self::TahoeOpenHand
             }
             "57f34c3b50a051f7504b165226f552d009378f1cd20f16ba6568216f3982fd59" => {
                 Self::TahoeOperationNotAllowed
             }
-            "65d626a50079c3111f3c3da9ad8a98220331a592332e00afcf61c0c9c77402f2" => {
+            "65d626a50079c3111f3c3da9ad8a98220331a592332e00afcf61c0c9c77402f2"
+            | "533657ebca7c00fa1b6bde9b53a62a64eba792e9889f37d1313395c135af93bb" => {
                 Self::TahoePointingHand
             }
             // As calculated from `NSCursor` directly
@@ -411,5 +436,43 @@ impl CursorShapeMacOS {
             Self::OpenHand | Self::ClosedHand => CursorShapeWindows::SizeAll,
             _ => CursorShapeWindows::Arrow,
         }
+    }
+}
+
+#[cfg(test)]
+mod detection_tests {
+    use super::*;
+
+    #[test]
+    fn current_tahoe_hand_images_are_recognized() {
+        for (hash, expected) in [
+            (
+                "533657ebca7c00fa1b6bde9b53a62a64eba792e9889f37d1313395c135af93bb",
+                CursorShapeMacOS::TahoePointingHand,
+            ),
+            (
+                "472712b01b8a560f40e726a2360e06b395238fa4a289787c7ff8935ba90f5151",
+                CursorShapeMacOS::TahoeOpenHand,
+            ),
+            (
+                "96c9bc41e07a6aa881f8026505e04ae5aaa3ae2699cbb4ddd3590ec416feef65",
+                CursorShapeMacOS::TahoeClosedHand,
+            ),
+        ] {
+            assert_eq!(CursorShapeMacOS::from_hash(hash), Some(expected));
+        }
+    }
+
+    #[test]
+    fn custom_pixels_and_invalid_dimensions_are_not_classified() {
+        assert_eq!(
+            CursorShapeMacOS::from_rgba(64, 64, &vec![0; 64 * 64 * 4]),
+            None
+        );
+        assert_eq!(
+            CursorShapeMacOS::from_rgba(32, 128, &vec![0; 64 * 64 * 4]),
+            None
+        );
+        assert_eq!(CursorShapeMacOS::from_rgba(64, 64, &[0]), None);
     }
 }

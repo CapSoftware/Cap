@@ -276,7 +276,17 @@ pub fn stop_app_on_panic<F: FnOnce() -> R + UnwindSafe, R>(
   panic_info: Weak<PanicInfo>,
   f: F,
 ) -> Option<R> {
-  match catch_unwind(f) {
+  // An Objective-C exception raised inside the callback would otherwise
+  // unwind through Rust frames, which aborts the process with no message.
+  // Catch it, log what AppKit actually complained about, and route it through
+  // the regular panic path so the crash is diagnosable.
+  match catch_unwind(move || match objc2::exception::catch(f) {
+    Ok(r) => r,
+    Err(exception) => {
+      eprintln!("tao: Objective-C exception in run loop callback: {exception:?}");
+      panic!("Objective-C exception in tao callback");
+    }
+  }) {
     Ok(r) => Some(r),
     Err(e) => {
       // It's important that we set the panic before requesting a `stop`

@@ -205,6 +205,8 @@ export function Timeline(props: {
 		meta,
 		previewResolutionBase,
 		canvasControls,
+		playbackIntent,
+		requestHandoffPlayback,
 	} = useEditorContext();
 
 	const duration = () => editorInstance.recordingDuration;
@@ -281,7 +283,6 @@ export function Timeline(props: {
 	const openAudioPicker = (laneIndex: number) => {
 		batch(() => {
 			setEditorState("timeline", "selection", null);
-			setEditorState("timeline", "camera3dSetup", null);
 			setEditorState("timeline", "audioPicker", laneIndex);
 		});
 	};
@@ -444,18 +445,13 @@ export function Timeline(props: {
 		}
 
 		if (type === "3d") {
-			if (next && !project.timeline?.camera3dSegments?.length) {
-				projectActions.startCamera3DSetup();
-				return;
-			}
+			// Turning the track on just shows the lane: the lane itself offers the
+			// auto scene and the first shot.
 			batch(() => {
 				setEditorState("timeline", "tracks", "3d", next);
 				if (!next && editorState.timeline.selection?.type === "3d") {
 					setEditorState("timeline", "selection", null);
 				}
-				// The setup flow lives on the track it is previewing, so hiding the
-				// track takes its sidebar panel with it.
-				if (!next) setEditorState("timeline", "camera3dSetup", null);
 			});
 			return;
 		}
@@ -1016,6 +1012,11 @@ export function Timeline(props: {
 	}
 
 	async function seekPlayheadTo(newTime: number) {
+		const pending = requestHandoffPlayback(playbackIntent(), newTime);
+		if (pending) {
+			await pending;
+			return;
+		}
 		// If playing, some backends require restart to seek reliably
 		if (editorState.playing) {
 			try {
@@ -1141,7 +1142,6 @@ export function Timeline(props: {
 					batch(() => {
 						setEditorState("timeline", "selection", null);
 						setEditorState("timeline", "audioPicker", null);
-						setEditorState("timeline", "camera3dSetup", null);
 					});
 					dispose();
 				},
@@ -1209,12 +1209,25 @@ export function Timeline(props: {
 				for (const index of [...selection.indices].sort((a, b) => b - a))
 					projectActions.splitOverlaySegment(type, index, time);
 				resumeHistory();
+			} else if (selection?.type === "3d") {
+				// Only a selected shot the playhead is actually inside can be cut;
+				// anything else falls through to cutting the clip underneath.
+				const segments = project.timeline?.camera3dSegments ?? [];
+				const index = [...selection.indices]
+					.sort((a, b) => b - a)
+					.find((idx) => {
+						const segment = segments[idx];
+						return !!segment && time > segment.start && time < segment.end;
+					});
+				const segment = index === undefined ? undefined : segments[index];
+				if (index !== undefined && segment)
+					projectActions.splitCamera3DSegment(index, time - segment.start);
+				else projectActions.splitClipSegment(time);
 			} else projectActions.splitClipSegment(time);
 		} else if (e.code === "Escape" && hasNoModifiers) {
 			// Deselect all selected segments
 			setEditorState("timeline", "selection", null);
 			setEditorState("timeline", "audioPicker", null);
-			setEditorState("timeline", "camera3dSetup", null);
 		} else if (
 			e.code === "KeyA" &&
 			(e.metaKey || e.ctrlKey) &&
@@ -1312,7 +1325,6 @@ export function Timeline(props: {
 							if (zoomSegmentDragState.type === "idle") {
 								setEditorState("timeline", "selection", null);
 								setEditorState("timeline", "audioPicker", null);
-								setEditorState("timeline", "camera3dSetup", null);
 							}
 						});
 						createEventListener(window, "mouseup", () => {
@@ -1322,7 +1334,7 @@ export function Timeline(props: {
 				}}
 				onMouseMove={(e) => {
 					const metrics = getTimelineContentMetrics();
-					if (editorState.playing) return;
+					if (playbackIntent()) return;
 					if (!metrics || metrics.width <= 0) return;
 					const offsetX = e.clientX - metrics.left;
 					if (offsetX < 0 || offsetX > metrics.width) {
@@ -1393,7 +1405,7 @@ export function Timeline(props: {
 				</div>
 				<Show
 					when={
-						!editorState.playing &&
+						!playbackIntent() &&
 						editorState.previewTime !== null &&
 						editorState.timeline.splitPreview === null
 							? { time: editorState.previewTime }
@@ -1623,7 +1635,7 @@ export function Timeline(props: {
 											: undefined
 									}
 									deleteLabel="Clear all"
-									deleteTitle="Delete all 3D segments"
+									deleteTitle="Delete all 3D shots"
 								>
 									<ThreeDTrack
 										onDragStateChanged={(v) => {
@@ -1788,7 +1800,6 @@ function TrackRow(props: {
 		batch(() => {
 			setEditorState("timeline", "audioPicker", null);
 			setEditorState("timeline", "audioReplace", null);
-			setEditorState("timeline", "camera3dSetup", null);
 			setEditorState(
 				"timeline",
 				"selection",

@@ -1,6 +1,6 @@
 use cap_recording::oop_muxer::{
-    MuxerSubprocess, MuxerSubprocessConfig, RespawningMuxerSubprocess, VideoStreamInit,
-    resolve_muxer_binary,
+    AudioStreamInit, MuxerSubprocess, MuxerSubprocessConfig, RespawningMuxerSubprocess,
+    VideoStreamInit, resolve_muxer_binary,
 };
 use std::path::PathBuf;
 use std::sync::Once;
@@ -14,8 +14,13 @@ static MUXER_BINARY: Once = Once::new();
 
 fn setup_muxer_binary() -> PathBuf {
     let workspace = env!("CARGO_MANIFEST_DIR");
-    let target_debug = PathBuf::from(workspace).join("../../target/debug/cap-muxer");
-    let target_release = PathBuf::from(workspace).join("../../target/release/cap-muxer");
+    let binary_name = format!("cap-muxer{}", std::env::consts::EXE_SUFFIX);
+    let target_debug = PathBuf::from(workspace)
+        .join("../../target/debug")
+        .join(&binary_name);
+    let target_release = PathBuf::from(workspace)
+        .join("../../target/release")
+        .join(binary_name);
 
     for candidate in [target_debug, target_release] {
         if candidate.exists() {
@@ -64,24 +69,134 @@ fn subprocess_spawns_and_finishes_cleanly_without_packets() {
     assert_eq!(report.packets_written, 0);
 }
 
+fn empty_audio_init() -> AudioStreamInit {
+    AudioStreamInit {
+        codec: "aac".into(),
+        sample_rate: 48_000,
+        channels: 2,
+        sample_format: "fltp".into(),
+        time_base: (1, 48_000),
+        extradata: vec![0x11, 0x90],
+    }
+}
+
+#[test]
+fn empty_audio_and_combined_streams_preserve_initialization_files() {
+    let binary = setup_muxer_binary();
+    for with_video in [false, true] {
+        let directory = TempDir::new().unwrap();
+        let output = directory.path().join("output");
+        let mut config = minimal_video_config(&output, Vec::new());
+        if !with_video {
+            config.video_init = None;
+        }
+        config.audio_init = Some(empty_audio_init());
+        config.init_segment_name = "init_$RepresentationID$.mp4".into();
+        let subprocess = MuxerSubprocess::spawn(binary.clone(), config, None).unwrap();
+        let report = subprocess.finish().unwrap();
+        assert_eq!(report.exit_code, Some(0));
+        assert_eq!(report.packets_written, 0);
+        assert!(output.join("init_0.mp4").is_file());
+        assert_eq!(output.join("init_1.mp4").is_file(), with_video);
+        assert!(
+            std::fs::read(output.join("dash_manifest.mpd"))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!output.join("dash_manifest.mpd.tmp").exists());
+    }
+}
+
+#[test]
+fn discarded_packets_before_first_video_keyframe_leave_a_clean_empty_output() {
+    let directory = TempDir::new().unwrap();
+    let output = directory.path().join("output");
+    let mut config = minimal_video_config(&output, Vec::new());
+    config.audio_init = Some(empty_audio_init());
+    config.init_segment_name = "init_$RepresentationID$.mp4".into();
+    let mut subprocess = MuxerSubprocess::spawn(setup_muxer_binary(), config, None).unwrap();
+    subprocess
+        .write_video_packet(0, 0, 3_000, false, &[1, 2, 3])
+        .unwrap();
+    subprocess
+        .write_audio_packet(0, 0, 1_024, &[4, 5, 6])
+        .unwrap();
+    let report = subprocess.finish().unwrap();
+    assert_eq!(report.exit_code, Some(0));
+    assert_eq!(report.packets_written, 2);
+    assert!(output.join("init_0.mp4").is_file());
+    assert!(output.join("init_1.mp4").is_file());
+    assert!(
+        std::fs::read(output.join("dash_manifest.mpd"))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(std::fs::read_dir(&output).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".m4s")
+    }));
+}
+
 #[test]
 fn subprocess_exits_after_finish_or_abort_without_waiting_for_stdin_eof() {
-    use cap_muxer_protocol::{Frame, write_frame};
+    use cap_muxer_protocol::{Frame, InitVideo, StartParams, write_frame};
     use std::io::Write;
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
     let binary = setup_muxer_binary();
-    for (frame, expected_exit) in [(Frame::Finish, 0), (Frame::Abort("test".into()), 40)] {
+    for (initialized, frame, expected_exit) in [
+        (false, Some(Frame::Finish), 0),
+        (false, Some(Frame::Abort("test".into())), 40),
+        (true, Some(Frame::Finish), 0),
+        (true, Some(Frame::Abort("test".into())), 40),
+        (true, None, 0),
+    ] {
+        let directory = TempDir::new().unwrap();
         let mut child = Command::new(&binary)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let mut stdin = child.stdin.take().unwrap();
-        write_frame(&mut stdin, &frame).unwrap();
-        stdin.flush().unwrap();
+        let mut stdin = child.stdin.take();
+        let writer = stdin.as_mut().unwrap();
+        if initialized {
+            write_frame(
+                writer,
+                &Frame::InitVideo(InitVideo {
+                    codec: "libx264".into(),
+                    width: TEST_WIDTH,
+                    height: TEST_HEIGHT,
+                    frame_rate_num: TEST_FPS as i32,
+                    frame_rate_den: 1,
+                    time_base_num: 1,
+                    time_base_den: 90_000,
+                    extradata: Vec::new(),
+                    segment_duration_ms: 2_000,
+                }),
+            )
+            .unwrap();
+            write_frame(
+                writer,
+                &Frame::Start(StartParams {
+                    output_directory: directory.path().to_string_lossy().into_owned(),
+                    init_segment_name: "init.mp4".into(),
+                    media_segment_pattern: "segment_$Number%03d$.m4s".into(),
+                }),
+            )
+            .unwrap();
+        }
+        if let Some(frame) = &frame {
+            write_frame(writer, frame).unwrap();
+            writer.flush().unwrap();
+        } else {
+            writer.flush().unwrap();
+            drop(stdin.take());
+        }
         let started = Instant::now();
         let status = loop {
             if let Some(status) = child.try_wait().unwrap() {
@@ -96,6 +211,9 @@ fn subprocess_exits_after_finish_or_abort_without_waiting_for_stdin_eof() {
         };
         drop(stdin);
         assert_eq!(status.code(), Some(expected_exit));
+        if initialized {
+            assert!(directory.path().join("init.mp4").is_file());
+        }
     }
 }
 
@@ -256,6 +374,15 @@ fn subprocess_survives_finish_after_init_only() {
 
 #[test]
 fn encoder_to_subprocess_end_to_end_produces_playable_init_and_segments() {
+    assert_encoded_recording_survives_finish(60);
+}
+
+#[test]
+fn the_only_encoded_packet_is_flushed_before_empty_output_is_decided() {
+    assert_encoded_recording_survives_finish(1);
+}
+
+fn assert_encoded_recording_survives_finish(frame_count: u64) {
     use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset};
     use cap_enc_ffmpeg::h264_packet::EncodePacketError;
     use cap_media_info::{Pixel, VideoInfo};
@@ -330,7 +457,7 @@ fn encoder_to_subprocess_end_to_end_produces_playable_init_and_segments() {
             })
     }
 
-    for i in 0..60u64 {
+    for i in 0..frame_count {
         let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, 320, 240);
         for plane_idx in 0..frame.planes() {
             let data = frame.data_mut(plane_idx);
@@ -352,11 +479,7 @@ fn encoder_to_subprocess_end_to_end_produces_playable_init_and_segments() {
 
     let report = subprocess.finish().expect("subprocess finish cleanly");
     assert_eq!(report.exit_code, Some(0));
-    assert!(
-        report.packets_written > 0,
-        "expected subprocess to have written at least one packet, got {}",
-        report.packets_written
-    );
+    assert_eq!(report.packets_written, frame_count);
 
     let init_path = output_dir.join("init.mp4");
     assert!(
@@ -370,7 +493,7 @@ fn encoder_to_subprocess_end_to_end_produces_playable_init_and_segments() {
         init_meta.len()
     );
 
-    let mut segment_count = 0u32;
+    let mut segments = Vec::new();
     for entry in std::fs::read_dir(&output_dir).unwrap().flatten() {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
@@ -380,11 +503,45 @@ fn encoder_to_subprocess_end_to_end_produces_playable_init_and_segments() {
                 meta.len() > 0,
                 "segment file {name_str} should be non-empty"
             );
-            segment_count += 1;
+            segments.push(entry.path());
         }
     }
     assert!(
-        segment_count > 0,
-        "expected at least one segment_*.m4s file, got {segment_count}"
+        !segments.is_empty(),
+        "expected at least one segment_*.m4s file"
     );
+    segments.sort();
+    let combined_path = temp_dir.path().join("combined.mp4");
+    let mut combined = std::fs::read(init_path).unwrap();
+    for segment in segments {
+        combined.extend(std::fs::read(segment).unwrap());
+    }
+    std::fs::write(&combined_path, combined).unwrap();
+    let mut input = ffmpeg::format::input(&combined_path).unwrap();
+    let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+    let stream_index = stream.index();
+    let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+        .unwrap()
+        .decoder()
+        .video()
+        .unwrap();
+    let mut decoded_frames = 0;
+    let mut receive_frames = |decoder: &mut ffmpeg::decoder::Video| loop {
+        let mut frame = ffmpeg::frame::Video::empty();
+        match decoder.receive_frame(&mut frame) {
+            Ok(()) => decoded_frames += 1,
+            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => break,
+            Err(ffmpeg::Error::Eof) => break,
+            Err(error) => panic!("Failed to decode finalized recording: {error}"),
+        }
+    };
+    for (stream, packet) in input.packets() {
+        if stream.index() == stream_index {
+            decoder.send_packet(&packet).unwrap();
+            receive_frames(&mut decoder);
+        }
+    }
+    decoder.send_eof().unwrap();
+    receive_frames(&mut decoder);
+    assert_eq!(decoded_frames, frame_count);
 }

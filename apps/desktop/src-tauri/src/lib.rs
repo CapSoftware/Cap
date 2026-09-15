@@ -17,6 +17,8 @@ mod clip_thumbnails;
 mod crash_sentinel;
 mod deeplink_actions;
 mod diagnostics;
+mod editor_preparing;
+mod editor_recording;
 mod editor_window;
 mod exit_shutdown;
 mod export;
@@ -32,6 +34,7 @@ pub mod linux_instant_camera;
 mod logging;
 #[cfg(target_os = "macos")]
 mod macos_save_panel;
+mod main_window_geometry;
 mod notifications;
 mod panel_manager;
 mod permissions;
@@ -39,6 +42,7 @@ mod permissions;
 mod picker_benchmark;
 mod platform;
 mod power_observer;
+mod preparing_finalization;
 mod presets;
 mod recording;
 mod recording_settings;
@@ -46,6 +50,9 @@ mod recording_telemetry;
 mod recordings_locations;
 mod recovery;
 mod screenshot_editor;
+mod startup;
+#[cfg(debug_assertions)]
+mod stop_editor_benchmark;
 mod target_select_overlay;
 mod telemetry;
 mod thumbnails;
@@ -160,6 +167,7 @@ const MAX_SETTLED_FINALIZATIONS: usize = 32;
 struct FinalizingRecordingsMap {
     attempts: std::collections::HashMap<ProjectObjectId, Arc<FinalizationAttempt>>,
     settled: std::collections::VecDeque<(ProjectObjectId, String)>,
+    last_preparing_generation: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -173,6 +181,10 @@ struct FinalizationAttempt {
     origin: FinalizationOrigin,
     project: Arc<FinalizationProject>,
     result: watch::Sender<FinalizationResult>,
+    preparing_generation: Option<u64>,
+    preparing_presentation:
+        watch::Sender<Option<Result<Arc<cap_project::ProjectConfiguration>, String>>>,
+    preparing: watch::Sender<preparing_finalization::PreparingFinalizationState>,
 }
 
 pub(crate) struct FinalizationToken {
@@ -975,6 +987,7 @@ impl FinalizingRecordings {
         project: Arc<FinalizationProject>,
         retry_failed: bool,
         origin: FinalizationOrigin,
+        preparing_requested: bool,
     ) -> Result<FinalizationRequest, String> {
         if project.access != FinalizationAccess::Write {
             return Err("Recording directory was not admitted for recovery.".into());
@@ -992,11 +1005,23 @@ impl FinalizingRecordings {
         {
             return Ok(FinalizationRequest::Existing(attempt.result.subscribe()));
         }
+        let preparing_generation = if preparing_requested
+            && origin == FinalizationOrigin::Recording
+            && let Some(generation) = recordings.last_preparing_generation.checked_add(1)
+        {
+            recordings.last_preparing_generation = generation;
+            Some(generation)
+        } else {
+            None
+        };
         let attempt = Arc::new(FinalizationAttempt {
             id: uuid::Uuid::new_v4().to_string(),
             origin,
             project,
             result: watch::channel(None).0,
+            preparing_generation,
+            preparing_presentation: watch::channel(None).0,
+            preparing: watch::channel(Default::default()).0,
         });
         recordings
             .settled
@@ -1014,8 +1039,9 @@ impl FinalizingRecordings {
         &self,
         project: Arc<FinalizationProject>,
         origin: FinalizationOrigin,
+        preparing_requested: bool,
     ) -> Result<FinalizationToken, String> {
-        match self.request(project, true, origin)? {
+        match self.request(project, true, origin, preparing_requested)? {
             FinalizationRequest::Started(token) => Ok(token),
             FinalizationRequest::Existing(_) => Err(
                 "This recording is already being prepared. Please wait for it to finish.".into(),
@@ -1027,14 +1053,14 @@ impl FinalizingRecordings {
         &self,
         project: Arc<FinalizationProject>,
     ) -> Result<FinalizationToken, String> {
-        self.start_with_origin(project, FinalizationOrigin::Recording)
+        self.start_with_origin(project, FinalizationOrigin::Recording, true)
     }
 
     pub(crate) fn start_recovering(
         &self,
         project: Arc<FinalizationProject>,
     ) -> Result<FinalizationToken, String> {
-        self.start_with_origin(project, FinalizationOrigin::Recovery)
+        self.start_with_origin(project, FinalizationOrigin::Recovery, false)
     }
 
     pub(crate) async fn recovery_success(&self, path: &Path) -> Result<Option<String>, String> {
@@ -1236,11 +1262,16 @@ impl<T: Clone> RequestedInput<T> {
         self.revision
     }
 
-    fn begin_or_join(&mut self, value: Option<T>, configuration: serde_json::Value) -> (u64, bool)
+    fn begin_or_join(
+        &mut self,
+        value: Option<T>,
+        configuration: serde_json::Value,
+        recording_starting: bool,
+    ) -> (u64, bool)
     where
         T: PartialEq,
     {
-        if self.pending
+        if (self.pending || (recording_starting && self.error.is_none()))
             && self.value == value
             && self.configuration.as_ref() == Some(&configuration)
         {
@@ -1939,12 +1970,14 @@ async fn set_mic_input(
     let settings = label.as_ref().and_then(|label| {
         recording_settings::RecordingSettingsStore::microphone_settings_for(&app_handle, label)
     });
-    let (revision, joined) = requested
-        .inner
-        .lock()
-        .unwrap()
-        .microphone
-        .begin_or_join(label.clone(), serde_json::json!(settings));
+    let (revision, joined) = {
+        let state = state.read().await;
+        requested.inner.lock().unwrap().microphone.begin_or_join(
+            label.clone(),
+            serde_json::json!(settings),
+            matches!(state.recording_state, RecordingState::Pending { .. }),
+        )
+    };
     if joined {
         return wait_for_existing_input(revision, "Microphone", || {
             requested.inner.lock().unwrap().microphone.clone()
@@ -2343,10 +2376,14 @@ async fn set_camera_input(
     let settings = id.as_ref().and_then(|id| {
         recording_settings::RecordingSettingsStore::camera_settings_for(&app_handle, id)
     });
-    let (revision, joined) = requested.inner.lock().unwrap().camera.begin_or_join(
-        id.clone(),
-        serde_json::json!((settings, skip_camera_window.unwrap_or(false))),
-    );
+    let (revision, joined) = {
+        let state = state.read().await;
+        requested.inner.lock().unwrap().camera.begin_or_join(
+            id.clone(),
+            serde_json::json!((settings, skip_camera_window.unwrap_or(false))),
+            matches!(state.recording_state, RecordingState::Pending { .. }),
+        )
+    };
     if joined {
         return wait_for_existing_input(revision, "Camera", || {
             requested.inner.lock().unwrap().camera.clone()
@@ -3378,6 +3415,17 @@ async fn cleanup_app_resources_for_exit(app: &AppHandle) {
     fake_window::cancel_all_fake_window_listeners(app);
     close_target_select_overlays(app);
 
+    let preparing = app
+        .state::<editor_preparing::PreparingConsumers>()
+        .inner()
+        .clone();
+    let _ = await_exit_step(
+        "dispose_preparing_editor_frames",
+        APP_EXIT_STEP_TIMEOUT,
+        preparing.dispose_all(),
+    )
+    .await;
+
     let app_for_pending_editors = app.clone();
     let _ = await_exit_step(
         "dispose_pending_editor_instances",
@@ -3544,10 +3592,13 @@ fn with_idle_app_for_title_flush<T>(
             if has_pending_finalizations(&recordings) {
                 return Err(ExitBlocked::FinalizationActive);
             }
-            if include_exports
-                && (export::export_session_active() || upload::upload_session_active())
-            {
-                return Err(ExitBlocked::ExportActive);
+            if include_exports {
+                if export::export_session_active() {
+                    return Err(ExitBlocked::ExportActive);
+                }
+                if upload::upload_session_active() {
+                    return Err(ExitBlocked::UploadActive);
+                }
             }
             Ok(())
         },
@@ -4674,10 +4725,50 @@ async fn stop_playback(editor_instance: WindowEditorInstance) -> Result<(), Stri
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn commit_editor_preparing_frame(
+    editor_instance: WindowEditorInstance,
+    instance_id: String,
+    frame_number: u32,
+    fps: u32,
+) -> Result<bool, String> {
+    editor_instance.commit_preparing_frame(&instance_id, frame_number, fps)
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn start_editor_handoff_playback(
+    editor_instance: WindowEditorInstance,
+    instance_id: String,
+    frame_number: u32,
+    fps: u32,
+    resolution_base: XY<u32>,
+) -> Result<String, String> {
+    editor_instance
+        .start_handoff_playback(&instance_id, frame_number, fps, resolution_base)
+        .await
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn stop_editor_handoff_playback(
+    editor_instance: WindowEditorInstance,
+    instance_id: String,
+    playback_id: String,
+) -> Result<(), String> {
+    editor_instance
+        .stop_handoff_playback(&instance_id, &playback_id)
+        .await
+}
+
 #[derive(Serialize, Type, Debug)]
 #[serde(rename_all = "camelCase")]
 struct SerializedEditorInstance {
+    instance_id: String,
+    preparing_playback: bool,
     frames_socket_url: String,
+    preparing_snapshot: Option<editor_preparing::PreparingEditorChanged>,
     recording_duration: f64,
     saved_project_config: ProjectConfiguration,
     recordings: Arc<ProjectRecordingsMeta>,
@@ -4711,6 +4802,11 @@ async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstan
     let editor_instance = EditorInstances::get_or_create(&window, path).await?;
 
     Ok(SerializedEditorInstance {
+        instance_id: editor_instance.instance_id.to_string(),
+        preparing_playback: editor_instance.preparing_adoption().is_some(),
+        preparing_snapshot: window
+            .state::<editor_preparing::PreparingConsumers>()
+            .snapshot_for_window(id),
         frames_socket_url: format!("ws://localhost:{}", editor_instance.ws_port),
         recording_duration: editor_instance.recordings.duration(),
         saved_project_config: {
@@ -4761,15 +4857,6 @@ async fn get_recording_meta_by_path(project_path: PathBuf) -> Result<RecordingMe
     RecordingMeta::load_for_project(&project_path).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
-async fn set_editor_recording_target(
-    app: AppHandle,
-    project_path: Option<PathBuf>,
-) -> Result<(), String> {
-    EditorRecordingTarget::set(&app, project_path);
-    Ok(())
-}
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(editor))]
@@ -5109,13 +5196,17 @@ async fn upload_exported_video(
 
     channel.send(UploadProgress { progress: 0.0 }).ok();
 
+    let existing_video_id = upload::reusable_video_id(meta.sharing.as_ref(), meta.upload.as_ref());
     let s3_config = match async {
         let video_id = match mode {
             UploadMode::Initial { pre_created_video } => {
-                if let Some(pre_created) = pre_created_video {
+                if let Some(video_id) = existing_video_id.clone() {
+                    Some(video_id)
+                } else if let Some(pre_created) = pre_created_video {
                     return Ok(pre_created.config);
+                } else {
+                    None
                 }
-                None
             }
             UploadMode::Reupload => {
                 let Some(sharing) = meta.sharing.clone() else {
@@ -5144,6 +5235,13 @@ async fn upload_exported_video(
         Err(err) => return Err(err.to_string()),
     };
 
+    if existing_video_id
+        .as_ref()
+        .is_some_and(|video_id| *video_id != s3_config.id)
+    {
+        return Err("Server did not preserve the existing share link".into());
+    }
+
     let screenshot_path = meta.project_path.join("screenshots/display.jpg");
     meta.upload = Some(UploadMeta::SinglePartUpload {
         video_id: s3_config.id.clone(),
@@ -5152,15 +5250,14 @@ async fn upload_exported_video(
         recording_dir: path.clone(),
     });
     meta.save_for_project()
-        .map_err(|e| error!("Failed to save recording meta: {e}"))
-        .ok();
+        .map_err(|error| format!("Failed to persist upload state: {error}"))?;
 
     match upload_video(
         &app,
         s3_config.id.clone(),
         file_path,
         screenshot_path,
-        metadata,
+        meta.sharing.is_some(),
         Some(channel.clone()),
     )
     .await
@@ -5168,24 +5265,29 @@ async fn upload_exported_video(
         Ok(uploaded_video) => {
             channel.send(UploadProgress { progress: 1.0 }).ok();
 
+            let link = meta
+                .sharing
+                .as_ref()
+                .map(|sharing| sharing.link.clone())
+                .unwrap_or(uploaded_video.link);
+
             meta.upload = Some(UploadMeta::Complete);
             meta.sharing = Some(SharingMeta {
-                link: uploaded_video.link.clone(),
+                link: link.clone(),
                 id: uploaded_video.id.clone(),
                 content_hash: None,
             });
             meta.save_for_project()
-                .map_err(|e| error!("Failed to save recording meta: {e}"))
-                .ok();
+                .map_err(|error| format!("Failed to persist sharing state: {error}"))?;
 
             let _ = app
                 .state::<ArcLock<ClipboardContext>>()
                 .write()
                 .await
-                .set_text(uploaded_video.link.clone());
+                .set_text(link.clone());
 
             NotificationType::ShareableLinkCopied.send(&app);
-            Ok(UploadResult::Success(uploaded_video.link))
+            Ok(UploadResult::Success(link))
         }
         Err(AuthedApiError::UpgradeRequired) => Ok(UploadResult::UpgradeRequired),
         Err(e) => {
@@ -5600,12 +5702,46 @@ fn media_sort_time_millis(path: &Path) -> f64 {
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
-fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMetadata)>, String> {
+async fn list_recordings(
+    app: AppHandle,
+) -> Result<Vec<(PathBuf, RecordingMetaWithMetadata)>, String> {
+    tokio::task::spawn_blocking(move || list_recordings_inner(&app, usize::MAX))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn list_recent_recordings(
+    app: AppHandle,
+) -> Result<Vec<(PathBuf, RecordingMetaWithMetadata)>, String> {
+    tokio::task::spawn_blocking(move || list_recordings_inner(&app, 9))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn newest_valid_media<T, U>(
+    mut candidates: Vec<(T, f64)>,
+    limit: usize,
+    mut load: impl FnMut(T, f64) -> Option<U>,
+) -> Vec<U> {
+    candidates.sort_by(|(_, a), (_, b)| b.total_cmp(a));
+    candidates
+        .into_iter()
+        .filter_map(|(candidate, timestamp)| load(candidate, timestamp))
+        .take(limit)
+        .collect()
+}
+
+fn list_recordings_inner(
+    app: &AppHandle,
+    limit: usize,
+) -> Vec<(PathBuf, RecordingMetaWithMetadata)> {
     // Recordings can live in multiple folders (the active one, the default
     // one, and any previously used custom folders) — scan them all so
     // switching the storage folder never hides existing recordings.
     let mut result = Vec::new();
-    for recordings_dir in recordings_locations::known_recordings_dirs(&app) {
+    for recordings_dir in recordings_locations::known_recordings_dirs(app) {
         let Ok(entries) = std::fs::read_dir(&recordings_dir) else {
             continue;
         };
@@ -5617,15 +5753,15 @@ fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMeta
                 continue;
             }
 
-            if let Ok(meta) = get_recording_meta(path.clone(), FileType::Recording) {
-                result.push((path, meta));
-            }
+            let timestamp = media_sort_time_millis(&path);
+            result.push((path, timestamp));
         }
     }
 
-    result.sort_by(|(_, a), (_, b)| b.sort_time_millis.total_cmp(&a.sort_time_millis));
-
-    Ok(result)
+    newest_valid_media(result, limit, |path, timestamp| {
+        let meta = RecordingMeta::load_for_project(&path).ok()?;
+        Some((path, RecordingMetaWithMetadata::new(meta, timestamp)))
+    })
 }
 
 fn acquire_recording_delete_lock(
@@ -5708,20 +5844,36 @@ async fn delete_recording_directory(app: AppHandle, path: PathBuf) -> Result<(),
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
-fn list_screenshots(app: AppHandle) -> Result<Vec<(PathBuf, ScreenshotMetaWithMetadata)>, String> {
-    let screenshots_dir = screenshots_path(&app);
+async fn list_screenshots(
+    app: AppHandle,
+) -> Result<Vec<(PathBuf, ScreenshotMetaWithMetadata)>, String> {
+    tokio::task::spawn_blocking(move || list_screenshots_inner(&app, usize::MAX))
+        .await
+        .map_err(|error| error.to_string())?
+}
 
-    let mut result = std::fs::read_dir(&screenshots_dir)
+#[tauri::command]
+#[specta::specta]
+async fn list_recent_screenshots(
+    app: AppHandle,
+) -> Result<Vec<(PathBuf, ScreenshotMetaWithMetadata)>, String> {
+    tokio::task::spawn_blocking(move || list_screenshots_inner(&app, 9))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn list_screenshots_inner(
+    app: &AppHandle,
+    limit: usize,
+) -> Result<Vec<(PathBuf, ScreenshotMetaWithMetadata)>, String> {
+    let screenshots_dir = screenshots_path(app);
+
+    let result = std::fs::read_dir(&screenshots_dir)
         .map_err(|e| format!("Failed to read screenshots directory: {e}"))?
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
             if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
-                let meta = match get_recording_meta(path.clone(), FileType::Screenshot) {
-                    Ok(meta) => meta.inner,
-                    Err(_) => return None,
-                };
-
                 let png_path = std::fs::read_dir(&path)
                     .ok()?
                     .filter_map(|e| e.ok())
@@ -5729,22 +5881,27 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(PathBuf, ScreenshotMetaWithMe
                     .map(|e| e.path())?;
 
                 let sort_time_millis = media_sort_time_millis(&png_path);
-                Some((
-                    png_path,
-                    ScreenshotMetaWithMetadata {
-                        inner: meta,
-                        sort_time_millis,
-                    },
-                ))
+                Some(((path, png_path), sort_time_millis))
             } else {
                 None
             }
         })
         .collect::<Vec<_>>();
 
-    result.sort_by(|(_, a), (_, b)| b.sort_time_millis.total_cmp(&a.sort_time_millis));
-
-    Ok(result)
+    Ok(newest_valid_media(
+        result,
+        limit,
+        |(path, png_path), sort_time_millis| {
+            let inner = RecordingMeta::load_for_project(&path).ok()?;
+            Some((
+                png_path,
+                ScreenshotMetaWithMetadata {
+                    inner,
+                    sort_time_millis,
+                },
+            ))
+        },
+    ))
 }
 
 #[tauri::command]
@@ -6407,16 +6564,31 @@ pub async fn open_target_picker(
     let state = app.state::<target_select_overlay::WindowFocusManager>();
     let display_id = None;
 
-    let _ = target_select_overlay::open_target_select_overlays(
+    let session = match target_select_overlay::open_target_select_overlays_for_session(
         app.clone(),
-        state,
+        state.inner(),
         None,
         display_id.clone(),
         Some(target_mode),
     )
-    .await;
+    .await
+    {
+        Ok(session) => session,
+        Err(error) => {
+            warn!(%error, "Failed to open target picker");
+            let _ = ShowCapWindow::Main {
+                init_target_mode: None,
+            }
+            .show(app)
+            .await;
+            return;
+        }
+    };
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    if !state.picker_is_current(session) {
+        return;
+    }
 
     let _ = RequestSetTargetMode {
         target_mode: Some(target_mode),
@@ -6432,6 +6604,13 @@ type FilteredRegistry = tracing_subscriber::layer::Layered<
 
 pub type DynLoggingLayer = Box<dyn tracing_subscriber::Layer<FilteredRegistry> + Send + Sync>;
 type LoggingHandle = tracing_subscriber::reload::Handle<Option<DynLoggingLayer>, FilteredRegistry>;
+
+#[cfg(debug_assertions)]
+pub fn initialize_stop_editor_benchmark(
+    create_log_directory: impl FnOnce(&std::path::Path, &std::path::Path) -> std::io::Result<PathBuf>,
+) -> Result<Option<PathBuf>, String> {
+    stop_editor_benchmark::initialize(create_log_directory)
+}
 
 /// Software recovery exists to break GPU-driver crash loops: a process that died
 /// while wgpu adapter/device initialisation was in flight. Any other unexpected
@@ -6605,6 +6784,7 @@ fn specta_builder() -> tauri_specta::Builder {
             recording::list_displays_with_thumbnails,
             recording::list_windows_with_thumbnails,
             windows::refresh_window_content_protection,
+            windows::restore_main_window_geometry,
             general_settings::get_default_excluded_windows,
             list_audio_devices,
             list_system_fonts,
@@ -6621,6 +6801,7 @@ fn specta_builder() -> tauri_specta::Builder {
             export::export_video_with_id,
             export::export_video_to_file,
             export::get_export_estimates,
+            export::cancel_export_estimates,
             export::generate_export_preview,
             export::generate_export_preview_fast,
             import::start_video_import,
@@ -6635,6 +6816,11 @@ fn specta_builder() -> tauri_specta::Builder {
             open_file_path,
             get_video_metadata,
             create_editor_instance,
+            editor_preparing::create_preparing_editor_frame,
+            editor_preparing::get_preparing_editor_state,
+            editor_preparing::seek_preparing_editor,
+            editor_preparing::set_preparing_editor_playing,
+            editor_preparing::stop_preparing_editor_frame,
             get_editor_project_path,
             get_mic_waveforms,
             get_system_audio_waveforms,
@@ -6643,6 +6829,9 @@ fn specta_builder() -> tauri_specta::Builder {
             audio_library::import_audio_track_file,
             start_playback,
             stop_playback,
+            commit_editor_preparing_frame,
+            start_editor_handoff_playback,
+            stop_editor_handoff_playback,
             set_playhead_position,
             set_project_config,
             update_project_config_in_memory,
@@ -6666,7 +6855,9 @@ fn specta_builder() -> tauri_specta::Builder {
             get_recording_meta,
             save_file_dialog,
             list_recordings,
+            list_recent_recordings,
             list_screenshots,
+            list_recent_screenshots,
             check_upgraded_and_update,
             open_external_link,
             hotkeys::set_hotkey,
@@ -6693,7 +6884,9 @@ fn specta_builder() -> tauri_specta::Builder {
             set_window_transparent,
             get_editor_meta,
             get_recording_meta_by_path,
-            set_editor_recording_target,
+            editor_recording::open_editor_recording_main,
+            editor_recording::cancel_editor_recording_flow,
+            editor_recording::get_editor_recording_target,
             delete_recording_directory,
             set_pretty_name,
             set_server_url,
@@ -6722,6 +6915,8 @@ fn specta_builder() -> tauri_specta::Builder {
             captions::export_captions_srt,
             target_select_overlay::open_target_select_overlays,
             target_select_overlay::close_target_select_overlays,
+            target_select_overlay::target_select_overlay_ready,
+            target_select_overlay::suspend_target_select_overlays,
             target_select_overlay::update_camera_overlay_bounds,
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,
@@ -6746,9 +6941,11 @@ fn specta_builder() -> tauri_specta::Builder {
             RecordingOptionsChanged,
             NewStudioRecordingAdded,
             EditorRecordingAdded,
+            editor_recording::EditorRecordingFlowChanged,
             NewScreenshotAdded,
             RenderFrameEvent,
             EditorStateChanged,
+            editor_preparing::PreparingEditorChanged,
             FrameLayoutEvent,
             CurrentRecordingChanged,
             RecordingStarted,
@@ -6802,6 +6999,7 @@ fn specta_builder() -> tauri_specta::Builder {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
+    let startup = startup::Startup::default();
     // Arm the unexpected-termination sentinel before anything else can crash, and
     // report any previous session that died without a clean shutdown.
     let previous_termination = crash_sentinel::init(&logs_dir, env!("CARGO_PKG_VERSION"));
@@ -6915,6 +7113,14 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .plugin(tauri_nspanel::init());
 
     let builder = builder
+        .manage(startup)
+        .on_page_load(|webview, payload| {
+            if webview.label() == "onboarding"
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
+            {
+                webview.app_handle().state::<startup::Startup>().mark_ready();
+            }
+        })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -6976,6 +7182,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         })
         .setup(move |app| {
             let app = app.handle().clone();
+            #[cfg(debug_assertions)]
+            stop_editor_benchmark::validate_app_identifier(&app.config().identifier)?;
             #[cfg(target_os = "macos")]
             let _startup_open_guard = app
                 .try_state::<StartupOpenGate>()
@@ -7039,6 +7247,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(EditorWindowIds::default());
             app.manage(ScreenshotEditorWindowIds::default());
             app.manage(EditorRecordingTarget::default());
+            app.manage(editor_recording::EditorRecordingFlowState::default());
             #[cfg(target_os = "macos")]
             app.manage(crate::platform::ScreenCapturePrewarmer::default());
             #[cfg(target_os = "macos")]
@@ -7047,6 +7256,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(http_client::RetryableHttpClient::default());
             app.manage(PendingScreenshots::default());
             app.manage(FinalizingRecordings::default());
+            app.manage(editor_preparing::PreparingConsumers::default());
             app.manage(updates::UpdatesState::default());
             updates::spawn_background_loop(app.clone());
             app.manage(upload_health::UploadHealthCache::default());
@@ -7215,6 +7425,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 move |_| {
                     app.state::<MainWindowReadyState>().set_ready(true);
                     tracing::info!("Main window frontend ready");
+                    app.state::<startup::Startup>().mark_ready();
+                    #[cfg(debug_assertions)]
+                    stop_editor_benchmark::run(app.clone());
                     #[cfg(debug_assertions)]
                     picker_benchmark::run(app.clone());
                     gpu_context::prewarm_gpu();
@@ -7247,10 +7460,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             window_position_persistence::install(&app);
 
             tokio::spawn(check_notification_permissions(app.clone()));
-
-            println!("Checking startup completion and permissions...");
-            let permissions = permissions::do_permissions_check(false);
-            println!("Permissions check result: {permissions:?}");
 
             tokio::spawn({
                 let app = app.clone();
@@ -7412,64 +7621,10 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     });
                                 }
                                 CapWindowId::Main => {
-                                api.prevent_close();
-                                clean_capture::cancel_closed_preflight(app);
-                                hide_main_window(app);
-
-                                #[cfg(target_os = "macos")]
-                                crate::permissions::schedule_macos_dock_visibility_sync(app);
-
-                                let Some(state) = app.try_state::<ArcLock<App>>() else {
-                                    warn!("App state unavailable during main window close request");
-                                    return;
-                                };
-                                let is_recording = state
-                                    .try_read()
-                                    .map(|s| s.is_recording_active_or_pending())
-                                    .unwrap_or(true);
-
-                                if !is_recording {
-                                    if let Some(camera_window) = CapWindowId::Camera.get(app) {
-                                        let _ = camera_window.hide();
-                                    }
-
-                                    close_target_select_overlays(app);
-
-                                    let app = app.clone();
-                                    spawn_on_runtime(async move {
-                                        let Some(state) = app.try_state::<ArcLock<App>>() else {
-                                            warn!("App state unavailable during main window close cleanup");
-                                            return;
-                                        };
-
-                                        let (mic_feed, camera_feed) = {
-                                            let mut app_state = state.write().await;
-                                            app_state.camera_preview.pause();
-                                            app_state.applied_mic_input.invalidate();
-                                            (
-                                                app_state.mic_feed.clone(),
-                                                app_state.camera_feed.clone(),
-                                            )
-                                        };
-
-                                        let _ = tokio::time::timeout(
-                                            APP_EXIT_STEP_TIMEOUT,
-                                            mic_feed.ask(microphone::RemoveInput),
-                                        )
-                                        .await;
-                                        let _ = tokio::time::timeout(
-                                            APP_EXIT_STEP_TIMEOUT,
-                                            camera_feed.ask(feeds::camera::RemoveInput),
-                                        )
-                                        .await;
-
-                                        let mut app_state = state.write().await;
-                                        app_state.selected_mic_label = None;
-                                        app_state.camera_in_use = false;
-                                    });
+                                    api.prevent_close();
+                                    dismiss_main_window(app);
                                 }
-                            }
-                            _ => {}
+                                _ => {}
                         }
                     }
                 }
@@ -7544,6 +7699,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 });
                             }
                             CapWindowId::Editor { .. } | CapWindowId::ScreenshotEditor { .. } => {
+                                editor_recording::abort_if_editor_gone(app);
                                 restore_main_windows_if_no_editors(app);
                             }
                             CapWindowId::Settings => {
@@ -8287,6 +8443,8 @@ fn retire_project_window(window: &Window, window_id: &CapWindowId) {
     let app = window.app_handle();
     match window_id {
         CapWindowId::Editor { id } => {
+            app.state::<editor_preparing::PreparingConsumers>()
+                .cancel_window(*id, None);
             let window_ids = EditorWindowIds::get(app);
             match window_ids.ids.lock() {
                 Ok(mut ids) => ids.retain(|(_, current_id)| current_id != id),
@@ -8468,6 +8626,17 @@ fn load_upload_resume_candidate(
     path: &std::path::Path,
     mark_crashed: bool,
 ) -> Result<Option<(RecordingMeta, cap_recording::upload_resume::UploadLock)>, String> {
+    load_upload_resume_candidate_at(path, mark_crashed, SystemTime::now())
+}
+
+fn load_upload_resume_candidate_at(
+    path: &std::path::Path,
+    mark_crashed: bool,
+    now: SystemTime,
+) -> Result<Option<(RecordingMeta, cap_recording::upload_resume::UploadLock)>, String> {
+    if !mark_crashed && !upload::recovery_age::eligible(path, now) {
+        return Ok(None);
+    }
     let lock = match upload::acquire_upload_lock(path) {
         Ok(lock) => lock,
         Err(_) => return Ok(None),
@@ -8499,59 +8668,90 @@ fn load_upload_resume_candidate(
             meta.save_for_project().map_err(|error| error.to_string())?;
         }
     }
+    if !upload::recovery_age::eligible(path, now) {
+        return Ok(None);
+    }
     upload::lifecycle::reconcile_reupload(&mut meta).map_err(|error| error.to_string())?;
     Ok(instant_upload_may_resume(&meta.inner).then_some((meta, lock)))
 }
 
 async fn resume_uploads(app: AppHandle, mark_crashed: bool) -> Result<(), String> {
     upload::lifecycle::reap().await;
-    for directory in recordings_locations::known_recordings_dirs(&app) {
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("cap") {
+    if app_is_exiting(&app) || !upload::lifecycle::has_capacity() {
+        return Ok(());
+    }
+    let scan_app = app.clone();
+    let paths = tokio::task::spawn_blocking(move || {
+        let mut paths = Vec::new();
+        for directory in recordings_locations::known_recordings_dirs(&scan_app) {
+            let Ok(entries) = std::fs::read_dir(directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                if app_is_exiting(&scan_app) {
+                    return paths;
+                }
+                let path = entry.path();
+                if path.extension().and_then(|value| value.to_str()) == Some("cap")
+                    && (mark_crashed || upload::recovery_age::eligible(&path, SystemTime::now()))
+                {
+                    paths.push(path);
+                }
+            }
+        }
+        paths
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    for path in paths {
+        if app_is_exiting(&app) || !upload::lifecycle::has_capacity() {
+            break;
+        }
+        let candidate_path = path.clone();
+        let candidate_app = app.clone();
+        let candidate = tokio::task::spawn_blocking(move || {
+            let mark_crashed = mark_crashed
+                && candidate_app
+                    .state::<startup::Startup>()
+                    .predates_launch(&candidate_path);
+            load_upload_resume_candidate(&candidate_path, mark_crashed)
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        let (meta, lock) = match candidate {
+            Ok(Some(candidate)) => candidate,
+            Ok(None) => continue,
+            Err(error) => {
+                warn!(%error, recording = %path.display(), "Recording upload state could not be read; files retained");
                 continue;
             }
-            if !upload::lifecycle::has_capacity() {
-                break;
-            }
-            let (meta, lock) = match load_upload_resume_candidate(&path, mark_crashed) {
-                Ok(Some(candidate)) => candidate,
+        };
+        if matches!(
+            meta.upload,
+            None | Some(UploadMeta::Complete | UploadMeta::Failed { .. })
+        ) {
+            continue;
+        }
+        let fallback_audio = matches!(
+            &meta.inner,
+            RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
+                sample_rate: Some(_),
+                ..
+            })
+        );
+        let required_audio =
+            match upload::lifecycle::resume_audio(&app, &path, fallback_audio).await {
+                Ok(Some(required_audio)) => required_audio,
                 Ok(None) => continue,
                 Err(error) => {
-                    warn!(%error, "Recording upload state could not be read; files retained");
+                    warn!(%error, "Recording upload intent could not be read; files retained");
                     continue;
                 }
             };
-            if matches!(
-                meta.upload,
-                None | Some(UploadMeta::Complete | UploadMeta::Failed { .. })
-            ) {
-                continue;
-            }
-            let fallback_audio = matches!(
-                &meta.inner,
-                RecordingMetaInner::Instant(InstantRecordingMeta::Complete {
-                    sample_rate: Some(_),
-                    ..
-                })
-            );
-            let required_audio =
-                match upload::lifecycle::resume_audio(&app, &path, fallback_audio).await {
-                    Ok(Some(required_audio)) => required_audio,
-                    Ok(None) => continue,
-                    Err(error) => {
-                        warn!(%error, "Recording upload intent could not be read; files retained");
-                        continue;
-                    }
-                };
-            if let Err(error) =
-                upload::lifecycle::resume_existing(app.clone(), meta, lock, required_audio).await
-            {
-                warn!(%error, "Upload retry remains local");
-            }
+        if let Err(error) =
+            upload::lifecycle::resume_existing(app.clone(), meta, lock, required_audio).await
+        {
+            warn!(%error, "Upload retry remains local");
         }
     }
     Ok(())
@@ -8579,18 +8779,46 @@ async fn create_editor_instance_impl(
                 is_software_adapter: shared.is_software_adapter,
             });
 
+    #[cfg(debug_assertions)]
+    let frame_cb: cap_editor::EditorFrameCallback =
+        if stop_editor_benchmark::frame_capture_requested() {
+            let capture_path = path.clone();
+            let mut frame_cb = frame_cb;
+            Box::new(move |output, layout| {
+                stop_editor_benchmark::capture_output(
+                    stop_editor_benchmark::CaptureKind::Ordinary,
+                    &capture_path,
+                    &output,
+                );
+                frame_cb(output, layout);
+            })
+        } else {
+            frame_cb
+        };
+
+    let (audio_output, startup, live_handoff) = app
+        .state::<editor_preparing::PreparingConsumers>()
+        .take_startup(&path)
+        .await?;
     let instance = {
         let app = app.clone();
-        EditorInstance::new(
+        EditorInstance::new_with_startup_inputs(
             path,
             move |state| {
                 let _ = EditorStateChanged::new(state).emit(&app);
             },
             frame_cb,
             shared_device,
+            cap_editor::EditorFrameFormat::Rgba,
+            audio_output,
+            startup,
         )
         .await?
     };
+
+    if let Some(handoff) = &live_handoff {
+        instance.install_preparing_handoff(handoff).await?;
+    }
 
     let event_id = RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();
@@ -8605,21 +8833,73 @@ async fn create_editor_instance_impl(
         }
     });
 
-    instance
-        .preview_tx
-        .send_modify(|v| *v = Some((0, EDITOR_PREVIEW_FPS, default_editor_preview_resolution())));
+    let started = match instance
+        .start_preparing_handoff(EDITOR_PREVIEW_FPS, default_editor_preview_resolution())
+        .await
+    {
+        Ok(started) => started,
+        Err(error) => {
+            app.unlisten(event_id);
+            let cleanup_failed = if let Some(handoff) = &live_handoff {
+                handoff.stop_and_wait().await.cleanup_failed
+            } else {
+                false
+            };
+            instance.dispose().await;
+            return Err(if cleanup_failed {
+                format!(
+                    "Preparing handoff start failed: {error:?}; preparing playback cleanup failed"
+                )
+            } else {
+                format!("Preparing handoff start failed: {error:?}")
+            });
+        }
+    };
+    if !started {
+        let frame = instance
+            .preparing_adoption()
+            .and_then(|adoption| adoption.frame_number(EDITOR_PREVIEW_FPS))
+            .unwrap_or(0);
+        instance.preview_tx.send_modify(|v| {
+            *v = Some((
+                frame,
+                EDITOR_PREVIEW_FPS,
+                default_editor_preview_resolution(),
+            ))
+        });
+    }
 
     Ok((instance, event_id))
 }
 
 pub(crate) async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Result<(), String> {
+    let result = wait_for_recording_ready_inner(app, path).await;
+    if result.is_err() {
+        let cleanup = editor_preparing::join_before_ordinary(app, path).await;
+        return result.and(cleanup);
+    }
+    result
+}
+
+async fn await_finalization_before_ordinary(
+    app: &AppHandle,
+    path: &Path,
+    result: watch::Receiver<FinalizationResult>,
+) -> Result<(), String> {
+    let finalization = await_finalization_result(result).await;
+    let cleanup = editor_preparing::join_before_ordinary(app, path).await;
+    finalization.and(cleanup)
+}
+
+async fn wait_for_recording_ready_inner(app: &AppHandle, path: &Path) -> Result<(), String> {
+    let display_path = path;
     let project = FinalizationProject::observe(path.to_path_buf()).await?;
     let path = project.work_path();
     let finalizing_state = app.state::<FinalizingRecordings>();
 
     if let Some(result) = finalizing_state.is_finalizing(&project) {
         info!("Recording is being finalized, waiting for completion...");
-        await_finalization_result(result).await?;
+        await_finalization_before_ordinary(app, display_path, result).await?;
         project.validate_async().await?;
         info!("Recording finalization completed");
         let meta = RecordingMeta::load_for_project(path)
@@ -8629,6 +8909,8 @@ pub(crate) async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Re
         }
         return Ok(());
     }
+
+    editor_preparing::join_before_ordinary(app, display_path).await?;
 
     let meta = match RecordingMeta::load_for_project(path) {
         Ok(meta) => meta,
@@ -8654,7 +8936,7 @@ pub(crate) async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Re
 
             project.validate_async().await?;
             if let Some(result) = finalizing_state.is_finalizing(&project) {
-                await_finalization_result(result).await?;
+                await_finalization_before_ordinary(app, display_path, result).await?;
                 break;
             }
 
@@ -8681,7 +8963,7 @@ pub(crate) async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Re
 
     project.validate_async().await?;
     if let Some(result) = finalizing_state.is_finalizing(&project) {
-        await_finalization_result(result).await?;
+        await_finalization_before_ordinary(app, display_path, result).await?;
         project.validate_async().await?;
     }
 
@@ -8702,11 +8984,13 @@ pub(crate) async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Re
                 "Recording directory changed before recovery",
             ));
         }
-        match finalizing_state.request(work_project, false, FinalizationOrigin::Recording)? {
+        match finalizing_state.request(work_project, false, FinalizationOrigin::Recording, false)? {
             FinalizationRequest::Started(token) => {
                 run_finalization_worker(token, recording::remux_fragmented_recording).await?;
             }
-            FinalizationRequest::Existing(result) => await_finalization_result(result).await?,
+            FinalizationRequest::Existing(result) => {
+                await_finalization_before_ordinary(app, display_path, result).await?
+            }
         }
         project.validate_async().await?;
         info!("Crash recovery remux completed");
@@ -8820,6 +9104,67 @@ fn show_import_error_dialog(app: &AppHandle, message: String) {
         .title("Import Error")
         .kind(tauri_plugin_dialog::MessageDialogKind::Error)
         .show(|_| {});
+}
+
+/// Everything a close request on the main window does -- hide it, drop the
+/// preview inputs when nothing is recording, and hand the foreground back to
+/// the editor that started a "Record a new clip" flow.
+pub(crate) fn dismiss_main_window(app: &AppHandle) {
+    clean_capture::cancel_closed_preflight(app);
+    hide_main_window(app);
+
+    #[cfg(target_os = "macos")]
+    crate::permissions::schedule_macos_dock_visibility_sync(app);
+
+    let Some(state) = app.try_state::<ArcLock<App>>() else {
+        warn!("App state unavailable during main window close request");
+        return;
+    };
+    let is_recording = state
+        .try_read()
+        .map(|s| s.is_recording_active_or_pending())
+        .unwrap_or(true);
+
+    if !is_recording {
+        if let Some(camera_window) = CapWindowId::Camera.get(app) {
+            let _ = camera_window.hide();
+        }
+
+        close_target_select_overlays(app);
+
+        let app_for_cleanup = app.clone();
+        spawn_on_runtime(async move {
+            let app = app_for_cleanup;
+            let Some(state) = app.try_state::<ArcLock<App>>() else {
+                warn!("App state unavailable during main window close cleanup");
+                return;
+            };
+
+            let (mic_feed, camera_feed) = {
+                let mut app_state = state.write().await;
+                app_state.camera_preview.pause();
+                app_state.applied_mic_input.invalidate();
+                (app_state.mic_feed.clone(), app_state.camera_feed.clone())
+            };
+
+            let _ =
+                tokio::time::timeout(APP_EXIT_STEP_TIMEOUT, mic_feed.ask(microphone::RemoveInput))
+                    .await;
+            let _ = tokio::time::timeout(
+                APP_EXIT_STEP_TIMEOUT,
+                camera_feed.ask(feeds::camera::RemoveInput),
+            )
+            .await;
+
+            let mut app_state = state.write().await;
+            app_state.selected_mic_label = None;
+            app_state.camera_in_use = false;
+        });
+
+        if let Some(editor_path) = editor_recording::abort(app) {
+            editor_recording::reveal_editor(app, &editor_path);
+        }
+    }
 }
 
 pub(crate) fn hide_main_window(app: &AppHandle) {
@@ -9897,24 +10242,131 @@ mod requested_inputs_tests {
     fn matching_pending_requests_share_setup_but_changed_configuration_supersedes_it() {
         let mut input = RequestedInput::new(None::<String>);
         let settings = serde_json::json!({ "sampleRate": 48_000 });
-        let (first, joined) = input.begin_or_join(Some("mic".into()), settings.clone());
+        let (first, joined) = input.begin_or_join(Some("mic".into()), settings.clone(), false);
         assert!(!joined);
         assert_eq!(
-            input.begin_or_join(Some("mic".into()), settings.clone()),
+            input.begin_or_join(Some("mic".into()), settings.clone(), false),
             (first, true)
         );
         let (second, joined) = input.begin_or_join(
             Some("mic".into()),
             serde_json::json!({ "sampleRate": 44_100 }),
+            false,
         );
         assert!(!joined);
         assert_ne!(first, second);
         input.finish(first, &Ok(()));
         assert!(input.pending);
         input.finish(second, &Err("disconnected".into()));
-        let (retry, joined) = input.begin_or_join(Some("mic".into()), settings);
+        let (retry, joined) = input.begin_or_join(Some("mic".into()), settings, false);
         assert!(!joined);
         assert_ne!(retry, second);
+    }
+
+    #[tokio::test]
+    async fn restoring_identical_inputs_during_startup_keeps_recording_publishable() {
+        let state = RequestedInputsState::new(None, None);
+        let mic = Some("MacBook Pro Microphone".to_string());
+        let camera = Some(super::DeviceOrModelID::DeviceID(
+            "MacBook Pro Camera".into(),
+        ));
+        let mic_settings = serde_json::json!(null);
+        let camera_settings = serde_json::json!((None::<serde_json::Value>, false));
+        let (mic_revision, camera_revision) = {
+            let mut inputs = state.inner.lock().unwrap();
+            let (mic_revision, _) =
+                inputs
+                    .microphone
+                    .begin_or_join(mic.clone(), mic_settings.clone(), false);
+            inputs.microphone.finish(mic_revision, &Ok(()));
+            let (camera_revision, _) =
+                inputs
+                    .camera
+                    .begin_or_join(camera.clone(), camera_settings.clone(), false);
+            inputs.camera.finish(camera_revision, &Ok(()));
+            (mic_revision, camera_revision)
+        };
+        let snapshot = state.ready_snapshot().unwrap();
+        let _startup = state.operation.lock().await;
+        {
+            let mut inputs = state.inner.lock().unwrap();
+            assert_eq!(
+                inputs.microphone.begin_or_join(mic, mic_settings, true),
+                (mic_revision, true)
+            );
+            assert_eq!(
+                inputs.camera.begin_or_join(camera, camera_settings, true),
+                (camera_revision, true)
+            );
+        }
+        for (revision, kind) in [(mic_revision, "Microphone"), (camera_revision, "Camera")] {
+            let result = tokio::time::timeout(std::time::Duration::from_millis(100), async {
+                if kind == "Microphone" {
+                    wait_for_existing_input(revision, kind, || state.snapshot().microphone).await
+                } else {
+                    wait_for_existing_input(revision, kind, || state.snapshot().camera).await
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(result, Ok(()));
+        }
+        assert!(state.ready_snapshot().is_ok());
+        assert!(state.is_current(&snapshot));
+        let mut published = false;
+        assert!(state.publish_if_current(&snapshot, || published = true));
+        assert!(published);
+    }
+
+    #[test]
+    fn startup_still_rejects_changed_devices_settings_and_disabled_inputs() {
+        for (value, settings) in [
+            (Some("other".to_string()), serde_json::json!(48_000)),
+            (Some("mic".to_string()), serde_json::json!(44_100)),
+            (None, serde_json::json!(48_000)),
+        ] {
+            let state = RequestedInputsState::new(None, None);
+            {
+                let mut inputs = state.inner.lock().unwrap();
+                let (revision, _) = inputs.microphone.begin_or_join(
+                    Some("mic".into()),
+                    serde_json::json!(48_000),
+                    false,
+                );
+                inputs.microphone.finish(revision, &Ok(()));
+            }
+            let snapshot = state.ready_snapshot().unwrap();
+            let (_, joined) = state
+                .inner
+                .lock()
+                .unwrap()
+                .microphone
+                .begin_or_join(value, settings, true);
+            assert!(!joined);
+            assert!(!state.is_current(&snapshot));
+            assert!(!state.publish_if_current(&snapshot, || panic!("changed input published")));
+        }
+    }
+
+    #[test]
+    fn completed_requests_are_retried_when_idle_or_previously_failed() {
+        for (recording_starting, result) in
+            [(false, Ok(())), (true, Err("disconnected".to_string()))]
+        {
+            let mut input = RequestedInput::new(None::<String>);
+            let (first, _) =
+                input.begin_or_join(Some("mic".into()), serde_json::json!(null), false);
+            input.finish(first, &result);
+            let (retry, joined) = input.begin_or_join(
+                Some("mic".into()),
+                serde_json::json!(null),
+                recording_starting,
+            );
+            assert!(!joined);
+            assert_ne!(retry, first);
+            assert!(input.pending);
+            assert!(input.error.is_none());
+        }
     }
 
     #[tokio::test]
@@ -10224,6 +10676,32 @@ mod typescript_bindings_tests {
 #[cfg(test)]
 mod instant_resume_safety_tests {
     use super::*;
+
+    #[test]
+    fn old_recordings_are_reconciled_once_but_skipped_before_periodic_metadata_reads() {
+        let path = project("old", InstantRecordingMeta::InProgress { recording: true });
+        let later = path.metadata().unwrap().created().unwrap() + Duration::from_secs(25 * 60 * 60);
+        assert!(
+            load_upload_resume_candidate_at(&path, true, later)
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(
+            RecordingMeta::load_for_project(&path).unwrap().inner,
+            RecordingMetaInner::Instant(InstantRecordingMeta::Failed { .. })
+        ));
+        std::fs::write(path.join("recording-meta.json"), b"invalid").unwrap();
+        assert!(
+            load_upload_resume_candidate_at(&path, false, later)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            std::fs::read(path.join("recording-meta.json")).unwrap(),
+            b"invalid"
+        );
+        std::fs::remove_dir_all(path).unwrap();
+    }
     fn project(tag: &str, inner: InstantRecordingMeta) -> PathBuf {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let path = std::env::temp_dir().join(format!(
@@ -10373,6 +10851,42 @@ mod instant_resume_safety_tests {
         );
         drop(ownership);
         std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod recent_media_tests {
+    use super::*;
+
+    #[test]
+    fn limited_history_matches_the_full_list_with_invalid_metadata_and_timestamp_ties() {
+        let candidates = vec![
+            ("old", 1.0),
+            ("first tie", 4.0),
+            ("broken", 5.0),
+            ("second tie", 4.0),
+            ("middle", 2.0),
+        ];
+        let load = |path, timestamp| (path != "broken").then_some((path, timestamp));
+        let full = newest_valid_media(candidates.clone(), usize::MAX, load);
+        let recent = newest_valid_media(candidates, 2, load);
+        assert_eq!(recent, full[..2]);
+        assert_eq!(recent, vec![("first tie", 4.0), ("second tie", 4.0)]);
+    }
+
+    #[test]
+    fn a_large_library_only_loads_metadata_for_the_requested_recent_items() {
+        let mut loads = 0;
+        let recent = newest_valid_media(
+            (0..10_000).map(|id| (id, f64::from(id))).collect(),
+            9,
+            |id, _| {
+                loads += 1;
+                Some(id)
+            },
+        );
+        assert_eq!(loads, 9);
+        assert_eq!(recent, (9991..10_000).rev().collect::<Vec<_>>());
     }
 }
 

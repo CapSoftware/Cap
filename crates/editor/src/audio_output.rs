@@ -9,7 +9,7 @@
 
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc as std_mpsc,
     },
@@ -29,6 +29,10 @@ use tokio::sync::watch;
 use tracing::{error, info};
 
 use crate::audio::{AudioSegment, MusicTracks, PrerenderedAudioBuffer};
+use crate::preparing_audio::{
+    PreparingAudioBuffer, PreparingAudioOutputHandle, PreparingAudioOutputSnapshot,
+    PreparingAudioSources,
+};
 
 /// How long to wait for the live callback to acknowledge a newly installed
 /// source before reporting "no audio". A running stream acknowledges within
@@ -52,16 +56,274 @@ pub struct PlaySpec {
 }
 
 enum ControlMsg {
+    Refresh {
+        spec: Box<PlaySpec>,
+        generation: u64,
+        revision: u64,
+        retire_tx: std_mpsc::Sender<ControlMsg>,
+    },
+    Retire(Box<dyn Send>),
+    Realign(Box<dyn FnOnce() + Send>),
     EnsureStream,
     Play {
         spec: Box<PlaySpec>,
         generation: u64,
         result_tx: std_mpsc::Sender<bool>,
     },
+    PreparePlayback {
+        spec: Box<PlaySpec>,
+        generation: u64,
+        request: Arc<PreparingAudioRequest>,
+    },
+    PrepareProgressivePlayback {
+        sources: PreparingAudioSources,
+        start_seconds: f64,
+        generation: u64,
+        installation: PreparingAudioInstallation,
+    },
     StopPlayback {
         generation: u64,
     },
     Shutdown,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PreparingAudioStatus {
+    Pending,
+    AwaitingCallback,
+    Started,
+    Unavailable,
+    Cancelled,
+}
+
+struct PreparingAudioRequest {
+    cancelled: AtomicBool,
+    started: AtomicBool,
+    deadline: Instant,
+    ack_deadline: OnceLock<Instant>,
+    status: watch::Sender<PreparingAudioStatus>,
+    output: Mutex<Option<PreparingAudioOutputHandle>>,
+    installed: watch::Sender<bool>,
+}
+
+impl PreparingAudioRequest {
+    fn new(timeout: Duration) -> Self {
+        Self {
+            cancelled: AtomicBool::new(false),
+            started: AtomicBool::new(false),
+            deadline: Instant::now() + timeout,
+            ack_deadline: OnceLock::new(),
+            status: watch::channel(PreparingAudioStatus::Pending).0,
+            output: Mutex::new(None),
+            installed: watch::channel(true).0,
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+            || (!self.started.load(Ordering::Acquire) && Instant::now() >= self.deadline())
+    }
+
+    fn deadline(&self) -> Instant {
+        self.ack_deadline.get().copied().unwrap_or(self.deadline)
+    }
+
+    fn awaiting_callback(&self) {
+        let _ = self
+            .ack_deadline
+            .set(self.deadline.min(Instant::now() + SOURCE_ACK_TIMEOUT));
+        self.status.send_if_modified(|status| {
+            if *status != PreparingAudioStatus::Pending {
+                return false;
+            }
+            *status = PreparingAudioStatus::AwaitingCallback;
+            true
+        });
+    }
+
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+        if let Some(output) = self
+            .output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            output.cancel();
+        }
+        self.status.send_replace(PreparingAudioStatus::Cancelled);
+    }
+
+    fn complete(&self, started: bool) {
+        self.status.send_if_modified(|status| {
+            if !matches!(
+                status,
+                PreparingAudioStatus::Pending | PreparingAudioStatus::AwaitingCallback
+            ) {
+                return false;
+            }
+            *status = if self.is_cancelled() {
+                PreparingAudioStatus::Cancelled
+            } else if started {
+                self.started.store(true, Ordering::Release);
+                PreparingAudioStatus::Started
+            } else {
+                self.cancelled.store(true, Ordering::Release);
+                PreparingAudioStatus::Unavailable
+            };
+            true
+        });
+    }
+}
+
+struct PreparingAudioInstallation {
+    request: Arc<PreparingAudioRequest>,
+    runtime: tokio::runtime::Handle,
+    playable_until: f64,
+}
+
+impl Drop for PreparingAudioInstallation {
+    fn drop(&mut self) {
+        self.request.installed.send_replace(true);
+    }
+}
+
+pub(crate) struct PreparingAudioPlayTicket {
+    generation: u64,
+    request: Arc<PreparingAudioRequest>,
+    control_tx: std_mpsc::Sender<ControlMsg>,
+}
+
+impl PreparingAudioPlayTicket {
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) fn output_handle(&self) -> Option<PreparingAudioOutputHandle> {
+        self.request
+            .output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn set_playable_until(&self, seconds: f64) -> Result<(), String> {
+        if let Some(output) = self
+            .request
+            .output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            output.set_playable_until(seconds)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn output_status(&self, now: Instant) -> Option<PreparingAudioOutputSnapshot> {
+        self.request
+            .output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|output| output.status(now))
+    }
+
+    pub(crate) async fn stop_and_wait(&self) -> Result<(), String> {
+        self.cancel();
+        let mut installed = self.request.installed.subscribe();
+        tokio::time::timeout(PLAY_REQUEST_TIMEOUT, async {
+            while !*installed.borrow_and_update() {
+                installed
+                    .changed()
+                    .await
+                    .map_err(|_| "Preparing audio installation owner ended".to_string())?;
+            }
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|_| "Preparing audio installation cleanup timed out".to_string())??;
+        let output = self
+            .request
+            .output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(output) = output {
+            tokio::time::timeout(PLAY_REQUEST_TIMEOUT, output.stop_and_wait())
+                .await
+                .map_err(|_| "Preparing audio source cleanup timed out".to_string())??;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn wait_started(&self) -> bool {
+        let mut status = self.request.status.subscribe();
+        loop {
+            let current = *status.borrow_and_update();
+            match current {
+                PreparingAudioStatus::Started if !self.request.is_cancelled() => return true,
+                PreparingAudioStatus::Pending | PreparingAudioStatus::AwaitingCallback => {}
+                _ => {
+                    self.cancel();
+                    return false;
+                }
+            }
+            if !matches!(
+                tokio::time::timeout_at(self.request.deadline().into(), status.changed()).await,
+                Ok(Ok(()))
+            ) {
+                self.cancel();
+                return false;
+            }
+        }
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.request.cancel();
+        let _ = self.control_tx.send(ControlMsg::StopPlayback {
+            generation: self.generation,
+        });
+    }
+}
+
+impl Drop for PreparingAudioPlayTicket {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+enum SourceAcknowledgement {
+    Refresh(std_mpsc::Sender<ControlMsg>, u64),
+    Ordinary(std_mpsc::Sender<()>),
+    Preparing(Arc<PreparingAudioRequest>),
+}
+
+impl SourceAcknowledgement {
+    fn preparing_request(&self) -> Option<Arc<PreparingAudioRequest>> {
+        match self {
+            Self::Ordinary(_) | Self::Refresh(..) => None,
+            Self::Preparing(request) => Some(request.clone()),
+        }
+    }
+
+    fn consumed(self) {
+        match &self {
+            Self::Refresh(..) => {}
+            Self::Ordinary(sender) => {
+                let _ = sender.send(());
+            }
+            Self::Preparing(request) => request.complete(true),
+        }
+    }
+}
+
+impl Drop for SourceAcknowledgement {
+    fn drop(&mut self) {
+        if let Self::Preparing(request) = self {
+            request.complete(false);
+        }
+    }
 }
 
 /// Handle to the editor session's shared audio output. Owned by the editor
@@ -162,6 +424,67 @@ impl AudioOutput {
         }
     }
 
+    pub(crate) fn prepare_playback(&self, spec: PlaySpec) -> PreparingAudioPlayTicket {
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        let request = Arc::new(PreparingAudioRequest::new(PLAY_REQUEST_TIMEOUT));
+        let ticket = PreparingAudioPlayTicket {
+            generation,
+            request: request.clone(),
+            control_tx: self.control_tx.clone(),
+        };
+        if self
+            .control_tx
+            .send(ControlMsg::PreparePlayback {
+                spec: Box::new(spec),
+                generation,
+                request: request.clone(),
+            })
+            .is_err()
+        {
+            request.complete(false);
+        }
+        ticket
+    }
+
+    pub(crate) fn prepare_progressive_playback(
+        &self,
+        sources: PreparingAudioSources,
+        start_seconds: f64,
+        playable_until: f64,
+    ) -> PreparingAudioPlayTicket {
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        let request = Arc::new(PreparingAudioRequest::new(PLAY_REQUEST_TIMEOUT));
+        request.installed.send_replace(false);
+        let ticket = PreparingAudioPlayTicket {
+            generation,
+            request: request.clone(),
+            control_tx: self.control_tx.clone(),
+        };
+        let command = ControlMsg::PrepareProgressivePlayback {
+            sources,
+            start_seconds,
+            generation,
+            installation: PreparingAudioInstallation {
+                request: request.clone(),
+                runtime: tokio::runtime::Handle::current(),
+                playable_until,
+            },
+        };
+        if self.control_tx.send(command).is_err() {
+            request.complete(false);
+        }
+        ticket
+    }
+
+    pub(crate) fn refresh_playback(&self, spec: PlaySpec, generation: u64) {
+        let _ = self.control_tx.send(ControlMsg::Refresh {
+            spec: Box::new(spec),
+            generation,
+            revision: self.next_generation.fetch_add(1, Ordering::Relaxed),
+            retire_tx: self.control_tx.clone(),
+        });
+    }
+
     /// Detaches the source installed by the `play` call that returned this
     /// generation. A newer source (from a replacing play) is left untouched,
     /// so a stale playback shutting down can't cut off its successor.
@@ -186,16 +509,50 @@ impl Drop for AudioOutput {
 /// Per-playback state owned by the audio callback.
 struct ActiveSource<T: FromSampleBytes> {
     generation: u64,
-    buffer: PrerenderedAudioBuffer<T>,
+    refresh_revision: u64,
+    buffer: ActiveSourceBuffer<T>,
     playhead_rx: watch::Receiver<f64>,
-    ack: Option<std_mpsc::Sender<()>>,
+    ack: Option<SourceAcknowledgement>,
+    preparing_request: Option<Arc<PreparingAudioRequest>>,
     #[cfg(not(target_os = "windows"))]
     latency_corrector: LatencyCorrector,
 }
 
+enum ActiveSourceBuffer<T: FromSampleBytes> {
+    Ordinary(PrerenderedAudioBuffer<T>),
+    Preparing(PreparingAudioBuffer<T>),
+}
+
+#[cfg(test)]
+impl<T: FromSampleBytes + cpal::FromSample<f32>> ActiveSourceBuffer<T> {
+    fn current_playhead_secs(&self) -> f64 {
+        let Self::Ordinary(buffer) = self else {
+            panic!("Preparing playback uses its consumed-span clock");
+        };
+        buffer.current_playhead_secs()
+    }
+
+    fn current_audible_playhead(&self, latency_seconds: f64) -> f64 {
+        let Self::Ordinary(buffer) = self else {
+            panic!("Preparing playback uses its consumed-span clock");
+        };
+        buffer.current_audible_playhead(latency_seconds)
+    }
+}
+
+type InstallProgressiveAudio =
+    dyn Fn(PreparingAudioSources, f64, u64, &PreparingAudioInstallation) -> Result<(), String>;
+
 enum SourceCommand<T: FromSampleBytes> {
+    Refresh {
+        source: Box<ActiveSource<T>>,
+        retire_tx: std_mpsc::Sender<ControlMsg>,
+        requeue_tx: std_mpsc::Sender<SourceCommand<T>>,
+    },
     Install(Box<ActiveSource<T>>),
-    Remove { generation: Option<u64> },
+    Remove {
+        generation: Option<u64>,
+    },
 }
 
 /// The type-erased face of a running stream. The closures capture the typed
@@ -203,7 +560,8 @@ enum SourceCommand<T: FromSampleBytes> {
 struct TypedStreamHandle {
     _stream: cpal::Stream,
     #[allow(clippy::type_complexity)]
-    install: Box<dyn Fn(Box<PlaySpec>, u64, std_mpsc::Sender<()>) -> Result<(), String>>,
+    install: Box<dyn Fn(Box<PlaySpec>, u64, SourceAcknowledgement) -> Result<(), String>>,
+    install_progressive: Box<InstallProgressiveAudio>,
     remove: Box<dyn Fn(Option<u64>)>,
 }
 
@@ -219,6 +577,22 @@ fn control_thread(control_rx: std_mpsc::Receiver<ControlMsg>) {
 
     while let Ok(msg) = control_rx.recv() {
         match msg {
+            ControlMsg::Refresh {
+                spec,
+                generation,
+                revision,
+                retire_tx,
+            } => {
+                if let Some(stream) = &state
+                    && let Err(error) = (stream.handle.install)(
+                        spec,
+                        generation,
+                        SourceAcknowledgement::Refresh(retire_tx, revision),
+                    )
+                {
+                    error!(%error, "Could not update microphone enhancement during playback");
+                }
+            }
             ControlMsg::EnsureStream => {
                 ensure_stream(&mut state);
             }
@@ -230,11 +604,63 @@ fn control_thread(control_rx: std_mpsc::Receiver<ControlMsg>) {
                 let ok = handle_play(&mut state, spec, generation);
                 let _ = result_tx.send(ok);
             }
-            ControlMsg::StopPlayback { generation } => {
-                if let Some(s) = &state {
-                    (s.handle.remove)(Some(generation));
+            ControlMsg::PreparePlayback {
+                spec,
+                generation,
+                request,
+            } => {
+                if request.is_cancelled() || !ensure_stream(&mut state) || request.is_cancelled() {
+                    request.complete(false);
+                    continue;
+                }
+                let Some(stream) = state.as_ref() else {
+                    request.complete(false);
+                    continue;
+                };
+                if let Err(error) = (stream.handle.install)(
+                    spec,
+                    generation,
+                    SourceAcknowledgement::Preparing(request.clone()),
+                ) {
+                    error!("Failed to install preparing audio source: {error}");
+                    request.complete(false);
                 }
             }
+            ControlMsg::PrepareProgressivePlayback {
+                sources,
+                start_seconds,
+                generation,
+                installation,
+            } => {
+                let request = &installation.request;
+                if request.is_cancelled() || !ensure_stream(&mut state) || request.is_cancelled() {
+                    request.complete(false);
+                    continue;
+                }
+                let Some(stream) = state.as_ref() else {
+                    request.complete(false);
+                    continue;
+                };
+                if let Err(error) = (stream.handle.install_progressive)(
+                    sources,
+                    start_seconds,
+                    generation,
+                    &installation,
+                ) {
+                    error!("Failed to install progressive preparing audio: {error}");
+                    request.complete(false);
+                }
+            }
+            ControlMsg::StopPlayback { generation } => {
+                stop_stream_state(
+                    &mut state,
+                    generation,
+                    |stream| stream.failed.load(Ordering::Acquire),
+                    |stream, generation| (stream.handle.remove)(Some(generation)),
+                );
+            }
+            ControlMsg::Retire(source) => drop(source),
+            ControlMsg::Realign(realign) => realign(),
             ControlMsg::Shutdown => break,
         }
     }
@@ -242,15 +668,79 @@ fn control_thread(control_rx: std_mpsc::Receiver<ControlMsg>) {
     info!("Audio output thread finished");
 }
 
+fn stop_stream_state<S>(
+    state: &mut Option<S>,
+    generation: u64,
+    is_failed: impl FnOnce(&S) -> bool,
+    remove: impl FnOnce(&S, u64),
+) {
+    if state.as_ref().is_some_and(is_failed) {
+        drop(state.take());
+    } else if let Some(stream) = state.as_ref() {
+        remove(stream, generation);
+    }
+}
+
 /// Applies pending install/remove commands to the active source. Shared by
 /// the live cpal callback and the headless sink.
-fn drain_source_commands<T: FromSampleBytes>(
+fn drain_source_commands<T: FromSampleBytes + cpal::FromSample<f32>>(
     active: &mut Option<ActiveSource<T>>,
     source_rx: &std_mpsc::Receiver<SourceCommand<T>>,
 ) {
     while let Ok(command) = source_rx.try_recv() {
         match command {
-            SourceCommand::Install(source) => *active = Some(*source),
+            SourceCommand::Refresh {
+                mut source,
+                retire_tx,
+                requeue_tx,
+            } => {
+                let retired = if let Some(current) = active.as_mut().filter(|current| {
+                    current.generation == source.generation
+                        && current.refresh_revision <= source.refresh_revision
+                }) {
+                    current.refresh_revision = source.refresh_revision;
+                    if let (
+                        ActiveSourceBuffer::Ordinary(previous),
+                        ActiveSourceBuffer::Ordinary(replacement),
+                    ) = (&current.buffer, &mut source.buffer)
+                    {
+                        let playhead = previous.current_audible_playhead(0.0);
+                        if !replacement.try_align_prepared_playhead(playhead) {
+                            let sender = retire_tx.clone();
+                            let _ = sender.send(ControlMsg::Realign(Box::new(move || {
+                                if let ActiveSourceBuffer::Ordinary(buffer) = &mut source.buffer {
+                                    buffer.set_playhead(playhead);
+                                    if !buffer.wait_until_ready(PRERENDER_READY_TIMEOUT) {
+                                        return;
+                                    }
+                                }
+                                let sender = requeue_tx.clone();
+                                let _ = sender.send(SourceCommand::Refresh {
+                                    source,
+                                    retire_tx,
+                                    requeue_tx,
+                                });
+                            })));
+                            continue;
+                        }
+                    }
+                    active.replace(*source).map(Box::new)
+                } else {
+                    Some(source)
+                };
+                if let Some(retired) = retired {
+                    let _ = retire_tx.send(ControlMsg::Retire(retired));
+                }
+            }
+            SourceCommand::Install(source) => {
+                if !source
+                    .preparing_request
+                    .as_ref()
+                    .is_some_and(|request| request.is_cancelled())
+                {
+                    *active = Some(*source);
+                }
+            }
             SourceCommand::Remove { generation } => {
                 let matches = generation.is_none()
                     || active
@@ -263,6 +753,14 @@ fn drain_source_commands<T: FromSampleBytes>(
             }
         }
     }
+    if active.as_ref().is_some_and(|source| {
+        source
+            .preparing_request
+            .as_ref()
+            .is_some_and(|request| request.is_cancelled())
+    }) {
+        *active = None;
+    }
 }
 
 /// Renders one output block from the active source: applies the video
@@ -274,22 +772,50 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
     buffer: &mut [T],
     latency_secs: f64,
 ) {
-    if source.playhead_rx.has_changed().unwrap_or(false) {
-        let video_playhead = *source.playhead_rx.borrow_and_update();
-        let audible_playhead = source.buffer.current_audible_playhead(latency_secs);
-        let drift = (video_playhead - audible_playhead).abs();
+    if source
+        .preparing_request
+        .as_ref()
+        .is_some_and(|request| request.is_cancelled())
+    {
+        buffer.fill(T::EQUILIBRIUM);
+        return;
+    }
+    match &mut source.buffer {
+        ActiveSourceBuffer::Ordinary(audio) => {
+            if source.playhead_rx.has_changed().unwrap_or(false) {
+                let video_playhead = *source.playhead_rx.borrow_and_update();
+                let audible_playhead = audio.current_audible_playhead(latency_secs);
+                let drift = (video_playhead - audible_playhead).abs();
 
-        // Normal frame updates coalesce on this watch too; only audible drift
-        // establishes whether the audio needs to move to the latest target.
-        if drift > 0.04 {
-            source.buffer.set_playhead(video_playhead + latency_secs);
+                if drift > 0.04 {
+                    audio.set_playhead(video_playhead + latency_secs);
+                }
+            }
+            audio.fill(buffer);
+        }
+        ActiveSourceBuffer::Preparing(audio) => {
+            if audio.fill(buffer, latency_secs) == 0 {
+                if audio.is_terminal()
+                    && let Some(request) = &source.preparing_request
+                {
+                    request.complete(false);
+                }
+                return;
+            }
         }
     }
 
-    source.buffer.fill(buffer);
+    if source
+        .preparing_request
+        .as_ref()
+        .is_some_and(|request| request.is_cancelled())
+    {
+        buffer.fill(T::EQUILIBRIUM);
+        return;
+    }
 
     if let Some(ack) = source.ack.take() {
-        let _ = ack.send(());
+        ack.consumed();
     }
 }
 
@@ -299,11 +825,18 @@ fn render_source_block<T: FromSampleBytes + cpal::FromSample<f32>>(
 fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     spec: Box<PlaySpec>,
     generation: u64,
-    ack: std_mpsc::Sender<()>,
+    ack: SourceAcknowledgement,
     output_info: AudioInfo,
     use_device_latency_hint: bool,
     install_tx: &std_mpsc::Sender<SourceCommand<T>>,
 ) -> Result<(), String> {
+    let preparing_request = ack.preparing_request();
+    if preparing_request
+        .as_ref()
+        .is_some_and(|request| request.is_cancelled())
+    {
+        return Err("Preparing audio request cancelled".into());
+    }
     let PlaySpec {
         segments,
         music,
@@ -352,25 +885,117 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     };
 
     let start_playhead = start_playhead_secs + initial_latency_secs;
-    let mut buffer = PrerenderedAudioBuffer::<T>::new(
-        segments,
-        music,
-        &project,
-        output_info,
-        duration_secs,
-        start_playhead,
-    );
-    buffer.set_playhead(start_playhead);
+    let mut buffer = if matches!(ack, SourceAcknowledgement::Refresh(..)) {
+        PrerenderedAudioBuffer::<T>::bounded(segments, music, &project, output_info, start_playhead)
+    } else {
+        PrerenderedAudioBuffer::<T>::new(
+            segments,
+            music,
+            &project,
+            output_info,
+            duration_secs,
+            start_playhead,
+        )
+    };
+    if !matches!(ack, SourceAcknowledgement::Refresh(..)) {
+        buffer.set_playhead(start_playhead);
+    }
     // A few ms: guarantees the callback reads real samples at the
     // playhead, never leading silence.
-    buffer.wait_until_ready(PRERENDER_READY_TIMEOUT);
+    if !buffer.wait_until_ready(PRERENDER_READY_TIMEOUT) {
+        return Err("Audio processing did not become ready in time".into());
+    }
 
+    if preparing_request
+        .as_ref()
+        .is_some_and(|request| request.is_cancelled())
+    {
+        return Err("Preparing audio request cancelled".into());
+    }
+
+    if let Some(request) = &preparing_request {
+        request.awaiting_callback();
+    }
+
+    let retire_tx = match &ack {
+        SourceAcknowledgement::Refresh(sender, _) => Some(sender.clone()),
+        _ => None,
+    };
+    let refresh_revision = match &ack {
+        SourceAcknowledgement::Refresh(_, revision) => *revision,
+        _ => 0,
+    };
+    let source = Box::new(ActiveSource {
+        generation,
+        refresh_revision,
+        buffer: ActiveSourceBuffer::Ordinary(buffer),
+        playhead_rx,
+        ack: Some(ack),
+        preparing_request,
+        #[cfg(not(target_os = "windows"))]
+        latency_corrector,
+    });
+    install_tx
+        .send(if let Some(retire_tx) = retire_tx {
+            SourceCommand::Refresh {
+                source,
+                retire_tx,
+                requeue_tx: install_tx.clone(),
+            }
+        } else {
+            SourceCommand::Install(source)
+        })
+        .map_err(|_| "Audio callback channel closed".to_string())
+}
+
+fn install_progressive_source<T: FromSampleBytes + cpal::FromSample<f32>>(
+    sources: PreparingAudioSources,
+    start_seconds: f64,
+    generation: u64,
+    installation: &PreparingAudioInstallation,
+    output_info: AudioInfo,
+    use_device_latency_hint: bool,
+    install_tx: &std_mpsc::Sender<SourceCommand<T>>,
+) -> Result<(), String> {
+    let request = &installation.request;
+    if request.is_cancelled() {
+        return Err("Preparing audio request cancelled".into());
+    }
+    #[cfg(not(target_os = "windows"))]
+    let latency_corrector = LatencyCorrector::new(
+        if use_device_latency_hint {
+            default_output_latency_hint(output_info.sample_rate, output_info.buffer_size)
+        } else {
+            None
+        },
+        LatencyCorrectionConfig::default(),
+    );
+    #[cfg(target_os = "windows")]
+    let _ = use_device_latency_hint;
+    let (buffer, output) = PreparingAudioBuffer::<T>::spawn(
+        sources,
+        output_info,
+        start_seconds,
+        installation.runtime.clone(),
+    )?;
+    *request
+        .output
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(output.clone());
+    output.set_playable_until(installation.playable_until)?;
+    if request.is_cancelled() {
+        return Err("Preparing audio request cancelled".into());
+    }
+    let (_, playhead_rx) = watch::channel(start_seconds);
+    request.awaiting_callback();
     install_tx
         .send(SourceCommand::Install(Box::new(ActiveSource {
             generation,
-            buffer,
+            refresh_revision: 0,
+            buffer: ActiveSourceBuffer::Preparing(buffer),
             playhead_rx,
-            ack: Some(ack),
+            ack: Some(SourceAcknowledgement::Preparing(request.clone())),
+            preparing_request: Some(request.clone()),
             #[cfg(not(target_os = "windows"))]
             latency_corrector,
         })))
@@ -432,6 +1057,23 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
 
     while let Ok(msg) = control_rx.recv() {
         match msg {
+            ControlMsg::Refresh {
+                spec,
+                generation,
+                revision,
+                retire_tx,
+            } => {
+                if let Err(error) = install_source::<f32>(
+                    spec,
+                    generation,
+                    SourceAcknowledgement::Refresh(retire_tx, revision),
+                    output_info,
+                    false,
+                    &source_tx,
+                ) {
+                    error!(%error, "Could not update headless audio playback");
+                }
+            }
             ControlMsg::EnsureStream => {}
             ControlMsg::Play {
                 spec,
@@ -443,7 +1085,7 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
                     && match install_source::<f32>(
                         spec,
                         generation,
-                        ack_tx,
+                        SourceAcknowledgement::Ordinary(ack_tx),
                         output_info,
                         false,
                         &source_tx,
@@ -456,11 +1098,58 @@ fn control_thread_headless(control_rx: std_mpsc::Receiver<ControlMsg>, mut tap: 
                     };
                 let _ = result_tx.send(ok);
             }
+            ControlMsg::PreparePlayback {
+                spec,
+                generation,
+                request,
+            } => {
+                if request.is_cancelled() || pump.is_none() {
+                    request.complete(false);
+                    continue;
+                }
+                if let Err(error) = install_source::<f32>(
+                    spec,
+                    generation,
+                    SourceAcknowledgement::Preparing(request.clone()),
+                    output_info,
+                    false,
+                    &source_tx,
+                ) {
+                    error!("Failed to install preparing headless audio source: {error}");
+                    request.complete(false);
+                }
+            }
+            ControlMsg::PrepareProgressivePlayback {
+                sources,
+                start_seconds,
+                generation,
+                installation,
+            } => {
+                let request = &installation.request;
+                if request.is_cancelled() || pump.is_none() {
+                    request.complete(false);
+                    continue;
+                }
+                if let Err(error) = install_progressive_source::<f32>(
+                    sources,
+                    start_seconds,
+                    generation,
+                    &installation,
+                    output_info,
+                    false,
+                    &source_tx,
+                ) {
+                    error!("Failed to install progressive headless audio: {error}");
+                    request.complete(false);
+                }
+            }
             ControlMsg::StopPlayback { generation } => {
                 let _ = source_tx.send(SourceCommand::Remove {
                     generation: Some(generation),
                 });
             }
+            ControlMsg::Retire(source) => drop(source),
+            ControlMsg::Realign(realign) => realign(),
             ControlMsg::Shutdown => break,
         }
     }
@@ -482,7 +1171,7 @@ fn handle_play(state: &mut Option<StreamState>, spec: Box<PlaySpec>, generation:
     };
 
     let (ack_tx, ack_rx) = std_mpsc::channel();
-    if let Err(e) = (s.handle.install)(spec, generation, ack_tx) {
+    if let Err(e) = (s.handle.install)(spec, generation, SourceAcknowledgement::Ordinary(ack_tx)) {
         error!("Failed to install audio source: {e}");
         return false;
     }
@@ -620,8 +1309,23 @@ where
 
     let install_tx = source_tx.clone();
     let install = Box::new(
-        move |spec: Box<PlaySpec>, generation: u64, ack: std_mpsc::Sender<()>| {
+        move |spec: Box<PlaySpec>, generation: u64, ack: SourceAcknowledgement| {
             install_source::<T>(spec, generation, ack, output_info, true, &install_tx)
+        },
+    );
+
+    let progressive_tx = source_tx.clone();
+    let install_progressive = Box::new(
+        move |sources, start_seconds, generation, installation: &PreparingAudioInstallation| {
+            install_progressive_source::<T>(
+                sources,
+                start_seconds,
+                generation,
+                installation,
+                output_info,
+                true,
+                &progressive_tx,
+            )
         },
     );
 
@@ -632,15 +1336,19 @@ where
     Ok(TypedStreamHandle {
         _stream: stream,
         install,
+        install_progressive,
         remove,
     })
 }
 
 #[cfg(test)]
+mod native_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn source(sample_rate: u32) -> (ActiveSource<f32>, watch::Sender<f64>) {
+    pub(super) fn source(sample_rate: u32) -> (ActiveSource<f32>, watch::Sender<f64>) {
         source_with_info(
             AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, sample_rate, 2),
             false,
@@ -665,7 +1373,7 @@ mod tests {
                 playhead_rx,
             }),
             0,
-            ack_tx,
+            SourceAcknowledgement::Ordinary(ack_tx),
             output_info,
             use_device_latency_hint,
             &install_tx,
@@ -696,6 +1404,126 @@ mod tests {
                 (playhead - 0.03).abs() < 1.0 / f64::from(sample_rate),
                 "sample_rate={sample_rate}, playhead={playhead}"
             );
+        }
+    }
+
+    #[test]
+    fn enhancement_refresh_only_replaces_its_active_playback_generation() {
+        let (mut original, _playhead) = source(48_000);
+        original.generation = 7;
+        let mut active = Some(original);
+        let (tx, rx) = std_mpsc::channel();
+        let (retire_tx, retire_rx) = std_mpsc::channel();
+        for (generation, should_replace) in [(7, true), (6, false), (8, false)] {
+            let (mut replacement, _playhead) = source(48_000);
+            replacement.generation = generation;
+            let replacement_receiver = replacement.playhead_rx.clone();
+            let ActiveSourceBuffer::Ordinary(buffer) = &mut replacement.buffer else {
+                panic!("expected ordinary source");
+            };
+            buffer.set_playhead(0.5);
+            let ActiveSourceBuffer::Ordinary(buffer) = &mut active.as_mut().unwrap().buffer else {
+                panic!("expected ordinary source");
+            };
+            buffer.set_playhead(0.125);
+            tx.send(SourceCommand::Refresh {
+                source: Box::new(replacement),
+                retire_tx: retire_tx.clone(),
+                requeue_tx: tx.clone(),
+            })
+            .unwrap();
+            drain_source_commands(&mut active, &rx);
+            assert!(matches!(
+                retire_rx.try_recv().unwrap(),
+                ControlMsg::Retire(_)
+            ));
+            let actual = active.as_ref().unwrap();
+            assert_eq!(actual.generation, 7);
+            assert_eq!(
+                actual.playhead_rx.same_channel(&replacement_receiver),
+                should_replace
+            );
+            assert!((actual.buffer.current_playhead_secs() - 0.125).abs() < 1.0 / 48_000.0);
+        }
+        tx.send(SourceCommand::Remove {
+            generation: Some(7),
+        })
+        .unwrap();
+        let (mut replacement, _playhead) = source(48_000);
+        replacement.generation = 7;
+        tx.send(SourceCommand::Refresh {
+            source: Box::new(replacement),
+            retire_tx: retire_tx.clone(),
+            requeue_tx: tx.clone(),
+        })
+        .unwrap();
+        drain_source_commands(&mut active, &rx);
+        assert!(active.is_none());
+    }
+
+    #[test]
+    fn enhancement_refresh_realigns_off_callback_and_rejects_superseded_work() {
+        for (newer_revision, stopped) in [(false, false), (true, false), (false, true)] {
+            let (mut original, _playhead) = source(48_000);
+            original.generation = 7;
+            let ActiveSourceBuffer::Ordinary(buffer) = &mut original.buffer else {
+                panic!("expected ordinary source");
+            };
+            buffer.set_playhead(1.0);
+            let original_receiver = original.playhead_rx.clone();
+            let mut active = Some(original);
+            let (mut replacement, _playhead) = source(48_000);
+            replacement.generation = 7;
+            replacement.refresh_revision = 1;
+            replacement.buffer = ActiveSourceBuffer::Ordinary(PrerenderedAudioBuffer::bounded(
+                Vec::new(),
+                MusicTracks::new(),
+                &ProjectConfiguration::default(),
+                AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2),
+                3.0,
+            ));
+            let replacement_receiver = replacement.playhead_rx.clone();
+            let (tx, rx) = std_mpsc::channel();
+            let (retire_tx, retire_rx) = std_mpsc::channel();
+            tx.send(SourceCommand::Refresh {
+                source: Box::new(replacement),
+                retire_tx,
+                requeue_tx: tx.clone(),
+            })
+            .unwrap();
+            drain_source_commands(&mut active, &rx);
+            let current = active.as_mut().unwrap();
+            assert!(current.playhead_rx.same_channel(&original_receiver));
+            assert_eq!(current.refresh_revision, 1);
+            let ControlMsg::Realign(realign) = retire_rx.try_recv().unwrap() else {
+                panic!("expected deferred audio preparation");
+            };
+            if newer_revision {
+                current.refresh_revision = 2;
+            }
+            let ActiveSourceBuffer::Ordinary(buffer) = &mut current.buffer else {
+                panic!("expected ordinary source");
+            };
+            buffer.set_playhead(1.025);
+            if stopped {
+                active = None;
+            }
+            realign();
+            drain_source_commands(&mut active, &rx);
+            assert!(matches!(
+                retire_rx.try_recv().unwrap(),
+                ControlMsg::Retire(_)
+            ));
+            if stopped {
+                assert!(active.is_none());
+            } else {
+                let current = active.as_ref().unwrap();
+                assert_eq!(
+                    current.playhead_rx.same_channel(&replacement_receiver),
+                    !newer_revision
+                );
+                assert!((current.buffer.current_playhead_secs() - 1.025).abs() < 1.0 / 48_000.0);
+            }
         }
     }
 

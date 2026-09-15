@@ -133,6 +133,8 @@ async fn load_recording(
                     timescale: 1.0,
                     name: None,
                     speed_audio_mode: None,
+                    hide_cursor: None,
+                    volume: None,
                 }]
             }
             StudioRecordingMeta::MultipleSegments { inner } => inner
@@ -152,6 +154,8 @@ async fn load_recording(
                         timescale: 1.0,
                         name: None,
                         speed_audio_mode: None,
+                        hide_cursor: None,
+                        volume: None,
                     })
                 })
                 .collect(),
@@ -275,7 +279,7 @@ async fn main() {
                 let data = frame.data.into_vec();
                 let bytes = data.len() + metadata_bytes;
                 let ws_frame = WSFrame {
-                    data: Arc::new(data),
+                    data: Arc::new(data).into(),
                     width: frame.width,
                     height: frame.height,
                     stride: frame.y_stride,
@@ -290,7 +294,7 @@ async fn main() {
             EditorFrameOutput::Rgba(frame) => {
                 let bytes = frame.data.len() + 24;
                 let ws_frame = WSFrame {
-                    data: frame.data,
+                    data: frame.data.into(),
                     width: frame.width,
                     height: frame.height,
                     stride: frame.padded_bytes_per_row,
@@ -305,7 +309,9 @@ async fn main() {
             #[cfg(target_os = "macos")]
             EditorFrameOutput::Surface(_) => return,
         };
-        frame_watch_tx.send(Some(Arc::new(ws_frame))).ok();
+        frame_watch_tx
+            .send(Some(Arc::new(ws_frame.into_packed())))
+            .ok();
     });
 
     let renderer = match Renderer::spawn_with_telemetry(

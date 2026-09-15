@@ -6,6 +6,7 @@ use cap_rendering::{
     FrameRenderer, ProjectRecordingsMeta, ProjectUniforms, RenderSegment, RenderVideoConstants,
     RendererLayers, TransitionRenderInput, ZoomTransformTimeline,
 };
+use cap_utils::export_resources::{DiskBudget, ExportResources, estimated_working_bytes};
 use futures::FutureExt;
 use image::codecs::jpeg::JpegEncoder;
 use serde::{Deserialize, Serialize};
@@ -22,10 +23,8 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
-#[cfg(not(target_os = "linux"))]
 use tauri::Manager;
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::io::AsyncBufReadExt;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, instrument, warn};
@@ -1161,15 +1160,26 @@ pub async fn export_video(
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
     let window_label = window.label().to_string();
+    let app = window.app_handle().clone();
     Box::pin(run_export_command(move || async move {
         let cancellation_guard =
             ExportCancellationGuard::new(next_export_command_id("export"), Some(window_label));
+        let resources = export_resource_preflight(
+            &app,
+            &project_path,
+            &settings,
+            &editor,
+            None,
+            &cancellation_guard.token(),
+        )
+        .await?;
         export_video_inner(
             project_path,
             settings,
             editor,
             ExportProgress(progress),
             cancellation_guard.token(),
+            resources,
         )
         .await
     }))
@@ -1188,14 +1198,25 @@ pub async fn export_video_with_id(
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
     let window_label = window.label().to_string();
+    let app = window.app_handle().clone();
     Box::pin(run_export_command(move || async move {
         let cancellation_guard = ExportCancellationGuard::new(export_id, Some(window_label));
+        let resources = export_resource_preflight(
+            &app,
+            &project_path,
+            &settings,
+            &editor,
+            None,
+            &cancellation_guard.token(),
+        )
+        .await?;
         export_video_inner(
             project_path,
             settings,
             editor,
             ExportProgress(progress),
             cancellation_guard.token(),
+            resources,
         )
         .await
     }))
@@ -1214,7 +1235,6 @@ pub async fn export_video_to_file(
     file_type: String,
     editor: OptionalWindowEditorInstance,
 ) -> Result<PathBuf, String> {
-    #[cfg(not(target_os = "linux"))]
     let app = window.app_handle().clone();
     let window_label = window.label().to_string();
     Box::pin(run_export_command(move || async move {
@@ -1223,6 +1243,7 @@ pub async fn export_video_to_file(
             Some(window_label),
         );
         export_video_to_file_inner(
+            app.clone(),
             project_path,
             settings,
             editor,
@@ -1245,6 +1266,7 @@ pub async fn export_video_to_file(
 }
 
 async fn export_video_to_file_inner(
+    app: tauri::AppHandle,
     project_path: PathBuf,
     settings: ExportSettings,
     editor: OptionalWindowEditorInstance,
@@ -1257,8 +1279,29 @@ async fn export_video_to_file_inner(
         return Err("Save dialog cancelled".to_string());
     };
 
-    let output_path =
-        export_video_inner(project_path, settings, editor, progress, cancel_token).await?;
+    let destination = match &save_path {
+        ExportSaveDestination::Selected(path) => Some(path.as_path()),
+        #[cfg(any(target_os = "macos", test))]
+        ExportSaveDestination::Default => None,
+    };
+    let resources = export_resource_preflight(
+        &app,
+        &project_path,
+        &settings,
+        &editor,
+        destination,
+        &cancel_token,
+    )
+    .await?;
+    let output_path = export_video_inner(
+        project_path,
+        settings,
+        editor,
+        progress,
+        cancel_token,
+        resources,
+    )
+    .await?;
     match save_path {
         ExportSaveDestination::Selected(path) => {
             copy_export_to_path(&output_path, &path).await?;
@@ -1269,7 +1312,92 @@ async fn export_video_to_file_inner(
     }
 }
 
+async fn export_resource_preflight(
+    app: &tauri::AppHandle,
+    project_path: &Path,
+    settings: &ExportSettings,
+    editor: &OptionalWindowEditorInstance,
+    destination: Option<&Path>,
+    cancel: &CancellationToken,
+) -> Result<ExportResources, String> {
+    if cancel.is_cancelled() {
+        return Err("Export cancelled".into());
+    }
+    let estimate = editor
+        .as_ref()
+        .map(|editor| {
+            let duration = export_estimate_duration(
+                &editor.project_config.1.borrow(),
+                editor.recordings.duration(),
+            );
+            estimated_working_bytes(
+                export_estimates_for_duration(settings, duration).estimated_size_mb,
+            )
+        })
+        .unwrap_or(0);
+    let mut disks = vec![DiskBudget {
+        path: project_path.to_path_buf(),
+        description: "your recording drive",
+        estimated_bytes: estimate,
+    }];
+    if let Some(path) = destination {
+        disks.push(DiskBudget {
+            path: path.to_path_buf(),
+            description: "your export drive",
+            estimated_bytes: estimate,
+        });
+    }
+    let resources = ExportResources::new(disks);
+    if let Some(message) = resources.check().await? {
+        if cancel.is_cancelled() {
+            return Err("Export cancelled".into());
+        }
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        app.dialog()
+            .message(message)
+            .title("Check export resources")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Proceed anyway".into(),
+                "Go back".into(),
+            ))
+            .show(move |confirmed| {
+                let _ = sender.send(confirmed);
+            });
+        let confirmed = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => false,
+            confirmed = receiver => confirmed.unwrap_or(false),
+        };
+        if !confirmed {
+            return Err("Export cancelled".into());
+        }
+        let _ = resources.check().await?;
+    }
+    if cancel.is_cancelled() {
+        return Err("Export cancelled".into());
+    }
+    Ok(resources)
+}
+
 async fn export_video_inner(
+    project_path: PathBuf,
+    settings: ExportSettings,
+    editor: OptionalWindowEditorInstance,
+    progress: ExportProgress,
+    cancel_token: CancellationToken,
+    resources: ExportResources,
+) -> Result<PathBuf, String> {
+    let stopped = cancel_token.child_token();
+    resources
+        .supervise(
+            export_video_attempts(project_path, settings, editor, progress, stopped.clone()),
+            || stopped.cancel(),
+        )
+        .await
+}
+
+async fn export_video_attempts(
     project_path: PathBuf,
     settings: ExportSettings,
     editor: OptionalWindowEditorInstance,
@@ -1600,20 +1728,73 @@ pub struct ExportEstimates {
     pub estimated_size_mb: f64,
 }
 
+static EXPORT_ESTIMATE_CANCELLATIONS: LazyLock<Mutex<HashMap<PathBuf, Arc<AtomicBool>>>> =
+    LazyLock::new(Mutex::default);
+
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+pub fn cancel_export_estimates(editor: WindowEditorInstance) {
+    if let Ok(cancellations) = EXPORT_ESTIMATE_CANCELLATIONS.lock()
+        && let Some(cancel) = cancellations.get(&editor.project_path)
+    {
+        cancel.store(true, Ordering::Release);
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(editor, on_estimate))]
 pub async fn get_export_estimates(
     path: PathBuf,
     settings: ExportSettings,
-) -> Result<ExportEstimates, String> {
-    let metadata = get_video_metadata(path.clone()).await?;
+    on_estimate: tauri::ipc::Channel<cap_export::estimates::ExportEstimates>,
+    editor: WindowEditorInstance,
+) -> Result<cap_export::estimates::ExportEstimates, String> {
+    if path != editor.project_path {
+        return Err("Export estimate does not match the open project".into());
+    }
+    let cancel = Arc::new(AtomicBool::new(false));
+    if let Some(previous) = EXPORT_ESTIMATE_CANCELLATIONS
+        .lock()
+        .map_err(|error| error.to_string())?
+        .insert(path.clone(), cancel.clone())
+    {
+        previous.store(true, Ordering::Release);
+    }
+    let result = async {
+        let project = load_export_preview_config(path.clone(), settings.cursor_only()).await?;
+        let settings = match settings {
+            ExportSettings::Mp4(settings) => cap_export::settings::ExportSettings::Mp4(settings),
+            ExportSettings::Gif(settings) => cap_export::settings::ExportSettings::Gif(settings),
+            ExportSettings::Mov(settings) => cap_export::settings::ExportSettings::Mov(settings),
+        };
+        cap_export::estimates::estimate_export(
+            (**editor).clone(),
+            project,
+            settings,
+            cancel.clone(),
+            move |estimate| {
+                let _ = on_estimate.send(estimate);
+            },
+        )
+        .await
+    }
+    .await;
+    if let Ok(mut cancellations) = EXPORT_ESTIMATE_CANCELLATIONS.lock()
+        && cancellations
+            .get(&path)
+            .is_some_and(|current| Arc::ptr_eq(current, &cancel))
+    {
+        let _ = cancellations.remove(&path);
+    }
+    result
+}
 
-    let meta = RecordingMeta::load_for_project(&path).map_err(|e| e.to_string())?;
-    let project_config = meta.project_config();
-    let duration_seconds = export_estimate_duration(&project_config, metadata.duration);
-
-    let (resolution, fps) = match &settings {
+fn export_estimates_for_duration(
+    settings: &ExportSettings,
+    duration_seconds: f64,
+) -> ExportEstimates {
+    let (resolution, fps) = match settings {
         ExportSettings::Mp4(s) => (s.resolution_base, s.fps),
         ExportSettings::Gif(s) => (s.resolution_base, s.fps),
         ExportSettings::Mov(s) => (s.resolution_base, s.fps),
@@ -1626,7 +1807,7 @@ pub async fn get_export_estimates(
 
     let (estimated_size_mb, estimated_time_seconds) = match &settings {
         ExportSettings::Mp4(mp4_settings) => {
-            let bits_per_pixel = mp4_settings.compression.bits_per_pixel() as f64;
+            let bits_per_pixel = mp4_settings.effective_bpp() as f64;
             let effective_fps = ((fps_f64 - 30.0).max(0.0) * 0.6) + fps_f64.min(30.0);
             let video_bitrate = total_pixels * bits_per_pixel * effective_fps;
             let audio_bitrate = 192_000.0;
@@ -1669,11 +1850,11 @@ pub async fn get_export_estimates(
         }
     };
 
-    Ok(ExportEstimates {
+    ExportEstimates {
         duration_seconds,
         estimated_time_seconds,
         estimated_size_mb,
-    })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Type)]

@@ -15,6 +15,7 @@ interface FrameMessage {
 
 interface InitCanvasMessage {
 	type: "init-canvas";
+	preserveAlpha?: boolean;
 	canvas: OffscreenCanvas;
 }
 
@@ -47,6 +48,8 @@ interface ReadyMessage {
 
 interface FrameRenderedMessage {
 	type: "frame-rendered";
+	frameNumber?: number;
+	targetTimeNs?: bigint;
 	width: number;
 	height: number;
 }
@@ -147,7 +150,7 @@ let webgpuRenderer: WebGPURenderer | null = null;
 let offscreenCanvas: OffscreenCanvas | null = null;
 let offscreenCtx: OffscreenCanvasRenderingContext2D | null = null;
 let lastImageData: ImageData | null = null;
-let pendingCanvasInit: OffscreenCanvas | null = null;
+let pendingCanvasInit: InitCanvasMessage | null = null;
 
 let strideBuffer: Uint8ClampedArray | null = null;
 let strideBufferSize = 0;
@@ -453,6 +456,8 @@ function renderBorrowedWebGPU(bytes: Uint8Array, release: () => void): boolean {
 		type: "frame-rendered",
 		width,
 		height,
+		frameNumber,
+		targetTimeNs,
 	} satisfies FrameRenderedMessage);
 
 	return true;
@@ -733,6 +738,7 @@ function renderLoop() {
 					type: "frame-rendered",
 					width: frame.width,
 					height: frame.height,
+					...frame.timing,
 				} satisfies FrameRenderedMessage);
 
 				const shouldContinue =
@@ -792,6 +798,7 @@ function renderLoop() {
 			type: "frame-rendered",
 			width: frame.width,
 			height: frame.height,
+			...frame.timing,
 		} satisfies FrameRenderedMessage);
 	}
 
@@ -871,7 +878,7 @@ function initWorker() {
 	self.postMessage({ type: "ready" } satisfies ReadyMessage);
 
 	if (pendingCanvasInit) {
-		initCanvas(pendingCanvasInit);
+		initCanvas(pendingCanvasInit.canvas, pendingCanvasInit.preserveAlpha);
 		pendingCanvasInit = null;
 	}
 
@@ -882,7 +889,10 @@ function initWorker() {
 
 initWorker();
 
-async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
+async function initCanvas(
+	canvas: OffscreenCanvas,
+	preserveAlpha = false,
+): Promise<void> {
 	if (isInitializing) {
 		return initializationPromise ?? Promise.resolve();
 	}
@@ -895,7 +905,11 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 
 		if (webgpuSupported) {
 			try {
-				webgpuRenderer = await initWebGPU(canvas);
+				webgpuRenderer = await initWebGPU(
+					canvas,
+					"high-performance",
+					preserveAlpha,
+				);
 				renderMode = "webgpu";
 				self.postMessage({
 					type: "renderer-mode",
@@ -905,7 +919,7 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 				console.error("[frame-worker] WebGPU init failed:", e);
 				renderMode = "canvas2d";
 				offscreenCtx = canvas.getContext("2d", {
-					alpha: false,
+					alpha: preserveAlpha,
 					desynchronized: true,
 				});
 				self.postMessage({
@@ -916,7 +930,7 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 		} else {
 			renderMode = "canvas2d";
 			offscreenCtx = canvas.getContext("2d", {
-				alpha: false,
+				alpha: preserveAlpha,
 				desynchronized: true,
 			});
 			self.postMessage({
@@ -1165,10 +1179,10 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 
 	if (e.data.type === "init-canvas") {
 		if (!workerReady) {
-			pendingCanvasInit = e.data.canvas;
+			pendingCanvasInit = e.data;
 			return;
 		}
-		await initCanvas(e.data.canvas);
+		await initCanvas(e.data.canvas, e.data.preserveAlpha);
 		return;
 	}
 

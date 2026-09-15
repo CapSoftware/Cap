@@ -2071,6 +2071,8 @@ pub fn apply_caption_result(
                 end: recording_duration,
                 name: None,
                 speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
             }],
             transitions: Vec::new(),
             zoom_segments: Vec::new(),

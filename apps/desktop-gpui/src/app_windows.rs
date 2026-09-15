@@ -29,9 +29,9 @@ use crate::{
     mode_select_window::{self, ModeSelectWindow},
     onboarding_window::{self, OnboardingWindow},
     platform,
-    recording::{RecordingMode, StartConfig},
+    recording::{RecordingMode, StartConfig, StudioFinalization},
     screenshot_editor::{self, ScreenshotEditorWindow},
-    session::{Phase, RecordingSession},
+    session::{Phase, RecordingSession, StudioEditorPresentation},
     settings_window::{self, Page, SettingsWindow},
     target_overlay::{AreaRect, HoveredWindow, OverlayWindow, TargetSelect},
     teleprompter_window::{self, TeleprompterWindow},
@@ -206,6 +206,7 @@ pub struct AppWindows {
     /// incrementing id; the path is the identity in both.
     pub editors: Vec<(PathBuf, WindowHandle<EditorWindow>)>,
     deleting_editors: HashSet<PathBuf>,
+    preparing_cleanup: crate::editor_preparing::PreparingCleanupRegistry,
     /// One screenshot editor per `.cap` bundle -- the gpui spelling of
     /// `ScreenshotEditorWindowIds`, keyed by the bundle directory.
     pub screenshot_editors: Vec<(PathBuf, WindowHandle<ScreenshotEditorWindow>)>,
@@ -486,6 +487,7 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         overlays: Vec::new(),
         editors: Vec::new(),
         deleting_editors: HashSet::new(),
+        preparing_cleanup: crate::editor_preparing::PreparingCleanupRegistry::default(),
         screenshot_editors: Vec::new(),
         main_hidden_for_picker: false,
         editor_hidden_for_picker: None,
@@ -521,6 +523,9 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             // status item becomes a stop button while a capture runs.
             crate::tray::set_recording(recording, cx);
         }
+        if phase == Phase::Stopping {
+            open_preparing_studio_editor(&session, cx);
+        }
         if phase == Phase::Idle && last_phase != Phase::Idle {
             #[cfg(target_os = "linux")]
             if !session.read(cx).instant_cleanup_safe() {
@@ -532,7 +537,12 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
             if !restore_clean_capture_ui(cx) {
                 return;
             }
-            let finished_studio = session.update(cx, |session, _| session.finished_studio.take());
+            let (finished_studio, preparing_editor) = session.update(cx, |session, _| {
+                (
+                    session.finished_studio.take(),
+                    session.take_preparing_studio_editor(),
+                )
+            });
             // The in-editor re-record target is consumed first, before
             // `postStudioRecordingBehaviour` is even consulted -- the order
             // `apply_post_studio_editor_behaviour` checks them
@@ -549,6 +559,20 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
                 session.update(cx, |session, _| session.take_editor_recording_target());
             if let Some(editor_path) = editor_target {
                 editor_recording_finished(editor_path, finished_studio, cx);
+            } else if let Some(preparing) =
+                preparing_editor.filter(|pending| pending.presentation.suppresses_completion_open())
+            {
+                let key = editor_key(&preparing.project_path);
+                if !cx
+                    .global::<AppWindows>()
+                    .editors
+                    .iter()
+                    .any(|(path, _)| path == &key)
+                {
+                    restore_after_editor_close(&key, cx);
+                } else {
+                    park_idle_camera_preview(cx);
+                }
             } else {
                 // `postStudioRecordingBehaviour` (`openEditor` is the
                 // default): a cleanly-stopped studio recording goes straight
@@ -591,6 +615,40 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
     // The Tauri app orders it the same way -- `DeepLinkActionExecutor::new` in
     // `setup`, before `on_open_url` is wired (`lib.rs:5449`).
     crate::deeplink::init(cx);
+}
+
+fn open_preparing_studio_editor(session: &Entity<RecordingSession>, cx: &mut App) {
+    let Some(pending) = session.read(cx).preparing_studio_editor().cloned() else {
+        return;
+    };
+    if !pending.capture_stopped
+        || pending.presentation != StudioEditorPresentation::Pending
+        || !pending.finalization.is_finalizing()
+        || crate::store::GeneralSettings::load().post_studio_recording_behaviour
+            != crate::store::PostStudioBehaviour::OpenEditor
+    {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    if !restore_clean_capture_ui(cx) {
+        return;
+    }
+    session.update(cx, |session, _| {
+        if let Some(current) = session.preparing_studio_editor_mut() {
+            current.presentation = StudioEditorPresentation::Attempted;
+        }
+    });
+    open_editor(pending.project_path, cx);
+    if session
+        .read(cx)
+        .preparing_studio_editor()
+        .is_some_and(|pending| matches!(pending.presentation, StudioEditorPresentation::Opened(_)))
+    {
+        close_controls(session, cx);
+        close_target_overlays(cx);
+        close_camera_window(cx);
+        restore_content_protection(cx);
+    }
 }
 
 /// `createThemeListener` + `commands.setTheme`: persist is already done; this
@@ -761,12 +819,6 @@ pub(crate) fn show_main_window_after_capture_pause(cx: &mut App) {
                 view.show_recorder(cx);
                 view.clear_target(cx);
             }
-            // Every path back to the main window is a path a new capture may
-            // have arrived on -- a finished recording most of all. The Tauri
-            // app gets this from `invalidateRecentMedia` plus the query's
-            // focus gate; here the reshow *is* the trigger, so a recording
-            // made a moment ago is in the list without a restart.
-            view.refresh_recents(window, cx);
             #[cfg(target_os = "linux")]
             if window.retained_visibility().is_some() {
                 match window.set_retained_visibility(true) {
@@ -875,7 +927,10 @@ pub fn hide_main_window(cx: &mut App) {
 
 fn hide_main_and_park_camera_preview(cx: &mut App) {
     hide_main_window(cx);
+    park_idle_camera_preview(cx);
+}
 
+fn park_idle_camera_preview(cx: &mut App) {
     if !camera_preview_can_be_parked(RecordingSession::global(cx).read(cx).phase) {
         return;
     }
@@ -885,6 +940,11 @@ fn hide_main_and_park_camera_preview(cx: &mut App) {
         view.suspend_device_restore();
     })
     .ok();
+    if let Some(handle) = cx.global::<AppWindows>().camera {
+        handle
+            .update(cx, |view, _, cx| view.retain_preview(cx))
+            .ok();
+    }
     close_camera_window(cx);
     crate::feeds::Feeds::global(cx).update(cx, |feeds, cx| feeds.park_camera_preview(cx));
 }
@@ -2579,6 +2639,7 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
         overlays,
         editors,
         deleting_editors: _,
+        preparing_cleanup: _,
         screenshot_editors,
         main_hidden_for_picker: _,
         editor_hidden_for_picker: _,
@@ -2904,7 +2965,7 @@ pub(crate) fn refresh_linux_instant_camera(
         effects: LinuxCameraProcessing {
             mirrored: snapshot.state.mirrored,
             blur: match snapshot.state.background_blur {
-                BlurMode::Off => LinuxCameraBlur::Off,
+                BlurMode::Off | BlurMode::Remove => LinuxCameraBlur::Off,
                 BlurMode::Light => LinuxCameraBlur::Light,
                 BlurMode::Heavy => LinuxCameraBlur::Heavy,
             },
@@ -3691,7 +3752,8 @@ pub fn open_camera_window(cx: &mut App) {
     }
 
     let state = crate::store::load().camera_window.unwrap_or_default();
-    let (width, height) = camera_window::window_size(&state, None);
+    let (width, height) =
+        camera_window::window_size(&state, camera_window::retained_preview_aspect(cx));
 
     let main = cx.global::<AppWindows>().main;
     let display = main
@@ -3982,6 +4044,16 @@ fn camera_frame(cx: &mut App) -> Option<CameraFrame> {
         .ok()
         .flatten()
         .filter(|camera| camera.snapshot.bounds.width > 0. && camera.snapshot.bounds.height > 0.)
+}
+
+pub(crate) fn studio_camera_snapshot(
+    target: &ScreenCaptureTarget,
+    cx: &mut App,
+) -> Option<crate::recording::StudioCameraSnapshot> {
+    let handle = cx.global::<AppWindows>().camera?;
+    handle
+        .update(cx, |view, window, _| view.studio_snapshot(window, target))
+        .ok()
 }
 
 fn visible_camera_frame(cx: &mut App) -> Option<CameraFrame> {
@@ -4439,6 +4511,12 @@ pub fn deliver_camera_frame(
     #[cfg(not(target_os = "macos"))] frame: crate::camera_window::CameraPreviewFrame,
     cx: &mut App,
 ) -> bool {
+    if !crate::feeds::Feeds::global(cx)
+        .read(cx)
+        .accepts_camera_preview(frame.timestamp)
+    {
+        return false;
+    }
     let Some(handle) = cx.global::<AppWindows>().camera else {
         return false;
     };
@@ -4495,21 +4573,52 @@ fn editor_key(path: &Path) -> PathBuf {
 /// Must be reached through `cx.defer` from anything inside an entity update:
 /// opening a window paints it synchronously and would double-lease the caller.
 pub fn open_editor(project_path: PathBuf, cx: &mut App) {
+    let key = editor_key(&project_path);
+    let session = RecordingSession::global(cx);
+    let preparing = session
+        .read(cx)
+        .preparing_studio_editor()
+        .filter(|pending| editor_key(&pending.project_path) == key)
+        .cloned();
+    if preparing
+        .as_ref()
+        .is_some_and(|pending| !pending.capture_stopped)
+    {
+        return;
+    }
+    let finalization = preparing.map(|pending| pending.finalization);
+    if let Some(window_id) = open_editor_window(project_path, finalization, cx) {
+        session.update(cx, |session, _| {
+            if let Some(pending) = session.preparing_studio_editor_mut()
+                && editor_key(&pending.project_path) == key
+            {
+                pending.presentation = StudioEditorPresentation::Opened(window_id);
+            }
+        });
+    }
+}
+
+fn open_editor_window(
+    project_path: PathBuf,
+    finalization: Option<StudioFinalization>,
+    cx: &mut App,
+) -> Option<gpui::WindowId> {
     #[cfg(target_os = "linux")]
     if defer_window_until_capture_safe(cx) {
-        return;
+        return None;
     }
     let key = editor_key(&project_path);
     if cx.global::<AppWindows>().deleting_editors.contains(&key) {
         tracing::info!(path = %key.display(), "recording deletion is still settling; editor remains closed");
-        return;
+        return None;
     }
 
-    if cx
+    if let Some(window_id) = cx
         .global::<AppWindows>()
         .editors
         .iter()
-        .any(|(path, _)| path == &key)
+        .find(|(path, _)| path == &key)
+        .map(|(_, handle)| handle.window_id())
     {
         tracing::info!(
             path = %key.display(),
@@ -4517,7 +4626,7 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
         );
         hide_main_and_park_camera_preview(cx);
         reveal_editor_window(&key, cx);
-        return;
+        return Some(window_id);
     }
 
     let bounds = opening_window_bounds(
@@ -4571,7 +4680,7 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
         Ok(handle) => handle,
         Err(error) => {
             tracing::error!("editor window failed to open: {error:#}");
-            return;
+            return None;
         }
     };
 
@@ -4595,7 +4704,137 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
 
     hide_main_and_park_camera_preview(cx);
     reveal_editor_window(&key, cx);
-    load_editor_project(key, handle, cx);
+    if finalization.is_some() {
+        tracing::info!(path = %key.display(), "preparing editor shell created");
+        let frame_path = key.clone();
+        handle.update(cx, |_, window, _| {
+            window.on_next_frame(move |window, _| {
+                window.on_next_frame(move |_, _| {
+                    tracing::info!(path = %frame_path.display(), "preparing editor first frame cycle completed");
+                });
+            });
+            window.refresh();
+        }).ok();
+    }
+    load_editor_project(key, handle, finalization, cx);
+    Some(handle.window_id())
+}
+
+fn editor_audio_output() -> Arc<cap_editor::AudioOutput> {
+    if std::env::var("CAP_GPUI_MUTE_AUDIO").is_ok_and(|value| value == "1") {
+        Arc::new(cap_editor::AudioOutput::new_headless(Box::new(|_, _| {})))
+    } else {
+        Arc::new(cap_editor::AudioOutput::new())
+    }
+}
+
+fn start_preparing_editor(
+    path: PathBuf,
+    handle: WindowHandle<EditorWindow>,
+    finalization: StudioFinalization,
+    audio_output: Arc<cap_editor::AudioOutput>,
+    cx: &mut App,
+) -> crate::editor_preparing::PreparingJoin {
+    let resolution = editor_window::preview_resolution(
+        crate::store::GeneralSettings::load().editor_preview_quality,
+    );
+    let (consumer, joined, frames) = crate::editor_preparing::spawn(
+        finalization,
+        resolution,
+        audio_output,
+        &gpui_tokio::Tokio::handle(cx),
+    );
+    cx.global_mut::<AppWindows>()
+        .preparing_cleanup
+        .register(path.clone(), joined.clone());
+    let mut updates = consumer.updates();
+    handle
+        .update(cx, |view, window, cx| {
+            view.begin_preparing(consumer);
+            cx.notify();
+            window.refresh();
+        })
+        .ok();
+    cx.spawn({
+        let path = path.clone();
+        async move |cx| {
+            loop {
+                let update = updates.borrow_and_update().clone();
+                if let Some(update) = update {
+                    let current_window = cx.update(|cx| {
+                        cx.global::<AppWindows>()
+                            .editors
+                            .iter()
+                            .any(|(key, current)| {
+                                key == &path && current.window_id() == handle.window_id()
+                            })
+                    });
+                    if !current_window
+                        || handle
+                            .update(cx, |view, window, cx| {
+                                view.preparing_progress_arrived(update, window, cx)
+                            })
+                            .is_err()
+                    {
+                        return;
+                    }
+                }
+                if updates.changed().await.is_err() {
+                    return;
+                }
+            }
+        }
+    })
+    .detach();
+    cx.spawn(async move |cx| {
+        while let Ok(preparing) = frames.recv_async().await {
+            let frame = match preparing.output {
+                cap_editor::EditorFrameOutput::Rgba(frame) => {
+                    let image = cx
+                        .background_executor()
+                        .spawn(async move { editor_window::frame_image(&frame) })
+                        .await;
+                    let Some(image) = image else { continue };
+                    editor_window::EditorPreviewFrame::Image(image)
+                }
+                #[cfg(target_os = "macos")]
+                cap_editor::EditorFrameOutput::Surface(surface) => {
+                    editor_window::surface_preview_frame(surface)
+                }
+                cap_editor::EditorFrameOutput::Nv12(_) => continue,
+            };
+            let current_window = cx.update(|cx| {
+                cx.global::<AppWindows>()
+                    .editors
+                    .iter()
+                    .any(|(key, current)| key == &path && current.window_id() == handle.window_id())
+            });
+            if !current_window {
+                return;
+            }
+            if handle
+                .update(cx, |view, window, cx| {
+                    view.preparing_frame_arrived(
+                        &preparing.epoch,
+                        &preparing.identity,
+                        preparing.request.sequence,
+                        editor_window::EditorFrame {
+                            frame,
+                            layout: preparing.layout,
+                            number: preparing.request.frame_number,
+                        },
+                        window,
+                        cx,
+                    );
+                })
+                .is_err()
+            {
+                return;
+            }
+        }
+    })
+    .detach();
+    joined
 }
 
 /// Build the `EditorInstance` and get frame 0 on screen.
@@ -4605,8 +4844,119 @@ pub fn open_editor(project_path: PathBuf, cx: &mut App) {
 /// preview renderer, all of which are tokio-spawned -- is constructed on the
 /// `gpui_tokio` runtime. `EditorInstance::new` on the main thread would block
 /// it for however long the first segment takes to open.
-fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &mut App) {
+fn load_editor_project(
+    path: PathBuf,
+    handle: WindowHandle<EditorWindow>,
+    finalization: Option<StudioFinalization>,
+    cx: &mut App,
+) {
+    load_editor_project_candidate(path, handle, finalization, None, cx);
+}
+
+pub(crate) fn retry_preparing_editor(
+    path: PathBuf,
+    handle: WindowHandle<EditorWindow>,
+    previous: Arc<cap_editor::EditorInstance>,
+    cx: &mut App,
+) {
+    load_editor_project_candidate(path, handle, None, Some(previous), cx);
+}
+
+fn load_editor_project_candidate(
+    path: PathBuf,
+    handle: WindowHandle<EditorWindow>,
+    finalization: Option<StudioFinalization>,
+    previous: Option<Arc<cap_editor::EditorInstance>>,
+    cx: &mut App,
+) {
+    let preparing_output = finalization.as_ref().map(|_| editor_audio_output());
+    let current_join =
+        finalization
+            .as_ref()
+            .zip(preparing_output.as_ref())
+            .map(|(finalization, output)| {
+                start_preparing_editor(
+                    path.clone(),
+                    handle,
+                    finalization.clone(),
+                    output.clone(),
+                    cx,
+                )
+            });
+    let continuing_join = current_join.clone();
+    let mut preparing_joins = if previous.is_some() {
+        Vec::new()
+    } else {
+        cx.global_mut::<AppWindows>()
+            .preparing_cleanup
+            .pending(&path)
+    };
+    if let Some(joined) = current_join
+        && !preparing_joins.iter().any(|pending| pending.same(&joined))
+    {
+        preparing_joins.push(joined);
+    }
     cx.spawn(async move |cx| {
+        let finalized = match finalization {
+            Some(finalization) => finalization.wait().await,
+            None => Ok(()),
+        };
+        let mut completed_audio = None;
+        let mut live_handoff = None;
+        for joined in &preparing_joins {
+            if finalized.is_ok()
+                && continuing_join
+                    .as_ref()
+                    .is_some_and(|current| current.same(joined))
+                && let Some(handoff) = joined.continuing_handoff().await
+            {
+                match handoff.take_completed_audio().await {
+                    Ok(audio) => {
+                        completed_audio = Some(audio);
+                        live_handoff = Some(handoff);
+                        continue;
+                    }
+                    Err(_) => {
+                        handoff.cancel();
+                    }
+                }
+            }
+            let completed = match joined.wait().await {
+                Ok(completed) => completed,
+                Err(message) => {
+                    handle
+                        .update(cx, |view, window, cx| view.set_error(message, window, cx))
+                        .ok();
+                    return;
+                }
+            };
+            let audio = completed.take_audio();
+            let accepted = handle
+                .update(cx, |view, window, cx| {
+                    let accepted = view.finish_preparing(&completed);
+                    cx.notify();
+                    window.refresh();
+                    accepted
+                })
+                .unwrap_or(false);
+            if accepted && finalized.is_ok() {
+                completed_audio = audio;
+            }
+        }
+        cx.update(|cx| {
+            cx.global_mut::<AppWindows>()
+                .preparing_cleanup
+                .prune_completed()
+        });
+        if let Err(message) = finalized {
+            handle
+                .update(cx, |view, window, cx| view.set_error(message, window, cx))
+                .ok();
+            return;
+        }
+        if handle.update(cx, |_, _, _| ()).is_err() {
+            return;
+        }
         let preflight_path = path.clone();
         let summary = cx
             .background_executor()
@@ -4671,23 +5021,28 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
                 let frame_format = cap_editor::EditorFrameFormat::BgraSurface;
                 #[cfg(not(target_os = "macos"))]
                 let frame_format = cap_editor::EditorFrameFormat::Rgba;
-                let audio_output = if std::env::var("CAP_GPUI_MUTE_AUDIO").is_ok_and(|v| v == "1") {
-                    std::sync::Arc::new(cap_editor::AudioOutput::new_headless(Box::new(
-                        |_samples, _at| {},
-                    )))
-                } else {
-                    std::sync::Arc::new(cap_editor::AudioOutput::new())
-                };
-                cap_editor::EditorInstance::new_with_preloaded_recordings(
+                if let Some(previous) = previous {
+                    return previous
+                        .recreate_preparing_candidate(state_cb, frame_cb, frame_format)
+                        .await;
+                }
+                let instance = cap_editor::EditorInstance::new_with_startup_inputs(
                     instance_path,
                     state_cb,
                     frame_cb,
                     None,
                     frame_format,
-                    audio_output,
-                    recordings,
+                    preparing_output.unwrap_or_else(editor_audio_output),
+                    cap_editor::EditorStartupInputs {
+                        recordings: Some(recordings),
+                        completed_audio,
+                    },
                 )
-                .await
+                .await?;
+                if let Some(handoff) = live_handoff {
+                    instance.install_preparing_handoff(&handoff).await?;
+                }
+                Ok::<_, String>(instance)
             })
         });
 
@@ -4753,6 +5108,7 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         // BGRA swap is a few megabytes per frame), deliver on the main one.
         cx.spawn({
             let stats = stats.clone();
+            let pump_instance = instance.clone();
             async move |cx| {
                 while let Ok((output, layout)) = frame_rx.recv_async().await {
                     let (frame, number) = match output {
@@ -4788,6 +5144,9 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
                     };
                     if handle
                         .update(cx, |view, window, cx| {
+                            if !view.is_instance(&pump_instance) {
+                                return;
+                            }
                             view.frame_arrived(
                                 editor_window::EditorFrame {
                                     frame,
@@ -4810,12 +5169,15 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         // The playhead drain. The signal is latest-wins, so this reads the
         // atomic rather than a queue: at 60Hz a backlog would only ever
         // describe the past.
+        let playhead_instance = instance.clone();
         cx.spawn(async move |cx| {
             while playhead_rx.recv_async().await.is_ok() {
                 let frame = playhead.position();
                 if handle
                     .update(cx, |view, window, cx| {
-                        view.playhead_changed(frame, window, cx)
+                        if view.is_instance(&playhead_instance) {
+                            view.playhead_changed(frame, window, cx);
+                        }
                     })
                     .is_err()
                 {
@@ -4840,10 +5202,15 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
         // The engine-stop drain: the driver's message that the engine died on
         // its own (end of timeline under a live seek, warmup abort, error),
         // delivered on the main thread like every other foreign-thread seam.
+        let stopped_instance = instance.clone();
         cx.spawn(async move |cx| {
             while engine_stopped_rx.recv_async().await.is_ok() {
                 if handle
-                    .update(cx, |view, window, cx| view.engine_stopped(window, cx))
+                    .update(cx, |view, window, cx| {
+                        if view.is_instance(&stopped_instance) {
+                            view.engine_stopped(window, cx);
+                        }
+                    })
                     .is_err()
                 {
                     return;
@@ -4863,17 +5230,6 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
             return;
         }
 
-        // The initial kick, exactly as `lib.rs:6617-6618` does it after
-        // creating an instance. Without this the canvas stays black: `seek_to`
-        // and `set_playhead_position` render nothing.
-        editor_window::request_frame(
-            &instance,
-            0,
-            editor_window::preview_resolution(
-                crate::store::GeneralSettings::load().editor_preview_quality,
-            ),
-        );
-
         drive_auto_sidebar(handle, cx).await;
         drive_auto_playback(path, handle, cx).await;
         drive_auto_export(handle, cx).await;
@@ -4882,6 +5238,23 @@ fn load_editor_project(path: PathBuf, handle: WindowHandle<EditorWindow>, cx: &m
 }
 
 async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::AsyncApp) {
+    if let Ok(page) = std::env::var("CAP_GPUI_AUTO_EXPORT_PAGE") {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(300))
+            .await;
+        let _ = handle.update(cx, |view, window, cx| {
+            view.open_export(window, cx);
+            if let Some(export) = view.export.as_mut() {
+                let flags: Vec<&str> = page.split(',').collect();
+                export.advanced_open = flags.contains(&"advanced");
+                if flags.contains(&"link") {
+                    export.destination = crate::editor_export::ExportDestination::Link;
+                }
+            }
+            cx.notify();
+        });
+        return;
+    }
     let Some(path) = std::env::var_os("CAP_GPUI_AUTO_EXPORT").map(PathBuf::from) else {
         return;
     };
@@ -4978,7 +5351,7 @@ fn load_editor_waveforms(
                         .map(|audio| {
                             Arc::new(match audio {
                                 Some(audio) => editor_timeline::waveform_peaks(
-                                    audio.samples(),
+                                    audio.sample_slices().flatten(),
                                     audio.channels(),
                                 ),
                                 None => Vec::new(),
@@ -5002,8 +5375,9 @@ fn load_editor_waveforms(
 }
 
 /// `CAP_GPUI_AUTO_SIDEBAR=<tab>[:<scroll>]` selects a config-sidebar tab and
-/// optionally scrolls its body, and `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]`
-/// selects timeline segments so their panel opens.
+/// optionally scrolls its body, `CAP_GPUI_AUTO_CAMERA3D=add[:<time>]|auto`
+/// makes a 3D shot, and `CAP_GPUI_AUTO_SELECT=<track>:<i>[,<i>]` selects
+/// timeline segments so their panel opens.
 ///
 /// They exist for the same reason as every other `CAP_GPUI_AUTO_*` hook, plus
 /// one specific to this pane: **a synthetic wheel does not scroll the sidebar's
@@ -5016,7 +5390,17 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
     let select = std::env::var("CAP_GPUI_AUTO_SELECT").ok();
     let canvas = std::env::var("CAP_GPUI_AUTO_CANVAS").ok();
     let crop = std::env::var("CAP_GPUI_AUTO_CROP").ok();
-    if tab.is_none() && select.is_none() && canvas.is_none() && crop.is_none() {
+    let clip_menu = std::env::var("CAP_GPUI_AUTO_CLIP_MENU").ok();
+    let camera3d = std::env::var("CAP_GPUI_AUTO_CAMERA3D").ok();
+    let add_track = std::env::var("CAP_GPUI_AUTO_ADD_TRACK").ok();
+    if tab.is_none()
+        && select.is_none()
+        && canvas.is_none()
+        && crop.is_none()
+        && clip_menu.is_none()
+        && camera3d.is_none()
+        && add_track.is_none()
+    {
         return;
     }
     cx.background_executor()
@@ -5032,6 +5416,15 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
             .update(cx, |view, window, cx| {
                 view.auto_select_sidebar_tab(&name, scroll, window, cx)
             })
+            .ok();
+    }
+
+    // `CAP_GPUI_AUTO_CAMERA3D=add[:<time>]|auto`: make a 3D shot the way the
+    // lane's own chips make one. Before the selection hook, so a probe can
+    // create a shot and then photograph its panel.
+    if let Some(spec) = camera3d {
+        handle
+            .update(cx, |view, window, cx| view.auto_camera3d(&spec, window, cx))
             .ok();
     }
 
@@ -5059,6 +5452,28 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
             .update(cx, |view, window, cx| view.auto_crop(&spec, window, cx))
             .ok();
     }
+
+    // `CAP_GPUI_AUTO_CLIP_MENU=<index>[:split]`: open clip `<index>`'s settings
+    // menu the way a right-click on it does, optionally splitting the first
+    // clip at 40% first so the merge rows have a neighbour to act on.
+    if let Some(spec) = clip_menu {
+        handle
+            .update(cx, |view, window, cx| {
+                view.auto_clip_menu(&spec, window, cx)
+            })
+            .ok();
+    }
+
+    // `CAP_GPUI_AUTO_ADD_TRACK=1` opens the add-track tray;
+    // `CAP_GPUI_AUTO_ADD_TRACK=<text|mask|style|audio|...>` opens it and picks
+    // that tile, then treats the player as hovered so its overlay draws.
+    if let Some(spec) = add_track {
+        handle
+            .update(cx, |view, window, cx| {
+                view.auto_add_track(&spec, window, cx)
+            })
+            .ok();
+    }
 }
 
 /// `CAP_GPUI_AUTO_PLAYBACK=<seconds>` presses play once the project is up and
@@ -5082,6 +5497,10 @@ async fn drive_auto_playback(
     let seek = std::env::var("CAP_GPUI_AUTO_SEEK")
         .ok()
         .and_then(|value| value.parse::<f64>().ok());
+    let seek_time = std::env::var("CAP_GPUI_AUTO_SEEK_TIME")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0);
     // `CAP_GPUI_AUTO_SCRUB_PLAYING=<n>`: a synthetic ruler drag during
     // playback -- n seeks at 33ms intervals sweeping 20% to 70% of the
     // timeline. This is the live-seek path's perf gate: every seek lands on a
@@ -5089,7 +5508,12 @@ async fn drive_auto_playback(
     let scrub_playing = std::env::var("CAP_GPUI_AUTO_SCRUB_PLAYING")
         .ok()
         .and_then(|value| value.parse::<u32>().ok());
-    if play_secs.is_none() && torture.is_none() && seek.is_none() && scrub_playing.is_none() {
+    if play_secs.is_none()
+        && torture.is_none()
+        && seek.is_none()
+        && seek_time.is_none()
+        && scrub_playing.is_none()
+    {
         return;
     }
 
@@ -5142,6 +5566,16 @@ async fn drive_auto_playback(
             })
             .ok();
         tracing::info!(fraction, "auto seek");
+    }
+
+    if let Some(seconds) = seek_time {
+        handle
+            .update(cx, |view, _window, cx| {
+                let seconds = seconds.min(view.total_duration());
+                view.seek_to_time(seconds, cx);
+                tracing::info!(seconds, "auto seek to recording time");
+            })
+            .ok();
     }
 
     if let Some(n) = scrub_playing {
@@ -5261,6 +5695,34 @@ pub fn editor_closed(project_path: &Path, window_id: gpui::WindowId, cx: &mut Ap
         return;
     };
 
+    RecordingSession::global(cx).update(cx, |session, _| {
+        if let Some(pending) = session.preparing_studio_editor_mut()
+            && editor_key(&pending.project_path) == key
+        {
+            pending.presentation.closed(window_id);
+        }
+    });
+
+    handle.update(cx, |view, _, _| view.cancel_preparing()).ok();
+    let preparing_joins = cx
+        .global_mut::<AppWindows>()
+        .preparing_cleanup
+        .pending(&key);
+    cx.spawn(async move |cx| {
+        for joined in preparing_joins {
+            if let Err(error) = joined.wait().await {
+                tracing::warn!(%error, "Closed preparing editor cleanup failed");
+                return;
+            }
+        }
+        cx.update(|cx| {
+            cx.global_mut::<AppWindows>()
+                .preparing_cleanup
+                .prune_completed()
+        });
+    })
+    .detach();
+
     // `onCleanup(() => { clearTimeout(saveTimer); flushProjectConfig() })`
     // (`ED/context.ts:1246-1252`): a `.cap` closed inside the 250ms save
     // debounce still gets its last edit written.
@@ -5272,7 +5734,19 @@ pub fn editor_closed(project_path: &Path, window_id: gpui::WindowId, cx: &mut Ap
         .ok()
         .flatten();
     if let Some(instance) = instance {
-        gpui_tokio::Tokio::spawn(cx, async move { instance.dispose().await }).detach();
+        let refresh =
+            gpui_tokio::Tokio::spawn(cx, async move { instance.dispose_with_thumbnail().await });
+        cx.spawn(async move |cx| {
+            if refresh.await.unwrap_or(false) {
+                cx.update(|cx| {
+                    refresh_library_after_delete(cx);
+                    let main = cx.global::<AppWindows>().main;
+                    main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
+                        .ok();
+                });
+            }
+        })
+        .detach();
     }
 
     restore_after_editor_close(&key, cx);
@@ -5313,8 +5787,9 @@ fn restore_after_editor_close(key: &Path, cx: &mut App) {
         settings_open,
         "editor window closed"
     );
-    let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-    if reveal_main_after_editor_close(editors_left, settings_open, idle) {
+    let session = session.read(cx);
+    let capture_safe = session.phase == Phase::Idle || session.capture_stopped_for_editor();
+    if reveal_main_after_editor_close(editors_left, settings_open, capture_safe) {
         show_main_window(cx);
     } else {
         // A dock-activating window closed; the policy has to be recomputed
@@ -5867,7 +6342,7 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
             .ok();
     }
     let main = cx.global::<AppWindows>().main;
-    main.update(cx, |view, window, cx| view.refresh_recents(window, cx))
+    main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
         .ok();
 
     // The editor owns the foreground now, the way a stopped studio recording
@@ -6004,8 +6479,6 @@ pub fn close_screenshot_editor_after_delete(bundle: &Path, cx: &mut App) {
     refresh_screenshot_surfaces(cx);
 }
 
-/// Every surface that lists screenshots: the tray's Previous, the settings
-/// Screenshots page, and the main window's Recents.
 pub fn refresh_screenshot_surfaces(cx: &mut App) {
     crate::tray::refresh_previous(cx);
     if let Some(settings) = cx.global::<AppWindows>().settings {
@@ -6014,7 +6487,7 @@ pub fn refresh_screenshot_surfaces(cx: &mut App) {
             .ok();
     }
     let main = cx.global::<AppWindows>().main;
-    main.update(cx, |view, window, cx| view.refresh_recents(window, cx))
+    main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
         .ok();
 }
 
@@ -6055,7 +6528,7 @@ pub fn screenshot_editor_closed(bundle: &Path, cx: &mut App) {
 pub fn refresh_library_after_delete(cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     let settings = cx.global::<AppWindows>().settings;
-    main.update(cx, |view, window, cx| view.refresh_recents(window, cx))
+    main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
         .ok();
     if let Some(settings) = settings {
         settings
@@ -6338,6 +6811,7 @@ mod tests {
                 camera_feed: None,
                 mic_feed: None,
                 linux_instant_camera: None,
+                start_gate: None,
             }),
             gate: CleanCaptureGate::default(),
             camera: None,

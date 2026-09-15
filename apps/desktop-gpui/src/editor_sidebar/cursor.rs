@@ -13,6 +13,7 @@ const CARD_GROUP: &str = "cursor-style-card";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CursorCard {
+    Default,
     Family(CursorFamily),
     Circle,
 }
@@ -20,6 +21,7 @@ enum CursorCard {
 impl CursorCard {
     fn label(self) -> &'static str {
         match self {
+            Self::Default => "Default",
             Self::Family(CursorFamily::MacOS) => "macOS",
             Self::Family(CursorFamily::MacOSTahoe) => "macOS Tahoe",
             Self::Family(CursorFamily::Windows) => "Windows",
@@ -29,6 +31,7 @@ impl CursorCard {
 
     fn key(self) -> &'static str {
         match self {
+            Self::Default => "auto",
             Self::Family(CursorFamily::MacOS) => "macos",
             Self::Family(CursorFamily::MacOSTahoe) => "tahoe",
             Self::Family(CursorFamily::Windows) => "windows",
@@ -38,6 +41,7 @@ impl CursorCard {
 
     fn cursor_type(self) -> CursorType {
         match self {
+            Self::Default => CursorType::Auto,
             Self::Family(CursorFamily::MacOS) => CursorType::MacOS,
             Self::Family(CursorFamily::MacOSTahoe) => CursorType::MacOSTahoe,
             Self::Family(CursorFamily::Windows) => CursorType::Windows,
@@ -46,9 +50,10 @@ impl CursorCard {
     }
 }
 
-fn cursor_cards() -> [CursorCard; 4] {
+fn cursor_cards() -> [CursorCard; 5] {
     if cfg!(target_os = "windows") {
         [
+            CursorCard::Default,
             CursorCard::Family(CursorFamily::Windows),
             CursorCard::Family(CursorFamily::MacOS),
             CursorCard::Family(CursorFamily::MacOSTahoe),
@@ -56,6 +61,7 @@ fn cursor_cards() -> [CursorCard; 4] {
         ]
     } else {
         [
+            CursorCard::Default,
             CursorCard::Family(CursorFamily::MacOS),
             CursorCard::Family(CursorFamily::MacOSTahoe),
             CursorCard::Family(CursorFamily::Windows),
@@ -64,13 +70,13 @@ fn cursor_cards() -> [CursorCard; 4] {
     }
 }
 
-fn selected_card(cursor_type: &CursorType, recorded: Option<CursorFamily>) -> CursorCard {
+fn selected_card(cursor_type: &CursorType) -> CursorCard {
     if *cursor_type == CursorType::Circle {
         return CursorCard::Circle;
     }
     match cursor_type.family() {
         Some(family) => CursorCard::Family(family),
-        None => CursorCard::Family(recorded.unwrap_or(host_cursor_family())),
+        None => CursorCard::Default,
     }
 }
 
@@ -149,10 +155,7 @@ impl EditorWindow {
     }
 
     fn selected_cursor_card(&self) -> CursorCard {
-        selected_card(
-            self.style_control_project().cursor.cursor_type(),
-            self.recorded_cursor_family,
-        )
+        selected_card(self.style_control_project().cursor.cursor_type())
     }
 
     fn cursor_preview(&self, shape: CursorShape, size: f32) -> Option<Arc<RenderImage>> {
@@ -186,6 +189,26 @@ impl EditorWindow {
     fn render_cursor_tile(&self, card: CursorCard, selected: bool, recorded: bool) -> AnyElement {
         let theme = self.theme;
         let art = match card {
+            CursorCard::Default => div()
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .child(
+                    self.cursor_art(
+                        self.recorded_cursor_family
+                            .unwrap_or(host_cursor_family())
+                            .arrow(),
+                        ARROW_BOX,
+                    ),
+                )
+                .child(div().text_size(px(12.)).child("Default"))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(Hsla::from(theme.gray_11))
+                        .child("Recorded cursors"),
+                )
+                .into_any_element(),
             CursorCard::Family(family) => self.cursor_art(family.arrow(), ARROW_BOX),
             CursorCard::Circle => circle_art(),
         };
@@ -243,27 +266,29 @@ impl EditorWindow {
             .gap(px(6.))
             .cursor_pointer()
             .child(self.render_cursor_tile(card, selected, is_recorded))
-            .child(
-                div()
-                    .max_w_full()
-                    .whitespace_nowrap()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .text_size(px(11.))
-                    .line_height(px(11.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(if selected {
-                        theme.gray_12
-                    } else {
-                        theme.gray_11
-                    }))
-                    .when(!selected, |this| {
-                        this.group_hover(CARD_GROUP, |this| {
-                            this.text_color(Hsla::from(theme.gray_12))
+            .when(card != CursorCard::Default, |this| {
+                this.child(
+                    div()
+                        .max_w_full()
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .text_size(px(11.))
+                        .line_height(px(11.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(Hsla::from(if selected {
+                            theme.gray_12
+                        } else {
+                            theme.gray_11
+                        }))
+                        .when(!selected, |this| {
+                            this.group_hover(CARD_GROUP, |this| {
+                                this.text_color(Hsla::from(theme.gray_12))
+                            })
                         })
-                    })
-                    .child(card.label()),
-            )
+                        .child(card.label()),
+                )
+            })
             .on_click(cx.listener(move |this, _, window, cx| {
                 let cursor_type = cursor_type.clone();
                 this.edit_project("cursor-type", window, cx, move |project| {
@@ -281,14 +306,42 @@ impl EditorWindow {
         let selected = self.selected_cursor_card();
         let recorded = self.recorded_cursor_family;
 
+        let description = match selected {
+            CursorCard::Default => "Keeps the cursor shapes and appearance from your recording.",
+            CursorCard::Family(CursorFamily::MacOS) => {
+                "Classic macOS appearance. Custom cursors keep their recorded shape."
+            }
+            CursorCard::Family(CursorFamily::MacOSTahoe) => {
+                "macOS Tahoe appearance. Custom cursors keep their recorded shape."
+            }
+            CursorCard::Family(CursorFamily::Windows) => {
+                "Windows appearance. Custom cursors keep their recorded shape."
+            }
+            CursorCard::Circle => "Replaces all cursor shapes with a circle.",
+        };
         div()
             .flex()
-            .flex_row()
+            .flex_col()
             .gap(px(CARD_GAP))
-            .children(
-                cursor_cards()
-                    .into_iter()
-                    .map(|card| self.render_cursor_card(card, selected == card, recorded, cx)),
+            .child(self.render_cursor_card(
+                CursorCard::Default,
+                selected == CursorCard::Default,
+                recorded,
+                cx,
+            ))
+            .child(
+                div().flex().flex_row().gap(px(CARD_GAP)).children(
+                    cursor_cards()
+                        .into_iter()
+                        .filter(|card| *card != CursorCard::Default)
+                        .map(|card| self.render_cursor_card(card, selected == card, recorded, cx)),
+                ),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(Hsla::from(self.theme.gray_11))
+                    .child(description),
             )
             .into_any_element()
     }
@@ -362,10 +415,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cards_lead_with_the_host_family() {
+    fn cards_offer_default_before_the_host_family() {
         let cards = cursor_cards();
-        assert_eq!(cards[0], CursorCard::Family(host_cursor_family()));
-        assert_eq!(cards[3], CursorCard::Circle);
+        assert_eq!(cards[0], CursorCard::Default);
+        assert_eq!(cards[1], CursorCard::Family(host_cursor_family()));
+        assert_eq!(cards[4], CursorCard::Circle);
         for family in [
             CursorFamily::MacOS,
             CursorFamily::MacOSTahoe,
@@ -379,25 +433,14 @@ mod tests {
     fn every_card_round_trips_through_its_type() {
         for card in cursor_cards() {
             let written = card.cursor_type();
-            assert_ne!(written, CursorType::Auto);
-            assert_eq!(selected_card(&written, None), card, "{:?}", card.label());
+            assert_eq!(selected_card(&written), card, "{:?}", card.label());
         }
     }
 
     #[test]
-    fn auto_follows_the_recording_then_the_host() {
-        assert_eq!(
-            selected_card(&CursorType::Auto, Some(CursorFamily::MacOSTahoe)),
-            CursorCard::Family(CursorFamily::MacOSTahoe)
-        );
-        assert_eq!(
-            selected_card(&CursorType::Pointer, Some(CursorFamily::Windows)),
-            CursorCard::Family(CursorFamily::Windows)
-        );
-        assert_eq!(
-            selected_card(&CursorType::Auto, None),
-            CursorCard::Family(host_cursor_family())
-        );
+    fn auto_and_legacy_pointer_select_default() {
+        assert_eq!(selected_card(&CursorType::Auto), CursorCard::Default);
+        assert_eq!(selected_card(&CursorType::Pointer), CursorCard::Default);
     }
 
     #[test]

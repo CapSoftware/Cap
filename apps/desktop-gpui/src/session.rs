@@ -6,11 +6,15 @@
 //! engine work runs on tokio via `gpui_tokio` and lands back here with
 //! `cx.notify()`.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::{Arc, Once},
+    time::{Duration, Instant},
+};
 
 use cap_utils::disk_space::{DiskSpaceStatus, RecordingStorageMonitor};
 use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 
+use crate::app_sounds::AppSound;
 use crate::recording::{self, ActiveRecording, StartConfig};
 
 /// `Idle -> Starting -> Recording -> Stopping -> Idle`; pause is a flag on
@@ -23,10 +27,54 @@ pub enum Phase {
     Stopping,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StudioEditorPresentation<I = gpui::WindowId> {
+    Pending,
+    Attempted,
+    Opened(I),
+    Dismissed,
+}
+
+impl<I: PartialEq> StudioEditorPresentation<I> {
+    pub(crate) fn suppresses_completion_open(&self) -> bool {
+        matches!(self, Self::Opened(_) | Self::Dismissed)
+    }
+
+    pub(crate) fn closed(&mut self, window: I) {
+        if matches!(self, Self::Opened(current) if *current == window) {
+            *self = Self::Dismissed;
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct PreparingStudioEditor {
+    generation: u64,
+    pub(crate) project_path: std::path::PathBuf,
+    pub(crate) finalization: recording::StudioFinalization,
+    pub(crate) capture_stopped: bool,
+    pub(crate) presentation: StudioEditorPresentation,
+}
+
+fn prepares_studio_editor(
+    mode: Option<recording::RecordingMode>,
+    low_storage: bool,
+    recording_failed: bool,
+    editor_target: bool,
+    open_editor: bool,
+) -> bool {
+    mode == Some(recording::RecordingMode::Studio)
+        && !low_storage
+        && !recording_failed
+        && !editor_target
+        && open_editor
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CountdownAdvance {
     Ignore,
     Tick(u32),
+    PlaySound,
     Start,
 }
 
@@ -41,7 +89,8 @@ fn countdown_advance(
     }
     match remaining {
         Some(remaining) if remaining > 1 => CountdownAdvance::Tick(remaining - 1),
-        Some(1) => CountdownAdvance::Start,
+        Some(1) => CountdownAdvance::PlaySound,
+        Some(0) => CountdownAdvance::Start,
         _ => CountdownAdvance::Ignore,
     }
 }
@@ -367,6 +416,7 @@ pub struct RecordingSession {
     /// Taken by the phase observer to honour `postStudioRecordingBehaviour`
     /// (`openEditor` by default) the way the Tauri app does.
     pub finished_studio: Option<std::path::PathBuf>,
+    preparing_studio_editor: Option<PreparingStudioEditor>,
     /// `EditorRecordingTarget` (`src-tauri/src/windows.rs:3679-3697`): the
     /// open editor project a "Record a new clip" capture must land back in.
     /// Set by the editor's record modal (`setEditorRecordingTarget`,
@@ -384,6 +434,15 @@ pub struct RecordingSession {
     failure_monitor: Option<Task<()>>,
     recording_generation: u64,
     countdown_remaining: Option<u32>,
+    countdown_cue_abort: Option<futures_util::future::AbortHandle>,
+    start_gate: Option<cap_recording::RecordingStartGate>,
+    start_cue: Option<crate::app_sounds::StartCue>,
+    /// A capture pipeline that finished warming up while the countdown or the
+    /// start cue was still running; activated the moment the cue ends.
+    primed: Option<ActiveRecording>,
+    /// Teardown of a cancelled primed start still releasing its devices; the
+    /// next start waits for it before locking the mic and camera again.
+    discarding: Option<Task<Result<(), tokio::task::JoinError>>>,
     pause_control: PauseControlState,
     pause_control_error: Option<String>,
     #[cfg(target_os = "linux")]
@@ -416,6 +475,7 @@ impl RecordingSession {
             controls_open: false,
             mic_muted: false,
             finished_studio: None,
+            preparing_studio_editor: None,
             editor_recording_target: None,
             started_at: None,
             paused_accum: Duration::ZERO,
@@ -424,6 +484,11 @@ impl RecordingSession {
             failure_monitor: None,
             recording_generation: 0,
             countdown_remaining: None,
+            countdown_cue_abort: None,
+            start_gate: None,
+            start_cue: None,
+            primed: None,
+            discarding: None,
             pause_control: PauseControlState::default(),
             pause_control_error: None,
             #[cfg(target_os = "linux")]
@@ -553,6 +618,29 @@ impl RecordingSession {
         self.countdown_remaining
     }
 
+    pub(crate) fn preparing_studio_editor(&self) -> Option<&PreparingStudioEditor> {
+        self.preparing_studio_editor
+            .as_ref()
+            .filter(|pending| pending.generation == self.recording_generation)
+    }
+
+    pub(crate) fn preparing_studio_editor_mut(&mut self) -> Option<&mut PreparingStudioEditor> {
+        self.preparing_studio_editor
+            .as_mut()
+            .filter(|pending| pending.generation == self.recording_generation)
+    }
+
+    pub(crate) fn take_preparing_studio_editor(&mut self) -> Option<PreparingStudioEditor> {
+        self.preparing_studio_editor.take()
+    }
+
+    pub(crate) fn capture_stopped_for_editor(&self) -> bool {
+        self.phase == Phase::Stopping
+            && self
+                .preparing_studio_editor()
+                .is_some_and(|pending| pending.capture_stopped)
+    }
+
     pub fn start(&mut self, config: StartConfig, cx: &mut Context<Self>) {
         if self.phase != Phase::Idle {
             return;
@@ -564,10 +652,19 @@ impl RecordingSession {
         self.storage_monitor = None;
         self.failure_monitor = None;
         self.recording_generation = self.recording_generation.wrapping_add(1);
+        self.preparing_studio_editor = None;
         let generation = self.recording_generation;
         let countdown = crate::store::GeneralSettings::load()
             .recording_countdown
             .unwrap_or(0);
+        let start_gate = cap_recording::RecordingStartGate::new();
+        let config = StartConfig {
+            start_gate: Some(start_gate.clone()),
+            ..config
+        };
+        self.start_gate = Some(start_gate);
+        self.start_cue = Some(crate::app_sounds::prime_recording_start_sound());
+        self.discard_primed(cx);
         self.pause_control.invalidate();
         self.pause_control.uncertain = false;
         self.pause_control_error = None;
@@ -585,17 +682,25 @@ impl RecordingSession {
         self.stopped_for_low_storage = false;
         self.stopped_elapsed = None;
         self.last_config = Some(config.clone());
-        self.countdown_remaining = (countdown > 0).then_some(countdown);
+        // `Some(0)` keeps the controls in their pre-start state while the cue plays.
+        self.countdown_remaining = Some(countdown);
         cx.notify();
 
-        if countdown == 0 {
-            self.start_engine(config, generation, cx);
-            return;
+        // The pipeline warms up during the final countdown second so capture is
+        // live when the cue ends; without a countdown it warms up under the cue.
+        if countdown <= 1 {
+            self.prime_engine(config.clone(), generation, cx);
         }
+        let initial_cue = (countdown == 0).then(|| self.play_start_cue(cx));
 
         cx.spawn(async move |this, cx| {
+            let mut pending_cue = initial_cue;
             loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
+                if let Some(cue) = pending_cue.take() {
+                    cue.await;
+                } else {
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                }
                 let keep_waiting = this
                     .update(cx, |this, cx| {
                         match countdown_advance(
@@ -607,13 +712,23 @@ impl RecordingSession {
                             CountdownAdvance::Ignore => false,
                             CountdownAdvance::Tick(remaining) => {
                                 this.countdown_remaining = Some(remaining);
+                                if remaining == 1 {
+                                    this.prime_engine(config.clone(), generation, cx);
+                                }
+                                cx.notify();
+                                true
+                            }
+                            CountdownAdvance::PlaySound => {
+                                this.countdown_remaining = Some(0);
+                                pending_cue = Some(this.play_start_cue(cx));
                                 cx.notify();
                                 true
                             }
                             CountdownAdvance::Start => {
                                 this.countdown_remaining = None;
+                                this.countdown_cue_abort = None;
+                                this.activate_primed(cx);
                                 cx.notify();
-                                this.start_engine(config.clone(), generation, cx);
                                 false
                             }
                         }
@@ -627,11 +742,44 @@ impl RecordingSession {
         .detach();
     }
 
-    fn start_engine(&mut self, config: StartConfig, generation: u64, cx: &mut Context<Self>) {
-        if self.phase != Phase::Starting
-            || self.recording_generation != generation
-            || self.countdown_remaining.is_some()
-        {
+    /// Plays the start cue; the returned future completes once the recording's
+    /// start gate is armed, whether the cue played, failed or was aborted.
+    fn play_start_cue(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> std::pin::Pin<Box<dyn Future<Output = ()>>> {
+        let gate = self.start_gate.clone().unwrap_or_default();
+        let cue = self.start_cue.take();
+        let (abort, registration) = futures_util::future::AbortHandle::new_pair();
+        self.countdown_cue_abort = Some(abort);
+        let task = gpui_tokio::Tokio::spawn(
+            cx,
+            futures_util::future::Abortable::new(
+                async move {
+                    match cue {
+                        Some(cue) => crate::app_sounds::play_recording_start_sound(cue, gate).await,
+                        None => {
+                            gate.arm();
+                        }
+                    }
+                },
+                registration,
+            ),
+        );
+        Box::pin(async move {
+            let _ = task.await;
+        })
+    }
+
+    fn abort_start_cue(&mut self) {
+        if let Some(abort) = self.countdown_cue_abort.take() {
+            abort.abort();
+        }
+        self.start_cue = None;
+    }
+
+    fn prime_engine(&mut self, config: StartConfig, generation: u64, cx: &mut Context<Self>) {
+        if self.phase != Phase::Starting || self.recording_generation != generation {
             return;
         }
         if !crate::menus::recording_start_allowed(cx) {
@@ -655,7 +803,17 @@ impl RecordingSession {
         };
         #[cfg(not(target_os = "linux"))]
         let start = recording::start(config);
-        let task = gpui_tokio::Tokio::spawn(cx, start);
+        let discarding = self.discarding.take();
+        let task = gpui_tokio::Tokio::spawn(cx, async move {
+            if let Some(discarding) = discarding
+                && tokio::time::timeout(Duration::from_secs(5), discarding)
+                    .await
+                    .is_err()
+            {
+                tracing::warn!("previous recording start is still tearing down; starting anyway");
+            }
+            start.await
+        });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             #[cfg(target_os = "linux")]
@@ -674,37 +832,25 @@ impl RecordingSession {
                 false
             };
             this.update(cx, |this, cx| {
-                #[cfg(target_os = "linux")]
                 if this.recording_generation != generation || this.phase != Phase::Starting {
                     if let Ok(Ok(active)) = result {
-                        gpui_tokio::Tokio::spawn(cx, active.cancel_preserving()).detach();
+                        this.discard_stale_start(active, cx);
                     }
                     return;
                 }
                 match result {
                     Ok(Ok(active)) => {
-                        tracing::info!(dir = %active.project_dir.display(), "recording started");
-                        let project_dir = active.project_dir.clone();
-                        let done = active.done_fut();
-                        this.active = Some(active);
-                        this.phase = Phase::Recording { paused: false };
-                        // A fresh mic lock always starts unmuted.
-                        this.mic_muted = false;
-                        this.started_at = Some(Instant::now());
-                        this.paused_accum = Duration::ZERO;
-                        this.paused_since = None;
-                        this.monitor_storage(project_dir, cx);
-                        this.monitor_recording_failure(done, cx);
-                        #[cfg(target_os = "linux")]
-                        if this.stop_requested {
-                            this.stop(cx);
-                        } else if this.show_controls_after_pause {
-                            this.show_clean_capture_controls(cx);
+                        if this.countdown_remaining.is_some() {
+                            this.primed = Some(active);
+                        } else {
+                            this.activate(active, cx);
                         }
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to start: {error:#}");
                         this.error = Some(format!("{error:#}"));
+                        this.abort_start_cue();
+                        this.countdown_remaining = None;
                         #[cfg(target_os = "linux")]
                         {
                             this.phase = if startup_joined {
@@ -721,6 +867,8 @@ impl RecordingSession {
                     Err(join_error) => {
                         tracing::error!("recording start task died: {join_error}");
                         this.error = Some("Recording task failed.".into());
+                        this.abort_start_cue();
+                        this.countdown_remaining = None;
                         #[cfg(target_os = "linux")]
                         {
                             this.phase = if startup_joined {
@@ -755,6 +903,57 @@ impl RecordingSession {
             .ok();
         })
         .detach();
+    }
+
+    fn activate_primed(&mut self, cx: &mut Context<Self>) {
+        if let Some(active) = self.primed.take() {
+            self.activate(active, cx);
+        }
+    }
+
+    fn activate(&mut self, active: ActiveRecording, cx: &mut Context<Self>) {
+        tracing::info!(dir = %active.project_dir.display(), "recording started");
+        let project_dir = active.project_dir.clone();
+        let done = active.done_fut();
+        self.active = Some(active);
+        self.phase = Phase::Recording { paused: false };
+        // A fresh mic lock always starts unmuted.
+        self.mic_muted = false;
+        self.started_at = Some(Instant::now());
+        self.paused_accum = Duration::ZERO;
+        self.paused_since = None;
+        self.start_cue = None;
+        self.monitor_storage(project_dir, cx);
+        self.monitor_recording_failure(done, cx);
+        #[cfg(target_os = "linux")]
+        if self.stop_requested {
+            self.stop(cx);
+        } else if self.show_controls_after_pause {
+            self.show_clean_capture_controls(cx);
+        }
+        cx.notify();
+    }
+
+    fn discard_primed(&mut self, cx: &mut Context<Self>) {
+        if let Some(active) = self.primed.take() {
+            self.discard_stale_start(active, cx);
+        }
+    }
+
+    fn discard_stale_start(&mut self, active: ActiveRecording, cx: &mut Context<Self>) {
+        let previous = self.discarding.take();
+        self.discarding = Some(gpui_tokio::Tokio::spawn(cx, async move {
+            if let Some(previous) = previous {
+                let _ = previous.await;
+            }
+            #[cfg(target_os = "linux")]
+            let discarded = active.cancel_preserving().await;
+            #[cfg(not(target_os = "linux"))]
+            let discarded = active.cancel_and_delete().await;
+            if let Err(error) = discarded {
+                tracing::warn!(%error, "discarding a cancelled recording start failed");
+            }
+        }));
     }
 
     fn monitor_recording_failure(&mut self, done: cap_recording::DoneFut, cx: &mut Context<Self>) {
@@ -947,18 +1146,41 @@ impl RecordingSession {
             let separator = if link.contains('?') { '&' } else { '?' };
             cx.open_url(&format!("{link}{separator}recordingStopped=1"));
         }
+        let studio_project_path = active.project_dir.clone();
+        let camera_snapshot = self.last_config.as_ref().and_then(|config| {
+            (config.mode == recording::RecordingMode::Studio && config.camera.is_some())
+                .then(|| crate::app_windows::studio_camera_snapshot(&config.target, cx))
+                .flatten()
+        });
+        let (studio_progress, studio_finalization) = if prepares_studio_editor(
+            self.mode(),
+            low_storage,
+            recording_failed,
+            self.editor_recording_target.is_some(),
+            crate::store::GeneralSettings::load().post_studio_recording_behaviour
+                == crate::store::PostStudioBehaviour::OpenEditor,
+        ) {
+            let (publisher, finalization) = recording::StudioFinalization::channel(
+                studio_project_path.clone(),
+                self.recording_generation,
+            );
+            publisher.set_camera_snapshot(camera_snapshot);
+            (Some(publisher), Some(finalization))
+        } else {
+            (None, None)
+        };
         #[cfg(target_os = "linux")]
         let retained_stop = active
             .instant_stop_handle(low_storage || recording_failed, recording_failed)
-            .or_else(|| active.clean_studio_stop_handle());
+            .or_else(|| active.clean_studio_stop_handle(studio_progress, camera_snapshot));
         #[cfg(windows)]
         let retained_stop = recording_failed
             .then(|| active.failed_stop_handle())
-            .or_else(|| active.clean_studio_stop_handle());
+            .or_else(|| active.clean_studio_stop_handle(studio_progress, camera_snapshot));
         #[cfg(target_os = "macos")]
         let retained_stop = recording_failed
             .then(|| active.failed_stop_handle())
-            .or_else(|| active.clean_studio_stop_handle());
+            .or_else(|| active.clean_studio_stop_handle(studio_progress, camera_snapshot));
         #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         let retained_stop: Option<recording::CaptureStopFuture> = None;
         let retains_active = retained_stop.is_some();
@@ -966,7 +1188,14 @@ impl RecordingSession {
             Some(future) => future,
             None => {
                 let active = self.active.take().unwrap();
-                Box::pin(async move { (true, active.stop(low_storage || recording_failed).await) })
+                Box::pin(async move {
+                    (
+                        true,
+                        active
+                            .stop(low_storage || recording_failed, camera_snapshot)
+                            .await,
+                    )
+                })
             }
         };
         #[cfg(target_os = "linux")]
@@ -977,9 +1206,45 @@ impl RecordingSession {
         self.stopped_elapsed = Some(self.elapsed());
         self.pause_control.cancel_for_stop();
         self.phase = Phase::Stopping;
+        self.preparing_studio_editor =
+            studio_finalization.map(|finalization| PreparingStudioEditor {
+                generation: self.recording_generation,
+                project_path: studio_project_path,
+                finalization,
+                capture_stopped: false,
+                presentation: StudioEditorPresentation::Pending,
+            });
         cx.notify();
 
+        let stop_sound = Arc::new(Once::new());
         let task = gpui_tokio::Tokio::spawn(cx, stop_future);
+        if let Some(pending) = self.preparing_studio_editor.clone() {
+            let stop_sound = stop_sound.clone();
+            let finalization = pending.finalization.clone();
+            let captured =
+                gpui_tokio::Tokio::spawn(cx, async move { finalization.wait_for_capture().await });
+            #[cfg(target_os = "linux")]
+            let capture_ticket = stop_ticket.clone();
+            cx.spawn(async move |this, cx| {
+                if !matches!(captured.await, Ok(true)) {
+                    return;
+                }
+                this.update(cx, |this, cx| {
+                    #[cfg(target_os = "linux")]
+                    if !capture_ticket.is_current(this.phase, this.recording_generation, this.terminal_operation, this.recording_owner().as_ref(), retains_active) { return; }
+                    #[cfg(not(target_os = "linux"))]
+                    if this.recording_generation != pending.generation || this.phase != Phase::Stopping { return; }
+                    if let Some(current) = this.preparing_studio_editor_mut()
+                        && current.finalization.same_job(&pending.finalization)
+                    {
+                        current.capture_stopped = true;
+                        stop_sound.call_once(|| AppSound::StopRecording.play());
+                        tracing::info!(path = %current.project_path.display(), "Studio capture stopped; editor preparation can begin");
+                        cx.notify();
+                    }
+                }).ok();
+            }).detach();
+        }
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
@@ -992,6 +1257,7 @@ impl RecordingSession {
                     Err(_) => !retains_active,
                 };
                 if !capture_stopped {
+                    this.preparing_studio_editor = None;
                     let error = match result {
                         Ok((_, Err(error))) => format!("{error:#}"),
                         Err(error) => format!("Stop task failed: {error}"),
@@ -1045,6 +1311,7 @@ impl RecordingSession {
                         // never does that, so it goes with the placeholder it
                         // was standing in for.
                         tracing::info!(dir = %project_dir.display(), "recording finished");
+                        stop_sound.call_once(|| AppSound::StopRecording.play());
                         if low_storage {
                             this.storage_notice = Some("Recording stopped because storage is low. Your recording was saved.".into());
                         }
@@ -1650,6 +1917,9 @@ impl RecordingSession {
     }
 
     fn finish(&mut self, cx: &mut Context<Self>) {
+        self.abort_start_cue();
+        self.discard_primed(cx);
+        self.start_gate = None;
         #[cfg(target_os = "linux")]
         if !self.instant_cleanup_safe() {
             self.clean_control.uncertain = true;
@@ -1707,7 +1977,7 @@ mod countdown_tests {
         );
         assert_eq!(
             countdown_advance(Phase::Starting, 7, 7, Some(1)),
-            CountdownAdvance::Start
+            CountdownAdvance::PlaySound
         );
         assert_eq!(
             countdown_advance(Phase::Starting, 7, 7, None),
@@ -1729,6 +1999,35 @@ mod countdown_tests {
             countdown_advance(Phase::Recording { paused: false }, 7, 7, Some(1)),
             CountdownAdvance::Ignore
         );
+    }
+
+    #[test]
+    fn completed_cue_can_only_start_its_own_pending_recording() {
+        assert_eq!(
+            countdown_advance(Phase::Starting, 7, 7, Some(0)),
+            CountdownAdvance::Start
+        );
+        for (phase, current) in [(Phase::Idle, 7), (Phase::Starting, 8)] {
+            assert_eq!(
+                countdown_advance(phase, current, 7, Some(0)),
+                CountdownAdvance::Ignore
+            );
+        }
+    }
+
+    #[test]
+    fn sound_follows_every_countdown_step_and_precedes_capture() {
+        for (remaining, expected) in [
+            (3, CountdownAdvance::Tick(2)),
+            (2, CountdownAdvance::Tick(1)),
+            (1, CountdownAdvance::PlaySound),
+            (0, CountdownAdvance::Start),
+        ] {
+            assert_eq!(
+                countdown_advance(Phase::Starting, 7, 7, Some(remaining)),
+                expected
+            );
+        }
     }
 }
 
@@ -2298,5 +2597,57 @@ mod pause_control_tests {
         state.invalidate();
         assert!(control.await.is_err());
         assert!(!polled.load(std::sync::atomic::Ordering::SeqCst));
+    }
+}
+
+#[cfg(test)]
+mod studio_editor_presentation_tests {
+    use super::*;
+
+    #[test]
+    fn early_editor_only_applies_to_normal_studio_stops_with_open_editor_preference() {
+        for mode in [
+            None,
+            Some(recording::RecordingMode::Instant),
+            Some(recording::RecordingMode::Studio),
+        ] {
+            for flags in 0..16 {
+                let low_storage = flags & 1 != 0;
+                let failed = flags & 2 != 0;
+                let editor_target = flags & 4 != 0;
+                let open_editor = flags & 8 != 0;
+                let expected = mode == Some(recording::RecordingMode::Studio) && flags == 8;
+                assert_eq!(
+                    prepares_studio_editor(mode, low_storage, failed, editor_target, open_editor),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unsuccessful_or_raced_early_window_creation_keeps_normal_completion_open() {
+        assert!(!StudioEditorPresentation::<u32>::Pending.suppresses_completion_open());
+        assert!(!StudioEditorPresentation::<u32>::Attempted.suppresses_completion_open());
+    }
+
+    #[test]
+    fn closing_a_preparing_editor_suppresses_completion_reopening() {
+        let mut state = StudioEditorPresentation::Opened(1);
+        assert!(state.suppresses_completion_open());
+        state.closed(1);
+        assert_eq!(state, StudioEditorPresentation::Dismissed);
+        assert!(state.suppresses_completion_open());
+    }
+
+    #[test]
+    fn explicit_reopening_retains_the_new_window_when_the_old_close_arrives() {
+        let mut state = StudioEditorPresentation::Opened(1);
+        state.closed(1);
+        state = StudioEditorPresentation::Opened(2);
+        state.closed(1);
+        assert_eq!(state, StudioEditorPresentation::Opened(2));
+        state.closed(2);
+        assert_eq!(state, StudioEditorPresentation::Dismissed);
     }
 }

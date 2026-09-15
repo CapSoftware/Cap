@@ -103,13 +103,27 @@ debug = 1
 [profile.dev.package."*"]
 debug = 0
 
+[profile.dev.package.cap-camera-effects]
+opt-level = 2
+
+[profile.dev.package.cap-audio]
+opt-level = 2
+
 # Optimize for smaller binary size
 [profile.release]
 panic = "unwind"
 codegen-units = 1 # Compile crates one after another so the compiler can optimize better
-lto = true        # Enables link to optimizations
+# Thin LTO runs the cross-crate optimisation in parallel across crates. Fat LTO
+# serialised the whole program through one thread and one address space, which
+# cost ~60 minutes of the Windows release job (18m for the CLI link + 41m for
+# the desktop link) and needed the swapfile / pagefile workarounds in
+# desktop-release.yml to survive 16GB runners.
+lto = "thin"
 opt-level = "s"   # Optimize for binary size
-debug = true
+# Line tables are all Sentry needs to symbolicate the uploaded dSYM / PDB
+# (function names + file:line). Full debuginfo multiplied rlib size and link
+# memory for variable/type info nothing consumes.
+debug = "line-tables-only"
 
 [patch.crates-io]
 # screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
@@ -121,3 +135,11 @@ tao = { path = "vendor/tao" }
 
 # https://github.com/CapSoftware/reqwest/commit/9b5ecbd5210a9510fde766015cabb724c1e70d2e
 reqwest = { git = "https://github.com/CapSoftware/reqwest", rev = "9b5ecbd5210a9510fde766015cabb724c1e70d2e" }
+
+# tauri-nspanel v2 @ 18ffb9a with ownership fixes: `to_panel()` no longer steals
+# tao's NSWindow retain (every repeat call was an over-release), converting the
+# same window twice is a no-op, the store forgets destroyed windows, and the
+# broken `dealloc` override (NSObject dealloc + jump through a garbage pointer)
+# is gone. See vendor/tauri-nspanel/CAP-CHANGES.md.
+[patch."https://github.com/ahkohd/tauri-nspanel"]
+tauri-nspanel = { path = "vendor/tauri-nspanel" }

@@ -355,6 +355,7 @@ trait UploadBackend: Send + Sync + 'static {
         verification: &UploadVerification,
     ) -> Result<(), String>;
     fn delete_after_upload(&self) -> bool;
+    fn notify_failure(&self);
 }
 
 struct LiveBackend;
@@ -500,6 +501,10 @@ impl UploadBackend for LiveBackend {
     fn delete_after_upload(&self) -> bool {
         crate::store::GeneralSettings::load().delete_instant_recordings_after_upload
     }
+
+    fn notify_failure(&self) {
+        crate::app_sounds::play_notification();
+    }
 }
 
 struct Job {
@@ -632,6 +637,9 @@ impl<B: UploadBackend> Manager<B> {
         })).catch_unwind().await.unwrap_or_else(|_| Err("The upload worker failed; the local recording is preserved".into()));
         upload.abort_segments().await;
         if let Err(error) = result {
+            if !*cancelled.borrow() {
+                self.backend.notify_failure();
+            }
             state.fail(error.clone(), now());
             if let Err(save_error) = write_state(&project, &state) {
                 tracing::error!(%save_error, "Failed to persist upload retry state");
@@ -1184,6 +1192,7 @@ mod tests {
         delete: AtomicBool,
         transfers: AtomicUsize,
         confirmations: AtomicUsize,
+        failure_notifications: AtomicUsize,
         transfer_steps: usize,
         transfer_step_delay: Duration,
         progress: AtomicUsize,
@@ -1268,6 +1277,10 @@ mod tests {
         fn delete_after_upload(&self) -> bool {
             self.delete.load(Ordering::Acquire)
         }
+
+        fn notify_failure(&self) {
+            self.failure_notifications.fetch_add(1, Ordering::AcqRel);
+        }
     }
 
     async fn joined(manager: &Manager<FakeBackend>) {
@@ -1330,6 +1343,13 @@ mod tests {
                 .unwrap();
             joined(&manager).await;
             fixture.assert_retained();
+            assert_eq!(
+                manager
+                    .backend
+                    .failure_notifications
+                    .load(Ordering::Acquire),
+                1
+            );
             assert_eq!(
                 fixture.state().phase,
                 if failure == "authentication" {
@@ -1600,6 +1620,13 @@ mod tests {
         manager.backend.release.notify_one();
         fixture.assert_retained();
         assert_eq!(manager.backend.confirmations.load(Ordering::Acquire), 0);
+        assert_eq!(
+            manager
+                .backend
+                .failure_notifications
+                .load(Ordering::Acquire),
+            0
+        );
         assert!(manager.jobs.lock().await.is_empty());
     }
 

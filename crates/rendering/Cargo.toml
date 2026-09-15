@@ -7,6 +7,7 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 anyhow.workspace = true
 bytemuck = { version = "1.7", features = ["derive"] }
 cap-camera-effects = { path = "../camera-effects" }
@@ -63,6 +64,8 @@ windows_0_58 = { package = "windows", version = "0.58", features = [
 ] }
 
 [dev-dependencies]
+cap-media-info = { path = "../media-info" }
+tempfile = "3"
 pollster = "0.4.0"
 pretty_assertions = "1.4.1"
 

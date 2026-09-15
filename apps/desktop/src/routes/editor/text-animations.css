@@ -1,0 +1,129 @@
+/* Hover previews for the text animation tiles. Every keyframe set declares
+ * only its starting state so the implicit `to` resolves to the tile's own
+ * resting style — that way a preview always lands back on the static
+ * depiction without a second, duplicated set of end values. */
+
+@keyframes ta-fade {
+	from {
+		opacity: 0;
+	}
+}
+
+@keyframes ta-slide-up {
+	from {
+		opacity: 0;
+		transform: translateY(6px);
+	}
+}
+
+@keyframes ta-slide-down {
+	from {
+		opacity: 0;
+		transform: translateY(-6px);
+	}
+}
+
+@keyframes ta-slide-left {
+	from {
+		opacity: 0;
+		transform: translateX(6px);
+	}
+}
+
+@keyframes ta-slide-right {
+	from {
+		opacity: 0;
+		transform: translateX(-6px);
+	}
+}
+
+@keyframes ta-pop {
+	from {
+		opacity: 0;
+		transform: scale(0.8);
+	}
+}
+
+@keyframes ta-zoom {
+	from {
+		opacity: 0;
+		transform: scale(1.3);
+	}
+}
+
+@keyframes ta-bounce {
+	from {
+		opacity: 0;
+		transform: translateY(10px);
+	}
+
+	60% {
+		opacity: 1;
+		transform: translateY(-7px);
+	}
+}
+
+@keyframes ta-wipe {
+	from {
+		clip-path: inset(0 100% 0 0);
+	}
+}
+
+@keyframes ta-tracking {
+	from {
+		opacity: 0;
+		letter-spacing: 6px;
+	}
+}
+
+.ta-tile:hover .ta-fx-fade {
+	animation: ta-fade 0.6s ease-out;
+}
+
+.ta-tile:hover .ta-fx-slide-up {
+	animation: ta-slide-up 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ta-tile:hover .ta-fx-slide-down {
+	animation: ta-slide-down 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ta-tile:hover .ta-fx-slide-left {
+	animation: ta-slide-left 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ta-tile:hover .ta-fx-slide-right {
+	animation: ta-slide-right 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ta-tile:hover .ta-fx-pop {
+	animation: ta-pop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.ta-tile:hover .ta-fx-zoom {
+	animation: ta-zoom 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ta-tile:hover .ta-fx-bounce {
+	animation: ta-bounce 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.ta-tile:hover .ta-fx-wipe {
+	animation: ta-wipe 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ta-tile:hover .ta-fx-tracking {
+	animation: ta-tracking 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ta-tile:hover .ta-fx-typewriter {
+	animation: ta-wipe 0.6s steps(6, end);
+}
+
+.ta-tile:hover .ta-fx-stagger > * {
+	animation: ta-fade 0.42s ease-out;
+}
+
+.ta-tile:hover .ta-fx-stagger > *:nth-child(2) {
+	animation-delay: 0.18s;
+}

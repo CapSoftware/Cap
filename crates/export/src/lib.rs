@@ -1,3 +1,4 @@
+pub mod estimates;
 pub mod gif;
 pub mod mov;
 pub mod mp4;
@@ -125,46 +126,7 @@ impl ExporterBuilder {
                 .map_err(Error::RecordingsMeta)?,
         );
 
-        // A freshly recorded .cap has no timeline — only the editor creates one. Without it the
-        // render loop's get_segment_time() returns None on frame 0 and produces zero frames (an empty
-        // export). Synthesize the same default timeline the editor would (one segment per recording,
-        // spanning its full duration) so raw recordings — e.g. from `cap export` — render correctly.
-        // Desktop exports already carry a timeline by export time, so this only fires for un-edited
-        // projects and changes nothing for them.
-        if project_config.timeline.is_none() {
-            let segments: Vec<TimelineSegment> = recordings
-                .segments
-                .iter()
-                .enumerate()
-                .filter_map(|(i, segment)| {
-                    let duration = segment.duration();
-                    (duration > 0.0).then_some(TimelineSegment {
-                        recording_clip: i as u32,
-                        start: 0.0,
-                        end: duration,
-                        timescale: 1.0,
-                        name: None,
-                        speed_audio_mode: None,
-                    })
-                })
-                .collect();
-            if !segments.is_empty() {
-                project_config.timeline = Some(TimelineConfiguration {
-                    segments,
-                    transitions: Vec::new(),
-                    zoom_segments: Vec::new(),
-                    scene_segments: Vec::new(),
-                    style_segments: Vec::new(),
-                    image_segments: Vec::new(),
-                    mask_segments: Vec::new(),
-                    text_segments: Vec::new(),
-                    caption_segments: Vec::new(),
-                    keyboard_segments: Vec::new(),
-                    audio_segments: Vec::new(),
-                    camera3d_segments: Vec::new(),
-                });
-            }
-        }
+        synthesize_default_timeline(&mut project_config, &recordings);
 
         cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project_config);
         cap_project::synchronize_captions(
@@ -249,6 +211,8 @@ impl ExporterBuilder {
             streaming_audio,
             streaming_output,
             audio_cancellation,
+            sample_windows: None,
+            sample_timing: None,
         })
     }
 }
@@ -271,6 +235,55 @@ async fn finish_audio_preparation(
         .finish(&segments)
         .map_err(|error| ExporterBuildError::MediaLoad(error.to_string()))?;
     Ok((segments, audio))
+}
+
+/// A freshly recorded .cap has no timeline — only the editor creates one. Without it the
+/// render loop's get_segment_time() returns None on frame 0 and produces zero frames (an empty
+/// export). Synthesize the same default timeline the editor would (one segment per recording,
+/// spanning its full duration) so raw recordings — e.g. from `cap export` — render correctly.
+/// Desktop exports already carry a timeline by export time, so this only fires for un-edited
+/// projects and changes nothing for them.
+pub fn synthesize_default_timeline(
+    project_config: &mut ProjectConfiguration,
+    recordings: &ProjectRecordingsMeta,
+) {
+    if project_config.timeline.is_some() {
+        return;
+    }
+    let segments: Vec<TimelineSegment> = recordings
+        .segments
+        .iter()
+        .enumerate()
+        .filter_map(|(i, segment)| {
+            let duration = segment.duration();
+            (duration > 0.0).then_some(TimelineSegment {
+                recording_clip: i as u32,
+                start: 0.0,
+                end: duration,
+                timescale: 1.0,
+                name: None,
+                speed_audio_mode: None,
+                hide_cursor: None,
+                volume: None,
+            })
+        })
+        .collect();
+    if !segments.is_empty() {
+        project_config.timeline = Some(TimelineConfiguration {
+            segments,
+            transitions: Vec::new(),
+            zoom_segments: Vec::new(),
+            scene_segments: Vec::new(),
+            style_segments: Vec::new(),
+            image_segments: Vec::new(),
+            mask_segments: Vec::new(),
+            text_segments: Vec::new(),
+            caption_segments: Vec::new(),
+            keyboard_segments: Vec::new(),
+            audio_segments: Vec::new(),
+            camera3d_segments: Vec::new(),
+        });
+    }
 }
 
 pub fn prepare_project_for_export(
@@ -379,6 +392,8 @@ pub struct ExporterBase {
     streaming_audio: Option<ExportAudioRenderer>,
     streaming_output: Option<mp4::TemporaryMp4Output>,
     audio_cancellation: Option<ExportAudioCancellation>,
+    sample_windows: Option<cap_rendering::FrameWindows>,
+    sample_timing: Option<Arc<estimates::SampleTiming>>,
 }
 
 impl ExporterBase {
@@ -410,8 +425,8 @@ mod cursor_only_tests {
 
     #[test]
     fn cursor_only_preserves_style_geometry_without_image_or_background_pixels() {
-        let mut project = ProjectConfiguration::default();
-        project.timeline = Some(serde_json::from_value(serde_json::json!({
+        let project = ProjectConfiguration {
+            timeline: Some(serde_json::from_value(serde_json::json!({
             "segments": [], "zoomSegments": [],
             "imageSegments": [{ "start": 1.0, "end": 2.0, "path": "content/images/example.png" }],
             "styleSegments": [{ "start": 1.0, "end": 2.0, "overrides": {
@@ -420,7 +435,9 @@ mod cursor_only_tests {
                     "padding": 15.0
                 }
             } }]
-        })).expect("timed configuration"));
+            })).expect("timed configuration")),
+            ..Default::default()
+        };
         let cursor_only = make_cursor_only_project(project);
         let timeline = cursor_only.timeline.as_ref().expect("timeline");
         assert!(timeline.image_segments.is_empty());

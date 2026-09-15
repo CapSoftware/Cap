@@ -705,8 +705,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
 dependencies = [
  "async-trait",
- "axum-core",
- "axum-macros",
+ "axum-core 0.4.5",
  "base64 0.22.1",
  "bytes",
  "futures-util",
@@ -716,7 +715,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "itoa",
- "matchit",
+ "matchit 0.7.3",
  "memchr",
  "mime",
  "percent-encoding",
@@ -729,7 +728,44 @@ dependencies = [
  "sha1",
  "sync_wrapper",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.24.0",
+ "tower",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "axum"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
+dependencies = [
+ "axum-core 0.5.6",
+ "axum-macros",
+ "base64 0.22.1",
+ "bytes",
+ "form_urlencoded",
+ "futures-util",
+ "http 1.3.1",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "itoa",
+ "matchit 0.8.4",
+ "memchr",
+ "mime",
+ "percent-encoding",
+ "pin-project-lite",
+ "serde_core",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_urlencoded",
+ "sha1",
+ "sync_wrapper",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
  "tower",
  "tower-layer",
  "tower-service",
@@ -758,10 +794,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "axum-macros"
-version = "0.4.2"
+name = "axum-core"
+version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d123550fa8d071b7255cb0cc04dc302baa6c8c4a79f55701552684d8399bce"
+checksum = "08c78f31d7b1291f7ee735c1c6780ccde7785daae9a9206026862dab7d8792d1"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "http 1.3.1",
+ "http-body",
+ "http-body-util",
+ "mime",
+ "pin-project-lite",
+ "sync_wrapper",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "axum-macros"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7aa268c23bfbbd2c4363b9cd302a4f504fb2a9dfe7e3451d66f35dd392e20aca"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1268,6 +1323,8 @@ dependencies = [
 name = "cap-audio"
 version = "0.1.0"
 dependencies = [
+ "cap-enc-ffmpeg",
+ "cap-rnnoise",
  "cidre",
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "ffmpeg-next",
@@ -1292,6 +1349,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1346,8 +1404,10 @@ dependencies = [
  "libloading 0.9.0",
  "ndarray 0.16.1",
  "ort",
+ "tokio",
  "tracing",
  "wgpu",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1457,7 +1517,7 @@ dependencies = [
  "anyhow",
  "ashpd",
  "async-stream",
- "axum",
+ "axum 0.8.9",
  "base64 0.22.1",
  "block2 0.6.1",
  "bytemuck",
@@ -1560,6 +1620,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite 0.24.0",
  "tokio-util",
  "tracing",
  "tracing-appender",
@@ -1582,8 +1643,9 @@ dependencies = [
 name = "cap-editor"
 version = "0.1.0"
 dependencies = [
- "axum",
+ "axum 0.7.9",
  "cap-audio",
+ "cap-enc-ffmpeg",
  "cap-media",
  "cap-media-info",
  "cap-project",
@@ -1593,6 +1655,7 @@ dependencies = [
  "ffmpeg-next",
  "flume",
  "futures",
+ "image 0.25.8",
  "lru",
  "ringbuf",
  "sentry",
@@ -1635,6 +1698,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
+ "windows 0.60.0",
  "workspace-hack",
 ]
 
@@ -1926,7 +1990,9 @@ dependencies = [
  "bytemuck",
  "cap-camera-effects",
  "cap-cursor-info",
+ "cap-enc-ffmpeg",
  "cap-flags",
+ "cap-media-info",
  "cap-project",
  "cap-video-decode",
  "cidre",
@@ -1950,6 +2016,7 @@ dependencies = [
  "serde",
  "serde_json",
  "specta",
+ "tempfile",
  "thiserror 1.0.69",
  "tiny-skia",
  "tokio",
@@ -1975,6 +2042,14 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
+]
+
+[[package]]
+name = "cap-rnnoise"
+version = "0.1.0"
+dependencies = [
+ "cc",
  "workspace-hack",
 ]
 
@@ -2054,10 +2129,14 @@ name = "cap-video-decode"
 version = "0.1.0"
 dependencies = [
  "cap-d3d-adapter",
+ "cap-enc-ffmpeg",
+ "cap-media-info",
  "cidre",
  "ffmpeg-hw-device",
  "ffmpeg-next",
  "num_cpus",
+ "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tracing",
@@ -5903,6 +5982,12 @@ name = "matchit"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
+
+[[package]]
+name = "matchit"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "matrixmultiply"
@@ -10513,7 +10598,6 @@ dependencies = [
 [[package]]
 name = "tauri-nspanel"
 version = "2.0.1"
-source = "git+https://github.com/ahkohd/tauri-nspanel?branch=v2#18ffb9a201fbf6fedfaa382fd4b92315ea30ab1a"
 dependencies = [
  "bitflags 2.13.1",
  "block",
@@ -10522,6 +10606,7 @@ dependencies = [
  "core-graphics 0.25.0",
  "objc",
  "objc-foundation",
+ "objc_exception",
  "objc_id",
  "tauri",
 ]
@@ -11334,7 +11419,19 @@ dependencies = [
  "futures-util",
  "log",
  "tokio",
- "tungstenite",
+ "tungstenite 0.24.0",
+]
+
+[[package]]
+name = "tokio-tungstenite"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite 0.29.0",
 ]
 
 [[package]]
@@ -11741,6 +11838,22 @@ dependencies = [
  "sha1",
  "thiserror 1.0.69",
  "utf-8",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c01152af293afb9c7c2a57e4b559c5620b421f6d133261c60dd2d0cdb38e6b8"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http 1.3.1",
+ "httparse",
+ "log",
+ "rand 0.9.2",
+ "sha1",
+ "thiserror 2.0.16",
 ]
 
 [[package]]
@@ -13516,40 +13629,50 @@ dependencies = [
 name = "workspace-hack"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "arrayvec",
- "axum",
  "bitflags 2.13.1",
  "bytemuck",
  "chrono",
  "clang-sys",
  "clap",
  "clap_builder",
+ "concurrent-queue",
  "deranged",
+ "digest",
+ "dispatch2",
+ "dpi",
  "either",
  "flate2",
  "form_urlencoded",
  "futures-channel",
  "futures-core",
  "futures-executor",
+ "futures-io",
  "futures-sink",
  "futures-task",
  "futures-util",
- "getrandom 0.2.16",
  "gif",
- "hashbrown 0.15.5",
  "idna",
- "itertools 0.12.1",
- "itertools 0.13.0",
  "libc",
+ "linux-raw-sys 0.11.0",
+ "linux-raw-sys 0.4.15",
  "log",
  "memchr",
  "miniz_oxide",
+ "ndarray 0.17.2",
  "nom 7.1.3",
+ "num-complex",
+ "num-integer",
  "num-rational",
- "num-traits",
+ "objc2 0.6.2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "open",
+ "ort",
+ "ort-sys",
  "percent-encoding",
- "phf_shared 0.10.0",
- "phf_shared 0.11.3",
+ "prettyplease",
  "proc-macro2",
  "profiling",
  "quote",
@@ -13560,25 +13683,44 @@ dependencies = [
  "reqwest",
  "rgb",
  "rustc-hash 1.1.0",
+ "rustix 0.38.44",
+ "rustix 1.1.2",
  "schemars 0.8.22",
+ "scopeguard",
  "semver",
  "serde",
  "serde_core",
- "serde_json",
  "simd-adler32",
- "smallvec",
+ "smol_str",
  "specta",
  "specta-macros",
  "stable_deref_trait",
- "syn 2.0.106",
  "tauri-utils",
  "thiserror 2.0.16",
  "time",
- "tokio",
+ "toml_datetime 0.7.5+spec-1.1.0",
+ "toml_edit 0.23.10+spec-1.0.0",
+ "toml_parser",
+ "toml_writer",
  "tracing",
  "tracing-core",
  "tracing-subscriber",
- "uuid",
+ "ttf-parser 0.25.1",
+ "wayland-backend",
+ "windows 0.54.0",
+ "windows 0.58.0",
+ "windows 0.60.0",
+ "windows 0.61.3",
+ "windows-core 0.60.1",
+ "windows-core 0.61.2",
+ "windows-result 0.3.4",
+ "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
+ "winnow 0.7.13",
+ "x11rb",
+ "x11rb-protocol",
 ]
 
 [[package]]

@@ -30,8 +30,11 @@ use std::sync::OnceLock;
 pub(crate) fn new_font_system() -> glyphon::FontSystem {
     static FONT_TEMPLATE: OnceLock<(String, glyphon::fontdb::Database)> = OnceLock::new();
 
+    let font_phase = crate::readiness::Phase::start("font.instance");
+    let template_phase = crate::readiness::Phase::start("font.template_lookup");
     let (locale, db) = FONT_TEMPLATE.get_or_init(|| {
-        let font_system = glyphon::FontSystem::new();
+        let init_phase = crate::readiness::Phase::start("font.template_init");
+        let font_system = crate::readiness::measure("font.system_scan", glyphon::FontSystem::new);
         let mut db = font_system.db().clone();
         // Pin the generic families to the fonts the editor webview resolves
         // them to. fontdb's stock defaults (e.g. "Arial") often don't match
@@ -60,10 +63,17 @@ pub(crate) fn new_font_system() -> glyphon::FontSystem {
             db.set_serif_family("DejaVu Serif");
             db.set_monospace_family("DejaVu Sans Mono");
         }
-        (font_system.locale().to_string(), db)
+        let template = (font_system.locale().to_string(), db);
+        init_phase.finish("returned");
+        template
     });
+    template_phase.finish("returned");
 
-    glyphon::FontSystem::new_with_locale_and_db(locale.clone(), db.clone())
+    let result = crate::readiness::measure("font.clone_and_index", || {
+        glyphon::FontSystem::new_with_locale_and_db(locale.clone(), db.clone())
+    });
+    font_phase.finish("returned");
+    result
 }
 
 pub use animated_gradient::*;

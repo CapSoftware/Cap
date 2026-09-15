@@ -1,0 +1,62 @@
+.cropper-editor .cropper-region {
+	border-color: white;
+	box-shadow:
+		0 0 0 1px #111827,
+		inset 0 0 0 1px #111827;
+}
+
+.cropper-editor .cropper-corner svg {
+	filter: drop-shadow(1px 0 0 #111827) drop-shadow(-1px 0 0 #111827)
+		drop-shadow(0 1px 0 #111827) drop-shadow(0 -1px 0 #111827);
+	min-width: 12px;
+	min-height: 12px;
+}
+
+.cropper-editor .cropper-edge {
+	z-index: 20;
+}
+
+.cropper-edge-grip {
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	width: 26px;
+	height: 7px;
+	transform: translate(-50%, -50%);
+	border: 1px solid #111827;
+	border-radius: 3px;
+	background: white;
+	box-shadow: 0 1px 3px #0006;
+	pointer-events: none;
+}
+
+.cropper-edge[data-direction="e"] .cropper-edge-grip,
+.cropper-edge[data-direction="w"] .cropper-edge-grip {
+	width: 7px;
+	height: 26px;
+}
+
+.cropper-editor .cropper-thirds > div {
+	border-color: #111827cc;
+	filter: drop-shadow(1px 1px 0 #fff);
+}
+
+.cropper-alignment-guide {
+	position: absolute;
+	z-index: 40;
+	pointer-events: none;
+	background: #d946ef;
+	box-shadow: 0 0 0 1px #fff9;
+}
+
+.cropper-alignment-guide[data-axis="x"] {
+	top: 0;
+	width: 1px;
+	height: 100%;
+}
+
+.cropper-alignment-guide[data-axis="y"] {
+	left: 0;
+	height: 1px;
+	width: 100%;
+}

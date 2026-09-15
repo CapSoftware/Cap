@@ -227,7 +227,10 @@ export function ImageOverlay(props: {
 	});
 
 	return (
-		<div class="pointer-events-none absolute inset-0">
+		<div
+			class="pointer-events-none absolute inset-0"
+			style={{ opacity: "var(--preview-controls-opacity, 1)" }}
+		>
 			<Show when={!editorState.playing}>
 				<For each={visible()}>
 					{({ segment, index }) => (

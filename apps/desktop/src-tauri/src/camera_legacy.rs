@@ -129,7 +129,8 @@ const WS_PREVIEW_BLUR_MAX_WIDTH: u32 = 640;
 const WS_PREVIEW_BLUR_MAX_HEIGHT: u32 = 360;
 const WS_PREVIEW_TARGET_FRAME_INTERVAL: Duration = Duration::from_micros(16_666);
 const WS_PREVIEW_FRAME_INTERVAL_SLACK: Duration = Duration::from_millis(1);
-const WS_BLUR_INFERENCE_INTERVAL: Duration = Duration::from_millis(150);
+const WS_BLUR_INFERENCE_INTERVAL: Duration =
+    Duration::from_millis(if cfg!(target_os = "macos") { 33 } else { 150 });
 
 // Low-spec preview profile (mirrors the native path in camera.rs). Only used
 // when `is_low_spec_preview()` is true (machines <= 8GB RAM detected at
@@ -439,6 +440,7 @@ pub async fn create_camera_preview_ws(
                     cap_camera_effects::BlurMode::Light
                 }
                 cap_project::BackgroundBlurMode::Heavy => cap_camera_effects::BlurMode::Heavy,
+                cap_project::BackgroundBlurMode::Remove => cap_camera_effects::BlurMode::Remove,
             };
             let (mut target_width, mut target_height) =
                 scaled_preview_dimensions(frame.width(), frame.height(), &state);
@@ -559,6 +561,11 @@ pub async fn create_camera_preview_ws(
                 }
             }
             if ws_active {
+                if blur_mode == cap_project::BackgroundBlurMode::Remove
+                    && matches!(blurred, Ok(None))
+                {
+                    continue;
+                }
                 let (data, stride) = blurred
                     .ok()
                     .flatten()
@@ -568,7 +575,7 @@ pub async fn create_camera_preview_ws(
                     });
                 frame_counter = frame_counter.wrapping_add(1);
                 let _previous_frame = frame_tx_clone.send_replace(Some(Arc::new(WSFrame {
-                    data,
+                    data: data.into(),
                     width,
                     height,
                     stride,
@@ -610,6 +617,7 @@ struct WsBlurResources {
     source_texture: Option<(u32, u32, wgpu::Texture)>,
     readbacks: Option<(u32, u32, [WsReadback; 2])>,
     current_idx: usize,
+    mode: Option<cap_camera_effects::BlurMode>,
 }
 
 impl WsBlurState {
@@ -669,6 +677,12 @@ impl WsBlurState {
             .as_mut()
             .ok_or("Requested camera blur initialization failed")?;
 
+        if res.mode != Some(mode) {
+            res.readbacks = None;
+            res.current_idx = 0;
+            res.mode = Some(mode);
+        }
+
         #[cfg(target_os = "linux")]
         if receipt.as_ref().is_some_and(|receipt| matches!(receipt.timestamp,
             cap_timestamp::Timestamp::Instant(captured) if captured.elapsed() > Duration::from_secs(1))) {
@@ -698,26 +712,6 @@ impl WsBlurState {
                 &res.source_texture.as_ref().unwrap().2
             }
         };
-
-        res.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: src,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            rgba_data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(stride),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
 
         let bytes_per_row_aligned = (width * 4 + 255) & !255;
         let buf_size = (bytes_per_row_aligned * height) as u64;
@@ -793,6 +787,26 @@ impl WsBlurState {
         };
 
         if let Some(idx) = issue_idx {
+            res.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: src,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                rgba_data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+
             let output = res.processor.process(&res.device, &res.queue, src, mode);
 
             let mut encoder = res
@@ -940,6 +954,7 @@ fn init_headless_blur() -> Result<WsBlurResources, String> {
         source_texture: None,
         readbacks: None,
         current_idx: 0,
+        mode: None,
     })
 }
 
