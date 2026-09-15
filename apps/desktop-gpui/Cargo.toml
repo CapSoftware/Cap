@@ -129,6 +129,7 @@ chrono = "0.4"
 # Read the Tauri app's settings store so both apps share one recordings library.
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
+sanitize-filename = "0.6.0"
 semver = "1"
 base64 = "0.22"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
