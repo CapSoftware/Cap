@@ -6,6 +6,7 @@ import { produce } from "solid-js/store";
 import { useCanvasSnapTargets } from "./CanvasElementsOverlay";
 import { useEditorContext } from "./context";
 import { evaluateMask, type MaskSegment } from "./masks";
+import { createOverlaySegments } from "./overlay-segments";
 import { SNAP_PX, snapMovingRect } from "./snapping";
 import { getOverlayZIndex } from "./timelineTracks";
 
@@ -20,20 +21,11 @@ export function MaskOverlay(props: MaskOverlayProps) {
 	const currentAbsoluteTime = () =>
 		editorState.previewTime ?? editorState.playbackTime ?? 0;
 
-	const visibleMaskSegments = createMemo(() => {
-		const segments = project.timeline?.maskSegments ?? [];
-		const time = currentAbsoluteTime();
-		return segments
-			.map((segment, index) => ({ segment, index }))
-			.filter(
-				({ segment }) =>
-					segment.enabled && time >= segment.start && time < segment.end,
-			)
-			.sort(
-				(a, b) =>
-					(a.segment.track ?? 0) - (b.segment.track ?? 0) || a.index - b.index,
-			);
-	});
+	const { indexed: maskSegments, visible: visibleMaskSegments } =
+		createOverlaySegments(
+			() => project.timeline?.maskSegments ?? [],
+			currentAbsoluteTime,
+		);
 
 	const selectedMaskIndex = createMemo(() => {
 		const selection = editorState.timeline.selection;
@@ -98,9 +90,9 @@ export function MaskOverlay(props: MaskOverlayProps) {
 		) {
 			return visible;
 		}
-		const segment = project.timeline?.maskSegments?.[hoveredIndex];
-		if (!segment) return visible;
-		return [...visible, { segment, index: hoveredIndex }];
+		const hovered = maskSegments()[hoveredIndex];
+		if (!hovered) return visible;
+		return [...visible, hovered];
 	});
 
 	const getMaskTime = (index: number) => {

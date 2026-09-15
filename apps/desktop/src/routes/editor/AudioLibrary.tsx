@@ -7,6 +7,7 @@ import {
 	createRoot,
 	createSignal,
 	For,
+	on,
 	onCleanup,
 	Show,
 } from "solid-js";
@@ -14,6 +15,7 @@ import toast from "solid-toast";
 
 import { commands, type ImportedAudioTrack } from "~/utils/tauri";
 import { AUDIO_IMPORT_EXTENSIONS } from "./audio";
+import { type AudioPickerMode, createAudioImportGuard } from "./audio-import";
 import { useEditorContext } from "./context";
 import { EditorButton } from "./ui";
 
@@ -71,15 +73,11 @@ function EqualizerBars() {
 	);
 }
 
-type AudioPickerMode =
-	| { type: "add"; lane: number }
-	| { type: "replace"; index: number };
-
 export function AudioLibraryPanel(props: {
 	mode: AudioPickerMode;
 	onClose: () => void;
 }) {
-	const { projectActions } = useEditorContext();
+	const { project, projectActions } = useEditorContext();
 	const [library] = useAudioLibrary();
 	const [busyId, setBusyId] = createSignal<string | null>(null);
 	const [uploading, setUploading] = createSignal(false);
@@ -89,6 +87,26 @@ export function AudioLibraryPanel(props: {
 	);
 
 	const isReplace = () => props.mode.type === "replace";
+	const imports = createAudioImportGuard(
+		() => props.mode,
+		(index) => project.timeline?.audioSegments?.[index],
+	);
+	const pickerModeKey = createMemo(() =>
+		props.mode.type === "replace"
+			? `replace:${props.mode.index}`
+			: `add:${props.mode.lane}`,
+	);
+	createEffect(
+		on(
+			pickerModeKey,
+			() => {
+				imports.invalidate();
+				setBusyId(null);
+				setUploading(false);
+			},
+			{ defer: true },
+		),
+	);
 
 	type LibraryTrack = NonNullable<ReturnType<typeof library>>[number];
 
@@ -141,54 +159,81 @@ export function AudioLibraryPanel(props: {
 		setPreviewId(id);
 	};
 
-	onCleanup(stopPreview);
-
-	const commit = (imported: ImportedAudioTrack) => {
+	onCleanup(() => {
+		imports.close();
 		stopPreview();
-		if (props.mode.type === "replace")
-			projectActions.replaceAudioSegment(props.mode.index, imported);
-		else projectActions.addAudioSegment(props.mode.lane, imported);
+	});
+
+	const close = () => {
+		imports.close();
+		stopPreview();
 		props.onClose();
+	};
+	const beginImport = () => {
+		if (busyId() !== null || uploading()) return;
+		const request = imports.begin();
+		if (!request) close();
+		return request;
+	};
+	const acceptsImport = (
+		request: NonNullable<ReturnType<typeof imports.begin>>,
+	) => {
+		if (imports.canCommit(request)) return true;
+		if (imports.isPending(request)) close();
+		return false;
+	};
+
+	const commit = (
+		request: NonNullable<ReturnType<typeof imports.begin>>,
+		imported: ImportedAudioTrack,
+	) => {
+		if (!acceptsImport(request)) return;
+		stopPreview();
+		if (request.mode.type === "replace")
+			projectActions.replaceAudioSegment(request.mode.index, imported);
+		else projectActions.addAudioSegment(request.mode.lane, imported);
+		close();
 	};
 
 	const addLibraryTrack = async (id: string) => {
-		if (busyId()) return;
+		const request = beginImport();
+		if (!request) return;
 		setBusyId(id);
 		try {
-			commit(await commands.addAudioLibraryTrack(id));
+			commit(request, await commands.addAudioLibraryTrack(id));
 		} catch (error) {
+			if (!acceptsImport(request)) return;
 			console.error("Failed to add audio track", error);
 			toast.error("Failed to add audio track");
 		} finally {
-			setBusyId(null);
+			if (imports.finish(request)) setBusyId(null);
 		}
 	};
 
 	const uploadTrack = async () => {
-		if (uploading()) return;
+		const request = beginImport();
+		if (!request) return;
 		setUploading(true);
 		try {
 			const selected = await open({
 				multiple: false,
 				filters: [{ name: "Audio", extensions: [...AUDIO_IMPORT_EXTENSIONS] }],
 			});
-			if (typeof selected !== "string") return;
-			commit(await commands.importAudioTrackFile(selected));
+			if (typeof selected !== "string" || !acceptsImport(request)) return;
+			commit(request, await commands.importAudioTrackFile(selected));
 		} catch (error) {
+			if (!acceptsImport(request)) return;
 			console.error("Failed to import audio file", error);
 			toast.error("Failed to import audio file");
 		} finally {
-			setUploading(false);
+			if (imports.finish(request)) setUploading(false);
 		}
 	};
 
 	return (
 		<div class="flex flex-col gap-4">
 			<div class="flex flex-row gap-2 items-center">
-				<EditorButton
-					onClick={() => props.onClose()}
-					leftIcon={<IconLucideCheck />}
-				>
+				<EditorButton onClick={close} leftIcon={<IconLucideCheck />}>
 					Done
 				</EditorButton>
 				<span class="text-sm text-gray-10">
@@ -310,7 +355,7 @@ export function AudioLibraryPanel(props: {
 													? "bg-gray-12 border-gray-12 text-gray-1"
 													: "bg-black/45 border-white/20 text-white hover:bg-gray-12 hover:border-gray-12 hover:text-gray-1",
 											)}
-											disabled={isBusy()}
+											disabled={busyId() !== null || uploading()}
 											onClick={(e) => {
 												e.stopPropagation();
 												addLibraryTrack(track.id);
@@ -343,7 +388,7 @@ export function AudioLibraryPanel(props: {
 
 			<button
 				type="button"
-				disabled={uploading()}
+				disabled={uploading() || busyId() !== null}
 				onClick={uploadTrack}
 				class="flex flex-col gap-1.5 justify-center items-center p-4 w-full text-center rounded-xl border border-dashed transition-colors bg-gray-2 border-gray-5 hover:bg-gray-3 hover:border-gray-7 disabled:opacity-60"
 			>

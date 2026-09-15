@@ -8689,6 +8689,7 @@ mod tests {
                             SharedWallClockPause::new(Arc::new(AtomicBool::new(false))),
                             false,
                             None,
+                            None,
                             Arc::new(OnceLock::new()),
                             AudioAnchor::FirstFrame,
                         );
