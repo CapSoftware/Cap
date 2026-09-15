@@ -67,6 +67,7 @@ use gpui::{
 };
 
 use crate::{
+    editor_audio::{AudioImportRequest, probe_audio_duration, replace_audio_asset},
     editor_edits::{self as edits, DragBounds, Hit, ProjectHistory, SPLIT_SNAP_PX, Selection},
     editor_export::ExportUi,
     store::SettingsEnum,
@@ -1586,6 +1587,9 @@ pub struct EditorWindow {
     add_track: Option<AddTrackMenu>,
     add_track_opens: usize,
     pub(crate) audio_picker: Option<crate::editor_audio::AudioPicker>,
+    pub(crate) audio_picker_generation: u64,
+    pub(crate) audio_import_pending: Option<u64>,
+    audio_picker_request: Option<AudioImportRequest>,
     /// A transient line over the player: the one place an action that cannot
     /// apply says so (the editor has no toast host of its own).
     pub(crate) notice: Option<EditorNotice>,
@@ -2150,6 +2154,9 @@ impl EditorWindow {
             add_track: None,
             add_track_opens: 0,
             audio_picker: None,
+            audio_picker_generation: 0,
+            audio_import_pending: None,
+            audio_picker_request: None,
             notice: None,
             notice_seq: 0,
             play_until: None,
@@ -5340,14 +5347,60 @@ impl EditorWindow {
     }
 
     pub(crate) fn open_audio_picker(&mut self, lane: u32, cx: &mut Context<Self>) {
+        self.audio_picker_generation = self.audio_picker_generation.wrapping_add(1);
         self.audio_picker = Some(crate::editor_audio::AudioPicker::Add { lane });
+        self.audio_picker_request = AudioImportRequest::new(
+            crate::editor_audio::AudioPicker::Add { lane },
+            self.audio_picker_generation,
+            &self.project,
+        );
         self.set_selection(None, cx);
         cx.notify();
     }
 
     pub(crate) fn open_audio_replace(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.audio_picker_generation = self.audio_picker_generation.wrapping_add(1);
         self.audio_picker = Some(crate::editor_audio::AudioPicker::Replace { index });
+        self.audio_picker_request = AudioImportRequest::new(
+            crate::editor_audio::AudioPicker::Replace { index },
+            self.audio_picker_generation,
+            &self.project,
+        );
         cx.notify();
+    }
+
+    fn begin_audio_import(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AudioImportRequest> {
+        self.audio_picker?;
+        if self.audio_import_pending == Some(self.audio_picker_generation) {
+            return None;
+        }
+        let request = self.audio_picker_request.as_ref()?;
+        if !request.accepts(
+            self.audio_picker,
+            self.audio_picker_generation,
+            &self.project,
+        ) {
+            self.close_stale_audio_picker(window, cx);
+            return None;
+        }
+        let request = request.clone();
+        self.audio_import_pending = Some(request.generation);
+        cx.notify();
+        Some(request)
+    }
+
+    fn close_stale_audio_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.audio_picker = None;
+        self.audio_picker_request = None;
+        self.show_notice(
+            "This audio segment changed. Select it and choose a replacement again.",
+            window,
+            cx,
+        );
     }
 
     pub(crate) fn add_library_track(
@@ -5357,7 +5410,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(picker) = self.audio_picker else {
+        let Some(request) = self.begin_audio_import(window, cx) else {
             return;
         };
         let project_path = self.project_path.clone();
@@ -5368,92 +5421,108 @@ impl EditorWindow {
                     async move { crate::editor_audio::copy_library_track(&project_path, id, name) },
                 )
                 .await;
-            match imported {
-                Ok((path, name, duration)) => {
-                    this.update_in(cx, |this, window, cx| {
-                        this.commit_picked_audio(picker, path, name, duration, window, cx);
-                    })
-                    .ok();
-                }
-                Err(error) => tracing::error!("adding library audio failed: {error}"),
-            }
+            this.update_in(cx, |this, window, cx| {
+                this.finish_audio_import(
+                    request,
+                    imported.map(|(path, name, duration)| {
+                        Some(ImportedAudio {
+                            path,
+                            name,
+                            duration,
+                        })
+                    }),
+                    window,
+                    cx,
+                );
+            })
+            .ok();
         })
         .detach();
     }
 
     pub(crate) fn import_audio_from_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.audio_picker {
-            Some(crate::editor_audio::AudioPicker::Add { lane }) => {
-                self.import_audio_for_lane(lane, window, cx);
-            }
-            Some(crate::editor_audio::AudioPicker::Replace { index }) => {
-                self.replace_audio_from_file(index, window, cx);
-            }
-            None => {}
-        }
+        let Some(request) = self.begin_audio_import(window, cx) else {
+            return;
+        };
+        self.import_audio_from_file(request, window, cx);
     }
 
-    fn commit_picked_audio(
+    fn finish_audio_import(
         &mut self,
-        picker: crate::editor_audio::AudioPicker,
-        path: String,
-        name: String,
-        duration: f64,
+        request: AudioImportRequest,
+        imported: Result<Option<ImportedAudio>, String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match picker {
+        if self.audio_import_pending != Some(request.generation) {
+            return;
+        }
+        self.audio_import_pending = None;
+        if !request.accepts(
+            self.audio_picker,
+            self.audio_picker_generation,
+            &self.project,
+        ) {
+            if self.audio_picker == Some(request.picker)
+                && self.audio_picker_generation == request.generation
+            {
+                self.close_stale_audio_picker(window, cx);
+            } else {
+                cx.notify();
+            }
+            return;
+        }
+        let imported = match imported {
+            Ok(Some(imported)) => imported,
+            Ok(None) => {
+                cx.notify();
+                return;
+            }
+            Err(error) => {
+                tracing::error!("importing audio failed: {error}");
+                cx.notify();
+                return;
+            }
+        };
+        match request.picker {
             crate::editor_audio::AudioPicker::Add { lane } => {
-                self.commit_audio_import(
-                    lane,
-                    ImportedAudio {
-                        path,
-                        name,
-                        duration,
-                    },
+                self.commit_audio_import(lane, imported, window, cx);
+            }
+            crate::editor_audio::AudioPicker::Replace { index } => {
+                self.replace_audio_segment(
+                    index,
+                    imported.path,
+                    imported.name,
+                    imported.duration,
                     window,
                     cx,
                 );
             }
-            crate::editor_audio::AudioPicker::Replace { index } => {
-                self.replace_audio_segment(index, path, name, duration, window, cx);
-            }
         }
         self.audio_picker = None;
+        cx.notify();
     }
 
-    fn replace_audio_from_file(
+    fn import_audio_from_file(
         &mut self,
-        index: usize,
+        request: AudioImportRequest,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let project_path = self.project_path.clone();
         cx.spawn_in(window, async move |this, cx| {
-            let Some(source) = crate::platform::open_audio_panel() else {
-                return;
+            let imported = match crate::platform::open_audio_panel() {
+                Some(source) => cx
+                    .background_executor()
+                    .spawn(async move { import_audio_file(&project_path, &source) })
+                    .await
+                    .map(Some),
+                None => Ok(None),
             };
-            let imported = cx
-                .background_executor()
-                .spawn(async move { import_audio_file(&project_path, &source) })
-                .await;
-            match imported {
-                Ok(imported) => {
-                    this.update_in(cx, |this, window, cx| {
-                        this.replace_audio_segment(
-                            index,
-                            imported.path,
-                            imported.name,
-                            imported.duration,
-                            window,
-                            cx,
-                        );
-                        this.audio_picker = None;
-                    })
-                    .ok();
-                }
-                Err(error) => tracing::error!("replacing audio failed: {error}"),
-            }
+            this.update_in(cx, |this, window, cx| {
+                this.finish_audio_import(request, imported, window, cx);
+            })
+            .ok();
         })
         .detach();
     }
@@ -5468,15 +5537,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         let changed = self.edit(
-            |timeline| {
-                let Some(segment) = timeline.audio_segments.get_mut(index) else {
-                    return false;
-                };
-                segment.path = path;
-                segment.name = Some(name);
-                segment.duration = (duration > 0.0).then_some(duration);
-                true
-            },
+            |timeline| replace_audio_asset(timeline, index, path, name, duration),
             window,
             cx,
         );
@@ -7592,32 +7653,6 @@ impl EditorWindow {
             self.set_selection(Some(Selection::single(TrackKind::Image, index)), cx);
             self.seek_to_time(start, cx);
         }
-    }
-
-    fn import_audio_for_lane(&mut self, lane: u32, window: &mut Window, cx: &mut Context<Self>) {
-        let project_path = self.project_path.clone();
-        cx.spawn_in(window, async move |this, cx| {
-            let Some(source) = crate::platform::open_audio_panel() else {
-                return;
-            };
-            let imported = cx
-                .background_executor()
-                .spawn(async move { import_audio_file(&project_path, &source) })
-                .await;
-            match imported {
-                Ok(imported) => {
-                    this.update_in(cx, |this, window, cx| {
-                        this.commit_audio_import(lane, imported, window, cx);
-                        this.audio_picker = None;
-                    })
-                    .ok();
-                }
-                Err(error) => {
-                    tracing::error!("importing audio failed: {error}");
-                }
-            }
-        })
-        .detach();
     }
 
     fn commit_audio_import(
@@ -11660,10 +11695,6 @@ fn import_audio_file(
     })
 }
 
-fn probe_audio_duration(_path: &std::path::Path) -> f64 {
-    0.0
-}
-
 fn aspect_ratio_eq(
     left: &Option<cap_project::AspectRatio>,
     right: &Option<cap_project::AspectRatio>,
@@ -11785,6 +11816,38 @@ fn hex_to_color(rgba: [u8; 4]) -> cap_project::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn importing_short_audio_keeps_source_and_probes_copied_duration() {
+        let root = std::env::temp_dir().join(format!(
+            "cap-gpui-short-audio-import-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("short.wav");
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&32_036_u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16_u32.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&8_000_u32.to_le_bytes());
+        wav.extend_from_slice(&16_000_u32.to_le_bytes());
+        wav.extend_from_slice(&2_u16.to_le_bytes());
+        wav.extend_from_slice(&16_u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&32_000_u32.to_le_bytes());
+        wav.resize(32_044, 0);
+        std::fs::write(&source, &wav).unwrap();
+        let project = root.join("project.cap");
+        let imported = import_audio_file(&project, &source).unwrap();
+        assert!((imported.duration - 2.0).abs() < 0.001);
+        assert_eq!(imported.name, "short");
+        assert_eq!(std::fs::read(&source).unwrap(), wav);
+        assert_eq!(std::fs::read(project.join(imported.path)).unwrap(), wav);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn add_track_tray_and_tiles_animate_in_sequence_and_settle() {
