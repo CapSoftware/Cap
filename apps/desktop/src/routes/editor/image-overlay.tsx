@@ -4,6 +4,7 @@ import { unwrap } from "solid-js/store";
 import { useCanvasSnapTargets } from "./CanvasElementsOverlay";
 import { useEditorContext } from "./context";
 import { resizeImage } from "./images";
+import { createOverlaySegments } from "./overlay-segments";
 import { SNAP_PX, snapMovingRect } from "./snapping";
 import { getOverlayZIndex } from "./timelineTracks";
 
@@ -20,14 +21,10 @@ export function ImageOverlay(props: {
 	} = useEditorContext();
 	const snapTargets = useCanvasSnapTargets();
 	const time = () => editorState.previewTime ?? editorState.playbackTime;
-	const visible = () =>
-		(project.timeline?.imageSegments ?? [])
-			.map((segment, index) => ({ segment, index }))
-			.filter(
-				({ segment }) =>
-					segment.enabled && time() >= segment.start && time() < segment.end,
-			)
-			.sort((a, b) => a.segment.track - b.segment.track || a.index - b.index);
+	const { visible } = createOverlaySegments(
+		() => project.timeline?.imageSegments ?? [],
+		time,
+	);
 	const selected = (index: number) =>
 		editorState.timeline.selection?.type === "image" &&
 		editorState.timeline.selection.indices.includes(index);
