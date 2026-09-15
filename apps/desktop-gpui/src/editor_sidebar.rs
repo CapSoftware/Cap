@@ -2047,6 +2047,13 @@ fn write_desktop_background_snapshot(source: &Path, output: &Path) -> Result<(),
 fn import_desktop_background(project_path: &Path) -> Result<PathBuf, String> {
     let source = crate::platform::desktop_picture_path()
         .ok_or_else(|| "Current desktop background path not found".to_string())?;
+    import_desktop_background_from_source(project_path, &source)
+}
+
+fn import_desktop_background_from_source(
+    project_path: &Path,
+    source: &Path,
+) -> Result<PathBuf, String> {
     if !source.exists() {
         return Err(format!(
             "Current desktop background does not exist: {}",
@@ -2059,7 +2066,7 @@ fn import_desktop_background(project_path: &Path) -> Result<PathBuf, String> {
         .map_err(|err| format!("failed to create background assets directory: {err}"))?;
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis())
+        .map(|elapsed| elapsed.as_nanos())
         .unwrap_or(0);
     let name = format!("{CURRENT_DESKTOP_BACKGROUND_BASENAME}-{timestamp}.jpg");
     let output = assets.join(&name);
@@ -2068,26 +2075,13 @@ fn import_desktop_background(project_path: &Path) -> Result<PathBuf, String> {
     ));
 
     let _ = std::fs::remove_file(&pending);
-    if let Err(error) = write_desktop_background_snapshot(&source, &pending) {
+    if let Err(error) = write_desktop_background_snapshot(source, &pending) {
         let _ = std::fs::remove_file(&pending);
         return Err(error);
     }
     let _ = std::fs::remove_file(&output);
     std::fs::rename(&pending, &output)
         .map_err(|err| format!("failed to store current desktop background: {err}"))?;
-
-    // `remove_imported_desktop_background_snapshots` (`recording.rs:210-224`).
-    if let Ok(entries) = std::fs::read_dir(&assets) {
-        let prefix = format!("{CURRENT_DESKTOP_BACKGROUND_BASENAME}-");
-        for entry in entries.flatten() {
-            if let Some(entry_name) = entry.file_name().to_str()
-                && entry_name != name
-                && entry_name.starts_with(&prefix)
-            {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-    }
 
     Ok(output)
 }
@@ -4265,6 +4259,48 @@ mod tests {
             ),
             Some("macOS/tahoe-dark")
         );
+    }
+
+    #[test]
+    fn importing_a_desktop_background_preserves_referenced_snapshots() {
+        let root = std::env::temp_dir().join(format!(
+            "cap-gpui-desktop-background-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let project = root.join("project.cap");
+        let source = root.join("wallpaper.jpg");
+        std::fs::create_dir_all(&root).unwrap();
+        image::RgbImage::from_pixel(32, 16, image::Rgb([40, 120, 200]))
+            .save(&source)
+            .unwrap();
+        let previous = project.join("assets/current-desktop-background-1.jpg");
+        std::fs::create_dir_all(previous.parent().unwrap()).unwrap();
+        write_desktop_background_snapshot(&source, &previous).unwrap();
+        let saved_style_path = previous.clone();
+        let history_path = previous.clone();
+        let previous_bytes = std::fs::read(&previous).unwrap();
+        let sibling_pending = project.join("assets/current-desktop-background-2.pending.jpg");
+        std::fs::write(&sibling_pending, b"another import in progress").unwrap();
+
+        image::RgbImage::from_pixel(48, 24, image::Rgb([180, 60, 30]))
+            .save(&source)
+            .unwrap();
+        let imported = import_desktop_background_from_source(&project, &source).unwrap();
+
+        assert_ne!(imported, previous);
+        assert_eq!(image::image_dimensions(&imported).unwrap(), (48, 24));
+        assert_eq!(std::fs::read(saved_style_path).unwrap(), previous_bytes);
+        assert_eq!(image::image_dimensions(history_path).unwrap(), (32, 16));
+        assert_eq!(
+            std::fs::read(sibling_pending).unwrap(),
+            b"another import in progress"
+        );
+        assert_eq!(stored_desktop_background(&project), Some(imported));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -188,45 +188,37 @@ pub async fn import_current_desktop_background(project_path: String) -> Result<S
     let project_dir = PathBuf::from(project_path);
 
     tokio::task::spawn_blocking(move || {
-        let assets_dir = project_dir.join("assets");
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_millis())
-            .unwrap_or(0);
-        let output_name = format!("{CURRENT_DESKTOP_BACKGROUND_BASENAME}-{timestamp}.jpg");
-        let output_path = assets_dir.join(&output_name);
-        let pending_path = assets_dir.join(format!(
-            "{CURRENT_DESKTOP_BACKGROUND_BASENAME}-{timestamp}.pending.jpg"
-        ));
-
-        if !matches!(
-            write_current_desktop_background_to(&output_path, &pending_path, None, false)?,
-            CurrentDesktopBackgroundWrite::Stored
-        ) {
-            return Err("Current desktop background snapshot was skipped".to_string());
-        }
-        remove_imported_desktop_background_snapshots(&assets_dir, &output_name);
-
-        Ok(output_path.to_string_lossy().into_owned())
+        let source_path = current_desktop_background_source_path(None)
+            .ok_or_else(|| "Current desktop background path not found".to_string())?;
+        import_current_desktop_background_from_source(&project_dir, &source_path)
     })
     .await
     .map_err(|err| format!("Desktop background snapshot task failed: {err}"))?
 }
 
-fn remove_imported_desktop_background_snapshots(assets_dir: &Path, keep_name: &str) {
-    let Ok(entries) = std::fs::read_dir(assets_dir) else {
-        return;
-    };
+fn import_current_desktop_background_from_source(
+    project_dir: &Path,
+    source_path: &Path,
+) -> Result<String, String> {
+    let assets_dir = project_dir.join("assets");
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let output_name = format!("{CURRENT_DESKTOP_BACKGROUND_BASENAME}-{timestamp}.jpg");
+    let output_path = assets_dir.join(&output_name);
+    let pending_path = assets_dir.join(format!(
+        "{CURRENT_DESKTOP_BACKGROUND_BASENAME}-{timestamp}.pending.jpg"
+    ));
 
-    let prefix = format!("{CURRENT_DESKTOP_BACKGROUND_BASENAME}-");
-    for entry in entries.flatten() {
-        if let Some(name) = entry.file_name().to_str()
-            && name != keep_name
-            && name.starts_with(prefix.as_str())
-        {
-            let _ = std::fs::remove_file(entry.path());
-        }
+    if !matches!(
+        write_desktop_background_source_to(source_path, &output_path, &pending_path)?,
+        CurrentDesktopBackgroundWrite::Stored
+    ) {
+        return Err("Current desktop background snapshot was skipped".to_string());
     }
+
+    Ok(output_path.to_string_lossy().into_owned())
 }
 
 fn write_current_desktop_background_to(
@@ -244,6 +236,14 @@ fn write_current_desktop_background_to(
         ));
     }
 
+    write_desktop_background_source_to(&source_path, output_path, pending_path)
+}
+
+fn write_desktop_background_source_to(
+    source_path: &Path,
+    output_path: &Path,
+    pending_path: &Path,
+) -> Result<CurrentDesktopBackgroundWrite, String> {
     if !source_path.exists() {
         return Err(format!(
             "Current desktop background does not exist: {}",
@@ -257,7 +257,7 @@ fn write_current_desktop_background_to(
     }
 
     let _ = std::fs::remove_file(pending_path);
-    if let Err(error) = write_desktop_background_snapshot(&source_path, pending_path) {
+    if let Err(error) = write_desktop_background_snapshot(source_path, pending_path) {
         let _ = std::fs::remove_file(pending_path);
         return Err(error);
     }
@@ -7410,6 +7410,41 @@ mod tests {
             Path::new("/System/Library/Desktop Pictures/wallpaper.jpg"),
             home
         ));
+    }
+
+    #[test]
+    fn importing_a_desktop_background_preserves_referenced_snapshots() {
+        let dir = tempdir().unwrap();
+        let project = dir.path().join("project.cap");
+        let source = dir.path().join("wallpaper.jpg");
+        image::RgbImage::from_pixel(32, 16, image::Rgb([40, 120, 200]))
+            .save(&source)
+            .unwrap();
+        let previous = project.join("assets/current-desktop-background-1.jpg");
+        let previous_pending = project.join("assets/current-desktop-background-1.pending.jpg");
+        assert!(matches!(
+            write_desktop_background_source_to(&source, &previous, &previous_pending).unwrap(),
+            CurrentDesktopBackgroundWrite::Stored
+        ));
+        let saved_style_path = previous.clone();
+        let history_path = previous.clone();
+        let previous_bytes = std::fs::read(&previous).unwrap();
+        let sibling_pending = project.join("assets/current-desktop-background-2.pending.jpg");
+        std::fs::write(&sibling_pending, b"another import in progress").unwrap();
+
+        image::RgbImage::from_pixel(48, 24, image::Rgb([180, 60, 30]))
+            .save(&source)
+            .unwrap();
+        let imported = import_current_desktop_background_from_source(&project, &source).unwrap();
+
+        assert_ne!(Path::new(&imported), previous);
+        assert_eq!(image::image_dimensions(&imported).unwrap(), (48, 24));
+        assert_eq!(std::fs::read(saved_style_path).unwrap(), previous_bytes);
+        assert_eq!(image::image_dimensions(history_path).unwrap(), (32, 16));
+        assert_eq!(
+            std::fs::read(sibling_pending).unwrap(),
+            b"another import in progress"
+        );
     }
 
     #[test]
