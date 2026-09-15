@@ -1457,33 +1457,38 @@ pub(crate) fn camera_preview_image(
 /// `db_fs` from `src-tauri/src/audio_meter.rs`: peak of the batch as dB FS,
 /// clamped to [-96, 0].
 fn db_fs(samples: &MicrophoneSamples) -> f64 {
-    use cpal::SampleFormat;
+    sample_bytes_db_fs(&samples.data, samples.format)
+}
 
-    let sample_size = samples.format.sample_size();
-    if sample_size == 0 || samples.data.len() < sample_size {
+fn sample_bytes_db_fs(data: &[u8], format: cpal::SampleFormat) -> f64 {
+    use cpal::{Sample, SampleFormat};
+
+    let sample_size = format.sample_size();
+    if sample_size == 0 || data.len() < sample_size {
         return -96.0;
     }
-    let peak = samples
-        .data
+    let peak = data
         .chunks_exact(sample_size)
         .map(|data| {
-            let value: f64 = match samples.format {
+            let value: f64 = match format {
                 SampleFormat::I8 => i8::from_ne_bytes([data[0]]) as f64 / i8::MAX as f64,
-                SampleFormat::U8 => u8::from_ne_bytes([data[0]]) as f64 / u8::MAX as f64 - 0.5,
+                SampleFormat::U8 => u8::from_ne_bytes([data[0]]).to_sample::<f64>(),
                 SampleFormat::I16 => {
                     i16::from_ne_bytes([data[0], data[1]]) as f64 / i16::MAX as f64
                 }
-                SampleFormat::U16 => {
-                    u16::from_ne_bytes([data[0], data[1]]) as f64 / u16::MAX as f64 - 0.5
-                }
+                SampleFormat::U16 => u16::from_ne_bytes([data[0], data[1]]).to_sample::<f64>(),
                 SampleFormat::I32 => {
                     i32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f64
                         / i32::MAX as f64
                 }
                 SampleFormat::U32 => {
-                    u32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f64
-                        / u32::MAX as f64
-                        - 0.5
+                    u32::from_ne_bytes([data[0], data[1], data[2], data[3]]).to_sample::<f64>()
+                }
+                SampleFormat::I64 => {
+                    i64::from_ne_bytes([
+                        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+                    ]) as f64
+                        / i64::MAX as f64
                 }
                 SampleFormat::F32 => {
                     f32::from_ne_bytes([data[0], data[1], data[2], data[3]]) as f64
@@ -1498,6 +1503,97 @@ fn db_fs(samples: &MicrophoneSamples) -> f64 {
         .fold(0.0f64, f64::max);
 
     (20.0 * peak.log10()).clamp(-96.0, 0.0)
+}
+
+#[cfg(test)]
+mod meter_tests {
+    use super::sample_bytes_db_fs;
+    use cpal::SampleFormat;
+
+    #[test]
+    fn unsigned_equilibrium_has_minimum_level() {
+        let cases = [
+            (SampleFormat::U8, 128u8.to_ne_bytes().to_vec()),
+            (SampleFormat::U16, 32768u16.to_ne_bytes().to_vec()),
+            (SampleFormat::U32, (1u32 << 31).to_ne_bytes().to_vec()),
+        ];
+        for (format, bytes) in cases {
+            assert_eq!(sample_bytes_db_fs(&bytes, format), -96.0, "{format:?}");
+        }
+    }
+
+    #[test]
+    fn unsigned_negative_peaks_have_full_scale_level() {
+        for format in [SampleFormat::U8, SampleFormat::U16, SampleFormat::U32] {
+            assert_eq!(sample_bytes_db_fs(&[0; 8], format), 0.0, "{format:?}");
+        }
+    }
+
+    #[test]
+    fn unsigned_half_scale_has_same_level_on_both_sides() {
+        let expected = 20.0 * 0.5f64.log10();
+        assert_eq!(sample_bytes_db_fs(&[64], SampleFormat::U8), expected);
+        assert_eq!(sample_bytes_db_fs(&[192], SampleFormat::U8), expected);
+    }
+
+    #[test]
+    fn i64_microphone_silence_has_minimum_level() {
+        assert_eq!(
+            sample_bytes_db_fs(&0i64.to_ne_bytes(), SampleFormat::I64),
+            -96.0
+        );
+    }
+
+    #[test]
+    fn i64_microphone_peaks_have_correct_level() {
+        let cases = [
+            (i64::MIN, 0.0),
+            (i64::MAX, 0.0),
+            (1i64 << 62, 20.0 * 0.5f64.log10()),
+        ];
+        for (sample, expected) in cases {
+            assert_eq!(
+                sample_bytes_db_fs(&sample.to_ne_bytes(), SampleFormat::I64),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn signed_and_float_formats_keep_existing_levels() {
+        let cases = [
+            (
+                SampleFormat::I8,
+                63i8.to_ne_bytes().to_vec(),
+                63.0 / i8::MAX as f64,
+            ),
+            (
+                SampleFormat::I16,
+                16383i16.to_ne_bytes().to_vec(),
+                16383.0 / i16::MAX as f64,
+            ),
+            (
+                SampleFormat::I32,
+                123456i32.to_ne_bytes().to_vec(),
+                123456.0 / i32::MAX as f64,
+            ),
+            (SampleFormat::F32, 0.5f32.to_ne_bytes().to_vec(), 0.5),
+            (SampleFormat::F64, 0.5f64.to_ne_bytes().to_vec(), 0.5),
+        ];
+        for (format, bytes, amplitude) in cases {
+            assert_eq!(
+                sample_bytes_db_fs(&bytes, format),
+                20.0 * amplitude.log10(),
+                "{format:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_and_partial_samples_remain_silent() {
+        assert_eq!(sample_bytes_db_fs(&[], SampleFormat::U8), -96.0);
+        assert_eq!(sample_bytes_db_fs(&[128], SampleFormat::U16), -96.0);
+    }
 }
 
 #[cfg(test)]
