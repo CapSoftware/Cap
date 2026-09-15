@@ -281,6 +281,7 @@ export const AgentChapter = Schema.Struct({
 });
 
 export const AgentTranscriptCue = Schema.Struct({
+	speaker: Schema.optional(Schema.NullOr(Schema.String)),
 	startMs: Schema.Number,
 	endMs: Schema.Number,
 	text: Schema.String,

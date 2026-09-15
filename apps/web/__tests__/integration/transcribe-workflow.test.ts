@@ -209,6 +209,9 @@ describe("transcribeVideoWorkflow", () => {
 
 		expect(result.success).toBe(true);
 		expect(mocks.transcribe).toHaveBeenCalledTimes(1);
+		expect(mocks.transcribe).toHaveBeenCalledWith(
+			expect.objectContaining({ speaker_labels: true }),
+		);
 		expect(mocks.transcribe.mock.calls[0]?.[0]).toMatchObject({
 			disfluencies: true,
 			speech_models: ["universal-3-5-pro", "universal-2"],
@@ -270,6 +273,9 @@ describe("transcribeVideoWorkflow", () => {
 			message: "Video has no spoken audio - skipped transcription",
 		});
 		expect(mocks.transcribe).toHaveBeenCalledTimes(1);
+		expect(mocks.transcribe).toHaveBeenCalledWith(
+			expect.objectContaining({ speaker_labels: true }),
+		);
 		expect(mocks.updates).toContainEqual({ transcriptionStatus: "NO_AUDIO" });
 		expect(mocks.updates).not.toContainEqual({ transcriptionStatus: "ERROR" });
 		expect(mocks.startAiGeneration).not.toHaveBeenCalled();
