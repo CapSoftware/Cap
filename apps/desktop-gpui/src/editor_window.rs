@@ -5512,12 +5512,24 @@ impl EditorWindow {
         let project_path = self.project_path.clone();
         cx.spawn_in(window, async move |this, cx| {
             let imported = match crate::platform::open_audio_panel() {
-                Some(source) => cx
-                    .background_executor()
-                    .spawn(async move { import_audio_file(&project_path, &source) })
-                    .await
-                    .map(Some),
-                None => Ok(None),
+                Some(source)
+                    if this
+                        .update_in(cx, |this, _, _| {
+                            this.audio_import_pending == Some(request.generation)
+                                && request.accepts(
+                                    this.audio_picker,
+                                    this.audio_picker_generation,
+                                    &this.project,
+                                )
+                        })
+                        .unwrap_or(false) =>
+                {
+                    cx.background_executor()
+                        .spawn(async move { import_audio_file(&project_path, &source) })
+                        .await
+                        .map(Some)
+                }
+                Some(_) | None => Ok(None),
             };
             this.update_in(cx, |this, window, cx| {
                 this.finish_audio_import(request, imported, window, cx);
