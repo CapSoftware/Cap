@@ -2115,6 +2115,14 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
         .best(ffmpeg::media::Type::Video)
         .ok_or("No video stream found")?;
     let stream_index = stream.index();
+    let stream_time_base = stream.time_base();
+    let stream_start = match stream.start_time() {
+        ffmpeg::ffi::AV_NOPTS_VALUE => 0,
+        timestamp => timestamp,
+    };
+    let target_timestamp = ((time * 1_000_000.0) as i64)
+        .rescale((1, 1_000_000), stream_time_base)
+        .saturating_add(stream_start);
 
     let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
         .map_err(|e| e.to_string())?
@@ -2147,14 +2155,17 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
 
     if time > 0.0 {
         let position_us = (time * 1_000_000.0) as i64;
-        let seek_target = position_us.rescale((1, 1_000_000), TIME_BASE);
+        let seek_target = target_timestamp.rescale(stream_time_base, TIME_BASE);
         decoder.flush();
         ictx.seek(seek_target, ..seek_target)
             .map_err(|e| format!("Failed to seek to {position_us}us: {e}"))?;
     }
 
     let mut frame = ffmpeg::frame::Video::empty();
+    let mut decoded = ffmpeg::frame::Video::empty();
     let mut got_frame = false;
+    let mut reached_target = false;
+    let mut decoder_finished = false;
     let mut packets_tried = 0usize;
 
     'outer: for (packet_stream, packet) in ictx.packets() {
@@ -2171,16 +2182,26 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
             continue;
         }
 
-        match decoder.receive_frame(&mut frame) {
-            Ok(()) => {
-                got_frame = true;
-                break 'outer;
-            }
-            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => {}
-            Err(ffmpeg::Error::Eof) => break 'outer,
-            Err(e) => {
-                if packets_tried >= SEEK_DECODE_PACKET_LIMIT {
-                    return Err(format!("Failed to decode frame: {e}"));
+        loop {
+            match decoder.receive_frame(&mut decoded) {
+                Ok(()) => {
+                    std::mem::swap(&mut frame, &mut decoded);
+                    got_frame = true;
+                    if thumbnail_frame_reaches_target(&frame, target_timestamp) {
+                        reached_target = true;
+                        break 'outer;
+                    }
+                }
+                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => break,
+                Err(ffmpeg::Error::Eof) => {
+                    decoder_finished = true;
+                    break 'outer;
+                }
+                Err(e) => {
+                    if packets_tried >= SEEK_DECODE_PACKET_LIMIT {
+                        return Err(format!("Failed to decode frame: {e}"));
+                    }
+                    break;
                 }
             }
         }
@@ -2190,18 +2211,21 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
         }
     }
 
-    if !got_frame {
+    if !reached_target && !decoder_finished {
         decoder
             .send_eof()
             .map_err(|e| format!("Failed to flush decoder: {e}"))?;
         loop {
-            match decoder.receive_frame(&mut frame) {
+            match decoder.receive_frame(&mut decoded) {
                 Ok(()) => {
+                    std::mem::swap(&mut frame, &mut decoded);
                     got_frame = true;
-                    break;
+                    if thumbnail_frame_reaches_target(&frame, target_timestamp) {
+                        break;
+                    }
                 }
                 Err(ffmpeg::Error::Eof) => break,
-                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => continue,
+                Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => break,
                 Err(e) => return Err(format!("Failed to flush decoder: {e}")),
             }
         }
@@ -2235,6 +2259,13 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
     Ok(Arc::new(RenderImage::new(smallvec::smallvec![
         image::Frame::new(image)
     ])))
+}
+
+fn thumbnail_frame_reaches_target(frame: &ffmpeg::frame::Video, target_timestamp: i64) -> bool {
+    frame
+        .timestamp()
+        .or_else(|| frame.pts())
+        .is_none_or(|timestamp| timestamp >= target_timestamp)
 }
 
 // ---------------------------------------------------------------------------
@@ -3334,6 +3365,27 @@ pub(crate) fn append_cap_project_to_editor(
 mod tests {
     use super::*;
     use gpui::{point, size};
+
+    #[test]
+    fn split_thumbnails_use_requested_time_inside_keyframe_interval() {
+        let fixture = ImportFixture::new(include_bytes!(
+            "../../desktop/src-tauri/test-data/clip-thumbnail-gop.mp4"
+        ));
+        for (time, expected_channel) in [(0.0, 2), (1.5, 1), (2.5, 0), (3.0, 0)] {
+            let thumbnail = decode_thumbnail_frame(&fixture.source, time).unwrap();
+            let data = thumbnail.as_bytes(0).unwrap();
+            let pixel = &data[..4];
+            assert!(
+                pixel[expected_channel] > 100,
+                "requested {time}s, got {pixel:?}"
+            );
+            for (channel, value) in pixel[..3].iter().enumerate() {
+                if channel != expected_channel {
+                    assert!(*value < 20, "requested {time}s, got {pixel:?}");
+                }
+            }
+        }
+    }
 
     const MP4_WITHOUT_AUDIO: &[u8] =
         include_bytes!("../../media-server/src/__tests__/fixtures/test-no-audio.mp4");
