@@ -730,20 +730,42 @@ export async function createSsoCheckout(
 				checkoutAttemptId: reserved.checkoutAttemptId,
 			};
 			const returnUrl = billingUrl(reserved.organizationId);
-			session = await stripe().checkout.sessions.create(
-				{
-					mode: "subscription",
-					customer: input.stripeCustomerId,
-					currency: reserved.checkoutCurrency,
-					line_items: [{ price: reserved.checkoutPriceId, quantity: 1 }],
-					client_reference_id: reserved.organizationId,
-					success_url: `${returnUrl}&sso_checkout={CHECKOUT_SESSION_ID}`,
-					cancel_url: returnUrl,
-					metadata,
-					subscription_data: { metadata },
-				},
-				{ idempotencyKey: `saml-sso-checkout-${reserved.checkoutAttemptId}` },
-			);
+			const createParams: Stripe.Checkout.SessionCreateParams = {
+				mode: "subscription",
+				customer: input.stripeCustomerId,
+				currency: reserved.checkoutCurrency,
+				line_items: [{ price: reserved.checkoutPriceId, quantity: 1 }],
+				allow_promotion_codes: true,
+				client_reference_id: reserved.organizationId,
+				success_url: `${returnUrl}&sso_checkout={CHECKOUT_SESSION_ID}`,
+				cancel_url: returnUrl,
+				metadata,
+				subscription_data: { metadata },
+			};
+			const createOptions = {
+				idempotencyKey: `saml-sso-checkout-${reserved.checkoutAttemptId}`,
+			};
+			try {
+				session = await stripe().checkout.sessions.create(
+					createParams,
+					createOptions,
+				);
+			} catch (error) {
+				if (
+					!(
+						error instanceof Error &&
+						"type" in error &&
+						error.type === "StripeIdempotencyError"
+					)
+				)
+					throw error;
+				const legacyParams = { ...createParams };
+				delete legacyParams.allow_promotion_codes;
+				session = await stripe().checkout.sessions.create(
+					legacyParams,
+					createOptions,
+				);
+			}
 			await saveCheckoutSession(reserved, session.id);
 		}
 		if (
@@ -759,7 +781,8 @@ export async function createSsoCheckout(
 		}
 		if (
 			session.status === "open" &&
-			reserved.checkoutCurrency !== input.currency
+			(reserved.checkoutCurrency !== input.currency ||
+				session.allow_promotion_codes !== true)
 		) {
 			const expired = await stripe().checkout.sessions.expire(
 				session.id,
@@ -768,7 +791,7 @@ export async function createSsoCheckout(
 			);
 			if (expired.id !== session.id || expired.status !== "expired") {
 				throw new Error(
-					"The previous currency checkout could not be closed. Refresh before retrying.",
+					"The previous SAML SSO checkout could not be closed. Refresh before retrying.",
 				);
 			}
 			session = expired;

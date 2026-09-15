@@ -370,6 +370,7 @@ beforeEach(() => {
 				metadata: params.metadata as Stripe.Metadata,
 				customer: params.customer,
 				currency: params.currency ?? null,
+				allow_promotion_codes: params.allow_promotion_codes ?? false,
 			});
 			state.sessions.set(session.id, session);
 			return session;
@@ -854,6 +855,7 @@ describe("SSO checkout ownership and duplicate prevention", () => {
 				currency: "gbp",
 				customer: "cus_owner",
 				mode: "subscription",
+				allow_promotion_codes: true,
 				line_items: [{ price: STRIPE_SAML_SSO_PRICE_ID, quantity: 1 }],
 				metadata: expect.objectContaining({
 					type: "saml_sso",
@@ -911,6 +913,77 @@ describe("SSO checkout ownership and duplicate prevention", () => {
 		await createSsoCheckout(checkoutInput("eur"));
 		expect(mocks.stripe.checkout.sessions.create).toHaveBeenCalledTimes(1);
 		expect(state.billing.get(organizationId)?.checkoutCurrency).toBe("eur");
+	});
+
+	it("replaces an open checkout that cannot accept a promotion code", async () => {
+		await createSsoCheckout(checkoutInput());
+		const previous = state.billing.get(organizationId);
+		const previousSessionId = String(previous?.checkoutSessionId);
+		const previousSession = state.sessions.get(previousSessionId);
+		if (!previousSession) throw new Error("Missing checkout fixture");
+		state.sessions.set(previousSessionId, {
+			...previousSession,
+			allow_promotion_codes: false,
+		});
+
+		await createSsoCheckout(checkoutInput());
+
+		expect(state.sessions.get(previousSessionId)?.status).toBe("expired");
+		expect(mocks.stripe.checkout.sessions.create).toHaveBeenCalledTimes(2);
+		const currentSessionId = String(
+			state.billing.get(organizationId)?.checkoutSessionId,
+		);
+		expect(currentSessionId).not.toBe(previousSessionId);
+		expect(state.sessions.get(currentSessionId)?.allow_promotion_codes).toBe(
+			true,
+		);
+	});
+
+	it("recovers an unsaved legacy checkout before replacing its idempotency key", async () => {
+		const oldAttemptId = "attempt_old";
+		state.billing.set(
+			organizationId,
+			billingRow({
+				checkoutAttemptId: oldAttemptId,
+				checkoutCurrency: "usd",
+				checkoutPriceId: STRIPE_SAML_SSO_PRICE_ID,
+				checkoutStartedAt: new Date("2026-09-02T00:00:00Z"),
+			}),
+		);
+		state.sessions.set(
+			"cs_old_unsaved",
+			checkoutSession({
+				id: "cs_old_unsaved",
+				status: "open",
+				payment_status: "unpaid",
+				url: "https://checkout.stripe.test/old-sso",
+				subscription: null,
+				allow_promotion_codes: false,
+				metadata: {
+					type: "saml_sso",
+					organizationId,
+					userId,
+					checkoutAttemptId: oldAttemptId,
+				},
+			}),
+		);
+		mocks.stripe.checkout.sessions.create.mockImplementationOnce(async () => {
+			throw Object.assign(new Error("Idempotency parameters changed"), {
+				type: "StripeIdempotencyError",
+			});
+		});
+
+		await createSsoCheckout(checkoutInput());
+
+		const calls = mocks.stripe.checkout.sessions.create.mock.calls;
+		expect(calls).toHaveLength(3);
+		expect(calls[0]?.[0].allow_promotion_codes).toBe(true);
+		expect(calls[1]?.[0].allow_promotion_codes).toBeUndefined();
+		expect(calls[1]?.[1].idempotencyKey).toBe(calls[0]?.[1].idempotencyKey);
+		expect(state.sessions.get("cs_old_unsaved")?.status).toBe("expired");
+		expect(state.billing.get(organizationId)?.checkoutAttemptId).not.toBe(
+			oldAttemptId,
+		);
 	});
 
 	it("confirms expiration before replacing an open checkout with the selected currency", async () => {
