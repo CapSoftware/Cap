@@ -60,6 +60,7 @@ export const EmbedVideo = forwardRef<
 		comments: CommentWithAuthor[];
 		chapters?: { title: string; start: number }[];
 		ownerName?: string | null;
+		ownerImageUrl?: string | null;
 		autoplay?: boolean;
 		/** Seconds to open at, from the embed URL's `?t=`. */
 		startTime?: number | null;
@@ -77,6 +78,7 @@ export const EmbedVideo = forwardRef<
 			comments: _comments,
 			chapters = [],
 			ownerName,
+			ownerImageUrl,
 			autoplay = false,
 			startTime = null,
 			minimal = false,
@@ -313,6 +315,7 @@ export const EmbedVideo = forwardRef<
 										{ownerName && (
 											<Avatar
 												name={ownerName}
+												imageUrl={ownerImageUrl}
 												className="hidden flex-shrink-0 xs:flex xs:size-10"
 												letterClass="xs:text-base font-medium"
 											/>

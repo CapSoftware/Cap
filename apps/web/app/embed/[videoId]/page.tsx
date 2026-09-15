@@ -351,10 +351,20 @@ async function EmbedContent({
 	const videoOwner = await db()
 		.select({
 			name: users.name,
+			image: users.image,
 		})
 		.from(users)
 		.where(eq(users.id, video.ownerId))
 		.limit(1);
+
+	const ownerImageUrl = await Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+		return yield* Option.fromNullable(videoOwner[0]?.image).pipe(
+			Option.map(imageUploads.resolveImageUrl),
+			Effect.transposeOption,
+			Effect.map(Option.getOrNull),
+		);
+	}).pipe(EffectRuntime.runPromise);
 
 	const branding = await Effect.gen(function* () {
 		const brandingInput = {
@@ -390,6 +400,7 @@ async function EmbedContent({
 				rules.settings.disableChapters ? [] : initialAiData?.chapters || []
 			}
 			ownerName={videoOwner[0]?.name || null}
+			ownerImageUrl={ownerImageUrl}
 			autoplay={autoplay}
 			startTime={startTime}
 			minimal={minimal}
