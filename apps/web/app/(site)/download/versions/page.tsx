@@ -56,7 +56,28 @@ function DownloadLinks({
 					className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-gray-3 text-gray-12 hover:bg-gray-4 transition-colors"
 				>
 					<LinuxIcon />
-					Linux .deb
+					Debian / Ubuntu (.deb)
+				</a>
+				<a
+					href="/download/linux-appimage"
+					className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-gray-3 text-gray-12 hover:bg-gray-4 transition-colors"
+				>
+					<LinuxIcon />
+					AppImage
+				</a>
+				<a
+					href="/download/linux-rpm"
+					className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-gray-3 text-gray-12 hover:bg-gray-4 transition-colors"
+				>
+					<LinuxIcon />
+					Fedora / RPM
+				</a>
+				<a
+					href="/download/linux-pacman"
+					className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-gray-3 text-gray-12 hover:bg-gray-4 transition-colors"
+				>
+					<LinuxIcon />
+					Arch / Pacman
 				</a>
 			</div>
 		);
@@ -101,7 +122,34 @@ function DownloadLinks({
 					className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-gray-3 text-gray-12 hover:bg-gray-4 transition-colors"
 				>
 					<LinuxIcon />
-					Linux .deb
+					Debian / Ubuntu (.deb)
+				</a>
+			)}
+			{downloads["linux-appimage"] && (
+				<a
+					href={downloads["linux-appimage"]}
+					className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-gray-3 text-gray-12 hover:bg-gray-4 transition-colors"
+				>
+					<LinuxIcon />
+					AppImage
+				</a>
+			)}
+			{downloads["linux-rpm"] && (
+				<a
+					href={downloads["linux-rpm"]}
+					className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-gray-3 text-gray-12 hover:bg-gray-4 transition-colors"
+				>
+					<LinuxIcon />
+					Fedora / RPM
+				</a>
+			)}
+			{downloads["linux-pacman"] && (
+				<a
+					href={downloads["linux-pacman"]}
+					className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md bg-gray-3 text-gray-12 hover:bg-gray-4 transition-colors"
+				>
+					<LinuxIcon />
+					Arch / Pacman
 				</a>
 			)}
 		</div>
