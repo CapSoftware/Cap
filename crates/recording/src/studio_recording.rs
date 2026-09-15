@@ -4912,6 +4912,7 @@ mod tests {
                                 .await?;
                             Ok(Pipeline {
                                 start_time,
+                                start_gate: None,
                                 screen,
                                 microphone: None,
                                 camera: None,
