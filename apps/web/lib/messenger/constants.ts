@@ -44,7 +44,7 @@ IMPORTANT URLS:
 - Terms of Service: https://cap.so/terms
 - Privacy Policy: https://cap.so/privacy
 - GitHub (open source): https://github.com/CapSoftware/Cap
-- Enterprise call booking: https://cal.com/cap.so/15min
+- Call booking (optional): https://calendar.app.google/BrQRrAeCzVR8Fd136
 - Support email: hello@cap.so
 - Loom importer (dashboard): https://cap.so/dashboard/import/loom
 - Loom downloader tool: https://cap.so/tools/loom-downloader
@@ -89,7 +89,11 @@ PRICING (early adopter beta pricing, locked in for lifetime of subscription):
 - Desktop License: $58/£58/€58 one-time (lifetime) or $29/£29/€29 per year, commercial usage rights, Studio Mode with full editor, unlimited local recordings, shareable links up to 5 minutes, export to MP4 or GIF. Currency is selected automatically at checkout, exactly the same way as Cap Pro.
 - Cap Pro: $12/£12/€12 per user per month (billed monthly) or $98/£98/€98 per user per year (billed annually, which works out to $8.16/£8.16/€8.16 per user per month), includes everything in Desktop License plus unlimited cloud storage and bandwidth, unlimited shareable links (no 5-minute limit), auto-generated AI titles/summaries/chapters/transcriptions, custom domain (cap.yourdomain.com), password-protected shares, viewer analytics, team workspaces, Loom video importer, custom S3 bucket and Google Drive support, priority support
 - Currency (applies to both Cap Pro and the Desktop License): the price is the same number in every currency, only the symbol changes. UK customers are billed in GBP and eurozone customers in EUR, selected automatically at checkout from the customer's location. Everyone else is billed in USD. There is nothing the customer needs to do to pick a currency.
-- Enterprise: custom pricing, contact via https://cal.com/cap.so/15min, includes SLAs, priority support, Loom video importer, bulk discounts, managed self-hosting, SAML SSO via WorkOS, advanced security controls
+- Cap is fully self-serve. Cap Pro is the plan, with optional add-ons that can be added anytime from organization settings in the dashboard. No enterprise plan or sales call is required.
+- Cap supports organizations with thousands of members, with enterprise capabilities including SOC 2 Type II, ISO 27001, and HIPAA compliance, custom storage, and volume discounts.
+- SAML SSO add-on: $199/month, added from the dashboard alongside Cap Pro.
+- Signed BAA add-on: $99/month, purchased and signed directly from the dashboard alongside Cap Pro.
+- SCIM provisioning can also be arranged. For help or to discuss SCIM, book an optional call at https://calendar.app.google/BrQRrAeCzVR8Fd136.
 - Early adopters keep their pricing forever, even after beta ends and regular prices change.
 - Student discount available at https://cap.so/student-discount
 
@@ -206,7 +210,7 @@ GOOGLE DRIVE STORAGE:
 AUTHENTICATION:
 - Email magic link: enter email, receive a 6-digit code, verify to sign in (passwordless)
 - Google OAuth: sign in with Google account
-- SAML SSO: enterprise SSO via WorkOS (requires Enterprise plan), organization-based
+- SAML SSO: organization-based SSO via WorkOS, available as an optional $199/month add-on to Cap Pro from the dashboard. No enterprise plan required.
 - Desktop app: authenticates via deep link back to the desktop app
 
 SELF-HOSTING:
@@ -278,7 +282,7 @@ COMMON USER TASKS:
 - To import Loom videos: go to https://cap.so/dashboard/import/loom (requires Cap Pro)
 - To view docs: go to https://cap.so/docs
 - To self-host: go to https://cap.so/self-hosting
-- To book an enterprise call: go to https://cal.com/cap.so/15min
+- To book an optional call: go to https://calendar.app.google/BrQRrAeCzVR8Fd136
 - To get student discount: go to https://cap.so/student-discount
 - To deactivate a license: go to https://cap.so/deactivate-license
 - To set up a custom domain: go to organization settings in the dashboard
@@ -290,7 +294,9 @@ COMMON USER TASKS:
 - To record from browser: use the web recorder in your dashboard
 - To change keyboard shortcuts: go to Settings > Shortcuts in the desktop app
 - To manage recordings: go to Settings > Recordings in the desktop app
-- To set up SSO: contact enterprise team at https://cal.com/cap.so/15min
+- To set up SAML SSO: add the $199/month SSO add-on from https://cap.so/dashboard/settings/organization
+- To get a signed BAA: add and sign the $99/month BAA add-on from https://cap.so/dashboard/settings/organization
+- To arrange SCIM provisioning: book a call at https://calendar.app.google/BrQRrAeCzVR8Fd136
 `;
 
 export const MESSENGER_AGENT_PROMPT = `You are Millie, you work at Cap. Cap is your company, your team, your people. You're warm, genuinely friendly, and you actually enjoy helping people figure things out. You make people feel like they're chatting with a thoughtful teammate who knows Cap well. You remember details from earlier in the conversation and check in when it helps.
