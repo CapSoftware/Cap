@@ -2079,7 +2079,7 @@ fn show_append_error(message: &str) {
 
 /// 96px cards at 2x (`w-24` at `ClipsSidebar.tsx:881`).
 const THUMB_MAX_WIDTH: u32 = 192;
-const SEEK_DECODE_PACKET_LIMIT: usize = 240;
+const SEEK_DECODE_PACKET_LIMIT: usize = 4096;
 
 fn decode_clip_thumbnail(
     project_path: &Path,
@@ -2105,6 +2105,20 @@ fn decode_clip_thumbnail(
 }
 
 fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, String> {
+    decode_thumbnail_frame_with_budget(
+        input,
+        time,
+        SEEK_DECODE_PACKET_LIMIT,
+        std::time::Duration::from_secs(2),
+    )
+}
+
+fn decode_thumbnail_frame_with_budget(
+    input: &Path,
+    time: f64,
+    packet_limit: usize,
+    timeout: std::time::Duration,
+) -> Result<Arc<RenderImage>, String> {
     use ffmpeg::rescale::{Rescale, TIME_BASE};
 
     let mut ictx =
@@ -2167,8 +2181,12 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
     let mut reached_target = false;
     let mut decoder_finished = false;
     let mut packets_tried = 0usize;
+    let decode_started = std::time::Instant::now();
 
     'outer: for (packet_stream, packet) in ictx.packets() {
+        if decode_started.elapsed() >= timeout {
+            return Err("Thumbnail decode time budget exhausted".to_string());
+        }
         if packet_stream.index() != stream_index {
             continue;
         }
@@ -2176,13 +2194,16 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
         packets_tried += 1;
 
         if decoder.send_packet(&packet).is_err() {
-            if packets_tried >= SEEK_DECODE_PACKET_LIMIT {
-                break;
+            if packets_tried >= packet_limit {
+                return Err("Thumbnail decode packet budget exhausted".to_string());
             }
             continue;
         }
 
         loop {
+            if decode_started.elapsed() >= timeout {
+                return Err("Thumbnail decode time budget exhausted".to_string());
+            }
             match decoder.receive_frame(&mut decoded) {
                 Ok(()) => {
                     std::mem::swap(&mut frame, &mut decoded);
@@ -2198,7 +2219,7 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
                     break 'outer;
                 }
                 Err(e) => {
-                    if packets_tried >= SEEK_DECODE_PACKET_LIMIT {
+                    if packets_tried >= packet_limit {
                         return Err(format!("Failed to decode frame: {e}"));
                     }
                     break;
@@ -2206,8 +2227,8 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
             }
         }
 
-        if packets_tried >= SEEK_DECODE_PACKET_LIMIT {
-            break;
+        if packets_tried >= packet_limit {
+            return Err("Thumbnail decode packet budget exhausted".to_string());
         }
     }
 
@@ -2216,6 +2237,9 @@ fn decode_thumbnail_frame(input: &Path, time: f64) -> Result<Arc<RenderImage>, S
             .send_eof()
             .map_err(|e| format!("Failed to flush decoder: {e}"))?;
         loop {
+            if decode_started.elapsed() >= timeout {
+                return Err("Thumbnail decode time budget exhausted".to_string());
+            }
             match decoder.receive_frame(&mut decoded) {
                 Ok(()) => {
                     std::mem::swap(&mut frame, &mut decoded);
@@ -3384,6 +3408,41 @@ mod tests {
                     assert!(*value < 20, "requested {time}s, got {pixel:?}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn long_gop_thumbnails_reach_requested_time_and_preserve_eof_fallback() {
+        let fixture = ImportFixture::new(include_bytes!(
+            "../../desktop/src-tauri/test-data/clip-thumbnail-long-gop.mp4"
+        ));
+        for time in [8.5, 10.0, 11.0] {
+            let thumbnail = decode_thumbnail_frame(&fixture.source, time).unwrap();
+            let data = thumbnail.as_bytes(0).unwrap();
+            let pixel = &data[..4];
+            assert!(
+                pixel[0] > 100 && pixel[1] < 20 && pixel[2] < 20,
+                "requested {time}s, got {pixel:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn exhausted_decode_budget_does_not_return_partial_thumbnail() {
+        let fixture = ImportFixture::new(include_bytes!(
+            "../../desktop/src-tauri/test-data/clip-thumbnail-long-gop.mp4"
+        ));
+        for (packet_limit, timeout, expected_error) in [
+            (240, std::time::Duration::from_secs(2), "packet budget"),
+            (
+                SEEK_DECODE_PACKET_LIMIT,
+                std::time::Duration::ZERO,
+                "time budget",
+            ),
+        ] {
+            let result =
+                decode_thumbnail_frame_with_budget(&fixture.source, 8.5, packet_limit, timeout);
+            assert!(result.unwrap_err().contains(expected_error));
         }
     }
 
