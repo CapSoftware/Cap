@@ -5,13 +5,13 @@ import type { Campaign } from "./types";
 export const campaignTemplates: Campaign[] = [
 	{
 		...customerUpdate,
-		name: "Cap | Customer product update template",
+		name: "Cap v0.6 launch | Customers",
 		audience: "customer",
 		promotional: false,
 	},
 	{
 		...freeUpdate,
-		name: "Cap | Noncustomer product update template",
+		name: "Cap v0.6 launch | Noncustomers",
 		audience: "free",
 		promotional: true,
 	},

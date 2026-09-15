@@ -20,11 +20,15 @@ export const mjmlVariables = (value: string) =>
 
 const renderBody = (body: string) => {
 	for (const [, tag] of body.matchAll(/<\/?([A-Za-z][\w]*)\b/g)) {
-		if (!["Paragraph", "Link", "Strong", "Em", "Br"].includes(tag))
+		if (!["Paragraph", "Link", "Strong", "Em", "Br", "Image"].includes(tag))
 			throw new Error(`Unsupported marketing content tag: ${tag}`);
 	}
 	return mjmlVariables(
 		body
+			.replaceAll(
+				"<Image ",
+				'<mj-image align="left" padding="0 0 20px" border-radius="12px" ',
+			)
 			.replaceAll("<Paragraph>", "<mj-text>")
 			.replaceAll("</Paragraph>", "</mj-text>\n")
 			.replaceAll(

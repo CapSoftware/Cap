@@ -168,8 +168,8 @@ Campaigns are manually scheduled product updates, with no automatic enrollment. 
 
 | Campaign | Audience | Subject and source | Loops ID |
 | --- | --- | --- | --- |
-| Customer product update template | customer | [Keeping up with Cap](../emails/marketing/customer-update.ts) | `cmtvpmfxc01ls0j0nnlffombv` |
-| Noncustomer product update template | free | [Take another look at Cap](../emails/marketing/free-update.ts) | `cmtvpmjej01kr0j18cxoz2n0y` |
+| Cap v0.6 launch \| Customers | customer | [Meet Cap v0.6, our biggest update yet](../emails/marketing/customer-update.ts) | `cmtvpmfxc01ls0j0nnlffombv` |
+| Cap v0.6 launch \| Noncustomers | free | [Meet Cap v0.6, our biggest update yet](../emails/marketing/free-update.ts) | `cmtvpmjej01kr0j18cxoz2n0y` |
 
 ## Branding and personalization
 
@@ -552,11 +552,11 @@ Thanks for giving Cap a go.
 
 ### customer-update
 
-Evergreen changelog invitation for customers; review before each campaign.
+One-off Cap v0.6 launch announcement for customers, leading to the release video and update details.
 
-**Subject:** Keeping up with Cap
+**Subject:** Meet Cap v0.6, our biggest update yet
 
-**Preview:** The changes we've shipped, all in one place.
+**Preview:** 3D scenes, animated titles and Studio Sound. See what's new in the launch video.
 
 **Variables:** `contact.capGreeting` (fallback: Hey,)
 
@@ -564,19 +564,25 @@ Evergreen changelog invitation for customers; review before each campaign.
 
 {contact.capGreeting}
 
-Just a quick one from me. If you're wondering what's changed in Cap, we keep the features and fixes together in our changelog.
+Cap v0.6 is here, and it's our biggest release yet.
 
-Here's what we've shipped.
+We've rebuilt the editor so you can do more with the recordings you already make. Add 3D scenes, animated titles and moving backgrounds, without opening another editing app.
 
-Is there something you're still waiting for us to build or fix? Reply and let me know. Hearing what's missing is just as useful as hearing what's working.
+Studio Sound reduces microphone noise, and the new export screen shows estimated file size and time before you save.
+
+The easiest way to see the difference is the launch video. The release page also has the download and full details.
+
+Watch Cap v0.6 in action →
+
+Thanks for supporting Cap. I can't wait to see what you make with this one :)
 
 ### free-update
 
-Evergreen reactivation invitation for eligible independent noncustomers; review before each campaign.
+One-off Cap v0.6 launch announcement for eligible independent noncustomers, showing the demo workflow through the release video.
 
-**Subject:** Take another look at Cap
+**Subject:** Meet Cap v0.6, our biggest update yet
 
-**Preview:** Was something missing when you tried it?
+**Preview:** Meet Cap v0.6: 3D scenes, animated titles and cleaner audio, all in one app.
 
 **Variables:** `contact.capGreeting` (fallback: Hey,)
 
@@ -584,11 +590,15 @@ Evergreen reactivation invitation for eligible independent noncustomers; review 
 
 {contact.capGreeting}
 
-If it's been a while since you tried Cap, I'd love for you to take another look.
+Cap v0.6 is here, and it's our biggest release yet.
 
-You can see what's changed here. Next time you need to explain something on screen, give it a go.
+We've rebuilt the editor to turn your screen recordings into polished demos. Record your screen, add a 3D scene, animated titles and a moving background, then export a video you'll want to share.
 
-If something put you off last time, just reply and tell me. I'd like to know, especially if it was something we could have done better.
+There's also Studio Sound to reduce microphone noise, plus faster exports. Whether it's a product demo, a client walkthrough or a team update, you can make it in Cap.
+
+The release video is the best way to see what's new:
+
+See Cap v0.6 in action →
 
 ## Application emails
 

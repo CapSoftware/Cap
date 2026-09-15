@@ -18,7 +18,7 @@ Start with the [catalogue and flow maps](CATALOG.md), [copy guidance](VOICE.md),
 | Registered Loops resource IDs                                   | [resources.json](resources.json)               |
 | Last reviewed upload hashes                                     | [delivery-receipt.json](delivery-receipt.json) |
 
-Each marketing file uses a small shared content vocabulary: Paragraph, Link, Strong, Em and Br. The MJML renderer combines that copy with the shared design. Unsupported new blocks fail export instead of silently disappearing. `scripts/loops/program.ts` is a compatibility export, not another copy source.
+Each marketing file uses a small shared content vocabulary: Paragraph, Link, Strong, Em, Br and Image. The MJML renderer combines that copy with the shared design. Images use descriptive alt text and a click destination, with files declared in the email's `assets` array under `emails/assets/`. Exports bundle these files alongside the logo. Unsupported new blocks fail export instead of silently disappearing. `scripts/loops/program.ts` is a compatibility export, not another copy source.
 
 The header uses the actual Cap vector artwork from `packages/ui/src/components/icons/Logo.tsx`. `bun run emails:logo` renders its original paths to the checked-in PNG with white backing. This preserves the wordmark and keeps its dark lettering visible on dark backgrounds. Do not rebuild the wordmark with a font or substitute the icon alone. The image and body share the same left edge.
 

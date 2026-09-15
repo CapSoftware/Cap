@@ -125,25 +125,27 @@
 		},
 		{
 			"id": "customer-update",
-			"sha256": "505f8049580c9162834db0506cbd9002ab4589046f00ff5032aa522fc344ec13",
+			"sha256": "68bc2b5e24a1544f4fa1ee50247a89cce55e4c4a91b4c4d5442a91284874bc9b",
 			"containerId": "cmtvpmfxc01ls0j0nnlffombv",
 			"nodeId": null,
-			"subject": "Keeping up with Cap",
-			"previewText": "The changes we've shipped, all in one place.",
+			"subject": "Cap v0.6 is here. Meet your new editor.",
+			"previewText": "3D scenes, animated titles and Studio Sound. See what's new in the launch video.",
 			"fallbacks": {
 				"capGreeting": "Hey,"
-			}
+			},
+			"reviewedAt": "2026-09-15T16:14:18.915Z"
 		},
 		{
 			"id": "free-update",
-			"sha256": "556e8bcc3465918c1a9ca57f88fa38baeda7abfaa4edeb73e2ca689322ff1840",
+			"sha256": "0cac3fc76d189e9934df5b33ab05a15e29272c6b0d01141b9e9fa66f1568f713",
 			"containerId": "cmtvpmjej01kr0j18cxoz2n0y",
 			"nodeId": null,
-			"subject": "Take another look at Cap",
-			"previewText": "Was something missing when you tried it?",
+			"subject": "Cap v0.6 is here. See what you can make.",
+			"previewText": "Meet Cap v0.6: 3D scenes, animated titles and cleaner audio, all in one app.",
 			"fallbacks": {
 				"capGreeting": "Hey,"
-			}
+			},
+			"reviewedAt": "2026-09-15T16:14:18.915Z"
 		}
 	]
 }

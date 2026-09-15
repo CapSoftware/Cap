@@ -8,6 +8,7 @@ export type EmailDefinition = {
 	subject: string;
 	previewText: string;
 	body: string;
+	assets?: string[];
 	variables: (keyof typeof contactFallbacks)[];
 };
 export type Message = EmailDefinition & {

@@ -57,10 +57,27 @@ export const validateEmail = (email: EmailDefinition) => {
 		errors.push(
 			"Email body leaves insufficient space for branding under the 100 KB LMX limit",
 		);
-	for (const match of email.body.matchAll(/<(?:Button|Link)\b([^>]*)>/g)) {
+	for (const match of email.body.matchAll(
+		/<(?:Button|Link|Image)\b([^>]*)>/g,
+	)) {
 		const href = /\bhref="([^"]+)"/.exec(match[1])?.[1];
 		if (!href || !/^(https:\/\/|mailto:)/.test(href))
 			errors.push("Buttons and links need an https or mailto destination");
+	}
+	const assetNames = (email.assets ?? []).map((path) => path.split("/").at(-1));
+	if (
+		new Set(assetNames).size !== assetNames.length ||
+		assetNames.includes("cap-logo.png") ||
+		(email.assets ?? []).some((path) => !/^emails\/assets\/[^/]+$/.test(path))
+	)
+		errors.push("Email assets need unique filenames under emails/assets");
+	for (const match of email.body.matchAll(/<Image\b([^>]*)>/g)) {
+		const src = /\bsrc="img\/([^"]+)"/.exec(match[1])?.[1];
+		const alt = /\balt="([^"]+)"/.exec(match[1])?.[1];
+		if (!src || !assetNames.includes(src) || !alt)
+			errors.push(
+				"Images need descriptive alt text and a declared bundled asset",
+			);
 	}
 	return errors;
 };
@@ -174,7 +191,7 @@ export const catalogExcerpt = (body: string) =>
 	body
 		.replace(/<\/(Paragraph|Button)>/g, "\n\n")
 		.replace(/<Br\s*\/>/g, "\n")
-		.replace(/<\/?(?:Paragraph|Button|Link|Strong|Em)\b[^>]*>/g, "")
+		.replace(/<\/?(?:Paragraph|Button|Link|Strong|Em|Image)\b[^>]*>/g, "")
 		.replaceAll("&", "&amp;")
 		.replaceAll("<", "&lt;")
 		.replaceAll(">", "&gt;")

@@ -9,7 +9,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { contactFallbacks, logo, sender } from "../../emails/brand";
 import { mjmlVariables, renderMjml } from "../../emails/mjml";
@@ -30,6 +30,12 @@ for (const email of marketingEmails) {
 		const mjml = renderMjml(email);
 		await writeFile(join(temporary, "index.mjml"), mjml);
 		await writeFile(join(temporary, "img/cap-logo.png"), asset);
+		const hash = createHash("sha256").update(mjml).update(asset);
+		for (const path of email.assets ?? []) {
+			const image = await readFile(new URL(path, root));
+			await writeFile(join(temporary, "img", basename(path)), image);
+			hash.update(image);
+		}
 		const archive = join(temporary, `${email.id}.zip`);
 		execFileSync("zip", ["-q", "-r", archive, "index.mjml", "img"], {
 			cwd: temporary,
@@ -39,7 +45,7 @@ for (const email of marketingEmails) {
 		manifest.push({
 			id: email.id,
 			file: `${email.id}.zip`,
-			sha256: createHash("sha256").update(mjml).update(asset).digest("hex"),
+			sha256: hash.digest("hex"),
 			subject: mjmlVariables(email.subject),
 			previewText: mjmlVariables(email.previewText),
 			...sender,
