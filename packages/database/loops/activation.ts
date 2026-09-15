@@ -1,3 +1,9 @@
+export const legacyActivationQuery = `
+	SELECT
+		EXISTS(SELECT 1 FROM videos WHERE ownerId = ? LIMIT 1) AS hasVideo,
+		EXISTS(SELECT 1 FROM videos WHERE ownerId = ? AND public = 1 LIMIT 1) AS hasSharedVideo
+`;
+
 export const activationQuery = `
 	SELECT
 		MAX(CASE WHEN u.video_id IS NOT NULL OR (j.video_id IS NOT NULL AND j.state <> 'verified') THEN 1 ELSE 0 END) AS hasPendingUpload,

@@ -1,5 +1,5 @@
 import type { Connection, RowDataPacket } from "mysql2/promise";
-import { activationQuery } from "./activation";
+import { activationQuery, legacyActivationQuery } from "./activation";
 import { activationSignalsAfter, inFreeExperiment } from "./experiment";
 import {
 	type CapUser,
@@ -13,6 +13,25 @@ type RuntimeUser = CapUser & {
 	emailVerified: string | null;
 	stripeCustomerId: string | null;
 };
+
+type UserSignals = {
+	hasAccount: number;
+	hasWorkosAccount: number;
+	hasInvite: number;
+	hasPendingInvite: number;
+};
+
+export const profileUserQuery = `
+	SELECT u.id,u.email,u.name,u.lastName,u.emailVerified,u.stripeCustomerId,
+		u.stripeSubscriptionStatus,u.thirdPartyStripeSubscriptionId,u.created_at,
+		u.defaultOrgId,u.marketingOrigin,
+		EXISTS(SELECT 1 FROM accounts a WHERE a.userId = u.id LIMIT 1) AS hasAccount,
+		EXISTS(SELECT 1 FROM accounts a WHERE a.userId = u.id AND BINARY a.provider = 'workos' LIMIT 1) AS hasWorkosAccount,
+		EXISTS(SELECT 1 FROM organization_invites i WHERE i.invitedEmail = u.email AND i.status IN ('pending','accepted') LIMIT 1) AS hasInvite,
+		EXISTS(SELECT 1 FROM organization_invites i WHERE i.invitedEmail = u.email AND BINARY i.status = 'pending' LIMIT 1) AS hasPendingInvite
+	FROM users u
+	WHERE u.id = ?
+`;
 
 export type LoopsProfileSource = {
 	input: ProfileInput & { user: CapUser };
@@ -31,26 +50,18 @@ export async function readLoopsProfile(
 	licenses: Connection,
 	userId: string,
 ): Promise<LoopsProfileSource | null> {
-	const [user] = await rows<RuntimeUser>(
+	const [record] = await rows<RuntimeUser & UserSignals>(
 		cap,
-		"SELECT id,email,name,lastName,emailVerified,stripeCustomerId,stripeSubscriptionStatus,thirdPartyStripeSubscriptionId,created_at,defaultOrgId,marketingOrigin FROM users WHERE id=?",
+		profileUserQuery,
 		[userId],
 	);
-	if (!user) return null;
+	if (!record) return null;
+	const { hasAccount, hasWorkosAccount, hasInvite, hasPendingInvite, ...user } =
+		record;
 	const memberships = await rows<Membership>(
 		cap,
 		"SELECT m.userId,m.organizationId,m.hasProSeat,o.ownerId,o.tombstoneAt,o.workosConnectionId,o.createdAt FROM organization_members m JOIN organizations o ON o.id=m.organizationId WHERE m.userId=?",
 		[userId],
-	);
-	const accounts = await rows<{ provider: string }>(
-		cap,
-		"SELECT provider FROM accounts WHERE userId=?",
-		[userId],
-	);
-	const invites = await rows<{ status: string }>(
-		cap,
-		"SELECT status FROM organization_invites WHERE invitedEmail=? AND status IN ('pending','accepted')",
-		[user.email],
 	);
 	let activation: {
 		hasVideo: number | boolean | null;
@@ -64,17 +75,11 @@ export async function readLoopsProfile(
 		]);
 		activation = result;
 	} else {
-		const [video] = await rows<{ id: string }>(
-			cap,
-			"SELECT id FROM videos WHERE ownerId=? LIMIT 1",
-			[userId],
-		);
-		const [shared] = await rows<{ id: string }>(
-			cap,
-			"SELECT id FROM videos WHERE ownerId=? AND public=1 LIMIT 1",
-			[userId],
-		);
-		activation = { hasVideo: Boolean(video), hasSharedVideo: Boolean(shared) };
+		const [result] = await rows<typeof activation>(cap, legacyActivationQuery, [
+			userId,
+			userId,
+		]);
+		activation = result;
 	}
 	const entitlement = await rows<License>(
 		licenses,
@@ -87,16 +92,16 @@ export async function readLoopsProfile(
 			user,
 			memberships,
 			licenses: entitlement,
-			invited: invites.length > 0,
-			sso: accounts.some((account) => account.provider === "workos"),
+			invited: Boolean(hasInvite),
+			sso: Boolean(hasWorkosAccount),
 			hasVideo: Boolean(activation?.hasVideo),
 			hasSharedVideo: Boolean(activation?.hasSharedVideo),
 			lastActivationNotificationAt: activation?.lastActivationNotificationAt,
 			hasPendingUpload: Boolean(activation?.hasPendingUpload),
 			now: new Date(),
 		},
-		signedUp: Boolean(user.emailVerified || accounts.length),
-		pendingInvite: invites.some((invite) => invite.status === "pending"),
+		signedUp: Boolean(user.emailVerified || hasAccount),
+		pendingInvite: Boolean(hasPendingInvite),
 		stripeCustomerId: user.stripeCustomerId,
 	};
 }

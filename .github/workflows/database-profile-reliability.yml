@@ -1,0 +1,59 @@
+name: Database Profile Reliability
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "packages/database/**"
+      - "scripts/loops/**"
+      - "bun.lock"
+      - ".github/actions/setup-js/**"
+      - ".github/workflows/database-profile-reliability.yml"
+  push:
+    branches: [main]
+    paths:
+      - "packages/database/**"
+      - "scripts/loops/**"
+      - "bun.lock"
+      - ".github/actions/setup-js/**"
+      - ".github/workflows/database-profile-reliability.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: database-profile-reliability-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  profile-contract:
+    name: Profile, activation, and consent compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_ROOT_HOST: "%"
+          MYSQL_DATABASE: loops_profile_tests
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --host=127.0.0.1 --user=root"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-js
+      - name: Verify profile queries and lifecycle decisions without database writes
+        env:
+          LOOPS_ACTIVATION_READONLY_TEST_URL: mysql://root@127.0.0.1:3306/loops_profile_tests
+        run: >-
+          bun test
+          scripts/loops/activation.test.ts
+          scripts/loops/sources.test.ts
+          scripts/loops/profile.test.ts
+          scripts/loops/lifecycle.test.ts
+          scripts/loops/watchdog.test.ts

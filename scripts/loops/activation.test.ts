@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import mysql, { type Connection, type RowDataPacket } from "mysql2/promise";
-import { activationQuery } from "../../packages/database/loops/activation";
+import {
+	activationQuery,
+	legacyActivationQuery,
+} from "../../packages/database/loops/activation";
 
 const url = process.env.LOOPS_ACTIVATION_READONLY_TEST_URL;
 
@@ -85,5 +88,47 @@ describe.skipIf(!url)(
 				(await signals({ viewed: true, upload: true })).hasSharedVideo,
 			).toBe(0);
 		});
+
+		for (const [name, videos] of [
+			["no videos", []],
+			["private video", [{ ownerId: "owner", public: 0 }]],
+			["public video", [{ ownerId: "owner", public: 1 }]],
+			["another owner's public video", [{ ownerId: "other", public: 1 }]],
+			["null visibility", [{ ownerId: "owner", public: null }]],
+			[
+				"mixed ownership and visibility",
+				[
+					{ ownerId: "other", public: 1 },
+					{ ownerId: "owner", public: 0 },
+					{ ownerId: "owner", public: 1 },
+				],
+			],
+		] as const) {
+			test(`legacy activation preserves both previous reads for ${name}`, async () => {
+				const fixture = videos.length
+					? videos
+							.map(() => "SELECT 'video' AS id, ? AS ownerId, ? AS public")
+							.join(" UNION ALL ")
+					: "SELECT NULL AS id, NULL AS ownerId, NULL AS public WHERE FALSE";
+				const cte = `WITH videos AS (${fixture})`;
+				const values = videos.flatMap((video) => [video.ownerId, video.public]);
+				const [previousVideo] = await database.query<RowDataPacket[]>(
+					`${cte} SELECT id FROM videos WHERE ownerId = ? LIMIT 1`,
+					[...values, "owner"],
+				);
+				const [previousShared] = await database.query<RowDataPacket[]>(
+					`${cte} SELECT id FROM videos WHERE ownerId = ? AND public = 1 LIMIT 1`,
+					[...values, "owner"],
+				);
+				const [combined] = await database.query<RowDataPacket[]>(
+					`${cte} ${legacyActivationQuery}`,
+					[...values, "owner", "owner"],
+				);
+				expect(Boolean(combined[0].hasVideo)).toBe(previousVideo.length > 0);
+				expect(Boolean(combined[0].hasSharedVideo)).toBe(
+					previousShared.length > 0,
+				);
+			});
+		}
 	},
 );
