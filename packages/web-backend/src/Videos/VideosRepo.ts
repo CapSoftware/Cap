@@ -3,7 +3,6 @@ import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { type User, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import type { MySqlInsertBase } from "drizzle-orm/mysql-core";
 import { Effect, Option } from "effect";
 import type { Schema } from "effect/Schema";
 import { Database } from "../Database.ts";
@@ -103,47 +102,53 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 				});
 			});
 
-		const create = (data: CreateVideoInput, options?: { id: Video.VideoId }) =>
+		const create = (
+			data: CreateVideoInput,
+			options?: {
+				id?: Video.VideoId;
+				initialUpload?: Omit<typeof Db.videoUploads.$inferInsert, "videoId">;
+			},
+		) =>
 			Effect.gen(function* () {
 				const id = options?.id ?? Video.VideoId.make(nanoId());
 
 				yield* db.use((db) =>
 					db.transaction(async (db) => {
-						const promises: MySqlInsertBase<any, any, any>[] = [
-							db.insert(Db.videos).values([
-								{
-									...data,
-									id,
-									orgId: data.orgId,
-									bucket: Option.getOrNull(data.bucketId ?? Option.none()),
-									storageIntegrationId: Option.getOrNull(
-										data.storageIntegrationId ?? Option.none(),
-									),
-									metadata: Option.getOrNull(data.metadata ?? Option.none()),
-									transcriptionStatus: Option.getOrNull(
-										data.transcriptionStatus ?? Option.none(),
-									),
-									folderId: Option.getOrNull(data.folderId ?? Option.none()),
-									width: Option.getOrNull(data.width ?? Option.none()),
-									height: Option.getOrNull(data.height ?? Option.none()),
-									duration: Option.getOrNull(data.duration ?? Option.none()),
-								},
-							]),
-						];
+						await db.insert(Db.videos).values([
+							{
+								...data,
+								id,
+								orgId: data.orgId,
+								bucket: Option.getOrNull(data.bucketId ?? Option.none()),
+								storageIntegrationId: Option.getOrNull(
+									data.storageIntegrationId ?? Option.none(),
+								),
+								metadata: Option.getOrNull(data.metadata ?? Option.none()),
+								transcriptionStatus: Option.getOrNull(
+									data.transcriptionStatus ?? Option.none(),
+								),
+								folderId: Option.getOrNull(data.folderId ?? Option.none()),
+								width: Option.getOrNull(data.width ?? Option.none()),
+								height: Option.getOrNull(data.height ?? Option.none()),
+								duration: Option.getOrNull(data.duration ?? Option.none()),
+							},
+						]);
 
 						if (data.importSource)
-							promises.push(
-								db.insert(Db.importedVideos).values([
-									{
-										id,
-										orgId: data.orgId,
-										source: data.importSource.source,
-										sourceId: data.importSource.id,
-									},
-								]),
-							);
+							await db.insert(Db.importedVideos).values([
+								{
+									id,
+									orgId: data.orgId,
+									source: data.importSource.source,
+									sourceId: data.importSource.id,
+								},
+							]);
 
-						await Promise.all(promises);
+						if (options?.initialUpload)
+							await db.insert(Db.videoUploads).values({
+								videoId: id,
+								...options.initialUpload,
+							});
 					}),
 				);
 

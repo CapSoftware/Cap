@@ -138,6 +138,7 @@ const { Storage } = await import("@cap/web-backend");
 const { invalidateGoogleDriveStorageQuotaCache } = await import(
 	"@/lib/google-drive-storage-quota"
 );
+const { maybeStartLiveTranscription } = await import("@/lib/live-transcribe");
 
 function resetMockDb() {
 	for (const key of Object.keys(mockDb)) {
@@ -168,6 +169,50 @@ function insertedValues(table: unknown) {
 	return mockDb.values.mock.calls[index]?.[0] as
 		| Record<string, unknown>
 		| undefined;
+}
+
+function recordingTransactionFixture(rejectUpload: boolean) {
+	type Row = Record<string, unknown>;
+	type Rows = { videos: Map<string, Row>; uploads: Map<string, Row> };
+	const committed: Rows = { videos: new Map(), uploads: new Map() };
+	const transactionInserts: unknown[] = [];
+	const directInserts: unknown[] = [];
+	const insertInto = (rows: Rows, inserts: unknown[]) => (table: unknown) => {
+		inserts.push(table);
+		return {
+			values: async (value: Row) => {
+				if (table === schema.videoUploads && rejectUpload)
+					throw new Error("Injected upload insert failure");
+				const target =
+					table === schema.videos
+						? rows.videos
+						: table === schema.videoUploads
+							? rows.uploads
+							: null;
+				if (!target) throw new Error("Unexpected insert table");
+				const id = String(table === schema.videos ? value.id : value.videoId);
+				target.set(id, { ...value });
+			},
+		};
+	};
+	mockDb.insert.mockImplementation(insertInto(committed, directInserts));
+	mockDb.transaction.mockImplementation(
+		async (
+			run: (tx: { insert: ReturnType<typeof insertInto> }) => Promise<unknown>,
+		) => {
+			const candidate: Rows = {
+				videos: new Map(committed.videos),
+				uploads: new Map(committed.uploads),
+			};
+			const result = await run({
+				insert: insertInto(candidate, transactionInserts),
+			});
+			committed.videos = candidate.videos;
+			committed.uploads = candidate.uploads;
+			return result;
+		},
+	);
+	return { committed, transactionInserts, directInserts };
 }
 
 function stubStorage() {
@@ -420,7 +465,7 @@ describe("GET /create", () => {
 		const response = await app.request("https://cap.test/create");
 
 		expect(response.status).toBe(200);
-		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+		expect(mockDb.transaction).toHaveBeenCalledTimes(2);
 
 		const orgValues = insertedValues(schema.organizations) as
 			| { id: string; ownerId: string; name: string }
@@ -469,7 +514,7 @@ describe("GET /create", () => {
 		const response = await app.request("https://cap.test/create");
 
 		expect(response.status).toBe(200);
-		expect(mockDb.transaction).not.toHaveBeenCalled();
+		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
 
 		expect(insertedValues(schema.videos)).toMatchObject({
 			orgId: "org-1",
@@ -494,7 +539,7 @@ describe("GET /create", () => {
 		const response = await app.request("https://cap.test/create");
 
 		expect(response.status).toBe(200);
-		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+		expect(mockDb.transaction).toHaveBeenCalledTimes(2);
 
 		const orgValues = insertedValues(schema.organizations) as
 			| { id: string }
@@ -524,7 +569,7 @@ describe("GET /create", () => {
 		);
 
 		expect(response.status).toBe(200);
-		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+		expect(mockDb.transaction).toHaveBeenCalledTimes(2);
 
 		const orgValues = insertedValues(schema.organizations) as
 			| { id: string }
@@ -558,7 +603,7 @@ describe("GET /create", () => {
 		);
 
 		expect(response.status).toBe(200);
-		expect(mockDb.transaction).not.toHaveBeenCalled();
+		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
 
 		expect(insertedValues(schema.videos)).toMatchObject({
 			orgId: "org-1",
@@ -585,7 +630,7 @@ describe("GET /create", () => {
 		const response = await app.request("https://cap.test/create?orgId=org-2");
 
 		expect(response.status).toBe(200);
-		expect(mockDb.transaction).not.toHaveBeenCalled();
+		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
 
 		expect(insertedValues(schema.videos)).toMatchObject({
 			orgId: "org-2",
@@ -618,6 +663,84 @@ describe("GET /create", () => {
 			ownerId: "user-1",
 		});
 		expect(await response.json()).toMatchObject({ id: "0123456789abcde" });
+	});
+
+	it("commits a progress-capable recording and its upload row in one transaction", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "fixture-user",
+			email: "fixture@example.com",
+			defaultOrgId: "fixture-org",
+			activeOrganizationId: "fixture-org",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{
+					id: "fixture-org",
+					name: "Fixture organization",
+					createdAt: new Date("2026-01-01T00:00:00.000Z"),
+				},
+			])
+			.mockResolvedValueOnce([]);
+		const fixture = recordingTransactionFixture(false);
+
+		const response = await app.request(
+			"https://cap.test/create?recordingMode=desktopMP4",
+			{ headers: { "X-Cap-Desktop-Version": "0.3.68" } },
+		);
+
+		expect(response.status).toBe(200);
+		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+		expect(fixture.transactionInserts).toEqual([
+			schema.videos,
+			schema.videoUploads,
+		]);
+		expect(fixture.directInserts).toEqual([]);
+		const body = await response.json();
+		expect(fixture.committed.videos.get(body.id)).toMatchObject({
+			id: body.id,
+			ownerId: "fixture-user",
+			orgId: "fixture-org",
+		});
+		expect(fixture.committed.uploads.get(body.id)).toMatchObject({
+			videoId: body.id,
+			mode: "singlepart",
+		});
+	});
+
+	it("rolls back a recording and skips transcription when its upload insert fails", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "fixture-user",
+			email: "fixture@example.com",
+			defaultOrgId: "fixture-org",
+			activeOrganizationId: "fixture-org",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{
+					id: "fixture-org",
+					name: "Fixture organization",
+					createdAt: new Date("2026-01-01T00:00:00.000Z"),
+				},
+			])
+			.mockResolvedValueOnce([]);
+		const fixture = recordingTransactionFixture(true);
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+		const response = await app.request(
+			"https://cap.test/create?recordingMode=desktopSegments",
+			{ headers: { "X-Cap-Desktop-Version": "0.3.68" } },
+		);
+
+		expect(response.status).toBe(500);
+		expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+		expect(fixture.transactionInserts).toEqual([
+			schema.videos,
+			schema.videoUploads,
+		]);
+		expect(fixture.directInserts).toEqual([]);
+		expect(fixture.committed.videos.size).toBe(0);
+		expect(fixture.committed.uploads.size).toBe(0);
+		expect(maybeStartLiveTranscription).not.toHaveBeenCalled();
 	});
 
 	it("rejects an invalid client-selected video ID", async () => {

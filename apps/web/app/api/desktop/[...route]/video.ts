@@ -303,9 +303,13 @@ app.get(
 				: Storage.getS3WritableAccessForUser(user.id, videoOrgId)
 			).pipe(runPromise);
 
-			await db()
-				.insert(videos)
-				.values({
+			const clientSupportsUploadProgress = isFromDesktopSemver(
+				c.req,
+				UPLOAD_PROGRESS_VERSION,
+			);
+
+			await db().transaction(async (tx) => {
+				await tx.insert(videos).values({
 					id: idToUse,
 					name: videoName,
 					ownerId: user.id,
@@ -329,16 +333,12 @@ app.get(
 					...(metadata ? { metadata } : {}),
 				});
 
-			const clientSupportsUploadProgress = isFromDesktopSemver(
-				c.req,
-				UPLOAD_PROGRESS_VERSION,
-			);
-
-			if (clientSupportsUploadProgress && !isScreenshot)
-				await db().insert(videoUploads).values({
-					videoId: idToUse,
-					mode: "singlepart",
-				});
+				if (clientSupportsUploadProgress && !isScreenshot)
+					await tx.insert(videoUploads).values({
+						videoId: idToUse,
+						mode: "singlepart",
+					});
+			});
 
 			if (recordingMode === "desktopSegments" && !isScreenshot) {
 				// Off the response path: this endpoint gates recording start on the
