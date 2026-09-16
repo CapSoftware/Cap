@@ -85,7 +85,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "laptop.svg",
     "shuffle.svg",
     "gift.svg",
-    "history.svg",
     "hotkeys.svg",
     "image.svg",
     "info.svg",
@@ -99,7 +98,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "message-square-plus.svg",
     "mic-off.svg",
     "microphone.svg",
-    "minimize.svg",
     "minus.svg",
     "monitor.svg",
     "more-vertical.svg",
@@ -186,10 +184,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "copy.svg",
     "record-fill.svg",
     "warning-bold.svg",
-    // The main window's hand-drawn traffic lights: the x and expand glyphs
-    // `CaptionControlsMacOS.tsx` inlines, shown while the group is hovered.
     "traffic-close.svg",
-    "traffic-zoom.svg",
     // The remaining settings pages (`settings_pages.rs`). `circle-check` is
     // Cap's own (`packages/ui-solid/icons/circle-check.svg`, hotkeys.tsx's
     // IconCapCircleCheck); the rest are the Lucide 24x24 originals the pages'
@@ -335,6 +330,7 @@ mod tests {
         // `ui::SelectionHeader` names the check and the trash itself.
         include_str!("ui/selection_header.rs"),
         include_str!("ui/radio_cards.rs"),
+        include_str!("ui/windows_caption.rs"),
         // The onboarding window's welcome cards and permissions surface; the
         // per-permission row glyphs are named on `OSPermission::icon`.
         include_str!("onboarding_window.rs"),
