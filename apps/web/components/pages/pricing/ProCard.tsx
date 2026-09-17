@@ -107,7 +107,7 @@ export const ProCard = ({ collapsed, onToggle }: PlanToggle) => {
 			note={
 				annual
 					? "Billed annually. Save 32% against monthly."
-					: `Billed monthly. Switch to annual for ${symbol}${copy.pricing.annual} a month.`
+					: `Or ${symbol}${copy.pricing.annual} a month, billed annually.`
 			}
 			controls={
 				<>
