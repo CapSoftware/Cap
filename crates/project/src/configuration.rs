@@ -1706,6 +1706,7 @@ pub struct ImageSegment {
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<Annotation>,
     pub name: String,
     pub center: XY<f64>,
