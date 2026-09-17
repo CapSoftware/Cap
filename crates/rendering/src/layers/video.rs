@@ -1,12 +1,12 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
-use cap_enc_ffmpeg::RelocatableSource;
 use cap_project::{VideoSegment, XY};
 
 use crate::{
     DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, RenderingError,
     composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
     decoder::{ManagedVideoDecoder, spawn_managed_decoder},
+    media_project::checked_project_video_source,
     yuv_converter::YuvConverterPipelines,
 };
 
@@ -90,8 +90,11 @@ impl VideoLayer {
         let mut frames = Vec::with_capacity(visible.len());
         for (index, segment, source_time) in visible {
             if !self.instances.contains_key(&index) {
-                let source = RelocatableSource::new(constants.recording_meta.project_path.clone())
-                    .map_err(|error| RenderingError::VideoOverlayDecodeFailed(error.to_string()))?;
+                let (source, _) = checked_project_video_source(
+                    &constants.recording_meta.project_path,
+                    &segment.path,
+                )
+                .map_err(|error| RenderingError::VideoOverlayDecodeFailed(error.to_string()))?;
                 let decoder = spawn_managed_decoder(
                     "video-overlay",
                     source,

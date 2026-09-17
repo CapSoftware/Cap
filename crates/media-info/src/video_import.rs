@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 
 pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"];
 
@@ -97,8 +100,27 @@ pub fn import_video(project_path: &Path, source: &Path) -> Result<ImportedVideo,
         .to_ascii_lowercase();
     let id = uuid::Uuid::new_v4();
     let directory = project_path.join("content/videos");
+    for candidate in [project_path.join("content"), directory.clone()] {
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err("Video assets cannot use linked project directories".into());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Cannot inspect video assets: {error}")),
+        }
+    }
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("Cannot create video assets: {error}"))?;
+    let root = project_path
+        .canonicalize()
+        .map_err(|error| format!("Cannot inspect editor project: {error}"))?;
+    let resolved_directory = directory
+        .canonicalize()
+        .map_err(|error| format!("Cannot inspect video assets: {error}"))?;
+    if !resolved_directory.starts_with(&root) {
+        return Err("Video assets must stay inside the editor project".into());
+    }
     let temporary = directory.join(format!(".{id}.import"));
     let result = (|| {
         let copied = std::fs::copy(source, &temporary)
@@ -170,5 +192,24 @@ mod tests {
             2
         );
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn video_import_rejects_a_linked_asset_directory_without_writing_outside() {
+        let root =
+            std::env::temp_dir().join(format!("cap-video-link-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let project = root.join("project");
+        let outside = root.join("outside");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("content")).unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../video-decode/tests/fixtures/h264-decoder-lifecycle.mp4");
+
+        assert!(import_video(&project, &source).is_err());
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
