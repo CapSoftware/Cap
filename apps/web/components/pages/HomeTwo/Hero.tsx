@@ -13,6 +13,7 @@ import { LinkNotification } from "./demo/CapSurfaces";
 import { MenuBar } from "./demo/MacDesktop";
 import { AppleGlyph } from "./glyphs";
 import { HeroHeadline } from "./HeroHeadline";
+import { HeroSky } from "./HeroSky";
 import { Fit, noop, useInView } from "./scenes/engine";
 import {
 	BODY_TEXT,
@@ -113,12 +114,13 @@ export const Hero = () => {
 
 	return (
 		<section className="relative px-5 pb-12 pt-12 sm:pt-14 md:pb-4 md:pt-[56px]">
+			<HeroSky />
 			<span
 				data-header-sentinel
 				aria-hidden="true"
 				className="pointer-events-none absolute bottom-0 left-0 size-px"
 			/>
-			<div className="mx-auto flex max-w-[1020px] flex-col items-center text-center">
+			<div className="relative mx-auto flex max-w-[1020px] flex-col items-center text-center">
 				<Link
 					href="/blog/cap-v06"
 					onClick={() =>
