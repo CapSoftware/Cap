@@ -35,6 +35,16 @@ export const applicationEmails: ApplicationEmail[] = [
 		],
 	},
 	{
+		id: "video-viewer-invite",
+		name: "Recording viewer invitation",
+		trigger: "A recording owner invites someone to view the recording",
+		recipients: "The invited viewer",
+		notes:
+			"Transactional viewing access; does not subscribe the viewer to marketing.",
+		template: "video-viewer-invite",
+		sources: ["apps/web/actions/videos/viewer-invites.ts"],
+	},
+	{
 		id: "download-link",
 		name: "Requested download links",
 		trigger: "The person requests download links by email",

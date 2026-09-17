@@ -51,6 +51,7 @@ function makeDeps(config: {
 	orgMembership?: boolean;
 	spaceMembership?: boolean;
 	allowedEmailDomain?: Option.Option<string>;
+	viewerGrantEmail?: string;
 }): VideosPolicyDeps {
 	const {
 		video,
@@ -59,6 +60,7 @@ function makeDeps(config: {
 		orgMembership = false,
 		spaceMembership = false,
 		allowedEmailDomain = Option.none<string>(),
+		viewerGrantEmail,
 	} = config;
 
 	return {
@@ -67,6 +69,7 @@ function makeDeps(config: {
 				Effect.succeed(
 					video ? Option.some([video, password] as const) : Option.none(),
 				),
+			hasViewerGrant: (_, email) => Effect.succeed(email === viewerGrantEmail),
 		},
 		orgsRepo: {
 			membershipForVideo: () =>
@@ -483,6 +486,42 @@ describe("VideosPolicy.canView", () => {
 	});
 
 	describe("the contractor scenario", () => {
+		it("allows a named external viewer to watch a private video", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: false }),
+				viewerGrantEmail: "guest@partner.com",
+			});
+			expect(await runCanView(deps, makeUser("guest@partner.com"))).toBe(
+				"allowed",
+			);
+			expect(await runCanView(deps, makeUser("other@partner.com"))).toBe(
+				"denied",
+			);
+			expect(await runCanView(deps, noUser)).toBe("denied");
+		});
+
+		it("lets a named viewer bypass the public link domain restriction", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: true }),
+				viewerGrantEmail: "guest@partner.com",
+				allowedEmailDomain: Option.some("mycompany.com"),
+			});
+			expect(await runCanView(deps, makeUser("guest@partner.com"))).toBe(
+				"allowed",
+			);
+		});
+
+		it("still requires the recording password from an invited viewer", async () => {
+			const deps = makeDeps({
+				video: makeVideo({ public: false }),
+				password: Option.some("video-hash"),
+				viewerGrantEmail: "guest@partner.com",
+			});
+			expect(await runCanView(deps, makeUser("guest@partner.com"))).toBe(
+				"password",
+			);
+		});
+
 		it("contractor in space can access private video despite domain restriction", async () => {
 			const deps = makeDeps({
 				video: makeVideo({ public: false }),
@@ -654,6 +693,14 @@ describe("VideosPolicy.canViewLoaded", () => {
 			user: makeUser("bob@gmail.com"),
 		},
 		{
+			name: "named external viewer on a private video",
+			config: {
+				video: makeVideo({ public: false }),
+				viewerGrantEmail: "guest@partner.com",
+			},
+			user: makeUser("guest@partner.com"),
+		},
+		{
 			name: "anonymous viewer with a video password and no attachment",
 			config: { video: makeVideo(), password: Option.some("video-hash") },
 			user: noUser,
@@ -722,6 +769,7 @@ describe("VideosPolicy.canViewLoaded", () => {
 		const countingDeps: VideosPolicyDeps = {
 			...deps,
 			repo: {
+				...deps.repo,
 				getById: (id) => {
 					getByIdCalls += 1;
 					return deps.repo.getById(id);
