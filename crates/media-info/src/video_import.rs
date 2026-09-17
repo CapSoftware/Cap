@@ -128,8 +128,20 @@ pub fn import_video(project_path: &Path, source: &Path) -> Result<ImportedVideo,
         if copied != source_metadata.len() {
             return Err("The source video changed during import. Drop it again.".into());
         }
+        #[cfg(windows)]
+        {
+            let mut copied_permissions = std::fs::metadata(&temporary)
+                .map_err(|error| format!("Cannot inspect video asset: {error}"))?
+                .permissions();
+            if copied_permissions.readonly() {
+                copied_permissions.set_readonly(false);
+                std::fs::set_permissions(&temporary, copied_permissions)
+                    .map_err(|error| format!("Cannot save video asset: {error}"))?;
+            }
+        }
         std::fs::OpenOptions::new()
-            .write(true)
+            .read(true)
+            .write(cfg!(windows))
             .open(&temporary)
             .and_then(|file| file.sync_all())
             .map_err(|error| format!("Cannot save video asset: {error}"))?;
