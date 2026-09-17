@@ -55,7 +55,7 @@ export const Settings = () => {
 							<div className="flex-1">
 								<div className="flex justify-between items-center">
 									<div>
-										<h4 className="text-sm font-medium text-gray-900">
+										<h4 className="text-sm font-medium text-gray-12">
 											{setting.label}
 										</h4>
 										{setting.description && (

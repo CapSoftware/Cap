@@ -60,6 +60,7 @@ import {
 import { usePublicEnv } from "@/utils/public-env";
 import { navigateWithTransition } from "@/utils/view-transition";
 import type { SharePageBranding, VideoData } from "../types";
+import { ShareNavigation } from "./ShareNavigation";
 import { describeShareAudience } from "./share-audience";
 import { useVideoDownload } from "./use-video-download";
 import { fromNow } from "./utils/from-now";
@@ -669,7 +670,7 @@ export const ShareHeader = ({
 			<div className="group relative inline-flex shrink-0 items-center">
 				{canManageSharePageBranding && (
 					<div className="pointer-events-none absolute left-0 top-full z-10 pt-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
-						<div className="flex items-center gap-1 rounded-full border border-gray-5 bg-white p-1 shadow-sm">
+						<div className="flex items-center gap-1 rounded-full border border-gray-5 bg-gray-1 p-1 shadow-sm">
 							<Button
 								variant="gray"
 								size="xs"
@@ -814,6 +815,7 @@ export const ShareHeader = ({
 						    both of them truncating at once, so the title ran out of room
 						    while there was still empty header to its right. */}
 						<div className="flex min-w-0 items-center gap-3 lg:min-w-[400px] lg:flex-1">
+							<ShareNavigation />
 							{renderBranding()}
 							{branding && <div className="h-7 w-px shrink-0 bg-gray-6" />}
 							<div className="min-w-0 flex-1">
@@ -930,7 +932,7 @@ export const ShareHeader = ({
 											)}
 										</Button>
 										{showCopyOptions && (
-											<div className="absolute right-0 top-full z-50 mt-1 min-w-full w-max overflow-hidden rounded-lg border border-gray-6 bg-white shadow-lg">
+											<div className="absolute right-0 top-full z-50 mt-1 min-w-full w-max overflow-hidden rounded-lg border border-gray-6 bg-gray-1 shadow-lg">
 												<button
 													type="button"
 													className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:bg-gray-3"
