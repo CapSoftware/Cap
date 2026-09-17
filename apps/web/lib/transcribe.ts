@@ -124,9 +124,8 @@ export async function transcribeVideo(
 	}
 
 	// A live transcription that is provably still running (its claim is
-	// freshness-stamped every chunk) is seconds away from promoting itself to
-	// canonical; claiming now would race it and transcribe the same audio
-	// twice. A stale stamp means the workflow died - proceed normally. The
+	// freshness-stamped every chunk) owns scheduling the final full pass.
+	// Claiming now could start it before the recording is complete. A stale stamp means the workflow died - proceed normally. The
 	// live workflow's own full-pass fallback uses earlyFromSegments, which is
 	// exempt so it can never deadlock against its opener.
 	if (!options.earlyFromSegments) {
