@@ -85,7 +85,7 @@ pub fn import_video(project_path: &Path, source: &Path) -> Result<ImportedVideo,
     if !is_supported_video_path(source) {
         return Err("Choose an MP4, MOV, AVI, MKV, WebM, WMV, M4V or FLV video".into());
     }
-    let source_file = std::fs::File::open(source)
+    let mut source_file = std::fs::File::open(source)
         .map_err(|error| format!("Cannot open source video: {error}"))?;
     let source_metadata = source_file
         .metadata()
@@ -123,28 +123,33 @@ pub fn import_video(project_path: &Path, source: &Path) -> Result<ImportedVideo,
     }
     let temporary = directory.join(format!(".{id}.import"));
     let result = (|| {
-        let copied = std::fs::copy(source, &temporary)
-            .map_err(|error| format!("Cannot copy video into project: {error}"))?;
+        let mut writable_temporary = None;
+        let copied = if cfg!(windows) && source_metadata.permissions().readonly() {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .map_err(|error| format!("Cannot create video asset: {error}"))?;
+            let copied = std::io::copy(&mut source_file, &mut file)
+                .map_err(|error| format!("Cannot copy video into project: {error}"))?;
+            writable_temporary = Some(file);
+            copied
+        } else {
+            std::fs::copy(source, &temporary)
+                .map_err(|error| format!("Cannot copy video into project: {error}"))?
+        };
         if copied != source_metadata.len() {
             return Err("The source video changed during import. Drop it again.".into());
         }
-        #[cfg(windows)]
-        {
-            let mut copied_permissions = std::fs::metadata(&temporary)
-                .map_err(|error| format!("Cannot inspect video asset: {error}"))?
-                .permissions();
-            if copied_permissions.readonly() {
-                copied_permissions.set_readonly(false);
-                std::fs::set_permissions(&temporary, copied_permissions)
-                    .map_err(|error| format!("Cannot save video asset: {error}"))?;
-            }
+        match writable_temporary {
+            Some(file) => file.sync_all(),
+            None => std::fs::OpenOptions::new()
+                .read(true)
+                .write(cfg!(windows))
+                .open(&temporary)
+                .and_then(|file| file.sync_all()),
         }
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(cfg!(windows))
-            .open(&temporary)
-            .and_then(|file| file.sync_all())
-            .map_err(|error| format!("Cannot save video asset: {error}"))?;
+        .map_err(|error| format!("Cannot save video asset: {error}"))?;
         let (duration, fps, width, height, has_audio) = probe_video(&temporary)?;
         let path = format!("content/videos/{id}.{extension}");
         std::fs::rename(&temporary, project_path.join(&path))

@@ -1492,9 +1492,10 @@ mod tests {
         let original =
             include_bytes!("../../media-server/src/__tests__/fixtures/test-with-audio.mp4");
         std::fs::write(&source, original).unwrap();
-        let mut source_permissions = std::fs::metadata(&source).unwrap().permissions();
-        source_permissions.set_readonly(true);
-        std::fs::set_permissions(&source, source_permissions).unwrap();
+        let source_permissions = std::fs::metadata(&source).unwrap().permissions();
+        let mut read_only_permissions = source_permissions.clone();
+        read_only_permissions.set_readonly(true);
+        std::fs::set_permissions(&source, read_only_permissions).unwrap();
         let (tx, rx) = flume::unbounded();
         run_video_import_in(&base, &source, &tx);
         let events: Vec<_> = rx.try_iter().collect();
@@ -1519,9 +1520,7 @@ mod tests {
             original
         );
         assert_eq!(std::fs::read(&source).unwrap(), original);
-        let mut source_permissions = std::fs::metadata(&source).unwrap().permissions();
-        assert!(source_permissions.readonly());
-        source_permissions.set_readonly(false);
+        assert!(std::fs::metadata(&source).unwrap().permissions().readonly());
         std::fs::set_permissions(&source, source_permissions).unwrap();
         let damaged = root.join("damaged.mp4");
         std::fs::write(&damaged, b"invalid").unwrap();
