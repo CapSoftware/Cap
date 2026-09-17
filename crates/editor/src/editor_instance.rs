@@ -373,12 +373,11 @@ impl EditorInstance {
         }
 
         let mut project = recording_meta.project_config();
-        if let Some(path) = &still_image {
-            if add_still_image_to_timeline(&mut project, path) {
-                if let Err(error) = project.write(&recording_meta.project_path) {
-                    warn!(%error, "Failed to save image timeline");
-                }
-            }
+        if let Some(path) = &still_image
+            && add_still_image_to_timeline(&mut project, path)
+            && let Err(error) = project.write(&recording_meta.project_path)
+        {
+            warn!(%error, "Failed to save image timeline");
         }
 
         if project.timeline.is_none() {
