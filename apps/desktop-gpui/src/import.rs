@@ -1498,7 +1498,7 @@ mod tests {
         let completed = events
             .iter()
             .find(|event| event.stage == ImportStage::Complete)
-            .unwrap();
+            .unwrap_or_else(|| panic!("video import failed: {events:?}"));
         let project_path = &completed.project_path;
         let meta = RecordingMeta::load_for_project(project_path).unwrap();
         assert!(matches!(

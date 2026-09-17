@@ -128,7 +128,9 @@ pub fn import_video(project_path: &Path, source: &Path) -> Result<ImportedVideo,
         if copied != source_metadata.len() {
             return Err("The source video changed during import. Drop it again.".into());
         }
-        std::fs::File::open(&temporary)
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&temporary)
             .and_then(|file| file.sync_all())
             .map_err(|error| format!("Cannot save video asset: {error}"))?;
         let (duration, fps, width, height, has_audio) = probe_video(&temporary)?;
