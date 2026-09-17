@@ -21,13 +21,15 @@ const QUOTES = PICKS.map((name) =>
 	testimonials.find((item) => item.name === name),
 ).filter((item): item is (typeof testimonials)[number] => Boolean(item));
 
-export const Testimonials = () => (
+export const Testimonials = ({ eyebrow = true }: { eyebrow?: boolean }) => (
 	<section className="px-5 py-20 lg:py-28">
 		<div className="mx-auto max-w-[1200px]">
 			<div className="mx-auto flex max-w-[760px] flex-col items-center text-center">
-				<Eyebrow accent={MODE_THEME.share.accent}>Testimonials</Eyebrow>
+				{eyebrow ? (
+					<Eyebrow accent={MODE_THEME.share.accent}>Testimonials</Eyebrow>
+				) : null}
 				<h2
-					className={`${H_SECTION} mt-6 text-balance text-[clamp(38px,5vw,56px)]`}
+					className={`${H_SECTION} ${eyebrow ? "mt-6" : ""} text-balance text-[clamp(38px,5vw,56px)]`}
 				>
 					Loved by builders, trusted by teams
 				</h2>

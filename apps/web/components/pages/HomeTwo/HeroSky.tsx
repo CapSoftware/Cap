@@ -1,5 +1,6 @@
 "use client";
 
+import { classNames } from "@cap/utils/helpers";
 import Image from "next/image";
 import { useRef } from "react";
 import { BAND, GRAIN } from "./theme";
@@ -141,7 +142,7 @@ const SKY = [
 	`linear-gradient(180deg, #C8DDF6 0%, #D9E7F8 34%, #E6EDF6 66%, ${BAND} 100%)`,
 ].join(",");
 
-export const HeroSky = () => {
+export const HeroSky = ({ className }: { className?: string }) => {
 	const rootRef = useRef<HTMLDivElement | null>(null);
 	const inView = useInView(rootRef, "0px");
 	const pageVisible = usePageVisible();
@@ -150,9 +151,11 @@ export const HeroSky = () => {
 		<div
 			ref={rootRef}
 			aria-hidden="true"
-			className={`pointer-events-none absolute inset-0 overflow-hidden rounded-t-[24px] ${
-				drifting ? "" : "ht-sky-idle"
-			}`}
+			className={classNames(
+				"pointer-events-none absolute inset-0 overflow-hidden",
+				className ?? "rounded-t-[24px]",
+				drifting ? "" : "ht-sky-idle",
+			)}
 			style={{
 				backgroundColor: BAND,
 				backgroundImage: SKY,
