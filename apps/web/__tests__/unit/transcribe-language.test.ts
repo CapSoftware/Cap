@@ -28,6 +28,7 @@ describe("AI generation language support", () => {
 			language_detection: true,
 		});
 		expect(options.disfluencies).toBe(true);
+		expect(options.speaker_labels).toBe(true);
 		if (!("language_detection_options" in options)) {
 			throw new Error("Expected automatic language detection options");
 		}
@@ -47,4 +48,11 @@ describe("AI generation language support", () => {
 			language_code: "zh",
 		});
 	});
+});
+
+it("keeps independent live chunks free of recording-wide speaker labels", () => {
+	expect(
+		getAssemblyAITranscriptionOptions("en", { speakerLabels: false })
+			.speaker_labels,
+	).toBe(false);
 });
