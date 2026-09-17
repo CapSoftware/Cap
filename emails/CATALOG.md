@@ -608,6 +608,7 @@ These are repository send paths and retained templates, not confirmation of prod
 | --- | --- | --- | --- |
 | Login verification code | Web or mobile email authentication request | The person signing in | [otp-email](../packages/database/emails/otp-email.tsx) |
 | Organization invitation | An organization invitation is issued through the web action or public API | The invited teammate | [organization-invite](../packages/database/emails/organization-invite.tsx) |
+| Recording viewer invitation | A recording owner invites someone to view the recording | The invited viewer | [video-viewer-invite](../packages/database/emails/video-viewer-invite.tsx) |
 | Requested download links | The person requests download links by email | The requesting email address | [download-link](../packages/database/emails/download-link.tsx) |
 | First shareable recording | Desktop API creates the first eligible shareable recording | The recording owner | [first-shareable-link](../packages/database/emails/first-shareable-link.tsx) |
 | New comment notification | An eligible comment notification is created | The notification recipient | [new-comment](../packages/database/emails/new-comment.tsx) |
@@ -631,6 +632,12 @@ Send source: [packages/database/auth/auth-options.ts](../packages/database/auth/
 An invitation is not permission to send promotions.
 
 Send source: [apps/web/actions/organization/send-invites.ts](../apps/web/actions/organization/send-invites.ts), [apps/web/app/api/v1/[...route]/route.ts](../apps/web/app/api/v1/%5B...route%5D/route.ts).
+
+### Recording viewer invitation
+
+Transactional viewing access; does not subscribe the viewer to marketing.
+
+Send source: [apps/web/actions/videos/viewer-invites.ts](../apps/web/actions/videos/viewer-invites.ts).
 
 ### Requested download links
 
