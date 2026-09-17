@@ -6826,6 +6826,7 @@ fn specta_builder() -> tauri_specta::Builder {
             get_mic_waveforms,
             get_system_audio_waveforms,
             audio_library::get_imported_waveform,
+            audio_library::cancel_imported_waveforms,
             audio_library::list_audio_library,
             audio_library::add_audio_library_track,
             audio_library::import_audio_track_file,
@@ -7589,6 +7590,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 match event {
                     WindowEvent::CloseRequested { api, .. } => {
                         let window_id = CapWindowId::from_str(label).ok();
+                        if matches!(&window_id, Some(CapWindowId::Editor { .. })) {
+                            audio_library::cancel_imported_waveforms_for_window(label);
+                        }
                         if !matches!(
                             window_id,
                             Some(CapWindowId::Editor { .. })
@@ -7634,6 +7638,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     }
                 }
                 WindowEvent::Destroyed => {
+                    audio_library::cancel_imported_waveforms_for_window(label);
                     fake_window::cancel_fake_window_listener(app, label);
                     let window_id = CapWindowId::from_str(label).ok();
                     if let Some(window_id) = &window_id {

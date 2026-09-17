@@ -2248,6 +2248,11 @@ export const [EditorContextProvider, useBaseEditorContext] =
 				Map<string, ImportedWaveform>
 			>(new Map());
 			const waveformRequested = new Set<string>();
+			let waveformAlive = true;
+			onCleanup(() => {
+				waveformAlive = false;
+				void commands.cancelImportedWaveforms().catch(() => undefined);
+			});
 			createEffect(() => {
 				const timeline = project.timeline;
 				const paths = [
@@ -2260,14 +2265,16 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					commands
 						.getImportedWaveform(path)
 						.then((encoded) => {
+							if (!waveformAlive) return;
 							const waveform = decodeImportedWaveform(encoded);
 							setImportedWaveforms((current) =>
 								new Map(current).set(path, waveform),
 							);
 						})
-						.catch((error) =>
-							console.error(`Failed to load waveform for ${path}:`, error),
-						);
+						.catch((error) => {
+							if (waveformAlive)
+								console.error(`Failed to load waveform for ${path}:`, error);
+						});
 				}
 			});
 			onMount(() => {

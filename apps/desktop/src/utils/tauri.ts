@@ -262,6 +262,9 @@ async getSystemAudioWaveforms() : Promise<number[][]> {
 async getImportedWaveform(path: string) : Promise<string> {
     return await TAURI_INVOKE("get_imported_waveform", { path });
 },
+async cancelImportedWaveforms() : Promise<void> {
+    await TAURI_INVOKE("cancel_imported_waveforms");
+},
 async listAudioLibrary() : Promise<AudioLibraryTrack[]> {
     return await TAURI_INVOKE("list_audio_library");
 },
