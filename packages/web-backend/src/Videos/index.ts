@@ -1,9 +1,11 @@
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
+import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub } from "@cap/utils";
 import {
 	CurrentUser,
+	DatabaseError,
 	type Folder,
 	Policy,
 	Storage as StorageDomain,
@@ -612,7 +614,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						ownerId: user.id,
 						orgId: input.orgId,
 						name: `Cap Recording - ${formattedDate}`,
-						public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+						public: yield* Effect.tryPromise({
+							try: () => getNewVideoPublic(input.orgId),
+							catch: (cause) => new DatabaseError({ cause }),
+						}),
 						source: { type: "webMP4" },
 						bucketId,
 						storageIntegrationId,
