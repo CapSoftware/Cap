@@ -456,31 +456,80 @@ export function DrizzleAdapter(
 			return row;
 		},
 		async useVerificationToken({ identifier, token }) {
-			const rows = await db
-				.select()
-				.from(verificationTokens)
-				.where(eq(verificationTokens.token, token))
-				.limit(1);
-			const row = rows[0];
-			if (!row) {
-				console.warn("[useVerificationToken] No token found");
-				return null;
-			}
 			const normalizedIdentifier = identifier?.toLowerCase() ?? "";
-			const storedIdentifier = row.identifier?.toLowerCase() ?? "";
-			if (normalizedIdentifier !== storedIdentifier) {
-				console.warn("[useVerificationToken] Identifier mismatch");
-				return null;
-			}
-			await db
-				.delete(verificationTokens)
-				.where(
-					and(
-						eq(verificationTokens.token, token),
-						eq(verificationTokens.identifier, row.identifier),
-					),
-				);
-			return { ...row, identifier: storedIdentifier };
+			const runVerification = async (tx: MySql2Database) => {
+				const builder = normalizedIdentifier
+					? tx
+							.select()
+							.from(verificationTokens)
+							.where(eq(verificationTokens.identifier, normalizedIdentifier))
+					: tx
+							.select()
+							.from(verificationTokens)
+							.where(eq(verificationTokens.token, token));
+
+				const lockedQuery =
+					typeof (builder as unknown as { for: unknown }).for === "function"
+						? (
+								builder as unknown as {
+									for: (mode: string) => unknown;
+								}
+							).for("update")
+						: builder;
+
+				const limitedQuery =
+					typeof (lockedQuery as unknown as { limit: unknown }).limit ===
+					"function"
+						? (
+								lockedQuery as unknown as {
+									limit: (
+										n: number,
+									) => Promise<Array<typeof verificationTokens.$inferSelect>>;
+								}
+							).limit(1)
+						: lockedQuery;
+
+				const rows = await (limitedQuery as Promise<
+					Array<typeof verificationTokens.$inferSelect>
+				>);
+
+				const row = rows[0];
+				if (!row) {
+					console.warn("[useVerificationToken] No token found");
+					return null;
+				}
+
+				await tx
+					.delete(verificationTokens)
+					.where(
+						and(
+							eq(verificationTokens.identifier, row.identifier),
+							eq(verificationTokens.token, row.token),
+						),
+					);
+
+				const storedIdentifier = row.identifier?.toLowerCase() ?? "";
+				if (normalizedIdentifier && normalizedIdentifier !== storedIdentifier) {
+					console.warn("[useVerificationToken] Identifier mismatch");
+					return null;
+				}
+
+				if (row.expires.valueOf() < Date.now()) {
+					console.warn("[useVerificationToken] Token expired");
+					return null;
+				}
+
+				if (row.token !== token) {
+					console.warn("[useVerificationToken] Token mismatch");
+					return null;
+				}
+
+				return { ...row, identifier: storedIdentifier };
+			};
+
+			return db.transaction
+				? await db.transaction(runVerification)
+				: await runVerification(db);
 		},
 	};
 }
