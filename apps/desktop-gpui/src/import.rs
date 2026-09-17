@@ -1,4 +1,5 @@
 use std::{
+    io::ErrorKind,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::Duration,
@@ -1750,6 +1751,37 @@ pub(crate) struct ImportedEditorImage {
     pub height: u32,
 }
 
+fn reject_linked_image_asset_directories(
+    project_path: &Path,
+    directory: &Path,
+) -> Result<(), String> {
+    for candidate in [project_path.join("content"), directory.to_path_buf()] {
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err("Image assets cannot use linked project directories".into());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Cannot inspect image assets: {error}")),
+        }
+    }
+    Ok(())
+}
+
+fn check_image_asset_directory(project_path: &Path, directory: &Path) -> Result<(), String> {
+    reject_linked_image_asset_directories(project_path, directory)?;
+    let root = project_path
+        .canonicalize()
+        .map_err(|error| format!("Cannot inspect editor project: {error}"))?;
+    let resolved = directory
+        .canonicalize()
+        .map_err(|error| format!("Cannot inspect image assets: {error}"))?;
+    if !resolved.starts_with(root) {
+        return Err("Image assets must stay inside the editor project".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn import_editor_image(
     project_path: &Path,
     source: &Path,
@@ -1767,7 +1799,9 @@ pub(crate) fn import_editor_image(
     }
     let id = uuid::Uuid::new_v4();
     let directory = project_path.join("content/images");
+    reject_linked_image_asset_directories(project_path, &directory)?;
     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    check_image_asset_directory(project_path, &directory)?;
     let temporary = directory.join(format!(".{id}.import"));
     let result = (|| {
         let mut temporary_file = std::fs::OpenOptions::new()
@@ -1820,6 +1854,7 @@ pub(crate) fn import_editor_image(
         decoded.apply_orientation(orientation);
         let (width, height) = (decoded.width(), decoded.height());
         let relative = format!("content/images/{id}.{extension}");
+        check_image_asset_directory(project_path, &directory)?;
         std::fs::rename(&temporary, project_path.join(&relative))
             .map_err(|error| format!("Failed to save image: {error}"))?;
         Ok(ImportedEditorImage {
@@ -1842,6 +1877,25 @@ pub(crate) fn import_editor_image(
 #[cfg(test)]
 mod style_image_tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn style_image_import_rejects_linked_asset_directory_without_writing_outside() {
+        let root = std::env::temp_dir().join(format!("cap-overlay-link-{}", uuid::Uuid::new_v4()));
+        let project = root.join("project");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(project.join("content")).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("content/images")).unwrap();
+        let source = root.join("source.png");
+        image::RgbaImage::from_pixel(4, 3, image::Rgba([25, 80, 210, 255]))
+            .save(&source)
+            .unwrap();
+
+        assert!(import_editor_image(&project, &source).is_err());
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn style_image_import_rotates_exif_copies_source_and_keeps_relative_unique_assets() {
