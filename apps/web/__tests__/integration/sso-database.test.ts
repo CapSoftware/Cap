@@ -6,6 +6,7 @@ import {
 	organizationSso,
 	organizations,
 	users,
+	verificationTokens,
 } from "@cap/database/schema";
 import { Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
@@ -342,6 +343,63 @@ describe.runIf(Boolean(databaseUrl))(
 					.select()
 					.from(organizationMembers)
 					.where(eq(organizationMembers.userId, userId)),
+			).toHaveLength(0);
+		});
+
+		it("burns an email OTP exactly once under concurrent guesses", async () => {
+			const identifier = `${id()}@example.com`;
+			const token = "482913";
+			const adapter = DrizzleAdapter(database());
+			if (!adapter.useVerificationToken) {
+				throw new Error("Missing useVerificationToken adapter.");
+			}
+			await database()
+				.insert(verificationTokens)
+				.values({ identifier, token, expires: new Date(Date.now() + 600_000) });
+
+			const attempts = await Promise.all(
+				Array.from({ length: 8 }, () =>
+					adapter.useVerificationToken({ identifier, token }),
+				),
+			);
+
+			expect(attempts.filter((result) => result !== null)).toHaveLength(1);
+			expect(
+				await database()
+					.select()
+					.from(verificationTokens)
+					.where(eq(verificationTokens.identifier, identifier)),
+			).toHaveLength(0);
+		});
+
+		it("never authenticates a wrong guess when it races the correct one", async () => {
+			const identifier = `${id()}@example.com`;
+			const token = "531942";
+			const adapter = DrizzleAdapter(database());
+			if (!adapter.useVerificationToken) {
+				throw new Error("Missing useVerificationToken adapter.");
+			}
+			await database()
+				.insert(verificationTokens)
+				.values({ identifier, token, expires: new Date(Date.now() + 600_000) });
+
+			const guesses = ["000000", "111111", token, "222222", "333333"];
+			const attempts = await Promise.all(
+				guesses.map((guess) =>
+					adapter.useVerificationToken({ identifier, token: guess }),
+				),
+			);
+
+			const successes = attempts.filter((result) => result !== null);
+			expect(successes.length).toBeLessThanOrEqual(1);
+			for (const success of successes) {
+				expect(success).toMatchObject({ identifier, token });
+			}
+			expect(
+				await database()
+					.select()
+					.from(verificationTokens)
+					.where(eq(verificationTokens.identifier, identifier)),
 			).toHaveLength(0);
 		});
 	},
