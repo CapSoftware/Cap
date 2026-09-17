@@ -37,12 +37,12 @@
 
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     rc::Rc,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -59,9 +59,9 @@ use core_foundation::base::TCFType;
 #[cfg(target_os = "macos")]
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
-    Animation, AnimationExt as _, AppContext as _, Bounds, Context, Entity, FocusHandle,
-    FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Pixels, Point, Render, RenderImage, SharedString,
+    Animation, AnimationExt as _, AppContext as _, Bounds, Context, Entity, ExternalPaths,
+    FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, RenderImage, SharedString,
     StatefulInteractiveElement as _, StyleRefinement, Styled, Subscription, WeakEntity, Window,
     div, point, prelude::FluentBuilder, px, svg,
 };
@@ -369,6 +369,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         return Err("Cannot edit non-studio recordings".to_string());
     };
 
+    let still_image = cap_rendering::media_project::still_image_path(studio);
     let (segment_count, has_camera, multiple_recording_segments) = match studio.as_ref() {
         StudioRecordingMeta::SingleSegment { segment } => (1, segment.camera.is_some(), false),
         StudioRecordingMeta::MultipleSegments { inner } => (
@@ -376,6 +377,11 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
             inner.segments.iter().any(|s| s.camera.is_some()),
             inner.segments.len() > 1,
         ),
+    };
+    let segment_count = if still_image.is_some() {
+        0
+    } else {
+        segment_count
     };
 
     // `hasMicrophone` reads `audio` on a single-segment recording and `mic` on
@@ -390,21 +396,33 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         }
     };
 
-    if segment_count == 0 {
+    if segment_count == 0
+        && !matches!(
+            studio.status(),
+            cap_project::StudioRecordingStatus::Complete
+        )
+    {
         return Err("Recording has no segments. It may need to be recovered first.".to_string());
     }
 
     // The panicking call, contained. `AssertUnwindSafe` because neither
     // borrow escapes the closure and nothing is left half-mutated by an
     // unwind here -- the value is constructed and dropped inside it.
-    let owned_path = path.to_path_buf();
-    let recordings = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ProjectRecordingsMeta::new(&owned_path, studio.as_ref())
-    }))
-    .map_err(|_| {
-        "This recording's video tracks could not be opened. The bundle looks damaged.".to_string()
-    })?
-    .map_err(|error| format!("Failed to read this recording's media: {error}"))?;
+    let recordings = if segment_count == 0 {
+        ProjectRecordingsMeta {
+            segments: Vec::new(),
+        }
+    } else {
+        let owned_path = path.to_path_buf();
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ProjectRecordingsMeta::new(&owned_path, studio.as_ref())
+        }))
+        .map_err(|_| {
+            "This recording's video tracks could not be opened. The bundle looks damaged."
+                .to_string()
+        })?
+        .map_err(|error| format!("Failed to read this recording's media: {error}"))?
+    };
     let recordings = Arc::new(recordings);
 
     // `RecordingMeta::project_config()` loads `project-config.json` (falling
@@ -412,6 +430,9 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     // `EditorInstance::new` starts from, so the timeline shown here is the one
     // that will be rendered.
     let mut config = meta.project_config();
+    if let Some(image_path) = &still_image {
+        cap_rendering::media_project::add_still_image_to_timeline(&mut config, image_path);
+    }
     // With no persisted timeline `EditorInstance::new` synthesises one from
     // the per-segment display durations (`editor_instance.rs:210-230`) and
     // writes it back. Synthesise the same shape here so the strip is not empty
@@ -434,8 +455,6 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
                     volume: None,
                 })
                 .collect(),
-            // `TimelineConfiguration` has no `Default`, so the eight other
-            // track vectors are spelled out empty.
             transitions: Vec::new(),
             zoom_segments: Vec::new(),
             scene_segments: Vec::new(),
@@ -447,6 +466,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
             camera3d_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            video_segments: Vec::new(),
         });
     }
 
@@ -1371,6 +1391,10 @@ struct ClipReleaseAnim {
 pub struct EditorWindow {
     pub(crate) theme: Theme,
     pub(crate) project_path: PathBuf,
+    pub(crate) screenshot_workspace:
+        Option<Entity<crate::screenshot_editor::ScreenshotEditorWindow>>,
+    pub(crate) image_drawing_workspace:
+        Option<Entity<crate::screenshot_editor::ScreenshotEditorWindow>>,
     state: LoadState,
     preparing_consumer: Option<crate::editor_preparing::PreparingConsumer>,
     preparing_candidate_frame: Option<u32>,
@@ -1429,6 +1453,8 @@ pub struct EditorWindow {
     // -- Timeline -----------------------------------------------------------
     /// Every track the strip draws.
     timeline: TimelineModel,
+    waveform_pending: HashSet<String>,
+    waveform_cancellation: Arc<AtomicBool>,
     /// The viewport, the hover ghost and the hovered track.
     view: TimelineView,
     playback_follow: timeline::PlaybackFollow,
@@ -1582,6 +1608,9 @@ pub struct EditorWindow {
 
     preview_quality: crate::store::EditorPreviewQuality,
     pub(crate) tracks: TrackLanes,
+    media_drop_queue: VecDeque<PathBuf>,
+    media_drop_active: bool,
+    video_picker_active: bool,
     toolbar_menu: Option<OpenToolbarMenu>,
     frame_controls: frame::FrameControls,
     add_track: Option<AddTrackMenu>,
@@ -1617,6 +1646,12 @@ pub struct EditorWindow {
     /// The Clips layout mode (`ClipsSidebar.tsx`): while open, the config
     /// sidebar's column draws the clips sidebar instead.
     pub(crate) clips: crate::editor_clips::ClipsState,
+}
+
+impl Drop for EditorWindow {
+    fn drop(&mut self) {
+        self.waveform_cancellation.store(true, Ordering::Relaxed);
+    }
 }
 
 struct PresetsMenu {
@@ -2044,6 +2079,16 @@ impl EditorWindow {
         });
         let timeline_view =
             cx.new(move |cx| EditorSectionView::new(&editor, EditorSection::Timeline, cx));
+        let screenshot_workspace =
+            crate::screenshot_editor::is_legacy_screenshot_project(&project_path).then(|| {
+                cx.new(|cx| {
+                    crate::screenshot_editor::ScreenshotEditorWindow::new_embedded(
+                        project_path.clone(),
+                        window,
+                        cx,
+                    )
+                })
+            });
 
         Self {
             // No material and no transparency: `applyMacOSWindowMaterial` runs
@@ -2055,6 +2100,8 @@ impl EditorWindow {
                 .ok()
                 .and_then(|meta| meta.sharing),
             project_path,
+            screenshot_workspace,
+            image_drawing_workspace: None,
             state: LoadState::Loading,
             preparing_consumer: None,
             preparing_candidate_frame: None,
@@ -2088,6 +2135,8 @@ impl EditorWindow {
             stats: None,
             play_mark: None,
             timeline: TimelineModel::default(),
+            waveform_pending: HashSet::new(),
+            waveform_cancellation: Arc::new(AtomicBool::new(false)),
             view: TimelineView::default(),
             playback_follow: timeline::PlaybackFollow::default(),
             fitted: false,
@@ -2149,6 +2198,9 @@ impl EditorWindow {
             snap_guides: Vec::new(),
             preview_quality: crate::store::GeneralSettings::load().editor_preview_quality,
             tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
+            media_drop_queue: VecDeque::new(),
+            media_drop_active: false,
+            video_picker_active: false,
             toolbar_menu: None,
             frame_controls: frame::FrameControls::default(),
             add_track: None,
@@ -2202,6 +2254,10 @@ impl EditorWindow {
     }
 
     pub(crate) fn flush_pending_saves(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        if let Some(workspace) = &self.screenshot_workspace {
+            workspace.read(cx).pending_save().borrow_mut().flush();
+            return Ok(());
+        }
         self.commit_pretty_name(cx)?;
         self.pending_save.borrow_mut().try_flush().map_err(|error| {
             format!(
@@ -2224,7 +2280,104 @@ impl EditorWindow {
     }
 
     pub fn focus_root(&self, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus, cx);
+        let focus = self
+            .image_drawing_workspace
+            .as_ref()
+            .or(self.screenshot_workspace.as_ref())
+            .map(|workspace| workspace.read(cx).focus.clone())
+            .unwrap_or_else(|| self.focus.clone());
+        window.focus(&focus, cx);
+    }
+
+    pub(crate) fn open_image_drawing(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.image_drawing_workspace.is_some() {
+            return;
+        }
+        let Some(segment) = self
+            .project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.image_segments.get(index))
+        else {
+            return;
+        };
+        let source = segment
+            .source_path
+            .as_deref()
+            .unwrap_or(&segment.path)
+            .to_string();
+        if let Err(error) = self.flush_pending_saves(cx) {
+            tracing::error!(%error, "could not save project before image drawing");
+            return;
+        }
+        self.stop_playback(cx);
+        let project_path = self.project_path.clone();
+        let workspace = cx.new(|cx| {
+            crate::screenshot_editor::ScreenshotEditorWindow::new_image_drawing(
+                project_path.clone(),
+                index,
+                source,
+                window,
+                cx,
+            )
+        });
+        self.image_drawing_workspace = Some(workspace);
+        self.focus_root(window, cx);
+        if let Some(handle) = window.window_handle().downcast::<Self>() {
+            cx.defer(move |cx| {
+                crate::screenshot_editor::load_image_drawing_project_embedded(
+                    project_path,
+                    index,
+                    handle,
+                    cx,
+                );
+            });
+        }
+        cx.notify();
+        window.refresh();
+    }
+
+    pub(crate) fn close_image_drawing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.image_drawing_workspace = None;
+        self.focus_root(window, cx);
+        cx.notify();
+        window.refresh();
+    }
+
+    pub(crate) fn commit_image_drawing(
+        &mut self,
+        index: usize,
+        source_relative: &str,
+        path: String,
+        annotations: Vec<cap_project::Annotation>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let changed = self.edit(
+            |timeline| {
+                let Some(segment) = timeline.image_segments.get_mut(index) else {
+                    return false;
+                };
+                if segment.source_path.as_deref().unwrap_or(&segment.path) != source_relative {
+                    return false;
+                }
+                segment.source_path = Some(source_relative.to_string());
+                segment.path = path;
+                segment.annotations = annotations;
+                true
+            },
+            window,
+            cx,
+        );
+        if changed {
+            self.close_image_drawing(window, cx);
+        }
+        changed
     }
 
     pub fn set_summary(
@@ -2276,6 +2429,7 @@ impl EditorWindow {
         self.history = ProjectHistory::new(self.project.clone());
         self.tracks = TrackLanes::from_project(&self.project, self.has_camera);
         self.rebuild_timeline();
+        self.queue_imported_waveforms(window, cx);
         // The sidebar's own signals are seeded from the config the instance
         // actually loaded, not the pre-flight's: `backgroundSourceTab`'s
         // initial value reads `background.padding`/`rounding` (`CS:1799-1802`).
@@ -2293,6 +2447,7 @@ impl EditorWindow {
         dismiss_indexed_sidebar_menu(&mut self.sidebar.menu);
         let mic = std::mem::take(&mut self.timeline.mic_waveforms);
         let system = std::mem::take(&mut self.timeline.system_waveforms);
+        let imported = std::mem::take(&mut self.timeline.imported_waveforms);
         self.timeline = TimelineModel::build_with_lanes(
             &self.project,
             self.has_camera,
@@ -2301,6 +2456,7 @@ impl EditorWindow {
         );
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
+        self.timeline.imported_waveforms = imported;
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
         }
@@ -2321,6 +2477,65 @@ impl EditorWindow {
         self.timeline.system_waveforms = system;
         cx.notify();
         window.refresh();
+    }
+
+    fn queue_imported_waveforms(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(timeline) = self.project.timeline.as_ref() else {
+            return;
+        };
+        let paths = timeline
+            .audio_segments
+            .iter()
+            .map(|segment| segment.path.as_str())
+            .chain(
+                timeline
+                    .video_segments
+                    .iter()
+                    .map(|segment| segment.path.as_str()),
+            )
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .collect::<HashSet<_>>();
+        for path in paths {
+            if self.waveform_pending.contains(&path)
+                || self.timeline.imported_waveforms.contains_key(&path)
+            {
+                continue;
+            }
+            self.waveform_pending.insert(path.clone());
+            let project_path = self.project_path.clone();
+            let cancellation = self.waveform_cancellation.clone();
+            let pending_path = path.clone();
+            cx.spawn_in(window, async move |this, cx| {
+                let loaded = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let _slot = cap_audio::imported_waveform_slots()
+                            .acquire()
+                            .await
+                            .map_err(|error| format!("Waveform worker unavailable: {error}"))?;
+                        cap_audio::imported_waveform(&project_path, &path, cancellation)
+                            .map(|peaks| (path, peaks))
+                    })
+                    .await;
+                this.update_in(cx, |this, window, cx| match loaded {
+                    Ok((path, peaks)) => {
+                        this.waveform_pending.remove(&pending_path);
+                        this.timeline
+                            .imported_waveforms
+                            .insert(path, Arc::new(timeline::ImportedWaveform::new(peaks)));
+                        cx.notify();
+                        window.refresh();
+                    }
+                    Err(error) => {
+                        this.waveform_pending.remove(&pending_path);
+                        tracing::warn!(%error, "imported waveform unavailable");
+                    }
+                })
+                .ok();
+            })
+            .detach();
+        }
     }
 
     // -- Editing: the write path ---------------------------------------------
@@ -2436,6 +2651,7 @@ impl EditorWindow {
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
         self.rebuild_timeline();
+        self.queue_imported_waveforms(window, cx);
         self.publish_project();
         self.schedule_save(window, cx);
         cx.notify();
@@ -2953,6 +3169,7 @@ impl EditorWindow {
                 request_frame(instance, initial_frame, self.preview_resolution());
             }
         }
+        self.process_next_media_drop(window, cx);
         cx.notify();
         window.refresh();
     }
@@ -3970,6 +4187,7 @@ impl EditorWindow {
                 let index = selection.indices[0];
                 match selection.track {
                     TrackKind::Image => Some(crate::editor_canvas::CanvasSelection::Image(index)),
+                    TrackKind::Video => Some(crate::editor_canvas::CanvasSelection::Video(index)),
                     TrackKind::Text => Some(crate::editor_canvas::CanvasSelection::Text(index)),
                     TrackKind::Mask => Some(crate::editor_canvas::CanvasSelection::Mask(index)),
                     _ => None,
@@ -4281,6 +4499,7 @@ impl EditorWindow {
             kind,
             TrackKind::Style
                 | TrackKind::Image
+                | TrackKind::Video
                 | TrackKind::Text
                 | TrackKind::Mask
                 | TrackKind::Audio
@@ -4403,9 +4622,11 @@ impl EditorWindow {
             return;
         }
         let valid_target = self.lane_reorder_position_valid(current.source, x, y);
-        let target_index = valid_target
-            .then(|| self.lane_reorder_target_index(current.source, y))
-            .unwrap_or(current.target_index);
+        let target_index = if valid_target {
+            self.lane_reorder_target_index(current.source, y)
+        } else {
+            current.target_index
+        };
         if promote {
             self.history.pause();
         }
@@ -5133,6 +5354,33 @@ impl EditorWindow {
 }
 
 type GhostClipLayout = (Vec<(f64, f64)>, Option<(f64, f64)>);
+
+enum ImportedDroppedMedia {
+    Image(crate::import::ImportedEditorImage),
+    Video(cap_media_info::video_import::ImportedVideo),
+}
+
+fn spawn_editor_media_import(
+    project_path: PathBuf,
+    source: PathBuf,
+    video: bool,
+) -> Result<flume::Receiver<Result<ImportedDroppedMedia, String>>, String> {
+    let (tx, rx) = flume::bounded(1);
+    std::thread::Builder::new()
+        .name("cap-editor-media-import".into())
+        .spawn(move || {
+            let imported = if video {
+                cap_media_info::video_import::import_video(&project_path, &source)
+                    .map(ImportedDroppedMedia::Video)
+            } else {
+                crate::import::import_editor_image(&project_path, &source)
+                    .map(ImportedDroppedMedia::Image)
+            };
+            let _ = tx.send(imported);
+        })
+        .map_err(|error| format!("Cannot start media import worker: {error}"))?;
+    Ok(rx)
+}
 
 /// One transient line under the player. The editor has no toast host -- the
 /// screenshot editor's bubbles are its own -- and exactly one message at a
@@ -6056,6 +6304,7 @@ impl EditorWindow {
         let count = match kind {
             TrackKind::Style => &mut self.tracks.style,
             TrackKind::Image => &mut self.tracks.image,
+            TrackKind::Video => &mut self.tracks.video,
             TrackKind::Text => &mut self.tracks.text,
             TrackKind::Mask => &mut self.tracks.mask,
             TrackKind::Audio => &mut self.tracks.audio,
@@ -6065,6 +6314,7 @@ impl EditorWindow {
         let used = match (kind, self.project.timeline.as_ref()) {
             (TrackKind::Style, Some(timeline)) => edits::used_lane_count(&timeline.style_segments),
             (TrackKind::Image, Some(timeline)) => edits::used_lane_count(&timeline.image_segments),
+            (TrackKind::Video, Some(timeline)) => edits::used_lane_count(&timeline.video_segments),
             (TrackKind::Text, Some(timeline)) => edits::used_lane_count(&timeline.text_segments),
             (TrackKind::Mask, Some(timeline)) => edits::used_lane_count(&timeline.mask_segments),
             (TrackKind::Audio, Some(timeline)) => edits::used_lane_count(&timeline.audio_segments),
@@ -6074,6 +6324,7 @@ impl EditorWindow {
         match kind {
             TrackKind::Style => self.tracks.style = next,
             TrackKind::Image => self.tracks.image = next,
+            TrackKind::Video => self.tracks.video = next,
             TrackKind::Text => self.tracks.text = next,
             TrackKind::Mask => self.tracks.mask = next,
             TrackKind::Audio => self.tracks.audio = next,
@@ -6943,6 +7194,11 @@ impl EditorWindow {
             )
         } else if self.clips.is_importing() {
             Some("Wait for the clip import to finish before closing or deleting this recording.")
+        } else if self.media_drop_active
+            || !self.media_drop_queue.is_empty()
+            || self.video_picker_active
+        {
+            Some("Wait for the media import to finish before closing or deleting this project.")
         } else {
             None
         }
@@ -7258,6 +7514,7 @@ impl EditorWindow {
                 self.rebuild_timeline();
                 self.open_audio_picker(lane, cx);
             }
+            TrackKind::Video => self.pick_timeline_video(window, cx),
             TrackKind::Text | TrackKind::Mask => {
                 self.add_overlay_segment(kind, window, cx);
             }
@@ -7580,6 +7837,176 @@ impl EditorWindow {
         cx.notify();
     }
 
+    fn on_external_paths_drop(
+        &mut self,
+        paths: &ExternalPaths,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut accepted = 0;
+        for path in &paths.0 {
+            if crate::import::is_supported_image_import_path(path)
+                || cap_media_info::video_import::is_supported_video_path(path)
+            {
+                self.media_drop_queue.push_back(path.clone());
+                accepted += 1;
+            }
+        }
+        if accepted == 0 {
+            self.show_notice(
+                "Choose an image or video file to add to this editor",
+                window,
+                cx,
+            );
+            return;
+        }
+        self.process_next_media_drop(window, cx);
+    }
+
+    fn pick_timeline_video(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.video_picker_active {
+            return;
+        }
+        self.video_picker_active = true;
+        let project_path = self.project_path.clone();
+        let time = self.playhead;
+        cx.spawn_in(window, async move |this, cx| {
+            #[cfg(target_os = "linux")]
+            let source = crate::platform::open_file_panel_async(
+                &[("Videos", cap_media_info::video_import::VIDEO_EXTENSIONS)],
+                None,
+                cx,
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
+            let source = crate::import::pick_import_file(
+                &[("Videos", cap_media_info::video_import::VIDEO_EXTENSIONS)],
+                cx,
+            )
+            .await;
+            let imported = match source {
+                Some(source) => Some(
+                    match spawn_editor_media_import(project_path, source, true) {
+                        Ok(receiver) => receiver.recv_async().await.unwrap_or_else(|error| {
+                            Err(format!("Media import worker stopped: {error}"))
+                        }),
+                        Err(error) => Err(error),
+                    },
+                ),
+                None => None,
+            };
+            this.update_in(cx, |this, window, cx| {
+                this.video_picker_active = false;
+                match imported {
+                    Some(Ok(ImportedDroppedMedia::Video(imported))) => {
+                        this.commit_video_import(imported, time, window, cx)
+                    }
+                    Some(Ok(ImportedDroppedMedia::Image(_))) => {}
+                    Some(Err(error)) => this.show_notice(error, window, cx),
+                    None => cx.notify(),
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn process_next_media_drop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.media_drop_active || !self.project_ready() {
+            return;
+        }
+        let Some(source) = self.media_drop_queue.pop_front() else {
+            return;
+        };
+        self.media_drop_active = true;
+        let project_path = self.project_path.clone();
+        let time = self.playhead;
+        let video = cap_media_info::video_import::is_supported_video_path(&source);
+        let receiver = match spawn_editor_media_import(project_path, source, video) {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                self.media_drop_active = false;
+                self.show_notice(error, window, cx);
+                self.process_next_media_drop(window, cx);
+                return;
+            }
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            let imported = receiver
+                .recv_async()
+                .await
+                .unwrap_or_else(|error| Err(format!("Media import worker stopped: {error}")));
+            this.update_in(cx, |this, window, cx| {
+                this.media_drop_active = false;
+                match imported {
+                    Ok(ImportedDroppedMedia::Image(imported)) => {
+                        this.commit_image_import(this.tracks.image, time, imported, window, cx);
+                        if let Some(error) = this.sidebar.image_import_error.clone() {
+                            this.show_notice(error, window, cx);
+                        }
+                    }
+                    Ok(ImportedDroppedMedia::Video(imported)) => {
+                        this.commit_video_import(imported, time, window, cx);
+                    }
+                    Err(error) => this.show_notice(error, window, cx),
+                }
+                this.process_next_media_drop(window, cx);
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn commit_video_import(
+        &mut self,
+        imported: cap_media_info::video_import::ImportedVideo,
+        time: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !edits::ensure_timeline(&mut self.project, &self.clip_display_durations) {
+            self.show_notice("The editor timeline is unavailable", window, cx);
+            return;
+        }
+        let output = self
+            .frame_layout
+            .map_or([1920, 1080], |layout| layout.output_size);
+        let ratio = f64::from(imported.width) / f64::from(imported.height) * f64::from(output[1])
+            / f64::from(output[0]);
+        let size = if ratio >= 1.0 {
+            XY::new(1.0, 1.0 / ratio)
+        } else {
+            XY::new(ratio, 1.0)
+        };
+        let start = time.max(0.0);
+        let lane = self.tracks.video;
+        let mut index = 0;
+        if self.edit(
+            |timeline| {
+                timeline.video_segments.push(cap_project::VideoSegment {
+                    start,
+                    end: start + imported.duration,
+                    track: lane,
+                    path: imported.path,
+                    name: imported.name,
+                    source_duration: imported.duration,
+                    size,
+                    ..Default::default()
+                });
+                index = timeline.video_segments.len() - 1;
+                true
+            },
+            window,
+            cx,
+        ) {
+            self.tracks.video = self.tracks.video.max(lane + 1);
+            self.set_selection(Some(Selection::single(TrackKind::Video, index)), cx);
+            self.seek_to_time(start, cx);
+        }
+    }
+
     fn commit_image_import(
         &mut self,
         mut lane: u32,
@@ -7596,15 +8023,7 @@ impl EditorWindow {
             cx.notify();
             return;
         }
-        let total = self.total_duration();
-        if total <= 0.0 {
-            self.sidebar.image_import_error = Some(
-                "The recording is no longer available for this image. Please reopen the project."
-                    .into(),
-            );
-            cx.notify();
-            return;
-        }
+        let total = self.total_duration().max(time.max(0.0) + 5.0);
         let Some(timeline) = self.project.timeline.as_ref() else {
             self.sidebar.image_import_error = Some(
                 "The recording is no longer available for this image. Please reopen the project."
@@ -10571,7 +10990,8 @@ impl EditorWindow {
                 | TrackKind::Mask
                 | TrackKind::Audio
                 | TrackKind::Style
-                | TrackKind::Image => Some("Delete"),
+                | TrackKind::Image
+                | TrackKind::Video => Some("Delete"),
                 TrackKind::Zoom | TrackKind::ThreeD | TrackKind::Scene => {
                     (!model.segments(kind).is_empty()).then_some("Clear all")
                 }
@@ -10930,7 +11350,8 @@ impl EditorWindow {
                                                 | TrackKind::Mask
                                                 | TrackKind::Audio
                                                 | TrackKind::Style
-                                                | TrackKind::Image => {
+                                                | TrackKind::Image
+                                                | TrackKind::Video => {
                                                     this.delete_track_lane(kind, lane, window, cx);
                                                 }
                                                 TrackKind::Zoom
@@ -11145,6 +11566,12 @@ fn is_playback_shortcut(
 
 impl Render for EditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(workspace) = &self.image_drawing_workspace {
+            return div().size_full().child(workspace.clone());
+        }
+        if let Some(workspace) = &self.screenshot_workspace {
+            return div().size_full().child(workspace.clone());
+        }
         self.sync_appearance(window, cx);
         let title_disabled = !self.visual_ready();
         if self.name_input.read(cx).is_disabled() != title_disabled {
@@ -11223,6 +11650,7 @@ impl Render for EditorWindow {
             .bg(self.root_bg())
             .text_color(Hsla::from(theme.gray_12))
             .track_focus(&self.focus)
+            .on_drop(cx.listener(Self::on_external_paths_drop))
             .capture_key_down(cx.listener(Self::capture_playback_key))
             .on_key_down(cx.listener(Self::on_key))
             // Only the cropper needs key-*up*: its nudge loop runs until every
@@ -11985,6 +12413,7 @@ mod tests {
                 camera3d_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                video_segments: Vec::new(),
             }),
             captions: Some(cap_project::CaptionsData {
                 segments: vec![cap_project::CaptionSegment {
@@ -12051,6 +12480,7 @@ mod tests {
                 camera3d_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                video_segments: Vec::new(),
             }),
             captions: Some(cap_project::CaptionsData {
                 segments: vec![cap_project::CaptionSegment {
@@ -12280,6 +12710,7 @@ mod tests {
             timeline: Some(TimelineConfiguration {
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                video_segments: Vec::new(),
                 segments: Vec::new(),
                 transitions: Vec::new(),
                 zoom_segments: Vec::new(),
@@ -12478,6 +12909,41 @@ mod tests {
         let error = preflight(&dir).unwrap_err();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(error.contains("recording meta"), "{error}");
+    }
+
+    #[test]
+    fn preflight_opens_screenshot_and_blank_media_projects_without_recording_clips() {
+        for screenshot in [true, false] {
+            let dir = std::env::temp_dir().join(format!(
+                "cap-gpui-media-preflight-{}.cap",
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            if screenshot {
+                image::RgbaImage::from_pixel(80, 45, image::Rgba([12, 34, 56, 255]))
+                    .save(dir.join("original.png"))
+                    .unwrap();
+            }
+            let meta = if screenshot {
+                serde_json::json!({
+                    "pretty_name": "Screenshot",
+                    "display": { "path": "original.png", "fps": 0 },
+                    "camera": null, "audio": null, "cursor": null
+                })
+            } else {
+                serde_json::json!({
+                    "pretty_name": "Media project",
+                    "segments": [],
+                    "status": { "status": "Complete" }
+                })
+            };
+            std::fs::write(dir.join("recording-meta.json"), meta.to_string()).unwrap();
+            let summary = preflight(&dir).unwrap();
+            assert!(summary.recordings.segments.is_empty());
+            assert!(summary.timeline.clips.is_empty());
+            assert_eq!(summary.duration, if screenshot { 5.0 } else { 0.0 });
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     // -- Playback ------------------------------------------------------------

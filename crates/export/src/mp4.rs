@@ -368,6 +368,9 @@ impl Mp4ExportSettings {
 
         let audio_segments = get_audio_segments(&base.segments).await;
         let music = load_music_tracks_uncached(&base.project_config, &base.project_path);
+        if let Some(audio) = &mut streaming_audio {
+            audio.set_music(music.clone());
+        }
 
         let has_recording_audio = audio_segments
             .first()

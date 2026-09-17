@@ -30,7 +30,7 @@ use crate::{
     onboarding_window::{self, OnboardingWindow},
     platform,
     recording::{RecordingMode, StartConfig, StudioFinalization},
-    screenshot_editor::{self, ScreenshotEditorWindow},
+    screenshot_editor,
     session::{Phase, RecordingSession, StudioEditorPresentation},
     settings_window::{self, Page, SettingsWindow},
     target_overlay::{AreaRect, HoveredWindow, OverlayWindow, TargetSelect},
@@ -207,9 +207,6 @@ pub struct AppWindows {
     pub editors: Vec<(PathBuf, WindowHandle<EditorWindow>)>,
     deleting_editors: HashSet<PathBuf>,
     preparing_cleanup: crate::editor_preparing::PreparingCleanupRegistry,
-    /// One screenshot editor per `.cap` bundle -- the gpui spelling of
-    /// `ScreenshotEditorWindowIds`, keyed by the bundle directory.
-    pub screenshot_editors: Vec<(PathBuf, WindowHandle<ScreenshotEditorWindow>)>,
     /// `hasHiddenMainWindowForPicker` (`new-main/index.tsx:2016-2059`): the
     /// main window hides while the target picker is up, and comes back only on
     /// a dismissal that reveals ("cancelled" -- Escape, the overlay's close
@@ -434,15 +431,17 @@ pub(crate) fn export_in_flight(cx: &App) -> bool {
 
     let windows = cx.global::<AppWindows>();
     windows.editors.iter().any(|(_, handle)| {
-        handle
-            .read(cx)
-            .ok()
-            .and_then(|editor| editor.export.as_ref())
+        let Ok(editor) = handle.read(cx) else {
+            return false;
+        };
+        editor
+            .export
+            .as_ref()
             .is_some_and(|export| export.phase.is_busy())
-    }) || windows.screenshot_editors.iter().any(|(_, handle)| {
-        handle
-            .read(cx)
-            .is_ok_and(ScreenshotEditorWindow::export_in_flight)
+            || editor
+                .screenshot_workspace
+                .as_ref()
+                .is_some_and(|workspace| workspace.read(cx).export_in_flight())
     })
 }
 
@@ -453,11 +452,6 @@ pub(crate) fn flush_pending_editor_saves(cx: &mut App) -> Result<(), String> {
 
     let windows = cx.global::<AppWindows>();
     let editors: Vec<_> = windows.editors.iter().map(|(_, handle)| *handle).collect();
-    let screenshot_editors: Vec<_> = windows
-        .screenshot_editors
-        .iter()
-        .map(|(_, handle)| *handle)
-        .collect();
 
     for handle in editors {
         if let Ok(result) = handle.update(cx, |editor, _, cx| editor.flush_pending_saves(cx)) {
@@ -465,11 +459,6 @@ pub(crate) fn flush_pending_editor_saves(cx: &mut App) -> Result<(), String> {
         }
     }
 
-    for handle in screenshot_editors {
-        if let Ok(pending) = handle.update(cx, |editor, _, _| editor.pending_save()) {
-            pending.borrow_mut().flush();
-        }
-    }
     Ok(())
 }
 
@@ -488,7 +477,6 @@ pub fn init(main: WindowHandle<MainWindow>, session: Entity<RecordingSession>, c
         editors: Vec::new(),
         deleting_editors: HashSet::new(),
         preparing_cleanup: crate::editor_preparing::PreparingCleanupRegistry::default(),
-        screenshot_editors: Vec::new(),
         main_hidden_for_picker: false,
         editor_hidden_for_picker: None,
         camera_park: CameraPark::default(),
@@ -668,11 +656,6 @@ pub fn broadcast_theme(cx: &mut App) {
     let camera = windows.camera;
     let overlays: Vec<_> = windows.overlays.iter().map(|(_, handle)| *handle).collect();
     let editors: Vec<_> = windows.editors.iter().map(|(_, handle)| *handle).collect();
-    let screenshot_editors: Vec<_> = windows
-        .screenshot_editors
-        .iter()
-        .map(|(_, handle)| *handle)
-        .collect();
 
     let refresh = |window: &mut gpui::Window, cx: &mut gpui::App| {
         crate::theme::apply_native(window, cx);
@@ -725,14 +708,11 @@ pub fn broadcast_theme(cx: &mut App) {
         });
     }
     for handle in editors {
-        let _ = handle.update(cx, |_, window, cx| {
+        let _ = handle.update(cx, |editor, window, cx| {
             refresh(window, cx);
-            cx.notify();
-        });
-    }
-    for handle in screenshot_editors {
-        let _ = handle.update(cx, |_, window, cx| {
-            refresh(window, cx);
+            if let Some(workspace) = &editor.screenshot_workspace {
+                workspace.update(cx, |_, cx| cx.notify());
+            }
             cx.notify();
         });
     }
@@ -1011,9 +991,6 @@ pub fn handle_dock_reopen(cx: &mut App) {
         windows
             .editors
             .retain(|(_, handle)| live.contains(&handle.window_id()));
-        windows
-            .screenshot_editors
-            .retain(|(_, handle)| live.contains(&handle.window_id()));
         windows.settings = windows
             .settings
             .filter(|handle| live.contains(&handle.window_id()));
@@ -1033,12 +1010,6 @@ pub fn handle_dock_reopen(cx: &mut App) {
         .editors
         .iter()
         .map(|(_, handle)| gpui::AnyWindowHandle::from(*handle))
-        .chain(
-            windows
-                .screenshot_editors
-                .iter()
-                .map(|(_, handle)| (*handle).into()),
-        )
         .chain(windows.settings.map(Into::into))
         .collect::<Vec<_>>();
     let focus = first_registered_reopen_target(candidates, &live);
@@ -2498,7 +2469,6 @@ pub enum OwnWindow {
     Teleprompter,
     TargetSelect,
     Editor,
-    ScreenshotEditor,
     Onboarding,
 }
 
@@ -2507,7 +2477,7 @@ impl OwnWindow {
     /// (`WindowCaptureOccluder`, `CaptureArea`, `RecordingsOverlay`, `Upgrade`,
     /// `Debug`) have no counterpart in this app; their default rules are still
     /// honoured for *other* processes by `resolve_excluded_window_ids`.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 9] = [
         Self::Main,
         Self::Settings,
         Self::Controls,
@@ -2516,7 +2486,6 @@ impl OwnWindow {
         Self::Teleprompter,
         Self::TargetSelect,
         Self::Editor,
-        Self::ScreenshotEditor,
         Self::Onboarding,
     ];
 
@@ -2530,7 +2499,6 @@ impl OwnWindow {
             Self::Teleprompter => "Cap Teleprompter",
             Self::TargetSelect => "Cap Target Select",
             Self::Editor => "Cap Editor",
-            Self::ScreenshotEditor => "Cap Screenshot Editor",
             Self::Onboarding => "Welcome to Cap",
         }
     }
@@ -2640,7 +2608,6 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
         editors,
         deleting_editors: _,
         preparing_cleanup: _,
-        screenshot_editors,
         main_hidden_for_picker: _,
         editor_hidden_for_picker: _,
         camera_park: _,
@@ -2658,10 +2625,6 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
     let teleprompter = *teleprompter;
     let overlays: Vec<_> = overlays.iter().map(|(_, handle)| *handle).collect();
     let editors: Vec<_> = editors.iter().map(|(_, handle)| *handle).collect();
-    let screenshot_editors: Vec<_> = screenshot_editors
-        .iter()
-        .map(|(_, handle)| *handle)
-        .collect();
 
     let mut windows = Vec::new();
     windows.extend(probe_own_window(OwnWindow::Main, main, cx));
@@ -2680,9 +2643,6 @@ fn own_windows(cx: &mut App) -> Vec<OwnWindowHandle> {
     }
     for handle in editors {
         windows.extend(probe_own_window(OwnWindow::Editor, handle, cx));
-    }
-    for handle in screenshot_editors {
-        windows.extend(probe_own_window(OwnWindow::ScreenshotEditor, handle, cx));
     }
     windows
 }
@@ -4716,7 +4676,16 @@ fn open_editor_window(
             window.refresh();
         }).ok();
     }
-    load_editor_project(key, handle, finalization, cx);
+    let screenshot_workspace = handle
+        .update(cx, |editor, _window, _cx| {
+            editor.screenshot_workspace.is_some()
+        })
+        .unwrap_or(false);
+    if screenshot_workspace {
+        screenshot_editor::load_screenshot_project_embedded(key, handle, cx);
+    } else {
+        load_editor_project(key, handle, finalization, cx);
+    }
     Some(handle.window_id())
 }
 
@@ -5779,7 +5748,7 @@ fn restore_after_editor_close(key: &Path, cx: &mut App) {
     }
 
     let windows = cx.global::<AppWindows>();
-    let editors_left = windows.editors.len() + windows.screenshot_editors.len();
+    let editors_left = windows.editors.len();
     let settings_open = windows.settings.is_some();
     tracing::info!(
         path = %key.display(),
@@ -6345,137 +6314,37 @@ pub fn screenshot_finished(captured: Option<PathBuf>, cx: &mut App) {
     main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
         .ok();
 
-    // The editor owns the foreground now, the way a stopped studio recording
-    // hands off to the video editor; `screenshot_editor_closed` brings the
-    // main window back.
     cx.global_mut::<AppWindows>().main_hidden_for_picker = false;
     open_screenshot_editor(png, cx);
 }
 
-/// Open (or focus) the screenshot editor for a bundle -- the
-/// `ShowCapWindow::ScreenshotEditor` arm: 1240x800, min 800x600, centered,
-/// reused per path. Accepts the PNG or the `.cap` directory.
-///
-/// Must be reached through `cx.defer` from anything inside an entity update:
-/// opening a window paints it synchronously and would double-lease the caller.
 pub fn open_screenshot_editor(path: PathBuf, cx: &mut App) {
-    #[cfg(target_os = "linux")]
-    if defer_window_until_capture_safe(cx) {
-        return;
-    }
     let Some(bundle) = screenshot_editor::resolve_bundle(&path) else {
         tracing::error!(path = %path.display(), "not a screenshot bundle; not opening the editor");
         return;
     };
-    let key = editor_key(&bundle);
-
-    if let Some(handle) = cx
-        .global::<AppWindows>()
-        .screenshot_editors
-        .iter()
-        .find(|(existing, _)| existing == &key)
-        .map(|(_, handle)| *handle)
-    {
-        tracing::info!(
-            path = %key.display(),
-            "screenshot editor already open for this bundle; focusing it"
-        );
-        let native = handle
-            .update(cx, |_, window, _| platform::native_window(window))
-            .ok()
-            .flatten();
-        cx.spawn(async move |_| {
-            if let Some(native) = &native {
-                platform::show_native(native);
-            }
-        })
-        .detach();
-        hide_main_window(cx);
-        return;
-    }
-
-    let bounds = opening_window_bounds(
-        size(
-            px(screenshot_editor::SCREENSHOT_EDITOR_WIDTH),
-            px(screenshot_editor::SCREENSHOT_EDITOR_HEIGHT),
-        ),
-        cx,
-    );
-
-    let handle = cx.open_window(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(gpui::TitlebarOptions {
-                title: Some("Cap Screenshot Editor".into()),
-                appears_transparent: true,
-                traffic_light_position: None,
-            }),
-            kind: WindowKind::Normal,
-            focus: true,
-            show: true,
-            is_resizable: true,
-            is_minimizable: true,
-            window_min_size: Some(fitted_window_min_size(
-                size(
-                    px(screenshot_editor::SCREENSHOT_EDITOR_MIN_WIDTH),
-                    px(screenshot_editor::SCREENSHOT_EDITOR_MIN_HEIGHT),
-                ),
-                bounds,
-            )),
-            ..Default::default()
-        },
-        {
-            let key = key.clone();
-            move |window, cx| cx.new(|cx| ScreenshotEditorWindow::new(key, window, cx))
-        },
-    );
-
-    let handle = match handle {
-        Ok(handle) => handle,
-        Err(error) => {
-            tracing::error!("screenshot editor window failed to open: {error:#}");
-            return;
-        }
-    };
-
-    cx.global_mut::<AppWindows>()
-        .screenshot_editors
-        .push((key.clone(), handle));
-    handle
-        .update(cx, |_, window, _| {
-            platform::kick_display_link(window);
-            tracing::info!(
-                number = platform::window_number(window),
-                path = %key.display(),
-                "screenshot editor window opened"
-            );
-        })
-        .ok();
-
-    hide_main_window(cx);
-    screenshot_editor::load_screenshot_project(key, handle, cx);
+    open_editor(bundle, cx);
 }
 
-/// The screenshot editor's Delete finished: drop the window (its pending
-/// write is for a bundle that no longer exists), refresh every surface that
-/// lists screenshots, and run the ordinary closed bookkeeping.
-pub fn close_screenshot_editor_after_delete(bundle: &Path, cx: &mut App) {
+pub fn close_embedded_screenshot_after_delete(bundle: &Path, cx: &mut App) {
     let key = editor_key(bundle);
     let handle = cx
         .global::<AppWindows>()
-        .screenshot_editors
+        .editors
         .iter()
         .find(|(path, _)| path == &key)
         .map(|(_, handle)| *handle);
     if let Some(handle) = handle {
-        if let Ok(pending) = handle.update(cx, |view, _window, _cx| view.pending_save()) {
-            pending.borrow_mut().discard();
-        }
         handle
-            .update(cx, |_, window, _| window.remove_window())
+            .update(cx, |editor, window, cx| {
+                if let Some(workspace) = &editor.screenshot_workspace {
+                    workspace.read(cx).pending_save().borrow_mut().discard();
+                }
+                window.remove_window();
+            })
             .ok();
+        editor_closed(&key, handle.window_id(), cx);
     }
-    screenshot_editor_closed(&key, cx);
     refresh_screenshot_surfaces(cx);
 }
 
@@ -6489,40 +6358,6 @@ pub fn refresh_screenshot_surfaces(cx: &mut App) {
     let main = cx.global::<AppWindows>().main;
     main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
         .ok();
-}
-
-/// A screenshot editor window is going away: flush its pending config write
-/// and bring the main window back once the last editor of either kind closes
-/// -- the same `Destroyed` arm `editor_closed` mirrors.
-pub fn screenshot_editor_closed(bundle: &Path, cx: &mut App) {
-    let key = editor_key(bundle);
-    let handle = {
-        let editors = &mut cx.global_mut::<AppWindows>().screenshot_editors;
-        let index = editors.iter().position(|(path, _)| path == &key);
-        index.map(|index| editors.remove(index).1)
-    };
-
-    if let Some(handle) = handle
-        && let Ok(pending) = handle.update(cx, |view, _window, _cx| view.pending_save())
-    {
-        pending.borrow_mut().flush();
-    }
-
-    let windows = cx.global::<AppWindows>();
-    let editors_left = windows.editors.len() + windows.screenshot_editors.len();
-    let settings_open = windows.settings.is_some();
-    tracing::info!(
-        path = %key.display(),
-        editors_left,
-        settings_open,
-        "screenshot editor window closed"
-    );
-    let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-    if reveal_main_after_editor_close(editors_left, settings_open, idle) {
-        show_main_window(cx);
-    } else {
-        crate::menus::schedule_dock_sync(cx);
-    }
 }
 
 pub fn refresh_library_after_delete(cx: &mut App) {
@@ -6706,9 +6541,8 @@ mod tests {
     #[test]
     fn dock_reopen_uses_registered_windows_and_falls_back_after_delete() {
         let editor = WindowHandle::<EditorWindow>::new(1_u64.into());
-        let screenshot = WindowHandle::<ScreenshotEditorWindow>::new(2_u64.into());
         let settings = WindowHandle::<SettingsWindow>::new(3_u64.into());
-        let candidates = [editor.into(), screenshot.into(), settings.into()];
+        let candidates = [editor.into(), settings.into()];
         let mut live = HashSet::from([editor.window_id(), settings.window_id()]);
         assert_eq!(
             first_registered_reopen_target(candidates, &live),
@@ -7499,7 +7333,6 @@ mod tests {
             (OwnWindow::Teleprompter, "Cap Teleprompter"),
             (OwnWindow::TargetSelect, "Cap Target Select"),
             (OwnWindow::Editor, "Cap Editor"),
-            (OwnWindow::ScreenshotEditor, "Cap Screenshot Editor"),
             (OwnWindow::Onboarding, "Welcome to Cap"),
         ];
         assert_eq!(OwnWindow::ALL.len(), expected.len());
@@ -7557,7 +7390,6 @@ mod tests {
             vec![
                 OwnWindow::TargetSelect,
                 OwnWindow::Editor,
-                OwnWindow::ScreenshotEditor,
                 OwnWindow::Onboarding,
             ]
         );

@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { hideCurrentWindow } from "~/utils/hide-window";
 import { commands } from "~/utils/tauri";
@@ -39,7 +38,7 @@ export const importVideoPath = async (
 	sourcePath: string,
 	options?: ImportOptions,
 ) => {
-	const projectPath = await commands.startVideoImport(sourcePath);
+	const projectPath = await commands.createMediaProjectFromVideo(sourcePath);
 	await commands.showWindow({ Editor: { project_path: projectPath } });
 	await maybeHideCurrentWindow(options);
 	return projectPath;
@@ -49,8 +48,8 @@ export const importImagePath = async (
 	sourcePath: string,
 	options?: ImportOptions,
 ) => {
-	const imagePath = await invoke<string>("start_image_import", { sourcePath });
-	await commands.showWindow({ ScreenshotEditor: { path: imagePath } });
+	const imagePath = await commands.createMediaProjectFromImage(sourcePath);
+	await commands.showWindow({ Editor: { project_path: imagePath } });
 	await maybeHideCurrentWindow(options);
 	return imagePath;
 };

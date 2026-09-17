@@ -218,6 +218,7 @@ export function TranscriptPanel() {
 					textSegments: [],
 					styleSegments: [],
 					imageSegments: [],
+					videoSegments: [],
 					captionSegments: [],
 					keyboardSegments: [],
 					camera3dSegments: [],

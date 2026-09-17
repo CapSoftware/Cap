@@ -1,5 +1,7 @@
 use std::path::PathBuf;
+use std::sync::{Arc, atomic::AtomicBool};
 
+use base64::Engine;
 use cap_enc_ffmpeg::remux::get_media_duration;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -162,4 +164,24 @@ pub async fn import_audio_track_file(
     })
     .await
     .map_err(|e| format!("Audio import task failed: {e}"))?
+}
+
+#[tauri::command]
+#[specta::specta]
+#[tracing::instrument(skip(editor_instance))]
+pub async fn get_imported_waveform(
+    editor_instance: WindowEditorInstance,
+    path: String,
+) -> Result<String, String> {
+    let _slot = cap_audio::imported_waveform_slots()
+        .acquire()
+        .await
+        .map_err(|error| format!("Waveform worker unavailable: {error}"))?;
+    let project_path = editor_instance.project_path.clone();
+    let peaks = tokio::task::spawn_blocking(move || {
+        cap_audio::imported_waveform(&project_path, &path, Arc::new(AtomicBool::new(false)))
+    })
+    .await
+    .map_err(|error| format!("Waveform task failed: {error}"))??;
+    Ok(base64::engine::general_purpose::STANDARD.encode(peaks.as_ref()))
 }

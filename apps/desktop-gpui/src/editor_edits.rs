@@ -358,7 +358,7 @@ pub fn min_segment_duration(kind: TrackKind, secs_per_pixel: f64) -> f64 {
         TrackKind::Zoom => (1., 40.),
         TrackKind::Scene => (1., 80.),
         TrackKind::ThreeD => (1., 40.),
-        TrackKind::Text | TrackKind::Style | TrackKind::Image => (1., 80.),
+        TrackKind::Text | TrackKind::Style | TrackKind::Image | TrackKind::Video => (1., 80.),
         TrackKind::Mask => (1., 80.),
         TrackKind::Audio => (0.5, 60.),
         TrackKind::Caption => (0.5, 40.),
@@ -563,6 +563,34 @@ impl_track_segment!(MaskSegment, lane: track);
 impl_track_segment!(TextSegment, lane: track);
 impl_track_segment!(cap_project::StyleSegment, lane: track);
 impl_track_segment!(cap_project::ImageSegment, lane: track);
+impl TrackSegmentOps for cap_project::VideoSegment {
+    fn start(&self) -> f64 {
+        self.start
+    }
+
+    fn end(&self) -> f64 {
+        self.end
+    }
+
+    fn set_start(&mut self, value: f64) {
+        self.start = value;
+    }
+
+    fn set_end(&mut self, value: f64) {
+        self.end = value;
+    }
+
+    fn lane(&self) -> u32 {
+        self.track
+    }
+
+    fn split_tail(&self, at: f64) -> Self {
+        let mut tail = self.clone();
+        tail.start += at;
+        tail.source_start += at;
+        tail
+    }
+}
 
 impl TrackSegmentOps for CaptionTrackSegment {
     fn start(&self) -> f64 {
@@ -763,6 +791,10 @@ macro_rules! with_track {
                 let $segments = &mut $timeline.image_segments;
                 $body
             }
+            TrackKind::Video => {
+                let $segments = &mut $timeline.video_segments;
+                $body
+            }
             TrackKind::Text => {
                 let $segments = &mut $timeline.text_segments;
                 $body
@@ -798,6 +830,7 @@ pub fn segment_count(timeline: &TimelineConfiguration, kind: TrackKind) -> usize
         TrackKind::ThreeD => timeline.camera3d_segments.len(),
         TrackKind::Style => timeline.style_segments.len(),
         TrackKind::Image => timeline.image_segments.len(),
+        TrackKind::Video => timeline.video_segments.len(),
         TrackKind::Text => timeline.text_segments.len(),
         TrackKind::Mask => timeline.mask_segments.len(),
         TrackKind::Audio => timeline.audio_segments.len(),
@@ -813,6 +846,22 @@ pub fn set_segment_start(
     index: usize,
     start: f64,
 ) -> bool {
+    if kind == TrackKind::Video {
+        let Some(segment) = timeline.video_segments.get_mut(index) else {
+            return false;
+        };
+        let source_start = segment.source_start + start - segment.start;
+        if !source_start.is_finite()
+            || source_start < 0.0
+            || start >= segment.end
+            || segment.start == start
+        {
+            return false;
+        }
+        segment.source_start = source_start;
+        segment.start = start;
+        return true;
+    }
     with_track!(timeline, kind, |segments| {
         let Some(segment) = segments.get_mut(index) else {
             return false;
@@ -824,7 +873,7 @@ pub fn set_segment_start(
             return false;
         }
         segment.set_start(start);
-        if !matches!(kind, TrackKind::Style | TrackKind::Image) {
+        if !matches!(kind, TrackKind::Style | TrackKind::Image | TrackKind::Video) {
             sort_track(segments);
         }
         true
@@ -838,6 +887,19 @@ pub fn set_segment_end(
     index: usize,
     end: f64,
 ) -> bool {
+    if kind == TrackKind::Video {
+        let Some(segment) = timeline.video_segments.get_mut(index) else {
+            return false;
+        };
+        if end <= segment.start
+            || segment.source_start + end - segment.start > segment.source_duration
+            || segment.end == end
+        {
+            return false;
+        }
+        segment.end = end;
+        return true;
+    }
     with_track!(timeline, kind, |segments| {
         let Some(segment) = segments.get_mut(index) else {
             return false;
@@ -846,7 +908,7 @@ pub fn set_segment_end(
             return false;
         }
         segment.set_end(end);
-        if !matches!(kind, TrackKind::Style | TrackKind::Image) {
+        if !matches!(kind, TrackKind::Style | TrackKind::Image | TrackKind::Video) {
             sort_track(segments);
         }
         true
@@ -887,6 +949,7 @@ pub fn delete_segments(
 ) -> bool {
     match kind {
         TrackKind::Image => delete_indices(&mut timeline.image_segments, indices),
+        TrackKind::Video => delete_indices(&mut timeline.video_segments, indices),
         TrackKind::Style => {
             let deleted = delete_indices(&mut timeline.style_segments, indices);
             normalize_track(&mut timeline.style_segments, |segment, lane| {
@@ -942,6 +1005,12 @@ pub fn delete_track_lane(timeline: &mut TimelineConfiguration, kind: TrackKind, 
         ),
         TrackKind::Image => apply(
             &mut timeline.image_segments,
+            lane,
+            |segment| segment.track,
+            |segment, value| segment.track = value,
+        ),
+        TrackKind::Video => apply(
+            &mut timeline.video_segments,
             lane,
             |segment| segment.track,
             |segment, value| segment.track = value,
@@ -1190,28 +1259,33 @@ fn ripple_deleted_bounds(
     (end > start).then_some((start, end))
 }
 
-fn ripple_relative_keyframes<T>(
-    keyframes: &mut Vec<T>,
+#[derive(Clone, Copy)]
+struct RippleKeyframeTimes {
     old_start: f64,
     new_start: f64,
     new_end: f64,
     cut_start: f64,
     cut_end: f64,
     shift: f64,
+}
+
+fn ripple_relative_keyframes<T>(
+    keyframes: &mut Vec<T>,
+    times: RippleKeyframeTimes,
     time: impl for<'a> Fn(&'a mut T) -> &'a mut f64,
 ) {
     keyframes.retain_mut(|keyframe| {
         let value = time(keyframe);
-        let absolute = old_start + *value;
-        if absolute >= cut_start && absolute < cut_end {
+        let absolute = times.old_start + *value;
+        if absolute >= times.cut_start && absolute < times.cut_end {
             return false;
         }
-        let mapped = if absolute >= cut_end {
-            absolute - shift
+        let mapped = if absolute >= times.cut_end {
+            absolute - times.shift
         } else {
             absolute
         };
-        *value = (mapped - new_start).clamp(0.0, new_end - new_start);
+        *value = (mapped - times.new_start).clamp(0.0, times.new_end - times.new_start);
         true
     });
 }
@@ -1229,36 +1303,23 @@ fn ripple_delete_mask_track(
         else {
             return false;
         };
-        ripple_relative_keyframes(
-            &mut segment.keyframes.position,
+        let times = RippleKeyframeTimes {
             old_start,
             new_start,
             new_end,
             cut_start,
             cut_end,
             shift,
-            |keyframe| &mut keyframe.time,
-        );
-        ripple_relative_keyframes(
-            &mut segment.keyframes.size,
-            old_start,
-            new_start,
-            new_end,
-            cut_start,
-            cut_end,
-            shift,
-            |keyframe| &mut keyframe.time,
-        );
-        ripple_relative_keyframes(
-            &mut segment.keyframes.intensity,
-            old_start,
-            new_start,
-            new_end,
-            cut_start,
-            cut_end,
-            shift,
-            |keyframe| &mut keyframe.time,
-        );
+        };
+        ripple_relative_keyframes(&mut segment.keyframes.position, times, |keyframe| {
+            &mut keyframe.time
+        });
+        ripple_relative_keyframes(&mut segment.keyframes.size, times, |keyframe| {
+            &mut keyframe.time
+        });
+        ripple_relative_keyframes(&mut segment.keyframes.intensity, times, |keyframe| {
+            &mut keyframe.time
+        });
         segment.start = new_start;
         segment.end = new_end;
         true
@@ -1429,6 +1490,49 @@ fn ripple_delete_audio_track(
     *segments = next;
 }
 
+fn ripple_delete_video_track(
+    segments: &mut Vec<cap_project::VideoSegment>,
+    cut_start: f64,
+    cut_end: f64,
+    shift: f64,
+) {
+    let mut next = Vec::with_capacity(segments.len());
+    for mut segment in std::mem::take(segments) {
+        if segment.end <= cut_start {
+            next.push(segment);
+        } else if segment.start >= cut_start && segment.end <= cut_end {
+            continue;
+        } else if segment.start >= cut_end {
+            segment.start -= shift;
+            segment.end -= shift;
+            next.push(segment);
+        } else if segment.start < cut_start && segment.end > cut_end {
+            let mut tail = segment.clone();
+            let old_start = tail.start;
+            segment.end = cut_start;
+            tail.start = cut_end - shift;
+            tail.end -= shift;
+            tail.source_start += cut_end - old_start;
+            next.push(segment);
+            if tail.end > tail.start {
+                next.push(tail);
+            }
+        } else if segment.start < cut_start {
+            segment.end = cut_start;
+            next.push(segment);
+        } else {
+            let old_start = segment.start;
+            segment.start = cut_end - shift;
+            segment.end = (segment.end - shift).max(segment.start);
+            segment.source_start += cut_end - old_start;
+            if segment.end > segment.start {
+                next.push(segment);
+            }
+        }
+    }
+    *segments = next;
+}
+
 fn ripple_delete_output_tracks(
     timeline: &mut TimelineConfiguration,
     cut_start: f64,
@@ -1437,6 +1541,7 @@ fn ripple_delete_output_tracks(
 ) {
     ripple_delete_track(&mut timeline.style_segments, cut_start, cut_end, shift);
     ripple_delete_track(&mut timeline.image_segments, cut_start, cut_end, shift);
+    ripple_delete_video_track(&mut timeline.video_segments, cut_start, cut_end, shift);
     ripple_delete_track(&mut timeline.zoom_segments, cut_start, cut_end, shift);
     ripple_delete_track(&mut timeline.scene_segments, cut_start, cut_end, shift);
     ripple_delete_camera3d_track(&mut timeline.camera3d_segments, cut_start, cut_end, shift);
@@ -1824,6 +1929,7 @@ pub fn ensure_timeline(project: &mut ProjectConfiguration, clip_display_duration
         camera3d_segments: Vec::new(),
         style_segments: Vec::new(),
         image_segments: Vec::new(),
+        video_segments: Vec::new(),
     });
     true
 }
@@ -2374,6 +2480,10 @@ pub fn set_clip_segment_timescale(
         segment.end += shift(segment.end);
     }
     for segment in &mut timeline.image_segments {
+        segment.start += shift(segment.start);
+        segment.end += shift(segment.end);
+    }
+    for segment in &mut timeline.video_segments {
         segment.start += shift(segment.start);
         segment.end += shift(segment.end);
     }

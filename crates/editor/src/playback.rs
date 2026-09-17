@@ -1,5 +1,5 @@
 use cap_project::{
-    ClipOffsets, ClipTransitionType, ProjectConfiguration, TimelineFrameMapping, XY,
+    ClipOffsets, ClipTransitionType, CursorEvents, ProjectConfiguration, TimelineFrameMapping, XY,
 };
 use cap_rendering::{
     DecodedFrame, DecodedSegmentFrames, PrecomputedCursorTimeline, ProjectUniforms,
@@ -48,6 +48,7 @@ const INITIAL_PARALLEL_DECODE_TASKS: usize = 4;
 const FRAME_CACHE_SIZE: usize = 4;
 const MAX_FRAME_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const RAMP_UP_FRAME_COUNT: u32 = 15;
+const MEDIA_ONLY_SEGMENT_INDEX: u32 = u32::MAX;
 
 fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfiguration) -> bool {
     let settings = |segment: &cap_project::TimelineSegment| {
@@ -645,6 +646,7 @@ impl Playback {
             .map(|duration| (duration, true))
             .unwrap_or((0.0, false));
         let segment_media_count = self.segment_medias.len();
+        let blank_screen_size = self.render_constants.options.screen_size;
 
         tokio::spawn(async move {
             if !has_timeline {
@@ -813,6 +815,31 @@ impl Playback {
                             is_initial,
                             transition,
                         })));
+                    } else if cached_project.get_segment_time(prefetch_time).is_none() {
+                        let frame = PrefetchedFrame {
+                            seek_generation,
+                            frame_number: frame_num,
+                            segment_frames: DecodedSegmentFrames {
+                                screen_size: blank_screen_size,
+                                screen_frame: None,
+                                camera_frame: None,
+                                segment_time: prefetch_time as f32,
+                                recording_time: prefetch_time as f32,
+                                segment_has_camera: false,
+                            },
+                            segment_index: MEDIA_ONLY_SEGMENT_INDEX,
+                            transition: None,
+                        };
+                        next_prefetch_frame += 1;
+                        match prefetch_tx.try_send(frame) {
+                            Ok(()) => {}
+                            Err(std_mpsc::TrySendError::Full(frame)) => {
+                                pending_frame = Some(frame);
+                                break;
+                            }
+                            Err(std_mpsc::TrySendError::Disconnected(_)) => return,
+                        }
+                        continue;
                     }
 
                     next_prefetch_frame += 1;
@@ -1110,6 +1137,13 @@ impl Playback {
             let mut cursor_timelines = build_cursor_timelines(&cached_project);
             let mut zoom_timelines = build_zoom_timelines(&cached_project);
             let mut outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
+            let media_only_cursor = Arc::new(CursorEvents::default());
+            let mut media_only_zoom = ZoomTransformTimeline::from_project(
+                &cached_project,
+                &media_only_cursor,
+                duration,
+                self.render_constants.options.screen_size,
+            );
 
             if !*stop_rx.borrow()
                 && let Some(prefetched_idx) = prefetch_buffer
@@ -1432,6 +1466,12 @@ impl Playback {
                     cursor_timelines = build_cursor_timelines(&cached_project);
                     zoom_timelines = build_zoom_timelines(&cached_project);
                     outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
+                    media_only_zoom = ZoomTransformTimeline::from_project(
+                        &cached_project,
+                        &media_only_cursor,
+                        duration,
+                        self.render_constants.options.screen_size,
+                    );
                 }
 
                 let frame_offset = frame_number.saturating_sub(clock_anchor_frame) as f64;
@@ -1761,128 +1801,169 @@ impl Playback {
                 let frame_acquire_duration = frame_acquire_start.elapsed();
 
                 if let Some((segment_frames, segment_index, transition)) = segment_frames_opt {
-                    let Some(segment_media) = self.segment_medias.get(segment_index as usize)
-                    else {
-                        if adopted.is_some() {
-                            break;
-                        }
-                        frame_number = frame_number.saturating_add(1);
-                        continue;
-                    };
-
-                    if !was_cached {
-                        frame_cache.insert(
-                            frame_number,
-                            Arc::clone(&segment_frames),
-                            segment_index,
-                            transition.as_ref().map(
-                                |(frames, transition_index, kind, progress)| {
-                                    (Arc::clone(frames), *transition_index, *kind, *progress)
-                                },
-                            ),
-                        );
-                    }
-
-                    let zoom_until = (frame_number as f32 + 1.0) / fps as f32;
-                    if let Some(timeline) = zoom_timelines.get_mut(segment_index as usize) {
-                        timeline.ensure_precomputed_until(zoom_until);
-                    }
-                    if let Some(timeline) = outgoing_zoom_timelines.get_mut(segment_index as usize)
-                    {
-                        timeline.ensure_precomputed_until(zoom_until);
-                    }
-                    let zoom_timeline = zoom_timelines.get(segment_index as usize);
-
-                    let empty_timeline;
-                    let zoom_ref = match zoom_timeline {
-                        Some(timeline) => timeline,
-                        None => {
-                            empty_timeline = ZoomTransformTimeline::new(
-                                &[],
-                                None,
-                                &segment_media.cursor,
-                                cached_project.screen_movement_spring,
-                                duration,
-                                None,
-                            );
-                            &empty_timeline
-                        }
-                    };
-
-                    let precomputed_cursor = &cursor_timelines[segment_index as usize];
-
-                    let uniforms_start = Instant::now();
-                    let uniforms = ProjectUniforms::new_with_precomputed_cursor(
-                        &self.render_constants,
-                        &cached_project,
-                        frame_number,
-                        fps,
-                        resolution_base,
-                        &segment_media.cursor,
-                        &segment_frames,
-                        duration,
-                        zoom_ref,
-                        precomputed_cursor,
-                    );
-                    let uniforms_duration = uniforms_start.elapsed();
-                    let submit_start = Instant::now();
-                    let submitted_frame_number = frame_number;
-                    if let Some((outgoing_frames, outgoing_index, kind, progress)) = transition {
-                        let outgoing_media = &self.segment_medias[outgoing_index as usize];
-                        if let Some(timeline) =
-                            outgoing_zoom_timelines.get_mut(outgoing_index as usize)
-                        {
-                            timeline.ensure_precomputed_until(zoom_until);
-                        }
-                        let outgoing_uniforms = ProjectUniforms::new_with_precomputed_cursor(
+                    if segment_index == MEDIA_ONLY_SEGMENT_INDEX {
+                        media_only_zoom
+                            .ensure_precomputed_until((frame_number as f32 + 1.0) / fps as f32);
+                        let cursor = Arc::clone(&media_only_cursor);
+                        let uniforms_start = Instant::now();
+                        let uniforms = ProjectUniforms::new(
                             &self.render_constants,
                             &cached_project,
                             frame_number,
                             fps,
                             resolution_base,
-                            &outgoing_media.cursor,
-                            &outgoing_frames,
+                            &cursor,
+                            &segment_frames,
                             duration,
-                            &outgoing_zoom_timelines[outgoing_index as usize],
-                            &cursor_timelines[outgoing_index as usize],
+                            &media_only_zoom,
                         );
-                        self.renderer.render_transition_frame(
-                            editor::RendererTransitionInput {
-                                segment_frames: Arc::unwrap_or_clone(outgoing_frames),
-                                uniforms: outgoing_uniforms,
-                                cursor: outgoing_media.cursor.clone(),
-                            },
-                            editor::RendererTransitionInput {
-                                segment_frames: Arc::unwrap_or_clone(segment_frames),
-                                uniforms,
-                                cursor: segment_media.cursor.clone(),
-                            },
-                            kind,
-                            progress,
-                        );
-                    } else {
+                        let uniforms_duration = uniforms_start.elapsed();
+                        let submit_start = Instant::now();
                         self.renderer.render_frame(
                             Arc::unwrap_or_clone(segment_frames),
                             uniforms,
-                            segment_media.cursor.clone(),
+                            cursor,
                         );
-                    }
-                    let submit_duration = submit_start.elapsed();
+                        let submit_duration = submit_start.elapsed();
+                        if let Some(telemetry) = &self.telemetry {
+                            telemetry.emit(PlaybackTelemetryEvent::FrameSubmitted {
+                                frame_number,
+                                source: frame_source,
+                                schedule_overshoot: overshoot,
+                                frame_acquire_duration,
+                                uniforms_duration,
+                                submit_duration,
+                                prefetch_buffer_len: prefetch_buffer.len(),
+                                total_frames_skipped,
+                            });
+                        }
+                        total_frames_rendered += 1;
+                    } else {
+                        let Some(segment_media) = self.segment_medias.get(segment_index as usize)
+                        else {
+                            if adopted.is_some() {
+                                break;
+                            }
+                            frame_number = frame_number.saturating_add(1);
+                            continue;
+                        };
 
-                    if let Some(telemetry) = &self.telemetry {
-                        telemetry.emit(PlaybackTelemetryEvent::FrameSubmitted {
-                            frame_number: submitted_frame_number,
-                            source: frame_source,
-                            schedule_overshoot: overshoot,
-                            frame_acquire_duration,
-                            uniforms_duration,
-                            submit_duration,
-                            prefetch_buffer_len: prefetch_buffer.len(),
-                            total_frames_skipped,
-                        });
-                    }
+                        if !was_cached {
+                            frame_cache.insert(
+                                frame_number,
+                                Arc::clone(&segment_frames),
+                                segment_index,
+                                transition.as_ref().map(
+                                    |(frames, transition_index, kind, progress)| {
+                                        (Arc::clone(frames), *transition_index, *kind, *progress)
+                                    },
+                                ),
+                            );
+                        }
 
-                    total_frames_rendered += 1;
+                        let zoom_until = (frame_number as f32 + 1.0) / fps as f32;
+                        if let Some(timeline) = zoom_timelines.get_mut(segment_index as usize) {
+                            timeline.ensure_precomputed_until(zoom_until);
+                        }
+                        if let Some(timeline) =
+                            outgoing_zoom_timelines.get_mut(segment_index as usize)
+                        {
+                            timeline.ensure_precomputed_until(zoom_until);
+                        }
+                        let zoom_timeline = zoom_timelines.get(segment_index as usize);
+
+                        let empty_timeline;
+                        let zoom_ref = match zoom_timeline {
+                            Some(timeline) => timeline,
+                            None => {
+                                empty_timeline = ZoomTransformTimeline::new(
+                                    &[],
+                                    None,
+                                    &segment_media.cursor,
+                                    cached_project.screen_movement_spring,
+                                    duration,
+                                    None,
+                                );
+                                &empty_timeline
+                            }
+                        };
+
+                        let precomputed_cursor = &cursor_timelines[segment_index as usize];
+
+                        let uniforms_start = Instant::now();
+                        let uniforms = ProjectUniforms::new_with_precomputed_cursor(
+                            &self.render_constants,
+                            &cached_project,
+                            frame_number,
+                            fps,
+                            resolution_base,
+                            &segment_media.cursor,
+                            &segment_frames,
+                            duration,
+                            zoom_ref,
+                            precomputed_cursor,
+                        );
+                        let uniforms_duration = uniforms_start.elapsed();
+                        let submit_start = Instant::now();
+                        let submitted_frame_number = frame_number;
+                        if let Some((outgoing_frames, outgoing_index, kind, progress)) = transition
+                        {
+                            let outgoing_media = &self.segment_medias[outgoing_index as usize];
+                            if let Some(timeline) =
+                                outgoing_zoom_timelines.get_mut(outgoing_index as usize)
+                            {
+                                timeline.ensure_precomputed_until(zoom_until);
+                            }
+                            let outgoing_uniforms = ProjectUniforms::new_with_precomputed_cursor(
+                                &self.render_constants,
+                                &cached_project,
+                                frame_number,
+                                fps,
+                                resolution_base,
+                                &outgoing_media.cursor,
+                                &outgoing_frames,
+                                duration,
+                                &outgoing_zoom_timelines[outgoing_index as usize],
+                                &cursor_timelines[outgoing_index as usize],
+                            );
+                            self.renderer.render_transition_frame(
+                                editor::RendererTransitionInput {
+                                    segment_frames: Arc::unwrap_or_clone(outgoing_frames),
+                                    uniforms: outgoing_uniforms,
+                                    cursor: outgoing_media.cursor.clone(),
+                                },
+                                editor::RendererTransitionInput {
+                                    segment_frames: Arc::unwrap_or_clone(segment_frames),
+                                    uniforms,
+                                    cursor: segment_media.cursor.clone(),
+                                },
+                                kind,
+                                progress,
+                            );
+                        } else {
+                            self.renderer.render_frame(
+                                Arc::unwrap_or_clone(segment_frames),
+                                uniforms,
+                                segment_media.cursor.clone(),
+                            );
+                        }
+                        let submit_duration = submit_start.elapsed();
+
+                        if let Some(telemetry) = &self.telemetry {
+                            telemetry.emit(PlaybackTelemetryEvent::FrameSubmitted {
+                                frame_number: submitted_frame_number,
+                                source: frame_source,
+                                schedule_overshoot: overshoot,
+                                frame_acquire_duration,
+                                uniforms_duration,
+                                submit_duration,
+                                prefetch_buffer_len: prefetch_buffer.len(),
+                                total_frames_skipped,
+                            });
+                        }
+
+                        total_frames_rendered += 1;
+                    }
                 }
 
                 if last_stats_time.elapsed() >= stats_interval {

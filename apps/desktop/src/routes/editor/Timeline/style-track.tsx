@@ -2,6 +2,7 @@ import { For, onCleanup, Show } from "solid-js";
 import { useEditorContext } from "../context";
 import { editOverlayInterval } from "../style";
 import { useTimelineContext } from "./context";
+import { ImportedWaveformCanvas } from "./imported-waveform";
 import {
 	SegmentContent,
 	SegmentHandle,
@@ -22,7 +23,7 @@ export function StyleTrack(props: OverlayTrackProps) {
 }
 
 export function OverlayTrack(
-	props: OverlayTrackProps & { type: "style" | "image" },
+	props: OverlayTrackProps & { type: "style" | "image" | "video" },
 ) {
 	const {
 		project,
@@ -31,13 +32,16 @@ export function OverlayTrack(
 		setEditorState,
 		projectActions,
 		projectHistory,
+		importedWaveform,
 		totalDuration,
 	} = useEditorContext();
 	const { secsPerPixel, timelineBounds } = useTimelineContext();
 	const allSegments = () =>
 		(props.type === "style"
 			? project.timeline?.styleSegments
-			: project.timeline?.imageSegments) ?? [];
+			: props.type === "video"
+				? project.timeline?.videoSegments
+				: project.timeline?.imageSegments) ?? [];
 	const segments = () =>
 		allSegments()
 			.map((segment, index) => ({ segment, index }))
@@ -60,6 +64,8 @@ export function OverlayTrack(
 	const add = (time: number) => {
 		if (props.type === "style")
 			projectActions.addStyleSegment(props.laneIndex, time);
+		else if (props.type === "video")
+			void projectActions.importVideoSegment(props.laneIndex, time);
 		else void projectActions.importImageSegment(props.laneIndex, time);
 	};
 	function select(index: number, event: MouseEvent) {
@@ -116,11 +122,31 @@ export function OverlayTrack(
 		const segment = allSegments()[index];
 		if (!segment) return;
 		const initial = { start: segment.start, end: segment.end };
+		const originalVideo =
+			props.type === "video"
+				? project.timeline?.videoSegments[index]
+				: undefined;
+		const initialSourceStart = originalVideo?.sourceStart ?? 0;
 		const initialPlaybackTime = editorState.playbackTime;
 		const lane = segments();
 		const position = lane.findIndex((item) => item.index === index);
-		const previousEnd = lane[position - 1]?.segment.end ?? 0;
-		const nextStart = lane[position + 1]?.segment.start ?? totalDuration();
+		const previousEnd = Math.max(
+			lane[position - 1]?.segment.end ?? 0,
+			props.type === "video" && edge === "start"
+				? segment.start - initialSourceStart
+				: 0,
+		);
+		const nextStart =
+			props.type === "video"
+				? Math.min(
+						lane[position + 1]?.segment.start ?? Number.POSITIVE_INFINITY,
+						edge === "end" && originalVideo
+							? segment.start +
+									originalVideo.sourceDuration -
+									initialSourceStart
+							: Number.POSITIVE_INFINITY,
+					)
+				: (lane[position + 1]?.segment.start ?? totalDuration());
 		const resume = projectHistory.pause();
 		let moved = false;
 		props.onDragStateChanged({ type: "movePending" });
@@ -138,6 +164,13 @@ export function OverlayTrack(
 			);
 			if (props.type === "style")
 				setProject("timeline", "styleSegments", index, interval);
+			else if (props.type === "video")
+				setProject("timeline", "videoSegments", index, {
+					...interval,
+					sourceStart:
+						initialSourceStart +
+						(edge === "start" ? interval.start - initial.start : 0),
+				});
 			else setProject("timeline", "imageSegments", index, interval);
 			setEditorState("previewTime", null);
 			setEditorState(
@@ -156,6 +189,11 @@ export function OverlayTrack(
 			if (cancelled && moved && allSegments()[index] === segment) {
 				if (props.type === "style")
 					setProject("timeline", "styleSegments", index, initial);
+				else if (props.type === "video")
+					setProject("timeline", "videoSegments", index, {
+						...initial,
+						sourceStart: initialSourceStart,
+					});
 				else setProject("timeline", "imageSegments", index, initial);
 				setEditorState("playbackTime", initialPlaybackTime);
 			}
@@ -188,7 +226,10 @@ export function OverlayTrack(
 			<Show when={segments().length === 0}>
 				<button
 					type="button"
-					disabled={props.type === "image" && editorState.importingImage}
+					disabled={
+						(props.type === "image" && editorState.importingImage) ||
+						(props.type === "video" && editorState.importingVideo)
+					}
 					class="cap-empty-lane pointer-events-auto"
 					onMouseDown={(event) => event.stopPropagation()}
 					onClick={(event) => {
@@ -197,7 +238,7 @@ export function OverlayTrack(
 					}}
 				>
 					<Show
-						when={props.type === "image"}
+						when={props.type !== "style"}
 						fallback={
 							<>
 								<span>
@@ -207,11 +248,19 @@ export function OverlayTrack(
 							</>
 						}
 					>
-						<span>Place images and logos on your video</span>
+						<span>
+							{props.type === "video"
+								? "Add video to the timeline"
+								: "Place images and logos on your video"}
+						</span>
 						<span class="cap-empty-lane-action">
-							{editorState.importingImage
-								? "· Importing image…"
-								: "· Add image"}
+							{props.type === "video"
+								? editorState.importingVideo
+									? "· Importing video…"
+									: "· Add video"
+								: editorState.importingImage
+									? "· Importing image…"
+									: "· Add image"}
 						</span>
 					</Show>
 				</button>
@@ -236,6 +285,26 @@ export function OverlayTrack(
 							class="cursor-grab overflow-hidden"
 							onMouseDown={(event) => drag(event, index, "move")}
 						>
+							<Show when={props.type === "video"}>
+								<ImportedWaveformCanvas
+									waveform={importedWaveform(
+										project.timeline?.videoSegments[index]?.path ?? "",
+									)}
+									start={segment.start}
+									end={segment.end}
+									sourceStart={
+										project.timeline?.videoSegments[index]?.sourceStart ?? 0
+									}
+									volumeDb={
+										project.timeline?.videoSegments[index]?.volumeDb ?? 0
+									}
+									enabled={
+										segment.enabled &&
+										!(project.timeline?.videoSegments[index]?.muted ?? true)
+									}
+									color="var(--track-video)"
+								/>
+							</Show>
 							<SegmentLabel
 								full={() => (
 									<div class="cap-seg-labels">

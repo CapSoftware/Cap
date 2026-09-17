@@ -8,12 +8,13 @@ import { makePersisted } from "@solid-primitives/storage";
 import { createMutation, createQuery, skipToken } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
-import { emitTo } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
+	type Accessor,
 	createEffect,
 	createMemo,
 	createResource,
@@ -43,7 +44,7 @@ import {
 import { Toggle } from "~/components/Toggle";
 import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { commands, events } from "~/utils/tauri";
+import { commands, events, type ImageDrawingCommit } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
 	EditorContextProvider,
@@ -62,6 +63,7 @@ import { ImportProgress } from "./ImportProgress";
 import { PlayerContent } from "./Player";
 import { usePreparingEditor } from "./preparing-editor-context";
 import { Timeline } from "./Timeline";
+import { getUsedTrackCount } from "./timelineTracks";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 
 // Deferred surfaces: these are not visible at first paint (export mode,
@@ -150,11 +152,44 @@ function getPreviewProjectConfig(
 	return config;
 }
 
-export function Editor() {
+type EditorMediaDrop = {
+	kind: "image" | "video";
+	sourcePath: string;
+};
+
+export function Editor(props: {
+	drawingCommit?: Accessor<ImageDrawingCommit | undefined>;
+}) {
 	const currentWindow = getCurrentWindow();
 	let flushTitleSave: (() => Promise<void>) | undefined;
 	let setTitleReadOnly: ((readOnly: boolean) => void) | undefined;
 	let activeTitleSave: { generation: number; requestId: string } | undefined;
+	let mediaDropHandler: ((drop: EditorMediaDrop) => void) | undefined;
+	const pendingMediaDrops: EditorMediaDrop[] = [];
+	const registerMediaDropHandler = (
+		handler: ((drop: EditorMediaDrop) => void) | undefined,
+	) => {
+		mediaDropHandler = handler;
+		if (handler) {
+			for (const drop of pendingMediaDrops.splice(0)) handler(drop);
+		}
+	};
+	createTauriEventListener<string>(
+		{ listen: (callback) => listen<string>("editor-image-dropped", callback) },
+		(sourcePath) => {
+			const drop: EditorMediaDrop = { kind: "image", sourcePath };
+			if (mediaDropHandler) mediaDropHandler(drop);
+			else pendingMediaDrops.push(drop);
+		},
+	);
+	createTauriEventListener<string>(
+		{ listen: (callback) => listen<string>("editor-video-dropped", callback) },
+		(sourcePath) => {
+			const drop: EditorMediaDrop = { kind: "video", sourcePath };
+			if (mediaDropHandler) mediaDropHandler(drop);
+			else pendingMediaDrops.push(drop);
+		},
+	);
 	const registerTitleSave = (
 		registration: TitleSaveRegistration | undefined,
 	) => {
@@ -322,8 +357,10 @@ export function Editor() {
 						<EditorInstanceContextProvider>
 							<EditorContent
 								projectPath={path()}
+								drawingCommit={props.drawingCommit}
 								getTitleSave={() => flushTitleSave}
 								registerTitleSave={registerTitleSave}
+								registerMediaDropHandler={registerMediaDropHandler}
 							/>
 						</EditorInstanceContextProvider>
 					</ErrorBoundary>
@@ -335,8 +372,12 @@ export function Editor() {
 
 function EditorContent(props: {
 	projectPath: string;
+	drawingCommit?: Accessor<ImageDrawingCommit | undefined>;
 	getTitleSave: () => (() => Promise<void>) | undefined;
 	registerTitleSave: (registration: TitleSaveRegistration | undefined) => void;
+	registerMediaDropHandler: (
+		handler: ((drop: EditorMediaDrop) => void) | undefined,
+	) => void;
 }) {
 	const ctx = useEditorInstanceContext();
 
@@ -377,10 +418,14 @@ function EditorContent(props: {
 			</Match>
 			<Match when={readyData()}>
 				{(values) => (
-					<EditorContextProvider {...values()}>
+					<EditorContextProvider
+						{...values()}
+						imageDrawingCommit={props.drawingCommit}
+					>
 						<Inner
 							getTitleSave={props.getTitleSave}
 							registerTitleSave={props.registerTitleSave}
+							registerMediaDropHandler={props.registerMediaDropHandler}
 						/>
 					</EditorContextProvider>
 				)}
@@ -392,6 +437,9 @@ function EditorContent(props: {
 function Inner(props: {
 	getTitleSave: () => (() => Promise<void>) | undefined;
 	registerTitleSave: (registration: TitleSaveRegistration | undefined) => void;
+	registerMediaDropHandler: (
+		handler: ((drop: EditorMediaDrop) => void) | undefined,
+	) => void;
 }) {
 	const {
 		project,
@@ -399,6 +447,7 @@ function Inner(props: {
 		flushProjectConfig,
 		editorInstance,
 		editorState,
+		projectActions,
 		setEditorState,
 		previewResolutionBase,
 		dialog,
@@ -461,6 +510,52 @@ function Inner(props: {
 		if (normalize(payload.editor_path) !== normalize(editorInstance.path))
 			return;
 		void appendRecordedClip(payload.recording_path);
+	});
+
+	let mediaDropQueue = Promise.resolve();
+	let mediaDropAborted = false;
+	onCleanup(() => {
+		mediaDropAborted = true;
+		props.registerMediaDropHandler(undefined);
+	});
+	props.registerMediaDropHandler((drop) => {
+		const dropTime = editorState.playbackTime;
+		mediaDropQueue = mediaDropQueue
+			.then(async () => {
+				while (
+					(editorState.importingImage || editorState.importingVideo) &&
+					!mediaDropAborted
+				) {
+					await new Promise((resolve) => setTimeout(resolve, 50));
+				}
+				if (mediaDropAborted) return;
+				const lane =
+					drop.kind === "video"
+						? getUsedTrackCount(project.timeline?.videoSegments ?? [])
+						: getUsedTrackCount(project.timeline?.imageSegments ?? []);
+				const toastId = toast.loading(`Importing ${drop.kind}…`);
+				const added =
+					drop.kind === "video"
+						? await projectActions.importVideoSegment(
+								lane,
+								dropTime,
+								drop.sourcePath,
+							)
+						: await projectActions.importImageSegment(
+								lane,
+								dropTime,
+								undefined,
+								drop.sourcePath,
+							);
+				if (added)
+					toast.success(`${drop.kind === "video" ? "Video" : "Image"} added`, {
+						id: toastId,
+					});
+				else toast.dismiss(toastId);
+			})
+			.catch((error) => {
+				toast.error(getEditorErrorMessage(error));
+			});
 	});
 
 	const appendRecordedClip = async (recordingPath: string) => {

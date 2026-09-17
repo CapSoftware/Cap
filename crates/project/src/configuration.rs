@@ -1704,6 +1704,9 @@ pub struct ImageSegment {
     pub track: u32,
     pub enabled: bool,
     pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    pub annotations: Vec<Annotation>,
     pub name: String,
     pub center: XY<f64>,
     pub size: XY<f64>,
@@ -1723,6 +1726,8 @@ impl Default for ImageSegment {
             track: 0,
             enabled: true,
             path: String::new(),
+            source_path: None,
+            annotations: Vec::new(),
             name: "Image".to_string(),
             center: XY::new(0.5, 0.5),
             size: XY::new(0.3, 0.3),
@@ -1739,6 +1744,73 @@ impl Default for ImageSegment {
 impl ImageSegment {
     pub fn is_active_at(&self, time: f64) -> bool {
         self.enabled && is_timeline_interval_active(self.start, self.end, time)
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VideoSegment {
+    pub start: f64,
+    pub end: f64,
+    pub track: u32,
+    pub enabled: bool,
+    pub path: String,
+    pub name: String,
+    pub source_start: f64,
+    pub source_duration: f64,
+    pub muted: bool,
+    pub volume_db: f32,
+    pub center: XY<f64>,
+    pub size: XY<f64>,
+    pub opacity: f32,
+    pub rotation: f32,
+    pub rounding: f32,
+    pub flip_x: bool,
+    pub flip_y: bool,
+    pub lock_aspect: bool,
+}
+
+impl Default for VideoSegment {
+    fn default() -> Self {
+        Self {
+            start: 0.0,
+            end: 0.0,
+            track: 0,
+            enabled: true,
+            path: String::new(),
+            name: "Video".to_string(),
+            source_start: 0.0,
+            source_duration: 0.0,
+            muted: false,
+            volume_db: 0.0,
+            center: XY::new(0.5, 0.5),
+            size: XY::new(1.0, 1.0),
+            opacity: 1.0,
+            rotation: 0.0,
+            rounding: 0.0,
+            flip_x: false,
+            flip_y: false,
+            lock_aspect: true,
+        }
+    }
+}
+
+impl VideoSegment {
+    pub fn is_active_at(&self, time: f64) -> bool {
+        self.enabled && is_timeline_interval_active(self.start, self.end, time)
+    }
+
+    pub fn source_time_at(&self, time: f64) -> Option<f64> {
+        if !self.is_active_at(time)
+            || !self.source_start.is_finite()
+            || !self.source_duration.is_finite()
+            || self.source_start < 0.0
+            || self.source_duration <= self.source_start
+        {
+            return None;
+        }
+        let source_time = self.source_start + time - self.start;
+        (source_time < self.source_duration).then_some(source_time)
     }
 }
 
@@ -1786,7 +1858,7 @@ where
     Ok(by_segment.into_values().collect())
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
     pub segments: Vec<TimelineSegment>,
@@ -1813,6 +1885,8 @@ pub struct TimelineConfiguration {
     pub style_segments: Vec<StyleSegment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub image_segments: Vec<ImageSegment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub video_segments: Vec<VideoSegment>,
     // Explicit rename: the digit boundary makes rename_all's camelCase output
     // easy to second-guess, and the editor TypeScript hardcodes this name.
     #[serde(default, rename = "camera3dSegments")]
@@ -2120,7 +2194,20 @@ impl TimelineConfiguration {
                     .sum::<f64>()
         };
 
-        segment_duration + self.held_duration()
+        let recording_duration = segment_duration + self.held_duration();
+        let media_duration = self
+            .image_segments
+            .iter()
+            .filter(|segment| segment.enabled && segment.end.is_finite())
+            .map(|segment| segment.end)
+            .chain(
+                self.video_segments
+                    .iter()
+                    .filter(|segment| segment.enabled && segment.end.is_finite())
+                    .map(|segment| segment.end),
+            )
+            .fold(0.0, f64::max);
+        recording_duration.max(media_duration)
     }
 
     /// Gapless-time windows covered by clips that hide the cursor, with
@@ -2563,6 +2650,7 @@ impl Annotation {
 pub enum OverlayTrackKind {
     Mask,
     Image,
+    Video,
     Text,
 }
 
@@ -2655,6 +2743,45 @@ impl Default for ProjectConfiguration {
     }
 }
 
+pub fn create_media_project(base: &Path, pretty_name: &str) -> Result<std::path::PathBuf, String> {
+    std::fs::create_dir_all(base)
+        .map_err(|error| format!("Cannot create media library: {error}"))?;
+    let project_path = base.join(format!("{}.cap", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&project_path)
+        .map_err(|error| format!("Cannot create media project: {error}"))?;
+    let result = (|| {
+        let meta = crate::RecordingMeta {
+            platform: Some(crate::Platform::default()),
+            project_path: project_path.clone(),
+            pretty_name: pretty_name.to_string(),
+            sharing: None,
+            inner: crate::RecordingMetaInner::Studio(Box::new(
+                crate::StudioRecordingMeta::MultipleSegments {
+                    inner: crate::MultipleSegments {
+                        segments: Vec::new(),
+                        cursors: Default::default(),
+                        status: Some(crate::StudioRecordingStatus::Complete),
+                    },
+                },
+            )),
+            upload: None,
+        };
+        meta.save_for_project()
+            .map_err(|error| format!("Cannot save media metadata: {error}"))?;
+        ProjectConfiguration {
+            timeline: Some(TimelineConfiguration::default()),
+            ..Default::default()
+        }
+        .write(&project_path)
+        .map_err(|error| format!("Cannot save media timeline: {error}"))?;
+        Ok(project_path.clone())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&project_path);
+    }
+    result
+}
+
 impl ProjectConfiguration {
     pub fn resolved_overlay_order(&self, available: &[OverlayTrack]) -> Vec<OverlayTrack> {
         let mut ordered = Vec::with_capacity(available.len());
@@ -2689,6 +2816,14 @@ impl ProjectConfiguration {
                 OverlayTrackKind::Image,
                 timeline
                     .image_segments
+                    .iter()
+                    .map(|segment| segment.track)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                OverlayTrackKind::Video,
+                timeline
+                    .video_segments
                     .iter()
                     .map(|segment| segment.track)
                     .collect::<Vec<_>>(),
@@ -2798,6 +2933,13 @@ impl ProjectConfiguration {
     pub fn validate(&self) -> Result<(), AnnotationValidationError> {
         for annotation in &self.annotations {
             annotation.validate()?;
+        }
+        if let Some(timeline) = &self.timeline {
+            for segment in &timeline.image_segments {
+                for annotation in &segment.annotations {
+                    annotation.validate()?;
+                }
+            }
         }
 
         Ok(())
@@ -3027,6 +3169,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn media_project_has_a_complete_empty_studio_timeline() {
+        let directory = tempfile::tempdir().unwrap();
+        let project_path = create_media_project(directory.path(), "Imported video").unwrap();
+        let meta = crate::RecordingMeta::load_for_project(&project_path).unwrap();
+        assert_eq!(meta.pretty_name, "Imported video");
+        let studio = meta.studio_meta().unwrap();
+        assert!(matches!(
+            studio.status(),
+            crate::StudioRecordingStatus::Complete
+        ));
+        assert!(matches!(
+            studio,
+            crate::StudioRecordingMeta::MultipleSegments { inner } if inner.segments.is_empty()
+        ));
+        let config = ProjectConfiguration::load(&project_path).unwrap();
+        assert_eq!(config.timeline.unwrap().duration(), 0.0);
+    }
+
+    #[test]
     fn studio_sound_defaults_old_projects_to_balanced_and_round_trips_tiers() {
         let legacy: AudioConfiguration =
             serde_json::from_str(r#"{"improve":true,"micVolumeDb":-3.0}"#).unwrap();
@@ -3105,6 +3266,7 @@ mod tests {
             audio_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            video_segments: Vec::new(),
             camera3d_segments: Vec::new(),
         }
     }
@@ -4261,6 +4423,7 @@ mod tests {
                 audio_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                video_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             }),
             ..Default::default()
@@ -4370,6 +4533,7 @@ mod tests {
                 audio_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                video_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
             }),
             ..Default::default()

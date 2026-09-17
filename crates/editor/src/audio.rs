@@ -208,6 +208,10 @@ impl AudioRenderer {
         self
     }
 
+    pub fn set_music(&mut self, music: MusicTracks) {
+        self.music = music;
+    }
+
     pub fn set_playhead(&mut self, playhead: f64, project: &ProjectConfiguration) {
         self.elapsed_samples = self.playhead_to_samples(playhead);
         self.speed_audio_processors = [None, None];
@@ -261,9 +265,25 @@ impl AudioRenderer {
             // Capture the output-time playhead before the recording mix advances
             // it, so timeline-positioned music is aligned to the same grid.
             let frame_start = self.elapsed_samples;
-            let (written, mut buf) = self.render_timeline_frame_raw(samples, project, timeline)?;
+            let (written, mut buf) =
+                match self.render_timeline_frame_raw(samples, project, timeline) {
+                    Some(rendered) => rendered,
+                    None => {
+                        let remaining = self
+                            .playhead_to_samples(timeline.duration())
+                            .saturating_sub(self.elapsed_samples);
+                        let written = samples.min(remaining);
+                        if written == 0 {
+                            return None;
+                        }
+                        self.elapsed_samples += written;
+                        (written, vec![0.0; written * 2])
+                    }
+                };
 
-            if !self.music.is_empty() && !timeline.audio_segments.is_empty() {
+            if !self.music.is_empty()
+                && (!timeline.audio_segments.is_empty() || !timeline.video_segments.is_empty())
+            {
                 mix_music(&self.music, timeline, frame_start, written, &mut buf);
             }
 
@@ -313,34 +333,52 @@ impl AudioRenderer {
         };
         while written < samples {
             sources.check_cancelled()?;
-            let (mapping, span) = if !timeline.transitions.is_empty()
+            let mapping_span = if !timeline.transitions.is_empty()
                 || !timeline.hold_windows().is_empty()
             {
-                let Some((mapping, output_end_samples)) = self.next_transition_mapping(timeline)
-                else {
-                    break;
-                };
-                (
-                    mapping,
-                    output_end_samples
-                        .saturating_sub(self.elapsed_samples)
-                        .min(samples - written),
-                )
+                self.next_transition_mapping(timeline)
+                    .map(|(mapping, output_end_samples)| {
+                        (
+                            mapping,
+                            output_end_samples
+                                .saturating_sub(self.elapsed_samples)
+                                .min(samples - written),
+                        )
+                    })
             } else {
-                let Some(cursor) = self.timeline_cursor(timeline) else {
-                    break;
-                };
-                (
-                    TimelineFrameMapping::Single {
-                        source: TimelineSource {
-                            source_time: cursor.segment_time,
-                            segment_index: cursor.segment_index,
-                            segment: cursor.segment,
+                self.timeline_cursor(timeline).map(|cursor| {
+                    (
+                        TimelineFrameMapping::Single {
+                            source: TimelineSource {
+                                source_time: cursor.segment_time,
+                                segment_index: cursor.segment_index,
+                                segment: cursor.segment,
+                            },
+                            output_end: 0.0,
                         },
-                        output_end: 0.0,
-                    },
-                    (cursor.segment_end_samples - self.elapsed_samples).min(samples - written),
-                )
+                        (cursor.segment_end_samples - self.elapsed_samples).min(samples - written),
+                    )
+                })
+            };
+            let Some((mapping, span)) = mapping_span else {
+                let remaining = self
+                    .playhead_to_samples(timeline.duration())
+                    .saturating_sub(self.elapsed_samples);
+                let count = (samples - written)
+                    .min(remaining)
+                    .min(EXPORT_AUDIO_BLOCK_SAMPLES);
+                if count == 0 {
+                    break;
+                }
+                let block = &mut output[..count * 2];
+                block.fill(0.0);
+                if !self.music.is_empty() {
+                    mix_music(&self.music, timeline, self.elapsed_samples, count, block);
+                }
+                emit(written, block)?;
+                self.elapsed_samples += count;
+                written += count;
+                continue;
             };
             if span == 0 {
                 break;
@@ -407,6 +445,15 @@ impl AudioRenderer {
                             span_offset,
                         );
                     }
+                }
+                if !self.music.is_empty() {
+                    mix_music(
+                        &self.music,
+                        timeline,
+                        self.elapsed_samples + span_offset,
+                        count,
+                        output,
+                    );
                 }
                 emit(written + span_offset, output)?;
                 span_offset += count;
@@ -1306,7 +1353,7 @@ fn mix_music(
     let frame_start = frame_start as i64;
     let frame_end = frame_start + samples as i64;
 
-    for segment in &timeline.audio_segments {
+    for segment in crate::segments::mixed_audio_segments(timeline) {
         if !segment.enabled || segment.end <= segment.start {
             continue;
         }
@@ -2648,6 +2695,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                video_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -2784,6 +2832,7 @@ mod tests {
                     scene_segments: Vec::new(),
                     style_segments: Vec::new(),
                     image_segments: Vec::new(),
+                    video_segments: Vec::new(),
                     mask_segments: Vec::new(),
                     text_segments: Vec::new(),
                     caption_segments: Vec::new(),
@@ -3072,6 +3121,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                video_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -3188,6 +3238,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                video_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -3419,6 +3470,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                video_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -3461,6 +3513,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                video_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -3604,6 +3657,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                video_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),
@@ -3819,5 +3873,51 @@ mod tests {
         let stream = render_export_audio(&mut renderer, &project, 30, 2 * 30);
         assert!((left_at_second(&stream, 0) - expected(4_000)).abs() < 0.02);
         assert!((left_at_second(&stream, 1) - expected(10_000)).abs() < 0.02);
+    }
+
+    #[test]
+    fn video_only_timeline_decodes_source_audio_and_respects_mute() {
+        let _ = ffmpeg::init();
+        let project_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let path = "apps/media-server/src/__tests__/fixtures/test-with-audio.mp4";
+        let video = cap_project::VideoSegment {
+            start: 0.0,
+            end: 0.75,
+            path: path.to_string(),
+            source_start: 0.25,
+            source_duration: 1.0,
+            ..Default::default()
+        };
+        let mut project = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                video_segments: vec![video],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut cache = MusicTracks::new();
+        let music = crate::load_music_tracks(&project, &project_path, &mut cache);
+        let data = music.get(path).unwrap();
+        assert_eq!(
+            data.source_start_sample(),
+            AudioData::SAMPLE_RATE as usize / 4
+        );
+        assert_eq!(data.sample_count(), AudioData::SAMPLE_RATE as usize * 3 / 4);
+
+        let mut renderer = AudioRenderer::new(vec![]).with_music(music);
+        let stream = render_export_audio(&mut renderer, &project, 30, 30);
+        let audible = stream[..AudioData::SAMPLE_RATE as usize * 3 / 2]
+            .iter()
+            .map(|sample| sample.abs())
+            .sum::<f32>()
+            / (AudioData::SAMPLE_RATE as f32 * 1.5);
+        assert!(audible > 0.01, "source audio was silent: {audible}");
+
+        project.timeline.as_mut().unwrap().video_segments[0].muted = true;
+        let muted = crate::load_music_tracks(&project, &project_path, &mut cache);
+        assert!(muted.is_empty());
+        renderer.set_music(muted);
+        let stream = render_export_audio(&mut renderer, &project, 30, 30);
+        assert!(stream.iter().all(|sample| *sample == 0.0));
     }
 }

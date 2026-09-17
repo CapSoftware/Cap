@@ -7,6 +7,7 @@ import { type AudioTrackSegment, MIN_AUDIO_SEGMENT_DURATION } from "../audio";
 import { useEditorContext } from "../context";
 import { getSegmentTrack, sortTrackSegments } from "../timelineTracks";
 import { useTimelineContext } from "./context";
+import { ImportedWaveformCanvas } from "./imported-waveform";
 import {
 	SegmentContent,
 	SegmentHandle,
@@ -217,6 +218,7 @@ export function AudioTrack(props: {
 		totalDuration,
 		projectHistory,
 		projectActions,
+		importedWaveform,
 	} = useEditorContext();
 	const { secsPerPixel } = useTimelineContext();
 	const setPreviewTime = useSetPreviewTime();
@@ -517,6 +519,15 @@ export function AudioTrack(props: {
 									},
 								)}
 							>
+								<ImportedWaveformCanvas
+									waveform={importedWaveform(segment.path)}
+									start={segment.start}
+									end={segment.end}
+									sourceStart={segment.trimStart}
+									volumeDb={segment.volumeDb}
+									enabled={segment.enabled}
+									color="var(--track-audio)"
+								/>
 								<SegmentLabel
 									compactAt={24}
 									full={() => (

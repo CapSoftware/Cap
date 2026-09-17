@@ -3015,6 +3015,11 @@ segment_editor!(
     image_segments,
     cap_project::ImageSegment
 );
+segment_editor!(
+    edit_video_segment,
+    video_segments,
+    cap_project::VideoSegment
+);
 segment_editor!(edit_audio_segment, audio_segments, AudioTrackSegment);
 
 impl EditorWindow {
@@ -3832,6 +3837,13 @@ impl EditorWindow {
                 count(timeline.image_segments.len()),
                 cx,
                 |this, index, cx| this.render_image_panel(index, cx),
+            ),
+            TrackKind::Video => self.stacked_panel(
+                "video",
+                "video",
+                count(timeline.video_segments.len()),
+                cx,
+                |this, index, cx| this.render_video_panel(index, cx),
             ),
             TrackKind::Zoom => {
                 let indices = count(timeline.zoom_segments.len());
@@ -8715,6 +8727,70 @@ impl ImageProperty {
 }
 
 impl EditorWindow {
+    fn render_video_panel(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(segment) = self
+            .timeline()
+            .and_then(|timeline| timeline.video_segments.get(index))
+        else {
+            return div().into_any_element();
+        };
+        let mut panel = div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(
+                self.labelled_small(
+                    "Video",
+                    div()
+                        .text_size(px(13.))
+                        .child(segment.name.clone())
+                        .into_any_element(),
+                ),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(self.theme.gray_10))
+                    .child("Drag the video on the canvas to move it. Pull a corner to resize it."),
+            );
+        for (key, label, value) in [
+            (0, "Enabled", segment.enabled),
+            (1, "Mute audio", segment.muted),
+            (2, "Lock aspect ratio", segment.lock_aspect),
+            (3, "Flip horizontally", segment.flip_x),
+            (4, "Flip vertically", segment.flip_y),
+        ] {
+            panel = panel.child(
+                ui::Subfield::plain(&self.theme, label).child(
+                    ui::Toggle::plain(
+                        &self.theme,
+                        SharedString::from(format!("video-{index}-{key}")),
+                        value,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.edit_video_segment(
+                            "video-toggle",
+                            index,
+                            window,
+                            cx,
+                            move |segment| {
+                                match key {
+                                    0 => segment.enabled = !value,
+                                    1 => segment.muted = !value,
+                                    2 => segment.lock_aspect = !value,
+                                    3 => segment.flip_x = !value,
+                                    _ => segment.flip_y = !value,
+                                }
+                                true
+                            },
+                        );
+                    })),
+                ),
+            );
+        }
+        panel.into_any_element()
+    }
+
     fn render_image_panel(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(segment) = self
             .timeline()
@@ -8780,6 +8856,19 @@ impl EditorWindow {
                             );
                         })),
                     ),
+            )
+            .child(
+                ui::Button::plain(
+                    &self.theme,
+                    SharedString::from(format!("draw-image-{index}")),
+                    ui::ButtonVariant::Gray,
+                    ui::ButtonSize::Md,
+                )
+                .icon("icons/edit.svg")
+                .label("Draw on image")
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_image_drawing(index, window, cx)
+                })),
             )
             .child(
                 ui::Button::plain(

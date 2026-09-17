@@ -1,4 +1,4 @@
-import type { ImageSegment, XY } from "~/utils/tauri";
+import { commands, type ImageSegment, type XY } from "~/utils/tauri";
 
 export type { ImageSegment } from "~/utils/tauri";
 export type ImageAsset = {
@@ -43,6 +43,7 @@ export function defaultImageSegment(
 		track,
 		enabled: true,
 		path: asset.path,
+		annotations: [],
 		name: asset.name,
 		center: { x: 0.5, y: 0.5 },
 		size: fitImageSize(asset.width, asset.height, output.width, output.height),
@@ -291,56 +292,22 @@ export async function importImagePath(
 }
 
 export async function pickImage(
-	projectPath: string,
+	sourcePath?: string,
 ): Promise<ImageAsset | null> {
-	const [{ open }, fs] = await Promise.all([
-		import("@tauri-apps/plugin-dialog"),
-		import("@tauri-apps/plugin-fs"),
-	]);
-	const source = await open({
-		multiple: false,
-		directory: false,
-		filters: [
-			{
-				name: "Images",
-				extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"],
-			},
-		],
-	});
+	const source =
+		sourcePath ??
+		(await import("@tauri-apps/plugin-dialog").then(({ open }) =>
+			open({
+				multiple: false,
+				directory: false,
+				filters: [
+					{
+						name: "Images",
+						extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"],
+					},
+				],
+			}),
+		));
 	if (typeof source !== "string") return null;
-	return importImagePath(projectPath, source, {
-		read: async (path) => readBoundedImage(await fs.open(path, { read: true })),
-		mkdir: (path) => fs.mkdir(path, { recursive: true }),
-		write: async (path, bytes) => {
-			const file = await fs.open(path, { write: true, createNew: true });
-			try {
-				let offset = 0;
-				while (offset < bytes.length) {
-					const written = await file.write(
-						bytes.subarray(
-							offset,
-							Math.min(bytes.length, offset + 1024 * 1024),
-						),
-					);
-					if (!written)
-						throw new Error("Unable to save the image in this project.");
-					offset += written;
-				}
-			} finally {
-				await file.close();
-			}
-		},
-		id: () => crypto.randomUUID(),
-		decode: async (bytes) => {
-			const bitmap = await createImageBitmap(
-				new Blob([new Uint8Array(bytes)]),
-				{ imageOrientation: "from-image" },
-			);
-			try {
-				return { width: bitmap.width, height: bitmap.height };
-			} finally {
-				bitmap.close();
-			}
-		},
-	});
+	return commands.importEditorImage(source);
 }

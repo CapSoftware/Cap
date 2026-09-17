@@ -47,6 +47,7 @@ import {
 	events,
 	type FrameLayoutEvent,
 	type FramesRendered,
+	type ImageDrawingCommit,
 	type ImportedAudioTrack,
 	type MultipleSegments,
 	type ProjectConfiguration,
@@ -56,6 +57,7 @@ import {
 	type SingleSegment,
 	type TimelineConfiguration,
 	type TimelineSegment,
+	type VideoSegment,
 	type XY,
 } from "~/utils/tauri";
 import {
@@ -105,6 +107,10 @@ import {
 	type StyleSegment,
 	splitOverlaySegment,
 } from "./style";
+import {
+	decodeImportedWaveform,
+	type ImportedWaveform,
+} from "./Timeline/imported-waveform-data";
 import type { TextSegment } from "./text";
 import {
 	applyMotionTemplate,
@@ -140,6 +146,7 @@ import {
 	sortTrackSegments,
 } from "./timelineTracks";
 import { createProgressBar } from "./utils";
+import { defaultVideoSegment, pickVideo } from "./video";
 
 export type ModalDialog =
 	| { type: "createPreset" }
@@ -211,6 +218,7 @@ export const getPreviewResolution = (
 export type TimelineTrackType =
 	| "style"
 	| "image"
+	| "video"
 	| "clip"
 	| "caption"
 	| "keyboard"
@@ -256,6 +264,7 @@ type EditorTimelineConfiguration = Omit<
 	textSegments: TextSegment[];
 	styleSegments: StyleSegment[];
 	imageSegments: ImageSegment[];
+	videoSegments: VideoSegment[];
 	audioSegments?: AudioTrackSegment[];
 	camera3dSegments: Camera3DSegment[];
 };
@@ -312,6 +321,9 @@ export function normalizeProject(
 				imageSegments: (config.overlayOrder?.length
 					? sortTrackSegments
 					: normalizeTrackSegments)(config.timeline.imageSegments ?? []),
+				videoSegments: (config.overlayOrder?.length
+					? sortTrackSegments
+					: normalizeTrackSegments)(config.timeline.videoSegments ?? []),
 				transitions:
 					(
 						config.timeline as TimelineConfiguration & {
@@ -383,6 +395,7 @@ export function serializeProjectConfiguration(
 				transitions: project.timeline.transitions ?? [],
 				styleSegments: project.timeline.styleSegments ?? [],
 				imageSegments: project.timeline.imageSegments ?? [],
+				videoSegments: project.timeline.videoSegments ?? [],
 				captionSegments: project.timeline.captionSegments ?? [],
 				keyboardSegments: project.timeline.keyboardSegments ?? [],
 				maskSegments: project.timeline.maskSegments ?? [],
@@ -412,10 +425,30 @@ export const [EditorContextProvider, useBaseEditorContext] =
 			meta: () => TransformedMeta;
 			editorInstance: SerializedEditorInstance;
 			refetchMeta(): Promise<void>;
+			imageDrawingCommit?: Accessor<ImageDrawingCommit | undefined>;
 		}) => {
 			const editorInstanceContext = useEditorInstanceContext();
 			const [project, setProject] = createStore<EditorProjectConfiguration>(
 				normalizeProject(props.editorInstance.savedProjectConfig),
+			);
+			createEffect(
+				on(
+					() => props.imageDrawingCommit?.(),
+					(commit) => {
+						if (!commit) return;
+						setProject(
+							"timeline",
+							"imageSegments",
+							commit.imageIndex,
+							(segment) => ({
+								...segment,
+								path: commit.path,
+								sourcePath: commit.sourcePath,
+								annotations: commit.annotations,
+							}),
+						);
+					},
+				),
 			);
 
 			const setClipTransition = (
@@ -467,6 +500,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						const tracks = [
 							timeline.styleSegments,
 							timeline.imageSegments,
+							timeline.videoSegments,
 							timeline.zoomSegments,
 							timeline.sceneSegments ?? [],
 							timeline.maskSegments,
@@ -611,14 +645,16 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					: null;
 			};
 			const selectAddedOverlay = (
-				type: "style" | "image",
+				type: "style" | "image" | "video",
 				lane: number,
 				start: number,
 			) => {
 				const segments =
 					(type === "style"
 						? project.timeline?.styleSegments
-						: project.timeline?.imageSegments) ?? [];
+						: type === "video"
+							? project.timeline?.videoSegments
+							: project.timeline?.imageSegments) ?? [];
 				const index = segments.findIndex(
 					(segment) => segment.track === lane && segment.start === start,
 				);
@@ -1003,11 +1039,16 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					}
 				},
 				splitOverlaySegment: (
-					type: "style" | "image",
+					type: "style" | "image" | "video",
 					index: number,
 					time: number,
 				) => {
-					const key = type === "style" ? "styleSegments" : "imageSegments";
+					const key =
+						type === "style"
+							? "styleSegments"
+							: type === "video"
+								? "videoSegments"
+								: "imageSegments";
 					setProject(
 						produce((value) => {
 							const timeline = value.timeline;
@@ -1018,6 +1059,15 @@ export const [EditorContextProvider, useBaseEditorContext] =
 									time,
 								);
 								if (parts) timeline.styleSegments.splice(index, 1, ...parts);
+							} else if (type === "video") {
+								const segment = structuredClone(
+									unwrap(timeline.videoSegments[index]),
+								);
+								const parts = splitOverlaySegment(segment, time);
+								if (parts) {
+									parts[1].sourceStart += time - segment.start;
+									timeline.videoSegments.splice(index, 1, ...parts);
+								}
 							} else {
 								const parts = splitOverlaySegment(
 									structuredClone(unwrap(timeline.imageSegments[index])),
@@ -1030,7 +1080,10 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					setEditorState("timeline", "selection", { type, indices: [index] });
 					if (type === "style") enterStyleScope(index);
 				},
-				deleteOverlaySegments: (type: "style" | "image", indices: number[]) => {
+				deleteOverlaySegments: (
+					type: "style" | "image" | "video",
+					indices: number[],
+				) => {
 					const remove = new Set(indices);
 					batch(() => {
 						setProject(
@@ -1039,6 +1092,11 @@ export const [EditorContextProvider, useBaseEditorContext] =
 								if (type === "style")
 									value.timeline.styleSegments =
 										value.timeline.styleSegments.filter(
+											(_, index) => !remove.has(index),
+										);
+								else if (type === "video")
+									value.timeline.videoSegments =
+										value.timeline.videoSegments.filter(
 											(_, index) => !remove.has(index),
 										);
 								else
@@ -1075,22 +1133,23 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					lane: number,
 					time = editorState.playbackTime,
 					replaceIndex?: number,
+					sourcePath?: string,
 				) => {
-					if (editorState.importingImage) return;
+					if (editorState.importingImage) return false;
 					const original =
 						replaceIndex === undefined
 							? null
 							: project.timeline?.imageSegments[replaceIndex];
 					setEditorState("importingImage", true);
 					try {
-						const asset = await pickImage(props.editorInstance.path);
-						if (!asset || !project.timeline) return;
+						const asset = await pickImage(sourcePath);
+						if (!asset || !project.timeline) return false;
 						if (replaceIndex !== undefined) {
 							if (
 								!original ||
 								project.timeline.imageSegments[replaceIndex] !== original
 							)
-								return;
+								return false;
 							const output = editorInstanceContext.latestFrameLayout();
 							const width = output?.output_width ?? 1920;
 							const height = output?.output_height ?? 1080;
@@ -1110,10 +1169,10 @@ export const [EditorContextProvider, useBaseEditorContext] =
 										}
 									: {}),
 							});
-							return;
+							return true;
 						}
 						const placement = overlayPlacement("image", lane, time);
-						if (!placement) return;
+						if (!placement) return false;
 						const layout = editorInstanceContext.latestFrameLayout();
 						const output = {
 							width: layout?.output_width ?? 1920,
@@ -1136,12 +1195,64 @@ export const [EditorContextProvider, useBaseEditorContext] =
 							}),
 						);
 						selectAddedOverlay("image", placement.lane, placement.start);
+						return true;
 					} catch (error) {
 						toast.error(
 							error instanceof Error ? error.message : "Unable to import image",
 						);
+						return false;
 					} finally {
 						setEditorState("importingImage", false);
+					}
+				},
+				importVideoSegment: async (
+					lane: number,
+					time = editorState.playbackTime,
+					sourcePath?: string,
+				) => {
+					if (editorState.importingVideo) return false;
+					setEditorState("importingVideo", true);
+					try {
+						const asset = await pickVideo(sourcePath);
+						if (!asset || !project.timeline) return false;
+						const segments = project.timeline.videoSegments;
+						const start = Math.max(0, time);
+						const end = start + asset.duration;
+						let placementLane = lane;
+						while (
+							segments.some(
+								(segment) =>
+									segment.track === placementLane &&
+									segment.start < end &&
+									segment.end > start,
+							)
+						) {
+							placementLane += 1;
+						}
+						const layout = editorInstanceContext.latestFrameLayout();
+						const output = {
+							width: layout?.output_width ?? 1920,
+							height: layout?.output_height ?? 1080,
+						};
+						setProject(
+							"timeline",
+							"videoSegments",
+							produce((videoSegments) => {
+								videoSegments.push(
+									defaultVideoSegment(asset, start, placementLane, output),
+								);
+								sortTrackSegments(videoSegments);
+							}),
+						);
+						selectAddedOverlay("video", placementLane, start);
+						return true;
+					} catch (error) {
+						toast.error(
+							error instanceof Error ? error.message : "Unable to import video",
+						);
+						return false;
+					} finally {
+						setEditorState("importingVideo", false);
 					}
 				},
 				splitMaskSegment: (index: number, time: number) => {
@@ -1801,10 +1912,18 @@ export const [EditorContextProvider, useBaseEditorContext] =
 
 			const totalDuration = () =>
 				project.timeline
-					? clipTimelineDuration(
-							project.timeline.segments,
-							project.timeline.transitions ?? [],
-						) + totalHeldDuration(holdWindows(project.timeline.textSegments))
+					? Math.max(
+							clipTimelineDuration(
+								project.timeline.segments,
+								project.timeline.transitions ?? [],
+							) + totalHeldDuration(holdWindows(project.timeline.textSegments)),
+							...project.timeline.imageSegments
+								.filter((segment) => segment.enabled)
+								.map((segment) => segment.end),
+							...project.timeline.videoSegments
+								.filter((segment) => segment.enabled)
+								.map((segment) => segment.end),
+						)
 					: props.editorInstance.recordingDuration;
 
 			type State = {
@@ -1855,6 +1974,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 			const [editorState, setEditorState] = createStore({
 				styleEditIndex: null as number | null,
 				importingImage: false,
+				importingVideo: false,
 				previewTime: null as number | null,
 				playbackTime: preparing?.handoffTarget()?.playback.playheadSeconds ?? 0,
 				playing: false,
@@ -1880,6 +2000,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 						| null
 						| { type: "style"; indices: number[] }
 						| { type: "image"; indices: number[] }
+						| { type: "video"; indices: number[] }
 						| { type: "zoom"; indices: number[] }
 						| { type: "clip"; indices: number[] }
 						| { type: "transition"; index: number }
@@ -1929,6 +2050,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 					tracks: {
 						style: getUsedTrackCount(project.timeline?.styleSegments ?? []),
 						image: getUsedTrackCount(project.timeline?.imageSegments ?? []),
+						video: getUsedTrackCount(project.timeline?.videoSegments ?? []),
 						clip: true,
 						caption: initialCaptionTrackVisible,
 						keyboard: initialKeyboardTrackVisible,
@@ -2122,6 +2244,32 @@ export const [EditorContextProvider, useBaseEditorContext] =
 			const [micWaveforms, setMicWaveforms] = createSignal<number[][]>();
 			const [systemAudioWaveforms, setSystemAudioWaveforms] =
 				createSignal<number[][]>();
+			const [importedWaveforms, setImportedWaveforms] = createSignal<
+				Map<string, ImportedWaveform>
+			>(new Map());
+			const waveformRequested = new Set<string>();
+			createEffect(() => {
+				const timeline = project.timeline;
+				const paths = [
+					...(timeline?.audioSegments ?? []),
+					...(timeline?.videoSegments ?? []),
+				].map((segment) => segment.path);
+				for (const path of new Set(paths)) {
+					if (!path || waveformRequested.has(path)) continue;
+					waveformRequested.add(path);
+					commands
+						.getImportedWaveform(path)
+						.then((encoded) => {
+							const waveform = decodeImportedWaveform(encoded);
+							setImportedWaveforms((current) =>
+								new Map(current).set(path, waveform),
+							);
+						})
+						.catch((error) =>
+							console.error(`Failed to load waveform for ${path}:`, error),
+						);
+				}
+			});
 			onMount(() => {
 				commands
 					.getMicWaveforms()
@@ -2482,6 +2630,7 @@ export const [EditorContextProvider, useBaseEditorContext] =
 				customDomain,
 				refetchMeta: () => props.refetchMeta(),
 				editorInstance: props.editorInstance,
+				importedWaveform: (path: string) => importedWaveforms().get(path),
 				dialog,
 				setDialog,
 				project,
@@ -2559,15 +2708,15 @@ function transformMeta({ pretty_name, ...rawMeta }: RecordingMeta) {
 		prettyName: pretty_name,
 		hasCamera: (() => {
 			if (meta.type === "single") return !!meta.camera;
-			return !!meta.segments[0].camera;
+			return !!meta.segments[0]?.camera;
 		})(),
 		hasSystemAudio: (() => {
 			if (meta.type === "single") return false;
-			return !!meta.segments[0].system_audio;
+			return !!meta.segments[0]?.system_audio;
 		})(),
 		hasMicrophone: (() => {
 			if (meta.type === "single") return !!meta.audio;
-			return !!meta.segments[0].mic;
+			return !!meta.segments[0]?.mic;
 		})(),
 		hasRecordedCursorData: (() => {
 			if (meta.type === "single") return !!meta.cursor;

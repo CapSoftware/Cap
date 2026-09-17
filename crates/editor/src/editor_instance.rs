@@ -1,15 +1,19 @@
 use crate::completed_audio::{CompletedAudioHandoff, CompletedAudioSegment};
 use crate::editor;
 use crate::playback::{self, PlaybackHandle, PlaybackStartError};
-use cap_project::StudioRecordingMeta;
 use cap_project::{
     CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, TimelineConfiguration,
     TimelineFrameMapping, TimelineSegment, XY,
 };
+use cap_project::{StudioRecordingMeta, StudioRecordingStatus};
+use cap_rendering::media_project::{
+    add_still_image_to_timeline, media_canvas_size, still_image_path,
+};
 use cap_rendering::{
-    PrecomputedCursorTimeline, ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders,
-    RenderVideoConstants, SegmentVideoPaths, SharedWgpuDevice, Video, ZoomTransformTimeline,
-    get_duration, spring_mass_damper::SpringMassDamperSimulationConfig,
+    BackgroundTextureCache, DecodedSegmentFrames, PrecomputedCursorTimeline, ProjectRecordingsMeta,
+    ProjectUniforms, RecordingSegmentDecoders, RenderOptions, RenderVideoConstants,
+    SegmentVideoPaths, SharedWgpuDevice, Video, ZoomTransformTimeline, get_duration,
+    spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 use std::{
     path::{Path, PathBuf},
@@ -351,19 +355,31 @@ impl EditorInstance {
         };
 
         meta.ensure_ordinary_media_access(&project_path)?;
+        let still_image = still_image_path(meta);
 
-        let segment_count = match meta.as_ref() {
-            StudioRecordingMeta::SingleSegment { .. } => 1,
-            StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
+        let segment_count = if still_image.is_some() {
+            0
+        } else {
+            match meta.as_ref() {
+                StudioRecordingMeta::SingleSegment { .. } => 1,
+                StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
+            }
         };
 
-        if segment_count == 0 {
+        if segment_count == 0 && !matches!(meta.status(), StudioRecordingStatus::Complete) {
             return Err(
                 "Recording has no segments. It may need to be recovered first.".to_string(),
             );
         }
 
         let mut project = recording_meta.project_config();
+        if let Some(path) = &still_image {
+            if add_still_image_to_timeline(&mut project, path) {
+                if let Err(error) = project.write(&recording_meta.project_path) {
+                    warn!(%error, "Failed to save image timeline");
+                }
+            }
+        }
 
         if project.timeline.is_none() {
             warn!("Project config has no timeline, creating one from recording segments");
@@ -428,6 +444,7 @@ impl EditorInstance {
                     scene_segments: Vec::new(),
                     style_segments: Vec::new(),
                     image_segments: Vec::new(),
+                    video_segments: Vec::new(),
                     mask_segments: Vec::new(),
                     text_segments: Vec::new(),
                     caption_segments: Vec::new(),
@@ -442,7 +459,14 @@ impl EditorInstance {
             }
         }
 
-        if project.clips.is_empty() {
+        if segment_count == 0 && project.timeline.is_none() {
+            project.timeline = Some(TimelineConfiguration::default());
+            if let Err(error) = project.write(&recording_meta.project_path) {
+                warn!(%error, "Failed to save media timeline");
+            }
+        }
+
+        if segment_count > 0 && project.clips.is_empty() {
             project.clips = initial_clip_configuration(&recording_meta.project_path, meta);
 
             if let Err(e) = project.write(&recording_meta.project_path) {
@@ -462,7 +486,7 @@ impl EditorInstance {
             tracing::info!("Using FFmpeg decoder for editor preview");
         }
 
-        let completed_audio = completed_audio.and_then(|handoff| {
+        let completed_audio = completed_audio.filter(|_| segment_count > 0).and_then(|handoff| {
             let matching = handoff.into_matching(&recording_meta, meta);
             if matching.is_none() {
                 tracing::debug!("Completed preparing audio did not match finalized metadata; decoding ordinary sources");
@@ -476,6 +500,9 @@ impl EditorInstance {
             let recording_meta = recording_meta.clone();
             let studio_meta = (**meta).clone();
             async move {
+                if segment_count == 0 {
+                    return Ok(Vec::new());
+                }
                 create_segments_with_audio(
                     &recording_meta,
                     &studio_meta,
@@ -500,7 +527,7 @@ impl EditorInstance {
         let has_music = project
             .timeline
             .as_ref()
-            .map(|t| !t.audio_segments.is_empty())
+            .map(|t| !t.audio_segments.is_empty() || !t.video_segments.is_empty())
             .unwrap_or(false);
         if has_declared_audio || has_music {
             audio_output.prewarm();
@@ -523,12 +550,18 @@ impl EditorInstance {
             });
         }
 
-        let recordings = match preloaded_recordings {
-            Some(recordings) => recordings,
-            None => Arc::new(ProjectRecordingsMeta::new(
-                &recording_meta.project_path,
-                meta.as_ref(),
-            )?),
+        let recordings = if segment_count == 0 {
+            Arc::new(ProjectRecordingsMeta {
+                segments: Vec::new(),
+            })
+        } else {
+            match preloaded_recordings {
+                Some(recordings) => recordings,
+                None => Arc::new(ProjectRecordingsMeta::new(
+                    &recording_meta.project_path,
+                    meta.as_ref(),
+                )?),
+            }
         };
 
         cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project);
@@ -541,22 +574,46 @@ impl EditorInstance {
                 .collect::<Vec<_>>(),
         );
 
+        let media_options = (segment_count == 0).then(|| RenderOptions {
+            camera_size: None,
+            screen_size: media_canvas_size(&project_path, &project, still_image.as_deref()),
+            preserve_screen_alpha: still_image.is_some(),
+        });
         let render_constants = if let Some(shared) = shared_device {
-            let rc = RenderVideoConstants::new_with_device(
-                shared,
-                &recordings.segments,
-                recording_meta.clone(),
-                (**meta).clone(),
-            )
-            .map_err(|e| format!("Failed to create render constants: {e}"))?;
+            let rc = if let Some(options) = media_options {
+                RenderVideoConstants::from_shared_device(
+                    shared,
+                    options,
+                    (**meta).clone(),
+                    recording_meta.clone(),
+                    Arc::new(BackgroundTextureCache::default()),
+                )
+            } else {
+                RenderVideoConstants::new_with_device(
+                    shared,
+                    &recordings.segments,
+                    recording_meta.clone(),
+                    (**meta).clone(),
+                )
+                .map_err(|e| format!("Failed to create render constants: {e}"))?
+            };
             Arc::new(rc)
         } else {
-            let rc = RenderVideoConstants::new(
-                &recordings.segments,
-                recording_meta.clone(),
-                (**meta).clone(),
-            )
-            .await
+            let rc = if let Some(options) = media_options {
+                RenderVideoConstants::new_with_options(
+                    options,
+                    recording_meta.clone(),
+                    (**meta).clone(),
+                )
+                .await
+            } else {
+                RenderVideoConstants::new(
+                    &recordings.segments,
+                    recording_meta.clone(),
+                    (**meta).clone(),
+                )
+                .await
+            }
             .map_err(|e| format!("Failed to create render constants: {e}"))?;
             Arc::new(rc)
         };
@@ -1023,6 +1080,51 @@ impl EditorInstance {
                             _ => None,
                         }
                     });
+
+                    if project.get_segment_time(frame_time).is_none() {
+                        let duration = project
+                            .timeline
+                            .as_ref()
+                            .map(TimelineConfiguration::duration)
+                            .unwrap_or(0.0);
+                        if frame_time > duration {
+                            break;
+                        }
+                        let size = self.render_constants.options.screen_size;
+                        let frames = DecodedSegmentFrames {
+                            screen_size: size,
+                            screen_frame: None,
+                            camera_frame: None,
+                            segment_time: frame_time as f32,
+                            recording_time: frame_time as f32,
+                            segment_has_camera: false,
+                        };
+                        let cursor = Arc::new(CursorEvents::default());
+                        let zoom =
+                            ZoomTransformTimeline::from_project(&project, &cursor, duration, size);
+                        let uniforms = ProjectUniforms::new(
+                            &self.render_constants,
+                            &project,
+                            frame_number,
+                            fps,
+                            resolution_base,
+                            &cursor,
+                            &frames,
+                            duration,
+                            &zoom,
+                        );
+                        if preview_rx.has_changed().unwrap_or(false) {
+                            continue;
+                        }
+                        if !self
+                            .renderer
+                            .render_frame_confirmed(frames, uniforms, cursor)
+                            .await
+                        {
+                            warn!(frame_number, "Preview renderer: media frame failed");
+                        }
+                        break;
+                    }
 
                     let Some((segment_time, segment)) = project.get_segment_time(frame_time) else {
                         warn!(
@@ -1843,6 +1945,58 @@ fn get_calibration_offset(
 mod tests {
     use super::*;
     use cap_project::{AudioGapSummary, CursorClickEvent, CursorConfiguration, CursorMoveEvent};
+
+    #[tokio::test]
+    async fn screenshot_bundle_opens_in_video_editor_and_renders_original_image() {
+        let directory = tempfile::tempdir().unwrap();
+        let project_path = directory.path().join("Screenshot.cap");
+        std::fs::create_dir_all(&project_path).unwrap();
+        let image_path = project_path.join("original.png");
+        image::RgbaImage::from_pixel(160, 90, image::Rgba([0, 0, 255, 255]))
+            .save(&image_path)
+            .unwrap();
+        let original = std::fs::read(&image_path).unwrap();
+        let mut meta: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "Screenshot",
+            "display": { "path": "original.png", "fps": 0 },
+            "camera": null, "audio": null, "cursor": null
+        }))
+        .unwrap();
+        meta.project_path = project_path.clone();
+        meta.save_for_project().unwrap();
+        ProjectConfiguration::default()
+            .write(&project_path)
+            .unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let instance = EditorInstance::new(
+            project_path.clone(),
+            |_| {},
+            Box::new(move |frame, _| {
+                if let crate::EditorFrameOutput::Rgba(frame) = frame {
+                    let _ = tx.send(frame);
+                }
+            }),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(instance.segment_medias.is_empty());
+        assert_eq!(instance.get_total_frames(30), 150);
+        instance
+            .preview_tx
+            .send(Some((0, 30, XY::new(160, 90))))
+            .unwrap();
+        let frame = tokio::task::spawn_blocking(move || {
+            rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap()
+        })
+        .await
+        .unwrap();
+        let center = 45 * frame.padded_bytes_per_row as usize + 80 * 4;
+        assert_eq!(&frame.data[center..center + 3], &[0, 0, 255]);
+        assert_eq!(std::fs::read(&image_path).unwrap(), original);
+        instance.dispose().await;
+    }
 
     #[tokio::test]
     async fn completed_pcm_loader_reuses_arc_without_opening_a_missing_file() {

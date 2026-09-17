@@ -106,7 +106,9 @@ ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-f
 # `webp` is the config sidebar's four background-source illustrations, which
 # the app ships as webp; features are additive, so enabling it here does not
 # move gpui's own pin.
-image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp"] }
+image = { version = "0.25.1", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp", "tiff"] }
+uuid = { version = "1.10.0", features = ["v4"] }
+relative-path = "1.9.3"
 jpeg-decoder = "0.3"
 smallvec = "1"
 # Grapheme boundaries for `ui::TextInput`: Backspace deletes a user-perceived

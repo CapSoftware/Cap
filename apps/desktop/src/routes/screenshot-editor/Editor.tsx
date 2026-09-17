@@ -35,7 +35,7 @@ import { Preview } from "./Preview";
 import { ScreenshotEditorSkeleton } from "./screenshot-editor-skeleton";
 import { Dialog, EditorButton } from "./ui";
 
-export function Editor() {
+export function Editor(props: { imageDrawingMode?: boolean }) {
 	const [zoom, setZoom] = createSignal(1);
 	const {
 		projectHistory,
@@ -178,7 +178,7 @@ export function Editor() {
 	return (
 		<Show when={isRenderReady()} fallback={<ScreenshotEditorSkeleton />}>
 			<div class="relative">
-				<Header />
+				<Header imageDrawingMode={props.imageDrawingMode} />
 				<AnnotationConfigBar />
 			</div>
 			<div class="flex overflow-y-hidden flex-1 gap-0 pb-0 w-full min-h-0 leading-5">

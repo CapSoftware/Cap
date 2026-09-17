@@ -10,7 +10,10 @@ use cap_project::{
     BackgroundSource, ProjectConfiguration, RecordingMeta, StudioRecordingMeta,
     TimelineConfiguration, TimelineSegment,
 };
-use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};
+use cap_rendering::media_project::{
+    add_still_image_to_timeline, media_canvas_size, still_image_path,
+};
+use cap_rendering::{ProjectRecordingsMeta, RenderOptions, RenderVideoConstants};
 use std::{
     path::PathBuf,
     sync::{
@@ -120,13 +123,21 @@ impl ExporterBuilder {
         let studio_meta = recording_meta
             .studio_meta()
             .ok_or(Error::NotStudioRecording)?;
+        let still_image = still_image_path(studio_meta);
 
-        let recordings = Arc::new(
+        let recordings = Arc::new(if still_image.is_some() {
+            ProjectRecordingsMeta {
+                segments: Vec::new(),
+            }
+        } else {
             ProjectRecordingsMeta::new(&recording_meta.project_path, studio_meta)
-                .map_err(Error::RecordingsMeta)?,
-        );
+                .map_err(Error::RecordingsMeta)?
+        });
 
         synthesize_default_timeline(&mut project_config, &recordings);
+        if let Some(path) = &still_image {
+            add_still_image_to_timeline(&mut project_config, path);
+        }
 
         cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project_config);
         cap_project::synchronize_captions(
@@ -147,22 +158,40 @@ impl ExporterBuilder {
         );
         let stream_audio = streaming_output.is_some();
 
-        let render_constants = Arc::new(
+        let render_constants = Arc::new(if recordings.segments.is_empty() {
+            RenderVideoConstants::new_with_options(
+                RenderOptions {
+                    screen_size: media_canvas_size(
+                        &recording_meta.project_path,
+                        &project_config,
+                        still_image.as_deref(),
+                    ),
+                    camera_size: None,
+                    preserve_screen_alpha: still_image.is_some(),
+                },
+                recording_meta.clone(),
+                studio_meta.clone(),
+            )
+            .await
+            .map_err(Error::RendererSetup)?
+        } else {
             RenderVideoConstants::new(
                 &recordings.segments,
                 recording_meta.clone(),
                 studio_meta.clone(),
             )
             .await
-            .map_err(Error::RendererSetup)?,
-        );
+            .map_err(Error::RendererSetup)?
+        });
 
         let audio_cancellation = if stream_audio {
             cancellation.map(ExportAudioCancellation::new)
         } else {
             None
         };
-        let (segments, streaming_audio) = if let Some(control) = &audio_cancellation {
+        let (segments, streaming_audio) = if recordings.segments.is_empty() {
+            (Vec::new(), None)
+        } else if let Some(control) = &audio_cancellation {
             let recording = recording_meta.clone();
             let studio = studio_meta.clone();
             let cancellation = control.user.clone();
@@ -276,6 +305,7 @@ pub fn synthesize_default_timeline(
             scene_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            video_segments: Vec::new(),
             mask_segments: Vec::new(),
             text_segments: Vec::new(),
             caption_segments: Vec::new(),
@@ -333,6 +363,98 @@ pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> Pro
     }
 
     project_config
+}
+
+#[cfg(test)]
+mod media_only_tests {
+    use super::*;
+    use cap_project::{AudioTrackSegment, VideoSegment, XY};
+
+    #[tokio::test]
+    async fn video_only_project_exports_full_mp4_with_source_audio() {
+        let directory = tempfile::tempdir().unwrap();
+        let project_path = directory.path().join("VideoOnly.cap");
+        std::fs::create_dir_all(project_path.join("content/videos")).unwrap();
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/media-server/src/__tests__/fixtures/test-with-audio.mp4");
+        let imported = project_path.join("content/videos/clip.mp4");
+        std::fs::copy(&source, &imported).unwrap();
+        let original = std::fs::read(&imported).unwrap();
+        let mut meta: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "Video Only",
+            "segments": []
+        }))
+        .unwrap();
+        meta.project_path = project_path.clone();
+        meta.save_for_project().unwrap();
+        let mut project = ProjectConfiguration::default();
+        project.background.padding = 0.0;
+        project.background.shadow = 0.0;
+        project.timeline = Some(TimelineConfiguration {
+            video_segments: vec![VideoSegment {
+                start: 0.0,
+                end: 1.0,
+                path: "content/videos/clip.mp4".into(),
+                source_duration: 1.0,
+                size: XY::new(1.0, 1.0),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        project.write(&project_path).unwrap();
+        let output = directory.path().join("output.mp4");
+        let base = ExporterBase::builder(project_path)
+            .with_output_path(output.clone())
+            .build()
+            .await
+            .unwrap();
+        assert_eq!(base.total_frames(30), 30);
+        let settings = crate::mp4::Mp4ExportSettings {
+            fps: 30,
+            resolution_base: XY::new(160, 90),
+            compression: crate::mp4::ExportCompression::Social,
+            custom_bpp: None,
+            force_ffmpeg_decoder: false,
+            optimize_filesize: true,
+        };
+        settings.export(base, |_| true).await.unwrap();
+        let export = ffmpeg::format::input(&output).unwrap();
+        assert!(export.streams().best(ffmpeg::media::Type::Video).is_some());
+        assert!(export.streams().best(ffmpeg::media::Type::Audio).is_some());
+        assert!(export.duration() >= 900_000);
+        let audio_project = ProjectConfiguration {
+            timeline: Some(TimelineConfiguration {
+                audio_segments: vec![AudioTrackSegment {
+                    start: 0.0,
+                    end: 1.0,
+                    track: 0,
+                    path: "output.mp4".into(),
+                    name: None,
+                    enabled: true,
+                    trim_start: 0.0,
+                    volume_db: 0.0,
+                    fade_in: 0.0,
+                    fade_out: 0.0,
+                    duration: Some(1.0),
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let tracks = cap_editor::load_music_tracks_uncached(&audio_project, directory.path());
+        let decoded = tracks.get("output.mp4").unwrap();
+        let amplitude = decoded
+            .samples()
+            .iter()
+            .map(|sample| sample.abs())
+            .sum::<f32>()
+            / decoded.samples().len() as f32;
+        assert!(
+            amplitude > 0.01,
+            "exported source audio was silent: {amplitude}"
+        );
+        assert_eq!(std::fs::read(imported).unwrap(), original);
+    }
 }
 
 fn prepare_streaming_output(

@@ -1421,6 +1421,25 @@ impl ShowCapWindow {
         &'a self,
         app: &'a AppHandle<Wry>,
     ) -> futures::future::BoxFuture<'a, tauri::Result<WebviewWindow>> {
+        if let Self::ScreenshotEditor { path } = self {
+            let path = path.clone();
+            return Box::pin(async move {
+                let project_path = if path.is_dir()
+                    && path.extension().and_then(|extension| extension.to_str()) == Some("cap")
+                {
+                    path
+                } else if let Some(parent) = path.parent().filter(|parent| {
+                    parent.extension().and_then(|extension| extension.to_str()) == Some("cap")
+                }) {
+                    parent.to_path_buf()
+                } else {
+                    crate::import::create_media_project_from_image(app.clone(), path)
+                        .await
+                        .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?
+                };
+                Self::Editor { project_path }.show(app).await
+            });
+        }
         let picker_session = matches!(self, Self::TargetSelectOverlay { .. })
             .then(|| app.state::<WindowFocusManager>().picker_session())
             .flatten();
@@ -1432,6 +1451,9 @@ impl ShowCapWindow {
         app: &'a AppHandle<Wry>,
         session: u32,
     ) -> futures::future::BoxFuture<'a, tauri::Result<WebviewWindow>> {
+        if matches!(self, Self::ScreenshotEditor { .. }) {
+            return self.show(app);
+        }
         Box::pin(self.show_inner(app, Some(session)))
     }
 
@@ -1470,20 +1492,6 @@ impl ShowCapWindow {
                         &state.counter,
                         &state.open_gates,
                         |id| CapWindowId::Editor { id },
-                    )
-                    .await?,
-                )
-            }
-            Self::ScreenshotEditor { path } => {
-                let state = app.state::<ScreenshotEditorWindowIds>();
-                Some(
-                    ProjectWindowOpening::acquire(
-                        app,
-                        path,
-                        state.ids.clone(),
-                        &state.counter,
-                        &state.open_gates,
-                        |id| CapWindowId::ScreenshotEditor { id },
                     )
                     .await?,
                 )
@@ -2307,7 +2315,17 @@ impl ShowCapWindow {
                 hide_recording_windows(app, false);
                 release_camera_preview_if_idle(app);
 
-                PendingEditorInstances::start_prewarm(app, _id.label(), project_path.clone()).await;
+                if crate::screenshot_editor::is_legacy_screenshot_project(project_path) {
+                    PendingScreenshotEditorInstances::start_prewarm(
+                        app,
+                        _id.label(),
+                        project_path.clone(),
+                    )
+                    .await;
+                } else {
+                    PendingEditorInstances::start_prewarm(app, _id.label(), project_path.clone())
+                        .await;
+                }
 
                 let builder = self
                     .window_builder_with_id(app, "/editor", &_id, _id.label())
@@ -2357,30 +2375,7 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::ScreenshotEditor { path } => {
-                hide_recording_windows(app, false);
-                release_camera_preview_if_idle(app);
-
-                PendingScreenshotEditorInstances::start_prewarm(app, _id.label(), path.clone())
-                    .await;
-
-                let window = self
-                    .window_builder_with_id(app, "/screenshot-editor", &_id, _id.label())
-                    .maximizable(true)
-                    .focused(true)
-                    .build()?;
-                if let Some(opening) = project_opening.as_mut() {
-                    opening.own_window(&window);
-                }
-                lock_window_text_scale(&window);
-
-                fit_content_window_bounds(&window, &_id, true).await;
-
-                window.show().ok();
-                window.set_focus().ok();
-
-                window
-            }
+            Self::ScreenshotEditor { .. } => unreachable!(),
             Self::Upgrade => {
                 crate::hide_main_window(app);
 
@@ -4194,7 +4189,8 @@ impl Drop for ProjectWindowOpening {
             let native_window = window.as_ref().window().clone();
             match self.id {
                 CapWindowId::Editor { .. } => {
-                    tauri::async_runtime::spawn(EditorInstances::remove(native_window));
+                    tauri::async_runtime::spawn(EditorInstances::remove(native_window.clone()));
+                    tauri::async_runtime::spawn(ScreenshotEditorInstances::remove(native_window));
                 }
                 CapWindowId::ScreenshotEditor { .. } => {
                     tauri::async_runtime::spawn(ScreenshotEditorInstances::remove(native_window));
@@ -4209,6 +4205,9 @@ impl Drop for ProjectWindowOpening {
             match id {
                 CapWindowId::Editor { .. } => {
                     PendingEditorInstances::get(&app)
+                        .cancel_prewarm(&label)
+                        .await;
+                    PendingScreenshotEditorInstances::get(&app)
                         .cancel_prewarm(&label)
                         .await;
                 }
@@ -4239,8 +4238,6 @@ impl EditorWindowIds {
 #[derive(Default, Clone)]
 pub struct ScreenshotEditorWindowIds {
     pub ids: Arc<Mutex<Vec<(PathBuf, u32)>>>,
-    pub counter: Arc<AtomicU32>,
-    open_gates: ProjectWindowOpenGates,
 }
 
 impl ScreenshotEditorWindowIds {

@@ -1,14 +1,25 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { createEffect, createSignal, Show } from "solid-js";
+import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
+import { commands } from "~/utils/tauri";
 import IconLucideCrosshair from "~icons/lucide/crosshair";
+import IconLucidePencil from "~icons/lucide/pencil";
 import { useEditorContext } from "./context";
 import { imageAssetPath } from "./images";
 import { EditorButton, Field, SectionLabel, Slider } from "./ui";
 
 export function ImageSegmentConfig(props: { index: number }) {
-	const { project, setProject, editorInstance, projectActions, editorState } =
-		useEditorContext();
+	const {
+		project,
+		setProject,
+		editorInstance,
+		projectActions,
+		editorState,
+		setEditorState,
+		flushProjectConfig,
+		requestHandoffPlayback,
+	} = useEditorContext();
 	const segment = () => project.timeline?.imageSegments[props.index];
 	const path = () => imageAssetPath(editorInstance.path, segment()?.path ?? "");
 	const [failed, setFailed] = createSignal(false);
@@ -66,6 +77,34 @@ export function ImageSegmentConfig(props: { index: number }) {
 							onError={() => setFailed(true)}
 						/>
 					</Show>
+					<EditorButton
+						class="w-full justify-center"
+						leftIcon={<IconLucidePencil class="size-4" />}
+						onClick={() =>
+							void (async () => {
+								try {
+									const pending = requestHandoffPlayback(false);
+									if (pending && !(await pending)) return;
+									if (editorState.playing) {
+										await commands.stopPlayback();
+										setEditorState("playing", false);
+									}
+									await flushProjectConfig();
+									window.dispatchEvent(
+										new CustomEvent("cap-edit-image", {
+											detail: { index: props.index },
+										}),
+									);
+								} catch (error) {
+									toast.error(
+										error instanceof Error ? error.message : String(error),
+									);
+								}
+							})()
+						}
+					>
+						Draw on image
+					</EditorButton>
 					<div class="flex justify-between gap-2">
 						<EditorButton
 							disabled={editorState.importingImage}
