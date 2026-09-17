@@ -71,6 +71,21 @@ async function hasLinkedAccount(db: MySql2Database, userId: User.UserId) {
 	return !!linkedAccount;
 }
 
+function getAffectedRows(result: unknown): number {
+	if (Array.isArray(result)) {
+		return (
+			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
+		);
+	}
+	return (
+		(result as { affectedRows?: number; rowsAffected?: number } | undefined)
+			?.affectedRows ??
+		(result as { affectedRows?: number; rowsAffected?: number } | undefined)
+			?.rowsAffected ??
+		0
+	);
+}
+
 export function DrizzleAdapter(
 	db: MySql2Database,
 	options?: { getSsoIdentity: () => ValidatedSsoIdentity | null },
@@ -456,31 +471,51 @@ export function DrizzleAdapter(
 			return row;
 		},
 		async useVerificationToken({ identifier, token }) {
-			const rows = await db
-				.select()
-				.from(verificationTokens)
-				.where(eq(verificationTokens.token, token))
-				.limit(1);
-			const row = rows[0];
-			if (!row) {
-				console.warn("[useVerificationToken] No token found");
-				return null;
-			}
 			const normalizedIdentifier = identifier?.toLowerCase() ?? "";
-			const storedIdentifier = row.identifier?.toLowerCase() ?? "";
-			if (normalizedIdentifier !== storedIdentifier) {
-				console.warn("[useVerificationToken] Identifier mismatch");
-				return null;
-			}
-			await db
-				.delete(verificationTokens)
-				.where(
-					and(
-						eq(verificationTokens.token, token),
-						eq(verificationTokens.identifier, row.identifier),
-					),
+
+			const execute = async (tx: typeof db) => {
+				const rows = await tx
+					.select()
+					.from(verificationTokens)
+					.where(eq(verificationTokens.identifier, normalizedIdentifier))
+					.limit(1);
+				const row = rows[0];
+				if (!row) {
+					console.warn("[useVerificationToken] No token found");
+					return null;
+				}
+				const storedIdentifier = row.identifier?.toLowerCase() ?? "";
+
+				const result = await tx
+					.delete(verificationTokens)
+					.where(
+						and(
+							eq(verificationTokens.identifier, row.identifier),
+							eq(verificationTokens.token, row.token),
+						),
+					);
+
+				if (getAffectedRows(result) === 0) {
+					console.warn(
+						"[useVerificationToken] Token already consumed or invalid during deletion.",
+					);
+					return null;
+				}
+
+				if (row.token !== token) {
+					console.warn("[useVerificationToken] Token mismatch");
+					return null;
+				}
+
+				return { ...row, identifier: storedIdentifier };
+			};
+
+			if (typeof db.transaction === "function") {
+				return await db.transaction(async (tx) =>
+					execute(tx as unknown as typeof db),
 				);
-			return { ...row, identifier: storedIdentifier };
+			}
+			return await execute(db);
 		},
 	};
 }
