@@ -493,6 +493,7 @@ mod tests {
                     audio_segments: Vec::new(),
                     style_segments: Vec::new(),
                     image_segments: Vec::new(),
+                    video_segments: Vec::new(),
                     camera3d_segments: Vec::new(),
                 }),
                 clips: (0..count)

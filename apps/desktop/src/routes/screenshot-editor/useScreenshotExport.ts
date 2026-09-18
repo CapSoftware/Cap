@@ -258,5 +258,5 @@ export function useScreenshotExport() {
 		}
 	};
 
-	return { exportImage, exportStatus, isExporting };
+	return { exportImage, exportStatus, isExporting, renderExportCanvas };
 }

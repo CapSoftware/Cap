@@ -14,9 +14,9 @@ import {
 	topLeftAnimateClasses,
 } from "../ui";
 
-export function AspectRatioSelect() {
+export function AspectRatioSelect(props: { initialOpen?: boolean }) {
 	const { project, setProject } = useScreenshotEditorContext();
-	const [open, setOpen] = createSignal(false);
+	const [open, setOpen] = createSignal(props.initialOpen ?? false);
 	let triggerSelect: HTMLDivElement | undefined;
 
 	return (

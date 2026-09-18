@@ -252,12 +252,13 @@ impl Renderer {
                         continue;
                     }
                     Some(RendererMessage::RenderThumbnail { input, finished }) => {
+                        let render_display = input.segment_frames.screen_frame.is_some();
                         let result = frame_renderer
                             .render_immediate(
                                 input.segment_frames,
                                 input.uniforms,
                                 &input.cursor,
-                                true,
+                                render_display,
                                 &mut layers,
                             )
                             .await
@@ -314,12 +315,13 @@ impl Renderer {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
                     RendererMessage::RenderThumbnail { input, finished } => {
+                        let render_display = input.segment_frames.screen_frame.is_some();
                         let result = frame_renderer
                             .render_immediate(
                                 input.segment_frames,
                                 input.uniforms,
                                 &input.cursor,
-                                true,
+                                render_display,
                                 &mut layers,
                             )
                             .await
@@ -412,22 +414,25 @@ impl Renderer {
             let input_frame_number = current.input.uniforms().frame_number;
             let frame_layout = current.input.uniforms().frame_layout();
             let render_result = match (output_format, current.input) {
-                (EditorFrameFormat::Rgba, PendingRenderInput::Single(input)) => frame_renderer
-                    .render_immediate_with_timings(
-                        input.segment_frames,
-                        input.uniforms,
-                        &input.cursor,
-                        true,
-                        &mut layers,
-                    )
-                    .await
-                    .map(|(frame, timings)| {
-                        (
-                            EditorFrameOutput::Rgba(frame),
-                            PlaybackRenderOutputFormat::Rgba,
-                            timings,
+                (EditorFrameFormat::Rgba, PendingRenderInput::Single(input)) => {
+                    let render_display = input.segment_frames.screen_frame.is_some();
+                    frame_renderer
+                        .render_immediate_with_timings(
+                            input.segment_frames,
+                            input.uniforms,
+                            &input.cursor,
+                            render_display,
+                            &mut layers,
                         )
-                    }),
+                        .await
+                        .map(|(frame, timings)| {
+                            (
+                                EditorFrameOutput::Rgba(frame),
+                                PlaybackRenderOutputFormat::Rgba,
+                                timings,
+                            )
+                        })
+                }
                 (
                     EditorFrameFormat::Rgba,
                     PendingRenderInput::Transition {
@@ -439,16 +444,16 @@ impl Renderer {
                 ) => frame_renderer
                     .render_transition_immediate(
                         TransitionRenderInput {
+                            render_display: outgoing.segment_frames.screen_frame.is_some(),
                             segment_frames: outgoing.segment_frames,
                             uniforms: outgoing.uniforms,
                             cursor: &outgoing.cursor,
-                            render_display: true,
                         },
                         TransitionRenderInput {
+                            render_display: incoming.segment_frames.screen_frame.is_some(),
                             segment_frames: incoming.segment_frames,
                             uniforms: incoming.uniforms,
                             cursor: &incoming.cursor,
-                            render_display: true,
                         },
                         kind,
                         progress,
@@ -464,12 +469,13 @@ impl Renderer {
                     }),
                 #[cfg(target_os = "macos")]
                 (EditorFrameFormat::BgraSurface, PendingRenderInput::Single(input)) => {
+                    let render_display = input.segment_frames.screen_frame.is_some();
                     frame_renderer
                         .render_immediate_bgra_surface(
                             input.segment_frames,
                             input.uniforms,
                             &input.cursor,
-                            true,
+                            render_display,
                             &mut layers,
                         )
                         .await
@@ -493,16 +499,16 @@ impl Renderer {
                 ) => frame_renderer
                     .render_transition_bgra_surface(
                         TransitionRenderInput {
+                            render_display: outgoing.segment_frames.screen_frame.is_some(),
                             segment_frames: outgoing.segment_frames,
                             uniforms: outgoing.uniforms,
                             cursor: &outgoing.cursor,
-                            render_display: true,
                         },
                         TransitionRenderInput {
+                            render_display: incoming.segment_frames.screen_frame.is_some(),
                             segment_frames: incoming.segment_frames,
                             uniforms: incoming.uniforms,
                             cursor: &incoming.cursor,
-                            render_display: true,
                         },
                         kind,
                         progress,

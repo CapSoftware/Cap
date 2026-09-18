@@ -1876,6 +1876,28 @@ pub struct ExportPreviewResult {
     pub total_frames: u32,
 }
 
+fn shared_preview_settings(
+    settings: ExportPreviewSettings,
+) -> cap_export::preview::ExportPreviewSettings {
+    cap_export::preview::ExportPreviewSettings {
+        fps: settings.fps,
+        resolution_base: settings.resolution_base,
+        compression_bpp: settings.compression_bpp,
+        cursor_only: settings.cursor_only,
+    }
+}
+
+fn from_shared_preview(result: cap_export::preview::ExportPreviewResult) -> ExportPreviewResult {
+    ExportPreviewResult {
+        jpeg_base64: result.jpeg_base64,
+        estimated_size_mb: result.estimated_size_mb,
+        actual_width: result.actual_width,
+        actual_height: result.actual_height,
+        frame_render_time_ms: result.frame_render_time_ms,
+        total_frames: result.total_frames,
+    }
+}
+
 fn estimate_cursor_only_size_mb(total_pixels: f64, total_frames: f64) -> f64 {
     let bytes_per_frame = total_pixels * 0.4;
     (bytes_per_frame * total_frames) / (1024.0 * 1024.0)
@@ -1963,6 +1985,19 @@ async fn generate_export_preview_inner(
             .map(|segment| segment.display.duration)
             .collect::<Vec<_>>(),
     );
+
+    if recordings.segments.is_empty() || project_config.get_segment_time(frame_time).is_none() {
+        return cap_export::preview::render_preview_with_config(
+            project_path,
+            project_config,
+            frame_time,
+            shared_preview_settings(settings),
+            should_force_ffmpeg_preview(),
+        )
+        .await
+        .map(from_shared_preview)
+        .map_err(|error| error.to_string());
+    }
 
     let render_constants = Arc::new(
         RenderVideoConstants::new(
@@ -2195,6 +2230,7 @@ async fn generate_export_preview_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine, engine::general_purpose::STANDARD};
     use tempfile::tempdir;
 
     #[test]
@@ -2277,6 +2313,48 @@ mod tests {
             .await
             .unwrap_err();
         assert!(malformed.contains("Failed to read saved project config"));
+    }
+
+    #[tokio::test]
+    async fn image_only_project_has_tauri_export_preview() {
+        let directory = tempdir().unwrap();
+        let bundle =
+            cap_project::create_media_project(directory.path(), "Tauri image preview").unwrap();
+        let images = bundle.join("content/images");
+        std::fs::create_dir_all(&images).unwrap();
+        image::RgbaImage::from_pixel(640, 360, image::Rgba([40, 210, 50, 255]))
+            .save(images.join("source.png"))
+            .unwrap();
+        let mut config = cap_project::ProjectConfiguration::load(&bundle).unwrap();
+        config
+            .timeline
+            .as_mut()
+            .unwrap()
+            .image_segments
+            .push(cap_project::ImageSegment {
+                end: 3.0,
+                path: "content/images/source.png".to_string(),
+                size: XY::new(1.0, 1.0),
+                ..Default::default()
+            });
+        config.write(&bundle).unwrap();
+        let preview = generate_export_preview_inner(
+            bundle,
+            0.5,
+            ExportPreviewSettings {
+                fps: 30,
+                resolution_base: XY::new(640, 360),
+                compression_bpp: 0.15,
+                cursor_only: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(preview.total_frames, 90);
+        let jpeg = STANDARD.decode(preview.jpeg_base64).unwrap();
+        let frame = image::load_from_memory(&jpeg).unwrap().to_rgb8();
+        let pixel = frame.get_pixel(frame.width() / 2, frame.height() / 2);
+        assert!(pixel[1] > pixel[0] + 80);
     }
 
     #[tokio::test]
@@ -2560,6 +2638,19 @@ async fn generate_export_preview_fast_inner(
     })
     .await
     .map_err(|error| format!("Failed to synchronize export preview timing: {error}"))?;
+    if editor.recordings.segments.is_empty()
+        || project_config.get_segment_time(frame_time).is_none()
+    {
+        return cap_export::preview::render_preview_with_editor(
+            &editor,
+            project_config,
+            frame_time,
+            shared_preview_settings(settings),
+        )
+        .await
+        .map(from_shared_preview)
+        .map_err(|error| error.to_string());
+    }
     let transition_mapping = project_config.timeline.as_ref().and_then(|timeline| {
         if timeline.transitions.is_empty() {
             return None;

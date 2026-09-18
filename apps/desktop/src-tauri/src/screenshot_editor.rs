@@ -1,8 +1,10 @@
 use crate::PendingScreenshots;
+use crate::editor_window::WindowEditorInstance;
 use crate::frame_ws::{WSFrame, create_watch_frame_ws};
 use crate::gpu_context;
-use crate::windows::{CapWindowId, ScreenshotEditorWindowIds};
+use crate::windows::{CapWindowId, EditorWindowIds, ScreenshotEditorWindowIds};
 use cap_project::{
+    Annotation, AspectRatio, BackgroundConfiguration, BackgroundSource, ImageSegment,
     ProjectConfiguration, RecordingMeta, RecordingMetaInner, SingleSegment, StudioRecordingMeta,
     VideoMeta,
 };
@@ -16,11 +18,16 @@ use image::{
 use relative_path::RelativePathBuf;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
-use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    ops::Deref,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tauri::{
     AppHandle, Manager, Runtime, Window,
     ipc::{CommandArg, InvokeError},
@@ -115,6 +122,7 @@ pub struct ScreenshotEditorInstance {
     pub pretty_name: String,
     pub image_width: u32,
     pub image_height: u32,
+    image_drawing: bool,
     source_rgba: Arc<Vec<u8>>,
 }
 
@@ -175,6 +183,8 @@ impl ScreenshotEditorInstances {
         app_handle: &AppHandle,
         path: PathBuf,
         start_preview: bool,
+        initial_config: Option<ProjectConfiguration>,
+        image_drawing: bool,
     ) -> Result<Arc<ScreenshotEditorInstance>, String> {
         let create_started = Instant::now();
 
@@ -285,6 +295,7 @@ impl ScreenshotEditorInstances {
         } else {
             (None, None)
         };
+        let loaded_config = initial_config.or(loaded_config);
 
         if !start_preview {
             let pretty_name = recording_meta
@@ -304,6 +315,7 @@ impl ScreenshotEditorInstances {
                 pretty_name,
                 image_width: width,
                 image_height: height,
+                image_drawing,
                 source_rgba: Arc::new(data),
             }));
         }
@@ -448,6 +460,7 @@ impl ScreenshotEditorInstances {
             pretty_name: recording_meta.pretty_name.clone(),
             image_width: width,
             image_height: height,
+            image_drawing,
             source_rgba: source_rgba.clone(),
         });
         ws_guard.disarm();
@@ -581,13 +594,7 @@ impl ScreenshotEditorInstances {
         window: &Window,
         path: PathBuf,
     ) -> Result<Arc<ScreenshotEditorInstance>, String> {
-        let CapWindowId::ScreenshotEditor { id } =
-            CapWindowId::from_str(window.label()).map_err(|error| error.to_string())?
-        else {
-            return Err("Invalid screenshot editor window".to_string());
-        };
-        let window_ids = ScreenshotEditorWindowIds::get(window.app_handle());
-        with_registered_screenshot_editor(&window_ids, id, || ())?;
+        with_registered_screenshot_workspace(window, || ())?;
         let instances = match window.try_state::<ScreenshotEditorInstances>() {
             Some(s) => (*s).clone(),
             None => {
@@ -596,7 +603,7 @@ impl ScreenshotEditorInstances {
             }
         };
         let mut instances = instances.0.write().await;
-        if let Some(instance) = with_registered_screenshot_editor(&window_ids, id, || {
+        if let Some(instance) = with_registered_screenshot_workspace(window, || {
             instances.get(window.label()).map(|instance| {
                 let instance = instance.clone();
                 let config = instance.config_tx.borrow().clone();
@@ -624,15 +631,20 @@ impl ScreenshotEditorInstances {
         let instance = match prewarmed {
             Some(instance) => instance,
             None => {
-                with_registered_screenshot_editor(&window_ids, id, || ())?;
+                with_registered_screenshot_workspace(window, || ())?;
                 let cleanup_runtime = tokio::runtime::Handle::current();
-                let instance =
-                    Self::create_standalone_instance(window.app_handle(), path.clone(), true)
-                        .await?;
+                let instance = Self::create_standalone_instance(
+                    window.app_handle(),
+                    path.clone(),
+                    true,
+                    None,
+                    false,
+                )
+                .await?;
                 ScreenshotEditorInstanceDelivery::new(instance, cleanup_runtime)
             }
         };
-        let published = with_registered_screenshot_editor(&window_ids, id, || {
+        let published = with_registered_screenshot_workspace(window, || {
             instance.adopt_into(&mut instances, window.label())
         });
         drop(instances);
@@ -643,6 +655,44 @@ impl ScreenshotEditorInstances {
                 return Err(error);
             }
         };
+        Ok(instance)
+    }
+
+    pub async fn create_for_image(
+        window: &Window,
+        source_path: PathBuf,
+        config: ProjectConfiguration,
+    ) -> Result<Arc<ScreenshotEditorInstance>, String> {
+        with_registered_screenshot_workspace(window, || ())?;
+        let instances = match window.try_state::<ScreenshotEditorInstances>() {
+            Some(state) => (*state).clone(),
+            None => {
+                window.manage(Self(Arc::new(RwLock::new(HashMap::new()))));
+                (*window.state::<Self>()).clone()
+            }
+        };
+        let mut instances = instances.0.write().await;
+        if let Some(existing) = instances.get(window.label()) {
+            if existing.path == source_path {
+                return Ok(existing.clone());
+            }
+            return Err("Another image drawing workspace is already active".to_string());
+        }
+        let instance = Self::create_standalone_instance(
+            window.app_handle(),
+            source_path,
+            true,
+            Some(config),
+            true,
+        )
+        .await?;
+        if let Err(error) = with_registered_screenshot_workspace(window, || {
+            instances.insert(window.label().to_string(), instance.clone());
+        }) {
+            drop(instances);
+            instance.dispose().await;
+            return Err(error);
+        }
         Ok(instance)
     }
 
@@ -682,14 +732,20 @@ impl ScreenshotEditorInstances {
     }
 }
 
-fn with_registered_screenshot_editor<T>(
-    window_ids: &ScreenshotEditorWindowIds,
-    id: u32,
+fn with_registered_screenshot_workspace<T>(
+    window: &Window,
     action: impl FnOnce() -> T,
 ) -> Result<T, String> {
-    let ids = window_ids.ids.lock().map_err(|error| error.to_string())?;
+    let (ids, id) = match CapWindowId::from_str(window.label())? {
+        CapWindowId::Editor { id } => (EditorWindowIds::get(window.app_handle()).ids, id),
+        CapWindowId::ScreenshotEditor { id } => {
+            (ScreenshotEditorWindowIds::get(window.app_handle()).ids, id)
+        }
+        _ => return Err("Invalid editor window for screenshot workspace".to_string()),
+    };
+    let ids = ids.lock().map_err(|error| error.to_string())?;
     if !ids.iter().any(|(_, registered_id)| *registered_id == id) {
-        return Err("Screenshot editor window is no longer registered".to_string());
+        return Err("Screenshot workspace window is no longer registered".to_string());
     }
     Ok(action())
 }
@@ -704,45 +760,6 @@ impl PendingScreenshotEditorInstances {
                 (*app.state::<Self>()).clone()
             }
         }
-    }
-
-    pub async fn start_prewarm(app: &AppHandle, window_label: String, path: PathBuf) {
-        let Ok(CapWindowId::ScreenshotEditor { id }) = CapWindowId::from_str(&window_label) else {
-            return;
-        };
-        let window_ids = ScreenshotEditorWindowIds::get(app);
-        let pending = Self::get(app);
-        let app = app.clone();
-        let tx = {
-            let mut instances = pending.0.write().await;
-            let admitted = with_registered_screenshot_editor(&window_ids, id, || {
-                use std::collections::hash_map::Entry;
-                match instances.entry(window_label) {
-                    Entry::Vacant(entry) => {
-                        let (tx, rx) = watch::channel(None);
-                        entry.insert(rx);
-                        Some(tx)
-                    }
-                    Entry::Occupied(_) => None,
-                }
-            });
-            match admitted {
-                Ok(Some(tx)) => tx,
-                Ok(None) => return,
-                Err(error) => {
-                    tracing::debug!(%error, "Skipping prewarm for a retired screenshot editor");
-                    return;
-                }
-            }
-        };
-
-        let cleanup_runtime = tokio::runtime::Handle::current();
-        tokio::spawn(async move {
-            let result = ScreenshotEditorInstances::create_standalone_instance(&app, path, true)
-                .await
-                .map(|instance| ScreenshotEditorInstanceDelivery::new(instance, cleanup_runtime));
-            tx.send(Some(result)).ok();
-        });
     }
 
     pub async fn take_prewarmed(&self, window_label: &str) -> Option<PendingReceiver> {
@@ -891,20 +908,20 @@ struct ScreenshotOcrImage {
 pub async fn create_screenshot_editor_instance(
     window: Window,
 ) -> Result<SerializedScreenshotEditorInstance, String> {
-    let CapWindowId::ScreenshotEditor { id } =
-        CapWindowId::from_str(window.label()).map_err(|e| e.to_string())?
-    else {
-        return Err("Invalid window".to_string());
+    let (ids, id) = match CapWindowId::from_str(window.label())? {
+        CapWindowId::Editor { id } => (EditorWindowIds::get(window.app_handle()).ids, id),
+        CapWindowId::ScreenshotEditor { id } => {
+            (ScreenshotEditorWindowIds::get(window.app_handle()).ids, id)
+        }
+        _ => return Err("Invalid window for screenshot workspace".to_string()),
     };
-
-    let path = {
-        let window_ids = ScreenshotEditorWindowIds::get(window.app_handle());
-        let window_ids = window_ids.ids.lock().unwrap();
-        let Some((path, _)) = window_ids.iter().find(|(_, _id)| *_id == id) else {
-            return Err("Screenshot editor instance not found".to_string());
-        };
-        path.clone()
-    };
+    let path = ids
+        .lock()
+        .map_err(|error| error.to_string())?
+        .iter()
+        .find(|(_, registered_id)| *registered_id == id)
+        .map(|(path, _)| path.clone())
+        .ok_or("Screenshot project window not found")?;
 
     let instance = ScreenshotEditorInstances::get_or_create(&window, path).await?;
     let config = instance.config_tx.borrow().config.clone();
@@ -917,6 +934,501 @@ pub async fn create_screenshot_editor_instance(
         image_width: instance.image_width,
         image_height: instance.image_height,
     })
+}
+
+fn image_segment_source(
+    project_path: &Path,
+    segment: &ImageSegment,
+) -> Result<(String, PathBuf), String> {
+    let relative = segment.source_path.as_deref().unwrap_or(&segment.path);
+    let relative_path = Path::new(relative);
+    if relative_path.is_absolute()
+        || relative_path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Err("Image source path escapes the project".to_string());
+    }
+    let root = project_path
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let source_path = project_path
+        .join(relative_path)
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if !source_path.starts_with(&root)
+        || !crate::import::is_supported_image_import_path(&source_path)
+    {
+        return Err("Image source is unavailable inside the project".to_string());
+    }
+    Ok((relative.to_string(), source_path))
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImageAppearance {
+    version: u8,
+    background: BackgroundConfiguration,
+    aspect_ratio: Option<AspectRatio>,
+}
+
+fn image_appearance_file(project_path: &Path, image_path: &str) -> Option<PathBuf> {
+    let relative = Path::new(image_path);
+    if relative.parent()? != Path::new("content/images") || relative.extension()?.to_str()? != "png"
+    {
+        return None;
+    }
+    let stem = relative.file_stem()?.to_str()?;
+    if stem.len() != 40
+        || !stem.starts_with("drawing-")
+        || !stem[8..]
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(
+        project_path
+            .join("content/images")
+            .join(format!("{stem}.style.json")),
+    )
+}
+
+fn portable_project_path(root: &Path, path: &Path) -> Result<String, String> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| "Screenshot background is outside the project".to_string())?;
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(part) = component else {
+            return Err("Screenshot background path is invalid".to_string());
+        };
+        parts.push(part.to_string_lossy().into_owned());
+    }
+    Ok(parts.join("/"))
+}
+
+fn load_image_appearance(
+    project_path: &Path,
+    image_path: &str,
+) -> Result<Option<ImageAppearance>, String> {
+    let Some(file) = image_appearance_file(project_path, image_path) else {
+        return Ok(None);
+    };
+    if !file.exists() {
+        return Ok(None);
+    }
+    let root = project_path
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let canonical = file.canonicalize().map_err(|error| error.to_string())?;
+    if !canonical.starts_with(&root) {
+        return Err("Screenshot appearance escapes the project".to_string());
+    }
+    let mut input = std::fs::File::open(&canonical).map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    input
+        .by_ref()
+        .take(65_537)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > 65_536 {
+        return Err("Screenshot appearance exceeds the size limit".to_string());
+    }
+    let mut appearance: ImageAppearance =
+        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    if appearance.version != 1 {
+        return Err("Screenshot appearance version is unsupported".to_string());
+    }
+    match &mut appearance.background.source {
+        BackgroundSource::Wallpaper { path } | BackgroundSource::Image { path } => {
+            if let Some(relative) = path {
+                let relative_path = Path::new(relative);
+                if relative_path.is_absolute()
+                    || relative_path
+                        .components()
+                        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+                {
+                    return Err("Screenshot background path is invalid".to_string());
+                }
+                let source = project_path
+                    .join(relative_path)
+                    .canonicalize()
+                    .map_err(|error| error.to_string())?;
+                if !source.starts_with(&root) || !source.is_file() {
+                    return Err("Screenshot background escapes the project".to_string());
+                }
+                *relative = source.to_string_lossy().into_owned();
+            }
+        }
+        _ => {}
+    }
+    Ok(Some(appearance))
+}
+
+fn save_image_appearance(
+    project_path: &Path,
+    image_path: &str,
+    mut appearance: ImageAppearance,
+) -> Result<Vec<PathBuf>, String> {
+    let file = image_appearance_file(project_path, image_path)
+        .ok_or("Screenshot appearance output path is invalid")?;
+    let root = project_path
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let images_dir = project_path.join("content/images");
+    let canonical_images = images_dir
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if !canonical_images.starts_with(&root) {
+        return Err("Screenshot appearance directory escapes the project".to_string());
+    }
+    let mut created = Vec::new();
+    let result = (|| -> Result<(), String> {
+        match &mut appearance.background.source {
+            BackgroundSource::Wallpaper { path } | BackgroundSource::Image { path } => {
+                if let Some(source_path) = path {
+                    let source = Path::new(source_path)
+                        .canonicalize()
+                        .map_err(|error| error.to_string())?;
+                    let extension = source
+                        .extension()
+                        .and_then(|part| part.to_str())
+                        .ok_or("Screenshot background type is unsupported")?
+                        .to_ascii_lowercase();
+                    if !matches!(
+                        extension.as_str(),
+                        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff"
+                    ) {
+                        return Err("Screenshot background type is unsupported".to_string());
+                    }
+                    let portable = if source.starts_with(&root) {
+                        portable_project_path(&root, &source)?
+                    } else {
+                        let mut input =
+                            std::fs::File::open(&source).map_err(|error| error.to_string())?;
+                        let size = input.metadata().map_err(|error| error.to_string())?.len();
+                        if size == 0 || size > 64 * 1024 * 1024 {
+                            return Err("Screenshot background exceeds the size limit".to_string());
+                        }
+                        let name = format!(
+                            "screenshot-background-{}.{}",
+                            uuid::Uuid::new_v4().simple(),
+                            extension
+                        );
+                        let output = canonical_images.join(&name);
+                        let mut target = std::fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(&output)
+                            .map_err(|error| error.to_string())?;
+                        created.push(output);
+                        std::io::copy(&mut input, &mut target)
+                            .map_err(|error| error.to_string())?;
+                        target.sync_all().map_err(|error| error.to_string())?;
+                        format!("content/images/{name}")
+                    };
+                    *source_path = portable;
+                }
+            }
+            _ => {}
+        }
+        let bytes = serde_json::to_vec(&appearance).map_err(|error| error.to_string())?;
+        if bytes.len() > 65_536 {
+            return Err("Screenshot appearance exceeds the size limit".to_string());
+        }
+        let temp = canonical_images.join(format!(
+            ".screenshot-style-{}.tmp",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let mut target = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| error.to_string())?;
+        created.push(temp.clone());
+        std::io::Write::write_all(&mut target, &bytes).map_err(|error| error.to_string())?;
+        target.sync_all().map_err(|error| error.to_string())?;
+        std::fs::rename(&temp, &file).map_err(|error| error.to_string())?;
+        let _ = created.pop();
+        created.push(file);
+        Ok(())
+    })();
+    if let Err(error) = result {
+        for path in &created {
+            let _ = std::fs::remove_file(path);
+        }
+        return Err(error);
+    }
+    Ok(created)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn create_image_drawing_instance(
+    window: Window,
+    image_index: u32,
+) -> Result<SerializedScreenshotEditorInstance, String> {
+    let CapWindowId::Editor { id } = CapWindowId::from_str(window.label())? else {
+        return Err("Image drawing requires an editor window".to_string());
+    };
+    let ids = EditorWindowIds::get(window.app_handle()).ids;
+    let project_path = ids
+        .lock()
+        .map_err(|error| error.to_string())?
+        .iter()
+        .find(|(_, registered_id)| *registered_id == id)
+        .map(|(path, _)| path.clone())
+        .ok_or("Editor project window not found")?;
+    let project = ProjectConfiguration::load(&project_path).map_err(|error| error.to_string())?;
+    let segment = project
+        .timeline
+        .as_ref()
+        .and_then(|timeline| timeline.image_segments.get(image_index as usize))
+        .ok_or("Image track item not found")?;
+    let (_, source_path) = image_segment_source(&project_path, segment)?;
+    let mut drawing_config = ProjectConfiguration::default();
+    drawing_config.background.source = BackgroundSource::Color {
+        value: [255, 255, 255],
+        alpha: 0,
+    };
+    drawing_config.background.padding = 0.0;
+    drawing_config.background.shadow = 0.0;
+    if let Some(appearance) = load_image_appearance(&project_path, &segment.path)? {
+        drawing_config.background = appearance.background;
+        drawing_config.aspect_ratio = appearance.aspect_ratio;
+    } else if segment.path == "original.png" {
+        drawing_config.background = project.background.clone();
+        drawing_config.aspect_ratio = project.aspect_ratio.clone();
+    }
+    drawing_config.annotations = segment.annotations.clone();
+    let instance =
+        ScreenshotEditorInstances::create_for_image(&window, source_path, drawing_config).await?;
+    let config = instance.config_tx.borrow().config.clone();
+    Ok(SerializedScreenshotEditorInstance {
+        frames_socket_url: format!("ws://localhost:{}", instance.ws_port),
+        path: instance.path.clone(),
+        config: Some(config),
+        pretty_name: segment.name.clone(),
+        image_width: instance.image_width,
+        image_height: instance.image_height,
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn close_image_drawing_instance(window: Window) -> Result<(), String> {
+    if !matches!(
+        CapWindowId::from_str(window.label())?,
+        CapWindowId::Editor { .. }
+    ) {
+        return Err("Image drawing requires an editor window".to_string());
+    }
+    ScreenshotEditorInstances::remove(window).await;
+    Ok(())
+}
+
+#[derive(Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageDrawingCommit {
+    pub image_index: u32,
+    pub path: String,
+    pub source_path: String,
+    pub annotations: Vec<Annotation>,
+}
+
+fn commit_image_drawing_file(
+    project_path: &Path,
+    image_index: u32,
+    expected_source: &Path,
+    annotations: Vec<Annotation>,
+    appearance: ImageAppearance,
+    png_bytes: &[u8],
+) -> Result<ImageDrawingCommit, String> {
+    if png_bytes.is_empty() || png_bytes.len() > 64 * 1024 * 1024 {
+        return Err("Drawing image exceeds the import size limit".to_string());
+    }
+    let (width, height) =
+        image::ImageReader::with_format(Cursor::new(png_bytes), image::ImageFormat::Png)
+            .into_dimensions()
+            .map_err(|error| format!("Drawing PNG is invalid: {error}"))?;
+    if width == 0
+        || height == 0
+        || width > MAX_DIMENSION
+        || height > MAX_DIMENSION
+        || u64::from(width) * u64::from(height) > 64_000_000
+    {
+        return Err("Drawing image dimensions exceed the editor limit".to_string());
+    }
+    image::load_from_memory_with_format(png_bytes, image::ImageFormat::Png)
+        .map_err(|error| format!("Drawing PNG is invalid: {error}"))?;
+    let mut project =
+        ProjectConfiguration::load(project_path).map_err(|error| error.to_string())?;
+    let segment = project
+        .timeline
+        .as_mut()
+        .and_then(|timeline| timeline.image_segments.get_mut(image_index as usize))
+        .ok_or("Image track item not found")?;
+    let (source_path, canonical_source) = image_segment_source(project_path, segment)?;
+    if canonical_source != expected_source {
+        return Err("Image source changed while drawing".to_string());
+    }
+    let images_dir = project_path.join("content/images");
+    std::fs::create_dir_all(&images_dir).map_err(|error| error.to_string())?;
+    let root = project_path
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let canonical_images = images_dir
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if !canonical_images.starts_with(root) {
+        return Err("Drawing asset directory escapes the project".to_string());
+    }
+    let filename = format!("drawing-{}.png", uuid::Uuid::new_v4().simple());
+    let relative_output = format!("content/images/{filename}");
+    let output = images_dir.join(&filename);
+    let temp = images_dir.join(format!(".{filename}.tmp"));
+    let write_result = (|| -> Result<(), std::io::Error> {
+        let mut file = std::fs::File::create(&temp)?;
+        std::io::Write::write_all(&mut file, png_bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&temp, &output)
+    })();
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("Cannot save drawing asset: {error}"));
+    }
+    let style_files = match save_image_appearance(project_path, &relative_output, appearance) {
+        Ok(files) => files,
+        Err(error) => {
+            let _ = std::fs::remove_file(&output);
+            return Err(error);
+        }
+    };
+    segment.source_path = Some(source_path.clone());
+    segment.annotations = annotations.clone();
+    segment.path = relative_output.clone();
+    if let Err(error) = project.write(project_path) {
+        let _ = std::fs::remove_file(&output);
+        for file in style_files {
+            let _ = std::fs::remove_file(file);
+        }
+        return Err(format!("Cannot save image drawing: {error}"));
+    }
+    Ok(ImageDrawingCommit {
+        image_index,
+        path: relative_output,
+        source_path,
+        annotations,
+    })
+}
+
+fn image_drawing_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(&app_data).map_err(|error| error.to_string())?;
+    let canonical_app_data = app_data.canonicalize().map_err(|error| error.to_string())?;
+    let cache_dir = app_data.join("image-drawing-temp");
+    std::fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
+    let canonical_cache = cache_dir
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if !canonical_cache.starts_with(canonical_app_data) {
+        return Err("Drawing cache directory escapes app data".to_string());
+    }
+    Ok(canonical_cache)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn image_drawing_temp_path(app: AppHandle) -> Result<PathBuf, String> {
+    Ok(image_drawing_cache_dir(&app)?.join(format!(
+        "cap-image-drawing-{}.png",
+        uuid::Uuid::new_v4().simple()
+    )))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn commit_image_drawing(
+    window: Window,
+    instance: WindowScreenshotEditorInstance,
+    editor: WindowEditorInstance,
+    image_index: u32,
+    png_path: PathBuf,
+) -> Result<ImageDrawingCommit, String> {
+    let CapWindowId::Editor { id } = CapWindowId::from_str(window.label())? else {
+        return Err("Image drawing requires an editor window".to_string());
+    };
+    let ids = EditorWindowIds::get(window.app_handle()).ids;
+    let project_path = ids
+        .lock()
+        .map_err(|error| error.to_string())?
+        .iter()
+        .find(|(_, registered_id)| *registered_id == id)
+        .map(|(path, _)| path.clone())
+        .ok_or("Editor project window not found")?;
+    if editor.project_path != project_path {
+        return Err("Editor project changed while drawing".to_string());
+    }
+    if instance
+        .path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        == Some("cap")
+    {
+        return Err("Image drawing instance is unavailable".to_string());
+    }
+    let source_path = instance
+        .path
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let drawing_config = instance.config_tx.borrow().config.clone();
+    let annotations = drawing_config.annotations.clone();
+    let appearance = ImageAppearance {
+        version: 1,
+        background: drawing_config.background,
+        aspect_ratio: drawing_config.aspect_ratio,
+    };
+    let project_for_write = project_path.clone();
+    let cache_dir = image_drawing_cache_dir(window.app_handle())?;
+    let committed = tokio::task::spawn_blocking(move || {
+        let canonical_png = png_path.canonicalize().map_err(|error| error.to_string())?;
+        let valid_name = png_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("cap-image-drawing-") && name.ends_with(".png"));
+        if !valid_name || canonical_png.parent() != Some(cache_dir.as_path()) {
+            return Err("Drawing temporary file is outside the editor cache".to_string());
+        }
+        let size = std::fs::metadata(&canonical_png)
+            .map_err(|error| error.to_string())?
+            .len();
+        if size == 0 || size > 64 * 1024 * 1024 {
+            return Err("Drawing image exceeds the import size limit".to_string());
+        }
+        let png_bytes = std::fs::read(&canonical_png).map_err(|error| error.to_string())?;
+        let committed = commit_image_drawing_file(
+            &project_for_write,
+            image_index,
+            &source_path,
+            annotations,
+            appearance,
+            &png_bytes,
+        )?;
+        let _ = std::fs::remove_file(&canonical_png);
+        Ok(committed)
+    })
+    .await
+    .map_err(|error| format!("Drawing save worker failed: {error}"))??;
+    let config = ProjectConfiguration::load(&project_path).map_err(|error| error.to_string())?;
+    editor.project_config.0.send(config).ok();
+    Ok(committed)
 }
 
 /// Renders one tiny throwaway frame on the shared GPU at startup so the Metal
@@ -1089,23 +1601,25 @@ pub async fn update_screenshot_config(
         config: config.clone(),
     });
 
-    if !save {
+    if !save || instance.image_drawing {
         return Ok(());
     }
 
-    let Some(parent) = instance.path.parent() else {
-        return Ok(());
-    };
-
-    if parent.extension().and_then(|s| s.to_str()) == Some("cap") {
-        let path = parent.to_path_buf();
-        if let Err(e) = config.write(&path) {
-            eprintln!("Failed to save screenshot config: {e}");
-        } else {
-            println!("Saved screenshot config to {path:?}");
-        }
+    let bundle = if instance.path.is_dir()
+        && instance
+            .path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            == Some("cap")
+    {
+        Some(instance.path.as_path())
     } else {
-        println!("Not saving config: parent {parent:?} is not a .cap directory");
+        instance.path.parent().filter(|parent| {
+            parent.extension().and_then(|extension| extension.to_str()) == Some("cap")
+        })
+    };
+    if let Some(bundle) = bundle {
+        config.write(bundle).map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -1617,7 +2131,9 @@ pub async fn render_screenshot_project_for_export(
     app: AppHandle,
     path: PathBuf,
 ) -> Result<ScreenshotProjectExport, String> {
-    let instance = ScreenshotEditorInstances::create_standalone_instance(&app, path, false).await?;
+    let instance =
+        ScreenshotEditorInstances::create_standalone_instance(&app, path, false, None, false)
+            .await?;
     let config = instance.config_tx.borrow().config.clone();
     let image_width = instance.image_width;
     let image_height = instance.image_height;
@@ -1894,4 +2410,186 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
         .map_err(|e| format!("Failed to encode screenshot export: {e}"))?;
 
     Ok(png_data.into_inner())
+}
+
+#[cfg(test)]
+mod image_drawing_tests {
+    use super::*;
+
+    fn png(rgb: [u8; 3]) -> Vec<u8> {
+        let pixels = image::RgbaImage::from_pixel(8, 6, image::Rgba([rgb[0], rgb[1], rgb[2], 255]));
+        let mut bytes = Vec::new();
+        PngEncoder::new(&mut bytes)
+            .write_image(pixels.as_raw(), 8, 6, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        bytes
+    }
+
+    fn appearance(padding: f64) -> ImageAppearance {
+        let mut background = BackgroundConfiguration::default();
+        background.padding = padding;
+        ImageAppearance {
+            version: 1,
+            background,
+            aspect_ratio: Some(AspectRatio::Wide),
+        }
+    }
+
+    #[tokio::test]
+    async fn image_drawing_updates_keep_media_project_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = cap_project::create_media_project(temp.path(), "Drawing config test").unwrap();
+        let mut project = ProjectConfiguration::load(&bundle).unwrap();
+        project
+            .timeline
+            .as_mut()
+            .unwrap()
+            .image_segments
+            .push(ImageSegment {
+                end: 5.0,
+                path: "source.png".to_string(),
+                ..Default::default()
+            });
+        project.write(&bundle).unwrap();
+        let original = std::fs::read(bundle.join("project-config.json")).unwrap();
+        let (config_tx, _config_rx) = watch::channel(ScreenshotConfigUpdate {
+            revision: 0,
+            config: ProjectConfiguration::default(),
+        });
+        let instance = Arc::new(ScreenshotEditorInstance {
+            ws_port: 0,
+            ws_shutdown_token: CancellationToken::new(),
+            config_tx,
+            path: bundle.join("source.png"),
+            pretty_name: "Drawing config test".to_string(),
+            image_width: 8,
+            image_height: 6,
+            image_drawing: true,
+            source_rgba: Arc::new(Vec::new()),
+        });
+        let mut drawing = ProjectConfiguration::default();
+        drawing.background.padding = 42.0;
+        update_screenshot_config(
+            WindowScreenshotEditorInstance(instance.clone()),
+            drawing,
+            true,
+            1,
+        )
+        .await
+        .unwrap();
+        assert_eq!(instance.config_tx.borrow().config.background.padding, 42.0);
+        assert_eq!(
+            std::fs::read(bundle.join("project-config.json")).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn image_drawing_preserves_source_and_previous_edits() {
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = cap_project::create_media_project(temp.path(), "Drawing test").unwrap();
+        let images = bundle.join("content/images");
+        std::fs::create_dir_all(&images).unwrap();
+        let source = images.join("source.png");
+        let source_bytes = png([255, 255, 255]);
+        std::fs::write(&source, &source_bytes).unwrap();
+        let mut project = ProjectConfiguration::load(&bundle).unwrap();
+        project
+            .timeline
+            .as_mut()
+            .unwrap()
+            .image_segments
+            .push(ImageSegment {
+                end: 5.0,
+                path: "content/images/source.png".to_string(),
+                ..Default::default()
+            });
+        project.write(&bundle).unwrap();
+        let annotation: Annotation = serde_json::from_value(serde_json::json!({
+            "id":"rectangle-one", "type":"rectangle", "x":1.0, "y":1.0,
+            "width":4.0, "height":3.0, "strokeColor":"#ff0000",
+            "strokeWidth":2.0, "fillColor":"transparent", "opacity":1.0,
+            "rotation":0.0, "text":null
+        }))
+        .unwrap();
+        let first = commit_image_drawing_file(
+            &bundle,
+            0,
+            &source.canonicalize().unwrap(),
+            vec![annotation.clone()],
+            appearance(12.0),
+            &png([255, 0, 0]),
+        )
+        .unwrap();
+        assert_ne!(first.path, first.source_path);
+        assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+        assert_eq!(first.annotations.len(), 1);
+        assert_eq!(
+            load_image_appearance(&bundle, &first.path)
+                .unwrap()
+                .unwrap()
+                .background
+                .padding,
+            12.0
+        );
+        let second = commit_image_drawing_file(
+            &bundle,
+            0,
+            &source.canonicalize().unwrap(),
+            vec![annotation],
+            appearance(28.0),
+            &png([0, 0, 255]),
+        )
+        .unwrap();
+        assert_ne!(first.path, second.path);
+        assert_eq!(
+            std::fs::read(bundle.join(&first.path)).unwrap(),
+            png([255, 0, 0])
+        );
+        assert_eq!(
+            std::fs::read(bundle.join(&second.path)).unwrap(),
+            png([0, 0, 255])
+        );
+        let persisted = ProjectConfiguration::load(&bundle).unwrap();
+        let segment = &persisted.timeline.unwrap().image_segments[0];
+        assert_eq!(
+            segment.source_path.as_deref(),
+            Some("content/images/source.png")
+        );
+        assert_eq!(segment.path, second.path);
+        assert_eq!(segment.annotations.len(), 1);
+        assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+        assert_eq!(
+            load_image_appearance(&bundle, &second.path)
+                .unwrap()
+                .unwrap()
+                .background
+                .padding,
+            28.0
+        );
+    }
+
+    #[test]
+    fn screenshot_background_stays_with_moved_project() {
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = cap_project::create_media_project(temp.path(), "Appearance test").unwrap();
+        std::fs::create_dir_all(bundle.join("content/images")).unwrap();
+        let background = temp.path().join("chosen-background.png");
+        let bytes = png([18, 30, 42]);
+        std::fs::write(&background, &bytes).unwrap();
+        let image_path = "content/images/drawing-00000000000000000000000000000001.png";
+        let mut style = appearance(16.0);
+        style.background.source = BackgroundSource::Image {
+            path: Some(background.to_string_lossy().into_owned()),
+        };
+        save_image_appearance(&bundle, image_path, style).unwrap();
+        let moved = temp.path().join("moved.cap");
+        std::fs::rename(&bundle, &moved).unwrap();
+        let loaded = load_image_appearance(&moved, image_path).unwrap().unwrap();
+        let BackgroundSource::Image { path: Some(path) } = loaded.background.source else {
+            panic!("Background image was not restored");
+        };
+        assert!(Path::new(&path).starts_with(moved.canonicalize().unwrap()));
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
 }

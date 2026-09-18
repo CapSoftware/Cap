@@ -5,7 +5,7 @@ import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import { createEffect, onCleanup, Suspense } from "solid-js";
+import { createEffect, onCleanup, Show, Suspense } from "solid-js";
 import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import IconCapCrop from "~icons/cap/crop";
@@ -33,7 +33,7 @@ import {
 } from "./ui";
 import { useScreenshotExport } from "./useScreenshotExport";
 
-export function Header() {
+export function Header(props: { imageDrawingMode?: boolean }) {
 	const ctx = useScreenshotEditorContext();
 	const {
 		setDialog,
@@ -47,6 +47,7 @@ export function Header() {
 	const { exportImage, exportStatus, isExporting } = useScreenshotExport();
 
 	createEffect(() => {
+		if (props.imageDrawingMode) return;
 		const handleKeyDown = (e: KeyboardEvent) => {
 			if (e.defaultPrevented) return;
 			const target = e.target as HTMLElement | null;
@@ -117,21 +118,25 @@ export function Header() {
 			</div>
 
 			<div class="flex items-center gap-2 absolute left-1/2 -translate-x-1/2">
-				<AspectRatioSelect />
-				<EditorButton
-					tooltipText="Crop Image"
-					onClick={cropDialogHandler}
-					disabled={isCropDisabled()}
-					leftIcon={<IconCapCrop class="size-4" />}
-				/>
-				<div class="w-px h-6 bg-gray-4 mx-1" />
+				<Show when={!props.imageDrawingMode}>
+					<AspectRatioSelect />
+					<EditorButton
+						tooltipText="Crop Image"
+						onClick={cropDialogHandler}
+						disabled={isCropDisabled()}
+						leftIcon={<IconCapCrop class="size-4" />}
+					/>
+					<div class="w-px h-6 bg-gray-4 mx-1" />
+				</Show>
 				<AnnotationTools />
-				<div class="w-px h-6 bg-gray-4 mx-1" />
-				<BackgroundSettingsPopover />
-				<PaddingPopover />
-				<RoundingPopover />
-				<ShadowPopover />
-				<BorderPopover />
+				<Show when={!props.imageDrawingMode}>
+					<div class="w-px h-6 bg-gray-4 mx-1" />
+					<BackgroundSettingsPopover />
+					<PaddingPopover />
+					<RoundingPopover />
+					<ShadowPopover />
+					<BorderPopover />
+				</Show>
 			</div>
 
 			<div
@@ -140,76 +145,78 @@ export function Header() {
 					ostype() !== "windows" && "pr-2",
 				)}
 			>
-				<div class="w-px h-6 bg-gray-4 mx-1" />
+				<Show when={!props.imageDrawingMode}>
+					<div class="w-px h-6 bg-gray-4 mx-1" />
 
-				<EditorButton
-					onClick={() => {
-						exportImage("clipboard");
-					}}
-					tooltipText="Copy to Clipboard"
-					disabled={isExporting()}
-					leftIcon={<IconLucideCopy class="w-4" />}
-				/>
-
-				<EditorButton
-					tooltipText="Save"
-					onClick={() => exportImage("file")}
-					disabled={isExporting()}
-					leftIcon={<IconLucideSave class="size-4" />}
-				/>
-
-				<EditorButton
-					tooltipText={shareTooltip()}
-					onClick={() => exportImage("share")}
-					disabled={isExporting()}
-					leftIcon={<IconLucideLink class="size-4" />}
-				/>
-
-				<DropdownMenu gutter={8} placement="bottom-end">
-					<EditorButton<typeof DropdownMenu.Trigger>
-						as={DropdownMenu.Trigger}
-						tooltipText="More Actions"
-						leftIcon={<IconLucideMoreHorizontal class="size-4" />}
+					<EditorButton
+						onClick={() => {
+							exportImage("clipboard");
+						}}
+						tooltipText="Copy to Clipboard"
 						disabled={isExporting()}
+						leftIcon={<IconLucideCopy class="w-4" />}
 					/>
-					<DropdownMenu.Portal>
-						<Suspense>
-							<PopperContent<typeof DropdownMenu.Content>
-								as={DropdownMenu.Content}
-								class={cx("min-w-[200px]", topSlideAnimateClasses)}
-							>
-								<MenuItemList<typeof DropdownMenu.Group>
-									as={DropdownMenu.Group}
-									class="p-1"
+
+					<EditorButton
+						tooltipText="Save"
+						onClick={() => exportImage("file")}
+						disabled={isExporting()}
+						leftIcon={<IconLucideSave class="size-4" />}
+					/>
+
+					<EditorButton
+						tooltipText={shareTooltip()}
+						onClick={() => exportImage("share")}
+						disabled={isExporting()}
+						leftIcon={<IconLucideLink class="size-4" />}
+					/>
+
+					<DropdownMenu gutter={8} placement="bottom-end">
+						<EditorButton<typeof DropdownMenu.Trigger>
+							as={DropdownMenu.Trigger}
+							tooltipText="More Actions"
+							leftIcon={<IconLucideMoreHorizontal class="size-4" />}
+							disabled={isExporting()}
+						/>
+						<DropdownMenu.Portal>
+							<Suspense>
+								<PopperContent<typeof DropdownMenu.Content>
+									as={DropdownMenu.Content}
+									class={cx("min-w-[200px]", topSlideAnimateClasses)}
 								>
-									<DropdownItem
-										onSelect={() => {
-											revealItemInDir(path());
-										}}
+									<MenuItemList<typeof DropdownMenu.Group>
+										as={DropdownMenu.Group}
+										class="p-1"
 									>
-										<IconLucideFolder class="size-4 text-gray-11" />
-										<span>Open Folder</span>
-									</DropdownItem>
-									<DropdownItem
-										onSelect={async () => {
-											if (
-												await ask(
-													"Are you sure you want to delete this screenshot?",
-												)
-											) {
-												await remove(path());
-												await getCurrentWindow().close();
-											}
-										}}
-									>
-										<IconCapTrash class="size-4 text-gray-11" />
-										<span>Delete</span>
-									</DropdownItem>
-								</MenuItemList>
-							</PopperContent>
-						</Suspense>
-					</DropdownMenu.Portal>
-				</DropdownMenu>
+										<DropdownItem
+											onSelect={() => {
+												revealItemInDir(path());
+											}}
+										>
+											<IconLucideFolder class="size-4 text-gray-11" />
+											<span>Open Folder</span>
+										</DropdownItem>
+										<DropdownItem
+											onSelect={async () => {
+												if (
+													await ask(
+														"Are you sure you want to delete this screenshot?",
+													)
+												) {
+													await remove(path());
+													await getCurrentWindow().close();
+												}
+											}}
+										>
+											<IconCapTrash class="size-4 text-gray-11" />
+											<span>Delete</span>
+										</DropdownItem>
+									</MenuItemList>
+								</PopperContent>
+							</Suspense>
+						</DropdownMenu.Portal>
+					</DropdownMenu>
+				</Show>
 
 				{ostype() === "windows" && <CaptionControlsWindows11 />}
 			</div>

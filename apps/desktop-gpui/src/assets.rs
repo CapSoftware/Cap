@@ -85,7 +85,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "laptop.svg",
     "shuffle.svg",
     "gift.svg",
-    "history.svg",
     "hotkeys.svg",
     "image.svg",
     "info.svg",
@@ -99,7 +98,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "message-square-plus.svg",
     "mic-off.svg",
     "microphone.svg",
-    "minimize.svg",
     "minus.svg",
     "monitor.svg",
     "more-vertical.svg",
@@ -189,7 +187,6 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // The main window's hand-drawn traffic lights: the x and expand glyphs
     // `CaptionControlsMacOS.tsx` inlines, shown while the group is hovered.
     "traffic-close.svg",
-    "traffic-zoom.svg",
     // The remaining settings pages (`settings_pages.rs`). `circle-check` is
     // Cap's own (`packages/ui-solid/icons/circle-check.svg`, hotkeys.tsx's
     // IconCapCircleCheck); the rest are the Lucide 24x24 originals the pages'
@@ -291,6 +288,7 @@ mod tests {
     /// scan the same list.
     const ICON_SOURCES: &[&str] = &[
         include_str!("main_window.rs"),
+        include_str!("ui/windows_caption.rs"),
         // Not a window: the Recents card's per-kind pill and fallback glyphs
         // are named on `MediaKind`, next to the `Recents.tsx` lines they come
         // from, so the table has to scan here too.

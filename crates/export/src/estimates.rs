@@ -228,11 +228,26 @@ pub async fn estimate_export(
     let setup_started = Instant::now();
     let render_constants = tokio::select! {
         _ = wait_for_stop(&editor, &cancel, deadline) => return Err("Export estimate cancelled or timed out".into()),
-        result = cap_rendering::RenderVideoConstants::new(
-            &editor.recordings.segments,
-            editor.meta().clone(),
-            editor.meta().studio_meta().ok_or("Cannot estimate this recording")?.clone(),
-        ) => Arc::new(result.map_err(|error| error.to_string())?),
+        result = async {
+            let recording_meta = editor.meta().clone();
+            let studio_meta = editor.meta().studio_meta().ok_or("Cannot estimate this recording")?.clone();
+            if editor.recordings.segments.is_empty() {
+                cap_rendering::RenderVideoConstants::new_with_options(
+                    editor.render_constants.options,
+                    recording_meta,
+                    studio_meta,
+                )
+                .await
+            } else {
+                cap_rendering::RenderVideoConstants::new(
+                    &editor.recordings.segments,
+                    recording_meta,
+                    studio_meta,
+                )
+                .await
+            }
+            .map_err(|error| error.to_string())
+        } => Arc::new(result?),
     };
     let sample_medias = tokio::select! {
         _ = wait_for_stop(&editor, &cancel, deadline) => return Err("Export estimate cancelled or timed out".into()),
@@ -772,6 +787,73 @@ fn summarize_pass(measurement: &PassMeasurement) -> Result<ExportEstimates, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_only_project_has_measured_export_estimate() {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(image_only_project_has_measured_export_estimate_inner());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    async fn image_only_project_has_measured_export_estimate_inner() {
+        let directory = tempfile::tempdir().unwrap();
+        let bundle = cap_project::create_media_project(directory.path(), "Estimate image").unwrap();
+        let images = bundle.join("content/images");
+        std::fs::create_dir_all(&images).unwrap();
+        image::RgbaImage::from_pixel(320, 180, image::Rgba([80, 180, 40, 255]))
+            .save(images.join("source.png"))
+            .unwrap();
+        let mut config = ProjectConfiguration::load(&bundle).unwrap();
+        config
+            .timeline
+            .as_mut()
+            .unwrap()
+            .image_segments
+            .push(cap_project::ImageSegment {
+                end: 2.0,
+                path: "content/images/source.png".to_string(),
+                size: cap_project::XY::new(1.0, 1.0),
+                ..Default::default()
+            });
+        config.write(&bundle).unwrap();
+        let editor = EditorInstance::new_with_audio_output(
+            bundle,
+            |_| {},
+            Box::new(|_, _| {}),
+            None,
+            Arc::new(cap_editor::AudioOutput::new_headless(Box::new(|_, _| {}))),
+        )
+        .await
+        .unwrap();
+        let estimate = estimate_export(
+            editor,
+            config,
+            ExportSettings::Mp4(crate::mp4::Mp4ExportSettings {
+                fps: 30,
+                resolution_base: cap_project::XY::new(320, 180),
+                compression: crate::mp4::ExportCompression::Social,
+                custom_bpp: None,
+                force_ffmpeg_decoder: false,
+                optimize_filesize: false,
+            }),
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(estimate.duration_seconds, 2.0);
+        assert!(estimate.estimated_size_mb > 0.0);
+        assert!(estimate.estimated_time_seconds > 0.0);
+    }
 
     fn packet(bytes: u64, key: bool) -> EncodedPacket {
         EncodedPacket { bytes, key }

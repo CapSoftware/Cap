@@ -48,6 +48,7 @@ pub mod iosurface_texture;
 mod layers;
 mod managed_segment;
 mod mask;
+pub mod media_project;
 pub mod notch_shape;
 mod overlay_layers;
 mod project_recordings;
@@ -589,6 +590,8 @@ pub enum RenderingError {
     ChannelSendNv12FrameFailed(#[from] mpsc::error::SendError<(Nv12RenderedFrame, u32)>),
     #[error("Failed to load image: {0}")]
     ImageLoadError(String),
+    #[error("Failed to decode imported video: {0}")]
+    VideoOverlayDecodeFailed(String),
     #[error("Error polling wgpu: {0}")]
     PollError(#[from] wgpu::PollError),
     #[error("Failed to upload display frame {frame_number} at recording time {recording_time}")]
@@ -747,6 +750,41 @@ pub async fn render_video_to_channel(
             }
         });
 
+        if project.get_segment_time(frame_time).is_none() {
+            next_frame = frame_windows.next_after(current_frame_number);
+            last_frame_number = current_frame_number;
+            frames_rendered += 1;
+            let size = constants.options.screen_size;
+            let frames = DecodedSegmentFrames {
+                screen_size: size,
+                screen_frame: None,
+                camera_frame: None,
+                segment_time: frame_time as f32,
+                recording_time: frame_time as f32,
+                segment_has_camera: false,
+            };
+            let cursor = CursorEvents::default();
+            let zoom = ZoomTransformTimeline::from_project(project, &cursor, duration, size);
+            let uniforms = ProjectUniforms::new(
+                constants,
+                project,
+                current_frame_number,
+                fps,
+                resolution_base,
+                &cursor,
+                &frames,
+                duration,
+                &zoom,
+            );
+            if let Some(frame) = frame_renderer
+                .render(frames, uniforms, &cursor, false, &mut layers)
+                .await?
+            {
+                last_successful_frame = Some(frame.clone());
+                sender.send((frame, current_frame_number)).await?;
+            }
+            continue;
+        }
         let Some((segment_time, segment)) = project.get_segment_time(frame_time) else {
             break;
         };
@@ -1222,6 +1260,46 @@ pub async fn render_video_to_channel_nv12(
             }
         });
 
+        if project.get_segment_time(frame_time).is_none() {
+            next_frame = frame_windows.next_after(current_frame_number);
+            last_frame_number = current_frame_number;
+            frames_rendered += 1;
+            let size = constants.options.screen_size;
+            let frames = DecodedSegmentFrames {
+                screen_size: size,
+                screen_frame: None,
+                camera_frame: None,
+                segment_time: frame_time as f32,
+                recording_time: frame_time as f32,
+                segment_has_camera: false,
+            };
+            let cursor = CursorEvents::default();
+            let zoom = ZoomTransformTimeline::from_project(project, &cursor, duration, size);
+            let uniforms = ProjectUniforms::new(
+                constants,
+                project,
+                current_frame_number,
+                fps,
+                resolution_base,
+                &cursor,
+                &frames,
+                duration,
+                &zoom,
+            );
+            if let Some(frame) = frame_renderer
+                .render_nv12(frames, uniforms, &cursor, false, &mut layers)
+                .await?
+            {
+                last_successful_frame = Some(frame.clone_metadata_with_data());
+                sender.send((frame, current_frame_number)).await?;
+                channel_frames_sent += 1;
+                if stop_after_frames_sent.is_some_and(|limit| channel_frames_sent >= limit) {
+                    stopped_after_frame_limit = true;
+                    break;
+                }
+            }
+            continue;
+        }
         let Some((segment_time, segment)) = project.get_segment_time(frame_time) else {
             break;
         };
@@ -5395,7 +5473,93 @@ pub struct FrameRenderStageTimings {
 #[cfg(test)]
 mod style_image_tests {
     use super::*;
-    use cap_project::{BackgroundSource, ImageSegment, StyleOverrides, StyleSegment};
+    use cap_project::{
+        BackgroundSource, ImageSegment, StyleOverrides, StyleSegment, TimelineConfiguration,
+        VideoSegment,
+    };
+    use std::path::Path;
+
+    #[tokio::test]
+    async fn imported_video_renders_without_a_recording_and_respects_rotation() {
+        let mut recording_meta: RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name": "video-overlay-test",
+            "display": { "path": "display.mp4", "fps": 30 },
+            "camera": null, "audio": null, "cursor": null
+        }))
+        .unwrap();
+        recording_meta.project_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let meta = recording_meta.studio_meta().unwrap().clone();
+        let size = XY::new(160, 90);
+        let constants = RenderVideoConstants::new_with_options(
+            RenderOptions {
+                screen_size: size,
+                camera_size: None,
+                preserve_screen_alpha: false,
+            },
+            recording_meta,
+            meta,
+        )
+        .await
+        .unwrap();
+        let mut project = ProjectConfiguration::default();
+        project.background.source = BackgroundSource::Color {
+            value: [255, 255, 255],
+            alpha: 255,
+        };
+        project.background.padding = 0.0;
+        project.background.shadow = 0.0;
+        project.timeline = Some(TimelineConfiguration {
+            video_segments: vec![VideoSegment {
+                start: 0.0,
+                end: 1.0,
+                path: "crates/video-decode/tests/fixtures/h264-decoder-lifecycle.mp4".into(),
+                source_duration: 1.0,
+                size: XY::new(1.0, 1.0),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let cursor = CursorEvents::default();
+        let frames = DecodedSegmentFrames {
+            screen_size: size,
+            screen_frame: None,
+            camera_frame: None,
+            segment_time: 0.2,
+            recording_time: 0.2,
+            segment_has_camera: false,
+        };
+        let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 1.0, size);
+        let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+        let mut renderer = FrameRenderer::new(&constants);
+        let uniforms = ProjectUniforms::new(
+            &constants, &project, 6, 30, size, &cursor, &frames, 1.0, &zoom,
+        );
+        layers
+            .prepare(&constants, &uniforms, &frames, &cursor, false)
+            .await
+            .unwrap();
+        let normal = renderer
+            .render_immediate(frames.clone(), uniforms, &cursor, false, &mut layers)
+            .await
+            .unwrap();
+
+        project.timeline.as_mut().unwrap().video_segments[0].rotation = 90.0;
+        let uniforms = ProjectUniforms::new(
+            &constants, &project, 6, 30, size, &cursor, &frames, 1.0, &zoom,
+        );
+        layers
+            .prepare(&constants, &uniforms, &frames, &cursor, false)
+            .await
+            .unwrap();
+        let rotated = renderer
+            .render_immediate(frames, uniforms, &cursor, false, &mut layers)
+            .await
+            .unwrap();
+
+        assert_ne!(normal.data, rotated.data);
+        let center = (45 * normal.padded_bytes_per_row as usize) + 80 * 4;
+        assert_ne!(&normal.data[center..center + 3], &[255, 255, 255]);
+    }
 
     #[tokio::test]
     async fn camera_only_ignores_cutout_and_preserves_background_blur() {
@@ -6866,12 +7030,20 @@ impl RendererLayers {
             camera_only: readiness::measure("layers.camera_only", || {
                 CameraLayer::new_with_all_shared_pipelines(
                     device,
-                    shared_yuv_pipelines,
-                    shared_composite_pipeline,
+                    shared_yuv_pipelines.clone(),
+                    shared_composite_pipeline.clone(),
                 )
             }),
             mask: readiness::measure("layers.mask", || MaskLayer::new(device)),
-            overlays: include_overlays.then(|| OverlayLayers::new(device, queue)),
+            overlays: include_overlays.then(|| {
+                OverlayLayers::new(
+                    device,
+                    queue,
+                    shared_yuv_pipelines,
+                    shared_composite_pipeline,
+                    prefer_cpu_conversion,
+                )
+            }),
             camera3d: readiness::measure("layers.camera3d", || Camera3DLayer::new(device)),
             camera_blur_processor: None,
             camera_blur_init_failed: false,
@@ -7132,6 +7304,7 @@ impl RendererLayers {
 
         if let Some(overlays) = &mut self.overlays {
             overlays.images.prepare(constants, uniforms).await;
+            overlays.videos.prepare(constants, uniforms).await?;
 
             if uniforms.project.overlay_order.is_empty() {
                 overlays.text.prepare(
@@ -7311,6 +7484,10 @@ impl RendererLayers {
         if let Some(overlays) = &mut self.overlays {
             let start = Instant::now();
             overlays.images.prepare(constants, uniforms).await;
+            overlays
+                .videos
+                .prepare_with_encoder(constants, uniforms, encoder)
+                .await?;
 
             if uniforms.project.overlay_order.is_empty() {
                 overlays.text.prepare(
@@ -7388,6 +7565,9 @@ impl RendererLayers {
         }
         self.camera.copy_to_texture(encoder);
         self.camera_only.copy_to_texture(encoder);
+        if let Some(overlays) = &mut self.overlays {
+            overlays.videos.copy_to_texture(encoder);
+        }
         self.background.render_surface(encoder);
 
         {
@@ -7535,7 +7715,17 @@ impl RendererLayers {
             }
 
             if let Some(overlays) = &self.overlays {
-                if render_display && overlays.images.has_content() {
+                for overlay in uniforms.project.overlay_tracks() {
+                    if overlay.kind == OverlayTrackKind::Video
+                        && overlays.videos.has_track(overlay.track)
+                    {
+                        let mut pass =
+                            render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                        overlays.videos.render_track(&mut pass, overlay.track);
+                    }
+                }
+
+                if overlays.images.has_content() {
                     let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
                     overlays.images.render(&mut pass);
                 }
@@ -7557,9 +7747,7 @@ impl RendererLayers {
                             self.mask.render(device, queue, session, encoder, mask);
                         }
                     }
-                    OverlayTrackKind::Image
-                        if render_display && overlays.images.has_track(overlay.track) =>
-                    {
+                    OverlayTrackKind::Image if overlays.images.has_track(overlay.track) => {
                         let mut pass =
                             render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
                         overlays.images.render_track(&mut pass, overlay.track);
@@ -7569,7 +7757,12 @@ impl RendererLayers {
                             render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
                         overlays.text.render_track(&mut pass, overlay.track);
                     }
-                    OverlayTrackKind::Text | OverlayTrackKind::Image => {}
+                    OverlayTrackKind::Video if overlays.videos.has_track(overlay.track) => {
+                        let mut pass =
+                            render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+                        overlays.videos.render_track(&mut pass, overlay.track);
+                    }
+                    OverlayTrackKind::Text | OverlayTrackKind::Image | OverlayTrackKind::Video => {}
                 }
             }
         }

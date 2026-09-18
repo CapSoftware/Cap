@@ -1025,6 +1025,7 @@ pub enum PanelSection {
     /// "Timing & advanced".
     Camera3DAdvanced,
     ZoomHelper,
+    ImageLayer,
 }
 
 // ---------------------------------------------------------------------------
@@ -2529,11 +2530,62 @@ impl EditorWindow {
             })
             .collect();
 
-        let rail = ui::TabRail::editor(&theme, "sidebar-tabs", self.panel_bg(), items)
+        let tab_rail = ui::TabRail::editor(&theme, "sidebar-tabs", self.panel_bg(), items)
             .height(px(crate::editor_window::SIDEBAR_TAB_BAR_HEIGHT))
             .on_select(cx.listener(|this, index: &usize, window, cx| {
                 this.select_sidebar_tab(*index, window, cx);
             }));
+        let rail = if selection.as_ref().is_some_and(|selection| {
+            selection.track == TrackKind::Image && selection.indices.len() == 1
+        }) {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.))
+                .h(px(crate::editor_window::SIDEBAR_TAB_BAR_HEIGHT))
+                .px(px(12.))
+                .flex_none()
+                .border_b_1()
+                .border_color(self.card_line())
+                .child(
+                    div()
+                        .id("image-sidebar-back")
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(4.))
+                        .h(px(32.))
+                        .px(px(8.))
+                        .rounded(px(8.))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(Hsla::from(theme.editor.ctl_hover)))
+                        .child(
+                            svg()
+                                .path("icons/arrow-left.svg")
+                                .size(px(16.))
+                                .text_color(Hsla::from(theme.editor.text_2)),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(Hsla::from(theme.editor.text_2))
+                                .child("Back"),
+                        )
+                        .on_click(cx.listener(|this, _, _window, cx| this.set_selection(None, cx))),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(Hsla::from(theme.editor.text_1))
+                        .child("Edit image"),
+                )
+                .into_any_element()
+        } else {
+            tab_rail.into_any_element()
+        };
 
         div()
             .w(px(crate::editor_window::SIDEBAR_WIDTH))

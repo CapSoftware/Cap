@@ -284,6 +284,10 @@ impl ExportAudioValidation {
 }
 
 impl ExportAudioRenderer {
+    pub fn set_music(&mut self, music: crate::MusicTracks) {
+        self.renderer.set_music(music);
+    }
+
     pub fn eligible(project: &ProjectConfiguration, meta: &StudioRecordingMeta) -> bool {
         let source_count = match meta {
             StudioRecordingMeta::SingleSegment { segment } => usize::from(segment.audio.is_some()),
@@ -1090,6 +1094,7 @@ mod tests {
                 scene_segments: Vec::new(),
                 style_segments: Vec::new(),
                 image_segments: Vec::new(),
+                video_segments: Vec::new(),
                 mask_segments: Vec::new(),
                 text_segments: Vec::new(),
                 caption_segments: Vec::new(),

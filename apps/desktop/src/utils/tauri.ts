@@ -190,8 +190,20 @@ async generateExportPreviewFast(frameTime: number, settings: ExportPreviewSettin
 async startVideoImport(sourcePath: string) : Promise<string> {
     return await TAURI_INVOKE("start_video_import", { sourcePath });
 },
+async createMediaProjectFromVideo(sourcePath: string) : Promise<string> {
+    return await TAURI_INVOKE("create_media_project_from_video", { sourcePath });
+},
+async createMediaProjectFromImage(sourcePath: string) : Promise<string> {
+    return await TAURI_INVOKE("create_media_project_from_image", { sourcePath });
+},
 async addExistingRecordingToEditor(sourcePath: string) : Promise<number> {
     return await TAURI_INVOKE("add_existing_recording_to_editor", { sourcePath });
+},
+async importEditorImage(sourcePath: string) : Promise<ImportedEditorImage> {
+    return await TAURI_INVOKE("import_editor_image", { sourcePath });
+},
+async importEditorVideo(sourcePath: string) : Promise<ImportedEditorVideo> {
+    return await TAURI_INVOKE("import_editor_video", { sourcePath });
 },
 async startImageImport(sourcePath: string) : Promise<string> {
     return await TAURI_INVOKE("start_image_import", { sourcePath });
@@ -246,6 +258,12 @@ async getMicWaveforms() : Promise<number[][]> {
 },
 async getSystemAudioWaveforms() : Promise<number[][]> {
     return await TAURI_INVOKE("get_system_audio_waveforms");
+},
+async getImportedWaveform(path: string) : Promise<string> {
+    return await TAURI_INVOKE("get_imported_waveform", { path });
+},
+async cancelImportedWaveforms() : Promise<void> {
+    await TAURI_INVOKE("cancel_imported_waveforms");
 },
 async listAudioLibrary() : Promise<AudioLibraryTrack[]> {
     return await TAURI_INVOKE("list_audio_library");
@@ -321,6 +339,18 @@ async uploadRenderedScreenshot(imageBytes: number[], contentType: string, projec
 },
 async createScreenshotEditorInstance() : Promise<SerializedScreenshotEditorInstance> {
     return await TAURI_INVOKE("create_screenshot_editor_instance");
+},
+async createImageDrawingInstance(imageIndex: number) : Promise<SerializedScreenshotEditorInstance> {
+    return await TAURI_INVOKE("create_image_drawing_instance", { imageIndex });
+},
+async closeImageDrawingInstance() : Promise<null> {
+    return await TAURI_INVOKE("close_image_drawing_instance");
+},
+async commitImageDrawing(imageIndex: number, pngPath: string) : Promise<ImageDrawingCommit> {
+    return await TAURI_INVOKE("commit_image_drawing", { imageIndex, pngPath });
+},
+async imageDrawingTempPath() : Promise<string> {
+    return await TAURI_INVOKE("image_drawing_temp_path");
 },
 async updateScreenshotConfig(config: ProjectConfiguration, save: boolean, revision: number) : Promise<null> {
     return await TAURI_INVOKE("update_screenshot_config", { config, save, revision });
@@ -1123,13 +1153,16 @@ export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean;
 export type HotkeyAction = "startStudioRecording" | "startInstantRecording" | "stopRecording" | "restartRecording" | "togglePauseRecording" | "cycleRecordingMode" | "openRecordingPicker" | "openRecordingPickerDisplay" | "openRecordingPickerWindow" | "openRecordingPickerArea" | "screenshotDisplay" | "screenshotWindow" | "screenshotArea" | "other"
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
-export type ImageSegment = { start: number; end: number; track: number; enabled: boolean; path: string; name: string; center: XY<number>; size: XY<number>; opacity: number; rotation: number; rounding: number; flipX: boolean; flipY: boolean; lockAspect: boolean }
+export type ImageDrawingCommit = { imageIndex: number; path: string; sourcePath: string; annotations: Annotation[] }
+export type ImageSegment = { start: number; end: number; track: number; enabled: boolean; path: string; sourcePath?: string | null; annotations: Annotation[]; name: string; center: XY<number>; size: XY<number>; opacity: number; rotation: number; rounding: number; flipX: boolean; flipY: boolean; lockAspect: boolean }
 export type ImportStage = "Probing" | "Converting" | "Finalizing" | "Complete" | "Failed"
 export type ImportedAudioTrack = {
 /**
  * Path relative to the project directory, e.g. `assets/audio/<file>`.
  */
 path: string; name: string; duration: number }
+export type ImportedEditorImage = { path: string; name: string; width: number; height: number }
+export type ImportedEditorVideo = { path: string; name: string; duration: number; fps: number; width: number; height: number; hasAudio: boolean }
 export type IncompleteRecordingInfo = { projectPath: string; prettyName: string; segmentCount: number; estimatedDurationSecs: number }
 export type InstantRecordingMeta = { recording: boolean } | { error: string } | { fps: number; sample_rate: number | null }
 export type JsonValue<T> = [T]
@@ -1179,7 +1212,7 @@ export type OnEscapePress = null
 export type Organization = { id: string; name: string; ownerId: string; role?: string; canEditBrand?: boolean; iconUrl?: string | null; brandColors?: OrganizationBrandColors }
 export type OrganizationBrandColors = { primary: string | null; secondary: string | null; accent: string | null; background: string | null }
 export type OverlayTrack = { kind: OverlayTrackKind; track: number }
-export type OverlayTrackKind = "mask" | "image" | "text"
+export type OverlayTrackKind = "mask" | "image" | "video" | "text"
 export type Phase = "awaitingShortcut" | "starting" | "recording" | "pausing" | "paused" | "resuming" | "resumeFailed" | "restarting" | "stopping" | "restoring"
 export type PhysicalSize = { width: number; height: number }
 export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
@@ -1350,7 +1383,7 @@ letterSpacing?: number; lineHeight?: number; opacity?: number; shadow?: number; 
  * segment edges when `layout` is not `Overlay`.
  */
 layoutTransition?: number }
-export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[]; styleSegments: StyleSegment[]; imageSegments: ImageSegment[]; camera3dSegments?: Camera3DSegment[] }
+export type TimelineConfiguration = { segments: TimelineSegment[]; transitions: ClipTransition[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; audioSegments?: AudioTrackSegment[]; styleSegments: StyleSegment[]; imageSegments: ImageSegment[]; videoSegments: VideoSegment[]; camera3dSegments?: Camera3DSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number; name?: string | null; speedAudioMode?: ClipSpeedAudioMode | null; volume?: number | null; hideCursor?: boolean | null }
 export type TranscriptionEngine = "Whisper" | "Parakeet"
 export type Trigger = "screenshotTaken" | "studioRecordingFinished" | "instantRecordingFinished" | "recordingStarted" | "uploadCompleted" | "videoImported" | "recordingDeleted"
@@ -1367,6 +1400,7 @@ export type Video = { duration: number; width: number; height: number; fps: numb
 export type VideoImportProgress = { project_path: string; stage: ImportStage; progress: number; message: string }
 export type VideoMeta = { path: string; fps?: number; start_time?: number | null; device_id?: string | null }
 export type VideoRecordingMetadata = { duration: number; size: number }
+export type VideoSegment = { start: number; end: number; track: number; enabled: boolean; path: string; name: string; sourceStart: number; sourceDuration: number; muted: boolean; volumeDb: number; center: XY<number>; size: XY<number>; opacity: number; rotation: number; rounding: number; flipX: boolean; flipY: boolean; lockAspect: boolean }
 export type VideoUploadInfo = { id: string; link: string; config: S3UploadMeta }
 export type VoiceIsolation = "light" | "balanced" | "strong"
 export type WindowExclusion = { bundleIdentifier?: string | null; ownerName?: string | null; windowTitle?: string | null }

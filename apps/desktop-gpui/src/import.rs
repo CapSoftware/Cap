@@ -1,27 +1,11 @@
-//! Media import -- the gpui port of the Tauri binary's `import.rs`: a picked
-//! video is transcoded into a fresh `.cap` studio bundle, a picked image
-//! becomes a screenshot bundle, and progress is reported through a global the
-//! main window's library panel draws.
-//!
-//! The Tauri version encodes through `cap-enc-ffmpeg`
-//! (`H264EncoderBuilder` / `OpusEncoder`), which is not a dependency of this
-//! standalone workspace -- the narrow slices of it the import path actually
-//! exercises are transcribed here onto the same `ffmpeg-next` this app already
-//! builds (each function cites its source). Progress travels the tray-channel
-//! shape: the worker thread owns a `flume::Sender` and a foreground task
-//! drains it into [`ActiveImports`] with a clean gpui borrow.
-
 use std::{
+    io::ErrorKind,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::Duration,
 };
 
-use cap_project::{
-    AudioMeta, Cursors, MultipleSegment, MultipleSegments, Platform, ProjectConfiguration,
-    RecordingMeta, RecordingMetaInner, SingleSegment, StudioRecordingMeta, StudioRecordingStatus,
-    VideoMeta,
-};
+use cap_project::ProjectConfiguration;
 use ffmpeg::{ChannelLayout, codec as avcodec, format as avformat};
 use gpui::{App, Global};
 
@@ -35,8 +19,8 @@ const MEDIA_IMPORT_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv", "png", "jpg", "jpeg", "webp", "gif",
     "bmp", "tif", "tiff",
 ];
-pub(crate) const OVERLAY_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
-const MAX_IMAGE_DIMENSION: u32 = 16_384;
+pub(crate) const OVERLAY_IMAGE_EXTENSIONS: &[&str] =
+    &["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"];
 static ACTIVE_IMPORT_WORKERS: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(test)]
@@ -79,73 +63,12 @@ fn generate_project_name(source_path: &Path, fallback: &str) -> String {
     format!("{stem} {}", now.format("%Y-%m-%d at %H.%M.%S"))
 }
 
-/// `import.rs:125-132`.
-fn sanitize_filename(name: &str) -> String {
-    name.chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            _ => c,
-        })
-        .collect()
-}
-
-/// The `(1)`-suffix uniquing loop from `start_video_import` (`import.rs:1370-1376`).
-fn unique_project_path(recordings_dir: &Path, sanitized_name: &str) -> PathBuf {
-    let mut project_path = recordings_dir.join(format!("{sanitized_name}.cap"));
-    let mut counter = 1;
-    while project_path.exists() {
-        project_path = recordings_dir.join(format!("{sanitized_name} ({counter}).cap"));
-        counter += 1;
-    }
-    project_path
-}
-
 fn check_project_exists(project_path: &Path) -> bool {
     project_path.exists() && project_path.join("recording-meta.json").exists()
 }
 
 /// The bundle both metas describe: `content/segments/segment-0/display.mp4`
 /// plus an optional sibling `audio.ogg` (`import.rs:1413-1439` and `1506-1536`).
-fn imported_video_meta(
-    project_path: &Path,
-    pretty_name: &str,
-    fps: u32,
-    has_audio: bool,
-    status: StudioRecordingStatus,
-) -> RecordingMeta {
-    RecordingMeta {
-        platform: Some(Platform::default()),
-        project_path: project_path.to_path_buf(),
-        pretty_name: pretty_name.to_string(),
-        sharing: None,
-        inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
-            inner: MultipleSegments {
-                segments: vec![MultipleSegment {
-                    display: VideoMeta {
-                        path: "content/segments/segment-0/display.mp4".into(),
-                        fps,
-                        start_time: Some(0.0),
-                        device_id: None,
-                    },
-                    camera: None,
-                    mic: None,
-                    system_audio: has_audio.then(|| AudioMeta {
-                        path: "content/segments/segment-0/audio.ogg".into(),
-                        start_time: Some(0.0),
-                        device_id: None,
-                        gap_summary: None,
-                    }),
-                    cursor: None,
-                    keyboard: None,
-                    display_notch: None,
-                }],
-                cursors: Cursors::default(),
-                status: Some(status),
-            },
-        })),
-        upload: None,
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Progress state -- what the main window's library panel draws
@@ -163,7 +86,6 @@ pub enum ImportKind {
 pub enum ImportStage {
     Probing,
     Converting,
-    Finalizing,
     Complete,
     Failed,
 }
@@ -240,15 +162,10 @@ fn apply_progress(update: ImportProgress, cx: &mut App) {
 
     if complete {
         refresh_libraries(cx);
-        // `importVideoPath` opens the editor on the imported bundle; the
-        // Tauri version opens it up front and shows `ImportProgress.tsx`
-        // inside, this app opens it once the bundle is Complete (deviation:
-        // the gpui editor has no importing screen). `importImagePath` ends in
-        // `ShowCapWindow::ScreenshotEditor` the same way.
         if cx.has_global::<crate::app_windows::AppWindows>() {
             match kind {
                 ImportKind::Video => crate::app_windows::open_editor(project_path, cx),
-                ImportKind::Image => crate::app_windows::open_screenshot_editor(project_path, cx),
+                ImportKind::Image => crate::app_windows::open_editor(project_path, cx),
             }
         }
     }
@@ -463,173 +380,75 @@ impl ProgressSink<'_> {
     }
 }
 
-/// `start_video_import` (`import.rs:1361-1599`), linearised: the Tauri command
-/// does the probe inline and spawns the transcode; here the whole pipeline is
-/// already on a worker thread.
 fn run_video_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
-    let recordings_dir = crate::recording::recordings_dir();
+    run_video_import_in(&crate::recording::recordings_dir(), source_path, tx);
+}
+
+fn run_video_import_in(base: &Path, source_path: &Path, tx: &flume::Sender<ImportProgress>) {
     let project_name = generate_project_name(source_path, "Imported Video");
-    let project_path = unique_project_path(&recordings_dir, &sanitize_filename(&project_name));
+    let project_path = match cap_project::create_media_project(base, &project_name) {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = tx.send(ImportProgress {
+                kind: ImportKind::Video,
+                project_path: source_path.to_path_buf(),
+                pretty_name: project_name,
+                stage: ImportStage::Failed,
+                progress: 0.0,
+                message: error,
+            });
+            return;
+        }
+    };
     let sink = ProgressSink {
         tx,
         kind: ImportKind::Video,
         project_path: &project_path,
         pretty_name: &project_name,
     };
-
-    sink.send(ImportStage::Probing, 0.0, "Analyzing video file...");
-    match probe_video_can_decode(source_path) {
-        Ok(true) => {}
-        Ok(false) => {
-            sink.send(
-                ImportStage::Failed,
-                0.0,
-                "Video format not supported or file is corrupted",
-            );
-            return;
+    sink.send(ImportStage::Probing, 0.0, "Importing video...");
+    let result = (|| {
+        let imported = cap_media_info::video_import::import_video(&project_path, source_path)?;
+        let asset_path = project_path.join(&imported.path);
+        let mut config = ProjectConfiguration::load(&project_path)
+            .map_err(|error| format!("Cannot load media timeline: {error}"))?;
+        config
+            .timeline
+            .get_or_insert_with(cap_project::TimelineConfiguration::default)
+            .video_segments
+            .push(cap_project::VideoSegment {
+                end: imported.duration,
+                path: imported.path,
+                name: imported.name,
+                source_duration: imported.duration,
+                muted: !imported.has_audio,
+                ..Default::default()
+            });
+        config
+            .write(&project_path)
+            .map_err(|error| format!("Cannot save imported video timeline: {error}"))?;
+        let thumbnail = crate::library::bundle_thumbnail_path(&project_path);
+        if let Err(error) = crate::library::create_screenshot(&asset_path, &thumbnail, None) {
+            tracing::warn!(%error, "could not create imported video thumbnail");
         }
-        Err(error) => {
-            sink.send(
-                ImportStage::Failed,
-                0.0,
-                &format!("Cannot decode video: {error}"),
-            );
-            return;
-        }
-    }
-
-    let segment_dir = project_path
-        .join("content")
-        .join("segments")
-        .join("segment-0");
-    if let Err(error) = std::fs::create_dir_all(&segment_dir) {
-        sink.send(
-            ImportStage::Failed,
-            0.0,
-            &format!("Failed to create project directory: {error}"),
-        );
+        Ok::<(), String>(())
+    })();
+    if let Err(error) = result {
+        let _ = std::fs::remove_dir_all(&project_path);
+        sink.send(ImportStage::Failed, 0.0, &error);
         return;
     }
-
-    let output_video_path = segment_dir.join("display.mp4");
-    let output_audio_path = segment_dir.join("audio.ogg");
-
-    // The InProgress meta first, so the library lists the bundle with its
-    // "In progress" badge while the conversion runs.
-    if let Err(error) = imported_video_meta(
-        &project_path,
-        &project_name,
-        30,
-        false,
-        StudioRecordingStatus::InProgress,
-    )
-    .save_for_project()
-    {
-        sink.send(
-            ImportStage::Failed,
-            0.0,
-            &format!("Failed to save initial metadata: {error:?}"),
-        );
-        return;
-    }
-
-    sink.send(ImportStage::Converting, 0.0, "Starting conversion...");
-    let result = transcode_video(
-        source_path,
-        &output_video_path,
-        Some(&output_audio_path),
-        &project_path,
-        &|progress| {
-            sink.send(
-                ImportStage::Converting,
-                progress,
-                &format!("Converting video... {}%", (progress * 100.0) as u32),
-            );
-        },
-        None,
-    );
-
-    let (fps, sample_rate) = match result {
-        Ok(result) => result,
-        Err(error) => {
-            if error == IMPORT_CANCELLED {
-                tracing::info!("video import cancelled");
-            } else {
-                tracing::error!("video import transcode failed: {error}");
-                // The Tauri version leaves the InProgress meta behind, which
-                // reads as a recording that never finishes; a Failed status
-                // gives the library its "Recording failed" badge instead.
-                if check_project_exists(&project_path)
-                    && let Err(save_error) = imported_video_meta(
-                        &project_path,
-                        &project_name,
-                        30,
-                        false,
-                        StudioRecordingStatus::Failed {
-                            error: error.clone(),
-                        },
-                    )
-                    .save_for_project()
-                {
-                    tracing::warn!("could not mark the import failed: {save_error:?}");
-                }
-            }
-            sink.send(ImportStage::Failed, 0.0, &error);
-            return;
-        }
-    };
-
-    sink.send(
-        ImportStage::Finalizing,
-        0.95,
-        "Creating project metadata...",
-    );
-
-    // `import.rs:1490-1504`: an Opus file this small is headers with no
-    // samples, so the meta must not point playback at it.
-    const MIN_VALID_AUDIO_SIZE: u64 = 1000;
-    let audio_file_size = std::fs::metadata(&output_audio_path)
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
-    let has_audio = sample_rate.is_some() && audio_file_size > MIN_VALID_AUDIO_SIZE;
-
-    if let Err(error) = imported_video_meta(
-        &project_path,
-        &project_name,
-        fps,
-        has_audio,
-        StudioRecordingStatus::Complete,
-    )
-    .save_for_project()
-    {
-        sink.send(
-            ImportStage::Failed,
-            0.0,
-            &format!("Failed to save metadata: {error:?}"),
-        );
-        return;
-    }
-
-    // Written before Complete rather than fire-and-forget as the Tauri spawn
-    // does, so the refresh that Complete triggers already finds the file.
-    let thumbnail = crate::library::bundle_thumbnail_path(&project_path);
-    if let Err(error) = crate::library::create_screenshot(&output_video_path, &thumbnail, None) {
-        tracing::warn!("could not write the imported video's thumbnail: {error}");
-    }
-
     sink.send(ImportStage::Complete, 1.0, "Import complete!");
     tracing::info!(path = %project_path.display(), "video import complete");
 }
 
-/// `start_image_import` (`import.rs:1899-2017`).
 fn run_image_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
-    let screenshots_dir = crate::library::screenshots_dir();
-    let project_name = generate_project_name(source_path, "Imported Image");
-    // `import.rs:1947-1948`: `:` becomes `.` the way recording bundles spell
-    // timestamps, then the reserved characters go.
-    let bundle_name = format!("{}.cap", sanitize_filename(&project_name.replace(':', ".")));
+    run_image_import_in(&crate::recording::recordings_dir(), source_path, tx);
+}
 
-    let placeholder_path = screenshots_dir.join(&bundle_name);
+fn run_image_import_in(base: &Path, source_path: &Path, tx: &flume::Sender<ImportProgress>) {
+    let project_name = generate_project_name(source_path, "Imported Image");
+    let placeholder_path = base.join(format!("{}.pending", uuid::Uuid::new_v4()));
     let early = ProgressSink {
         tx,
         kind: ImportKind::Image,
@@ -641,17 +460,8 @@ fn run_image_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
         early.send(ImportStage::Failed, 0.0, "Image file does not exist");
         return;
     }
-    if let Err(error) = std::fs::create_dir_all(&screenshots_dir) {
-        early.send(
-            ImportStage::Failed,
-            0.0,
-            &format!("Failed to create screenshots directory: {error}"),
-        );
-        return;
-    }
-
-    let project_path = match cap_utils::ensure_unique_filename(&bundle_name, &screenshots_dir) {
-        Ok(name) => screenshots_dir.join(name),
+    let project_path = match cap_project::create_media_project(base, &project_name) {
+        Ok(path) => path,
         Err(error) => {
             early.send(ImportStage::Failed, 0.0, &error);
             return;
@@ -666,65 +476,31 @@ fn run_image_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
 
     sink.send(ImportStage::Probing, 0.0, "Importing image...");
 
-    let (width, height, rgba) = match decode_image_rgba(source_path) {
-        Ok(decoded) => decoded,
-        Err(error) => {
-            sink.send(ImportStage::Failed, 0.0, &error);
-            return;
-        }
-    };
-
-    if let Err(error) = std::fs::create_dir_all(&project_path) {
-        sink.send(
-            ImportStage::Failed,
-            0.0,
-            &format!("Failed to create screenshot project directory: {error}"),
-        );
-        return;
-    }
-
-    let image_path = project_path.join("original.png");
-    if let Err(error) = write_png(&image_path, width, height, &rgba) {
+    let result = (|| {
+        let imported = import_editor_image(&project_path, source_path)?;
+        let mut config = ProjectConfiguration::load(&project_path)
+            .map_err(|error| format!("Cannot load media timeline: {error}"))?;
+        config
+            .timeline
+            .get_or_insert_with(cap_project::TimelineConfiguration::default)
+            .image_segments
+            .push(cap_project::ImageSegment {
+                end: 5.0,
+                path: imported.path.clone(),
+                size: cap_project::XY::new(1.0, 1.0),
+                ..Default::default()
+            });
+        config
+            .write(&project_path)
+            .map_err(|error| format!("Cannot save imported image timeline: {error}"))?;
+        create_image_thumbnail(
+            &project_path.join(imported.path),
+            &project_path.join("screenshots/display.jpg"),
+        )
+    })();
+    if let Err(error) = result {
+        let _ = std::fs::remove_dir_all(&project_path);
         sink.send(ImportStage::Failed, 0.0, &error);
-        return;
-    }
-
-    // The bundle shape `list_screenshots` scans for: a `.cap` directory whose
-    // meta parses, holding a PNG (`import.rs:1981-2009`).
-    let meta = RecordingMeta {
-        platform: Some(Platform::default()),
-        project_path: project_path.clone(),
-        pretty_name: project_name.clone(),
-        sharing: None,
-        inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::SingleSegment {
-            segment: SingleSegment {
-                display: VideoMeta {
-                    path: "original.png".into(),
-                    fps: 0,
-                    start_time: Some(0.0),
-                    device_id: None,
-                },
-                camera: None,
-                audio: None,
-                cursor: None,
-            },
-        })),
-        upload: None,
-    };
-    if let Err(error) = meta.save_for_project() {
-        sink.send(
-            ImportStage::Failed,
-            0.0,
-            &format!("Failed to save screenshot metadata: {error:?}"),
-        );
-        return;
-    }
-    if let Err(error) = ProjectConfiguration::default().write(&project_path) {
-        sink.send(
-            ImportStage::Failed,
-            0.0,
-            &format!("Failed to save screenshot project config: {error}"),
-        );
         return;
     }
 
@@ -732,83 +508,42 @@ fn run_image_import(source_path: &Path, tx: &flume::Sender<ImportProgress>) {
     tracing::info!(path = %project_path.display(), "image import complete");
 }
 
+fn create_image_thumbnail(path: &Path, thumbnail: &Path) -> Result<(), String> {
+    use image::ImageDecoder;
+    let mut reader = image::ImageReader::open(path)
+        .map_err(|error| format!("Cannot open imported image thumbnail: {error}"))?
+        .with_guessed_format()
+        .map_err(|error| format!("Cannot identify imported image thumbnail: {error}"))?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    limits.max_image_width = Some(32_768);
+    limits.max_image_height = Some(32_768);
+    reader.limits(limits);
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|error| format!("Cannot decode imported image thumbnail: {error}"))?;
+    let orientation = decoder
+        .orientation()
+        .map_err(|error| format!("Cannot orient imported image thumbnail: {error}"))?;
+    let mut image = image::DynamicImage::from_decoder(decoder)
+        .map_err(|error| format!("Cannot read imported image thumbnail: {error}"))?;
+    image.apply_orientation(orientation);
+    std::fs::create_dir_all(
+        thumbnail
+            .parent()
+            .ok_or("Imported image thumbnail has no directory")?,
+    )
+    .map_err(|error| format!("Cannot create imported image thumbnail directory: {error}"))?;
+    image
+        .thumbnail(400, 225)
+        .save_with_format(thumbnail, image::ImageFormat::Jpeg)
+        .map_err(|error| format!("Cannot save imported image thumbnail: {error}"))
+}
+
 // ---------------------------------------------------------------------------
 // Probing
 // ---------------------------------------------------------------------------
 
-/// `probe_video_can_decode` (`crates/enc-ffmpeg/src/remux.rs:322-390`), minus
-/// the log suppression that crate wraps around it.
-fn probe_video_can_decode(path: &Path) -> Result<bool, String> {
-    let input = avformat::input(path).map_err(|e| format!("Failed to open file: {e}"))?;
-
-    let input_stream = input
-        .streams()
-        .best(ffmpeg::media::Type::Video)
-        .ok_or_else(|| "No video stream found".to_string())?;
-
-    let decoder_ctx = avcodec::Context::from_parameters(input_stream.parameters())
-        .map_err(|e| format!("Failed to create decoder context: {e}"))?;
-    let mut decoder = decoder_ctx
-        .decoder()
-        .video()
-        .map_err(|e| format!("Failed to create video decoder: {e}"))?;
-
-    let stream_index = input_stream.index();
-
-    let mut input = avformat::input(path).map_err(|e| format!("Failed to reopen file: {e}"))?;
-
-    let mut frame = ffmpeg::frame::Video::empty();
-    let mut packets_tried = 0;
-    const MAX_PACKETS: usize = 100;
-
-    for (stream, packet) in input.packets() {
-        if stream.index() != stream_index {
-            continue;
-        }
-
-        packets_tried += 1;
-
-        if let Err(e) = decoder.send_packet(&packet) {
-            if packets_tried >= MAX_PACKETS {
-                return Err(format!(
-                    "Failed to send packet after {packets_tried} attempts: {e}"
-                ));
-            }
-            continue;
-        }
-
-        match decoder.receive_frame(&mut frame) {
-            Ok(()) => return Ok(true),
-            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => continue,
-            Err(ffmpeg::Error::Eof) => break,
-            Err(e) => {
-                if packets_tried >= MAX_PACKETS {
-                    return Err(format!(
-                        "Failed to decode frame after {packets_tried} packets: {e}"
-                    ));
-                }
-                continue;
-            }
-        }
-    }
-
-    if let Err(e) = decoder.send_eof() {
-        return Err(format!("Failed to send EOF: {e}"));
-    }
-
-    loop {
-        match decoder.receive_frame(&mut frame) {
-            Ok(()) => return Ok(true),
-            Err(ffmpeg::Error::Eof) => break,
-            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => continue,
-            Err(e) => return Err(format!("Failed to receive frame after EOF: {e}")),
-        }
-    }
-
-    Ok(false)
-}
-
-/// `get_media_duration` (`remux.rs:543-557`).
 fn media_duration(path: &Path) -> Option<Duration> {
     let input = avformat::input(path).ok()?;
     let duration = input.duration();
@@ -1745,141 +1480,95 @@ impl OpusOutput {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Image decode + PNG encode
-// ---------------------------------------------------------------------------
-
-fn check_image_dimensions(width: u32, height: u32) -> Result<(), String> {
-    if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
-        return Err(format!("Image dimensions exceed maximum: {width}x{height}"));
-    }
-    if width
-        .checked_mul(height)
-        .and_then(|pixels| pixels.checked_mul(4))
-        .is_none()
-    {
-        return Err(format!("Image dimensions overflow: {width}x{height}"));
-    }
-    Ok(())
-}
-
-/// `start_image_import`'s decode (`import.rs:1908-1933`), with an ffmpeg
-/// fallback: this workspace's `image` build only carries png/jpeg/webp
-/// (Cargo.toml pins the features), so gif/bmp/tiff decode through the same
-/// ffmpeg stack the video path uses.
-fn decode_image_rgba(source_path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
-    match decode_image_with_image_crate(source_path) {
-        Ok(decoded) => Ok(decoded),
-        Err(image_error) => decode_image_with_ffmpeg(source_path)
-            .map_err(|ffmpeg_error| format!("{image_error} ({ffmpeg_error})")),
-    }
-}
-
-fn decode_image_with_image_crate(source_path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
-    let image = image::ImageReader::open(source_path)
-        .map_err(|e| format!("Failed to open image: {e}"))?
-        .with_guessed_format()
-        .map_err(|e| format!("Failed to detect image format: {e}"))?
-        .decode()
-        .map_err(|e| format!("Failed to decode image: {e}"))?;
-
-    let (width, height) = (image.width(), image.height());
-    check_image_dimensions(width, height)?;
-    Ok((width, height, image.to_rgba8().into_raw()))
-}
-
-fn decode_image_with_ffmpeg(source_path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
-    let mut input =
-        avformat::input(source_path).map_err(|e| format!("Failed to open image: {e}"))?;
-    let stream_index = input
-        .streams()
-        .best(ffmpeg::media::Type::Video)
-        .ok_or("Failed to decode image: no image stream")?
-        .index();
-    let mut decoder = avcodec::Context::from_parameters(
-        input
-            .stream(stream_index)
-            .ok_or("Failed to decode image: no image stream")?
-            .parameters(),
-    )
-    .map_err(|e| format!("Failed to decode image: {e}"))?
-    .decoder()
-    .video()
-    .map_err(|e| format!("Failed to decode image: {e}"))?;
-
-    let mut frame = ffmpeg::frame::Video::empty();
-    let mut decoded = false;
-    for (stream, packet) in input.packets() {
-        if stream.index() != stream_index {
-            continue;
-        }
-        if decoder.send_packet(&packet).is_err() {
-            continue;
-        }
-        if decoder.receive_frame(&mut frame).is_ok() {
-            decoded = true;
-            break;
-        }
-    }
-    if !decoded {
-        decoder
-            .send_eof()
-            .map_err(|e| format!("Failed to decode image: {e}"))?;
-        decoded = decoder.receive_frame(&mut frame).is_ok();
-    }
-    if !decoded {
-        return Err("Failed to decode image".to_string());
-    }
-
-    let (width, height) = (frame.width(), frame.height());
-    check_image_dimensions(width, height)?;
-
-    let mut scaler = ffmpeg::software::scaling::Context::get(
-        frame.format(),
-        width,
-        height,
-        avformat::Pixel::RGBA,
-        width,
-        height,
-        ffmpeg::software::scaling::Flags::BILINEAR,
-    )
-    .map_err(|e| format!("Failed to decode image: {e}"))?;
-    let mut rgba_frame = ffmpeg::frame::Video::empty();
-    scaler
-        .run(&frame, &mut rgba_frame)
-        .map_err(|e| format!("Failed to decode image: {e}"))?;
-
-    // Row by row: the scaler pads rows to its own stride, the buffer is tight
-    // (the `create_screenshot` copy, `library.rs:779-787`).
-    let width_usize = width as usize;
-    let height_usize = height as usize;
-    let src_stride = rgba_frame.stride(0);
-    let row_bytes = width_usize * 4;
-    let mut buffer = vec![0u8; height_usize * row_bytes];
-    for y in 0..height_usize {
-        let src = &rgba_frame.data(0)[y * src_stride..y * src_stride + row_bytes];
-        buffer[y * row_bytes..(y + 1) * row_bytes].copy_from_slice(src);
-    }
-
-    Ok((width, height, buffer))
-}
-
-/// The PNG write (`import.rs:1960-1977`).
-fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
-    let file = std::fs::File::create(path)
-        .map_err(|e| format!("Failed to create imported image file: {e}"))?;
-    let encoder = image::codecs::png::PngEncoder::new_with_quality(
-        std::io::BufWriter::new(file),
-        image::codecs::png::CompressionType::Default,
-        image::codecs::png::FilterType::Adaptive,
-    );
-    image::ImageEncoder::write_image(encoder, rgba, width, height, image::ColorType::Rgba8.into())
-        .map_err(|e| format!("Failed to encode imported image: {e}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cap_project::{RecordingMeta, StudioRecordingMeta};
+
+    #[test]
+    fn direct_video_import_creates_media_timeline_with_source_audio_and_preserves_input() {
+        let root = temp_dir("direct-video");
+        let base = root.join("library");
+        let source = root.join("source.mp4");
+        let original =
+            include_bytes!("../../media-server/src/__tests__/fixtures/test-with-audio.mp4");
+        std::fs::write(&source, original).unwrap();
+        let source_permissions = std::fs::metadata(&source).unwrap().permissions();
+        let mut read_only_permissions = source_permissions.clone();
+        read_only_permissions.set_readonly(true);
+        std::fs::set_permissions(&source, read_only_permissions).unwrap();
+        let (tx, rx) = flume::unbounded();
+        run_video_import_in(&base, &source, &tx);
+        let events: Vec<_> = rx.try_iter().collect();
+        let completed = events
+            .iter()
+            .find(|event| event.stage == ImportStage::Complete)
+            .unwrap_or_else(|| panic!("video import failed: {events:?}"));
+        let project_path = &completed.project_path;
+        let meta = RecordingMeta::load_for_project(project_path).unwrap();
+        assert!(matches!(
+            meta.studio_meta().unwrap(),
+            StudioRecordingMeta::MultipleSegments { inner } if inner.segments.is_empty()
+        ));
+        let config = ProjectConfiguration::load(project_path).unwrap();
+        let timeline = config.timeline.unwrap();
+        assert_eq!(timeline.video_segments.len(), 1);
+        let video = &timeline.video_segments[0];
+        assert!(video.end > 0.0 && !video.muted);
+        assert!(crate::library::bundle_thumbnail_path(project_path).is_file());
+        assert_eq!(
+            std::fs::read(project_path.join(&video.path)).unwrap(),
+            original
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        assert!(std::fs::metadata(&source).unwrap().permissions().readonly());
+        std::fs::set_permissions(&source, source_permissions).unwrap();
+        let damaged = root.join("damaged.mp4");
+        std::fs::write(&damaged, b"invalid").unwrap();
+        run_video_import_in(&base, &damaged, &tx);
+        assert_eq!(std::fs::read_dir(&base).unwrap().count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direct_image_import_creates_media_timeline_and_preserves_input() {
+        let root = temp_dir("direct-image");
+        let base = root.join("library");
+        let source = root.join("source.png");
+        image::RgbaImage::from_pixel(24, 16, image::Rgba([25, 80, 210, 255]))
+            .save(&source)
+            .unwrap();
+        let original = std::fs::read(&source).unwrap();
+        let (tx, rx) = flume::unbounded();
+        run_image_import_in(&base, &source, &tx);
+        let events: Vec<_> = rx.try_iter().collect();
+        let completed = events
+            .iter()
+            .find(|event| event.stage == ImportStage::Complete)
+            .unwrap();
+        let project_path = &completed.project_path;
+        let meta = RecordingMeta::load_for_project(project_path).unwrap();
+        assert!(matches!(
+            meta.studio_meta().unwrap(),
+            StudioRecordingMeta::MultipleSegments { inner } if inner.segments.is_empty()
+        ));
+        let config = ProjectConfiguration::load(project_path).unwrap();
+        let timeline = config.timeline.unwrap();
+        assert_eq!(timeline.image_segments.len(), 1);
+        let image = &timeline.image_segments[0];
+        assert_eq!(image.end, 5.0);
+        assert!(crate::library::bundle_thumbnail_path(project_path).is_file());
+        assert_eq!(
+            std::fs::read(project_path.join(&image.path)).unwrap(),
+            original
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        let damaged = root.join("damaged.png");
+        std::fs::write(&damaged, b"invalid").unwrap();
+        run_image_import_in(&base, &damaged, &tx);
+        assert_eq!(std::fs::read_dir(&base).unwrap().count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn editor_import_cancellation_interrupts_a_real_conversion() {
@@ -1983,15 +1672,6 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_filename_replaces_reserved_characters() {
-        assert_eq!(
-            sanitize_filename(r#"a/b\c:d*e?f"g<h>i|j"#),
-            "a_b_c_d_e_f_g_h_i_j"
-        );
-        assert_eq!(sanitize_filename("My Clip 2026"), "My Clip 2026");
-    }
-
-    #[test]
     fn project_names_carry_the_source_stem_and_a_timestamp() {
         let name = generate_project_name(Path::new("/tmp/My Clip.mp4"), "Imported Video");
         assert!(name.starts_with("My Clip "), "{name}");
@@ -1999,24 +1679,6 @@ mod tests {
 
         let fallback = generate_project_name(Path::new("/"), "Imported Video");
         assert!(fallback.starts_with("Imported Video "), "{fallback}");
-    }
-
-    #[test]
-    fn unique_project_path_suffixes_like_the_tauri_import() {
-        let dir = temp_dir("unique");
-
-        let first = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00");
-        assert!(first.ends_with("Video 2026-01-01 at 10.00.00.cap"));
-        std::fs::create_dir_all(&first).unwrap();
-
-        let second = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00");
-        assert!(second.ends_with("Video 2026-01-01 at 10.00.00 (1).cap"));
-        std::fs::create_dir_all(&second).unwrap();
-
-        let third = unique_project_path(&dir, "Video 2026-01-01 at 10.00.00");
-        assert!(third.ends_with("Video 2026-01-01 at 10.00.00 (2).cap"));
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -2089,115 +1751,151 @@ pub(crate) struct ImportedEditorImage {
     pub height: u32,
 }
 
+fn reject_linked_image_asset_directories(
+    project_path: &Path,
+    directory: &Path,
+) -> Result<(), String> {
+    for candidate in [project_path.join("content"), directory.to_path_buf()] {
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err("Image assets cannot use linked project directories".into());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Cannot inspect image assets: {error}")),
+        }
+    }
+    Ok(())
+}
+
+fn check_image_asset_directory(project_path: &Path, directory: &Path) -> Result<(), String> {
+    reject_linked_image_asset_directories(project_path, directory)?;
+    let root = project_path
+        .canonicalize()
+        .map_err(|error| format!("Cannot inspect editor project: {error}"))?;
+    let resolved = directory
+        .canonicalize()
+        .map_err(|error| format!("Cannot inspect image assets: {error}"))?;
+    if !resolved.starts_with(root) {
+        return Err("Image assets must stay inside the editor project".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn import_editor_image(
     project_path: &Path,
     source: &Path,
 ) -> Result<ImportedEditorImage, String> {
     use image::ImageDecoder;
-    use std::{
-        hash::BuildHasher,
-        io::{Read, Write},
-    };
+    use std::io::Read;
     const MAX_BYTES: u64 = 64 * 1024 * 1024;
     if !project_path.is_dir() || !has_supported_extension(source, OVERLAY_IMAGE_EXTENSIONS) {
-        return Err("Choose a PNG, JPEG, WebP, GIF or BMP image for this project".into());
+        return Err("Choose a PNG, JPEG, WebP, GIF, BMP or TIFF image for this project".into());
     }
     let file = std::fs::File::open(source).map_err(|error| error.to_string())?;
     let metadata = file.metadata().map_err(|error| error.to_string())?;
     if !metadata.is_file() || metadata.len() > MAX_BYTES {
         return Err("Image files must be 64 MiB or smaller".into());
     }
-    let mut encoded = Vec::new();
-    file.take(MAX_BYTES + 1)
-        .read_to_end(&mut encoded)
-        .map_err(|error| error.to_string())?;
-    if encoded.len() as u64 > MAX_BYTES {
-        return Err("Image files must be 64 MiB or smaller".into());
-    }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(&encoded))
+    let id = uuid::Uuid::new_v4();
+    let directory = project_path.join("content/images");
+    reject_linked_image_asset_directories(project_path, &directory)?;
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    check_image_asset_directory(project_path, &directory)?;
+    let temporary = directory.join(format!(".{id}.import"));
+    let result = (|| {
+        let mut temporary_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| error.to_string())?;
+        let copied = std::io::copy(&mut file.take(MAX_BYTES + 1), &mut temporary_file)
+            .map_err(|error| format!("Failed to copy image: {error}"))?;
+        if copied > MAX_BYTES {
+            return Err("Image files must be 64 MiB or smaller".into());
+        }
+        temporary_file
+            .sync_all()
+            .map_err(|error| format!("Failed to save image: {error}"))?;
+        drop(temporary_file);
+        let mut reader = image::ImageReader::new(std::io::BufReader::new(
+            std::fs::File::open(&temporary).map_err(|error| error.to_string())?,
+        ))
         .with_guessed_format()
         .map_err(|error| error.to_string())?;
-    let extension = match reader.format() {
-        Some(image::ImageFormat::Png) => "png",
-        Some(image::ImageFormat::Jpeg) => "jpg",
-        Some(image::ImageFormat::WebP) => "webp",
-        Some(image::ImageFormat::Gif) => "gif",
-        Some(image::ImageFormat::Bmp) => "bmp",
-        _ => return Err("Choose a PNG, JPEG, WebP, GIF or BMP image".into()),
-    };
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(128 * 1024 * 1024);
-    limits.max_image_width = Some(32_768);
-    limits.max_image_height = Some(32_768);
-    reader.limits(limits);
-    let mut decoder = reader.into_decoder().map_err(|error| {
-        format!("Cannot decode image (maximum 32,768 pixels per side): {error}")
-    })?;
-    let (source_width, source_height) = decoder.dimensions();
-    if source_width == 0
-        || source_height == 0
-        || u64::from(source_width) * u64::from(source_height) > 16_777_216
-        || decoder.total_bytes() > 128 * 1024 * 1024
-    {
-        return Err("Images must have at most 16,777,216 pixels (32,768 per side) and decode to at most 128 MiB".into());
+        let extension = match reader.format() {
+            Some(image::ImageFormat::Png) => "png",
+            Some(image::ImageFormat::Jpeg) => "jpg",
+            Some(image::ImageFormat::WebP) => "webp",
+            Some(image::ImageFormat::Gif) => "gif",
+            Some(image::ImageFormat::Bmp) => "bmp",
+            Some(image::ImageFormat::Tiff) => "tiff",
+            _ => return Err("Choose a PNG, JPEG, WebP, GIF, BMP or TIFF image".into()),
+        };
+        let mut limits = image::Limits::default();
+        limits.max_alloc = Some(128 * 1024 * 1024);
+        limits.max_image_width = Some(32_768);
+        limits.max_image_height = Some(32_768);
+        reader.limits(limits);
+        let mut decoder = reader
+            .into_decoder()
+            .map_err(|error| format!("Cannot decode image: {error}"))?;
+        let (source_width, source_height) = decoder.dimensions();
+        if source_width == 0
+            || source_height == 0
+            || u64::from(source_width) * u64::from(source_height) > 16_777_216
+            || decoder.total_bytes() > 128 * 1024 * 1024
+        {
+            return Err("Images must have at most 16,777,216 pixels (32,768 per side) and decode to at most 128 MiB".into());
+        }
+        let orientation = decoder.orientation().map_err(|error| error.to_string())?;
+        let mut decoded = image::DynamicImage::from_decoder(decoder)
+            .map_err(|error| format!("Cannot decode image: {error}"))?;
+        decoded.apply_orientation(orientation);
+        let (width, height) = (decoded.width(), decoded.height());
+        let relative = format!("content/images/{id}.{extension}");
+        check_image_asset_directory(project_path, &directory)?;
+        std::fs::rename(&temporary, project_path.join(&relative))
+            .map_err(|error| format!("Failed to save image: {error}"))?;
+        Ok(ImportedEditorImage {
+            path: relative,
+            name: source
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Image")
+                .to_string(),
+            width,
+            height,
+        })
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
     }
-    let orientation = decoder.orientation().map_err(|error| error.to_string())?;
-    let mut decoded = image::DynamicImage::from_decoder(decoder)
-        .map_err(|error| format!("Cannot decode image: {error}"))?;
-    decoded.apply_orientation(orientation);
-    let (width, height) = (decoded.width(), decoded.height());
-    drop(decoded);
-    let mut bytes = [0u8; 16];
-    for chunk in bytes.chunks_exact_mut(8) {
-        chunk.copy_from_slice(
-            &std::collections::hash_map::RandomState::new()
-                .hash_one(source)
-                .to_be_bytes(),
-        );
-    }
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-    let id = format!(
-        "{}-{}-{}-{}-{}",
-        &hex[..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..]
-    );
-    let relative = format!("content/images/{id}.{extension}");
-    let destination = project_path.join(&relative);
-    std::fs::create_dir_all(project_path.join("content/images"))
-        .map_err(|error| error.to_string())?;
-    let mut destination_file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&destination)
-        .map_err(|error| error.to_string())?;
-    if let Err(error) = destination_file
-        .write_all(&encoded)
-        .and_then(|()| destination_file.sync_all())
-    {
-        drop(destination_file);
-        let _ = std::fs::remove_file(&destination);
-        return Err(format!("Failed to save image: {error}"));
-    }
-    Ok(ImportedEditorImage {
-        path: relative,
-        name: source
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .unwrap_or("Image")
-            .to_string(),
-        width,
-        height,
-    })
+    result
 }
 
 #[cfg(test)]
 mod style_image_tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn style_image_import_rejects_linked_asset_directory_without_writing_outside() {
+        let root = std::env::temp_dir().join(format!("cap-overlay-link-{}", uuid::Uuid::new_v4()));
+        let project = root.join("project");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(project.join("content")).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("content/images")).unwrap();
+        let source = root.join("source.png");
+        image::RgbaImage::from_pixel(4, 3, image::Rgba([25, 80, 210, 255]))
+            .save(&source)
+            .unwrap();
+
+        assert!(import_editor_image(&project, &source).is_err());
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn style_image_import_rotates_exif_copies_source_and_keeps_relative_unique_assets() {

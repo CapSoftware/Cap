@@ -1568,6 +1568,7 @@ dependencies = [
  "objc2-foundation 0.2.2",
  "parakeet-rs",
  "raw-window-handle",
+ "relative-path",
  "reqwest 0.12.28",
  "resvg 0.45.1",
  "rfd",
@@ -1587,6 +1588,7 @@ dependencies = [
  "tracing-subscriber",
  "tray-icon",
  "unicode-segmentation",
+ "uuid",
  "wayland-client",
  "wgpu 25.0.2",
  "whisper-rs",
@@ -1764,6 +1766,7 @@ dependencies = [
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=6013cb5f8bd3)",
  "ffmpeg-next",
  "thiserror 1.0.69",
+ "uuid",
  "workspace-hack",
 ]
 
