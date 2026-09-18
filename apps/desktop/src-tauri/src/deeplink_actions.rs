@@ -216,16 +216,17 @@ impl DeepLinkAction {
                 let capture_target: ScreenCaptureTarget = match capture_mode {
                     CaptureMode::Screen(name) => {
                         let displays = cap_recording::screen_capture::list_displays();
-                        if name == "default" || name.is_empty() {
-                            displays.into_iter().next()
-                                .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                                .ok_or("No display available".to_string())?
+                        let target_display = if name != "default" && !name.is_empty() {
+                            displays.iter().find(|(s, _)| s.name == name)
                         } else {
-                            displays.into_iter()
-                                .find(|(s, _)| s.name == name)
-                                .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                                .ok_or(format!("No screen with name \"{}\"", &name))?
-                        }
+                            None
+                        };
+
+                        let (display, _) = target_display
+                            .or_else(|| displays.first())
+                            .ok_or_else(|| "No display available".to_string())?;
+
+                        ScreenCaptureTarget::Display { id: display.id }
                     },
                     CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
                         .into_iter()
