@@ -13,6 +13,7 @@ const secret = "editor-solid-ui-replay-secret";
 const videoId = "editor-solid-ui-replay";
 const userId = "editor-solid-ui-user";
 const proCaptions = process.env.CAP_EDITOR_UI_PRO_CAPTIONS === "1";
+const coldMount = process.env.CAP_EDITOR_UI_COLD_MOUNT === "1";
 const browserEngine =
 	process.env.CAP_EDITOR_UI_BROWSER === "webkit" ? webkit : chromium;
 const editorPublic = resolve(
@@ -338,6 +339,34 @@ try {
 	const pageErrors: string[] = [];
 	const rendererFallbacks: string[] = [];
 	const failedResponses: string[] = [];
+	let delayedSkeletonRequests = 0;
+	let delayedEditorRequests = 0;
+	if (coldMount) {
+		await page.addInitScript(() => {
+			window.addEventListener("message", (event: MessageEvent<unknown>) => {
+				if (typeof event.data !== "object" || event.data === null) return;
+				if (!("kind" in event.data)) return;
+				if (event.data.kind === "cap-editor-connect")
+					document.body.dataset.editorConnectReceived = "true";
+			});
+		});
+		await page.route(
+			/\/editor-solid\/assets\/editor-skeleton-[^/]+\.js(?:\?.*)?$/,
+			async (route) => {
+				delayedSkeletonRequests++;
+				await Bun.sleep(3_000);
+				await route.continue();
+			},
+		);
+		await page.route(
+			/\/editor-solid\/assets\/Editor-[^/]+\.js(?:\?.*)?$/,
+			async (route) => {
+				delayedEditorRequests++;
+				await Bun.sleep(6_000);
+				await route.continue();
+			},
+		);
+	}
 	page.on("pageerror", (error) => pageErrors.push(error.message));
 	page.on("console", (message) => {
 		if (message.type() !== "error") return;
@@ -365,7 +394,7 @@ try {
 			iframe.addEventListener("load", () => resolve(), { once: true }),
 		);
 	});
-	await page.evaluate(
+	const connecting = page.evaluate(
 		async ({ recordingId, editorSession, ownerId, captionsEnabled }) => {
 			const { EditorHostBridge } = await import(
 				new URL("/test-host.js", location.origin).href
@@ -406,6 +435,23 @@ try {
 		},
 	);
 	const editor = page.frameLocator("#editor");
+	if (coldMount) {
+		await editor
+			.locator("body[data-editor-connect-received=true]")
+			.waitFor({ state: "attached", timeout: 4_000 });
+		await editor
+			.getByRole("button", { name: "Export", exact: true })
+			.waitFor({ timeout: 4_000 });
+		assert.equal(
+			await editor
+				.getByRole("button", { name: "Export", exact: true })
+				.isDisabled(),
+			true,
+		);
+		assert.equal(delayedSkeletonRequests, 1);
+		assert.equal(delayedEditorRequests, 1);
+	}
+	await connecting;
 	await editor.getByRole("button", { name: "Export", exact: true }).waitFor({
 		state: "visible",
 		timeout: 20_000,
@@ -535,6 +581,9 @@ try {
 			videoId,
 			browserEngine: browserEngine.name(),
 			proCaptions,
+			coldMount,
+			delayedSkeletonRequests,
+			delayedEditorRequests,
 			separateCameraTabEnabled: true,
 			freeCaptionsUpgradeVisible: !proCaptions,
 			proCaptionGenerationVisible: proCaptions,

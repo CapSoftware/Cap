@@ -270,7 +270,7 @@ if (root) {
 		if (message.kind !== "cap-editor-connect" || message.version !== 1) return;
 		const port = event.ports[0];
 		if (!port) return;
-		mountGeneration++;
+		if (errorDispose || webErrorState().message) mountGeneration++;
 		errorDispose?.();
 		errorDispose = null;
 		window.capWebEditorCaptionsEnabled = message.captionsEnabled === true;
