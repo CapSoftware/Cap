@@ -72,8 +72,19 @@ export function StudioEditorClient(props: {
 	userId: string;
 	captionsEnabled: boolean;
 	savedAt: string | null;
+	preparingTitle: string;
+	preparingDuration: number;
+	preparingTracks: Array<"display" | "camera">;
 }) {
-	const { videoId, userId, captionsEnabled, savedAt } = props;
+	const {
+		videoId,
+		userId,
+		captionsEnabled,
+		savedAt,
+		preparingTitle,
+		preparingDuration,
+		preparingTracks,
+	} = props;
 	const router = useRouter();
 	const [sessionId, setSessionId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -89,6 +100,10 @@ export function StudioEditorClient(props: {
 	const sessionRef = useRef<string | null>(null);
 	const bridgeRef = useRef<EditorHostBridge | null>(null);
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
+	const frameConnectRef = useRef<{
+		document: Document;
+		sessionId: string;
+	} | null>(null);
 	const restoreInProgressRef = useRef(false);
 	const savedAtRef = useRef(savedAt);
 	const captureDraftRef = useRef<() => boolean>(() => true);
@@ -375,7 +390,33 @@ export function StudioEditorClient(props: {
 
 	const onFrameLoad = useCallback(
 		(iframe: HTMLIFrameElement) => {
-			if (!sessionId || closedRef.current) return;
+			const document = iframe.contentDocument;
+			if (
+				!document ||
+				document.readyState !== "complete" ||
+				new URL(document.URL).pathname !== "/editor-solid/index.html" ||
+				closedRef.current
+			)
+				return;
+			iframe.contentWindow?.postMessage(
+				{
+					kind: "cap-editor-preparing",
+					version: 1,
+					title: preparingTitle,
+					durationSeconds: preparingDuration,
+					tracks: preparingTracks,
+				},
+				window.location.origin,
+			);
+			if (!sessionId) return;
+			const previous = frameConnectRef.current;
+			if (previous?.document === document) {
+				if (previous.sessionId === sessionId) return;
+				frameConnectRef.current = null;
+				iframe.src = "/editor-solid/index.html";
+				return;
+			}
+			frameConnectRef.current = { document, sessionId };
 			bridgeRef.current?.dispose();
 			const bridge = new EditorHostBridge(
 				videoId,
@@ -412,8 +453,22 @@ export function StudioEditorClient(props: {
 				}
 			});
 		},
-		[captionsEnabled, restartAfterImport, router, sessionId, userId, videoId],
+		[
+			captionsEnabled,
+			preparingDuration,
+			preparingTitle,
+			preparingTracks,
+			restartAfterImport,
+			router,
+			sessionId,
+			userId,
+			videoId,
+		],
 	);
+
+	useEffect(() => {
+		if (sessionId && iframeRef.current) onFrameLoad(iframeRef.current);
+	}, [onFrameLoad, sessionId]);
 
 	if (error) {
 		return (
@@ -452,13 +507,6 @@ export function StudioEditorClient(props: {
 						Try again
 					</button>
 				)}
-			</div>
-		);
-	}
-	if (!sessionId) {
-		return (
-			<div className="flex min-h-screen items-center justify-center bg-white text-neutral-600">
-				Preparing editor…
 			</div>
 		);
 	}

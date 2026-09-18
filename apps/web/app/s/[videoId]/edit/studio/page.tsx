@@ -19,6 +19,7 @@ export default async function StudioEditorPage(props: {
 		.select({
 			id: videos.id,
 			ownerId: videos.ownerId,
+			name: videos.name,
 			duration: videos.duration,
 			isScreenshot: videos.isScreenshot,
 			source: videos.source,
@@ -62,6 +63,14 @@ export default async function StudioEditorPage(props: {
 			userId={user.id}
 			captionsEnabled={userIsPro(user)}
 			savedAt={video.metadata?.webEditorProject?.savedAt ?? null}
+			preparingTitle={video.name}
+			preparingDuration={video.duration}
+			preparingTracks={
+				editorSources?.camera ||
+				video.metadata?.webEditorClips?.items.some((clip) => clip.cameraPath)
+					? ["display", "camera"]
+					: ["display"]
+			}
 		/>
 	);
 }

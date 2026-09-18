@@ -35,6 +35,7 @@ let container: HTMLDivElement;
 const requests: Array<{ url: string; method: string; body: unknown }> = [];
 let currentRevision: string;
 let rejectNextRestore: boolean;
+let preparationReady: boolean;
 
 function browserStorage(): Storage {
 	const items = new Map<string, string>();
@@ -59,6 +60,8 @@ beforeEach(() => {
 	requests.length = 0;
 	currentRevision = "newer";
 	rejectNextRestore = false;
+	preparationReady = true;
+	mocks.connect.mockClear();
 	container = document.createElement("div");
 	document.body.append(container);
 	root = createRoot(container);
@@ -79,7 +82,11 @@ beforeEach(() => {
 				url.startsWith("/api/editor/preparations/preparation?") &&
 				method === "GET"
 			) {
-				return Response.json({ status: "ready", sessionId: "session" });
+				return Response.json(
+					preparationReady
+						? { status: "ready", sessionId: "session" }
+						: { status: "preparing" },
+				);
 			}
 			if (url === "/api/editor/sessions/session/config" && method === "PUT") {
 				const expectedSavedAt = (body as Record<string, unknown>)
@@ -157,6 +164,9 @@ async function openRecoveryConflict() {
 				userId: "owner",
 				captionsEnabled: true,
 				savedAt: "newer",
+				preparingTitle: "Paired replay",
+				preparingDuration: 900,
+				preparingTracks: ["display", "camera"],
 			}),
 		);
 	});
@@ -247,4 +257,65 @@ test("a second tab save during chosen recovery keeps the draft for another owner
 	expect(
 		readEditorLocalDraft(window.localStorage, "owner", "video"),
 	).toBeNull();
+});
+
+test("preparation keeps the shared editor shell open and connects once when ready", async () => {
+	preparationReady = false;
+	await act(async () => {
+		root.render(
+			createElement(StudioEditorClient, {
+				videoId: "video",
+				userId: "owner",
+				captionsEnabled: true,
+				savedAt: null,
+				preparingTitle: "Paired replay",
+				preparingDuration: 900,
+				preparingTracks: ["display", "camera"],
+			}),
+		);
+	});
+	const iframe = container.querySelector<HTMLIFrameElement>(
+		'iframe[title="Cap editor"]',
+	);
+	if (!iframe) throw new Error("Editor shell was not shown during preparation");
+	await waitFor(() => {
+		expect(
+			requests.some((request) => request.url === "/api/editor/preparations"),
+		).toBe(true);
+	});
+	const frameDocument =
+		document.implementation.createHTMLDocument("Cap editor");
+	Object.defineProperty(frameDocument, "URL", {
+		configurable: true,
+		value: "http://localhost/editor-solid/index.html",
+	});
+	Object.defineProperty(frameDocument, "readyState", {
+		configurable: true,
+		value: "complete",
+	});
+	Object.defineProperty(iframe, "contentDocument", {
+		configurable: true,
+		value: frameDocument,
+	});
+	const childWindow = iframe.contentWindow;
+	if (!childWindow) throw new Error("Editor child window was unavailable");
+	const postMessage = vi.spyOn(childWindow, "postMessage");
+	await act(async () => iframe.dispatchEvent(new Event("load")));
+	expect(postMessage).toHaveBeenCalledWith(
+		{
+			kind: "cap-editor-preparing",
+			version: 1,
+			title: "Paired replay",
+			durationSeconds: 900,
+			tracks: ["display", "camera"],
+		},
+		window.location.origin,
+	);
+	expect(mocks.connect).not.toHaveBeenCalled();
+	preparationReady = true;
+	await waitFor(() => {
+		expect(mocks.connect).toHaveBeenCalledTimes(1);
+	});
+	await act(async () => iframe.dispatchEvent(new Event("load")));
+	expect(mocks.connect).toHaveBeenCalledTimes(1);
 });
