@@ -88,7 +88,7 @@ services:
       retries: 10
       start_period: 30s
   minio:
-    image: 'minio/minio:latest'
+    image: 'quay.io/minio/minio:latest'
     restart: unless-stopped
     command: 'server /data --console-address ":9001"'
     environment:
@@ -109,7 +109,7 @@ services:
       start_period: 10s
   minio-setup:
     container_name: cap-minio-setup
-    image: 'minio/mc:latest'
+    image: 'quay.io/minio/mc:latest'
     exclude_from_hc: true
     depends_on:
       minio:
