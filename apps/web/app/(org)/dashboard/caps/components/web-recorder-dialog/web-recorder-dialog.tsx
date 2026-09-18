@@ -67,6 +67,10 @@ export const WebRecorderDialog = () => {
 	const startSoundRef = useRef<HTMLAudioElement | null>(null);
 	const stopSoundRef = useRef<HTMLAudioElement | null>(null);
 	const cameraPreviewRef = useRef<CameraPreviewWindowHandle>(null);
+	const getCameraPreviewStream = useCallback(
+		() => cameraPreviewRef.current?.getVideoStream() ?? null,
+		[],
+	);
 
 	useEffect(() => {
 		if (typeof window === "undefined") {
@@ -148,6 +152,7 @@ export const WebRecorderDialog = () => {
 		hasAudioTrack,
 		chunkUploads,
 		errorDownload,
+		cameraErrorDownload,
 		completedShareUrl,
 		recoveredDownloads,
 		isSettingUp,
@@ -175,6 +180,10 @@ export const WebRecorderDialog = () => {
 		systemAudioEnabled,
 		recordingMode,
 		selectedCameraId,
+		getCameraPreviewStream,
+		onDisplayStreamAcquired: async () => {
+			await cameraPreviewRef.current?.closePictureInPicture();
+		},
 		isProUser: user.isPro,
 		onRecordingSurfaceDetected: (mode) => {
 			setRecordingMode(mode);
@@ -449,6 +458,7 @@ export const WebRecorderDialog = () => {
 					hasAudioTrack={hasAudioTrack}
 					chunkUploads={chunkUploads}
 					errorDownload={errorDownload}
+					cameraErrorDownload={cameraErrorDownload}
 					onStop={handleStopClick}
 					onPause={pauseRecording}
 					onResume={resumeRecording}
@@ -460,6 +470,7 @@ export const WebRecorderDialog = () => {
 				<CameraPreviewWindow
 					ref={cameraPreviewRef}
 					cameraId={selectedCameraId}
+					hidden={recordingMode !== "camera" && (isSettingUp || isRecording)}
 					onClose={() => handleCameraChange(null)}
 				/>
 			)}

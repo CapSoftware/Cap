@@ -173,6 +173,12 @@ const trackDefinitions: TrackDefinition[] = [
 	},
 ];
 
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
+const captionsAllowed = () =>
+	!isWebEditor ||
+	(window as Window & { capWebEditorCaptionsEnabled?: boolean })
+		.capWebEditorCaptionsEnabled === true;
+
 function deleteTrackLane<T extends { track?: number }>(
 	segments: T[],
 	laneIndex: number,
@@ -293,7 +299,7 @@ export function Timeline(props: {
 		(!project.camera.hide ||
 			stylesRevealCamera(project.timeline?.styleSegments ?? []) ||
 			!!project.timeline?.sceneSegments?.length);
-	const captionTrackVisible = () => trackState().caption;
+	const captionTrackVisible = () => captionsAllowed() && trackState().caption;
 	const keyboardTrackVisible = () => trackState().keyboard;
 	const threeDTrackVisible = () => trackState()["3d"];
 	const trackOptions = createMemo(() =>
@@ -317,7 +323,12 @@ export function Timeline(props: {
 											: definition.type === "audio"
 												? trackState().audio > 0
 												: true,
-			available: definition.type === "scene" ? sceneAvailable() : true,
+			available:
+				definition.type === "caption"
+					? captionsAllowed()
+					: definition.type === "scene"
+						? sceneAvailable()
+						: true,
 			supportsMultiple:
 				definition.type === "style" ||
 				definition.type === "image" ||
@@ -405,6 +416,7 @@ export function Timeline(props: {
 
 	function handleToggleTrack(type: TimelineTrackType, next: boolean) {
 		if (type === "caption") {
+			if (!captionsAllowed()) return;
 			batch(() => {
 				if (!project.captions) {
 					setProject("captions", {

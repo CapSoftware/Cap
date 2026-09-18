@@ -1,8 +1,11 @@
+import type { SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	rows: [] as unknown[][],
+	updates: [] as Record<string, unknown>[],
 	where: vi.fn(),
 	write: vi.fn(),
 	getAccess: vi.fn(),
@@ -22,7 +25,12 @@ vi.mock("@cap/database", () => ({
 				innerJoin: () => ({ where: mocks.where }),
 			}),
 		}),
-		update: () => ({ set: () => ({ where: mocks.write }) }),
+		update: () => ({
+			set: (values: Record<string, unknown>) => {
+				mocks.updates.push(values);
+				return { where: mocks.write };
+			},
+		}),
 		delete: () => ({ where: mocks.write }),
 	}),
 }));
@@ -86,6 +94,7 @@ const pending = { phase: "processing", processingProgress: 25 };
 describe("media processing workflows", () => {
 	beforeEach(() => {
 		mocks.rows = [];
+		mocks.updates = [];
 		mocks.where
 			.mockReset()
 			.mockImplementation(async () => mocks.rows.shift() ?? []);
@@ -133,6 +142,8 @@ describe("media processing workflows", () => {
 			[],
 			[metadata],
 			[video],
+			[video],
+			[video],
 			[],
 		];
 		await expect(processVideoWorkflow(payload)).resolves.toMatchObject({
@@ -142,6 +153,89 @@ describe("media processing workflows", () => {
 		expect(mocks.fetch).toHaveBeenCalledOnce();
 		expect(mocks.sleep.mock.calls).toEqual([[5_000], [10_000]]);
 		expect(mocks.remove).toHaveBeenCalledWith(payload.rawFileKey);
+	});
+
+	it("retains a screen-only raw source after processing completes", async () => {
+		const screenVideo = {
+			...video,
+			ownerId: "owner",
+			metadata: {
+				editorSources: {
+					version: 1,
+					display: {
+						key: payload.rawFileKey,
+						contentType: "video/mp4",
+						size: 2048,
+						objectIdentity: "source-etag",
+					},
+				},
+			},
+		};
+		mocks.rows = [
+			[screenVideo],
+			[{ ...pending, rawFileKey: payload.rawFileKey }],
+			[screenVideo],
+			[pending],
+			[pending],
+			[],
+			[metadata],
+			[screenVideo],
+			[screenVideo],
+			[],
+		];
+		await expect(processVideoWorkflow(payload)).resolves.toMatchObject({
+			success: true,
+		});
+		expect(mocks.remove).not.toHaveBeenCalled();
+	});
+
+	it("verifies the finished direct-MP4 source before enabling Studio", async () => {
+		const directKey = "owner/video/result.mp4";
+		const directVideo = {
+			...video,
+			ownerId: "owner",
+			metadata: {
+				editorSources: {
+					version: 1,
+					display: { key: directKey, contentType: "video/mp4" },
+				},
+			},
+		};
+		mocks.head.mockReturnValue(
+			Effect.succeed({ ContentLength: 4096, ETag: "final-etag" }),
+		);
+		mocks.rows = [
+			[directVideo],
+			[{ ...pending, rawFileKey: directKey }],
+			[directVideo],
+			[pending],
+			[pending],
+			[],
+			[metadata],
+			[directVideo],
+			[directVideo],
+			[],
+		];
+		await expect(
+			processVideoWorkflow({ ...payload, rawFileKey: directKey }),
+		).resolves.toMatchObject({ success: true });
+		expect(mocks.head).toHaveBeenCalledWith(directKey);
+		const dialect = new MySqlDialect();
+		const sourceSql = mocks.updates.find((values) => "metadata" in values)
+			?.metadata as SQL | undefined;
+		if (!sourceSql) throw new Error("Finished editor source was not written");
+		const patch = dialect
+			.sqlToQuery(sourceSql)
+			.params.find(
+				(value): value is string =>
+					typeof value === "string" && value.includes('"editorSources"'),
+			);
+		expect(JSON.parse(patch ?? "null")).toEqual({
+			editorSources: {
+				display: { size: 4096, objectIdentity: "final-etag" },
+			},
+		});
+		expect(mocks.remove).not.toHaveBeenCalled();
 	});
 
 	it("keeps uploaded source data when processing fails", async () => {
@@ -172,6 +266,8 @@ describe("media processing workflows", () => {
 			[video],
 			[],
 			[metadata],
+			[video],
+			[video],
 			[video],
 			[],
 		];

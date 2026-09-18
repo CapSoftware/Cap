@@ -1,0 +1,8 @@
+{
+	"name": "@cap/editor-cap-bundle",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	}
+}

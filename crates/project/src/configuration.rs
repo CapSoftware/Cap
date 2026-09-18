@@ -444,7 +444,8 @@ pub struct BackgroundBlurConfig {
 
 impl BackgroundBlurConfig {
     pub fn removes_background(&self) -> bool {
-        cfg!(target_os = "macos") && self.mode == BackgroundBlurMode::Remove
+        (cfg!(target_os = "macos") || cfg!(feature = "web-editor-camera-removal"))
+            && self.mode == BackgroundBlurMode::Remove
     }
 
     pub fn is_active(&self) -> bool {
@@ -3067,7 +3068,7 @@ mod tests {
         assert_eq!(legacy.background_blur.mode, BackgroundBlurMode::Off);
         assert_eq!(
             round_trip.background_blur.is_active(),
-            cfg!(target_os = "macos")
+            cfg!(target_os = "macos") || cfg!(feature = "web-editor-camera-removal")
         );
     }
 

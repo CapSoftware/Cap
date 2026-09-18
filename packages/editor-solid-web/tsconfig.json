@@ -1,0 +1,27 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"jsx": "preserve",
+		"jsxImportSource": "solid-js",
+		"strict": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+		"resolveJsonModule": true,
+		"allowImportingTsExtensions": true,
+		"types": [
+			"bun",
+			"vite/client",
+			"vitest/importMeta",
+			"@cap/ui-solid/types",
+			"@webgpu/types"
+		],
+		"paths": {
+			"~/utils/tauri": ["./src/tauri-bridge.ts"],
+			"~/*": ["../../apps/desktop/src/*"]
+		}
+	},
+	"include": ["src", "vite.config.ts"]
+}

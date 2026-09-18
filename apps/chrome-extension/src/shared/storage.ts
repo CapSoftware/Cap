@@ -1,3 +1,4 @@
+import { requestStorage } from "./storage-bridge";
 import { RECORDING_STATE_KEY, SHARED_UI_STATE_KEY } from "./storage-keys";
 import type {
 	BootstrapData,
@@ -44,15 +45,23 @@ export type MediaAccessState = {
 // retried successfully or the entry is pruned.
 export type FailedRecording = {
 	sessionId: string;
+	cameraSessionId?: string;
 	videoId: string | null;
 	shareUrl: string | null;
 	mimeType: string;
+	cameraMimeType?: string;
 	subpath: string | null;
+	cameraSubpath?: string;
+	cameraOffsetMs?: number;
 	durationMs: number;
 	width: number | null;
 	height: number | null;
 	fps: number | null;
+	cameraWidth?: number;
+	cameraHeight?: number;
+	cameraFps?: number;
 	totalBytes: number;
+	cameraTotalBytes?: number;
 	createdAt: number;
 	message: string | null;
 };
@@ -118,35 +127,61 @@ const withKeyLock = <T>(key: string, task: () => Promise<T>): Promise<T> => {
 	return run;
 };
 
-const getLocal = (keys: string[]) =>
-	new Promise<Record<string, unknown>>((resolve) => {
-		chrome.storage.local.get(keys, (items) => resolve(items));
-	});
+const getLocal = async (keys: string[]) =>
+	(
+		await requestStorage({
+			target: "storage-bridge",
+			type: "get",
+			area: "local",
+			keys,
+		})
+	).items ?? {};
 
-const setLocal = (items: Record<string, unknown>) =>
-	new Promise<void>((resolve) => {
-		chrome.storage.local.set(items, resolve);
+const setLocal = async (items: Record<string, unknown>) => {
+	await requestStorage({
+		target: "storage-bridge",
+		type: "set",
+		area: "local",
+		items,
 	});
+};
 
-const removeLocal = (keys: string[] | string) =>
-	new Promise<void>((resolve) => {
-		chrome.storage.local.remove(keys, resolve);
+const removeLocal = async (keys: string[] | string) => {
+	await requestStorage({
+		target: "storage-bridge",
+		type: "remove",
+		area: "local",
+		keys,
 	});
+};
 
-const getSession = (keys: string[]) =>
-	new Promise<Record<string, unknown>>((resolve) => {
-		chrome.storage.session.get(keys, (items) => resolve(items));
-	});
+const getSession = async (keys: string[]) =>
+	(
+		await requestStorage({
+			target: "storage-bridge",
+			type: "get",
+			area: "session",
+			keys,
+		})
+	).items ?? {};
 
-const setSession = (items: Record<string, unknown>) =>
-	new Promise<void>((resolve) => {
-		chrome.storage.session.set(items, resolve);
+const setSession = async (items: Record<string, unknown>) => {
+	await requestStorage({
+		target: "storage-bridge",
+		type: "set",
+		area: "session",
+		items,
 	});
+};
 
-const removeSession = (keys: string[] | string) =>
-	new Promise<void>((resolve) => {
-		chrome.storage.session.remove(keys, resolve);
+const removeSession = async (keys: string[] | string) => {
+	await requestStorage({
+		target: "storage-bridge",
+		type: "remove",
+		area: "session",
+		keys,
 	});
+};
 
 export const loadSettings = async () => {
 	const result = await getLocal([SETTINGS_KEY]);
@@ -281,7 +316,23 @@ const isFailedRecording = (value: unknown): value is FailedRecording => {
 		typeof candidate.sessionId === "string" &&
 		typeof candidate.mimeType === "string" &&
 		typeof candidate.totalBytes === "number" &&
-		typeof candidate.createdAt === "number"
+		typeof candidate.createdAt === "number" &&
+		(candidate.cameraSessionId === undefined ||
+			typeof candidate.cameraSessionId === "string") &&
+		(candidate.cameraMimeType === undefined ||
+			typeof candidate.cameraMimeType === "string") &&
+		(candidate.cameraSubpath === undefined ||
+			typeof candidate.cameraSubpath === "string") &&
+		(candidate.cameraOffsetMs === undefined ||
+			typeof candidate.cameraOffsetMs === "number") &&
+		(candidate.cameraWidth === undefined ||
+			typeof candidate.cameraWidth === "number") &&
+		(candidate.cameraHeight === undefined ||
+			typeof candidate.cameraHeight === "number") &&
+		(candidate.cameraFps === undefined ||
+			typeof candidate.cameraFps === "number") &&
+		(candidate.cameraTotalBytes === undefined ||
+			typeof candidate.cameraTotalBytes === "number")
 	);
 };
 
@@ -332,13 +383,20 @@ export const removeFailedRecording = (sessionId: string) =>
 // subpath, dimensions) instead of a download-only one.
 export type LiveRecordingManifest = {
 	sessionId: string;
+	cameraSessionId?: string;
 	videoId: string;
 	shareUrl: string;
 	mimeType: string;
+	cameraMimeType?: string;
 	subpath: string;
+	cameraSubpath?: string;
+	cameraOffsetMs?: number;
 	width: number;
 	height: number;
 	fps: number;
+	cameraWidth?: number;
+	cameraHeight?: number;
+	cameraFps?: number;
 	startedAt: number;
 };
 
@@ -358,7 +416,21 @@ const isLiveRecordingManifest = (
 		typeof candidate.width === "number" &&
 		typeof candidate.height === "number" &&
 		typeof candidate.fps === "number" &&
-		typeof candidate.startedAt === "number"
+		typeof candidate.startedAt === "number" &&
+		(candidate.cameraSessionId === undefined ||
+			typeof candidate.cameraSessionId === "string") &&
+		(candidate.cameraMimeType === undefined ||
+			typeof candidate.cameraMimeType === "string") &&
+		(candidate.cameraSubpath === undefined ||
+			typeof candidate.cameraSubpath === "string") &&
+		(candidate.cameraOffsetMs === undefined ||
+			typeof candidate.cameraOffsetMs === "number") &&
+		(candidate.cameraWidth === undefined ||
+			typeof candidate.cameraWidth === "number") &&
+		(candidate.cameraHeight === undefined ||
+			typeof candidate.cameraHeight === "number") &&
+		(candidate.cameraFps === undefined ||
+			typeof candidate.cameraFps === "number")
 	);
 };
 

@@ -1,0 +1,205 @@
+import { videos } from "@cap/database/schema";
+import { Database } from "@cap/web-backend";
+import { CurrentUser, HttpAuthMiddleware, Video } from "@cap/web-domain";
+import {
+	HttpApi,
+	HttpApiBuilder,
+	HttpApiEndpoint,
+	HttpApiError,
+	HttpApiGroup,
+} from "@effect/platform";
+import { and, eq, sql } from "drizzle-orm";
+import { Effect, Layer, Schema } from "effect";
+import {
+	hasEditorCaptionContent,
+	preserveEditorCaptionContent,
+} from "@/lib/editor-caption-access";
+import {
+	createEditorCaptionCache,
+	restoreEditorCaptionConfig,
+} from "@/lib/editor-caption-transport";
+import {
+	decodeWebEditorProject,
+	encodeWebEditorProject,
+} from "@/lib/editor-project-storage";
+import {
+	loadEligibleEditorVideo,
+	requestMediaEditor,
+	verifyOwnedEditorSession,
+} from "@/lib/editor-session";
+import { apiToHandler } from "@/lib/server";
+
+export const dynamic = "force-dynamic";
+
+function affectedOne(value: unknown) {
+	const result = Array.isArray(value) ? value[0] : value;
+	return (
+		typeof result === "object" &&
+		result !== null &&
+		"affectedRows" in result &&
+		result.affectedRows === 1
+	);
+}
+
+class Api extends HttpApi.make("WebEditorProjectSaveApi").add(
+	HttpApiGroup.make("root")
+		.add(
+			HttpApiEndpoint.get("revision", "/api/editor/sessions/:id/config")
+				.setPath(Schema.Struct({ id: Schema.String }))
+				.setUrlParams(Schema.Struct({ videoId: Video.VideoId }))
+				.addSuccess(Schema.Struct({ savedAt: Schema.NullOr(Schema.String) }))
+				.addError(HttpApiError.NotFound)
+				.addError(HttpApiError.Forbidden)
+				.addError(HttpApiError.ServiceUnavailable)
+				.addError(HttpApiError.InternalServerError)
+				.middleware(HttpAuthMiddleware),
+		)
+		.add(
+			HttpApiEndpoint.put("save", "/api/editor/sessions/:id/config")
+				.setPath(Schema.Struct({ id: Schema.String }))
+				.setPayload(
+					Schema.Struct({
+						videoId: Video.VideoId,
+						config: Schema.Unknown,
+						expectedSavedAt: Schema.optional(Schema.NullOr(Schema.String)),
+					}),
+				)
+				.addSuccess(
+					Schema.Struct({ saved: Schema.Boolean, savedAt: Schema.String }),
+				)
+				.addError(HttpApiError.NotFound)
+				.addError(HttpApiError.Forbidden)
+				.addError(HttpApiError.ServiceUnavailable)
+				.addError(HttpApiError.InternalServerError)
+				.addError(HttpApiError.Conflict)
+				.middleware(HttpAuthMiddleware),
+		),
+) {}
+
+const ApiLive = HttpApiBuilder.api(Api).pipe(
+	Layer.provide(
+		HttpApiBuilder.group(Api, "root", (handlers) =>
+			handlers
+				.handle("revision", ({ path, urlParams }) =>
+					Effect.gen(function* () {
+						yield* verifyOwnedEditorSession(urlParams.videoId, path.id);
+						const video = yield* loadEligibleEditorVideo(urlParams.videoId);
+						return {
+							savedAt: video.metadata?.webEditorProject?.savedAt ?? null,
+						};
+					}),
+				)
+				.handle("save", ({ path, payload }) =>
+					Effect.gen(function* () {
+						const video = yield* loadEligibleEditorVideo(payload.videoId);
+						if (
+							payload.expectedSavedAt !== undefined &&
+							payload.expectedSavedAt !==
+								(video.metadata?.webEditorProject?.savedAt ?? null)
+						) {
+							return yield* new HttpApiError.Conflict();
+						}
+						const config = payload.config;
+						if (
+							typeof config !== "object" ||
+							config === null ||
+							Array.isArray(config)
+						) {
+							return yield* new HttpApiError.ServiceUnavailable();
+						}
+						const input = config as Record<string, unknown>;
+						const priorProject = video.metadata?.webEditorProject;
+						const priorConfig = priorProject
+							? decodeWebEditorProject(priorProject)
+							: null;
+						const priorCache =
+							"webCaptionRef" in input && priorConfig
+								? yield* Effect.tryPromise({
+										try: () => createEditorCaptionCache(priorConfig),
+										catch: () => new HttpApiError.ServiceUnavailable(),
+									})
+								: null;
+						const restored = restoreEditorCaptionConfig(input, priorCache);
+						if (!restored) return yield* new HttpApiError.Conflict();
+						if (!video.captionsEnabled && hasEditorCaptionContent(restored)) {
+							return yield* new HttpApiError.Forbidden();
+						}
+						const { serialized, project } = yield* Effect.try({
+							try: () => encodeWebEditorProject(restored),
+							catch: () => new HttpApiError.ServiceUnavailable(),
+						});
+						const storedProject =
+							!video.captionsEnabled &&
+							priorConfig &&
+							hasEditorCaptionContent(priorConfig)
+								? yield* Effect.try({
+										try: () =>
+											encodeWebEditorProject(
+												preserveEditorCaptionContent(restored, priorConfig),
+											).project,
+										catch: () => new HttpApiError.ServiceUnavailable(),
+									})
+								: project;
+						const sessionPath = `/editor/sessions/${encodeURIComponent(path.id)}`;
+						const identity = yield* requestMediaEditor(sessionPath);
+						if (identity.status === 404)
+							return yield* new HttpApiError.NotFound();
+						if (!identity.ok)
+							return yield* new HttpApiError.ServiceUnavailable();
+						const info: unknown = yield* Effect.tryPromise({
+							try: () => identity.json(),
+							catch: () => new HttpApiError.ServiceUnavailable(),
+						});
+						if (
+							typeof info !== "object" ||
+							info === null ||
+							!("videoId" in info) ||
+							info.videoId !== video.id
+						) {
+							return yield* new HttpApiError.NotFound();
+						}
+						const native = yield* requestMediaEditor(`${sessionPath}/config`, {
+							method: "PUT",
+							headers: { "Content-Type": "application/json" },
+							body: serialized,
+						});
+						if (native.status !== 204)
+							return yield* new HttpApiError.ServiceUnavailable();
+						const database = yield* Database;
+						const user = yield* CurrentUser;
+						const savedProject = JSON.stringify(storedProject);
+						const updated: unknown = yield* database
+							.use((client) =>
+								client
+									.update(videos)
+									.set({
+										metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.webEditorProject', CAST(${savedProject} AS JSON))`,
+									})
+									.where(
+										and(
+											eq(videos.id, video.id),
+											eq(videos.ownerId, user.id),
+											sql`JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.webEditorProject.savedAt')) <=> ${priorProject?.savedAt ?? null}`,
+										),
+									),
+							)
+							.pipe(
+								Effect.catchTag("DatabaseError", () =>
+									Effect.fail(new HttpApiError.InternalServerError()),
+								),
+							);
+						if (!affectedOne(updated))
+							return yield* new HttpApiError.Conflict();
+						if (storedProject.version !== 2)
+							return yield* new HttpApiError.ServiceUnavailable();
+						return { saved: true, savedAt: storedProject.savedAt };
+					}),
+				),
+		),
+	),
+);
+
+const handler = apiToHandler(ApiLive);
+
+export const GET = handler;
+export const PUT = handler;

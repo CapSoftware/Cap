@@ -66,6 +66,7 @@ import {
 	waitForIceGatheringComplete,
 } from "../shared/webrtc";
 import { captureDisplayStream } from "./display-capture";
+import { observePairedRecorderStarts } from "./recorder-start-sync";
 
 const RECORDING_TIMESLICE_MS = 1000;
 const RECORDING_TIMESLICE_GUARD_MS = RECORDING_TIMESLICE_MS * 3;
@@ -93,13 +94,19 @@ type RecordingSound = "start-recording" | "stop-recording";
 
 type ActiveRecording = {
 	recorder: MediaRecorder;
+	cameraRecorder: MediaRecorder | null;
+	settings: ExtensionSettings;
+	authToken: string;
 	stopPromise: Promise<void>;
+	cameraStopPromise: Promise<void> | null;
 	streams: MediaStream[];
 	recordingStream: MediaStream;
 	statusTimer: number | null;
 	spool: RecordingSpool;
+	cameraSpool: RecordingSpool | null;
 	uploader: InstantRecordingUploader;
 	startedAt: number;
+	cameraOffsetMs: number | null;
 	durationMs: number;
 	lastResumedAt: number | null;
 	videoId: VideoId;
@@ -107,16 +114,24 @@ type ActiveRecording = {
 	width: number;
 	height: number;
 	fps: number;
+	cameraWidth: number | null;
+	cameraHeight: number | null;
+	cameraFps: number | null;
 	subpath: string;
 	mimeType: string;
+	cameraSubpath: string | null;
+	cameraMimeType: string | null;
 	maxDurationMs: number | null;
 	audioContext?: AudioContext;
 	chunkChain: Promise<void>;
+	cameraChunkChain: Promise<void>;
 	dataRequestInterval: number | null;
+	cameraDataRequestInterval: number | null;
 	chunkStartGuard: number | null;
 	chunkingMode: ChunkingMode | null;
 	lastChunkAt: number | null;
 	recordedBytes: number;
+	cameraRecordedBytes: number;
 	finalizePromise: Promise<RecordingStatus> | null;
 	cleanedUp: boolean;
 	// A spool write failure (IndexedDB quota, backpressure) must not end an
@@ -125,6 +140,8 @@ type ActiveRecording = {
 	// streaming upload continues untouched.
 	spoolFailed: boolean;
 	memoryBackup: LocalRecordingState;
+	cameraSpoolFailed: boolean;
+	cameraMemoryBackup: LocalRecordingState;
 };
 
 let activeRecording: ActiveRecording | null = null;
@@ -437,12 +454,21 @@ const tabCaptureConstraints = (streamId: string, includeAudio: boolean) =>
 
 const getMainStream = async (request: StartRecordingRequest) => {
 	if (request.mode === "tab") {
-		if (!request.tabStreamId) throw new Error("Tab stream id is missing");
-		return navigator.mediaDevices.getUserMedia(
-			tabCaptureConstraints(
-				request.tabStreamId,
-				request.settings.systemAudio.enabled,
-			),
+		if (request.tabStreamId) {
+			return navigator.mediaDevices.getUserMedia(
+				tabCaptureConstraints(
+					request.tabStreamId,
+					request.settings.systemAudio.enabled,
+				),
+			);
+		}
+		return captureDisplayStream(
+			"tab",
+			request.settings.systemAudio.enabled,
+			(options) =>
+				navigator.mediaDevices.getDisplayMedia(
+					options as DisplayMediaStreamOptions,
+				),
 		);
 	}
 
@@ -635,6 +661,18 @@ const cleanupActiveRecording = async (recording: ActiveRecording) => {
 	if (recording.chunkStartGuard !== null) {
 		window.clearTimeout(recording.chunkStartGuard);
 	}
+	if (recording.cameraDataRequestInterval !== null) {
+		window.clearInterval(recording.cameraDataRequestInterval);
+	}
+	if (recording.recorder.state !== "inactive") {
+		recording.recorder.stop();
+	}
+	if (
+		recording.cameraRecorder &&
+		recording.cameraRecorder.state !== "inactive"
+	) {
+		recording.cameraRecorder.stop();
+	}
 	for (const stream of recording.streams) {
 		stopTracks(stream);
 	}
@@ -656,19 +694,44 @@ const sweepOrphanedRecordingSpools = async () => {
 			loadLiveRecordingManifests(),
 		]);
 		const now = Date.now();
-		const knownSessions = new Set(failed.map((entry) => entry.sessionId));
+		const knownSessions = new Set(
+			failed.flatMap((entry) =>
+				entry.cameraSessionId
+					? [entry.sessionId, entry.cameraSessionId]
+					: [entry.sessionId],
+			),
+		);
+		const sessionsById = new Map(
+			sessions.map((session) => [session.sessionId, session]),
+		);
 		const manifestsBySession = new Map(
 			manifests.map((manifest) => [manifest.sessionId, manifest]),
+		);
+		const manifestsByCameraSession = new Map(
+			manifests.flatMap((manifest) => {
+				const sessionId = manifest.cameraSessionId;
+				return sessionId ? [[sessionId, manifest] as const] : [];
+			}),
 		);
 		const remainingSessions = new Set<string>();
 		let entries = [...failed];
 
 		for (const orphan of sessions) {
-			if (activeRecording?.spool.sessionId === orphan.sessionId) {
+			if (
+				activeRecording?.spool.sessionId === orphan.sessionId ||
+				activeRecording?.cameraSpool?.sessionId === orphan.sessionId
+			) {
 				remainingSessions.add(orphan.sessionId);
 				continue;
 			}
-			if (now - orphan.updatedAt < RECORDING_SPOOL_LIVE_MIN_IDLE_MS) {
+			const manifest = manifestsBySession.get(orphan.sessionId);
+			// A surviving manifest belongs to a previous offscreen document. This
+			// document is the extension's only spool writer, so the shared live
+			// window must not delay recovery after that writer has gone away.
+			if (
+				now - orphan.updatedAt < RECORDING_SPOOL_LIVE_MIN_IDLE_MS &&
+				!manifest
+			) {
 				remainingSessions.add(orphan.sessionId);
 				continue;
 			}
@@ -682,20 +745,47 @@ const sweepOrphanedRecordingSpools = async () => {
 					() => undefined,
 				);
 				entries = entries.filter(
-					(entry) => entry.sessionId !== orphan.sessionId,
+					(entry) =>
+						entry.sessionId !== orphan.sessionId &&
+						entry.cameraSessionId !== orphan.sessionId,
 				);
 				continue;
 			}
 
 			remainingSessions.add(orphan.sessionId);
+			const cameraOwner = manifestsByCameraSession.get(orphan.sessionId);
+			if (
+				cameraOwner &&
+				(sessionsById.has(cameraOwner.sessionId) ||
+					knownSessions.has(cameraOwner.sessionId))
+			) {
+				continue;
+			}
 			if (!knownSessions.has(orphan.sessionId) && orphan.totalBytes > 0) {
 				// A crash-stranded session whose live manifest survived keeps its
 				// videoId/subpath so the entry stays retryable, not download-only.
 				// The duration is a wall-clock estimate (it includes pauses); it
 				// only feeds the completion metadata on retry.
-				const manifest = manifestsBySession.get(orphan.sessionId);
+				const cameraSession = manifest?.cameraSessionId
+					? sessionsById.get(manifest.cameraSessionId)
+					: undefined;
+				const cameraMetadata =
+					manifest?.cameraSessionId && cameraSession?.totalBytes
+						? {
+								cameraSessionId: manifest.cameraSessionId,
+								cameraMimeType:
+									manifest.cameraMimeType ?? cameraSession.mimeType,
+								cameraSubpath: manifest.cameraSubpath,
+								cameraOffsetMs: manifest.cameraOffsetMs ?? 0,
+								cameraWidth: manifest.cameraWidth,
+								cameraHeight: manifest.cameraHeight,
+								cameraFps: manifest.cameraFps,
+								cameraTotalBytes: cameraSession.totalBytes,
+							}
+						: {};
 				entries.push({
 					sessionId: orphan.sessionId,
+					...cameraMetadata,
 					videoId: manifest?.videoId ?? null,
 					shareUrl: manifest?.shareUrl ?? null,
 					mimeType: orphan.mimeType,
@@ -710,6 +800,10 @@ const sweepOrphanedRecordingSpools = async () => {
 					createdAt: orphan.updatedAt,
 					message: "The recording was interrupted before its upload finished.",
 				});
+				if (manifest?.cameraSessionId && cameraSession?.totalBytes) {
+					knownSessions.add(manifest.cameraSessionId);
+					remainingSessions.add(manifest.cameraSessionId);
+				}
 			}
 		}
 
@@ -724,6 +818,16 @@ const sweepOrphanedRecordingSpools = async () => {
 			await deleteRecoveredRecordingSpool(entry.sessionId).catch(
 				() => undefined,
 			);
+			if (entry.cameraSessionId) {
+				survivingSessions.delete(entry.cameraSessionId);
+				await deleteRecoveredRecordingSpool(entry.cameraSessionId).catch(
+					() => undefined,
+				);
+			}
+		}
+		if (startInProgress && !activeRecording) return;
+		if (activeRecording) {
+			survivingSessions.add(activeRecording.spool.sessionId);
 		}
 		await pruneLiveRecordingManifests(survivingSessions).catch(() => undefined);
 	} catch {
@@ -736,7 +840,10 @@ function stopRecorderAfterError(recorder: MediaRecorder) {
 		recorder.stop();
 	}
 	window.setTimeout(() => {
-		if (activeRecording?.recorder === recorder) {
+		if (
+			activeRecording?.recorder === recorder ||
+			activeRecording?.cameraRecorder === recorder
+		) {
 			void stopRecording();
 		}
 	}, 0);
@@ -758,6 +865,20 @@ const stopManualChunking = (recording: ActiveRecording) => {
 	if (recording.chunkStartGuard !== null) {
 		window.clearTimeout(recording.chunkStartGuard);
 		recording.chunkStartGuard = null;
+	}
+};
+
+const requestCameraRecorderData = (recording: ActiveRecording) => {
+	if (recording.cameraRecorder?.state !== "recording") return;
+	try {
+		recording.cameraRecorder.requestData();
+	} catch {}
+};
+
+const stopCameraChunking = (recording: ActiveRecording) => {
+	if (recording.cameraDataRequestInterval !== null) {
+		window.clearInterval(recording.cameraDataRequestInterval);
+		recording.cameraDataRequestInterval = null;
 	}
 };
 
@@ -811,13 +932,19 @@ const startRecording = async (request: StartRecordingRequest) => {
 	const ownedStreams: MediaStream[] = [];
 	let ownedVideoId: string | null = null;
 	let ownedSpool: RecordingSpool | null = null;
+	let ownedCameraSpool: RecordingSpool | null = null;
 	let ownedRecording: ActiveRecording | null = null;
 	let countdownPromise: Promise<void> | null = null;
 
 	try {
 		status = { phase: "creating" };
 
-		const mainStream = await getMainStream(request);
+		const mainStream = await getMainStream(request).catch((error: unknown) => {
+			throw new Error(
+				`Unable to capture ${request.mode} source: ${error instanceof Error ? error.message : String(error)}`,
+				{ cause: error },
+			);
+		});
 		ownedStreams.push(mainStream);
 		throwIfStartCanceled();
 		const captureSource = getCaptureSource(request, mainStream);
@@ -847,6 +974,34 @@ const startRecording = async (request: StartRecordingRequest) => {
 			streams,
 			routeFirstStreamToSpeakers: request.mode === "tab",
 		});
+		const cameraStream =
+			request.mode !== "camera" && request.settings.webcam.enabled
+				? await getCameraPreviewStream(request.settings.webcam)
+				: null;
+		const cameraTrack = cameraStream?.getVideoTracks()[0]?.clone() ?? null;
+		if (
+			request.settings.webcam.enabled &&
+			request.mode !== "camera" &&
+			!cameraTrack
+		) {
+			throw new Error("The selected camera is not available for recording");
+		}
+		const cameraRecordingStream = cameraTrack
+			? new MediaStream([cameraTrack])
+			: null;
+		if (cameraRecordingStream) {
+			ownedStreams.push(cameraRecordingStream);
+			streams.push(cameraRecordingStream);
+		}
+		const cameraDimensions = cameraRecordingStream
+			? getStreamSize(cameraRecordingStream)
+			: null;
+		const cameraPipeline = cameraRecordingStream
+			? selectRecordingPipeline(false)
+			: null;
+		if (cameraRecordingStream && !cameraPipeline) {
+			throw new Error("No supported camera recorder format is available");
+		}
 		const hasAudio = recordingStream.getAudioTracks().length > 0;
 		const pipeline = selectRecordingPipeline(hasAudio);
 		if (!pipeline) throw new Error("No supported recorder format is available");
@@ -886,6 +1041,11 @@ const startRecording = async (request: StartRecordingRequest) => {
 		throwIfStartCanceled();
 		const spool = await RecordingSpool.create({ mimeType: pipeline.mimeType });
 		ownedSpool = spool;
+		throwIfStartCanceled();
+		const cameraSpool = cameraPipeline
+			? await RecordingSpool.create({ mimeType: cameraPipeline.mimeType })
+			: null;
+		ownedCameraSpool = cameraSpool;
 		throwIfStartCanceled();
 		const uploader = new InstantRecordingUploader({
 			videoId: creation.id,
@@ -944,6 +1104,12 @@ const startRecording = async (request: StartRecordingRequest) => {
 		const recorder = new MediaRecorder(recordingStream, {
 			mimeType: pipeline.mimeType,
 		});
+		const cameraRecorder =
+			cameraRecordingStream && cameraPipeline
+				? new MediaRecorder(cameraRecordingStream, {
+						mimeType: cameraPipeline.mimeType,
+					})
+				: null;
 
 		await countdownPromise;
 		throwIfStartCanceled();
@@ -957,13 +1123,19 @@ const startRecording = async (request: StartRecordingRequest) => {
 
 		const recording: ActiveRecording = {
 			recorder,
+			cameraRecorder,
+			settings: request.settings,
+			authToken: request.auth.authApiKey,
 			stopPromise: Promise.resolve(),
+			cameraStopPromise: null,
 			streams,
 			recordingStream,
 			statusTimer: null,
 			spool,
+			cameraSpool,
 			uploader,
 			startedAt,
+			cameraOffsetMs: null,
 			durationMs: 0,
 			lastResumedAt: startedAt,
 			videoId: creation.id,
@@ -971,20 +1143,32 @@ const startRecording = async (request: StartRecordingRequest) => {
 			width,
 			height,
 			fps,
+			cameraWidth: cameraDimensions?.width ?? null,
+			cameraHeight: cameraDimensions?.height ?? null,
+			cameraFps: cameraDimensions?.fps ?? null,
 			subpath,
 			mimeType: pipeline.mimeType,
+			cameraSubpath: cameraPipeline
+				? `camera-upload.${cameraPipeline.fileExtension}`
+				: null,
+			cameraMimeType: cameraPipeline?.mimeType ?? null,
 			maxDurationMs,
 			audioContext,
 			chunkChain: Promise.resolve(),
+			cameraChunkChain: Promise.resolve(),
 			dataRequestInterval: null,
+			cameraDataRequestInterval: null,
 			chunkStartGuard: null,
 			chunkingMode: null,
 			lastChunkAt: null,
 			recordedBytes: 0,
+			cameraRecordedBytes: 0,
 			finalizePromise: null,
 			cleanedUp: false,
 			spoolFailed: false,
 			memoryBackup: initialLocalRecordingState(),
+			cameraSpoolFailed: false,
+			cameraMemoryBackup: initialLocalRecordingState(),
 		};
 
 		ownedRecording = recording;
@@ -999,6 +1183,17 @@ const startRecording = async (request: StartRecordingRequest) => {
 		// failed-recording entry (videoId, subpath) instead of download-only.
 		await saveLiveRecordingManifest({
 			sessionId: spool.sessionId,
+			...(cameraSpool
+				? {
+						cameraSessionId: cameraSpool.sessionId,
+						cameraMimeType: cameraPipeline?.mimeType,
+						cameraSubpath: recording.cameraSubpath ?? undefined,
+						cameraOffsetMs: 0,
+						cameraWidth: recording.cameraWidth ?? undefined,
+						cameraHeight: recording.cameraHeight ?? undefined,
+						cameraFps: recording.cameraFps ?? undefined,
+					}
+				: {}),
 			videoId: creation.id,
 			shareUrl: creation.shareUrl,
 			mimeType: pipeline.mimeType,
@@ -1013,6 +1208,13 @@ const startRecording = async (request: StartRecordingRequest) => {
 			recorder.onstop = () => resolve();
 			recorder.onerror = () => reject(new Error("MediaRecorder failed"));
 		});
+		if (cameraRecorder) {
+			recording.cameraStopPromise = new Promise<void>((resolve, reject) => {
+				cameraRecorder.onstop = () => resolve();
+				cameraRecorder.onerror = () =>
+					reject(new Error("Camera MediaRecorder failed"));
+			});
+		}
 		// A mid-recording recorder failure must stop the session right away;
 		// without this the rejection sits unhandled while the timer keeps
 		// ticking over a recorder that no longer produces chunks, and nothing
@@ -1073,6 +1275,39 @@ const startRecording = async (request: StartRecordingRequest) => {
 				stopRecorderAfterError(recorder);
 			}
 		};
+		if (cameraRecorder && cameraSpool) {
+			cameraRecorder.ondataavailable = (event) => {
+				if (event.data.size === 0) return;
+				recording.cameraRecordedBytes += event.data.size;
+				recording.cameraChunkChain = recording.cameraChunkChain.then(
+					async () => {
+						if (recording.cameraSpoolFailed) {
+							appendCameraMemoryBackupChunk(recording, event.data);
+							return;
+						}
+						try {
+							await cameraSpool.appendChunk(event.data);
+						} catch (error) {
+							recording.cameraSpoolFailed = true;
+							console.warn(
+								"Camera recording spool failed; keeping the local backup in memory",
+								error,
+							);
+						}
+					},
+				);
+			};
+			recording.cameraStopPromise?.catch(() => {
+				if (activeRecording !== recording || recording.finalizePromise) return;
+				status = {
+					phase: "error",
+					message: "Camera recording stopped unexpectedly",
+					videoId: creation.id,
+				};
+				broadcastStatus();
+				stopRecorderAfterError(cameraRecorder);
+			});
+		}
 
 		status = {
 			phase: "recording",
@@ -1081,6 +1316,39 @@ const startRecording = async (request: StartRecordingRequest) => {
 			durationMs: 0,
 			updatedAt: startedAt,
 		};
+		const saveCameraManifest = () =>
+			saveLiveRecordingManifest({
+				sessionId: spool.sessionId,
+				cameraSessionId: cameraSpool?.sessionId,
+				cameraMimeType: recording.cameraMimeType ?? undefined,
+				cameraSubpath: recording.cameraSubpath ?? undefined,
+				cameraOffsetMs: recording.cameraOffsetMs ?? 0,
+				cameraWidth: recording.cameraWidth ?? undefined,
+				cameraHeight: recording.cameraHeight ?? undefined,
+				cameraFps: recording.cameraFps ?? undefined,
+				videoId: creation.id,
+				shareUrl: creation.shareUrl,
+				mimeType: pipeline.mimeType,
+				subpath,
+				width,
+				height,
+				fps,
+				startedAt,
+			});
+		if (cameraRecorder) {
+			observePairedRecorderStarts(recorder, cameraRecorder, (offsetMs) => {
+				if (
+					activeRecording !== recording ||
+					recording.finalizePromise ||
+					recording.cleanedUp
+				) {
+					return;
+				}
+				recording.cameraOffsetMs = offsetMs;
+				void saveCameraManifest().catch(() => undefined);
+			});
+		}
+		const screenStartRequestedAt = performance.now();
 
 		try {
 			recorder.start(RECORDING_TIMESLICE_MS);
@@ -1089,6 +1357,21 @@ const startRecording = async (request: StartRecordingRequest) => {
 		} catch {
 			recorder.start();
 			beginManualChunking(recording);
+		}
+		if (cameraRecorder) {
+			const cameraStartRequestedAt = performance.now();
+			recording.cameraOffsetMs = Math.round(
+				cameraStartRequestedAt - screenStartRequestedAt,
+			);
+			try {
+				cameraRecorder.start(RECORDING_TIMESLICE_MS);
+			} catch {
+				cameraRecorder.start();
+				recording.cameraDataRequestInterval = window.setInterval(() => {
+					requestCameraRecorderData(recording);
+				}, RECORDING_TIMESLICE_MS);
+			}
+			await saveCameraManifest().catch(() => undefined);
 		}
 		playRecordingSound("start-recording", request.settings);
 		// The service worker that sent start-recording may have been killed
@@ -1109,6 +1392,23 @@ const startRecording = async (request: StartRecordingRequest) => {
 		);
 		countdownResolve?.();
 		await countdownPromise?.catch(() => undefined);
+		if (ownedRecording) {
+			if (ownedRecording.recorder.state !== "inactive") {
+				ownedRecording.recorder.stop();
+				await ownedRecording.stopPromise.catch(() => undefined);
+			}
+			if (
+				ownedRecording.cameraRecorder &&
+				ownedRecording.cameraRecorder.state !== "inactive"
+			) {
+				ownedRecording.cameraRecorder.stop();
+				await ownedRecording.cameraStopPromise?.catch(() => undefined);
+			}
+			await Promise.all([
+				ownedRecording.chunkChain,
+				ownedRecording.cameraChunkChain,
+			]);
+		}
 		// Release only what this attempt acquired. No chunk can have been
 		// captured yet — chunks only flow once recorder.start() succeeds, after
 		// which nothing here throws — so the spool holds no recoverable data.
@@ -1134,15 +1434,22 @@ const startRecording = async (request: StartRecordingRequest) => {
 			);
 			await ownedSpool.dispose().catch(() => undefined);
 		}
+		await ownedCameraSpool?.dispose().catch(() => undefined);
 		// Reset the "creating" status so later status syncs do not report a
 		// phantom in-progress recording.
-		if (status.phase === "creating") {
+		if (
+			status.phase === "creating" ||
+			(ownedRecording &&
+				"videoId" in status &&
+				status.videoId === ownedRecording.videoId)
+		) {
 			status = isUserCancellationError(error)
 				? { phase: "idle" }
 				: {
 						phase: "error",
 						message: error instanceof Error ? error.message : String(error),
 					};
+			broadcastStatus();
 		}
 		throw error;
 	} finally {
@@ -1159,6 +1466,22 @@ const appendMemoryBackupChunk = (recording: ActiveRecording, chunk: Blob) => {
 	if (recording.memoryBackup.overflowed && !previous.overflowed) {
 		console.warn(
 			"In-memory recording backup exceeded its cap; dropping the local copy (the streaming upload still has every byte)",
+		);
+	}
+};
+
+const appendCameraMemoryBackupChunk = (
+	recording: ActiveRecording,
+	chunk: Blob,
+) => {
+	const previous = recording.cameraMemoryBackup;
+	recording.cameraMemoryBackup = appendLocalRecordingChunk(previous, chunk, {
+		mode: "capped",
+		maxBytes: MEMORY_BACKUP_MAX_BYTES,
+	});
+	if (recording.cameraMemoryBackup.overflowed && !previous.overflowed) {
+		console.warn(
+			"In-memory camera backup exceeded its cap; dropping the local copy",
 		);
 	}
 };
@@ -1180,6 +1503,68 @@ const recoverRecordingBlob = async (recording: ActiveRecording) => {
 	return new Blob(parts, { type: recording.mimeType });
 };
 
+const recoverCameraRecordingBlob = async (recording: ActiveRecording) => {
+	const spool = recording.cameraSpool;
+	if (!spool) return null;
+	if (!recording.cameraSpoolFailed) return spool.recoverBlob();
+	if (recording.cameraMemoryBackup.overflowed) return null;
+	const spooledBlob = await spool.recoverBlob().catch(() => null);
+	const parts = spooledBlob
+		? [spooledBlob, ...recording.cameraMemoryBackup.chunks]
+		: recording.cameraMemoryBackup.chunks;
+	if (parts.length === 0) return null;
+	return new Blob(parts, { type: recording.cameraMimeType ?? "" });
+};
+
+const uploadCameraSidecar = async (options: {
+	videoId: VideoId;
+	settings: ExtensionSettings;
+	authToken: string;
+	blob: Blob;
+	mimeType: string;
+	subpath: string;
+	screenSubpath: string;
+	cameraOffsetMs: number;
+	durationMs: number;
+	width: number;
+	height: number;
+	fps: number;
+}) => {
+	const api = {
+		baseUrl: options.settings.apiBaseUrl,
+		authToken: options.authToken,
+		requestTimeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS,
+		extraBody: {
+			screenSubpath: options.screenSubpath,
+			cameraOffsetMs: options.cameraOffsetMs,
+		},
+	};
+	const uploadSession = await initiateMultipartUpload({
+		videoId: options.videoId,
+		contentType: options.mimeType,
+		subpath: options.subpath,
+		api,
+	});
+	const uploader = new InstantRecordingUploader({
+		videoId: options.videoId,
+		uploadId: uploadSession.uploadId,
+		provider: uploadSession.provider,
+		mimeType: options.mimeType,
+		subpath: options.subpath,
+		api,
+		setUploadStatus: () => undefined,
+		sendProgressUpdate: async () => undefined,
+	});
+	await uploader.finalize({
+		finalBlob: options.blob,
+		durationSeconds: Math.max(1, Math.round(options.durationMs / 1000)),
+		width: options.width,
+		height: options.height,
+		fps: options.fps,
+		subpath: options.subpath,
+	});
+};
+
 // Returns whether the recording bytes are persisted and retryable from the
 // upload page.
 const rememberFailedRecording = async (
@@ -1189,6 +1574,7 @@ const rememberFailedRecording = async (
 	if (recording.recordedBytes === 0) return false;
 
 	let sessionId = recording.spool.sessionId;
+	let cameraSessionId = recording.cameraSpool?.sessionId;
 	if (recording.spoolFailed) {
 		// The original spool is missing the tail that went to memory; a retry
 		// reading it would upload a truncated file. Persist the full recording
@@ -1214,9 +1600,41 @@ const rememberFailedRecording = async (
 		if (!replacement) return false;
 		sessionId = replacement.sessionId;
 	}
+	if (recording.cameraSpoolFailed && recording.cameraSpool) {
+		const fullBlob = await recoverCameraRecordingBlob(recording).catch(
+			() => null,
+		);
+		const replacement =
+			fullBlob && fullBlob.size >= recording.cameraRecordedBytes
+				? await RecordingSpool.create({
+						mimeType: recording.cameraMimeType ?? fullBlob.type,
+						maxPendingChunkBytes: fullBlob.size,
+					})
+						.then(async (spool) => {
+							await spool.appendChunk(fullBlob);
+							await spool.flush();
+							return spool;
+						})
+						.catch(() => null)
+				: null;
+		await recording.cameraSpool.dispose().catch(() => undefined);
+		cameraSessionId = replacement?.sessionId;
+	}
 
 	const saved = await upsertFailedRecording({
 		sessionId,
+		...(cameraSessionId && recording.cameraRecordedBytes > 0
+			? {
+					cameraSessionId,
+					cameraMimeType: recording.cameraMimeType ?? undefined,
+					cameraSubpath: recording.cameraSubpath ?? undefined,
+					cameraOffsetMs: recording.cameraOffsetMs ?? 0,
+					cameraWidth: recording.cameraWidth ?? undefined,
+					cameraHeight: recording.cameraHeight ?? undefined,
+					cameraFps: recording.cameraFps ?? undefined,
+					cameraTotalBytes: recording.cameraRecordedBytes,
+				}
+			: {}),
 		videoId: recording.videoId,
 		shareUrl: recording.shareUrl,
 		mimeType: recording.mimeType,
@@ -1237,6 +1655,11 @@ const rememberFailedRecording = async (
 		await deleteRecoveredRecordingSpool(dropped.sessionId).catch(
 			() => undefined,
 		);
+		if (dropped.cameraSessionId) {
+			await deleteRecoveredRecordingSpool(dropped.cameraSessionId).catch(
+				() => undefined,
+			);
+		}
 	}
 
 	return saved.kept.some((entry) => entry.sessionId === sessionId);
@@ -1244,15 +1667,47 @@ const rememberFailedRecording = async (
 
 const finalizeRecording = async (recording: ActiveRecording) => {
 	try {
-		await recording.stopPromise;
+		await Promise.all([
+			recording.stopPromise,
+			recording.cameraStopPromise ?? Promise.resolve(),
+		]);
 		await cleanupActiveRecording(recording);
-		await recording.chunkChain;
+		await Promise.all([recording.chunkChain, recording.cameraChunkChain]);
 		// finalBlob is null when the capped memory backup overflowed. The
 		// streamed parts still carry every byte; the uploader just falls back
 		// to its recorded-bytes counter instead of the local blob's size.
 		const finalBlob = await recoverRecordingBlob(recording);
 		if ((!finalBlob || finalBlob.size === 0) && recording.recordedBytes === 0) {
 			throw new Error("No recording data was captured");
+		}
+		if (
+			recording.cameraSpool &&
+			recording.cameraRecordedBytes > 0 &&
+			(!recording.cameraSubpath ||
+				!recording.cameraMimeType ||
+				recording.cameraOffsetMs === null)
+		) {
+			throw new Error("The separate camera recording metadata is incomplete");
+		}
+		if (recording.cameraSpool && recording.cameraRecordedBytes > 0) {
+			const cameraBlob = await recoverCameraRecordingBlob(recording);
+			if (!cameraBlob || cameraBlob.size < recording.cameraRecordedBytes) {
+				throw new Error("The separate camera recording could not be recovered");
+			}
+			await uploadCameraSidecar({
+				videoId: recording.videoId,
+				settings: recording.settings,
+				authToken: recording.authToken,
+				blob: cameraBlob,
+				mimeType: recording.cameraMimeType ?? cameraBlob.type,
+				subpath: recording.cameraSubpath ?? "camera-upload.webm",
+				screenSubpath: recording.subpath,
+				cameraOffsetMs: recording.cameraOffsetMs ?? 0,
+				durationMs: recording.durationMs,
+				width: recording.cameraWidth ?? DEFAULT_WIDTH,
+				height: recording.cameraHeight ?? DEFAULT_HEIGHT,
+				fps: recording.cameraFps ?? DEFAULT_FPS,
+			});
 		}
 		await recording.uploader.finalize({
 			finalBlob: finalBlob && finalBlob.size > 0 ? finalBlob : null,
@@ -1263,6 +1718,7 @@ const finalizeRecording = async (recording: ActiveRecording) => {
 			subpath: recording.subpath,
 		});
 		await recording.spool.dispose();
+		await recording.cameraSpool?.dispose();
 		await removeFailedRecording(recording.spool.sessionId).catch(
 			() => undefined,
 		);
@@ -1354,12 +1810,19 @@ async function stopRecording() {
 	}
 
 	stopManualChunking(recording);
+	stopCameraChunking(recording);
 	const now = Date.now();
 	recording.durationMs = getRecordingDuration(recording, now);
 	recording.lastResumedAt = null;
 
 	if (recording.recorder.state !== "inactive") {
 		recording.recorder.stop();
+	}
+	if (
+		recording.cameraRecorder &&
+		recording.cameraRecorder.state !== "inactive"
+	) {
+		recording.cameraRecorder.stop();
 	}
 
 	if (status.phase !== "error") {
@@ -1396,6 +1859,9 @@ const pauseRecording = () => {
 	recording.durationMs = getRecordingDuration(recording, now);
 	recording.lastResumedAt = null;
 	recording.recorder.pause();
+	if (recording.cameraRecorder?.state === "recording") {
+		recording.cameraRecorder.pause();
+	}
 	if (status.phase === "recording") {
 		status = {
 			...status,
@@ -1414,6 +1880,9 @@ const resumeRecording = () => {
 	}
 	const now = Date.now();
 	recording.recorder.resume();
+	if (recording.cameraRecorder?.state === "paused") {
+		recording.cameraRecorder.resume();
+	}
 	recording.lastResumedAt = now;
 	if (status.phase === "paused") {
 		status = {
@@ -1454,6 +1923,7 @@ const runFailedUploadRetry = async (
 	const orphan = await recoverRecordingSpoolSession(failed.sessionId);
 	if (!orphan || orphan.blob.size === 0) {
 		await removeFailedRecording(failed.sessionId).catch(() => undefined);
+		await removeLiveRecordingManifest(failed.sessionId).catch(() => undefined);
 		throw new Error("The recorded data is no longer available.");
 	}
 
@@ -1497,6 +1967,35 @@ const runFailedUploadRetry = async (
 	};
 
 	try {
+		if (failed.cameraSessionId) {
+			const cameraOrphan = await recoverRecordingSpoolSession(
+				failed.cameraSessionId,
+			);
+			if (
+				!cameraOrphan ||
+				cameraOrphan.blob.size === 0 ||
+				!failed.cameraMimeType ||
+				!failed.cameraSubpath ||
+				typeof failed.cameraOffsetMs !== "number" ||
+				!Number.isFinite(failed.cameraOffsetMs)
+			) {
+				throw new Error("The separate camera recording is no longer available");
+			}
+			await uploadCameraSidecar({
+				videoId: typedVideoId,
+				settings,
+				authToken: auth.authApiKey,
+				blob: cameraOrphan.blob,
+				mimeType: failed.cameraMimeType,
+				subpath: failed.cameraSubpath,
+				screenSubpath: subpath,
+				cameraOffsetMs: failed.cameraOffsetMs,
+				durationMs: failed.durationMs,
+				width: failed.cameraWidth ?? failed.width ?? DEFAULT_WIDTH,
+				height: failed.cameraHeight ?? failed.height ?? DEFAULT_HEIGHT,
+				fps: failed.cameraFps ?? failed.fps ?? DEFAULT_FPS,
+			});
+		}
 		const uploadSession = await initiateMultipartUpload({
 			videoId: typedVideoId,
 			contentType: failed.mimeType,
@@ -1543,7 +2042,13 @@ const runFailedUploadRetry = async (
 		await deleteRecoveredRecordingSpool(failed.sessionId).catch(
 			() => undefined,
 		);
+		if (failed.cameraSessionId) {
+			await deleteRecoveredRecordingSpool(failed.cameraSessionId).catch(
+				() => undefined,
+			);
+		}
 		await removeFailedRecording(failed.sessionId).catch(() => undefined);
+		await removeLiveRecordingManifest(failed.sessionId).catch(() => undefined);
 		setRetryStatus({
 			phase: "completed",
 			videoId: typedVideoId,

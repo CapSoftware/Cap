@@ -466,6 +466,9 @@ export function PlayerContent(props: { compactness?: number }) {
 					<Tooltip kbd={["Space"]} content="Play/Pause video">
 						<button
 							type="button"
+							aria-label={
+								playbackIntent() && !isAtEnd() ? "Pause video" : "Play video"
+							}
 							onClick={handlePlayPauseClick}
 							class="flex justify-center items-center rounded-full transition-opacity size-8 bg-ed-text-1 text-ed-card hover:opacity-90"
 						>

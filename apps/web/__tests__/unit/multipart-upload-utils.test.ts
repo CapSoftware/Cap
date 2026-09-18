@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
 	getMultipartFileKey,
 	getSubpath,
+	isCameraRecorderUpload,
+	isDisplayRecorderUpload,
 	isRawRecorderUpload,
 } from "@/app/api/upload/[...route]/multipart-utils";
 
@@ -43,6 +45,23 @@ describe("multipart upload utils", () => {
 		expect(isRawRecorderUpload("raw-upload.webm")).toBe(true);
 		expect(isRawRecorderUpload("raw-upload.mp4")).toBe(true);
 		expect(isRawRecorderUpload("result.mp4")).toBe(false);
+	});
+
+	it("accepts only canonical paired recording media paths", () => {
+		for (const extension of ["webm", "mp4"]) {
+			expect(isDisplayRecorderUpload(`raw-upload.${extension}`)).toBe(true);
+			expect(isCameraRecorderUpload(`camera-upload.${extension}`)).toBe(true);
+		}
+		for (const subpath of [
+			"camera-upload.webm/extra",
+			"camera-upload.webm.bak",
+			"raw-upload.webm/extra",
+			"../camera-upload.webm",
+			"result.mp4",
+		]) {
+			expect(isDisplayRecorderUpload(subpath)).toBe(false);
+			expect(isCameraRecorderUpload(subpath)).toBe(false);
+		}
 	});
 
 	it("rejects missing video ids", () => {

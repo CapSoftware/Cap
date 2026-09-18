@@ -16,6 +16,7 @@ describe("GET /", () => {
 				"/audio/check",
 				"/audio/extract",
 				"/audio/convert",
+				"/editor/preparations",
 				"/video/status",
 				"/video/probe",
 				"/video/thumbnail",

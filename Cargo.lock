@@ -1657,6 +1657,7 @@ dependencies = [
  "futures",
  "image 0.25.8",
  "lru",
+ "relative-path",
  "ringbuf",
  "sentry",
  "serde",
@@ -1667,6 +1668,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "windows 0.60.0",
  "workspace-hack",
 ]

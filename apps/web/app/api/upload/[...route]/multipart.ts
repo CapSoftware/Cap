@@ -11,7 +11,7 @@ import {
 } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
 import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
@@ -37,6 +37,8 @@ import { stringOrNumberOptional } from "@/utils/zod";
 import {
 	getMultipartFileKey,
 	getSubpath,
+	isCameraRecorderUpload,
+	isDisplayRecorderUpload,
 	isRawRecorderUpload,
 } from "./multipart-utils";
 
@@ -51,6 +53,9 @@ const FREE_PLAN_DURATION_GRACE_SECONDS = 30;
 const runPromiseAnyEnv = runPromise as <A, E>(
 	effect: Effect.Effect<A, E, unknown>,
 ) => Promise<A>;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
 
 const abortRequestSchema = z
 	.object({
@@ -177,6 +182,7 @@ app.post(
 			);
 		}
 
+		const cameraSourceUpload = isCameraRecorderUpload(getSubpath(body) ?? "");
 		const resp = await Effect.gen(function* () {
 			const policy = yield* VideosPolicy;
 			const db = yield* Database;
@@ -184,21 +190,23 @@ app.post(
 			const video = yield* policy.getOwnedById(videoId);
 			if (Option.isNone(video)) return yield* new Video.NotFoundError();
 
-			yield* db.use((db) =>
-				db
-					.insert(Db.videoUploads)
-					.values({
-						videoId: video.value[0].id,
-						mode: "multipart",
-					})
-					.onDuplicateKeyUpdate({
-						set: {
+			if (!cameraSourceUpload) {
+				yield* db.use((db) =>
+					db
+						.insert(Db.videoUploads)
+						.values({
+							videoId: video.value[0].id,
 							mode: "multipart",
-							rawFileKey: null,
-							updatedAt: new Date(),
-						},
-					}),
-			);
+						})
+						.onDuplicateKeyUpdate({
+							set: {
+								mode: "multipart",
+								rawFileKey: null,
+								updatedAt: new Date(),
+							},
+						}),
+				);
+			}
 		}).pipe(
 			Effect.tapError(Effect.logError),
 			Effect.catchAll((e) => {
@@ -418,6 +426,8 @@ app.post(
 				width: stringOrNumberOptional,
 				height: stringOrNumberOptional,
 				fps: stringOrNumberOptional,
+				screenSubpath: z.string().optional(),
+				cameraOffsetMs: z.number().finite().optional(),
 				replaceExisting: z.boolean().optional(),
 			})
 			.and(
@@ -480,7 +490,8 @@ app.post(
 			const reportedDuration =
 				typeof body.durationInSecs === "number" ? body.durationInSecs : null;
 			const missingRequiredDuration =
-				isRawRecorderUpload(subpath) && reportedDuration === null;
+				(isRawRecorderUpload(subpath) || isCameraRecorderUpload(subpath)) &&
+				reportedDuration === null;
 			const exceedsFreePlanLimit =
 				reportedDuration !== null &&
 				reportedDuration >
@@ -538,11 +549,13 @@ app.post(
 								);
 						} else {
 							yield* bucket.multipart.abort(fileKey, uploadId);
-							yield* db.use((db) =>
-								db
-									.delete(Db.videoUploads)
-									.where(eq(Db.videoUploads.videoId, videoId)),
-							);
+							if (!isCameraRecorderUpload(subpath)) {
+								yield* db.use((db) =>
+									db
+										.delete(Db.videoUploads)
+										.where(eq(Db.videoUploads.videoId, videoId)),
+								);
+							}
 						}
 					}).pipe(
 						Effect.catchAll(() =>
@@ -559,6 +572,129 @@ app.post(
 							: "Recording exceeds the free plan duration limit. Upgrade to Cap Pro to upload longer recordings.",
 					);
 				}
+			}
+
+			if (isCameraRecorderUpload(subpath)) {
+				const screenSubpath = body.screenSubpath;
+				const cameraOffsetMs = body.cameraOffsetMs;
+				if (
+					body.replaceExisting ||
+					!screenSubpath ||
+					!isDisplayRecorderUpload(screenSubpath) ||
+					typeof cameraOffsetMs !== "number" ||
+					Math.abs(cameraOffsetMs) > 30_000
+				) {
+					return c.json({ error: "Invalid editor recording source" }, 400);
+				}
+
+				return yield* Effect.gen(function* () {
+					const [bucket] = yield* Storage.getAccessForVideo(video, {
+						resolvePublishedOutput: false,
+					});
+					const orderedParts = [...parts].sort(
+						(left, right) => left.partNumber - right.partNumber,
+					);
+					const totalSize = orderedParts.reduce(
+						(total, part) => total + part.size,
+						0,
+					);
+					if (
+						totalSize <= 0 ||
+						!orderedParts.every(
+							(part, index) => part.partNumber === index + 1 && part.size > 0,
+						)
+					) {
+						return c.json({ error: "Invalid camera upload parts" }, 400);
+					}
+
+					const verifyObject = bucket.headObject(fileKey).pipe(
+						Effect.filterOrFail(
+							(head) => head.ContentLength === totalSize,
+							() =>
+								new Error("Camera source size does not match uploaded parts"),
+						),
+						Effect.retry({
+							times: 3,
+							schedule: Schedule.exponential("50 millis"),
+						}),
+					);
+					const result = yield* bucket.multipart
+						.complete(fileKey, uploadId, {
+							MultipartUpload: {
+								Parts: orderedParts.map((part) => ({
+									PartNumber: part.partNumber,
+									ETag: part.etag,
+								})),
+							},
+							...(bucket.provider === "googleDrive"
+								? { MpuObjectSize: totalSize }
+								: {}),
+						})
+						.pipe(
+							Effect.catchAll((error) =>
+								verifyObject.pipe(Effect.catchAll(() => Effect.fail(error))),
+							),
+						);
+					const head = yield* verifyObject;
+					const contentType = subpath.endsWith(".webm")
+						? "video/webm"
+						: "video/mp4";
+					const cameraFps = Number(body.fps);
+					const screenContentType = screenSubpath.endsWith(".webm")
+						? "video/webm"
+						: "video/mp4";
+					const sourcePatch = JSON.stringify({
+						editorSources: {
+							version: 1,
+							display: {
+								key: `${user.id}/${videoId}/${screenSubpath}`,
+								contentType: screenContentType,
+							},
+							camera: {
+								key: fileKey,
+								contentType,
+								size: totalSize,
+								...(Number.isInteger(cameraFps) &&
+								cameraFps > 0 &&
+								cameraFps <= 120
+									? { fps: cameraFps }
+									: {}),
+								objectIdentity: head.ETag ?? result.ETag ?? null,
+								offsetMs: cameraOffsetMs,
+							},
+						},
+					});
+					yield* db.use((db) =>
+						db
+							.update(Db.videos)
+							.set({
+								metadata: sql`JSON_MERGE_PATCH(COALESCE(${Db.videos.metadata}, JSON_OBJECT()), ${sourcePatch})`,
+							})
+							.where(
+								and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)),
+							),
+					);
+					return c.json({
+						success: true,
+						fileKey,
+						objectIdentity: head.ETag ?? result.ETag ?? null,
+						processingStarted: false,
+					});
+				}).pipe(
+					Effect.catchAll((error) =>
+						Effect.logError(
+							"Could not complete camera source upload",
+							error,
+						).pipe(
+							Effect.map(() =>
+								c.json(
+									{ error: "Could not complete camera source upload" },
+									500,
+								),
+							),
+						),
+					),
+				);
 			}
 
 			if (replacement) {
@@ -788,6 +924,53 @@ app.post(
 					);
 
 					if (isRawRecorderUpload(subpath)) {
+						const metadata: unknown = Option.getOrNull(video.metadata);
+						const editorSources = isRecord(metadata)
+							? metadata.editorSources
+							: null;
+						const displaySource = isRecord(editorSources)
+							? editorSources.display
+							: null;
+						const pairedSource =
+							isRecord(displaySource) && displaySource.key === fileKey;
+						const retainDisplaySource =
+							isDisplayRecorderUpload(subpath) &&
+							(!isRecord(editorSources) || pairedSource);
+						const totalSize = parts.reduce(
+							(total, part) => total + part.size,
+							0,
+						);
+						const sourceHead = retainDisplaySource
+							? yield* bucket.headObject(fileKey).pipe(
+									Effect.filterOrFail(
+										(head) => totalSize > 0 && head.ContentLength === totalSize,
+										() =>
+											new Error("Display source size does not match upload"),
+									),
+									Effect.retry({
+										times: 3,
+										schedule: Schedule.exponential("50 millis"),
+									}),
+								)
+							: null;
+						const sourcePatch = JSON.stringify({
+							editorSources: {
+								version: 1,
+								display: {
+									key: fileKey,
+									contentType: subpath.endsWith(".webm")
+										? "video/webm"
+										: "video/mp4",
+									size: totalSize,
+									...(Number.isInteger(Number(body.fps)) &&
+									Number(body.fps) > 0 &&
+									Number(body.fps) <= 120
+										? { fps: Number(body.fps) }
+										: {}),
+									objectIdentity: sourceHead?.ETag ?? result.ETag ?? null,
+								},
+							},
+						});
 						yield* db.use((db) =>
 							db
 								.update(Db.videos)
@@ -799,6 +982,11 @@ app.post(
 									width: updateIfDefined(body.width, Db.videos.width),
 									height: updateIfDefined(body.height, Db.videos.height),
 									fps: updateIfDefined(body.fps, Db.videos.fps),
+									...(retainDisplaySource
+										? {
+												metadata: sql`JSON_MERGE_PATCH(COALESCE(${Db.videos.metadata}, JSON_OBJECT()), ${sourcePatch})`,
+											}
+										: {}),
 								})
 								.where(
 									and(
@@ -1129,14 +1317,32 @@ app.post("/abort", abortRequestValidator, (c) => {
 			});
 		}
 
+		if (isCameraRecorderUpload(getSubpath(body) ?? "")) {
+			const [bucket] = yield* Storage.getAccessForVideo(video, {
+				resolvePublishedOutput: false,
+			});
+			if (bucket.provider === "s3") {
+				yield* bucket.multipart
+					.abort(fileKey, uploadId)
+					.pipe(
+						Effect.catchAll(() =>
+							Effect.logWarning("Camera source upload was already completed"),
+						),
+					);
+			}
+			return c.json({ success: true, fileKey, uploadId });
+		}
+
 		const [bucket] = yield* Storage.getAccessForVideo(video);
 
 		console.log(`Aborting multipart upload ${uploadId} for key: ${fileKey}`);
 		yield* bucket.multipart.abort(fileKey, uploadId);
 
-		yield* db.use((db) =>
-			db.delete(Db.videoUploads).where(eq(Db.videoUploads.videoId, videoId)),
-		);
+		if (!isCameraRecorderUpload(getSubpath(body) ?? "")) {
+			yield* db.use((db) =>
+				db.delete(Db.videoUploads).where(eq(Db.videoUploads.videoId, videoId)),
+			);
+		}
 
 		return c.json({ success: true, fileKey, uploadId });
 	}).pipe(

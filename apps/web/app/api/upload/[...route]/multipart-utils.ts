@@ -44,3 +44,9 @@ export const getMultipartFileKey = (
 
 export const isRawRecorderUpload = (subpath: string) =>
 	subpath.startsWith("raw-upload.");
+
+export const isDisplayRecorderUpload = (subpath: string) =>
+	/^raw-upload\.(webm|mp4)$/.test(subpath);
+
+export const isCameraRecorderUpload = (subpath: string) =>
+	/^camera-upload\.(webm|mp4)$/.test(subpath);

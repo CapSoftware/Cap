@@ -4,8 +4,8 @@ import { videoEdits, videos, videoUploads } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { notFound } from "next/navigation";
-import { isEditSourceKey } from "@/lib/video-edit-processing";
+import { notFound, redirect } from "next/navigation";
+import { getEditSourceKey, isEditSourceKey } from "@/lib/video-edit-processing";
 import {
 	areEditSpecsEquivalent,
 	createIdentityEditSpec,
@@ -57,10 +57,6 @@ export default async function EditVideoPage(props: {
 		notFound();
 	}
 
-	if (!userIsPro(user)) {
-		return <EditUpgradeGate />;
-	}
-
 	if (
 		video.uploadPhase &&
 		isEditSourceKey({
@@ -89,7 +85,10 @@ export default async function EditVideoPage(props: {
 	}
 
 	const [existingEdit] = await db()
-		.select({ editSpec: videoEdits.editSpec })
+		.select({
+			editSpec: videoEdits.editSpec,
+			sourceKey: videoEdits.sourceKey,
+		})
 		.from(videoEdits)
 		.where(eq(videoEdits.videoId, videoId));
 
@@ -99,6 +98,25 @@ export default async function EditVideoPage(props: {
 				createIdentityEditSpec(existingEdit.editSpec.sourceDuration),
 			)
 		: false;
+	const editorSources = video.metadata?.editorSources;
+	const hasStudioSource = existingEdit
+		? existingEdit.sourceKey === getEditSourceKey(video.ownerId, videoId)
+		: editorSources == null ||
+			(editorSources.version === 1 &&
+				Boolean(editorSources.display) &&
+				Number.isSafeInteger(editorSources.display.size) &&
+				(editorSources.display.size ?? 0) > 0);
+	if (
+		(process.env.CAP_WEB_EDITOR_WORKER_URL ||
+			process.env.CAP_WEB_EDITOR_WORKER_POOL) &&
+		hasStudioSource &&
+		!video.metadata?.editProcessing
+	) {
+		redirect(`/s/${videoId}/edit/studio`);
+	}
+	if (!userIsPro(user)) {
+		return <EditUpgradeGate />;
+	}
 
 	return (
 		<EditVideoClient
