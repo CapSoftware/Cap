@@ -5,7 +5,7 @@ import "@fontsource/geist-sans/latin-700.css";
 import "../../../apps/desktop/src/styles/theme.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
-import { onCleanup } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import { render } from "solid-js/web";
 import { Toaster } from "solid-toast";
 import type { PreparingEditorModel } from "../../../apps/desktop/src/routes/editor/preparing-editor-model";
@@ -29,6 +29,7 @@ const queryClient = new QueryClient({
 
 let dispose: (() => void) | null = null;
 let skeletonDispose: (() => void) | null = null;
+let errorDispose: (() => void) | null = null;
 let skeletonModel: PreparingEditorModel | null = null;
 let skeletonSequence = -1;
 let preparingData: {
@@ -37,6 +38,11 @@ let preparingData: {
 	tracks: Array<"display" | "camera">;
 } | null = null;
 let mountGeneration = 0;
+const [webErrorState, setWebErrorState] = createSignal({
+	message: "",
+	hasBrowserDraftConflict: false,
+	restoringBrowserDraft: false,
+});
 let editorModulePromise: Promise<
 	typeof import("../../../apps/desktop/src/routes/editor/Editor")
 > | null = null;
@@ -113,6 +119,8 @@ export async function mountEditor(element: HTMLElement) {
 	if (dispose) return;
 	skeletonDispose?.();
 	skeletonDispose = null;
+	errorDispose?.();
+	errorDispose = null;
 	skeletonModel = null;
 	skeletonSequence = -1;
 	dispose = render(
@@ -134,6 +142,8 @@ export function disposeEditor() {
 	dispose = null;
 	skeletonDispose?.();
 	skeletonDispose = null;
+	errorDispose?.();
+	errorDispose = null;
 	skeletonModel = null;
 	skeletonSequence = -1;
 	setEditorTransport(null);
@@ -169,6 +179,71 @@ if (root) {
 		if (event.origin !== window.location.origin) return;
 		if (typeof event.data !== "object" || event.data === null) return;
 		const message = event.data as Record<string, unknown>;
+		if (message.kind === "cap-editor-error" && message.version === 1) {
+			if (
+				typeof message.message !== "string" ||
+				message.message.length < 1 ||
+				message.message.length > 1000 ||
+				typeof message.hasBrowserDraftConflict !== "boolean" ||
+				typeof message.restoringBrowserDraft !== "boolean"
+			)
+				return;
+			setWebErrorState({
+				message: message.message,
+				hasBrowserDraftConflict: message.hasBrowserDraftConflict,
+				restoringBrowserDraft: message.restoringBrowserDraft,
+			});
+			if (errorDispose) {
+				window.parent.postMessage(
+					{ kind: "cap-editor-error-ready", version: 1 },
+					window.location.origin,
+				);
+				return;
+			}
+			const generation = ++mountGeneration;
+			dispose?.();
+			dispose = null;
+			skeletonDispose?.();
+			skeletonDispose = null;
+			skeletonModel = null;
+			skeletonSequence = -1;
+			setEditorTransport(null);
+			void import("./web-editor-error-screen").then(
+				({ WebEditorErrorScreen }) => {
+					if (generation !== mountGeneration) return;
+					errorDispose = render(
+						() => (
+							<div class="flex h-screen w-screen flex-col bg-ed-window text-ed-text-1">
+								<WebEditorErrorScreen
+									message={webErrorState().message}
+									hasBrowserDraftConflict={
+										webErrorState().hasBrowserDraftConflict
+									}
+									restoringBrowserDraft={webErrorState().restoringBrowserDraft}
+									onAction={(action) =>
+										window.parent.postMessage(
+											{ kind: "cap-editor-error-action", version: 1, action },
+											window.location.origin,
+										)
+									}
+								/>
+							</div>
+						),
+						root,
+					);
+					window.parent.postMessage(
+						{ kind: "cap-editor-error-ready", version: 1 },
+						window.location.origin,
+					);
+				},
+				() =>
+					window.parent.postMessage(
+						{ kind: "cap-editor-error-failed", version: 1 },
+						window.location.origin,
+					),
+			);
+			return;
+		}
 		if (message.kind === "cap-editor-preparing" && message.version === 1) {
 			if (
 				typeof message.title !== "string" ||
@@ -195,6 +270,9 @@ if (root) {
 		if (message.kind !== "cap-editor-connect" || message.version !== 1) return;
 		const port = event.ports[0];
 		if (!port) return;
+		mountGeneration++;
+		errorDispose?.();
+		errorDispose = null;
 		window.capWebEditorCaptionsEnabled = message.captionsEnabled === true;
 		window.capWebEditorUserId =
 			typeof message.userId === "string" ? message.userId : "";

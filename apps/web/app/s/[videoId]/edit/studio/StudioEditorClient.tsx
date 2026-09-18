@@ -88,6 +88,7 @@ export function StudioEditorClient(props: {
 	const router = useRouter();
 	const [sessionId, setSessionId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const [errorFrameReady, setErrorFrameReady] = useState(false);
 	const [recoveryConflict, setRecoveryConflict] =
 		useState<EditorLocalDraft | null>(null);
 	const [restoringBrowserDraft, setRestoringBrowserDraft] = useState(false);
@@ -100,6 +101,7 @@ export function StudioEditorClient(props: {
 	const sessionRef = useRef<string | null>(null);
 	const bridgeRef = useRef<EditorHostBridge | null>(null);
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
+	const errorFrameRef = useRef<HTMLIFrameElement | null>(null);
 	const frameConnectRef = useRef<{
 		document: Document;
 		sessionId: string;
@@ -388,6 +390,92 @@ export function StudioEditorClient(props: {
 		}
 	}, [recoveryConflict, userId, videoId]);
 
+	const sendErrorToFrame = useCallback(
+		(iframe: HTMLIFrameElement) => {
+			const document = iframe.contentDocument;
+			if (
+				!error ||
+				!document ||
+				document.readyState !== "complete" ||
+				new URL(document.URL).pathname !== "/editor-solid/index.html"
+			)
+				return;
+			iframe.contentWindow?.postMessage(
+				{
+					kind: "cap-editor-error",
+					version: 1,
+					message: error,
+					hasBrowserDraftConflict: recoveryConflict !== null,
+					restoringBrowserDraft,
+				},
+				window.location.origin,
+			);
+		},
+		[error, recoveryConflict, restoringBrowserDraft],
+	);
+
+	useEffect(() => {
+		if (!error) {
+			setErrorFrameReady(false);
+			return;
+		}
+		bridgeRef.current?.dispose();
+		bridgeRef.current = null;
+		frameConnectRef.current = null;
+	}, [error]);
+
+	useEffect(() => {
+		if (errorFrameRef.current) sendErrorToFrame(errorFrameRef.current);
+	}, [sendErrorToFrame]);
+
+	useEffect(() => {
+		if (!error) return;
+		const onErrorFrameMessage = (event: MessageEvent<unknown>) => {
+			if (
+				event.origin !== window.location.origin ||
+				event.source !== errorFrameRef.current?.contentWindow ||
+				typeof event.data !== "object" ||
+				event.data === null
+			)
+				return;
+			const message = event.data as Record<string, unknown>;
+			if (message.version !== 1) return;
+			if (message.kind === "cap-editor-error-ready") {
+				setErrorFrameReady(true);
+				return;
+			}
+			if (message.kind !== "cap-editor-error-action") return;
+			if (message.action === "retry") {
+				window.location.reload();
+			} else if (message.action === "back-to-recording") {
+				router.push(`/s/${encodeURIComponent(videoId)}`);
+			} else if (
+				message.action === "restore-browser" &&
+				recoveryConflict &&
+				!restoringBrowserDraft
+			) {
+				void restoreBrowserDraft();
+			} else if (
+				message.action === "open-latest" &&
+				recoveryConflict &&
+				!restoringBrowserDraft
+			) {
+				clearEditorLocalDraft(window.localStorage, userId, videoId);
+				window.location.reload();
+			}
+		};
+		window.addEventListener("message", onErrorFrameMessage);
+		return () => window.removeEventListener("message", onErrorFrameMessage);
+	}, [
+		error,
+		recoveryConflict,
+		restoringBrowserDraft,
+		restoreBrowserDraft,
+		router,
+		userId,
+		videoId,
+	]);
+
 	const onFrameLoad = useCallback(
 		(iframe: HTMLIFrameElement) => {
 			const document = iframe.contentDocument;
@@ -472,40 +560,55 @@ export function StudioEditorClient(props: {
 
 	if (error) {
 		return (
-			<div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-white p-6 text-neutral-900">
-				<p role="alert">{error}</p>
-				{recoveryConflict ? (
-					<div className="flex gap-3">
-						<button
-							type="button"
-							className="rounded-md bg-neutral-900 px-4 py-2 text-white"
-							disabled={restoringBrowserDraft}
-							onClick={() => void restoreBrowserDraft()}
-						>
-							{restoringBrowserDraft
-								? "Restoring browser edits…"
-								: "Restore browser edits"}
-						</button>
-						<button
-							type="button"
-							className="rounded-md border border-neutral-300 px-4 py-2"
-							disabled={restoringBrowserDraft}
-							onClick={() => {
-								clearEditorLocalDraft(window.localStorage, userId, videoId);
-								window.location.reload();
-							}}
-						>
-							Open latest saved
-						</button>
+			<div className="relative h-screen w-screen bg-[#f1f1f3]">
+				<iframe
+					ref={errorFrameRef}
+					title="Cap editor error"
+					src="/editor-solid/index.html"
+					className={
+						errorFrameReady
+							? "h-full w-full border-0"
+							: "pointer-events-none absolute inset-0 h-full w-full border-0 opacity-0"
+					}
+					onLoad={(event) => sendErrorToFrame(event.currentTarget)}
+				/>
+				{!errorFrameReady && (
+					<div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-neutral-900">
+						<p role="alert">{error}</p>
+						{recoveryConflict ? (
+							<div className="flex gap-3">
+								<button
+									type="button"
+									className="rounded-md bg-neutral-900 px-4 py-2 text-white"
+									disabled={restoringBrowserDraft}
+									onClick={() => void restoreBrowserDraft()}
+								>
+									{restoringBrowserDraft
+										? "Restoring browser edits…"
+										: "Restore browser edits"}
+								</button>
+								<button
+									type="button"
+									className="rounded-md border border-neutral-300 px-4 py-2"
+									disabled={restoringBrowserDraft}
+									onClick={() => {
+										clearEditorLocalDraft(window.localStorage, userId, videoId);
+										window.location.reload();
+									}}
+								>
+									Open latest saved
+								</button>
+							</div>
+						) : (
+							<button
+								type="button"
+								className="rounded-md bg-neutral-900 px-4 py-2 text-white"
+								onClick={() => window.location.reload()}
+							>
+								Try again
+							</button>
+						)}
 					</div>
-				) : (
-					<button
-						type="button"
-						className="rounded-md bg-neutral-900 px-4 py-2 text-white"
-						onClick={() => window.location.reload()}
-					>
-						Try again
-					</button>
 				)}
 			</div>
 		);
@@ -534,13 +637,14 @@ export function StudioEditorClient(props: {
 					onClose={(imported) => {
 						setRecordClipOpen(false);
 						if (imported) {
-							void restartAfterImport().catch((cause) =>
+							void restartAfterImport().catch((cause) => {
+								captureDraftRef.current();
 								setError(
 									cause instanceof Error
 										? cause.message
 										: "Editor could not restart",
-								),
-							);
+								);
+							});
 						}
 					}}
 				/>
