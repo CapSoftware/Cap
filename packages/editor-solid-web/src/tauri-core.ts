@@ -1,6 +1,10 @@
 import { registerEditorChannel } from "./channels";
 import { resolveEditorImportedImage } from "./editor-file-mapping";
-import { invokeEditorTauriCommand } from "./tauri-bridge";
+import {
+	importEditorBrowserImage,
+	invokeEditorTauriCommand,
+} from "./tauri-bridge";
+import { takeEditorSelectedFile } from "./tauri-dialog";
 
 let assetBase = "";
 let nextChannelId = 1;
@@ -10,6 +14,21 @@ export function setEditorAssetBase(value: string) {
 }
 
 export function invoke<T>(command: string, args?: unknown) {
+	if (command === "webEditorImportImage") {
+		if (
+			typeof args !== "object" ||
+			args === null ||
+			!("source" in args) ||
+			typeof args.source !== "string"
+		) {
+			return Promise.reject(new Error("Selected editor image is invalid"));
+		}
+		const file = takeEditorSelectedFile(args.source);
+		if (!file) {
+			return Promise.reject(new Error("Selected editor image is unavailable"));
+		}
+		return importEditorBrowserImage(file) as Promise<T>;
+	}
 	return invokeEditorTauriCommand<T>(command, args);
 }
 
