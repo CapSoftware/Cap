@@ -20,14 +20,16 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use cap_project::{
-    BackgroundSource, BorderConfiguration, CornerStyle, ProjectConfiguration, RecordingMeta,
-    RecordingMetaInner, ShadowConfiguration, SingleSegment, StudioRecordingMeta, VideoMeta,
+    AspectRatio, BackgroundConfiguration, BackgroundSource, BorderConfiguration, CornerStyle,
+    ProjectConfiguration, RecordingMeta, RecordingMetaInner, ShadowConfiguration, SingleSegment,
+    StudioRecordingMeta, VideoMeta,
 };
 use cap_rendering::{
     DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectUniforms, RenderOptions,
@@ -41,6 +43,7 @@ use gpui::{
     img, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px, svg,
 };
 use relative_path::RelativePathBuf;
+use serde::{Deserialize, Serialize};
 
 use crate::editor_edits::ProjectHistory;
 use crate::editor_sidebar::{
@@ -60,11 +63,7 @@ const MAX_DIMENSION: u32 = 16_384;
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(1000);
 
 /// `Header.tsx:112` -- `h-14`.
-const HEADER_HEIGHT: f32 = 56.;
-/// `AnnotationConfig.tsx:44` -- `h-11`.
-const CONFIG_BAR_HEIGHT: f32 = 44.;
-/// `LayersPanel.tsx:203` -- `w-56`.
-const LAYERS_PANEL_WIDTH: f32 = 224.;
+const HEADER_HEIGHT: f32 = 52.;
 /// `Preview.tsx:52`.
 const PREVIEW_PADDING: f32 = 20.;
 /// `clampZoom` (`Preview.tsx:193`).
@@ -94,17 +93,6 @@ pub fn resolve_bundle(path: &Path) -> Option<PathBuf> {
     }
     let parent = path.parent()?;
     (parent.extension().and_then(|ext| ext.to_str()) == Some("cap")).then(|| parent.to_path_buf())
-}
-
-pub fn is_legacy_screenshot_project(project_path: &Path) -> bool {
-    let Ok(meta) = RecordingMeta::load_for_project(project_path) else {
-        return false;
-    };
-    matches!(
-        meta.inner,
-        RecordingMetaInner::Studio(studio)
-            if matches!(studio.as_ref(), StudioRecordingMeta::SingleSegment { segment } if segment.display.fps == 0)
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +156,205 @@ pub fn load_source(bundle: &Path) -> Result<LoadedSource, String> {
         meta,
         studio_meta,
     })
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImageAppearance {
+    version: u8,
+    background: BackgroundConfiguration,
+    aspect_ratio: Option<AspectRatio>,
+}
+
+fn image_appearance_file(project_path: &Path, image_path: &str) -> Option<PathBuf> {
+    let relative = Path::new(image_path);
+    if relative.parent()? != Path::new("content/images") || relative.extension()?.to_str()? != "png"
+    {
+        return None;
+    }
+    let stem = relative.file_stem()?.to_str()?;
+    if stem.len() != 40
+        || !stem.starts_with("drawing-")
+        || !stem[8..]
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(
+        project_path
+            .join("content/images")
+            .join(format!("{stem}.style.json")),
+    )
+}
+
+fn portable_project_path(root: &Path, path: &Path) -> Result<String, String> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| "Screenshot background is outside the project".to_string())?;
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(part) = component else {
+            return Err("Screenshot background path is invalid".to_string());
+        };
+        parts.push(part.to_string_lossy().into_owned());
+    }
+    Ok(parts.join("/"))
+}
+
+fn load_image_appearance(
+    project_path: &Path,
+    image_path: &str,
+) -> Result<Option<ImageAppearance>, String> {
+    let Some(file) = image_appearance_file(project_path, image_path) else {
+        return Ok(None);
+    };
+    if !file.exists() {
+        return Ok(None);
+    }
+    let root = project_path
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let canonical = file.canonicalize().map_err(|error| error.to_string())?;
+    if !canonical.starts_with(&root) {
+        return Err("Screenshot appearance escapes the project".to_string());
+    }
+    let mut input = std::fs::File::open(&canonical).map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    input
+        .by_ref()
+        .take(65_537)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > 65_536 {
+        return Err("Screenshot appearance exceeds the size limit".to_string());
+    }
+    let mut appearance: ImageAppearance =
+        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    if appearance.version != 1 {
+        return Err("Screenshot appearance version is unsupported".to_string());
+    }
+    match &mut appearance.background.source {
+        BackgroundSource::Wallpaper { path } | BackgroundSource::Image { path } => {
+            if let Some(relative) = path {
+                let relative_path = Path::new(relative);
+                if relative_path.is_absolute()
+                    || relative_path
+                        .components()
+                        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+                {
+                    return Err("Screenshot background path is invalid".to_string());
+                }
+                let source = project_path
+                    .join(relative_path)
+                    .canonicalize()
+                    .map_err(|error| error.to_string())?;
+                if !source.starts_with(&root) || !source.is_file() {
+                    return Err("Screenshot background escapes the project".to_string());
+                }
+                *relative = source.to_string_lossy().into_owned();
+            }
+        }
+        _ => {}
+    }
+    Ok(Some(appearance))
+}
+
+fn save_image_appearance(
+    project_path: &Path,
+    image_path: &str,
+    mut appearance: ImageAppearance,
+) -> Result<Vec<PathBuf>, String> {
+    let file = image_appearance_file(project_path, image_path)
+        .ok_or("Screenshot appearance output path is invalid")?;
+    let root = project_path
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let images_dir = project_path.join("content/images");
+    let canonical_images = images_dir
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if !canonical_images.starts_with(&root) {
+        return Err("Screenshot appearance directory escapes the project".to_string());
+    }
+    let mut created = Vec::new();
+    let result = (|| -> Result<(), String> {
+        match &mut appearance.background.source {
+            BackgroundSource::Wallpaper { path } | BackgroundSource::Image { path } => {
+                if let Some(source_path) = path {
+                    let source = Path::new(source_path)
+                        .canonicalize()
+                        .map_err(|error| error.to_string())?;
+                    let extension = source
+                        .extension()
+                        .and_then(|part| part.to_str())
+                        .ok_or("Screenshot background type is unsupported")?
+                        .to_ascii_lowercase();
+                    if !matches!(
+                        extension.as_str(),
+                        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff"
+                    ) {
+                        return Err("Screenshot background type is unsupported".to_string());
+                    }
+                    let portable = if source.starts_with(&root) {
+                        portable_project_path(&root, &source)?
+                    } else {
+                        let mut input =
+                            std::fs::File::open(&source).map_err(|error| error.to_string())?;
+                        let size = input.metadata().map_err(|error| error.to_string())?.len();
+                        if size == 0 || size > 64 * 1024 * 1024 {
+                            return Err("Screenshot background exceeds the size limit".to_string());
+                        }
+                        let name = format!(
+                            "screenshot-background-{}.{}",
+                            uuid::Uuid::new_v4().simple(),
+                            extension
+                        );
+                        let output = canonical_images.join(&name);
+                        let mut target = std::fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(&output)
+                            .map_err(|error| error.to_string())?;
+                        created.push(output);
+                        std::io::copy(&mut input, &mut target)
+                            .map_err(|error| error.to_string())?;
+                        target.sync_all().map_err(|error| error.to_string())?;
+                        format!("content/images/{name}")
+                    };
+                    *source_path = portable;
+                }
+            }
+            _ => {}
+        }
+        let bytes = serde_json::to_vec(&appearance).map_err(|error| error.to_string())?;
+        if bytes.len() > 65_536 {
+            return Err("Screenshot appearance exceeds the size limit".to_string());
+        }
+        let temp = canonical_images.join(format!(
+            ".screenshot-style-{}.tmp",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let mut target = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| error.to_string())?;
+        created.push(temp.clone());
+        std::io::Write::write_all(&mut target, &bytes).map_err(|error| error.to_string())?;
+        target.sync_all().map_err(|error| error.to_string())?;
+        std::fs::rename(&temp, &file).map_err(|error| error.to_string())?;
+        let _ = created.pop();
+        created.push(file);
+        Ok(())
+    })();
+    if let Err(error) = result {
+        for path in &created {
+            let _ = std::fs::remove_file(path);
+        }
+        return Err(error);
+    }
+    Ok(created)
 }
 
 pub fn load_image_drawing_source(
@@ -246,6 +433,13 @@ pub fn load_image_drawing_source(
     };
     config.background.padding = 0.0;
     config.background.shadow = 0.0;
+    if let Some(appearance) = load_image_appearance(bundle, &segment.path)? {
+        config.background = appearance.background;
+        config.aspect_ratio = appearance.aspect_ratio;
+    } else if segment.path == "original.png" {
+        config.background = project.background.clone();
+        config.aspect_ratio = project.aspect_ratio.clone();
+    }
     config.annotations = segment.annotations.clone();
     Ok(LoadedSource {
         rgba: image.to_rgba8().into_raw(),
@@ -258,7 +452,11 @@ pub fn load_image_drawing_source(
     })
 }
 
-fn save_image_drawing_asset(bundle: &Path, bytes: &[u8]) -> Result<(String, PathBuf), String> {
+fn save_image_drawing_asset(
+    bundle: &Path,
+    bytes: &[u8],
+    appearance: ImageAppearance,
+) -> Result<(String, Vec<PathBuf>), String> {
     if bytes.is_empty() || bytes.len() > 64 * 1024 * 1024 {
         return Err("Drawing image exceeds the editor size limit".to_string());
     }
@@ -285,8 +483,8 @@ fn save_image_drawing_asset(bundle: &Path, bytes: &[u8]) -> Result<(String, Path
     }
     let filename = format!("drawing-{}.png", uuid::Uuid::new_v4().simple());
     let relative = format!("content/images/{filename}");
-    let output = images_dir.join(&filename);
-    let temp = images_dir.join(format!(".{filename}.tmp"));
+    let output = canonical_images.join(&filename);
+    let temp = canonical_images.join(format!(".{filename}.tmp"));
     let write_result = (|| -> Result<(), std::io::Error> {
         let mut file = std::fs::File::create(&temp)?;
         std::io::Write::write_all(&mut file, bytes)?;
@@ -297,7 +495,16 @@ fn save_image_drawing_asset(bundle: &Path, bytes: &[u8]) -> Result<(String, Path
         let _ = std::fs::remove_file(&temp);
         return Err(format!("Cannot save drawing asset: {error}"));
     }
-    Ok((relative, output))
+    let style_files = match save_image_appearance(bundle, &relative, appearance) {
+        Ok(files) => files,
+        Err(error) => {
+            let _ = std::fs::remove_file(&output);
+            return Err(error);
+        }
+    };
+    let mut files = vec![output];
+    files.extend(style_files);
+    Ok((relative, files))
 }
 
 // ---------------------------------------------------------------------------
@@ -637,6 +844,18 @@ impl BgTab {
 /// header's right-hand cluster. One at a time, by construction.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Popover {
+    Background,
+    Padding,
+    Rounding,
+    Shadow,
+    Border,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ImageEditAction {
+    Tool(Tool),
+    Aspect,
+    Crop,
     Background,
     Padding,
     Rounding,
@@ -1062,6 +1281,7 @@ pub struct ScreenshotEditorWindow {
     ready: bool,
     image_drawing_index: Option<usize>,
     image_drawing_source: Option<String>,
+    pending_image_action: Option<ImageEditAction>,
     pending_save: Rc<RefCell<PendingConfigSave>>,
     save_task: Option<gpui::Task<()>>,
 
@@ -1137,6 +1357,7 @@ impl ScreenshotEditorWindow {
             ready: false,
             image_drawing_index: None,
             image_drawing_source: None,
+            pending_image_action: None,
             pending_save: Rc::new(RefCell::new(PendingConfigSave::default())),
             save_task: None,
 
@@ -1268,6 +1489,67 @@ impl ScreenshotEditorWindow {
         if let Some(previous) = self.frame.replace(image) {
             let _ = window.drop_image(previous);
         }
+        if let Some(action) = self.pending_image_action.take() {
+            match action {
+                ImageEditAction::Tool(tool) => self.set_tool(tool, cx),
+                ImageEditAction::Crop => self.open_crop_dialog(window, cx),
+                _ => {
+                    let anchor = match action {
+                        ImageEditAction::Aspect => Anchor::Aspect,
+                        ImageEditAction::Background => Anchor::Background,
+                        ImageEditAction::Padding => Anchor::Padding,
+                        ImageEditAction::Rounding => Anchor::Rounding,
+                        ImageEditAction::Shadow => Anchor::Shadow,
+                        ImageEditAction::Border => Anchor::Border,
+                        ImageEditAction::Tool(_) | ImageEditAction::Crop => unreachable!(),
+                    };
+                    cx.spawn_in(window, async move |this, cx| {
+                        for _ in 0..15 {
+                            cx.background_executor()
+                                .timer(Duration::from_millis(16))
+                                .await;
+                            let applied = this.update_in(cx, |this, window, cx| {
+                                if this.image_drawing_index.is_none()
+                                    || this.anchor(anchor).get().is_none()
+                                {
+                                    return false;
+                                }
+                                match action {
+                                    ImageEditAction::Aspect => {
+                                        this.toggle_menu(MenuKind::Aspect, anchor, window, cx);
+                                    }
+                                    ImageEditAction::Background => {
+                                        this.active_popover = Some(Popover::Background);
+                                    }
+                                    ImageEditAction::Padding => {
+                                        this.active_popover = Some(Popover::Padding);
+                                    }
+                                    ImageEditAction::Rounding => {
+                                        this.active_popover = Some(Popover::Rounding);
+                                    }
+                                    ImageEditAction::Shadow => {
+                                        this.active_popover = Some(Popover::Shadow);
+                                    }
+                                    ImageEditAction::Border => {
+                                        this.active_popover = Some(Popover::Border);
+                                    }
+                                    ImageEditAction::Tool(_) | ImageEditAction::Crop => {
+                                        unreachable!()
+                                    }
+                                }
+                                cx.notify();
+                                true
+                            });
+                            match applied {
+                                Ok(true) | Err(_) => return,
+                                Ok(false) => {}
+                            }
+                        }
+                    })
+                    .detach();
+                }
+            }
+        }
         // The content rect moves with the frame, so every mask is re-clipped
         // into it (`AnnotationLayer.tsx:88-141`) before the overlays resample.
         if self.clamp_masks() {
@@ -1286,12 +1568,14 @@ impl ScreenshotEditorWindow {
         bundle: PathBuf,
         image_index: usize,
         source_relative: String,
+        action: ImageEditAction,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace = Self::new_embedded(bundle, window, cx);
         workspace.image_drawing_index = Some(image_index);
         workspace.image_drawing_source = Some(source_relative);
+        workspace.pending_image_action = Some(action);
         workspace
     }
 
@@ -2072,6 +2356,11 @@ impl ScreenshotEditorWindow {
             return;
         };
         let config = self.project.clone();
+        let appearance = ImageAppearance {
+            version: 1,
+            background: config.background.clone(),
+            aspect_ratio: config.aspect_ratio.clone(),
+        };
         if let Err(error) = config.validate() {
             self.toast_error(error.to_string(), window, cx);
             return;
@@ -2129,13 +2418,13 @@ impl ScreenshotEditorWindow {
             let saved = match encoded {
                 Ok(bytes) => {
                     cx.background_executor()
-                        .spawn(async move { save_image_drawing_asset(&bundle, &bytes) })
+                        .spawn(async move { save_image_drawing_asset(&bundle, &bytes, appearance) })
                         .await
                 }
                 Err(error) => Err(error),
             };
             match saved {
-                Ok((path, output)) => {
+                Ok((path, files)) => {
                     let committed = parent
                         .update(cx, |editor, window, cx| {
                             editor.commit_image_drawing(
@@ -2149,7 +2438,9 @@ impl ScreenshotEditorWindow {
                         })
                         .unwrap_or(false);
                     if !committed {
-                        let _ = std::fs::remove_file(&output);
+                        for file in files {
+                            let _ = std::fs::remove_file(file);
+                        }
                         this.update_in(cx, |view, window, cx| {
                             view.toast_error("The image track changed while drawing", window, cx)
                         })
@@ -2944,18 +3235,10 @@ impl ScreenshotEditorWindow {
                 self.selected_annotation = None;
                 cx.notify();
             }
-            "p" if self.image_drawing_index.is_none() => {
-                self.toggle_popover(Popover::Padding, window, cx)
-            }
-            "b" if self.image_drawing_index.is_none() => {
-                self.toggle_popover(Popover::Background, window, cx)
-            }
-            "h" if self.image_drawing_index.is_none() => {
-                self.toggle_popover(Popover::Shadow, window, cx)
-            }
-            "e" if self.image_drawing_index.is_none() => {
-                self.toggle_popover(Popover::Border, window, cx)
-            }
+            "p" => self.toggle_popover(Popover::Padding, window, cx),
+            "b" => self.toggle_popover(Popover::Background, window, cx),
+            "h" => self.toggle_popover(Popover::Shadow, window, cx),
+            "e" => self.toggle_popover(Popover::Border, window, cx),
             "l" => self.toggle_layers_panel(cx),
             "backspace" | "delete" => self.delete_selected_annotation(window, cx),
             _ => {}
@@ -2992,8 +3275,9 @@ impl ScreenshotEditorWindow {
         div()
             .flex()
             .flex_row()
+            .flex_wrap()
             .items_center()
-            .gap(px(4.))
+            .gap(px(8.))
             .child(tool_button(
                 &theme,
                 "screenshot-layers-toggle",
@@ -3006,7 +3290,6 @@ impl ScreenshotEditorWindow {
                     this.toggle_layers_panel(cx);
                 }),
             ))
-            .child(divider(&theme, 16.))
             .children(Tool::ALL.map(|tool| {
                 tool_button(
                     &theme,
@@ -3024,102 +3307,8 @@ impl ScreenshotEditorWindow {
     }
 
     /// `Header.tsx:109-216`.
-    fn render_header(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_header(&self, window: &Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let crop_enabled = self.image_size.is_some();
-        let exporting = self.exporting;
-        let drawing = self.image_drawing_index.is_some();
-        let share_tooltip = match self.export_status {
-            ExportStatus::Rendering => "Rendering screenshot",
-            ExportStatus::Encoding => "Preparing upload",
-            ExportStatus::Uploading => "Uploading screenshot",
-            ExportStatus::Idle => "Create shareable link",
-        };
-
-        let tools = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_center()
-            .gap(px(8.))
-            .child(
-                self.anchored(
-                    Anchor::Aspect,
-                    ui::EditorButton::plain(&theme, "screenshot-aspect")
-                        .width(px(80.))
-                        .disabled(drawing)
-                        .left_icon("icons/layout.svg")
-                        .icon_size(px(16.))
-                        .label(self.aspect_label())
-                        .right_icon("icons/chevron-down.svg")
-                        .right_icon_end(true)
-                        .pressed(
-                            self.menu
-                                .as_ref()
-                                .is_some_and(|(kind, _)| *kind == MenuKind::Aspect),
-                        )
-                        .tooltip(&theme, "Aspect Ratio")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            cx.stop_propagation();
-                            this.toggle_menu(MenuKind::Aspect, Anchor::Aspect, window, cx);
-                        })),
-                ),
-            )
-            .child(
-                ui::EditorButton::plain(&theme, "screenshot-crop")
-                    .left_icon("icons/crop.svg")
-                    .icon_size(px(16.))
-                    .disabled(!crop_enabled || drawing)
-                    .tooltip(&theme, "Crop Image")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.open_crop_dialog(window, cx);
-                    })),
-            )
-            .child(divider(&theme, 24.))
-            .child(self.render_annotation_tools(cx))
-            .child(divider(&theme, 24.))
-            .children(
-                [
-                    Popover::Background,
-                    Popover::Padding,
-                    Popover::Rounding,
-                    Popover::Shadow,
-                    Popover::Border,
-                ]
-                .map(|popover| {
-                    let button = ui::EditorButton::plain(&theme, popover.id())
-                        .left_icon(popover.icon())
-                        .icon_size(px(16.))
-                        .disabled(drawing)
-                        .pressed(self.active_popover == Some(popover))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            cx.stop_propagation();
-                            this.toggle_popover(popover, window, cx);
-                        }));
-                    // The `kbd` prop rides the tooltip, which
-                    // `ui::EditorButton` does not carry, so the wrapper the
-                    // popover anchors against owns it instead.
-                    self.anchored(
-                        popover.anchor(),
-                        kbd_tooltip(&theme, popover.tooltip(), popover.keys(), button),
-                    )
-                    .into_any_element()
-                }),
-            );
-        #[cfg(not(target_os = "windows"))]
-        let tools = tools.absolute().top_0().left_0().size_full();
-        #[cfg(target_os = "windows")]
-        let tools = div()
-            .id("screenshot-header-tools")
-            .flex()
-            .flex_1()
-            .min_w_0()
-            .h(px(32.))
-            .overflow_x_scroll()
-            .occlude()
-            .child(tools.flex_shrink_0().mx_auto());
-
         let header = div()
             .relative()
             .flex()
@@ -3129,12 +3318,6 @@ impl ScreenshotEditorWindow {
             .w_full()
             .h(px(HEADER_HEIGHT))
             .px(px(16.))
-            .when(cfg!(target_os = "windows"), |header| {
-                header
-                    .pr_0()
-                    .gap(px(8.))
-                    .window_control_area(gpui::WindowControlArea::Drag)
-            })
             .flex_shrink_0()
             .border_b_1()
             .border_color(theme.gray_3)
@@ -3143,90 +3326,43 @@ impl ScreenshotEditorWindow {
             } else {
                 theme.gray_1
             })
-            // The inset traffic lights' spacer (`Header.tsx:115`).
-            .when(!cfg!(target_os = "windows"), |header| {
-                header.child(div().flex().items_center().child(div().w(px(56.))))
+            .when(cfg!(target_os = "windows"), |header| {
+                header.window_control_area(gpui::WindowControlArea::Drag)
             })
-            // `absolute left-1/2 -translate-x-1/2` -- a full-width centred row
-            // is the same placement without a transform, and it is not
-            // interactive itself, so the right cluster painted after it still
-            // takes its own clicks.
-            .child(tools)
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(8.))
-                    .h_full()
-                    .pr(px(8.))
-                    .when(cfg!(target_os = "windows"), |actions| {
-                        actions.h(px(32.)).flex_shrink_0().occlude()
+                    .gap(px(6.))
+                    .when(!cfg!(target_os = "windows"), |title| {
+                        title.child(div().w(px(76.)))
                     })
-                    .child(divider(&theme, 24.))
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(self.pretty_name.clone())
                     .child(
-                        ui::EditorButton::plain(&theme, "screenshot-copy")
-                            .left_icon("icons/copy.svg")
-                            .icon_size(px(16.))
-                            .disabled(exporting || drawing)
-                            .tooltip(&theme, "Copy to Clipboard")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.export_image(ExportDestination::Clipboard, window, cx);
-                            })),
-                    )
-                    .child(
-                        ui::EditorButton::plain(&theme, "screenshot-save")
-                            .left_icon("icons/save.svg")
-                            .icon_size(px(16.))
-                            .disabled(exporting || drawing)
-                            .tooltip(&theme, "Save")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.export_image(ExportDestination::File, window, cx);
-                            })),
-                    )
-                    .child(
-                        ui::EditorButton::plain(&theme, "screenshot-share")
-                            .left_icon("icons/link.svg")
-                            .icon_size(px(16.))
-                            .disabled(exporting || drawing)
-                            .tooltip(&theme, share_tooltip)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.share_screenshot(window, cx);
-                            })),
-                    )
-                    .child(
-                        self.anchored(
-                            Anchor::More,
-                            ui::EditorButton::plain(&theme, "screenshot-more")
-                                .left_icon("icons/more-horizontal.svg")
-                                .icon_size(px(16.))
-                                .disabled(exporting || drawing)
-                                .pressed(
-                                    self.menu
-                                        .as_ref()
-                                        .is_some_and(|(kind, _)| *kind == MenuKind::More),
-                                )
-                                .tooltip(&theme, "More Actions")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    cx.stop_propagation();
-                                    this.toggle_menu(MenuKind::More, Anchor::More, window, cx);
-                                })),
-                        ),
+                        div()
+                            .text_color(Hsla::from(theme.editor.text_3))
+                            .child(".cap"),
                     ),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.editor.text_3))
+                    .child("Image editing"),
             );
-
         #[cfg(target_os = "windows")]
         let header = header.child(ui::windows_caption_controls(
             theme,
-            _window.is_window_active(),
-            _window.is_maximized(),
+            window.is_window_active(),
+            window.is_maximized(),
             true,
             true,
         ));
-
+        #[cfg(not(target_os = "windows"))]
+        let _ = window;
         header
     }
 
@@ -3238,11 +3374,11 @@ impl ScreenshotEditorWindow {
         div()
             .flex()
             .flex_col()
-            .h_full()
-            .w(px(LAYERS_PANEL_WIDTH))
-            .flex_shrink_0()
-            .border_r_1()
-            .border_color(theme.gray_3)
+            .h(px(240.))
+            .w_full()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme.gray_4)
             .bg(if theme.is_dark() {
                 theme.gray_2
             } else {
@@ -3327,34 +3463,21 @@ impl ScreenshotEditorWindow {
         let theme = self.theme;
         Some(
             div()
-                // The bar floats over the preview, and gpui hitboxes do not
-                // occlude by default: without this a press on a swatch would
-                // also land on the annotation underneath it.
                 .occlude()
-                .absolute()
-                .top(px(HEADER_HEIGHT))
-                .left(px(if self.layers_panel_open {
-                    LAYERS_PANEL_WIDTH
-                } else {
-                    0.
-                }))
-                .right_0()
-                .h(px(CONFIG_BAR_HEIGHT))
-                .border_b_1()
-                .border_color(theme.gray_3)
+                .w_full()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(theme.gray_4)
                 .bg(if theme.is_dark() {
                     theme.gray_2
                 } else {
                     theme.gray_1
                 })
                 .flex()
-                .flex_row()
-                .items_center()
-                .justify_center()
-                .gap(px(24.))
-                .px(px(16.))
+                .flex_col()
+                .gap(px(12.))
+                .p(px(12.))
                 .children(self.render_annotation_config_controls(cx))
-                .child(divider(&theme, 20.))
                 .child(
                     div()
                         .id("screenshot-annotation-done")
@@ -4289,11 +4412,11 @@ impl ScreenshotEditorWindow {
             .flex_1()
             .min_w_0()
             .overflow_hidden()
-            .bg(if theme.is_dark() {
-                theme.gray_2
-            } else {
-                theme.gray_1
-            })
+            .rounded(px(12.))
+            .border_1()
+            .border_color(Hsla::from(theme.editor.line))
+            .shadow(theme.editor.card_shadow())
+            .bg(Hsla::from(theme.editor.card_2))
             .child(
                 div()
                     .id("screenshot-preview-area")
@@ -4693,22 +4816,265 @@ impl ScreenshotEditorWindow {
 }
 
 impl ScreenshotEditorWindow {
+    fn render_screenshot_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let crop_enabled = self.image_size.is_some();
+        let appearance = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap(px(8.))
+            .child(self.anchored(
+                Anchor::Aspect,
+                appearance_tile(
+                    &theme,
+                    "screenshot-aspect",
+                    "icons/layout.svg",
+                    "Aspect",
+                    Some(self.aspect_label()),
+                    false,
+                    true,
+                    cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.toggle_menu(MenuKind::Aspect, Anchor::Aspect, window, cx);
+                    }),
+                ),
+            ))
+            .child(appearance_tile(
+                &theme,
+                "screenshot-crop",
+                "icons/crop.svg",
+                "Crop",
+                None,
+                false,
+                crop_enabled,
+                cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.open_crop_dialog(window, cx);
+                }),
+            ))
+            .children(
+                [
+                    Popover::Background,
+                    Popover::Padding,
+                    Popover::Rounding,
+                    Popover::Shadow,
+                    Popover::Border,
+                ]
+                .map(|popover| {
+                    let label = match popover {
+                        Popover::Background => "Background",
+                        Popover::Padding => "Padding",
+                        Popover::Rounding => "Corners",
+                        Popover::Shadow => "Shadow",
+                        Popover::Border => "Border",
+                    };
+                    let button = appearance_tile(
+                        &theme,
+                        popover.id(),
+                        popover.icon(),
+                        label,
+                        None,
+                        self.active_popover == Some(popover),
+                        true,
+                        cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.toggle_popover(popover, window, cx);
+                        }),
+                    );
+                    self.anchored(
+                        popover.anchor(),
+                        kbd_tooltip(&theme, popover.tooltip(), popover.keys(), button),
+                    )
+                    .into_any_element()
+                }),
+            );
+        let body = div()
+            .id("screenshot-sidebar-scroll")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .gap(px(16.))
+            .p(px(16.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.gray_11)
+                            .child("Annotate"),
+                    )
+                    .child(self.render_annotation_tools(cx)),
+            )
+            .children(self.render_annotation_config_bar(cx))
+            .when(self.layers_panel_open, |body| {
+                body.child(self.render_layers_panel(cx))
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.gray_11)
+                            .child("Appearance"),
+                    )
+                    .child(appearance),
+            );
+        let footer = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.))
+            .p(px(16.))
+            .border_t_1()
+            .border_color(Hsla::from(theme.editor.line))
+            .children(self.render_image_drawing_actions(cx))
+            .when(self.image_drawing_index.is_none(), |footer| {
+                footer
+                    .child(
+                        ui::EditorButton::plain(&theme, "screenshot-copy")
+                            .width(px(64.))
+                            .left_icon("icons/copy.svg")
+                            .icon_size(px(16.))
+                            .label("Copy")
+                            .disabled(self.exporting)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.export_image(ExportDestination::Clipboard, window, cx);
+                            })),
+                    )
+                    .child(
+                        ui::EditorButton::plain(&theme, "screenshot-save")
+                            .width(px(64.))
+                            .left_icon("icons/save.svg")
+                            .icon_size(px(16.))
+                            .label("Save")
+                            .disabled(self.exporting)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.export_image(ExportDestination::File, window, cx);
+                            })),
+                    )
+                    .child(
+                        ui::EditorButton::plain(&theme, "screenshot-share")
+                            .width(px(64.))
+                            .left_icon("icons/link.svg")
+                            .icon_size(px(16.))
+                            .label("Share")
+                            .disabled(self.exporting)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.share_screenshot(window, cx);
+                            })),
+                    )
+                    .child(
+                        self.anchored(
+                            Anchor::More,
+                            ui::EditorButton::plain(&theme, "screenshot-more")
+                                .width(px(64.))
+                                .left_icon("icons/more-horizontal.svg")
+                                .icon_size(px(16.))
+                                .label("More")
+                                .disabled(self.exporting)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.toggle_menu(MenuKind::More, Anchor::More, window, cx);
+                                })),
+                        ),
+                    )
+            });
+        let back = self.image_drawing_index.is_some();
+        div()
+            .flex()
+            .flex_col()
+            .h_full()
+            .w(px(416.))
+            .flex_shrink_0()
+            .overflow_hidden()
+            .rounded(px(12.))
+            .border_1()
+            .border_color(Hsla::from(theme.editor.line))
+            .shadow(theme.editor.card_shadow())
+            .bg(Hsla::from(theme.editor.card))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .h(px(46.))
+                    .px(px(12.))
+                    .flex_none()
+                    .border_b_1()
+                    .border_color(Hsla::from(theme.editor.line))
+                    .children(back.then(|| {
+                        div()
+                            .id("screenshot-sidebar-back")
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(4.))
+                            .h(px(32.))
+                            .px(px(8.))
+                            .rounded(px(8.))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(Hsla::from(theme.editor.ctl_hover)))
+                            .child(
+                                svg()
+                                    .path("icons/arrow-left.svg")
+                                    .size(px(16.))
+                                    .text_color(Hsla::from(theme.editor.text_2)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(Hsla::from(theme.editor.text_2))
+                                    .child("Back"),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if !this.exporting {
+                                    this.cancel_image_drawing(window, cx);
+                                }
+                            }))
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(Hsla::from(theme.editor.text_1))
+                                    .child("Edit image"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(Hsla::from(theme.editor.text_3))
+                                    .truncate()
+                                    .child(self.pretty_name.clone()),
+                            ),
+                    ),
+            )
+            .child(body)
+            .child(footer)
+    }
+
     fn render_image_drawing_actions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.image_drawing_index?;
         let theme = self.theme;
         Some(
             div()
-                .absolute()
-                .bottom(px(16.))
-                .right(px(16.))
                 .flex()
                 .flex_row()
                 .gap(px(8.))
-                .rounded(px(8.))
-                .border_1()
-                .border_color(theme.gray_4)
-                .bg(theme.gray_2)
-                .p(px(8.))
                 .child(
                     ui::Button::plain(
                         &theme,
@@ -4726,13 +5092,13 @@ impl ScreenshotEditorWindow {
                     ui::Button::plain(
                         &theme,
                         "apply-image-drawing",
-                        ui::ButtonVariant::Gray,
+                        ui::ButtonVariant::Blue,
                         ui::ButtonSize::Md,
                     )
                     .label(if self.exporting {
                         "Applying…"
                     } else {
-                        "Apply drawing"
+                        "Apply changes"
                     })
                     .disabled(self.exporting || !self.ready)
                     .on_click(
@@ -4770,17 +5136,11 @@ impl Render for ScreenshotEditorWindow {
             .flex_col()
             .font_family("Geist")
             .font_weight(FontWeight::MEDIUM)
-            .bg(if theme.is_dark() {
-                theme.gray_1
-            } else {
-                theme.gray_2
-            })
+            .bg(Hsla::from(theme.editor.window))
             .text_color(theme.gray_12);
 
         if !self.ready {
-            return root
-                .child(self.render_skeleton(window))
-                .children(self.render_image_drawing_actions(cx));
+            return root.child(self.render_skeleton(window));
         }
 
         root.child(self.render_header(window, cx))
@@ -4792,12 +5152,12 @@ impl Render for ScreenshotEditorWindow {
                     .min_h_0()
                     .w_full()
                     .overflow_hidden()
-                    .when(self.layers_panel_open, |this| {
-                        this.child(self.render_layers_panel(cx))
-                    })
-                    .child(self.render_preview(cx)),
+                    .gap(px(8.))
+                    .px(px(2.))
+                    .pb(px(2.))
+                    .child(self.render_preview(cx))
+                    .child(self.render_screenshot_sidebar(cx)),
             )
-            .children(self.render_annotation_config_bar(cx))
             .children(self.render_annotation_overlays(window, cx))
             .children(self.render_popover(window, cx))
             .children(self.render_menu(cx))
@@ -4828,7 +5188,6 @@ impl Render for ScreenshotEditorWindow {
                     }),
                 ))
             })
-            .children(self.render_image_drawing_actions(cx))
     }
 }
 
@@ -4883,19 +5242,27 @@ fn tool_button(
     div()
         .id(id.into())
         .flex()
+        .flex_col()
         .items_center()
         .justify_center()
-        .size(px(32.))
+        .gap(px(4.))
+        .w(px(84.))
+        .h(px(68.))
         .flex_shrink_0()
-        .rounded(px(8.))
+        .rounded(px(12.))
         .cursor_pointer()
-        .when(active, |this| this.bg(theme.blue_3))
-        .when(!active, |this| this.hover(|style| style.bg(theme.gray_3)))
-        .child(svg().path(icon).size(px(16.)).text_color(if active {
-            theme.blue_11
+        .bg(if active {
+            Hsla::from(theme.editor.accent_2)
         } else {
-            theme.gray_11
+            Hsla::from(theme.editor.ctl)
+        })
+        .hover(move |style| style.bg(Hsla::from(theme.editor.ctl_hover)))
+        .child(svg().path(icon).size(px(20.)).text_color(if active {
+            Hsla::from(theme.editor.accent)
+        } else {
+            Hsla::from(theme.editor.text_2)
         }))
+        .child(div().text_size(px(11.)).truncate().child(label.clone()))
         .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
         .tooltip(move |_window, cx| {
             ui::Tooltip::new(&theme, label.clone())
@@ -4903,6 +5270,56 @@ fn tool_button(
                 .view(cx)
         })
         .on_click(on_click)
+}
+
+fn appearance_tile(
+    theme: &Theme,
+    id: &'static str,
+    icon: &'static str,
+    label: &'static str,
+    subtitle: Option<&'static str>,
+    active: bool,
+    enabled: bool,
+    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let theme = *theme;
+    let foreground = if active {
+        Hsla::from(theme.editor.accent)
+    } else {
+        Hsla::from(theme.editor.text_2)
+    };
+    div()
+        .id(id)
+        .tab_index(0)
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(4.))
+        .w(px(84.))
+        .h(px(68.))
+        .rounded(px(12.))
+        .bg(if active {
+            Hsla::from(theme.editor.accent_2)
+        } else {
+            Hsla::from(theme.editor.ctl)
+        })
+        .text_color(foreground)
+        .when(enabled, |tile| {
+            tile.cursor_pointer()
+                .hover(move |style| style.bg(Hsla::from(theme.editor.ctl_hover)))
+                .on_click(on_click)
+        })
+        .when(!enabled, |tile| tile.opacity(0.5))
+        .child(svg().path(icon).size(px(20.)).text_color(foreground))
+        .child(div().text_size(px(11.)).truncate().child(label))
+        .children(subtitle.map(|subtitle| {
+            div()
+                .text_size(px(9.))
+                .text_color(Hsla::from(theme.editor.text_3))
+                .truncate()
+                .child(subtitle)
+        }))
 }
 
 /// The transparent swatch's mini checkerboard -- four 16px quarters, which is
@@ -5216,6 +5633,8 @@ fn aspect_eq(a: &Option<cap_project::AspectRatio>, b: &Option<cap_project::Aspec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cap_project::ImageSegment;
+    use image::ImageEncoder;
 
     /// The checkerboard is one 240x240 tile of 10px cells -- an even number of
     /// cells per axis, so tiling it leaves no seam.
@@ -5330,5 +5749,72 @@ mod tests {
         // The 8px floor keeps a gentle tick moving (`Preview.tsx:306`).
         assert_eq!(ctrl_wheel_zoom_step(1.), 8. * 0.005);
         assert_eq!(ctrl_wheel_zoom_step(-1.), -8. * 0.005);
+    }
+
+    #[test]
+    fn image_drawing_restores_style_after_project_moves() {
+        let temp = std::env::temp_dir().join(format!(
+            "cap-gpui-image-style-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        let bundle = cap_project::create_media_project(&temp, "GPUI drawing").unwrap();
+        let images = bundle.join("content/images");
+        std::fs::create_dir_all(&images).unwrap();
+        let pixels = image::RgbaImage::from_pixel(8, 6, image::Rgba([23, 45, 67, 255]));
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(pixels.as_raw(), 8, 6, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        std::fs::write(images.join("source.png"), &png).unwrap();
+        let outside_background = temp.join("chosen-background.png");
+        std::fs::write(&outside_background, &png).unwrap();
+        let mut background = BackgroundConfiguration::default();
+        background.source = BackgroundSource::Image {
+            path: Some(outside_background.to_string_lossy().into_owned()),
+        };
+        background.padding = 24.0;
+        let (relative, files) = save_image_drawing_asset(
+            &bundle,
+            &png,
+            ImageAppearance {
+                version: 1,
+                background,
+                aspect_ratio: Some(AspectRatio::Wide),
+            },
+        )
+        .unwrap();
+        assert_eq!(files.len(), 3);
+        let mut project = ProjectConfiguration::load(&bundle).unwrap();
+        project
+            .timeline
+            .as_mut()
+            .unwrap()
+            .image_segments
+            .push(ImageSegment {
+                path: relative,
+                source_path: Some("content/images/source.png".to_string()),
+                end: 5.0,
+                ..Default::default()
+            });
+        project.write(&bundle).unwrap();
+        let moved = temp.join("moved.cap");
+        std::fs::rename(&bundle, &moved).unwrap();
+        let loaded = load_image_drawing_source(&moved, 0).unwrap();
+        assert_eq!(loaded.config.background.padding, 24.0);
+        assert!(matches!(
+            loaded.config.aspect_ratio,
+            Some(AspectRatio::Wide)
+        ));
+        let BackgroundSource::Image { path: Some(path) } = loaded.config.background.source else {
+            panic!("Background image was not restored");
+        };
+        assert!(Path::new(&path).starts_with(moved.canonicalize().unwrap()));
+        assert_eq!(std::fs::read(path).unwrap(), png);
+        assert_eq!(
+            std::fs::read(moved.join("content/images/source.png")).unwrap(),
+            png
+        );
+        std::fs::remove_dir_all(temp).unwrap();
     }
 }

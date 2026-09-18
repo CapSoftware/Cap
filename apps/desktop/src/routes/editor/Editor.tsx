@@ -60,6 +60,7 @@ import { DEFAULT_TIMELINE_HEIGHT, editorVerticalLayout } from "./editor-layout";
 import { EditorSkeleton } from "./editor-skeleton";
 import { Header, type TitleSaveRegistration } from "./Header";
 import { ImportProgress } from "./ImportProgress";
+import { ImageEditorSidebar } from "./image-editor-sidebar";
 import { PlayerContent } from "./Player";
 import { usePreparingEditor } from "./preparing-editor-context";
 import { Timeline } from "./Timeline";
@@ -457,10 +458,39 @@ function Inner(props: {
 	} = useEditorContext();
 
 	const preparingSession = usePreparingEditor();
+	onMount(() => {
+		const restoreImageSelection = (event: Event) => {
+			const index = (event as CustomEvent<{ index: number }>).detail?.index;
+			if (
+				Number.isInteger(index) &&
+				index >= 0 &&
+				project.timeline?.imageSegments[index]
+			) {
+				setEditorState("timeline", "selection", {
+					type: "image",
+					indices: [index],
+				});
+			}
+		};
+		window.addEventListener("cap-image-edit-return", restoreImageSelection);
+		onCleanup(() =>
+			window.removeEventListener(
+				"cap-image-edit-return",
+				restoreImageSelection,
+			),
+		);
+	});
 	const editorReady = () =>
 		preparingSession?.ordinaryReady() ??
 		canvasControls()?.hasRenderedFrame() ??
 		false;
+	const imageSelection = () => {
+		const selection = editorState.timeline.selection;
+		if (selection?.type !== "image" || selection.indices.length !== 1)
+			return null;
+		const index = selection.indices[0];
+		return project.timeline?.imageSegments[index] ? index : null;
+	};
 	onMount(() => {
 		const blockPreparingKeys = (event: KeyboardEvent) => {
 			if (editorReady()) return;
@@ -1062,14 +1092,22 @@ function Inner(props: {
 							<Show when={!isTranscriptMode()}>
 								<div class="ml-2 flex min-h-0 w-104 min-w-104 flex-none overflow-hidden">
 									<div
-										class="overflow-hidden min-h-0"
+										class="overflow-hidden min-h-0 flex-1"
 										classList={{
-											flex: !isClipsMode(),
-											"flex-1": !isClipsMode(),
 											hidden: isClipsMode(),
 										}}
 									>
-										<ConfigSidebar />
+										<div
+											class="h-full min-h-0"
+											style={{
+												display: imageSelection() !== null ? "none" : "flex",
+											}}
+										>
+											<ConfigSidebar />
+										</div>
+										<Show when={imageSelection() !== null}>
+											<ImageEditorSidebar index={imageSelection() ?? 0} />
+										</Show>
 									</div>
 									<Show when={clipsSidebarMounted()}>
 										<Suspense>

@@ -4426,6 +4426,8 @@ pub(crate) fn replace_image_asset(
     }
     segment.path = path;
     segment.name = name;
+    segment.source_path = None;
+    segment.annotations.clear();
     true
 }
 
@@ -4434,7 +4436,7 @@ mod style_image_replacement_tests {
     use super::*;
     #[test]
     fn style_image_replace_preserves_geometry_and_history_rejects_stale_target() {
-        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({"timeline":{"zoomSegments":[],"segments":[],"imageSegments":[{"start":2,"end":8,"track":3,"path":"content/images/old.png","name":"Old","center":{"x":0.3,"y":0.7},"size":{"x":0.2,"y":0.4},"rotation":35,"flipX":true,"opacity":0.6}]}})).unwrap();
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({"timeline":{"zoomSegments":[],"segments":[],"imageSegments":[{"start":2,"end":8,"track":3,"path":"content/images/old.png","sourcePath":"content/images/source.png","annotations":[{"id":"old-drawing","type":"rectangle","x":10.0,"y":20.0,"width":30.0,"height":40.0,"strokeColor":"#f05656","strokeWidth":4.0,"fillColor":"transparent","opacity":1.0,"rotation":0.0}],"name":"Old","center":{"x":0.3,"y":0.7},"size":{"x":0.2,"y":0.4},"rotation":35,"flipX":true,"opacity":0.6}]}})).unwrap();
         let before = serde_json::to_value(&project).unwrap();
         let mut history = ProjectHistory::new(project.clone());
         let fingerprint =
@@ -4450,6 +4452,11 @@ mod style_image_replacement_tests {
         let mut expected = before.clone();
         expected["timeline"]["imageSegments"][0]["path"] = "content/images/new.gif".into();
         expected["timeline"]["imageSegments"][0]["name"] = "New".into();
+        let image = expected["timeline"]["imageSegments"][0]
+            .as_object_mut()
+            .unwrap();
+        assert!(image.remove("sourcePath").is_some());
+        assert!(image.remove("annotations").is_some());
         assert_eq!(serde_json::to_value(&project).unwrap(), expected);
         assert!(!replace_image_asset(
             &mut project,

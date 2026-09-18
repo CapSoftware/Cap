@@ -36,20 +36,37 @@ pub fn still_image_path(meta: &StudioRecordingMeta) -> Option<String> {
 }
 
 pub fn add_still_image_to_timeline(project: &mut ProjectConfiguration, path: &str) -> bool {
+    let legacy_annotations = project.annotations.clone();
     let timeline = project
         .timeline
         .get_or_insert_with(TimelineConfiguration::default);
-    if timeline
+    if let Some(segment) = timeline
         .image_segments
-        .iter()
-        .any(|segment| segment.path == path)
+        .iter_mut()
+        .find(|segment| segment.path == path || segment.source_path.as_deref() == Some(path))
     {
-        return false;
+        let mut changed = false;
+        if segment.name == "Image" {
+            segment.name = "Screenshot".to_string();
+            changed = true;
+        }
+        if segment.source_path.is_none()
+            && segment.annotations.is_empty()
+            && !legacy_annotations.is_empty()
+        {
+            segment.source_path = Some(path.to_string());
+            segment.annotations = legacy_annotations;
+            changed = true;
+        }
+        return changed;
     }
     timeline.image_segments.push(ImageSegment {
         start: 0.0,
         end: 5.0,
         path: path.to_string(),
+        source_path: (!legacy_annotations.is_empty()).then(|| path.to_string()),
+        annotations: legacy_annotations,
+        name: "Screenshot".to_string(),
         size: XY::new(1.0, 1.0),
         ..Default::default()
     });
@@ -93,6 +110,34 @@ pub fn media_canvas_size(
 mod tests {
     use super::*;
     use cap_project::VideoSegment;
+
+    #[test]
+    fn legacy_screenshot_annotations_transfer_only_once() {
+        let annotation = serde_json::from_value(serde_json::json!({
+            "id": "legacy", "type": "rectangle", "x": 10.0, "y": 20.0,
+            "width": 30.0, "height": 40.0, "strokeColor": "#f05656",
+            "strokeWidth": 4.0, "fillColor": "transparent", "opacity": 1.0,
+            "rotation": 0.0
+        }))
+        .unwrap();
+        let mut project = ProjectConfiguration::default();
+        project.annotations = vec![annotation];
+
+        assert!(add_still_image_to_timeline(&mut project, "original.png"));
+        let segment = &mut project.timeline.as_mut().unwrap().image_segments[0];
+        assert_eq!(segment.name, "Screenshot");
+        assert_eq!(segment.source_path.as_deref(), Some("original.png"));
+        assert_eq!(segment.annotations.len(), 1);
+        segment.annotations.clear();
+
+        assert!(!add_still_image_to_timeline(&mut project, "original.png"));
+        let segment = &mut project.timeline.as_mut().unwrap().image_segments[0];
+        assert!(segment.annotations.is_empty());
+        segment.path = "content/images/drawing.png".to_string();
+
+        assert!(!add_still_image_to_timeline(&mut project, "original.png"));
+        assert_eq!(project.timeline.unwrap().image_segments.len(), 1);
+    }
 
     #[test]
     fn video_source_accepts_project_files_and_rejects_escape_paths() {

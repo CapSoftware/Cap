@@ -1160,6 +1160,8 @@ export const [EditorContextProvider, useBaseEditorContext] =
 							setProject("timeline", "imageSegments", replaceIndex, {
 								path: asset.path,
 								name: asset.name,
+								sourcePath: null,
+								annotations: [],
 								...(original.lockAspect
 									? {
 											size: {

@@ -2079,17 +2079,6 @@ impl EditorWindow {
         });
         let timeline_view =
             cx.new(move |cx| EditorSectionView::new(&editor, EditorSection::Timeline, cx));
-        let screenshot_workspace =
-            crate::screenshot_editor::is_legacy_screenshot_project(&project_path).then(|| {
-                cx.new(|cx| {
-                    crate::screenshot_editor::ScreenshotEditorWindow::new_embedded(
-                        project_path.clone(),
-                        window,
-                        cx,
-                    )
-                })
-            });
-
         Self {
             // No material and no transparency: `applyMacOSWindowMaterial` runs
             // in the `(window-chrome)` layout and `/editor` is not one of its
@@ -2100,7 +2089,7 @@ impl EditorWindow {
                 .ok()
                 .and_then(|meta| meta.sharing),
             project_path,
-            screenshot_workspace,
+            screenshot_workspace: None,
             image_drawing_workspace: None,
             state: LoadState::Loading,
             preparing_consumer: None,
@@ -2292,6 +2281,7 @@ impl EditorWindow {
     pub(crate) fn open_image_drawing(
         &mut self,
         index: usize,
+        action: crate::screenshot_editor::ImageEditAction,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -2322,6 +2312,7 @@ impl EditorWindow {
                 project_path.clone(),
                 index,
                 source,
+                action,
                 window,
                 cx,
             )

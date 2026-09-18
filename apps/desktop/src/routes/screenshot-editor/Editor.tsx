@@ -4,9 +4,11 @@ import { makePersisted } from "@solid-primitives/storage";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { Menu } from "@tauri-apps/api/menu";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import {
 	createEffect,
 	createSignal,
+	type JSX,
 	Match,
 	onCleanup,
 	onMount,
@@ -23,6 +25,8 @@ import {
 	createCropOptionsMenuItems,
 	type Ratio,
 } from "~/components/Cropper";
+import CaptionControlsMacOS from "~/components/titlebar/controls/CaptionControlsMacOS";
+import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import IconCapCircleX from "~icons/cap/circle-x";
 import IconLucideMaximize from "~icons/lucide/maximize";
@@ -33,9 +37,20 @@ import { Header } from "./Header";
 import { LayersPanel } from "./LayersPanel";
 import { Preview } from "./Preview";
 import { ScreenshotEditorSkeleton } from "./screenshot-editor-skeleton";
+import {
+	ScreenshotSidebar,
+	type ScreenshotSidebarAction,
+} from "./screenshot-sidebar";
 import { Dialog, EditorButton } from "./ui";
 
-export function Editor(props: { imageDrawingMode?: boolean }) {
+export function Editor(props: {
+	imageDrawingMode?: boolean;
+	sidebarLayout?: boolean;
+	sidebarFooter?: JSX.Element;
+	initialAction?: ScreenshotSidebarAction;
+	onBack?: () => void;
+	backDisabled?: boolean;
+}) {
 	const [zoom, setZoom] = createSignal(1);
 	const {
 		projectHistory,
@@ -49,6 +64,7 @@ export function Editor(props: { imageDrawingMode?: boolean }) {
 		activePopover,
 		setActivePopover,
 		isRenderReady,
+		prettyName,
 	} = useScreenshotEditorContext();
 	const [copiedAnnotation, setCopiedAnnotation] =
 		createSignal<Annotation | null>(null);
@@ -176,22 +192,84 @@ export function Editor(props: { imageDrawingMode?: boolean }) {
 	});
 
 	return (
-		<Show when={isRenderReady()} fallback={<ScreenshotEditorSkeleton />}>
-			<div class="relative">
-				<Header imageDrawingMode={props.imageDrawingMode} />
-				<AnnotationConfigBar />
-			</div>
-			<div class="flex overflow-y-hidden flex-1 gap-0 pb-0 w-full min-h-0 leading-5">
-				<Show when={layersPanelOpen()}>
-					<LayersPanel />
-				</Show>
-				<div class="flex overflow-hidden flex-col flex-1 min-h-0">
-					<div class="flex overflow-y-hidden flex-row flex-1 min-h-0">
-						<Preview zoom={zoom()} setZoom={setZoom} />
+		<Show
+			when={isRenderReady()}
+			fallback={
+				props.sidebarLayout ? (
+					<div class="flex h-full flex-col gap-2 bg-ed-window">
+						<div class="flex h-[42px] shrink-0 items-center px-4 text-[13px] font-medium text-ed-text-1">
+							{prettyName}
+						</div>
+						<div class="flex min-h-0 flex-1 gap-2 px-2 pb-2">
+							<div class="flex min-w-0 flex-1 items-center justify-center rounded-xl bg-ed-card text-[13px] text-ed-text-2 shadow-ed-card">
+								Preparing image…
+							</div>
+							<div class="w-104 min-w-104 rounded-xl bg-ed-card shadow-ed-card" />
+						</div>
+					</div>
+				) : (
+					<ScreenshotEditorSkeleton />
+				)
+			}
+		>
+			<Show
+				when={props.sidebarLayout}
+				fallback={
+					<>
+						<div class="relative">
+							<Header imageDrawingMode={props.imageDrawingMode} />
+							<AnnotationConfigBar />
+						</div>
+						<div class="flex overflow-y-hidden flex-1 gap-0 pb-0 w-full min-h-0 leading-5">
+							<Show when={layersPanelOpen()}>
+								<LayersPanel />
+							</Show>
+							<div class="flex overflow-hidden flex-col flex-1 min-h-0">
+								<div class="flex overflow-y-hidden flex-row flex-1 min-h-0">
+									<Preview zoom={zoom()} setZoom={setZoom} />
+								</div>
+							</div>
+							<Dialogs />
+						</div>
+					</>
+				}
+			>
+				<div class="flex h-full min-h-0 flex-col gap-2 bg-ed-window">
+					<div
+						data-tauri-drag-region
+						class="flex h-[42px] shrink-0 items-center justify-between px-4 text-[13px] font-medium text-ed-text-1"
+					>
+						<div class="flex min-w-0 items-center gap-3">
+							<Show when={ostype() === "macos"}>
+								<div class="w-14 shrink-0" />
+							</Show>
+							<Show when={ostype() === "linux"}>
+								<CaptionControlsMacOS />
+							</Show>
+							<span class="truncate">{prettyName}</span>
+							<span class="shrink-0 text-ed-text-3">.cap</span>
+						</div>
+						<span class="text-[11px] font-normal text-ed-text-2">
+							Image editing
+						</span>
+						<Show when={ostype() === "windows"}>
+							<CaptionControlsWindows11 />
+						</Show>
+					</div>
+					<div class="flex min-h-0 flex-1 gap-2 overflow-hidden px-2 pb-2">
+						<div class="relative flex min-w-0 flex-1 overflow-hidden rounded-xl bg-ed-card shadow-ed-card">
+							<Preview zoom={zoom()} setZoom={setZoom} editorLayout />
+							<Dialogs />
+						</div>
+						<ScreenshotSidebar
+							initialAction={props.initialAction}
+							footer={props.sidebarFooter}
+							onBack={props.onBack}
+							backDisabled={props.backDisabled}
+						/>
 					</div>
 				</div>
-				<Dialogs />
-			</div>
+			</Show>
 		</Show>
 	);
 }

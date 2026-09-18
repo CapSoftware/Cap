@@ -3831,13 +3831,16 @@ impl EditorWindow {
                 cx,
                 |this, index, cx| this.render_style_panel(index, cx),
             ),
-            TrackKind::Image => self.stacked_panel(
-                "image",
-                "image",
-                count(timeline.image_segments.len()),
-                cx,
-                |this, index, cx| this.render_image_panel(index, cx),
-            ),
+            TrackKind::Image => {
+                let indices = count(timeline.image_segments.len());
+                if indices.len() == 1 {
+                    self.render_image_panel(indices[0], cx)
+                } else {
+                    self.stacked_panel("image", "image", indices, cx, |this, index, cx| {
+                        this.render_image_panel(index, cx)
+                    })
+                }
+            }
             TrackKind::Video => self.stacked_panel(
                 "video",
                 "video",
@@ -8792,16 +8795,144 @@ impl EditorWindow {
     }
 
     fn render_image_panel(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        use crate::screenshot_annotations::Tool;
+        use crate::screenshot_editor::ImageEditAction;
+
         let Some(segment) = self
             .timeline()
             .and_then(|timeline| timeline.image_segments.get(index))
         else {
             return div().into_any_element();
         };
+        let theme = self.theme;
+        let screenshot = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(Hsla::from(theme.editor.text_1))
+                    .child("Image editing"),
+            )
+            .child(
+                ui::Button::plain(
+                    &self.theme,
+                    SharedString::from(format!("edit-screenshot-{index}")),
+                    ui::ButtonVariant::Gray,
+                    ui::ButtonSize::Md,
+                )
+                .icon("icons/pencil.svg")
+                .label("Open canvas")
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_image_drawing(index, ImageEditAction::Tool(Tool::Select), window, cx)
+                })),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(Hsla::from(theme.editor.text_2))
+                    .child("Annotate"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap(px(8.))
+                    .children(Tool::ALL.map(|tool| {
+                        div()
+                            .id(SharedString::from(format!(
+                                "image-tool-{index}-{}",
+                                tool.label()
+                            )))
+                            .tab_index(0)
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(4.))
+                            .w(px(84.))
+                            .h(px(68.))
+                            .rounded(px(12.))
+                            .bg(Hsla::from(theme.editor.ctl))
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(Hsla::from(theme.editor.ctl_hover)))
+                            .child(
+                                svg()
+                                    .path(tool.icon())
+                                    .size(px(20.))
+                                    .text_color(Hsla::from(theme.editor.text_2)),
+                            )
+                            .child(div().text_size(px(11.)).truncate().child(tool.label()))
+                            .tooltip(move |_window, cx| {
+                                ui::Tooltip::new(&theme, tool.label()).view(cx)
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_image_drawing(
+                                    index,
+                                    ImageEditAction::Tool(tool),
+                                    window,
+                                    cx,
+                                )
+                            }))
+                    })),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(Hsla::from(theme.editor.text_2))
+                    .child("Appearance"),
+            )
+            .child(
+                div().flex().flex_row().flex_wrap().gap(px(8.)).children(
+                    [
+                        ("Aspect", "icons/layout.svg", ImageEditAction::Aspect),
+                        ("Crop", "icons/crop.svg", ImageEditAction::Crop),
+                        ("Background", "icons/image.svg", ImageEditAction::Background),
+                        ("Padding", "icons/padding.svg", ImageEditAction::Padding),
+                        ("Corners", "icons/corners.svg", ImageEditAction::Rounding),
+                        ("Shadow", "icons/shadow.svg", ImageEditAction::Shadow),
+                        ("Border", "icons/square.svg", ImageEditAction::Border),
+                    ]
+                    .map(|(label, icon, action)| {
+                        div()
+                            .id(SharedString::from(format!(
+                                "image-appearance-{index}-{label}"
+                            )))
+                            .tab_index(0)
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(4.))
+                            .w(px(84.))
+                            .h(px(68.))
+                            .rounded(px(12.))
+                            .bg(Hsla::from(theme.editor.ctl))
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(Hsla::from(theme.editor.ctl_hover)))
+                            .child(
+                                svg()
+                                    .path(icon)
+                                    .size(px(20.))
+                                    .text_color(Hsla::from(theme.editor.text_2)),
+                            )
+                            .child(div().text_size(px(11.)).truncate().child(label))
+                            .tooltip(move |_window, cx| ui::Tooltip::new(&theme, label).view(cx))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_image_drawing(index, action, window, cx)
+                            }))
+                    }),
+                ),
+            );
         let mut panel = div()
             .flex()
             .flex_col()
-            .gap(px(16.))
+            .gap(px(12.))
             .child(self.labelled_small(
                 "Name",
                 self.render_field_input(FieldKey::ImageName(index), None),
@@ -8856,19 +8987,6 @@ impl EditorWindow {
                             );
                         })),
                     ),
-            )
-            .child(
-                ui::Button::plain(
-                    &self.theme,
-                    SharedString::from(format!("draw-image-{index}")),
-                    ui::ButtonVariant::Gray,
-                    ui::ButtonSize::Md,
-                )
-                .icon("icons/edit.svg")
-                .label("Draw on image")
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.open_image_drawing(index, window, cx)
-                })),
             )
             .child(
                 ui::Button::plain(
@@ -8942,7 +9060,24 @@ impl EditorWindow {
                 ),
             );
         }
-        panel.into_any_element()
+        let layer = self.sidebar.section(PanelSection::ImageLayer);
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(20.))
+            .child(screenshot)
+            .child(crate::editor_sidebar::disclosure_row(
+                &theme,
+                "image-layer-settings",
+                "Layer settings",
+                layer.is_open(),
+                cx.listener(|this, _, window, cx| {
+                    this.sidebar.section(PanelSection::ImageLayer).toggle();
+                    this.animate_collapsibles(window, cx);
+                }),
+            ))
+            .child(collapsible(&layer, panel.into_any_element()))
+            .into_any_element()
     }
 
     fn render_style_panel(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {

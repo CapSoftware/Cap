@@ -57,7 +57,10 @@ export function defaultImageSegment(
 }
 
 export function imageAssetPath(projectPath: string, relative: string) {
-	if (!/^content\/images\/[^/\\]+$/.test(relative) || relative.includes(".."))
+	if (
+		!/^(?:original\.png|content\/images\/[^/\\]+)$/.test(relative) ||
+		relative.includes("..")
+	)
 		return null;
 	return `${projectPath.replace(/[\\/]$/, "")}/${relative}`;
 }
