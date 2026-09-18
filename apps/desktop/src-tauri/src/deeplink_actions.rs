@@ -214,11 +214,19 @@ impl DeepLinkAction {
                 crate::set_mic_input(app.clone(), state.clone(), mic_label).await?;
 
                 let capture_target: ScreenCaptureTarget = match capture_mode {
-                    CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
-                        .into_iter()
-                        .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                        .ok_or(format!("No screen with name \"{}\"", &name))?,
+                    CaptureMode::Screen(name) => {
+                        let displays = cap_recording::screen_capture::list_displays();
+                        if name == "default" || name.is_empty() {
+                            displays.into_iter().next()
+                                .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
+                                .ok_or("No display available".to_string())?
+                        } else {
+                            displays.into_iter()
+                                .find(|(s, _)| s.name == name)
+                                .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
+                                .ok_or(format!("No screen with name \"{}\"", &name))?
+                        }
+                    },
                     CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
                         .into_iter()
                         .find(|(w, _)| w.name == name)
