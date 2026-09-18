@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
-import app from "../../app";
+import app from "../../editor-worker-app";
 import { getEditorSession } from "../../lib/editor-sessions";
 import {
 	editorWebSocketHandler,

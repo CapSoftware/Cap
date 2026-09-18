@@ -9,7 +9,7 @@ import {
 	parseCapBundleManifest,
 	readCapBundleManifestLength,
 } from "@cap/editor-cap-bundle";
-import app from "../../app";
+import app from "../../editor-worker-app";
 import { getEditorSession } from "../../lib/editor-sessions";
 import { editorWallpaperDirectory } from "../../lib/editor-wallpapers";
 import {

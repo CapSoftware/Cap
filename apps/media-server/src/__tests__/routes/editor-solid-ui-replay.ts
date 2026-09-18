@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { type Browser, chromium, webkit } from "@playwright/test";
-import app from "../../app";
+import app from "../../editor-worker-app";
 import {
 	editorWebSocketHandler,
 	handleEditorSocketUpgrade,

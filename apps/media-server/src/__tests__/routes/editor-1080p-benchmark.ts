@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { deflateSync } from "node:zlib";
 import { type Browser, chromium, webkit } from "@playwright/test";
 import sharp from "sharp";
-import app from "../../app";
+import app from "../../editor-worker-app";
 import { getEditorSession } from "../../lib/editor-sessions";
 import {
 	editorWebSocketHandler,

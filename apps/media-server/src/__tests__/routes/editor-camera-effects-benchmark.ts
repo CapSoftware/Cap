@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
-import app from "../../app";
+import app from "../../editor-worker-app";
 import { getEditorSession } from "../../lib/editor-sessions";
 
 const runFile = promisify(execFile);

@@ -54,7 +54,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							orderedEditorWorkers(
 								parseEditorWorkerPool(
 									env.CAP_WEB_EDITOR_WORKER_POOL,
-									env.CAP_WEB_EDITOR_WORKER_URL ?? env.MEDIA_SERVER_URL,
+									env.CAP_WEB_EDITOR_WORKER_URL,
 								),
 								video.id,
 							),

@@ -10,7 +10,7 @@ import {
 	parseCapBundleManifest,
 	readCapBundleManifestLength,
 } from "@cap/editor-cap-bundle";
-import app from "../../app";
+import app from "../../editor-worker-app";
 import { extractEditorCapBundle } from "../../lib/editor-cap-bundle";
 import { startNativeEditorSession } from "../../lib/editor-native";
 

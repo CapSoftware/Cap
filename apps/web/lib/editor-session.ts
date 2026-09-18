@@ -581,7 +581,7 @@ export const requestMediaEditor = Effect.fn("requestMediaEditor")(function* (
 			editorWorkerForRequest(
 				parseEditorWorkerPool(
 					env.CAP_WEB_EDITOR_WORKER_POOL,
-					env.CAP_WEB_EDITOR_WORKER_URL ?? env.MEDIA_SERVER_URL,
+					env.CAP_WEB_EDITOR_WORKER_URL,
 				),
 				path,
 				selectedWorkerId,

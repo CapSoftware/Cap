@@ -1,10 +1,4 @@
 import app from "./app";
-import { closeAllEditorSessions } from "./lib/editor-sessions";
-import {
-	type EditorSocketConnection,
-	editorWebSocketHandler,
-	handleEditorSocketUpgrade,
-} from "./lib/editor-websocket";
 import { abortAllJobs } from "./lib/job-manager";
 import { cancelAllMediaOperations } from "./lib/media-operations";
 import { cleanupMediaTransferCache } from "./lib/media-transfer";
@@ -24,7 +18,6 @@ const shutdown = async () => {
 		console.log(`[media-server] Aborted ${abortedJobs} active jobs`);
 	}
 	await cancelAllMediaOperations();
-	await closeAllEditorSessions();
 	await cleanupMediaTransferCache();
 	process.exit(0);
 };
@@ -41,9 +34,5 @@ process.on("SIGHUP", () => {
 
 export default {
 	port,
-	fetch(request: Request, server: Bun.Server<EditorSocketConnection>) {
-		const upgrade = handleEditorSocketUpgrade(request, server);
-		return upgrade === null ? app.fetch(request) : upgrade;
-	},
-	websocket: editorWebSocketHandler,
+	fetch: app.fetch,
 };
