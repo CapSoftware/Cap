@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
@@ -629,6 +629,13 @@ test.skipIf(!hasNativeBinaries)(
 				};
 			});
 			if (!commandSocket) throw new Error("Missing editor command socket");
+			const attachedFuture = Date.now() + 5 * 60 * 1000;
+			const attachedClock = spyOn(Date, "now").mockReturnValue(attachedFuture);
+			try {
+				expect(getEditorSession(sessionId)).not.toBeNull();
+			} finally {
+				attachedClock.mockRestore();
+			}
 			const currentCommandSocket = commandSocket;
 			type CommandReply = {
 				kind: string;
@@ -1593,22 +1600,34 @@ test.skipIf(!hasNativeBinaries)(
 			expect(
 				(await stat(join(reopenedProjectPath, importedVideo.path))).size,
 			).toBe(importedVideoAsset.size);
-			const reopenedClose = await app.request(`/editor/sessions/${sessionId}`, {
-				method: "DELETE",
-				headers,
-			});
-			expect(reopenedClose.status).toBe(204);
-			sessionId = null;
-			const screenOnly = await app.request("/editor/preparations", {
-				method: "POST",
-				headers,
-				body: JSON.stringify({
-					videoId: "test-screen-only",
-					title: "Screen only",
-					display: sources.display,
-				}),
-			});
+			const unclaimedSessionId = sessionId;
+			const expiredFuture = Date.now() + 5 * 60 * 1000;
+			const expiredClock = spyOn(Date, "now").mockReturnValue(expiredFuture);
+			let screenOnly: Response | null = null;
+			try {
+				screenOnly = await app.request("/editor/preparations", {
+					method: "POST",
+					headers,
+					body: JSON.stringify({
+						videoId: "test-screen-only",
+						title: "Screen only",
+						display: sources.display,
+					}),
+				});
+			} finally {
+				expiredClock.mockRestore();
+			}
+			if (!screenOnly) throw new Error("Screen-only editor preparation failed");
 			expect(screenOnly.status).toBe(202);
+			expect(getEditorSession(unclaimedSessionId)).toBeNull();
+			const expiredPreparation = await app.request(
+				`/editor/preparations/${reopenedPreparation.id}`,
+				{ headers },
+			);
+			expect(
+				((await expiredPreparation.json()) as { status: string }).status,
+			).toBe("closed");
+			sessionId = null;
 			const screenPreparation = (await screenOnly.json()) as { id: string };
 			const screenDeadline = Date.now() + 10_000;
 			while (Date.now() < screenDeadline) {

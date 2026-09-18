@@ -16,7 +16,7 @@ import {
 	getEditorExportEstimate,
 } from "./editor-export-estimates";
 import { renderEditorExportPreview } from "./editor-export-previews";
-import { getEditorSession } from "./editor-sessions";
+import { attachEditorSession, getEditorSession } from "./editor-sessions";
 import {
 	consumeEditorSocketTicket,
 	type EditorSocketScope,
@@ -399,6 +399,10 @@ export const editorWebSocketHandler: Bun.WebSocketHandler<EditorSocketConnection
 			if (!parallelRead) ws.data.commandQueue = commandTask;
 		},
 		open(ws) {
+			if (!attachEditorSession(ws.data.sessionId)) {
+				ws.close(1011, "Editor session closed");
+				return;
+			}
 			if (ws.data.scope === "commands") return;
 			if (ws.data.upstream) return;
 			connectEditorUpstream(ws, ws.data.upstreamUrl);

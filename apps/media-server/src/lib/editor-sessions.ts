@@ -22,6 +22,7 @@ import type { EditorVideoAsset } from "./editor-video-assets";
 import { closeEditorVideoImports } from "./editor-video-imports";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+const SESSION_ATTACH_TIMEOUT_MS = 2 * 60 * 1000;
 const PREPARATION_RETENTION_MS = 30 * 60 * 1000;
 const MAX_ACTIVE_SESSIONS = 1;
 
@@ -58,9 +59,31 @@ type Session = {
 	videoId: string;
 	native: NativeSession & { captionsEnabled: boolean };
 	lastActive: number;
+	readyAt: number;
+	attached: boolean;
 };
 
 const sessions = new Map<string, Session>();
+const closingSessions = new Map<string, Promise<boolean>>();
+
+function editorSessionExpired(session: Session, now: number) {
+	return (
+		now - session.lastActive > IDLE_TIMEOUT_MS ||
+		(!session.attached && now - session.readyAt > SESSION_ATTACH_TIMEOUT_MS)
+	);
+}
+
+async function reclaimExpiredEditorSessions() {
+	const now = Date.now();
+	const expired = [...sessions.values()].filter((session) =>
+		editorSessionExpired(session, now),
+	);
+	await Promise.all([
+		...closingSessions.values(),
+		...expired.map((session) => closeEditorSession(session.id)),
+	]);
+}
+
 type Preparation = {
 	id: string;
 	videoId: string;
@@ -186,11 +209,14 @@ export async function createEditorSession(
 			await native.close();
 			throw new Error("Editor preparation canceled");
 		}
+		const readyAt = Date.now();
 		const session: Session = {
 			id: newEditorSessionId(),
 			videoId: input.videoId,
 			native,
-			lastActive: Date.now(),
+			lastActive: readyAt,
+			readyAt,
+			attached: false,
 		};
 		sessions.set(session.id, session);
 		return session.id;
@@ -199,7 +225,8 @@ export async function createEditorSession(
 	}
 }
 
-export function beginEditorPreparation(input: EditorSessionInput) {
+export async function beginEditorPreparation(input: EditorSessionInput) {
+	await reclaimExpiredEditorSessions();
 	if (sessions.size + starting >= MAX_ACTIVE_SESSIONS) {
 		throw new EditorSessionBusyError("Editor render capacity is busy");
 	}
@@ -235,6 +262,14 @@ export function beginEditorPreparation(input: EditorSessionInput) {
 export function getEditorPreparation(id: string) {
 	const preparation = preparations.get(id);
 	if (!preparation) return null;
+	if (
+		preparation.status === "ready" &&
+		preparation.sessionId &&
+		!getEditorSessionVideoId(preparation.sessionId)
+	) {
+		preparation.status = "closed";
+		preparation.updatedAt = Date.now();
+	}
 	return {
 		videoId: preparation.videoId,
 		status: preparation.status,
@@ -243,7 +278,15 @@ export function getEditorPreparation(id: string) {
 }
 
 export function getEditorSessionVideoId(id: string) {
-	return sessions.get(id)?.videoId ?? null;
+	const session = sessions.get(id);
+	if (!session) return null;
+	if (editorSessionExpired(session, Date.now())) {
+		void closeEditorSession(id).catch((error) => {
+			console.error("Expired editor session cleanup failed", error);
+		});
+		return null;
+	}
+	return session.videoId;
 }
 
 export function cancelEditorPreparation(id: string) {
@@ -263,15 +306,28 @@ export function cancelEditorPreparation(id: string) {
 export function getEditorSession(id: string) {
 	const session = sessions.get(id);
 	if (!session) return null;
-	if (Date.now() - session.lastActive > IDLE_TIMEOUT_MS) {
-		void closeEditorSession(id);
+	const now = Date.now();
+	if (editorSessionExpired(session, now)) {
+		void closeEditorSession(id).catch((error) => {
+			console.error("Expired editor session cleanup failed", error);
+		});
 		return null;
 	}
-	session.lastActive = Date.now();
+	session.lastActive = now;
 	return session.native;
 }
 
+export function attachEditorSession(id: string) {
+	if (!getEditorSession(id)) return false;
+	const session = sessions.get(id);
+	if (!session) return false;
+	session.attached = true;
+	return true;
+}
+
 export async function closeEditorSession(id: string) {
+	const closing = closingSessions.get(id);
+	if (closing) return closing;
 	const session = sessions.get(id);
 	if (!session) return false;
 	sessions.delete(id);
@@ -281,16 +337,24 @@ export async function closeEditorSession(id: string) {
 			preparation.updatedAt = Date.now();
 		}
 	}
-	try {
-		await Promise.all([
-			closeEditorExports(id),
-			closeEditorVideoImports(id),
-			closeEditorCapImports(id),
-		]);
-	} finally {
-		await session.native.close();
-	}
-	return true;
+	const task = (async () => {
+		try {
+			await Promise.all([
+				closeEditorExports(id),
+				closeEditorVideoImports(id),
+				closeEditorCapImports(id),
+			]);
+		} finally {
+			try {
+				await session.native.close();
+			} finally {
+				closingSessions.delete(id);
+			}
+		}
+		return true;
+	})();
+	closingSessions.set(id, task);
+	return task;
 }
 
 export async function closeAllEditorSessions() {
@@ -302,12 +366,16 @@ export async function closeAllEditorSessions() {
 			(preparation) => preparation.task ?? Promise.resolve(),
 		),
 	);
-	await Promise.all([...sessions.keys()].map(closeEditorSession));
+	await Promise.all([
+		...closingSessions.values(),
+		...[...sessions.keys()].map(closeEditorSession),
+	]);
 }
 
 const sweep = setInterval(() => {
+	const now = Date.now();
 	for (const preparation of preparations.values()) {
-		if (Date.now() - preparation.updatedAt > PREPARATION_RETENTION_MS) {
+		if (now - preparation.updatedAt > PREPARATION_RETENTION_MS) {
 			if (preparation.status === "preparing") {
 				preparation.controller.abort();
 			}
@@ -315,7 +383,7 @@ const sweep = setInterval(() => {
 		}
 	}
 	for (const session of sessions.values()) {
-		if (Date.now() - session.lastActive > IDLE_TIMEOUT_MS) {
+		if (editorSessionExpired(session, now)) {
 			void closeEditorSession(session.id).catch((error) => {
 				console.error("Editor session cleanup failed", error);
 			});

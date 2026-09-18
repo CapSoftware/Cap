@@ -370,7 +370,7 @@ editor.post("/preparations", async (c) => {
 		return c.json({ error: "Invalid editor session request" }, 400);
 	}
 	try {
-		const id = beginEditorPreparation(parsed.data);
+		const id = await beginEditorPreparation(parsed.data);
 		return c.json({ id, status: "preparing" as const }, 202);
 	} catch (error) {
 		if (error instanceof EditorSessionBusyError) {
