@@ -1017,7 +1017,7 @@ export const useWebRecorder = ({
 			) {
 				toast.warning(
 					recordingMode === "tab"
-						? 'System audio wasn\'t captured. Make sure "Share tab audio" is checked in the browser picker.'
+						? "System audio wasn't captured. Make sure \u0022Share tab audio\u0022 is checked in the browser picker."
 						: "System audio wasn't captured. Your browser or OS may not support it for screen sharing. Try sharing a browser tab instead.",
 				);
 			}
