@@ -138,7 +138,12 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							customer: customerId as string,
 							line_items: [{ price: priceId, quantity }],
 							mode: "subscription",
-							...(checkoutCurrency ? { currency: checkoutCurrency } : {}),
+							...(checkoutCurrency
+								? {
+										currency: checkoutCurrency,
+										adaptive_pricing: { enabled: false },
+									}
+								: {}),
 							success_url: isOnBoarding
 								? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
 								: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,

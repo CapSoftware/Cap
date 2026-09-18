@@ -86,7 +86,12 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						stripe().checkout.sessions.create({
 							line_items: [{ price: priceId, quantity }],
 							mode: "subscription",
-							...(checkoutCurrency ? { currency: checkoutCurrency } : {}),
+							...(checkoutCurrency
+								? {
+										currency: checkoutCurrency,
+										adaptive_pricing: { enabled: false },
+									}
+								: {}),
 							success_url: redirects.successUrl,
 							cancel_url: redirects.cancelUrl,
 							allow_promotion_codes: true,

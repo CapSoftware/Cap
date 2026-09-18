@@ -152,9 +152,25 @@ describe("Cap Pro checkout currency", () => {
 			expect.objectContaining({
 				customer: "cus_test",
 				currency: "usd",
+				adaptive_pricing: { enabled: false },
 				line_items: [{ price: "price_monthly", quantity: 2 }],
 			}),
 		);
+	});
+
+	it("keeps account automatic currency localization enabled", async () => {
+		const response = await accountCheckout(
+			checkoutRequest("/api/settings/billing/subscribe", {
+				priceId: "price_monthly",
+				quantity: 1,
+				continueCheckout: true,
+				checkoutCurrency: "auto",
+			}),
+		);
+		expect(response.status).toBe(200);
+		const options = mocks.createSession.mock.lastCall?.[0];
+		expect(options).not.toHaveProperty("currency");
+		expect(options).not.toHaveProperty("adaptive_pricing");
 	});
 
 	it("creates an account customer before starting checkout when needed", async () => {
@@ -211,7 +227,10 @@ describe("Cap Pro checkout currency", () => {
 			}),
 		);
 		expect(mocks.createSession).toHaveBeenLastCalledWith(
-			expect.objectContaining({ currency: "eur" }),
+			expect.objectContaining({
+				currency: "eur",
+				adaptive_pricing: { enabled: false },
+			}),
 		);
 		await guestCheckout(
 			checkoutRequest(route, {
@@ -223,6 +242,7 @@ describe("Cap Pro checkout currency", () => {
 		);
 		const latest = mocks.createSession.mock.calls.at(-1)?.[0];
 		expect(latest).not.toHaveProperty("currency");
+		expect(latest).not.toHaveProperty("adaptive_pricing");
 	});
 
 	it("rejects a currency unavailable on an annual price before opening payment", async () => {
