@@ -232,12 +232,14 @@ export async function createVideoAndGetUploadUrl({
 			...(folderId ? { folderId } : {}),
 		};
 
-		await db().insert(videos).values(videoData);
+		await db().transaction(async (tx) => {
+			await tx.insert(videos).values(videoData);
 
-		if (supportsUploadProgress)
-			await db().insert(videoUploads).values({
-				videoId: idToUse,
-			});
+			if (supportsUploadProgress)
+				await tx.insert(videoUploads).values({
+					videoId: idToUse,
+				});
+		});
 
 		revalidatePath("/dashboard/caps");
 		revalidatePath("/dashboard/folder");
