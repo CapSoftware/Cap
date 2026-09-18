@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import CheckoutPage from "@/app/(site)/checkout/page";
 import { POST as guestCheckout } from "@/app/api/settings/billing/guest-checkout/route";
 import { POST as accountCheckout } from "@/app/api/settings/billing/subscribe/route";
@@ -14,12 +14,21 @@ const mocks = vi.hoisted(() => ({
 	retrievePrice: vi.fn(),
 	currentUser: vi.fn(),
 	trackEvent: vi.fn(),
+	listCustomers: vi.fn(),
+	createCustomer: vi.fn(),
+	updateCustomer: vi.fn(),
+	writeCustomerId: vi.fn(),
+	disposeHandlers: [] as Array<() => Promise<void>>,
 }));
 
 vi.mock("@cap/database", () => ({
-	db: () => {
-		throw new Error("Unexpected database write");
-	},
+	db: () => ({
+		update: () => ({
+			set: () => ({
+				where: mocks.writeCustomerId,
+			}),
+		}),
+	}),
 }));
 vi.mock("@cap/database/auth/session", () => ({
 	getCurrentUser: mocks.currentUser,
@@ -36,21 +45,50 @@ vi.mock("@cap/utils", () => ({
 	stripe: () => ({
 		prices: { retrieve: mocks.retrievePrice },
 		checkout: { sessions: { create: mocks.createSession } },
+		customers: {
+			list: mocks.listCustomers,
+			create: mocks.createCustomer,
+			update: mocks.updateCustomer,
+		},
 	}),
 	userIsPro: () => false,
 }));
 vi.mock("@/lib/server-analytics", () => ({
 	trackServerEvent: mocks.trackEvent,
 }));
+vi.mock("@/lib/server", async () => {
+	const { HttpApiBuilder, HttpServer } = await import("@effect/platform");
+	const { Layer } = await import("effect");
+	return {
+		apiToHandler: (
+			api: import("effect").Layer.Layer<
+				import("@effect/platform").HttpApi.Api,
+				never,
+				never
+			>,
+		) => {
+			const handler = api.pipe(
+				Layer.merge(HttpServer.layerContext),
+				HttpApiBuilder.toWebHandler,
+			);
+			mocks.disposeHandlers.push(handler.dispose);
+			return handler.handler;
+		},
+	};
+});
 
 const checkoutRequest = (route: string, body: Record<string, unknown>) =>
 	new Request(`https://cap.test${route}`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
-	}) as unknown as import("next/server").NextRequest;
+	});
 
 describe("Cap Pro checkout currency", () => {
+	afterAll(() =>
+		Promise.all(mocks.disposeHandlers.map((dispose) => dispose())),
+	);
+
 	beforeEach(() => {
 		vi.clearAllMocks();
 		process.env.VERCEL_ENV = "preview";
@@ -59,6 +97,9 @@ describe("Cap Pro checkout currency", () => {
 			email: "",
 			stripeCustomerId: "cus_test",
 		});
+		mocks.listCustomers.mockResolvedValue({ data: [] });
+		mocks.createCustomer.mockResolvedValue({ id: "cus_new" });
+		mocks.writeCustomerId.mockResolvedValue(undefined);
 		mocks.createSession.mockResolvedValue({
 			id: "cs_test",
 			url: "https://checkout.stripe.test/session",
@@ -116,6 +157,49 @@ describe("Cap Pro checkout currency", () => {
 		);
 	});
 
+	it("creates an account customer before starting checkout when needed", async () => {
+		mocks.currentUser.mockResolvedValue({
+			id: "test-user",
+			email: "",
+			stripeCustomerId: null,
+		});
+		const response = await accountCheckout(
+			checkoutRequest("/api/settings/billing/subscribe", {
+				priceId: "price_monthly",
+				quantity: 2,
+				continueCheckout: true,
+				checkoutCurrency: "usd",
+			}),
+		);
+		expect(response.status).toBe(200);
+		expect(mocks.listCustomers).toHaveBeenCalledWith({
+			email: "",
+			limit: 1,
+		});
+		expect(mocks.createCustomer).toHaveBeenCalledWith({
+			email: "",
+			metadata: { userId: "test-user" },
+		});
+		expect(mocks.writeCustomerId).toHaveBeenCalledOnce();
+		expect(mocks.createSession).toHaveBeenCalledWith(
+			expect.objectContaining({ customer: "cus_new", currency: "usd" }),
+		);
+	});
+
+	it("keeps the existing error response if Stripe cannot start checkout", async () => {
+		mocks.createSession.mockRejectedValue(new Error("Stripe unavailable"));
+		const response = await accountCheckout(
+			checkoutRequest("/api/settings/billing/subscribe", {
+				priceId: "price_monthly",
+				quantity: 1,
+				continueCheckout: true,
+				checkoutCurrency: "auto",
+			}),
+		);
+		expect(response.status).toBe(500);
+		expect(await response.json()).toEqual({ error: true });
+	});
+
 	it("honors a guest choice and leaves automatic currency to Stripe", async () => {
 		const route = "/api/settings/billing/guest-checkout";
 		await guestCheckout(
@@ -151,6 +235,31 @@ describe("Cap Pro checkout currency", () => {
 			}),
 		);
 		expect(response.status).toBe(400);
+		expect(mocks.createSession).not.toHaveBeenCalled();
+	});
+
+	it("rejects an unavailable account currency before changing the customer", async () => {
+		mocks.currentUser.mockResolvedValue({
+			id: "test-user",
+			email: "",
+			stripeCustomerId: null,
+		});
+		const response = await accountCheckout(
+			checkoutRequest("/api/settings/billing/subscribe", {
+				priceId: "price_yearly",
+				quantity: 1,
+				continueCheckout: true,
+				checkoutCurrency: "eur",
+			}),
+		);
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({
+			error: true,
+			message:
+				"This currency is unavailable for the selected plan. Choose another currency and try again.",
+		});
+		expect(mocks.listCustomers).not.toHaveBeenCalled();
+		expect(mocks.writeCustomerId).not.toHaveBeenCalled();
 		expect(mocks.createSession).not.toHaveBeenCalled();
 	});
 

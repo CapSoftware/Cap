@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as startGuestCheckout } from "@/app/api/settings/billing/guest-checkout/route";
 import { GET } from "@/app/mobile/checkout/complete/route";
 import {
@@ -9,6 +9,7 @@ import {
 const checkoutMocks = vi.hoisted(() => ({
 	create: vi.fn(),
 	track: vi.fn(() => Promise.resolve()),
+	disposeHandlers: [] as Array<() => Promise<void>>,
 }));
 
 vi.mock("@cap/env", () => ({
@@ -31,15 +32,39 @@ vi.mock("@cap/utils", () => ({
 vi.mock("@/lib/server-analytics", () => ({
 	trackServerEvent: checkoutMocks.track,
 }));
+vi.mock("@/lib/server", async () => {
+	const { HttpApiBuilder, HttpServer } = await import("@effect/platform");
+	const { Layer } = await import("effect");
+	return {
+		apiToHandler: (
+			api: import("effect").Layer.Layer<
+				import("@effect/platform").HttpApi.Api,
+				never,
+				never
+			>,
+		) => {
+			const handler = api.pipe(
+				Layer.merge(HttpServer.layerContext),
+				HttpApiBuilder.toWebHandler,
+			);
+			checkoutMocks.disposeHandlers.push(handler.dispose);
+			return handler.handler;
+		},
+	};
+});
 
 const makeGuestCheckoutRequest = (body: Record<string, unknown>) =>
 	new Request("https://cap.so/api/settings/billing/guest-checkout", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
-	}) as unknown as import("next/server").NextRequest;
+	});
 
 describe("checkout redirects", () => {
+	afterAll(() =>
+		Promise.all(checkoutMocks.disposeHandlers.map((dispose) => dispose())),
+	);
+
 	beforeEach(() => {
 		vi.clearAllMocks();
 		checkoutMocks.create.mockResolvedValue({

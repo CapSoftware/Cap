@@ -3,8 +3,16 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { stripe, userIsPro } from "@cap/utils";
+import {
+	HttpApi,
+	HttpApiBuilder,
+	HttpApiEndpoint,
+	HttpApiGroup,
+	HttpServerRequest,
+	HttpServerResponse,
+} from "@effect/platform";
 import { eq } from "drizzle-orm";
-import type { NextRequest } from "next/server";
+import { Effect, Layer } from "effect";
 import type Stripe from "stripe";
 import {
 	CheckoutCurrencyUnavailable,
@@ -12,133 +20,171 @@ import {
 	proCheckoutPeriod,
 	proCheckoutStepUrl,
 } from "@/lib/pro-checkout-currency";
+import { apiToHandler } from "@/lib/server";
 import { trackServerEvent } from "@/lib/server-analytics";
 
-export async function POST(request: NextRequest) {
-	const user = await getCurrentUser();
-	let customerId = user?.stripeCustomerId;
-	const body = (await request.json()) as Record<string, unknown>;
-	const { priceId, quantity } = body;
-	const isOnBoarding = body.isOnBoarding === true;
-	const continueCheckout = body.continueCheckout === true;
+class Api extends HttpApi.make("CapSubscribeApi").add(
+	HttpApiGroup.make("root").add(
+		HttpApiEndpoint.post("subscribe")`/api/settings/billing/subscribe`,
+	),
+) {}
 
-	if (typeof priceId !== "string" || !priceId) {
-		console.error("Price ID not found");
-		return Response.json({ error: true }, { status: 400 });
-	}
-	if (
-		typeof quantity !== "number" ||
-		!Number.isSafeInteger(quantity) ||
-		quantity < 1
-	) {
-		return Response.json(
-			{ error: true, message: "Choose at least one user." },
-			{ status: 400 },
-		);
-	}
+const jsonResponse = (body: unknown, status = 200) =>
+	HttpServerResponse.unsafeJson(body, { status });
 
-	if (!user) {
-		console.error("User not found");
-		return Response.json({ error: true, auth: false }, { status: 401 });
-	}
+const ApiLive = HttpApiBuilder.api(Api).pipe(
+	Layer.provide(
+		HttpApiBuilder.group(Api, "root", (handlers) =>
+			handlers.handle("subscribe", () =>
+				Effect.gen(function* () {
+					const user = yield* Effect.tryPromise(getCurrentUser);
+					let customerId = user?.stripeCustomerId;
+					const request = yield* HttpServerRequest.HttpServerRequest;
+					const body = (yield* request.json) as Record<string, unknown>;
+					const { priceId, quantity } = body;
+					const isOnBoarding = body.isOnBoarding === true;
+					const continueCheckout = body.continueCheckout === true;
 
-	if (userIsPro(user)) {
-		console.error("User already has pro plan");
-		return Response.json({ error: true, subscription: true }, { status: 400 });
-	}
-	const period = proCheckoutPeriod(priceId);
-	if (continueCheckout && !period) {
-		return Response.json({ error: true }, { status: 400 });
-	}
-	if (period && !continueCheckout) {
-		const url = proCheckoutStepUrl({
-			baseUrl: serverEnv().WEB_URL,
-			priceId,
-			quantity,
-			flow: "account",
-			isOnBoarding,
-		});
-		if (!url) return Response.json({ error: true }, { status: 400 });
-		return Response.json({ url }, { status: 200 });
-	}
+					if (typeof priceId !== "string" || !priceId) {
+						console.error("Price ID not found");
+						return jsonResponse({ error: true }, 400);
+					}
+					if (
+						typeof quantity !== "number" ||
+						!Number.isSafeInteger(quantity) ||
+						quantity < 1
+					) {
+						return jsonResponse(
+							{ error: true, message: "Choose at least one user." },
+							400,
+						);
+					}
 
-	try {
-		const checkoutCurrency = continueCheckout
-			? await checkoutCurrencyForChoice(priceId, body.checkoutCurrency)
-			: undefined;
-		if (!user.stripeCustomerId) {
-			const existingCustomers = await stripe().customers.list({
-				email: user.email,
-				limit: 1,
-			});
+					if (!user) {
+						console.error("User not found");
+						return jsonResponse({ error: true, auth: false }, 401);
+					}
 
-			let customer: Stripe.Customer;
-			if (existingCustomers.data.length > 0 && existingCustomers.data[0]) {
-				customer = existingCustomers.data[0];
+					if (userIsPro(user)) {
+						console.error("User already has pro plan");
+						return jsonResponse({ error: true, subscription: true }, 400);
+					}
+					const period = proCheckoutPeriod(priceId);
+					if (continueCheckout && !period) {
+						return jsonResponse({ error: true }, 400);
+					}
+					if (period && !continueCheckout) {
+						const url = proCheckoutStepUrl({
+							baseUrl: serverEnv().WEB_URL,
+							priceId,
+							quantity,
+							flow: "account",
+							isOnBoarding,
+						});
+						if (!url) return jsonResponse({ error: true }, 400);
+						return jsonResponse({ url });
+					}
 
-				customer = await stripe().customers.update(customer.id, {
-					metadata: {
-						...customer.metadata,
-						userId: user.id,
-					},
-				});
-			} else {
-				customer = await stripe().customers.create({
-					email: user.email,
-					metadata: {
-						userId: user.id,
-					},
-				});
-			}
+					const checkoutCurrency = continueCheckout
+						? yield* Effect.tryPromise(() =>
+								checkoutCurrencyForChoice(priceId, body.checkoutCurrency),
+							)
+						: undefined;
+					if (!user.stripeCustomerId) {
+						const existingCustomers = yield* Effect.tryPromise(() =>
+							stripe().customers.list({
+								email: user.email,
+								limit: 1,
+							}),
+						);
 
-			await db()
-				.update(users)
-				.set({
-					stripeCustomerId: customer.id,
-				})
-				.where(eq(users.id, user.id));
-			customerId = customer.id;
-		}
+						let customer: Stripe.Customer;
+						if (
+							existingCustomers.data.length > 0 &&
+							existingCustomers.data[0]
+						) {
+							customer = existingCustomers.data[0];
 
-		const checkoutSession = await stripe().checkout.sessions.create({
-			customer: customerId as string,
-			line_items: [{ price: priceId, quantity: quantity }],
-			mode: "subscription",
-			...(checkoutCurrency ? { currency: checkoutCurrency } : {}),
-			success_url: isOnBoarding
-				? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
-				: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
-			cancel_url: isOnBoarding
-				? `${serverEnv().WEB_URL}/onboarding`
-				: `${serverEnv().WEB_URL}/pricing`,
-			allow_promotion_codes: true,
-			metadata: {
-				platform: "web",
-				dubCustomerId: user.id,
-				isOnBoarding: isOnBoarding ? "true" : "false",
-			},
-		});
+							customer = yield* Effect.tryPromise(() =>
+								stripe().customers.update(customer.id, {
+									metadata: {
+										...customer.metadata,
+										userId: user.id,
+									},
+								}),
+							);
+						} else {
+							customer = yield* Effect.tryPromise(() =>
+								stripe().customers.create({
+									email: user.email,
+									metadata: {
+										userId: user.id,
+									},
+								}),
+							);
+						}
 
-		if (checkoutSession.url) {
-			trackServerEvent(user.id, "checkout_started", {
-				price_id: priceId,
-				quantity: quantity,
-				platform: "web",
-			});
+						yield* Effect.tryPromise(async () => {
+							await db()
+								.update(users)
+								.set({ stripeCustomerId: customer.id })
+								.where(eq(users.id, user.id));
+						});
+						customerId = customer.id;
+					}
 
-			return Response.json({ url: checkoutSession.url }, { status: 200 });
-		}
+					const checkoutSession = yield* Effect.tryPromise(() =>
+						stripe().checkout.sessions.create({
+							customer: customerId as string,
+							line_items: [{ price: priceId, quantity }],
+							mode: "subscription",
+							...(checkoutCurrency ? { currency: checkoutCurrency } : {}),
+							success_url: isOnBoarding
+								? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
+								: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
+							cancel_url: isOnBoarding
+								? `${serverEnv().WEB_URL}/onboarding`
+								: `${serverEnv().WEB_URL}/pricing`,
+							allow_promotion_codes: true,
+							metadata: {
+								platform: "web",
+								dubCustomerId: user.id,
+								isOnBoarding: isOnBoarding ? "true" : "false",
+							},
+						}),
+					);
 
-		console.error("Checkout session created but no URL returned");
-		return Response.json({ error: true }, { status: 400 });
-	} catch (error) {
-		if (error instanceof CheckoutCurrencyUnavailable) {
-			return Response.json(
-				{ error: true, message: error.message },
-				{ status: 400 },
-			);
-		}
-		console.error("Error creating checkout session:", error);
-		return Response.json({ error: true }, { status: 500 });
-	}
-}
+					if (checkoutSession.url) {
+						yield* Effect.try(() =>
+							trackServerEvent(user.id, "checkout_started", {
+								price_id: priceId,
+								quantity,
+								platform: "web",
+							}),
+						);
+
+						return jsonResponse({ url: checkoutSession.url });
+					}
+
+					console.error("Checkout session created but no URL returned");
+					return jsonResponse({ error: true }, 400);
+				}).pipe(
+					Effect.catchAll((error) => {
+						const cause = error.cause ?? error;
+						if (cause instanceof CheckoutCurrencyUnavailable) {
+							return Effect.succeed(
+								jsonResponse({ error: true, message: cause.message }, 400),
+							);
+						}
+						console.error("Error creating checkout session:", cause);
+						return Effect.succeed(jsonResponse({ error: true }, 500));
+					}),
+				),
+			),
+		),
+	),
+);
+
+const handler = apiToHandler(ApiLive);
+
+export const POST = handler;
