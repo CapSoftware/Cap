@@ -6,16 +6,35 @@ import { stripe, userIsPro } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import type Stripe from "stripe";
+import {
+	CheckoutCurrencyUnavailable,
+	checkoutCurrencyForChoice,
+	proCheckoutPeriod,
+	proCheckoutStepUrl,
+} from "@/lib/pro-checkout-currency";
 import { trackServerEvent } from "@/lib/server-analytics";
 
 export async function POST(request: NextRequest) {
 	const user = await getCurrentUser();
 	let customerId = user?.stripeCustomerId;
-	const { priceId, quantity, isOnBoarding } = await request.json();
+	const body = (await request.json()) as Record<string, unknown>;
+	const { priceId, quantity } = body;
+	const isOnBoarding = body.isOnBoarding === true;
+	const continueCheckout = body.continueCheckout === true;
 
-	if (!priceId) {
+	if (typeof priceId !== "string" || !priceId) {
 		console.error("Price ID not found");
 		return Response.json({ error: true }, { status: 400 });
+	}
+	if (
+		typeof quantity !== "number" ||
+		!Number.isSafeInteger(quantity) ||
+		quantity < 1
+	) {
+		return Response.json(
+			{ error: true, message: "Choose at least one user." },
+			{ status: 400 },
+		);
 	}
 
 	if (!user) {
@@ -27,8 +46,26 @@ export async function POST(request: NextRequest) {
 		console.error("User already has pro plan");
 		return Response.json({ error: true, subscription: true }, { status: 400 });
 	}
+	const period = proCheckoutPeriod(priceId);
+	if (continueCheckout && !period) {
+		return Response.json({ error: true }, { status: 400 });
+	}
+	if (period && !continueCheckout) {
+		const url = proCheckoutStepUrl({
+			baseUrl: serverEnv().WEB_URL,
+			priceId,
+			quantity,
+			flow: "account",
+			isOnBoarding,
+		});
+		if (!url) return Response.json({ error: true }, { status: 400 });
+		return Response.json({ url }, { status: 200 });
+	}
 
 	try {
+		const checkoutCurrency = continueCheckout
+			? await checkoutCurrencyForChoice(priceId, body.checkoutCurrency)
+			: undefined;
 		if (!user.stripeCustomerId) {
 			const existingCustomers = await stripe().customers.list({
 				email: user.email,
@@ -67,6 +104,7 @@ export async function POST(request: NextRequest) {
 			customer: customerId as string,
 			line_items: [{ price: priceId, quantity: quantity }],
 			mode: "subscription",
+			...(checkoutCurrency ? { currency: checkoutCurrency } : {}),
 			success_url: isOnBoarding
 				? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
 				: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
@@ -94,6 +132,12 @@ export async function POST(request: NextRequest) {
 		console.error("Checkout session created but no URL returned");
 		return Response.json({ error: true }, { status: 400 });
 	} catch (error) {
+		if (error instanceof CheckoutCurrencyUnavailable) {
+			return Response.json(
+				{ error: true, message: error.message },
+				{ status: 400 },
+			);
+		}
 		console.error("Error creating checkout session:", error);
 		return Response.json({ error: true }, { status: 500 });
 	}

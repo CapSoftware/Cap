@@ -17,6 +17,10 @@ vi.mock("@cap/env", () => ({
 }));
 
 vi.mock("@cap/utils", () => ({
+	STRIPE_PLAN_IDS: {
+		development: { monthly: "price_monthly", yearly: "price_yearly" },
+		production: { monthly: "price_live_monthly", yearly: "price_live_yearly" },
+	},
 	stripe: () => ({
 		checkout: {
 			sessions: { create: checkoutMocks.create },
