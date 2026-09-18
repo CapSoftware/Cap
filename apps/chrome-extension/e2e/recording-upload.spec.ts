@@ -720,7 +720,7 @@ const startRecording = async (
 	if (mode === "tab") {
 		const injected = spawnSync("osascript", [
 			"-e",
-			'tell application "System Events" to keystroke "y" using {command down, shift down}',
+			String.raw`tell application "System Events" to keystroke "y" using {command down, shift down}`,
 		]);
 		if (injected.status !== 0) {
 			throw new Error(injected.stderr.toString());
