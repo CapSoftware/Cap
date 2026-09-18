@@ -86,21 +86,11 @@ export const RecordingModeSelector = ({
 				<SelectContent className="z-[502] max-w-[280px]">
 					{Object.entries(recordingModeOptions).map(([value, option]) => {
 						const OptionIcon = option.icon;
-						const isFullscreen = value === "fullscreen";
-
 						return (
 							<SelectItem key={value} value={value}>
-								<span className="flex flex-col gap-0.5">
-									<span className="flex items-center gap-2">
-										<OptionIcon className="size-4 text-gray-11" />
-										{option.label}
-									</span>
-									{isFullscreen && (
-										<span className="text-xs italic text-gray-10 pl-6">
-											Recommended to capture camera window when picture in
-											picture is activated
-										</span>
-									)}
+								<span className="flex items-center gap-2">
+									<OptionIcon className="size-4 text-gray-11" />
+									{option.label}
 								</span>
 							</SelectItem>
 						);
