@@ -13,6 +13,27 @@ import {
 
 type CurrencyChoice = "auto" | SupportedCurrency;
 
+export function checkoutSignInHref({
+	priceId,
+	quantity,
+	isOnBoarding,
+	choice,
+}: {
+	priceId: string;
+	quantity: number;
+	isOnBoarding: boolean;
+	choice: CurrencyChoice;
+}) {
+	const checkoutParams = new URLSearchParams({
+		priceId,
+		quantity: String(quantity),
+		flow: "account",
+	});
+	if (isOnBoarding) checkoutParams.set("isOnBoarding", "true");
+	if (choice !== "auto") checkoutParams.set("checkoutCurrency", choice);
+	return `/login?next=${encodeURIComponent(`/checkout?${checkoutParams.toString()}`)}`;
+}
+
 export function CheckoutCurrencyPicker({
 	priceId,
 	quantity,
@@ -20,6 +41,7 @@ export function CheckoutCurrencyPicker({
 	period,
 	isOnBoarding,
 	currencies,
+	initialChoice = "auto",
 }: {
 	priceId: string;
 	quantity: number;
@@ -27,15 +49,24 @@ export function CheckoutCurrencyPicker({
 	period: ProCheckoutPeriod;
 	isOnBoarding: boolean;
 	currencies: SupportedCurrency[];
+	initialChoice?: CurrencyChoice;
 }) {
 	const currencyId = useId();
-	const [choice, setChoice] = useState<CurrencyChoice>("auto");
+	const [choice, setChoice] = useState<CurrencyChoice>(initialChoice);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [authExpired, setAuthExpired] = useState(false);
+	const signInHref = checkoutSignInHref({
+		priceId,
+		quantity,
+		isOnBoarding,
+		choice,
+	});
 
 	const submit = async (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
 		setError(null);
+		setAuthExpired(false);
 		setLoading(true);
 		try {
 			const response = await fetch(
@@ -64,7 +95,8 @@ export function CheckoutCurrencyPicker({
 				return;
 			}
 			if (response.status === 401) {
-				setError("Your sign-in expired. Sign in and start checkout again.");
+				setAuthExpired(true);
+				setError("Your sign-in expired. Sign in to continue checkout.");
 			} else if (result.subscription === true) {
 				setError("Your account is already on Cap Pro.");
 			} else {
@@ -126,9 +158,17 @@ export function CheckoutCurrencyPicker({
 							: `You will be charged in ${choice.toUpperCase()}.`}
 					</p>
 					{error && (
-						<p role="alert" className="mt-4 text-[13px] text-[#B42318]">
-							{error}
-						</p>
+						<div role="alert" className="mt-4 text-[13px] text-[#B42318]">
+							<p>{error}</p>
+							{authExpired && (
+								<a
+									href={signInHref}
+									className="mt-2 inline-block font-medium underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4979A8]"
+								>
+									Sign in to continue
+								</a>
+							)}
+						</div>
 					)}
 					<button
 						type="submit"

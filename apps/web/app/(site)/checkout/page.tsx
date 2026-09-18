@@ -7,6 +7,7 @@ import {
 	type ProCheckoutFlow,
 	proCheckoutPeriod,
 } from "@/lib/pro-checkout-currency";
+import { isSupportedCurrency } from "@/utils/currency";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,7 @@ export default async function CheckoutPage({
 		quantity?: string;
 		flow?: string;
 		isOnBoarding?: string;
+		checkoutCurrency?: string;
 	}>;
 }) {
 	const params = await searchParams;
@@ -41,6 +43,11 @@ export default async function CheckoutPage({
 		});
 		const currencies = price.active ? availableCheckoutCurrencies(price) : [];
 		if (currencies.length === 0) throw new Error("No checkout currencies");
+		const initialChoice =
+			isSupportedCurrency(params.checkoutCurrency) &&
+			currencies.includes(params.checkoutCurrency)
+				? params.checkoutCurrency
+				: "auto";
 		return (
 			<CheckoutCurrencyPicker
 				priceId={priceId}
@@ -49,6 +56,7 @@ export default async function CheckoutPage({
 				period={period}
 				isOnBoarding={isOnBoarding}
 				currencies={currencies}
+				initialChoice={initialChoice}
 			/>
 		);
 	} catch {
@@ -58,6 +66,8 @@ export default async function CheckoutPage({
 			flow,
 		});
 		if (isOnBoarding) retry.set("isOnBoarding", "true");
+		if (isSupportedCurrency(params.checkoutCurrency))
+			retry.set("checkoutCurrency", params.checkoutCurrency);
 		return (
 			<main className="flex min-h-[70vh] items-center justify-center bg-[#EDF1F6] px-5 py-28 text-[#111111]">
 				<div className="w-full max-w-[440px] rounded-[20px] border border-[#DDE4EB] bg-white p-7 text-center sm:p-9">

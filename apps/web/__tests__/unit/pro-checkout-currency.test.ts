@@ -1,9 +1,13 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import CheckoutPage from "@/app/(site)/checkout/page";
 import { POST as guestCheckout } from "@/app/api/settings/billing/guest-checkout/route";
 import { POST as accountCheckout } from "@/app/api/settings/billing/subscribe/route";
-import { CheckoutCurrencyPicker } from "@/components/checkout-currency-picker";
+import {
+	CheckoutCurrencyPicker,
+	checkoutSignInHref,
+} from "@/components/checkout-currency-picker";
 
 const mocks = vi.hoisted(() => ({
 	createSession: vi.fn(),
@@ -167,6 +171,41 @@ describe("Cap Pro checkout currency", () => {
 		expect(markup).not.toContain("EUR (€)");
 		expect(markup).toMatch(/<label[^>]*for="([^"]+)"[^>]*>Currency<\/label>/);
 		expect(markup).toContain("Continue to secure checkout");
+	});
+
+	it("preserves the plan, seats, onboarding, and chosen currency through sign-in", async () => {
+		const loginUrl = new URL(
+			checkoutSignInHref({
+				priceId: "price_monthly",
+				quantity: 3,
+				isOnBoarding: true,
+				choice: "usd",
+			}),
+			"https://cap.test",
+		);
+		const checkoutPath = loginUrl.searchParams.get("next");
+		expect(loginUrl.pathname).toBe("/login");
+		const resumedCheckout = new URL(checkoutPath ?? "", "https://cap.test");
+		expect(resumedCheckout.pathname).toBe("/checkout");
+		expect(resumedCheckout.searchParams.get("priceId")).toBe("price_monthly");
+		expect(resumedCheckout.searchParams.get("quantity")).toBe("3");
+		expect(resumedCheckout.searchParams.get("flow")).toBe("account");
+		expect(resumedCheckout.searchParams.get("isOnBoarding")).toBe("true");
+		expect(resumedCheckout.searchParams.get("checkoutCurrency")).toBe("usd");
+
+		const page = await CheckoutPage({
+			searchParams: Promise.resolve({
+				priceId: "price_monthly",
+				quantity: "3",
+				flow: "account",
+				isOnBoarding: "true",
+				checkoutCurrency: "usd",
+			}),
+		});
+		const markup = renderToStaticMarkup(page);
+		expect(markup).toMatch(
+			/<option value="usd" selected="">USD \(\$\)<\/option>/,
+		);
 	});
 
 	it("keeps mobile guest checkout on its existing direct flow", async () => {
