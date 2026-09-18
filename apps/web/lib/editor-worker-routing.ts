@@ -10,7 +10,9 @@ const SESSION_ID = new RegExp(`^(?:([a-z][a-z0-9-]{0,23})\\.)?${UUID}$`);
 function validOrigin(value: string) {
 	const url = new URL(value);
 	if (
-		(url.protocol !== "https:" && url.protocol !== "http:") ||
+		(url.protocol !== "https:" &&
+			(url.protocol !== "http:" ||
+				!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) ||
 		url.pathname !== "/" ||
 		url.search ||
 		url.hash ||

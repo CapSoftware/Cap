@@ -596,6 +596,7 @@ export const requestMediaEditor = Effect.fn("requestMediaEditor")(function* (
 			fetch(`${worker.origin}${path}`, {
 				...init,
 				headers,
+				redirect: "error",
 				signal: AbortSignal.timeout(timeoutMs),
 			}),
 		catch: () => new HttpApiError.ServiceUnavailable(),
