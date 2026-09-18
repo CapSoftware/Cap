@@ -29,6 +29,9 @@ const camera = join(
 	import.meta.dir,
 	"../fixtures/editor-clips/camera-green.webm",
 );
+const image = join(import.meta.dir, "../fixtures/exif-orientation-6.jpg");
+const imagePath = "content/images/3d82ac0f-c24a-4c21-aa3c-e1749c23b24b.jpg";
+const imageKey = `${userId}/${videoId}/editor-assets/images/${imagePath.slice("content/images/".length)}`;
 
 async function readySession(id: string, headers: Record<string, string>) {
 	const deadline = Date.now() + 60_000;
@@ -88,6 +91,9 @@ let browser: Browser | null = null;
 let sessionId: string | null = null;
 let savedAt: string | null = null;
 let captionRequests = 0;
+let imageImports = 0;
+let imagePreviewRequests = 0;
+let uploadedImage: Uint8Array<ArrayBuffer> | null = null;
 let base = "";
 try {
 	server = Bun.serve({
@@ -99,6 +105,14 @@ try {
 				return new Response(Bun.file(display));
 			if (url.pathname === "/camera.webm")
 				return new Response(Bun.file(camera));
+			if (url.pathname === "/test-image-upload" && request.method === "PUT") {
+				uploadedImage = new Uint8Array(await request.arrayBuffer());
+				return new Response(null, { status: 200 });
+			}
+			if (url.pathname === "/test-image.jpg" && uploadedImage)
+				return new Response(uploadedImage, {
+					headers: { "Content-Type": "image/jpeg" },
+				});
 			if (url.pathname === "/test-host.js")
 				return new Response(hostCode, {
 					headers: { "Content-Type": "text/javascript; charset=utf-8" },
@@ -130,6 +144,72 @@ try {
 			}
 			if (sessionId) {
 				const apiRoot = `/api/editor/sessions/${encodeURIComponent(sessionId)}`;
+				if (url.pathname === `${apiRoot}/assets`) {
+					if (request.method === "GET") return Response.json({ path: null });
+					const payload = (await request.json()) as {
+						kind?: string;
+						videoId?: string;
+						fileName?: string;
+						size?: number;
+						contentType?: string;
+						key?: string;
+						path?: string;
+					};
+					if (
+						payload.kind !== "image" ||
+						payload.videoId !== videoId ||
+						payload.fileName !== "exif-orientation-6.jpg" ||
+						payload.contentType !== "image/jpeg" ||
+						payload.size !== (await stat(image)).size
+					)
+						return new Response("Invalid image import", { status: 400 });
+					if (request.method === "POST")
+						return Response.json({
+							key: imageKey,
+							path: imagePath,
+							upload: {
+								type: "put",
+								url: `${base}/test-image-upload`,
+								headers: {},
+							},
+						});
+					if (
+						request.method !== "PUT" ||
+						payload.key !== imageKey ||
+						payload.path !== imagePath ||
+						!uploadedImage ||
+						uploadedImage.byteLength !== payload.size
+					)
+						return new Response("Image upload is incomplete", { status: 400 });
+					const imported = await app.request(
+						`/editor/sessions/${sessionId}/image-assets`,
+						{
+							method: "POST",
+							headers,
+							body: JSON.stringify({
+								path: imagePath,
+								name: "exif-orientation-6",
+								url: `${base}/test-image.jpg`,
+								size: payload.size,
+								contentType: "image/jpeg",
+								objectIdentity: null,
+							}),
+						},
+					);
+					if (imported.ok) imageImports++;
+					return imported;
+				}
+				if (url.pathname === `${apiRoot}/file`) {
+					if (
+						request.method !== "GET" ||
+						url.searchParams.get("videoId") !== videoId ||
+						url.searchParams.get("path") !==
+							`cap-web-editor://session/${sessionId}/${imagePath}`
+					)
+						return new Response("Image asset is unavailable", { status: 404 });
+					imagePreviewRequests++;
+					return Response.redirect(`${base}/test-image.jpg`);
+				}
 				if (url.pathname === `${apiRoot}/captions`) {
 					const requestedVideoId =
 						request.method === "GET"
@@ -376,6 +456,16 @@ try {
 		true,
 	);
 	assert.equal(await editor.getByText("Download Whisper model").count(), 0);
+	await editor.getByRole("button", { name: "Add track" }).click();
+	const fileChooser = page.waitForEvent("filechooser");
+	await editor.getByRole("button", { name: "Image", exact: true }).click();
+	await (await fileChooser).setFiles(image);
+	await editor.locator("[data-image-overlay]").waitFor({
+		state: "visible",
+		timeout: 20_000,
+	});
+	assert.equal(imageImports, 1);
+	assert.ok(imagePreviewRequests > 0);
 	const screenshot = await page.screenshot();
 	if (process.env.CAP_EDITOR_UI_SCREENSHOT_PATH)
 		await writeFile(process.env.CAP_EDITOR_UI_SCREENSHOT_PATH, screenshot);
@@ -451,6 +541,7 @@ try {
 			proCaptionGenerationApplied: proCaptions && captionRequests === 1,
 			playbackAdvanced,
 			localModelDownloadsAbsent: true,
+			imageOverlayImported: imageImports === 1 && imagePreviewRequests > 0,
 			cameraControlsVisible: true,
 			cameraBackgroundRemovalSelectable: true,
 			exportPreviewVisible: true,
