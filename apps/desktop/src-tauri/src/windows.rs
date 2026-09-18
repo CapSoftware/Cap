@@ -2315,17 +2315,7 @@ impl ShowCapWindow {
                 hide_recording_windows(app, false);
                 release_camera_preview_if_idle(app);
 
-                if crate::screenshot_editor::is_legacy_screenshot_project(project_path) {
-                    PendingScreenshotEditorInstances::start_prewarm(
-                        app,
-                        _id.label(),
-                        project_path.clone(),
-                    )
-                    .await;
-                } else {
-                    PendingEditorInstances::start_prewarm(app, _id.label(), project_path.clone())
-                        .await;
-                }
+                PendingEditorInstances::start_prewarm(app, _id.label(), project_path.clone()).await;
 
                 let builder = self
                     .window_builder_with_id(app, "/editor", &_id, _id.label())

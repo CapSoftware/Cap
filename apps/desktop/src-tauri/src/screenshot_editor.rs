@@ -126,17 +126,6 @@ pub struct ScreenshotEditorInstance {
     source_rgba: Arc<Vec<u8>>,
 }
 
-pub fn is_legacy_screenshot_project(project_path: &Path) -> bool {
-    let Ok(meta) = RecordingMeta::load_for_project(project_path) else {
-        return false;
-    };
-    matches!(
-        meta.inner,
-        RecordingMetaInner::Studio(studio)
-            if matches!(studio.as_ref(), StudioRecordingMeta::SingleSegment { segment } if segment.display.fps == 0)
-    )
-}
-
 impl ScreenshotEditorInstance {
     pub async fn dispose(&self) {
         self.ws_shutdown_token.cancel();
@@ -743,18 +732,6 @@ impl ScreenshotEditorInstances {
     }
 }
 
-fn with_registered_screenshot_project<T>(
-    window_ids: &Arc<std::sync::Mutex<Vec<(PathBuf, u32)>>>,
-    id: u32,
-    action: impl FnOnce() -> T,
-) -> Result<T, String> {
-    let ids = window_ids.lock().map_err(|error| error.to_string())?;
-    if !ids.iter().any(|(_, registered_id)| *registered_id == id) {
-        return Err("Screenshot editor window is no longer registered".to_string());
-    }
-    Ok(action())
-}
-
 fn with_registered_screenshot_workspace<T>(
     window: &Window,
     action: impl FnOnce() -> T,
@@ -783,50 +760,6 @@ impl PendingScreenshotEditorInstances {
                 (*app.state::<Self>()).clone()
             }
         }
-    }
-
-    pub async fn start_prewarm(app: &AppHandle, window_label: String, path: PathBuf) {
-        let (window_ids, id) = match CapWindowId::from_str(&window_label) {
-            Ok(CapWindowId::Editor { id }) => (EditorWindowIds::get(app).ids, id),
-            Ok(CapWindowId::ScreenshotEditor { id }) => {
-                (ScreenshotEditorWindowIds::get(app).ids, id)
-            }
-            _ => return,
-        };
-        let pending = Self::get(app);
-        let app = app.clone();
-        let tx = {
-            let mut instances = pending.0.write().await;
-            let admitted = with_registered_screenshot_project(&window_ids, id, || {
-                use std::collections::hash_map::Entry;
-                match instances.entry(window_label) {
-                    Entry::Vacant(entry) => {
-                        let (tx, rx) = watch::channel(None);
-                        entry.insert(rx);
-                        Some(tx)
-                    }
-                    Entry::Occupied(_) => None,
-                }
-            });
-            match admitted {
-                Ok(Some(tx)) => tx,
-                Ok(None) => return,
-                Err(error) => {
-                    tracing::debug!(%error, "Skipping prewarm for a retired screenshot editor");
-                    return;
-                }
-            }
-        };
-
-        let cleanup_runtime = tokio::runtime::Handle::current();
-        tokio::spawn(async move {
-            let result = ScreenshotEditorInstances::create_standalone_instance(
-                &app, path, true, None, false,
-            )
-            .await
-            .map(|instance| ScreenshotEditorInstanceDelivery::new(instance, cleanup_runtime));
-            tx.send(Some(result)).ok();
-        });
     }
 
     pub async fn take_prewarmed(&self, window_label: &str) -> Option<PendingReceiver> {
