@@ -209,7 +209,7 @@ export function createWS(url: string) {
 				}
 			}
 		} catch {
-			socket.close(1003, "Invalid editor frame");
+			socket.close(4003, "Invalid editor frame");
 		} finally {
 			decoding = false;
 		}
