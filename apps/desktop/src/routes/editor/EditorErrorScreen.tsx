@@ -2,6 +2,7 @@ import { Button } from "@cap/ui-solid";
 import { createMutation } from "@tanstack/solid-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { createEffect, onCleanup, Show } from "solid-js";
@@ -15,6 +16,7 @@ import IconLoaderCircle from "~icons/lucide/loader-circle";
 import IconRefreshCw from "~icons/lucide/refresh-cw";
 
 const NEEDS_RECOVERY_PATTERN = /may need to be recovered/i;
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
 
 function isRecoveryNeededError(error: string): boolean {
 	return NEEDS_RECOVERY_PATTERN.test(error);
@@ -26,7 +28,7 @@ export function EditorErrorScreen(props: {
 }) {
 	const storageShortage = () => isRecordingStorageError(props.error);
 	const needsRecovery = () =>
-		storageShortage() || isRecoveryNeededError(props.error);
+		!isWebEditor && (storageShortage() || isRecoveryNeededError(props.error));
 	const isMac = () => ostype() === "macos";
 
 	let disposed = false;
@@ -259,52 +261,69 @@ export function EditorErrorScreen(props: {
 						</div>
 					</Show>
 
-					<div class="bg-gray-2 border border-gray-4 rounded-xl p-4 space-y-4">
-						<div class="space-y-2">
-							<h3 class="font-medium text-gray-12 text-sm">
-								Manual Investigation
-							</h3>
-							<p class="text-xs text-gray-11">
-								You can open the recording folder to inspect the raw files
-								directly.
-							</p>
-
-							<div class="bg-gray-3 rounded-lg p-3 space-y-2">
-								<p class="text-xs font-mono text-gray-11 break-all">
-									{props.projectPath}
+					<Show when={!isWebEditor}>
+						<div class="bg-gray-2 border border-gray-4 rounded-xl p-4 space-y-4">
+							<div class="space-y-2">
+								<h3 class="font-medium text-gray-12 text-sm">
+									Manual Investigation
+								</h3>
+								<p class="text-xs text-gray-11">
+									You can open the recording folder to inspect the raw files
+									directly.
 								</p>
-								<Show
-									when={isMac()}
-									fallback={
-										<p class="text-xs text-gray-10 italic">
-											Tip: Double-click inside the folder to browse the
-											contents.
-										</p>
-									}
-								>
-									<p class="text-xs text-gray-10 italic">
-										Tip: Right-click and select "Show Enclosing Folder" to see
-										the .cap bundle contents.
+
+								<div class="bg-gray-3 rounded-lg p-3 space-y-2">
+									<p class="text-xs font-mono text-gray-11 break-all">
+										{props.projectPath}
 									</p>
-								</Show>
+									<Show
+										when={isMac()}
+										fallback={
+											<p class="text-xs text-gray-10 italic">
+												Tip: Double-click inside the folder to browse the
+												contents.
+											</p>
+										}
+									>
+										<p class="text-xs text-gray-10 italic">
+											Tip: Right-click and select "Show Enclosing Folder" to see
+											the .cap bundle contents.
+										</p>
+									</Show>
+								</div>
 							</div>
+
+							<Button
+								onClick={handleOpenFolder}
+								variant="outline"
+								class="w-full"
+							>
+								<IconFolder class="size-4 mr-2" />
+								Open Folder
+							</Button>
 						</div>
 
-						<Button onClick={handleOpenFolder} variant="outline" class="w-full">
-							<IconFolder class="size-4 mr-2" />
-							Open Folder
-						</Button>
-					</div>
-
-					<div class="flex justify-center">
-						<button
-							type="button"
-							onClick={() => window.close()}
-							class="text-sm text-gray-10 hover:text-gray-11 transition-colors"
-						>
-							Close Window
-						</button>
-					</div>
+						<div class="flex justify-center">
+							<button
+								type="button"
+								onClick={() => window.close()}
+								class="text-sm text-gray-10 hover:text-gray-11 transition-colors"
+							>
+								Close Window
+							</button>
+						</div>
+					</Show>
+					<Show when={isWebEditor}>
+						<div class="flex justify-center">
+							<button
+								type="button"
+								onClick={() => void getCurrentWindow().close()}
+								class="text-sm text-gray-10 hover:text-gray-11 transition-colors"
+							>
+								Back to recording
+							</button>
+						</div>
+					</Show>
 				</div>
 			</div>
 		</div>

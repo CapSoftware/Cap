@@ -4,7 +4,9 @@ import { stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { type Browser, chromium, webkit } from "@playwright/test";
 import app from "../../editor-worker-app";
+import { parseEditorSocketRequest } from "../../lib/editor-command-socket";
 import {
+	type EditorSocketConnection,
 	editorWebSocketHandler,
 	handleEditorSocketUpgrade,
 } from "../../lib/editor-websocket";
@@ -14,6 +16,12 @@ const videoId = "editor-solid-ui-replay";
 const userId = "editor-solid-ui-user";
 const proCaptions = process.env.CAP_EDITOR_UI_PRO_CAPTIONS === "1";
 const coldMount = process.env.CAP_EDITOR_UI_COLD_MOUNT === "1";
+const recoveryFault = process.env.CAP_EDITOR_UI_RUNTIME_RECOVERY_FAULT === "1";
+const runtimeFault =
+	process.env.CAP_EDITOR_UI_RUNTIME_FAULT === "1" || recoveryFault;
+const runtimeFaultMessage = recoveryFault
+	? "Recording may need to be recovered"
+	: "Editor runtime fault for UI replay";
 const browserEngine =
 	process.env.CAP_EDITOR_UI_BROWSER === "webkit" ? webkit : chromium;
 const editorPublic = resolve(
@@ -322,6 +330,38 @@ try {
 	assert.equal(preparation.status, 202);
 	const prepared = (await preparation.json()) as { id: string };
 	sessionId = await readySession(prepared.id, headers);
+	const socketHandler: Bun.WebSocketHandler<EditorSocketConnection> =
+		runtimeFault
+			? {
+					...editorWebSocketHandler,
+					message(ws, message) {
+						let command = null;
+						try {
+							command = parseEditorSocketRequest(
+								JSON.parse(
+									typeof message === "string"
+										? message
+										: Buffer.from(message).toString("utf8"),
+								),
+							);
+						} catch {}
+						if (
+							command?.kind === "invoke" &&
+							command.name === "createEditorInstance"
+						) {
+							ws.send(
+								JSON.stringify({
+									kind: "error",
+									id: command.id,
+									error: runtimeFaultMessage,
+								}),
+							);
+							return;
+						}
+						editorWebSocketHandler.message(ws, message);
+					},
+				}
+			: editorWebSocketHandler;
 	socketServer = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -329,7 +369,7 @@ try {
 			const upgrade = handleEditorSocketUpgrade(request, listener);
 			return upgrade === null ? app.fetch(request) : upgrade;
 		},
-		websocket: editorWebSocketHandler,
+		websocket: socketHandler,
 	});
 	process.env.CAP_WEB_EDITOR_PUBLIC_ORIGIN = `http://127.0.0.1:${socketServer.port}`;
 	browser = await browserEngine.launch({ headless: true });
@@ -402,6 +442,7 @@ try {
 			const iframe = document.getElementById("editor") as HTMLIFrameElement;
 			const browserWindow = window as typeof window & {
 				capTestEditorError?: string;
+				capTestEditorClosed?: boolean;
 				capTestBridge?: { dispose: () => void };
 				capTestSavedAt?: string | null;
 			};
@@ -410,7 +451,9 @@ try {
 				recordingId,
 				editorSession,
 				ownerId,
-				() => undefined,
+				() => {
+					browserWindow.capTestEditorClosed = true;
+				},
 				(error: Error) => {
 					browserWindow.capTestEditorError = error.message;
 				},
@@ -435,227 +478,266 @@ try {
 		},
 	);
 	const editor = page.frameLocator("#editor");
-	if (coldMount) {
+	if (runtimeFault) {
+		await connecting;
 		await editor
-			.locator("body[data-editor-connect-received=true]")
-			.waitFor({ state: "attached", timeout: 4_000 });
-		await editor
-			.getByRole("button", { name: "Export", exact: true })
-			.waitFor({ timeout: 4_000 });
+			.getByRole("heading", { name: "Unable to Open Recording" })
+			.waitFor({ state: "visible", timeout: 20_000 });
+		assert.equal(await editor.getByText(runtimeFaultMessage).count(), 1);
 		assert.equal(
+			await editor.getByRole("button", { name: "Try again" }).count(),
+			1,
+		);
+		assert.equal(
+			await editor.getByRole("button", { name: "Open Folder" }).count(),
+			0,
+		);
+		assert.equal(
+			await editor.getByRole("button", { name: "Close Window" }).count(),
+			0,
+		);
+		assert.equal(
+			await editor.getByRole("button", { name: "Recover Recording" }).count(),
+			0,
+		);
+		if (process.env.CAP_EDITOR_UI_RUNTIME_ERROR_SCREENSHOT_PATH)
+			await writeFile(
+				process.env.CAP_EDITOR_UI_RUNTIME_ERROR_SCREENSHOT_PATH,
+				await page.screenshot(),
+			);
+		await editor.getByRole("button", { name: "Back to recording" }).click();
+		await page.waitForFunction(
+			() =>
+				(window as typeof window & { capTestEditorClosed?: boolean })
+					.capTestEditorClosed === true,
+		);
+		assert.deepEqual(failedResponses, []);
+		process.stdout.write(
+			`${JSON.stringify({ browserEngine: browserEngine.name(), runtimeFault: true, recoveryFault, nativeOnlyActionsHidden: true, backToRecordingClosedEditor: true, failedResponses })}\n`,
+		);
+	} else {
+		if (coldMount) {
+			await editor
+				.locator("body[data-editor-connect-received=true]")
+				.waitFor({ state: "attached", timeout: 4_000 });
 			await editor
 				.getByRole("button", { name: "Export", exact: true })
-				.isDisabled(),
+				.waitFor({ timeout: 4_000 });
+			assert.equal(
+				await editor
+					.getByRole("button", { name: "Export", exact: true })
+					.isDisabled(),
+				true,
+			);
+			assert.equal(delayedSkeletonRequests, 1);
+			assert.equal(delayedEditorRequests, 1);
+		}
+		await connecting;
+		await editor.getByRole("button", { name: "Export", exact: true }).waitFor({
+			state: "visible",
+			timeout: 20_000,
+		});
+		await editor.getByRole("tab", { name: "Camera" }).waitFor({
+			state: "visible",
+			timeout: 20_000,
+		});
+		assert.equal(
+			await editor.getByRole("tab", { name: "Camera" }).isDisabled(),
+			false,
+		);
+		await editor.getByRole("tab", { name: "Captions" }).click();
+		if (proCaptions) {
+			await editor.getByRole("button", { name: "Generate Captions" }).waitFor({
+				state: "visible",
+				timeout: 20_000,
+			});
+			assert.equal(
+				await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).count(),
+				0,
+			);
+			await editor.getByRole("button", { name: "Generate Captions" }).click();
+			await editor
+				.getByRole("button", { name: "Regenerate Captions" })
+				.waitFor({ state: "visible", timeout: 20_000 });
+			assert.equal(captionRequests, 1);
+			await editor.getByText("Captions", { exact: true }).last().waitFor({
+				state: "visible",
+			});
+		} else {
+			await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
+				state: "visible",
+				timeout: 20_000,
+			});
+			assert.equal(
+				await editor.getByRole("button", { name: "Generate Captions" }).count(),
+				0,
+			);
+			assert.equal(captionRequests, 0);
+		}
+		assert.equal(
+			await editor
+				.getByText(
+					"Cap Pro captions use the same AssemblyAI transcription as your shareable link.",
+				)
+				.isVisible(),
 			true,
 		);
-		assert.equal(delayedSkeletonRequests, 1);
-		assert.equal(delayedEditorRequests, 1);
-	}
-	await connecting;
-	await editor.getByRole("button", { name: "Export", exact: true }).waitFor({
-		state: "visible",
-		timeout: 20_000,
-	});
-	await editor.getByRole("tab", { name: "Camera" }).waitFor({
-		state: "visible",
-		timeout: 20_000,
-	});
-	assert.equal(
-		await editor.getByRole("tab", { name: "Camera" }).isDisabled(),
-		false,
-	);
-	await editor.getByRole("tab", { name: "Captions" }).click();
-	if (proCaptions) {
-		await editor.getByRole("button", { name: "Generate Captions" }).waitFor({
+		assert.equal(await editor.getByText("Download Whisper model").count(), 0);
+		await editor.getByRole("button", { name: "Add track" }).click();
+		const fileChooser = page.waitForEvent("filechooser");
+		await editor.getByRole("button", { name: "Image", exact: true }).click();
+		await (await fileChooser).setFiles(image);
+		await editor.locator("[data-image-overlay]").waitFor({
 			state: "visible",
 			timeout: 20_000,
 		});
-		assert.equal(
-			await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).count(),
-			0,
-		);
-		await editor.getByRole("button", { name: "Generate Captions" }).click();
-		await editor
-			.getByRole("button", { name: "Regenerate Captions" })
-			.waitFor({ state: "visible", timeout: 20_000 });
-		assert.equal(captionRequests, 1);
-		await editor.getByText("Captions", { exact: true }).last().waitFor({
-			state: "visible",
-		});
-	} else {
-		await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
-			state: "visible",
-			timeout: 20_000,
-		});
-		assert.equal(
-			await editor.getByRole("button", { name: "Generate Captions" }).count(),
-			0,
-		);
-		assert.equal(captionRequests, 0);
-	}
-	assert.equal(
-		await editor
-			.getByText(
-				"Cap Pro captions use the same AssemblyAI transcription as your shareable link.",
-			)
-			.isVisible(),
-		true,
-	);
-	assert.equal(await editor.getByText("Download Whisper model").count(), 0);
-	await editor.getByRole("button", { name: "Add track" }).click();
-	const fileChooser = page.waitForEvent("filechooser");
-	await editor.getByRole("button", { name: "Image", exact: true }).click();
-	await (await fileChooser).setFiles(image);
-	await editor.locator("[data-image-overlay]").waitFor({
-		state: "visible",
-		timeout: 20_000,
-	});
-	assert.equal(imageImports, 1);
-	assert.ok(imagePreviewRequests > 0);
-	const screenshot = await page.screenshot();
-	if (process.env.CAP_EDITOR_UI_SCREENSHOT_PATH)
-		await writeFile(process.env.CAP_EDITOR_UI_SCREENSHOT_PATH, screenshot);
-	let playbackAdvanced = false;
-	if (proCaptions) {
-		await editor.getByRole("button", { name: "Play video" }).click();
-		await editor.getByRole("button", { name: "Pause video" }).waitFor({
-			state: "visible",
-			timeout: 10_000,
-		});
-		await editor
-			.getByText(/^0:00\.[1-9]\d$/)
-			.first()
-			.waitFor({
+		assert.equal(imageImports, 1);
+		assert.ok(imagePreviewRequests > 0);
+		const screenshot = await page.screenshot();
+		if (process.env.CAP_EDITOR_UI_SCREENSHOT_PATH)
+			await writeFile(process.env.CAP_EDITOR_UI_SCREENSHOT_PATH, screenshot);
+		let playbackAdvanced = false;
+		if (proCaptions) {
+			await editor.getByRole("button", { name: "Play video" }).click();
+			await editor.getByRole("button", { name: "Pause video" }).waitFor({
 				state: "visible",
 				timeout: 10_000,
 			});
-		playbackAdvanced = true;
-		await editor.getByRole("button", { name: "Pause video" }).click();
-	}
-	await editor.getByRole("tab", { name: "Camera" }).click();
-	await editor.getByText("Hide Camera").waitFor({ state: "visible" });
-	const cameraBackground = editor
-		.getByText("Background", { exact: true })
-		.locator("..");
-	await cameraBackground.locator("button").click();
-	await editor.getByRole("option", { name: "Remove Background" }).click();
-	await cameraBackground.getByText("Remove Background").waitFor({
-		state: "visible",
-	});
-	await editor.getByRole("button", { name: "Export", exact: true }).click();
-	await editor.getByRole("button", { name: "Back to editor" }).waitFor({
-		state: "visible",
-		timeout: 20_000,
-	});
-	await editor.getByRole("button", { name: "Export to File" }).waitFor({
-		state: "visible",
-		timeout: 20_000,
-	});
-	try {
-		await editor.getByRole("img", { name: "Export preview" }).waitFor({
+			await editor
+				.getByText(/^0:00\.[1-9]\d$/)
+				.first()
+				.waitFor({
+					state: "visible",
+					timeout: 10_000,
+				});
+			playbackAdvanced = true;
+			await editor.getByRole("button", { name: "Pause video" }).click();
+		}
+		await editor.getByRole("tab", { name: "Camera" }).click();
+		await editor.getByText("Hide Camera").waitFor({ state: "visible" });
+		const cameraBackground = editor
+			.getByText("Background", { exact: true })
+			.locator("..");
+		await cameraBackground.locator("button").click();
+		await editor.getByRole("option", { name: "Remove Background" }).click();
+		await cameraBackground.getByText("Remove Background").waitFor({
+			state: "visible",
+		});
+		await editor.getByRole("button", { name: "Export", exact: true }).click();
+		await editor.getByRole("button", { name: "Back to editor" }).waitFor({
 			state: "visible",
 			timeout: 20_000,
 		});
-	} catch (cause) {
-		throw new Error(
-			`Export preview failed: ${JSON.stringify({ pageErrors, failedResponses, pageText: (await editor.locator("body").innerText()).slice(0, 2_000) })}`,
-			{ cause },
+		await editor.getByRole("button", { name: "Export to File" }).waitFor({
+			state: "visible",
+			timeout: 20_000,
+		});
+		try {
+			await editor.getByRole("img", { name: "Export preview" }).waitFor({
+				state: "visible",
+				timeout: 20_000,
+			});
+		} catch (cause) {
+			throw new Error(
+				`Export preview failed: ${JSON.stringify({ pageErrors, failedResponses, pageText: (await editor.locator("body").innerText()).slice(0, 2_000) })}`,
+				{ cause },
+			);
+		}
+		const exportScreenshot = await page.screenshot();
+		if (process.env.CAP_EDITOR_UI_EXPORT_SCREENSHOT_PATH)
+			await writeFile(
+				process.env.CAP_EDITOR_UI_EXPORT_SCREENSHOT_PATH,
+				exportScreenshot,
+			);
+		const bridgeError = await page.evaluate(
+			() =>
+				(window as typeof window & { capTestEditorError?: string })
+					.capTestEditorError ?? null,
+		);
+		assert.equal(bridgeError, null);
+		assert.deepEqual(pageErrors, []);
+		assert.deepEqual(failedResponses, []);
+		process.stdout.write(
+			`${JSON.stringify({
+				videoId,
+				browserEngine: browserEngine.name(),
+				proCaptions,
+				coldMount,
+				delayedSkeletonRequests,
+				delayedEditorRequests,
+				separateCameraTabEnabled: true,
+				freeCaptionsUpgradeVisible: !proCaptions,
+				proCaptionGenerationVisible: proCaptions,
+				proCaptionGenerationApplied: proCaptions && captionRequests === 1,
+				playbackAdvanced,
+				localModelDownloadsAbsent: true,
+				imageOverlayImported: imageImports === 1 && imagePreviewRequests > 0,
+				cameraControlsVisible: true,
+				cameraBackgroundRemovalSelectable: true,
+				exportPreviewVisible: true,
+				screenshotSha256: createHash("sha256").update(screenshot).digest("hex"),
+				exportScreenshotSha256: createHash("sha256")
+					.update(exportScreenshot)
+					.digest("hex"),
+				pageErrors,
+				failedResponses,
+				rendererFallbacks: rendererFallbacks.length,
+			})}\n`,
+		);
+		await page.evaluate(() => {
+			(
+				window as typeof window & { capTestBridge?: { dispose: () => void } }
+			).capTestBridge?.dispose();
+		});
+		await page.close();
+		const faultPage = await browser.newPage();
+		let blockedEditorChunks = 0;
+		await faultPage.route(
+			/\/editor-solid\/assets\/Editor-[^/]+\.js(?:\?.*)?$/,
+			async (route) => {
+				blockedEditorChunks++;
+				await route.abort("failed");
+			},
+		);
+		await faultPage.goto(`${base}/test-editor`);
+		await faultPage.locator("#editor").evaluate(async (frame) => {
+			const iframe = frame as HTMLIFrameElement;
+			if (iframe.contentDocument?.readyState === "complete") return;
+			await new Promise<void>((resolve) =>
+				iframe.addEventListener("load", () => resolve(), { once: true }),
+			);
+		});
+		const mountFailure = await faultPage.evaluate(
+			async ({ recordingId, editorSession, ownerId }) => {
+				const { EditorHostBridge } = await import(
+					new URL("/test-host.js", location.origin).href
+				);
+				const iframe = document.getElementById("editor") as HTMLIFrameElement;
+				const bridge = new EditorHostBridge(
+					recordingId,
+					editorSession,
+					ownerId,
+					() => undefined,
+					() => undefined,
+				);
+				try {
+					await bridge.connect(iframe);
+					return null;
+				} catch (cause) {
+					return cause instanceof Error ? cause.message : String(cause);
+				} finally {
+					bridge.dispose();
+				}
+			},
+			{ recordingId: videoId, editorSession: sessionId, ownerId: userId },
+		);
+		assert.ok(blockedEditorChunks > 0);
+		assert.equal(mountFailure, "Editor could not load");
+		await faultPage.close();
+		process.stdout.write(
+			`${JSON.stringify({ editorChunkFailureVisible: true, blockedEditorChunks })}\n`,
 		);
 	}
-	const exportScreenshot = await page.screenshot();
-	if (process.env.CAP_EDITOR_UI_EXPORT_SCREENSHOT_PATH)
-		await writeFile(
-			process.env.CAP_EDITOR_UI_EXPORT_SCREENSHOT_PATH,
-			exportScreenshot,
-		);
-	const bridgeError = await page.evaluate(
-		() =>
-			(window as typeof window & { capTestEditorError?: string })
-				.capTestEditorError ?? null,
-	);
-	assert.equal(bridgeError, null);
-	assert.deepEqual(pageErrors, []);
-	assert.deepEqual(failedResponses, []);
-	process.stdout.write(
-		`${JSON.stringify({
-			videoId,
-			browserEngine: browserEngine.name(),
-			proCaptions,
-			coldMount,
-			delayedSkeletonRequests,
-			delayedEditorRequests,
-			separateCameraTabEnabled: true,
-			freeCaptionsUpgradeVisible: !proCaptions,
-			proCaptionGenerationVisible: proCaptions,
-			proCaptionGenerationApplied: proCaptions && captionRequests === 1,
-			playbackAdvanced,
-			localModelDownloadsAbsent: true,
-			imageOverlayImported: imageImports === 1 && imagePreviewRequests > 0,
-			cameraControlsVisible: true,
-			cameraBackgroundRemovalSelectable: true,
-			exportPreviewVisible: true,
-			screenshotSha256: createHash("sha256").update(screenshot).digest("hex"),
-			exportScreenshotSha256: createHash("sha256")
-				.update(exportScreenshot)
-				.digest("hex"),
-			pageErrors,
-			failedResponses,
-			rendererFallbacks: rendererFallbacks.length,
-		})}\n`,
-	);
-	await page.evaluate(() => {
-		(
-			window as typeof window & { capTestBridge?: { dispose: () => void } }
-		).capTestBridge?.dispose();
-	});
-	await page.close();
-	const faultPage = await browser.newPage();
-	let blockedEditorChunks = 0;
-	await faultPage.route(
-		/\/editor-solid\/assets\/Editor-[^/]+\.js(?:\?.*)?$/,
-		async (route) => {
-			blockedEditorChunks++;
-			await route.abort("failed");
-		},
-	);
-	await faultPage.goto(`${base}/test-editor`);
-	await faultPage.locator("#editor").evaluate(async (frame) => {
-		const iframe = frame as HTMLIFrameElement;
-		if (iframe.contentDocument?.readyState === "complete") return;
-		await new Promise<void>((resolve) =>
-			iframe.addEventListener("load", () => resolve(), { once: true }),
-		);
-	});
-	const mountFailure = await faultPage.evaluate(
-		async ({ recordingId, editorSession, ownerId }) => {
-			const { EditorHostBridge } = await import(
-				new URL("/test-host.js", location.origin).href
-			);
-			const iframe = document.getElementById("editor") as HTMLIFrameElement;
-			const bridge = new EditorHostBridge(
-				recordingId,
-				editorSession,
-				ownerId,
-				() => undefined,
-				() => undefined,
-			);
-			try {
-				await bridge.connect(iframe);
-				return null;
-			} catch (cause) {
-				return cause instanceof Error ? cause.message : String(cause);
-			} finally {
-				bridge.dispose();
-			}
-		},
-		{ recordingId: videoId, editorSession: sessionId, ownerId: userId },
-	);
-	assert.ok(blockedEditorChunks > 0);
-	assert.equal(mountFailure, "Editor could not load");
-	await faultPage.close();
-	process.stdout.write(
-		`${JSON.stringify({ editorChunkFailureVisible: true, blockedEditorChunks })}\n`,
-	);
 } finally {
 	if (sessionId)
 		await app.request(`/editor/sessions/${sessionId}`, {
