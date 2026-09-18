@@ -706,6 +706,8 @@ impl AudioSource for Microphone {
                     let mut stale_count: u32 = 0;
                     let mut high_drop_intervals: u32 = 0;
                     let mut high_silence_intervals: u32 = 0;
+                    let mut silence_stall_start: Option<Instant> = None;
+                    let mut silence_stall_emitted = false;
                     loop {
                         tokio::select! {
                             biased;
@@ -766,18 +768,25 @@ impl AudioSource for Microphone {
 
                             let is_muted = recording_muted.load(Ordering::Relaxed);
                             if is_audio_starved(captured_delta, silence_delta, is_muted) {
+                                if silence_stall_start.is_none() {
+                                    silence_stall_start = Some(Instant::now());
+                                }
                                 high_silence_intervals = high_silence_intervals.saturating_add(1);
                             } else {
                                 high_silence_intervals = 0;
+                                silence_stall_start = None;
+                                silence_stall_emitted = false;
                             }
-                            if high_silence_intervals >= 2 {
+                            if high_silence_intervals >= 2 && !silence_stall_emitted {
+                                silence_stall_emitted = true;
+                                let waited_ms = silence_stall_start
+                                    .map(|s| s.elapsed().as_millis() as u64)
+                                    .unwrap_or(0);
                                 emit_health(
                                     &health_tx,
                                     PipelineHealthEvent::Stalled {
                                         source: "microphone".to_string(),
-                                        waited_ms: (silence_delta as u64).saturating_mul(
-                                            SILENCE_CHUNK_DURATION.as_millis() as u64,
-                                        ),
+                                        waited_ms,
                                     },
                                 );
                             }
