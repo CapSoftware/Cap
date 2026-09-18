@@ -1,4 +1,4 @@
-FROM rust:1.90-trixie AS native-builder
+FROM rust:1.90-trixie@sha256:e227f20ec42af3ea9a3c9c1dd1b2012aa15f12279b5e9d5fb890ca1c2bb5726c AS native-builder
 
 ARG TARGETARCH
 
@@ -45,7 +45,7 @@ RUN set -eu; \
 	install -Dm644 "/tmp/${ort_asset}/LICENSE" /out/onnxruntime/LICENSE; \
 	install -Dm644 "/tmp/${ort_asset}/ThirdPartyNotices.txt" /out/onnxruntime/ThirdPartyNotices.txt
 
-FROM oven/bun:1.4.0 AS worker-runtime
+FROM oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6 AS worker-runtime
 
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends \
