@@ -68,6 +68,7 @@ cap-media-info = { path = "../media-info" }
 tempfile = "3"
 pollster = "0.4.0"
 pretty_assertions = "1.4.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [build-dependencies]
 build-time = "0.1"
