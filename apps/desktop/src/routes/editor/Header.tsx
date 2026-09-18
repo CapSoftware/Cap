@@ -49,6 +49,10 @@ export type TitleSaveRegistration = {
 };
 
 type RegisterTitleSave = (save: TitleSaveRegistration | undefined) => void;
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
+const recordingBundleActionLabel = isWebEditor
+	? "Download recording bundle"
+	: "Open recording bundle";
 
 export function Header(props: {
 	registerTitleSave: RegisterTitleSave;
@@ -127,11 +131,22 @@ export function Header(props: {
 					<EditorButton
 						onClick={() => {
 							clearTimelineSelection();
-
-							console.log({ path: `${editorInstance.path}/` });
-							revealItemInDir(`${editorInstance.path}/`);
+							const path = `${editorInstance.path}/`;
+							if (isWebEditor) {
+								void revealItemInDir(path).catch((error: unknown) => {
+									toast.error(
+										error instanceof Error
+											? error.message
+											: "Unable to download recording bundle",
+									);
+								});
+								return;
+							}
+							console.log({ path });
+							revealItemInDir(path);
 						}}
-						tooltipText="Open recording bundle"
+						tooltipText={recordingBundleActionLabel}
+						aria-label={recordingBundleActionLabel}
 						leftIcon={<IconLucideFolder />}
 					/>
 					<EditorButton

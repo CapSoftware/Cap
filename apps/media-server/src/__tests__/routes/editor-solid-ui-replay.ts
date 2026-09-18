@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
+import {
+	CAP_BUNDLE_HEADER_BYTES,
+	parseCapBundleManifest,
+	readCapBundleManifestLength,
+} from "@cap/editor-cap-bundle";
 import { type Browser, chromium, webkit } from "@playwright/test";
 import app from "../../editor-worker-app";
 import { parseEditorSocketRequest } from "../../lib/editor-command-socket";
@@ -100,6 +105,7 @@ let browser: Browser | null = null;
 let sessionId: string | null = null;
 let savedAt: string | null = null;
 let captionRequests = 0;
+let bundleTicketRequests = 0;
 let imageImports = 0;
 let imagePreviewRequests = 0;
 let uploadedImage: Uint8Array<ArrayBuffer> | null = null;
@@ -153,6 +159,24 @@ try {
 			}
 			if (sessionId) {
 				const apiRoot = `/api/editor/sessions/${encodeURIComponent(sessionId)}`;
+				if (
+					url.pathname === `${apiRoot}/project-bundle/download-ticket` &&
+					request.method === "POST"
+				) {
+					const payload = (await request.json()) as { videoId?: string };
+					if (payload.videoId !== videoId)
+						return new Response("Invalid recording", { status: 403 });
+					const ticketed = await app.request(
+						`/editor/sessions/${sessionId}/project-bundle/download-ticket`,
+						{
+							method: "POST",
+							headers,
+							body: JSON.stringify({ fileName: "Cap Recording.capbundle" }),
+						},
+					);
+					if (ticketed.ok) bundleTicketRequests++;
+					return ticketed;
+				}
 				if (url.pathname === `${apiRoot}/assets`) {
 					if (request.method === "GET") return Response.json({ path: null });
 					const payload = (await request.json()) as {
@@ -376,6 +400,21 @@ try {
 	const page = await browser.newPage({
 		viewport: { width: 1440, height: 900 },
 	});
+	await page.addInitScript(() => {
+		const nativeClose = WebSocket.prototype.close;
+		WebSocket.prototype.close = function (code?: number, reason?: string) {
+			if (code === 4003) {
+				const browserWindow = window as typeof window & {
+					capTestInvalidFrameCloses?: number;
+				};
+				browserWindow.capTestInvalidFrameCloses =
+					(browserWindow.capTestInvalidFrameCloses ?? 0) + 1;
+			}
+			if (code === undefined) return nativeClose.call(this);
+			if (reason === undefined) return nativeClose.call(this, code);
+			return nativeClose.call(this, code, reason);
+		};
+	});
 	const pageErrors: string[] = [];
 	const rendererFallbacks: string[] = [];
 	const failedResponses: string[] = [];
@@ -407,7 +446,9 @@ try {
 			},
 		);
 	}
-	page.on("pageerror", (error) => pageErrors.push(error.message));
+	page.on("pageerror", (error) =>
+		pageErrors.push(error.stack ?? error.message),
+	);
 	page.on("console", (message) => {
 		if (message.type() !== "error") return;
 		if (
@@ -545,6 +586,49 @@ try {
 			await editor.getByRole("tab", { name: "Camera" }).isDisabled(),
 			false,
 		);
+		const bundleDownload = page.waitForEvent("download");
+		await editor
+			.getByRole("button", { name: "Download recording bundle" })
+			.click();
+		let bundle: Awaited<typeof bundleDownload>;
+		try {
+			bundle = await bundleDownload;
+		} catch (cause) {
+			throw new Error(
+				`Recording bundle download failed: ${JSON.stringify({ bundleTicketRequests, pageErrors, failedResponses, pageText: (await editor.locator("body").innerText()).slice(0, 2_000) })}`,
+				{ cause },
+			);
+		}
+		assert.equal(bundle.suggestedFilename(), "Cap Recording.capbundle");
+		assert.equal(await bundle.failure(), null);
+		assert.equal(bundleTicketRequests, 1);
+		const bundleBytes = Buffer.from(
+			await Bun.file(await bundle.path()).arrayBuffer(),
+		);
+		const bundleManifestLength = readCapBundleManifestLength(
+			bundleBytes.subarray(0, CAP_BUNDLE_HEADER_BYTES),
+		);
+		assert.ok(bundleManifestLength);
+		const bundleManifest = parseCapBundleManifest(
+			bundleBytes.subarray(
+				CAP_BUNDLE_HEADER_BYTES,
+				CAP_BUNDLE_HEADER_BYTES + bundleManifestLength,
+			),
+			bundleBytes.byteLength,
+		);
+		assert.ok(bundleManifest);
+		assert.ok(
+			bundleManifest.files.some((file) =>
+				file.path.startsWith("content/segments/segment-0/display."),
+			),
+			JSON.stringify(bundleManifest.files.map((file) => file.path)),
+		);
+		assert.ok(
+			bundleManifest.files.some((file) =>
+				file.path.startsWith("content/segments/segment-0/camera."),
+			),
+			JSON.stringify(bundleManifest.files.map((file) => file.path)),
+		);
 		await editor.getByRole("tab", { name: "Captions" }).click();
 		if (proCaptions) {
 			await editor.getByRole("button", { name: "Generate Captions" }).waitFor({
@@ -654,7 +738,15 @@ try {
 				(window as typeof window & { capTestEditorError?: string })
 					.capTestEditorError ?? null,
 		);
+		const invalidFrameCloses = await editor
+			.locator("body")
+			.evaluate(
+				() =>
+					(window as typeof window & { capTestInvalidFrameCloses?: number })
+						.capTestInvalidFrameCloses ?? 0,
+			);
 		assert.equal(bridgeError, null);
+		assert.equal(invalidFrameCloses, 0);
 		assert.deepEqual(pageErrors, []);
 		assert.deepEqual(failedResponses, []);
 		process.stdout.write(
@@ -666,6 +758,7 @@ try {
 				delayedSkeletonRequests,
 				delayedEditorRequests,
 				separateCameraTabEnabled: true,
+				recordingBundleDownloaded: bundleTicketRequests === 1,
 				freeCaptionsUpgradeVisible: !proCaptions,
 				proCaptionGenerationVisible: proCaptions,
 				proCaptionGenerationApplied: proCaptions && captionRequests === 1,
@@ -682,6 +775,7 @@ try {
 				pageErrors,
 				failedResponses,
 				rendererFallbacks: rendererFallbacks.length,
+				invalidFrameCloses,
 			})}\n`,
 		);
 		await page.evaluate(() => {
