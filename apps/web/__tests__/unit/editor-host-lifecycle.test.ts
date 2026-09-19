@@ -862,6 +862,77 @@ test("share controls use a fresh web plan and open the existing upgrade flow", a
 	}
 });
 
+test("caption access follows a changed Cap Pro plan without reconnecting the editor", async () => {
+	let pro = false;
+	let captionRequests = 0;
+	const captions = {
+		settings: null,
+		segments: [
+			{
+				id: "segment-0",
+				text: "Hello",
+				start: 0.1,
+				end: 0.4,
+				words: [{ text: "Hello", start: 0.1, end: 0.4 }],
+			},
+		],
+	};
+	const { bridge, port } = await connectedExportHost(async (url, init) => {
+		if (url.endsWith("/plan?videoId=video")) return Response.json({ pro });
+		if (url.endsWith("/captions") && init?.method === "POST") {
+			captionRequests++;
+			return Response.json({ status: "ready", captions, message: null });
+		}
+		throw new Error(`Unexpected editor request: ${url}`);
+	});
+	const invoke = async (id: number, name: string, args: unknown[] = []) => {
+		const reply = new Promise<unknown>((resolve) => {
+			port.onmessage = (event: MessageEvent<unknown>) => resolve(event.data);
+		});
+		port.postMessage({ kind: "invoke", id, name, args });
+		return reply;
+	};
+	const transcriptionArgs = [
+		"cap-web-editor://session/session",
+		"cap-web-editor://app-local-data/transcription_models/best.bin",
+		"auto",
+		"Parakeet",
+	];
+	try {
+		expect(await invoke(1, "transcribeAudio", transcriptionArgs)).toEqual({
+			kind: "error",
+			id: 1,
+			error: "Cap Pro is required for web editor captions",
+		});
+		pro = true;
+		expect(await invoke(2, "checkUpgradedAndUpdate")).toEqual({
+			kind: "result",
+			id: 2,
+			value: true,
+		});
+		expect(await invoke(3, "transcribeAudio", transcriptionArgs)).toEqual({
+			kind: "result",
+			id: 3,
+			value: captions,
+		});
+		pro = false;
+		expect(await invoke(4, "checkUpgradedAndUpdate")).toEqual({
+			kind: "result",
+			id: 4,
+			value: false,
+		});
+		expect(await invoke(5, "transcribeAudio", transcriptionArgs)).toEqual({
+			kind: "error",
+			id: 5,
+			error: "Cap Pro is required for web editor captions",
+		});
+		expect(captionRequests).toBe(1);
+	} finally {
+		port.close();
+		bridge.dispose();
+	}
+});
+
 test("Solid export progress is delivered before a verified direct browser download", async () => {
 	const requests: Array<{ url: string; init?: RequestInit }> = [];
 	let polled = 0;

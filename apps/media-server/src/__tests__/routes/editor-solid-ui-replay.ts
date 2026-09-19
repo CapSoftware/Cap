@@ -105,6 +105,7 @@ let browser: Browser | null = null;
 let sessionId: string | null = null;
 let savedAt: string | null = null;
 let captionRequests = 0;
+let currentCaptionPlan = proCaptions;
 let bundleTicketRequests = 0;
 let imageImports = 0;
 let imagePreviewRequests = 0;
@@ -248,7 +249,7 @@ try {
 						request.method === "GET"
 							? url.searchParams.get("videoId")
 							: ((await request.json()) as { videoId?: string }).videoId;
-					if (!proCaptions || requestedVideoId !== videoId)
+					if (!currentCaptionPlan || requestedVideoId !== videoId)
 						return new Response("Cap Pro is required for captions", {
 							status: 403,
 						});
@@ -321,7 +322,7 @@ try {
 					}
 				}
 				if (url.pathname === `${apiRoot}/plan` && request.method === "GET")
-					return Response.json({ pro: proCaptions });
+					return Response.json({ pro: currentCaptionPlan });
 				if (url.pathname === `${apiRoot}/assets` && request.method === "GET")
 					return Response.json({ path: null });
 			}
@@ -750,6 +751,40 @@ try {
 			);
 			assert.equal(captionRequests, 0);
 		}
+		currentCaptionPlan = !proCaptions;
+		await editor
+			.locator("body")
+			.evaluate(() => window.dispatchEvent(new Event("focus")));
+		if (proCaptions) {
+			await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
+				state: "visible",
+			});
+			assert.equal(
+				await editor
+					.getByRole("button", { name: "Regenerate Captions" })
+					.count(),
+				0,
+			);
+		} else {
+			await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
+				state: "hidden",
+			});
+		}
+		currentCaptionPlan = proCaptions;
+		await editor
+			.locator("body")
+			.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+		if (proCaptions) {
+			await editor
+				.getByRole("button", { name: "Regenerate Captions" })
+				.waitFor({
+					state: "visible",
+				});
+		} else {
+			await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
+				state: "visible",
+			});
+		}
 		assert.equal(
 			await editor
 				.getByText(
@@ -857,6 +892,7 @@ try {
 				freeCaptionsUpgradeVisible: !proCaptions,
 				proCaptionGenerationVisible: proCaptions,
 				proCaptionGenerationApplied: proCaptions && captionRequests === 1,
+				captionPlanChangesWithoutReload: true,
 				playbackAdvanced,
 				localModelDownloadsAbsent: true,
 				imageOverlayImported: imageImports === 1 && imagePreviewRequests > 0,

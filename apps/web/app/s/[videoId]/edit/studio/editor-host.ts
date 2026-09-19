@@ -364,6 +364,7 @@ export class EditorHostBridge {
 		File,
 		WebEditorImportedVideo
 	>();
+	private planRequestSequence = 0;
 
 	constructor(
 		private readonly videoId: string,
@@ -379,7 +380,7 @@ export class EditorHostBridge {
 		) => void,
 		private readonly onOpenClipRecorder?: () => void,
 		private readonly onImportNeedsReload?: () => Promise<void>,
-		private readonly captionsEnabled = false,
+		private captionsEnabled = false,
 		private readonly onUpgrade?: () => void,
 		private readonly onProjectSaved?: (savedAt: string) => void,
 		private readonly getProjectSavedAt?: () => string | null,
@@ -410,6 +411,7 @@ export class EditorHostBridge {
 	}
 
 	private async currentPlan() {
+		const requestSequence = ++this.planRequestSequence;
 		const response = await fetch(
 			`/api/editor/sessions/${encodeURIComponent(this.sessionId)}/plan?videoId=${encodeURIComponent(this.videoId)}`,
 			{ cache: "no-store", signal: this.controller.signal },
@@ -424,6 +426,8 @@ export class EditorHostBridge {
 		) {
 			throw new Error("Recording plan response was invalid");
 		}
+		if (requestSequence === this.planRequestSequence)
+			this.captionsEnabled = value.pro;
 		return value.pro;
 	}
 

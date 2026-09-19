@@ -258,6 +258,23 @@ export function CaptionsTab(props: {
 }) {
 	const { project, setProject, editorInstance, editorState, setEditorState } =
 		useEditorContext();
+	const [webCaptionsProEnabled, setWebCaptionsProEnabled] = createSignal(
+		isWebEditor && webCaptionsEnabled(),
+	);
+	let planRequestSequence = 0;
+	const refreshWebCaptionPlan = async () => {
+		const requestSequence = ++planRequestSequence;
+		try {
+			const enabled = await commands.checkUpgradedAndUpdate();
+			if (requestSequence === planRequestSequence)
+				setWebCaptionsProEnabled(enabled);
+		} catch {
+			return;
+		}
+	};
+	const refreshWebCaptionPlanOnVisibility = () => {
+		if (!document.hidden) void refreshWebCaptionPlan();
+	};
 
 	const selectedCaptionIndex = () =>
 		editorState.timeline.selection?.type === "caption" &&
@@ -570,6 +587,12 @@ export function CaptionsTab(props: {
 
 	onMount(async () => {
 		if (isWebEditor) {
+			window.addEventListener("focus", refreshWebCaptionPlan);
+			document.addEventListener(
+				"visibilitychange",
+				refreshWebCaptionPlanOnVisibility,
+			);
+			void refreshWebCaptionPlan();
 			const savedLanguage = localStorage.getItem(
 				"selectedTranscriptionLanguage",
 			);
@@ -648,6 +671,14 @@ export function CaptionsTab(props: {
 	});
 
 	onCleanup(() => {
+		if (isWebEditor) {
+			planRequestSequence++;
+			window.removeEventListener("focus", refreshWebCaptionPlan);
+			document.removeEventListener(
+				"visibilitychange",
+				refreshWebCaptionPlanOnVisibility,
+			);
+		}
 		if (unlistenDownloadProgress) unlistenDownloadProgress();
 		stopDownloadStatusPolling();
 	});
@@ -810,7 +841,7 @@ export function CaptionsTab(props: {
 						Cap Pro captions use the same AssemblyAI transcription as your
 						shareable link.
 					</p>
-					<Show when={!webCaptionsEnabled()}>
+					<Show when={!webCaptionsProEnabled()}>
 						<a
 							href="/pricing"
 							target="_blank"
@@ -820,7 +851,7 @@ export function CaptionsTab(props: {
 							Upgrade to Cap Pro
 						</a>
 					</Show>
-					<Show when={webCaptionsEnabled() && hasAudio()}>
+					<Show when={webCaptionsProEnabled() && hasAudio()}>
 						<Field name="Language" inline>
 							<KSelect<string>
 								options={WEB_LANGUAGE_OPTIONS.map((option) => option.code)}
