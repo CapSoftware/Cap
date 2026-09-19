@@ -187,6 +187,9 @@ export function createWS(url: string) {
 	let h264DisplayEpoch = 0;
 	let h264LowRequested = false;
 	let bandwidthProbeStartedAt: number | null = null;
+	let bandwidthProbeRequested = false;
+	let networkCheckTimer: ReturnType<typeof setInterval> | null = null;
+	let networkChangeListener: (() => void) | null = null;
 	let h264FirstPacketTime: number | null = null;
 	let h264FirstTargetNs: bigint | null = null;
 	let h264LastTargetNs: bigint | null = null;
@@ -283,6 +286,7 @@ export function createWS(url: string) {
 	const fallbackToPng = (reason: string) => {
 		if (!h264Requested) return;
 		console.warn("Editor H.264 preview switched to PNG", reason);
+		stopNetworkWatch();
 		h264Requested = false;
 		h264ConfigGeneration++;
 		h264Decoder?.close();
@@ -454,28 +458,65 @@ export function createWS(url: string) {
 			);
 		}
 	};
+	const connection =
+		typeof navigator === "undefined"
+			? undefined
+			: (
+					navigator as Navigator & {
+						connection?: EventTarget & { downlink?: number };
+					}
+				).connection;
+	const stopNetworkWatch = () => {
+		if (networkCheckTimer !== null) clearInterval(networkCheckTimer);
+		networkCheckTimer = null;
+		if (networkChangeListener)
+			connection?.removeEventListener?.("change", networkChangeListener);
+		networkChangeListener = null;
+	};
+	const requestBandwidthProbe = () => {
+		if (
+			!h264Requested ||
+			bandwidthProbeRequested ||
+			socket.readyState !== WebSocket.OPEN
+		)
+			return;
+		bandwidthProbeRequested = true;
+		bandwidthProbeStartedAt = performance.now();
+		socket.send('{"probe":"bandwidth"}');
+	};
 	socket.addEventListener("open", () => {
 		if (h264Requested) {
 			socket.send('{"mode":"h264"}');
 			socket.send('{"bitrate":"low"}');
 			h264LowRequested = true;
-			const downlink =
-				typeof navigator === "undefined"
-					? undefined
-					: (navigator as Navigator & { connection?: { downlink?: number } })
-							.connection?.downlink;
+			const downlink = connection?.downlink;
 			if (
 				typeof downlink === "number" &&
 				Number.isFinite(downlink) &&
 				downlink > 0 &&
 				downlink <= 6
 			) {
+				const checkNetwork = () => {
+					const latest = connection?.downlink;
+					if (
+						typeof latest !== "number" ||
+						!Number.isFinite(latest) ||
+						latest <= 6
+					)
+						return;
+					requestBandwidthProbe();
+					if (!bandwidthProbeRequested) return;
+					stopNetworkWatch();
+				};
+				networkChangeListener = checkNetwork;
+				connection?.addEventListener?.("change", checkNetwork);
+				networkCheckTimer = setInterval(checkNetwork, 30_000);
 				return;
 			}
-			bandwidthProbeStartedAt = performance.now();
-			socket.send('{"probe":"bandwidth"}');
+			requestBandwidthProbe();
 		}
 	});
+	socket.addEventListener("close", stopNetworkWatch);
 	socket.addEventListener("message", (event: MessageEvent<unknown>) => {
 		if (event.data instanceof ArrayBuffer && isBandwidthProbe(event.data)) {
 			event.stopImmediatePropagation();
@@ -582,6 +623,7 @@ export function createWS(url: string) {
 		}
 	});
 	onCleanup(() => {
+		stopNetworkWatch();
 		h264ConfigGeneration++;
 		h264Requested = false;
 		h264Decoder?.close();

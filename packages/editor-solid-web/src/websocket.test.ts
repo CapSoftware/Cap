@@ -69,7 +69,7 @@ test("the browser view refuses an insecure remote frame socket", () => {
 	).toThrow("Invalid editor frame socket credential");
 });
 
-test("a WebCodecs browser starts with one H.264 upstream and skips a slow-link probe", () => {
+test("a WebCodecs browser skips the slow-link startup probe and restores high quality after a network change", () => {
 	globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
 	MockWebSocket.sockets = [];
 	const webCodecs = [
@@ -91,8 +91,10 @@ test("a WebCodecs browser starts with one H.264 upstream and skips a slow-link p
 				configurable: true,
 			});
 		}
+		const connection = new EventTarget() as EventTarget & { downlink: number };
+		connection.downlink = 5;
 		Object.defineProperty(globalThis.navigator, "connection", {
-			value: { downlink: 5 },
+			value: connection,
 			configurable: true,
 		});
 		const url = "wss://editor.cap.so/editor/sessions/fixture/frames";
@@ -101,6 +103,15 @@ test("a WebCodecs browser starts with one H.264 upstream and skips a slow-link p
 		createRoot((dispose) => {
 			const socket = createWS(url);
 			socket.dispatchEvent(new Event("open"));
+			expect(MockWebSocket.sockets[0]?.messages).toEqual([
+				JSON.stringify({ mode: "h264" }),
+				JSON.stringify({ bitrate: "low" }),
+			]);
+			connection.downlink = 9;
+			connection.dispatchEvent(new Event("change"));
+			const probe = new Uint8Array(8 + 512 * 1024);
+			probe.set([67, 65, 80, 66, 65, 78, 68, 49]);
+			socket.dispatchEvent(new MessageEvent("message", { data: probe.buffer }));
 			dispose();
 		});
 		expect(MockWebSocket.sockets[0]?.protocols).toEqual([
@@ -111,6 +122,8 @@ test("a WebCodecs browser starts with one H.264 upstream and skips a slow-link p
 		expect(MockWebSocket.sockets[0]?.messages).toEqual([
 			JSON.stringify({ mode: "h264" }),
 			JSON.stringify({ bitrate: "low" }),
+			JSON.stringify({ probe: "bandwidth" }),
+			JSON.stringify({ bitrate: "high" }),
 		]);
 	} finally {
 		for (const [index, name] of webCodecs.entries()) {
