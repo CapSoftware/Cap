@@ -301,9 +301,28 @@ async function replayPairedCapture(
 		});
 
 		await page.goto("https://capture.test/harness");
-		await page.waitForFunction(
-			() => window.capRecorderHarness?.canStartRecording === true,
-		);
+		try {
+			await page.waitForFunction(
+				() => window.capRecorderHarness?.canStartRecording === true,
+			);
+		} catch (error) {
+			const diagnostics = await page.evaluate(() => ({
+				readyState: document.readyState,
+				mediaDevices: Boolean(navigator.mediaDevices),
+				mediaRecorder: typeof MediaRecorder,
+				harnessMounted: Boolean(window.capRecorderHarness),
+			}));
+			throw new Error(
+				"Capture harness failed to initialize: " +
+					JSON.stringify({
+						engine: engine.name,
+						pauseResume,
+						browserErrors,
+						diagnostics,
+					}),
+				{ cause: error },
+			);
+		}
 		await page.evaluate(() => window.capRecorderHarness.startRecording());
 		await page.waitForFunction(
 			() => window.capRecorderHarness?.phase === "recording",
