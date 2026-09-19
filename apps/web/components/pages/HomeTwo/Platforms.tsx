@@ -17,7 +17,7 @@ import {
 	H_SECTION,
 	MODE_THEME,
 	MONO,
-	meshStyle,
+	PLATFORM_SURFACE,
 } from "./theme";
 
 const WindowsGlyph = ({ className }: { className?: string }) => (
@@ -137,8 +137,8 @@ export const Platforms = () => {
 						return (
 							<div
 								key={desktop.key}
-								className="flex flex-col justify-between rounded-[24px] p-8 md:min-h-[300px]"
-								style={meshStyle(MODE_THEME[desktop.mode])}
+								className="flex flex-col justify-between rounded-[24px] p-8 shadow-[0_0_0_1px_rgba(17,17,17,0.06)] md:min-h-[300px]"
+								style={{ background: PLATFORM_SURFACE[desktop.key] }}
 							>
 								<div className="flex items-start justify-between gap-4">
 									<span className="grid size-14 place-items-center rounded-[16px] bg-white text-[#111111] shadow-[0_0_0_1px_rgba(17,17,17,0.06),0_14px_30px_-18px_rgba(17,17,17,0.5)]">
@@ -148,8 +148,12 @@ export const Platforms = () => {
 										<span
 											className={classNames(
 												MONO,
-												"rounded-full bg-white/70 px-3 py-1.5 text-[11px] uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.7)]",
+												"rounded-full px-3 py-1.5 text-[11px] uppercase leading-none tracking-[0.05em]",
 											)}
+											style={{
+												background: MODE_THEME[desktop.mode].chip,
+												color: MODE_THEME[desktop.mode].glyph,
+											}}
 										>
 											Your device
 										</span>
@@ -171,7 +175,7 @@ export const Platforms = () => {
 											"mt-6 h-[46px] px-5 text-[15px]",
 										)}
 									>
-										Download for {desktop.name}
+										Download now
 									</Link>
 								</div>
 							</div>

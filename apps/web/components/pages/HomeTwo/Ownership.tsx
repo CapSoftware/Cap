@@ -1,7 +1,13 @@
 "use client";
 
 import { classNames } from "@cap/utils/helpers";
-import { Server } from "lucide-react";
+import {
+	GitBranch,
+	HeartPulse,
+	Server,
+	ShieldCheck,
+	Unlock,
+} from "lucide-react";
 import Image from "next/image";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { CapLogoMark } from "./demo/capIcons";
@@ -10,7 +16,6 @@ import { Scaled } from "./scenes/engine";
 import {
 	BAND,
 	BODY_TEXT,
-	EYEBROW,
 	grainBg,
 	H_SECTION,
 	MODE_THEME,
@@ -86,18 +91,26 @@ const PROOF = [
 	{
 		label: "Open source",
 		body: "Every line is on GitHub. Audit it, fork it, or contribute the feature you need.",
+		icon: <GitBranch className="size-5" />,
+		theme: MODE_THEME.instant,
 	},
 	{
 		label: "SOC 2 Type II · ISO 27001",
 		body: "Independently audited controls behind Cap Cloud.",
+		icon: <ShieldCheck className="size-5" />,
+		theme: MODE_THEME.studio,
 	},
 	{
 		label: "HIPAA compliant",
 		body: "Signed BAAs for organizations handling PHI.",
+		icon: <HeartPulse className="size-5" />,
+		theme: MODE_THEME.screenshot,
 	},
 	{
 		label: "No lock in",
 		body: "Recordings are plain video files. Take them anywhere, any time.",
+		icon: <Unlock className="size-5" />,
+		theme: MODE_THEME.share,
 	},
 ];
 
@@ -379,60 +392,71 @@ export const Ownership = () => {
 					</div>
 				</div>
 
-				<div className="mt-4 grid gap-4 lg:grid-cols-[1.3fr_1fr]">
-					<figure className="flex flex-col justify-center rounded-[20px] bg-white p-8 shadow-[0_0_0_1px_rgba(17,17,17,0.05)] lg:p-10">
-						<blockquote
-							className={`${BODY_TEXT} text-balance text-[clamp(19px,1.9vw,24px)] leading-[1.4] text-[#111111]`}
+				<figure className="mt-4 flex flex-col gap-8 rounded-[20px] bg-white p-8 shadow-[0_0_0_1px_rgba(17,17,17,0.05)] lg:flex-row lg:items-center lg:justify-between lg:gap-14 lg:p-10">
+					<div className="flex gap-5">
+						<span
+							aria-hidden="true"
+							className={`${BODY_TEXT} hidden select-none text-[64px] leading-[0.8] sm:block`}
+							style={{ color: MODE_THEME.studio.accent, opacity: 0.32 }}
 						>
-							&ldquo;{QUOTE.content}&rdquo;
+							&ldquo;
+						</span>
+						<blockquote
+							className={`${BODY_TEXT} max-w-[680px] text-balance text-[clamp(20px,2.1vw,26px)] leading-[1.4] text-[#111111]`}
+						>
+							{QUOTE.content}
 						</blockquote>
-						<figcaption className="mt-7 flex flex-wrap items-center gap-2">
-							<span className="inline-flex items-center gap-2 rounded-full bg-[#EDF1F6] py-1.5 pl-1.5 pr-4">
-								<Image
-									src={QUOTE.image}
-									alt=""
-									width={28}
-									height={28}
-									className="size-7 rounded-full object-cover"
-								/>
-								<span className="text-[13.5px] font-medium text-[#111111]">
-									{QUOTE.name}
-								</span>
+					</div>
+					<figcaption className="flex shrink-0 items-center gap-3">
+						<span
+							className="inline-flex shrink-0 rounded-full p-[2px]"
+							style={{ background: MODE_THEME.studio.accent }}
+						>
+							<Image
+								src={QUOTE.image}
+								alt=""
+								width={44}
+								height={44}
+								className="size-11 rounded-full object-cover ring-2 ring-white"
+							/>
+						</span>
+						<span className="flex flex-col">
+							<span className="text-[14.5px] font-medium text-[#111111]">
+								{QUOTE.name}
 							</span>
-							<span className="rounded-full bg-[#EDF1F6] px-4 py-2 text-[13.5px] text-[rgba(17,17,17,0.55)]">
+							<span className="text-[13.5px] text-[rgba(17,17,17,0.55)]">
 								{QUOTE.handle}
 							</span>
-						</figcaption>
-					</figure>
+						</span>
+					</figcaption>
+				</figure>
 
-					<ul
-						className="grid grid-cols-1 gap-px overflow-hidden rounded-[20px] sm:grid-cols-2"
-						style={grainBg(BAND)}
-					>
-						{PROOF.map((item) => (
-							<li key={item.label} className="flex flex-col gap-2 p-6">
-								<p
-									className={classNames(
-										EYEBROW,
-										"flex items-center gap-2 text-[11px] text-[#111111]",
-									)}
-								>
-									<span
-										aria-hidden="true"
-										className="inline-block size-[7px]"
-										style={{ background: MODE_THEME.studio.accent }}
-									/>
-									{item.label}
-								</p>
-								<p
-									className={`${BODY_TEXT} text-[14.5px] leading-[1.45] text-[rgba(17,17,17,0.72)]`}
-								>
-									{item.body}
-								</p>
-							</li>
-						))}
-					</ul>
-				</div>
+				<ul
+					className="mt-4 grid gap-3 rounded-[20px] p-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4 lg:p-4"
+					style={grainBg(BAND)}
+				>
+					{PROOF.map((item) => (
+						<li
+							key={item.label}
+							className="flex flex-col gap-4 rounded-[14px] bg-white p-6"
+						>
+							<span
+								className="grid size-10 shrink-0 place-items-center rounded-[11px]"
+								style={{ background: item.theme.chip, color: item.theme.glyph }}
+							>
+								{item.icon}
+							</span>
+							<span className="text-[15.5px] font-medium leading-[1.25] text-[#111111]">
+								{item.label}
+							</span>
+							<span
+								className={`${BODY_TEXT} text-[14px] leading-[1.45] text-[rgba(17,17,17,0.7)]`}
+							>
+								{item.body}
+							</span>
+						</li>
+					))}
+				</ul>
 			</div>
 		</section>
 	);
