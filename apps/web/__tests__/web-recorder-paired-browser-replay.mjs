@@ -343,10 +343,14 @@ async function replayPairedCapture(
 		await page.evaluate(() => window.capRecorderHarness.stopRecording());
 		try {
 			await page.waitForFunction(
-				(expectedPhase) => window.capRecorderHarness?.phase === expectedPhase,
-				failCameraCompletion ? "error" : "completed",
+				() => ["completed", "error"].includes(window.capRecorderHarness?.phase),
+				null,
 				{ timeout: 30000 },
 			);
+			const actualPhase = await page.evaluate(
+				() => window.capRecorderHarness?.phase,
+			);
+			assert.equal(actualPhase, failCameraCompletion ? "error" : "completed");
 		} catch (error) {
 			const state = await page.evaluate(() => ({
 				phase: window.capRecorderHarness?.phase,
@@ -497,7 +501,9 @@ assert.ok(engines.length > 0, `Unknown browser engine: ${requestedEngine}`);
 try {
 	const results = [];
 	for (const engine of engines) {
-		const browser = await engine.browserType.launch({ headless: true });
+		const browser = await engine.browserType.launch({
+			headless: process.env.CAP_REPLAY_HEADED !== "true",
+		});
 		try {
 			for (const pauseResume of [false, true]) {
 				results.push(

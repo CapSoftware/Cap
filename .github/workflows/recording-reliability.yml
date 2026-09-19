@@ -56,8 +56,10 @@ jobs:
         include:
           - browser: chromium
             runner: ubuntu-24.04
+            headed: false
           - browser: webkit
             runner: macos-latest
+            headed: true
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
@@ -72,6 +74,8 @@ jobs:
       - name: Replay paired web recorder capture
         working-directory: apps/web
         run: bun __tests__/web-recorder-paired-browser-replay.mjs ${{ matrix.browser }}
+        env:
+          CAP_REPLAY_HEADED: ${{ matrix.headed }}
 
   recording-contract:
     name: Recording ownership, preservation, and recovery
