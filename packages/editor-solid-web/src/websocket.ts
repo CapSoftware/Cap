@@ -166,8 +166,13 @@ export function createWS(url: string) {
 	const ticket = frameSocketCredentials.get(url);
 	if (!ticket) throw new Error("Editor frame socket credential is unavailable");
 	frameSocketCredentials.delete(url);
+	let h264Requested =
+		typeof VideoDecoder !== "undefined" &&
+		typeof EncodedVideoChunk !== "undefined" &&
+		typeof VideoFrame !== "undefined";
 	const socket = new WebSocket(url, [
 		"cap-editor-v1",
+		...(h264Requested ? ["cap-editor-h264-v1"] : []),
 		`cap-editor-ticket.${ticket}`,
 	]);
 	socket.binaryType = "arraybuffer";
@@ -175,10 +180,6 @@ export function createWS(url: string) {
 	let context: PixelContext | null = null;
 	let latest: ArrayBuffer | null = null;
 	let decoding = false;
-	let h264Requested =
-		typeof VideoDecoder !== "undefined" &&
-		typeof EncodedVideoChunk !== "undefined" &&
-		typeof VideoFrame !== "undefined";
 	let h264Decoder: VideoDecoder | null = null;
 	let h264Dimensions: { width: number; height: number } | null = null;
 	let h264Sequence: number | null = null;
@@ -458,6 +459,19 @@ export function createWS(url: string) {
 			socket.send('{"mode":"h264"}');
 			socket.send('{"bitrate":"low"}');
 			h264LowRequested = true;
+			const downlink =
+				typeof navigator === "undefined"
+					? undefined
+					: (navigator as Navigator & { connection?: { downlink?: number } })
+							.connection?.downlink;
+			if (
+				typeof downlink === "number" &&
+				Number.isFinite(downlink) &&
+				downlink > 0 &&
+				downlink <= 6
+			) {
+				return;
+			}
 			bandwidthProbeStartedAt = performance.now();
 			socket.send('{"probe":"bandwidth"}');
 		}

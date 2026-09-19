@@ -11,6 +11,7 @@ class MockWebSocket extends EventTarget {
 	closeCode: number | null = null;
 	readonly readyState = MockWebSocket.OPEN;
 	binaryType: BinaryType = "blob";
+	messages: string[] = [];
 
 	constructor(
 		readonly url: string,
@@ -25,6 +26,10 @@ class MockWebSocket extends EventTarget {
 			throw new DOMException("Invalid close code", "InvalidAccessError");
 		this.closed = true;
 		if (code !== undefined) this.closeCode = code;
+	}
+
+	send(message: string) {
+		this.messages.push(message);
 	}
 }
 
@@ -62,6 +67,67 @@ test("the browser view refuses an insecure remote frame socket", () => {
 			ticket: "a".repeat(43),
 		}),
 	).toThrow("Invalid editor frame socket credential");
+});
+
+test("a WebCodecs browser starts with one H.264 upstream and skips a slow-link probe", () => {
+	globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+	MockWebSocket.sockets = [];
+	const webCodecs = [
+		"VideoDecoder",
+		"EncodedVideoChunk",
+		"VideoFrame",
+	] as const;
+	const descriptors = webCodecs.map((name) =>
+		Object.getOwnPropertyDescriptor(globalThis, name),
+	);
+	const connectionDescriptor = Object.getOwnPropertyDescriptor(
+		globalThis.navigator,
+		"connection",
+	);
+	try {
+		for (const name of webCodecs) {
+			Object.defineProperty(globalThis, name, {
+				value: class {},
+				configurable: true,
+			});
+		}
+		Object.defineProperty(globalThis.navigator, "connection", {
+			value: { downlink: 5 },
+			configurable: true,
+		});
+		const url = "wss://editor.cap.so/editor/sessions/fixture/frames";
+		const ticket = "b".repeat(43);
+		setEditorFrameSocketCredential({ url, ticket });
+		createRoot((dispose) => {
+			const socket = createWS(url);
+			socket.dispatchEvent(new Event("open"));
+			dispose();
+		});
+		expect(MockWebSocket.sockets[0]?.protocols).toEqual([
+			"cap-editor-v1",
+			"cap-editor-h264-v1",
+			`cap-editor-ticket.${ticket}`,
+		]);
+		expect(MockWebSocket.sockets[0]?.messages).toEqual([
+			JSON.stringify({ mode: "h264" }),
+			JSON.stringify({ bitrate: "low" }),
+		]);
+	} finally {
+		for (const [index, name] of webCodecs.entries()) {
+			const descriptor = descriptors[index];
+			if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+			else Reflect.deleteProperty(globalThis, name);
+		}
+		if (connectionDescriptor) {
+			Object.defineProperty(
+				globalThis.navigator,
+				"connection",
+				connectionDescriptor,
+			);
+		} else {
+			Reflect.deleteProperty(globalThis.navigator, "connection");
+		}
+	}
 });
 
 test("an invalid compressed frame closes without a browser-invalid status code", async () => {

@@ -109,6 +109,7 @@ test.skipIf(!hasNativeBinaries)(
 		let server: ReturnType<typeof Bun.serve> | null = null;
 		let socketServer: ReturnType<typeof Bun.serve> | null = null;
 		let socket: WebSocket | null = null;
+		let fastStartSocket: WebSocket | null = null;
 		let commandSocket: WebSocket | null = null;
 		let sessionId: string | null = null;
 		try {
@@ -645,6 +646,67 @@ test.skipIf(!hasNativeBinaries)(
 				new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
 			);
 			expect(socket.protocol).toBe("cap-editor-v1");
+			const fastStartTicketResponse = await app.request(
+				`/editor/sessions/${sessionId}/sockets`,
+				{
+					method: "POST",
+					headers,
+					body: JSON.stringify({ origin: "http://127.0.0.1:3000" }),
+				},
+			);
+			expect(fastStartTicketResponse.status).toBe(200);
+			const fastStartTicket = (
+				(await fastStartTicketResponse.json()) as {
+					sockets: { frames: { url: string; ticket: string } };
+				}
+			).sockets.frames;
+			fastStartSocket = new BunWebSocket(fastStartTicket.url, {
+				protocols: [
+					"cap-editor-v1",
+					"cap-editor-h264-v1",
+					`cap-editor-ticket.${fastStartTicket.ticket}`,
+				],
+				headers: { Origin: "http://127.0.0.1:3000" },
+			});
+			fastStartSocket.binaryType = "arraybuffer";
+			let fastStartPngFrames = 0;
+			await new Promise<void>((resolve, reject) => {
+				const timer = setTimeout(
+					() => reject(new Error("Fast-start editor socket timed out")),
+					5000,
+				);
+				if (!fastStartSocket)
+					return reject(new Error("Missing fast-start editor socket"));
+				fastStartSocket.onopen = () => {
+					fastStartSocket?.send('{"bitrate":"low"}');
+				};
+				fastStartSocket.onmessage = (event: MessageEvent<unknown>) => {
+					if (!(event.data instanceof ArrayBuffer)) return;
+					const magic = new TextDecoder().decode(
+						new Uint8Array(event.data, 0, 8),
+					);
+					if (magic !== "CAPPNG01") return;
+					fastStartPngFrames++;
+					clearTimeout(timer);
+					resolve();
+				};
+				fastStartSocket.onerror = () => {
+					clearTimeout(timer);
+					reject(new Error("Fast-start editor socket failed"));
+				};
+			});
+			const nativeSession = getEditorSession(sessionId);
+			if (!nativeSession)
+				throw new Error("Native editor session is unavailable");
+			const nativeMetrics = await nativeSession.request("/metrics");
+			expect(nativeMetrics.status).toBe(200);
+			expect(
+				((await nativeMetrics.json()) as { h264Viewers: number }).h264Viewers,
+			).toBe(1);
+			fastStartSocket.send('{"mode":"h264"}');
+			await Bun.sleep(150);
+			expect(fastStartPngFrames).toBe(1);
+			expect(fastStartSocket.protocol).toBe("cap-editor-v1");
 			const commandTicket = ticketData.sockets.commands;
 			commandSocket = new BunWebSocket(commandTicket.url, {
 				protocols: [
@@ -1770,6 +1832,7 @@ test.skipIf(!hasNativeBinaries)(
 			sessionId = null;
 		} finally {
 			commandSocket?.close();
+			fastStartSocket?.close();
 			socket?.close();
 			socketServer?.stop(true);
 			if (sessionId) {

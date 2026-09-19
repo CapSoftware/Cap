@@ -62,8 +62,15 @@ export function handleEditorSocketUpgrade(
 		request.headers.get("sec-websocket-protocol"),
 	);
 	if (!native) return new Response("Unauthorized", { status: 401 });
+	const h264Hint =
+		scope === "frames" &&
+		request.headers
+			.get("sec-websocket-protocol")
+			?.split(",")
+			.some((value) => value.trim() === "cap-editor-h264-v1") === true;
 	const upstream = new URL(`/${scope}`, native.origin);
 	upstream.protocol = "ws:";
+	if (h264Hint) upstream.pathname = "/frames-h264";
 	const accepted = server.upgrade(request, {
 		data: {
 			upstreamUrl: upstream.toString(),
@@ -79,8 +86,8 @@ export function handleEditorSocketUpgrade(
 			commandQueue: Promise.resolve(),
 			pendingCommands: 0,
 			abort: new AbortController(),
-			frameMode: "png",
-			reducedBitrate: false,
+			frameMode: h264Hint ? "h264" : "png",
+			reducedBitrate: h264Hint,
 			bandwidthProbeUsed: false,
 		},
 		headers: { "Sec-WebSocket-Protocol": "cap-editor-v1" },
@@ -181,6 +188,9 @@ export const editorWebSocketHandler: Bun.WebSocketHandler<EditorSocketConnection
 					const upstream = new URL(ws.data.upstreamUrl);
 					upstream.pathname = "/frames-h264";
 					connectEditorUpstream(ws, upstream.toString());
+					return;
+				}
+				if (message === '{"mode":"h264"}' && ws.data.frameMode === "h264") {
 					return;
 				}
 				if (
