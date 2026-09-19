@@ -14,14 +14,15 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{
-        DefaultBodyLimit, Path, State,
+        DefaultBodyLimit, Path, Request, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::{
         HeaderMap, StatusCode,
-        header::{ACCEPT, CONTENT_TYPE},
+        header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     },
-    response::IntoResponse,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post, put},
 };
 use cap_editor::{
@@ -99,6 +100,7 @@ struct ServiceState {
     playhead_rx: watch::Receiver<u32>,
     preview_lock: Mutex<()>,
     instance_id: String,
+    internal_token: String,
     socket_origin: String,
     frame_metrics: Arc<FrameMetrics>,
     playing: Arc<AtomicBool>,
@@ -278,6 +280,23 @@ fn pack_audio(samples: &[f32], deadline: Instant) -> Bytes {
 
 async fn health() -> StatusCode {
     StatusCode::OK
+}
+
+async fn require_internal_token(
+    State(state): State<Arc<ServiceState>>,
+    request: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let authorized = request
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|value| value == state.internal_token);
+    if !authorized {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(next.run(request).await)
 }
 
 async fn metrics(State(state): State<Arc<ServiceState>>) -> Json<serde_json::Value> {
@@ -948,6 +967,16 @@ async fn event_socket(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let internal_token = env::var("CAP_WEB_EDITOR_INTERNAL_TOKEN")?;
+    if internal_token.len() != 43
+        || !internal_token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(
+            io::Error::new(io::ErrorKind::InvalidInput, "Invalid internal editor token").into(),
+        );
+    }
     let project_path = env::args_os()
         .nth(1)
         .map(PathBuf::from)
@@ -1045,6 +1074,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         playhead_rx,
         preview_lock: Mutex::new(()),
         instance_id,
+        internal_token,
         socket_origin: format!("ws://{address}"),
         frame_metrics,
         playing,
@@ -1088,7 +1118,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/frames-h264", get(h264_frames))
         .route("/audio", get(audio))
         .route("/events", get(events))
-        .with_state(state);
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(
+            state,
+            require_internal_token,
+        ));
     println!("{}", serde_json::json!({ "address": address.to_string() }));
     axum::serve(listener, app).await?;
     Ok(())

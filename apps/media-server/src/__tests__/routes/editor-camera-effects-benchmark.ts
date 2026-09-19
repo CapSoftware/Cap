@@ -220,7 +220,9 @@ try {
 	const native = getEditorSession(sessionId);
 	assert.ok(native?.pid);
 	const pid = native.pid;
-	viewer = new WebSocket(`${native.origin.replace(/^http/, "ws")}/frames-h264`);
+	viewer = native.connectSocket(
+		`${native.origin.replace(/^http/, "ws")}/frames-h264`,
+	);
 	viewer.binaryType = "arraybuffer";
 	viewer.addEventListener("message", (event) => {
 		if (typeof event.data === "string") {

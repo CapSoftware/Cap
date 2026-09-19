@@ -277,6 +277,46 @@ test.skipIf(!hasNativeBinaries)(
 			expect(readySessionId).not.toBeNull();
 			if (!readySessionId) throw new Error("Native preparation has no session");
 			sessionId = readySessionId;
+			const directNative = getEditorSession(sessionId);
+			expect(directNative).not.toBeNull();
+			if (!directNative)
+				throw new Error("Native editor session is unavailable");
+			expect((await fetch(`${directNative.origin}/health`)).status).toBe(401);
+			expect(
+				(
+					await fetch(`${directNative.origin}/seek`, {
+						method: "PUT",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							frameNumber: 0,
+							fps: 30,
+							resolutionBase: { x: 640, y: 360 },
+						}),
+					})
+				).status,
+			).toBe(401);
+			expect((await directNative.request("/health")).status).toBe(200);
+			const directSocket = new WebSocket(
+				`${directNative.origin.replace(/^http/, "ws")}/frames`,
+			);
+			await new Promise<void>((resolve, reject) => {
+				const timer = setTimeout(
+					() => reject(new Error("Direct native socket rejection timed out")),
+					5000,
+				);
+				directSocket.onopen = () => {
+					clearTimeout(timer);
+					reject(new Error("Unauthenticated native socket opened"));
+				};
+				directSocket.onerror = () => {
+					clearTimeout(timer);
+					resolve();
+				};
+				directSocket.onclose = () => {
+					clearTimeout(timer);
+					resolve();
+				};
+			});
 			const instance = await app.request(
 				`/editor/sessions/${sessionId}/instance`,
 				{ headers },

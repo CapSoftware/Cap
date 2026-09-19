@@ -1,5 +1,5 @@
 import { type ChildProcessByStdio, execFile, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { chmod, lstat, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
@@ -409,8 +409,10 @@ function waitForExit(exit: Promise<void>, timeoutMs: number) {
 }
 
 export async function startNativeEditorSession(project: NativeEditorProject) {
+	const internalToken = randomBytes(32).toString("base64url");
 	const child = spawn(nativeEditorBinary("service"), [project.path], {
 		stdio: ["ignore", "pipe", "pipe"],
+		env: { ...process.env, CAP_WEB_EDITOR_INTERNAL_TOKEN: internalToken },
 	});
 	let stderr = "";
 	child.stderr.on("data", (chunk: Buffer) => {
@@ -438,7 +440,13 @@ export async function startNativeEditorSession(project: NativeEditorProject) {
 	};
 	try {
 		const origin = await waitForStartup(child);
+		const authorizedHeaders = (headers?: HeadersInit) => {
+			const result = new Headers(headers);
+			result.set("Authorization", `Bearer ${internalToken}`);
+			return result;
+		};
 		const health = await fetch(`${origin}/health`, {
+			headers: authorizedHeaders(),
 			signal: AbortSignal.timeout(STARTUP_TIMEOUT_MS),
 		});
 		if (!health.ok)
@@ -457,7 +465,29 @@ export async function startNativeEditorSession(project: NativeEditorProject) {
 				if (!path.startsWith("/") || path.startsWith("//")) {
 					throw new Error("Invalid native editor request path");
 				}
-				return fetch(`${origin}${path}`, init);
+				return fetch(`${origin}${path}`, {
+					...init,
+					headers: authorizedHeaders(init?.headers),
+				});
+			},
+			connectSocket: (url: string) => {
+				if (closed) throw new Error("Native editor session is closed");
+				const upstream = new URL(url);
+				const expected = new URL(origin);
+				if (
+					upstream.protocol !== "ws:" ||
+					upstream.host !== expected.host ||
+					upstream.hostname !== "127.0.0.1"
+				) {
+					throw new Error("Invalid native editor socket address");
+				}
+				const BunWebSocket = WebSocket as unknown as new (
+					address: string,
+					options: Bun.WebSocketOptions,
+				) => WebSocket;
+				return new BunWebSocket(url, {
+					headers: { Authorization: `Bearer ${internalToken}` },
+				});
 			},
 			close,
 		};

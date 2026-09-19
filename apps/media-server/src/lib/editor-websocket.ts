@@ -94,7 +94,12 @@ function connectEditorUpstream(
 	url: string,
 ) {
 	const previous = ws.data.upstream;
-	const upstream = new WebSocket(url);
+	const native = getEditorSession(ws.data.sessionId);
+	if (!native) {
+		ws.close(1011, "Editor session closed");
+		return;
+	}
+	const upstream = native.connectSocket(url);
 	upstream.binaryType = "arraybuffer";
 	ws.data.upstream = upstream;
 	if (previous && previous.readyState < 2) previous.close();
