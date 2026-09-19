@@ -1,4 +1,7 @@
-import type { CapturedTabInputEvent } from "../shared/input-events";
+import {
+	type CapturedTabInputEvent,
+	isSafeTabKeyboardEvent,
+} from "../shared/input-events";
 import { RECORDING_STATE_KEY } from "../shared/storage-keys";
 
 const MOVE_INTERVAL_MS = 16;
@@ -201,7 +204,8 @@ export function initTabInputCapture() {
 			!recordingId ||
 			!event.isTrusted ||
 			isExtensionUiEvent(event) ||
-			isEditableTarget(event)
+			isEditableTarget(event) ||
+			!isSafeTabKeyboardEvent(event.key, event.code)
 		)
 			return;
 		push({

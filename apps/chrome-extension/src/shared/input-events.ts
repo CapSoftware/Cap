@@ -41,6 +41,32 @@ const CURSORS = new Set([
 	"ns-resize",
 ]);
 const MODIFIERS = new Set(["Meta", "LControl", "LAlt", "LShift"]);
+const SAFE_KEY_CODES: Record<string, readonly string[]> = {
+	Escape: ["Escape"],
+	Enter: ["Enter", "NumpadEnter"],
+	Tab: ["Tab"],
+	Backspace: ["Backspace"],
+	Delete: ["Delete"],
+	ArrowUp: ["ArrowUp"],
+	ArrowDown: ["ArrowDown"],
+	ArrowLeft: ["ArrowLeft"],
+	ArrowRight: ["ArrowRight"],
+	Home: ["Home"],
+	End: ["End"],
+	PageUp: ["PageUp"],
+	PageDown: ["PageDown"],
+	Shift: ["ShiftLeft", "ShiftRight"],
+	Control: ["ControlLeft", "ControlRight"],
+	Alt: ["AltLeft", "AltRight"],
+	Meta: ["MetaLeft", "MetaRight"],
+};
+
+export function isSafeTabKeyboardEvent(key: string, code: string) {
+	const codes = SAFE_KEY_CODES[key];
+	return codes
+		? codes.includes(code)
+		: key === code && /^F(?:[1-9]|1[0-9]|2[0-4])$/.test(key);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -79,7 +105,8 @@ function validEvent(value: unknown): value is CapturedTabInputEvent {
 		typeof value.key === "string" &&
 		value.key.length <= 64 &&
 		typeof value.code === "string" &&
-		value.code.length <= 64
+		value.code.length <= 64 &&
+		isSafeTabKeyboardEvent(value.key, value.code)
 	);
 }
 

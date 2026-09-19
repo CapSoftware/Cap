@@ -101,6 +101,7 @@ type ActiveRecording = {
 	cameraRecorder: MediaRecorder | null;
 	audioSidecars: AudioRecordingSidecar[];
 	inputSidecar: InputEventSidecar | null;
+	inputCaptureTabId: number | null;
 	inputUploadApi: RecorderApiOptions;
 	inputStopPromise: Promise<void> | null;
 	inputCaptureIncomplete: boolean;
@@ -1326,6 +1327,9 @@ const startRecording = async (request: StartRecordingRequest) => {
 						tabId: request.tabId,
 						videoWidth: width,
 						videoHeight: height,
+					}).catch((error: unknown) => {
+						console.warn("Tab input capture could not start", error);
+						return null;
 					})
 				: null;
 		ownedInputSidecar = inputSidecar;
@@ -1340,6 +1344,10 @@ const startRecording = async (request: StartRecordingRequest) => {
 			cameraRecorder,
 			audioSidecars: ownedAudioSidecars,
 			inputSidecar,
+			inputCaptureTabId:
+				request.tabStreamId && request.tabId !== undefined
+					? request.tabId
+					: null,
 			inputUploadApi: api,
 			inputStopPromise: null,
 			inputCaptureIncomplete: false,
@@ -1966,8 +1974,8 @@ const finalizeRecording = async (recording: ActiveRecording) => {
 		await Promise.all([
 			recording.stopPromise,
 			recording.cameraStopPromise ?? Promise.resolve(),
-			recording.inputStopPromise ?? Promise.resolve(),
 		]);
+		await recording.inputStopPromise;
 		await cleanupActiveRecording(recording);
 		await Promise.all([recording.chunkChain, recording.cameraChunkChain]);
 		// finalBlob is null when the capped memory backup overflowed. The
@@ -2009,12 +2017,18 @@ const finalizeRecording = async (recording: ActiveRecording) => {
 				Math.max(1, Math.round(recording.durationMs / 1000)),
 			);
 		}
-		await recording.inputSidecar?.upload({
-			videoId: recording.videoId,
-			screenSubpath: recording.subpath,
-			durationSeconds: Math.max(1, Math.round(recording.durationMs / 1000)),
-			api: recording.inputUploadApi,
-		});
+		if (recording.inputSidecar && !recording.inputCaptureIncomplete) {
+			await recording.inputSidecar
+				.upload({
+					videoId: recording.videoId,
+					screenSubpath: recording.subpath,
+					durationSeconds: Math.max(1, Math.round(recording.durationMs / 1000)),
+					api: recording.inputUploadApi,
+				})
+				.catch((error: unknown) => {
+					console.warn("Tab input events could not upload", error);
+				});
+		}
 		await recording.uploader.finalize({
 			finalBlob: finalBlob && finalBlob.size > 0 ? finalBlob : null,
 			durationSeconds: Math.max(1, Math.round(recording.durationMs / 1000)),
@@ -2025,7 +2039,7 @@ const finalizeRecording = async (recording: ActiveRecording) => {
 		});
 		await recording.spool.dispose();
 		await recording.cameraSpool?.dispose();
-		await recording.inputSidecar?.dispose();
+		await recording.inputSidecar?.dispose().catch(() => undefined);
 		await Promise.all(
 			recording.audioSidecars.map((sidecar) =>
 				sidecar.disposeBackup().catch(() => undefined),
@@ -2100,12 +2114,11 @@ const getCurrentUploadSnapshot = () =>
 			};
 
 const stopTabInputCapture = async (recording: ActiveRecording) => {
-	const inputSidecar = recording.inputSidecar;
-	if (!inputSidecar) return;
+	if (recording.inputCaptureTabId === null) return;
 	const response: unknown = await chrome.runtime.sendMessage({
 		target: "service-worker",
 		type: "input-capture-stop",
-		tabId: inputSidecar.tabId,
+		tabId: recording.inputCaptureTabId,
 		recordingId: recording.videoId,
 	});
 	if (
@@ -2146,12 +2159,13 @@ async function stopRecording() {
 	recording.durationMs = getRecordingDuration(recording, now);
 	recording.lastResumedAt = null;
 	recording.inputSidecar?.stop(performance.timeOrigin + performance.now());
-	recording.inputStopPromise = recording.inputSidecar
-		? stopTabInputCapture(recording).catch((error: unknown) => {
-				recording.inputCaptureIncomplete = true;
-				throw error;
-			})
-		: null;
+	recording.inputStopPromise =
+		recording.inputCaptureTabId !== null
+			? stopTabInputCapture(recording).catch((error: unknown) => {
+					recording.inputCaptureIncomplete = true;
+					console.warn("Tab input events could not flush", error);
+				})
+			: null;
 
 	if (recording.recorder.state !== "inactive") {
 		recording.recorder.stop();
@@ -2279,9 +2293,7 @@ const runFailedUploadRetry = async (
 		);
 	}
 	if (failed.inputEventsRetryUnavailable) {
-		throw new Error(
-			"The tab cursor and keyboard events are unavailable to retry. Download the screen recording or check your Cap.",
-		);
+		console.warn("Tab input events are unavailable during recording retry");
 	}
 
 	const orphan = await recoverRecordingSpoolSession(failed.sessionId);
@@ -2378,24 +2390,30 @@ const runFailedUploadRetry = async (
 				api,
 			});
 		}
-		if (failed.inputEventsSessionId) {
+		if (failed.inputEventsSessionId && !failed.inputEventsRetryUnavailable) {
 			const inputOrphan = await recoverRecordingSpoolSession(
 				failed.inputEventsSessionId,
-			);
-			if (
-				!inputOrphan ||
-				inputOrphan.blob.size !== failed.inputEventsTotalBytes ||
-				inputOrphan.blob.size === 0
-			) {
-				throw new Error("The tab input event stream is unavailable");
-			}
-			await uploadInputEventBlob({
-				videoId: typedVideoId,
-				screenSubpath: subpath,
-				durationSeconds: Math.max(1, Math.round(failed.durationMs / 1000)),
-				api,
-				blob: inputOrphan.blob,
+			).catch((error: unknown) => {
+				console.warn("Tab input events could not be recovered", error);
+				return null;
 			});
+			if (
+				inputOrphan &&
+				inputOrphan.blob.size === failed.inputEventsTotalBytes &&
+				inputOrphan.blob.size > 0
+			) {
+				await uploadInputEventBlob({
+					videoId: typedVideoId,
+					screenSubpath: subpath,
+					durationSeconds: Math.max(1, Math.round(failed.durationMs / 1000)),
+					api,
+					blob: inputOrphan.blob,
+				}).catch((error: unknown) => {
+					console.warn("Tab input events could not upload during retry", error);
+				});
+			} else {
+				console.warn("Tab input events are unavailable during recording retry");
+			}
 		}
 		const uploadSession = await initiateMultipartUpload({
 			videoId: typedVideoId,

@@ -111,6 +111,25 @@ fn web_cursor_style(cursor: &str) -> io::Result<&'static str> {
     }
 }
 
+fn safe_web_keyboard_key(key: &str, code: &str) -> bool {
+    match key {
+        "Escape" | "Tab" | "Backspace" | "Delete" | "ArrowUp" | "ArrowDown" | "ArrowLeft"
+        | "ArrowRight" | "Home" | "End" | "PageUp" | "PageDown" => code == key,
+        "Enter" => matches!(code, "Enter" | "NumpadEnter"),
+        "Shift" => matches!(code, "ShiftLeft" | "ShiftRight"),
+        "Control" => matches!(code, "ControlLeft" | "ControlRight"),
+        "Alt" => matches!(code, "AltLeft" | "AltRight"),
+        "Meta" => matches!(code, "MetaLeft" | "MetaRight"),
+        _ => {
+            code == key
+                && key
+                    .strip_prefix('F')
+                    .and_then(|value| value.parse::<u8>().ok())
+                    .is_some_and(|number| (1..=24).contains(&number))
+        }
+    }
+}
+
 fn load_web_input_events(path: &Path) -> Result<WebInputData, Box<dyn Error>> {
     if path.extension().and_then(|value| value.to_str()) != Some("ndjson") {
         return Err(invalid_input("Input event source must be NDJSON").into());
@@ -204,6 +223,7 @@ fn load_web_input_events(path: &Path) -> Result<WebInputData, Box<dyn Error>> {
                 };
                 if key.len() > 64
                     || code.len() > 64
+                    || !safe_web_keyboard_key(&key, &code)
                     || event.x.is_some()
                     || event.y.is_some()
                     || event.cursor.is_some()
@@ -1026,7 +1046,7 @@ mod tests {
                 "{\"kind\":\"move\",\"timeMs\":12,\"x\":0.25,\"y\":0.5,\"cursor\":\"pointer\",\"button\":0,\"modifiers\":[]}\n",
                 "{\"kind\":\"down\",\"timeMs\":13,\"x\":0.25,\"y\":0.5,\"cursor\":\"pointer\",\"button\":0,\"modifiers\":[]}\n",
                 "{\"kind\":\"up\",\"timeMs\":20,\"x\":0.25,\"y\":0.5,\"cursor\":\"pointer\",\"button\":0,\"modifiers\":[]}\n",
-                "{\"kind\":\"keyDown\",\"timeMs\":21,\"key\":\"k\",\"code\":\"KeyK\",\"modifiers\":[]}\n",
+                "{\"kind\":\"keyDown\",\"timeMs\":21,\"key\":\"Escape\",\"code\":\"Escape\",\"modifiers\":[]}\n",
             ),
         )
         .unwrap();
@@ -1037,7 +1057,7 @@ mod tests {
         assert!(data.cursor.clicks[0].down);
         assert!(!data.cursor.clicks[1].down);
         assert_eq!(data.keyboard.presses.len(), 1);
-        assert_eq!(data.keyboard.presses[0].key_code, "KeyK");
+        assert_eq!(data.keyboard.presses[0].key_code, "Escape");
         assert!(data.styles.contains("pointer"));
     }
 
@@ -1050,6 +1070,15 @@ mod tests {
             concat!(
                 "{\"version\":1,\"platform\":\"MacIntel\"}\n",
                 "{\"kind\":\"keyDown\",\"timeMs\":21,\"key\":\"secret\",\"code\":\"\",\"modifiers\":[],\"text\":\"secret\"}\n",
+            ),
+        )
+        .unwrap();
+        assert!(load_web_input_events(&source).is_err());
+        fs::write(
+            &source,
+            concat!(
+                "{\"version\":1,\"platform\":\"MacIntel\"}\n",
+                "{\"kind\":\"keyDown\",\"timeMs\":21,\"key\":\"k\",\"code\":\"KeyK\",\"modifiers\":[]}\n",
             ),
         )
         .unwrap();

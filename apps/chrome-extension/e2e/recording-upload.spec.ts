@@ -122,6 +122,9 @@ const animatedCapturePage = () => `<!doctype html>
 		<div style="position:fixed;bottom:0;right:0;width:32px;height:32px;background:#0000ff"></div>
 		<input type="password" aria-label="Password test" style="position:fixed;top:40px;left:40px">
 		<div role="textbox" aria-label="Custom private field" tabindex="0" style="position:fixed;top:80px;left:40px">Custom input</div>
+		<div aria-label="Custom PIN widget" tabindex="0" style="position:fixed;top:120px;left:40px">PIN widget</div>
+		<button aria-label="Secret button" style="position:fixed;top:160px;left:40px">Secret button</button>
+		<canvas aria-label="Canvas secret widget" tabindex="0" width="100" height="30" style="position:fixed;top:200px;left:40px"></canvas>
 	</body>
 </html>`;
 
@@ -1519,12 +1522,18 @@ test.describe("extension recording upload", () => {
 			.getByRole("textbox", { name: "Custom private field" })
 			.click();
 		await capturePage.keyboard.type("private");
+		await capturePage.locator('[aria-label="Custom PIN widget"]').click();
+		await capturePage.keyboard.type("1234");
+		await capturePage.getByRole("button", { name: "Secret button" }).click();
+		await capturePage.keyboard.type("secret");
+		await capturePage.locator('[aria-label="Canvas secret widget"]').click();
+		await capturePage.keyboard.type("pin");
 		await capturePage.mouse.click(500, 400);
-		await capturePage.keyboard.press("k");
+		await capturePage.keyboard.press("Escape");
 		await capturePage.goto(`${mockServer.origin}/capture.html?step=2`);
 		await capturePage.bringToFront();
 		await capturePage.mouse.click(600, 500);
-		await capturePage.keyboard.press("n");
+		await capturePage.keyboard.press("ArrowRight");
 		await capturePage.waitForTimeout(500);
 		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
 			target: "service-worker",
@@ -1545,15 +1554,84 @@ test.describe("extension recording upload", () => {
 		const recordedKeys = inputLines
 			.filter((line) => line.kind === "keyDown")
 			.map((line) => line.key);
-		expect(recordedKeys).not.toContain("s");
-		expect(recordedKeys).not.toContain("p");
+		expect(
+			recordedKeys.every((key) => typeof key === "string" && key.length > 1),
+		).toBe(true);
+		expect(
+			inputLines
+				.filter((line) => line.kind === "keyDown")
+				.every((line) =>
+					typeof line.code === "string"
+						? !/^(Key[A-Z]|Digit[0-9]|Numpad[0-9])$/.test(line.code)
+						: false,
+				),
+		).toBe(true);
 		expect(inputLines).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({ kind: "down" }),
-				expect.objectContaining({ kind: "keyDown", key: "k" }),
-				expect.objectContaining({ kind: "keyDown", key: "n" }),
+				expect.objectContaining({ kind: "keyDown", key: "Escape" }),
+				expect.objectContaining({ kind: "keyDown", key: "ArrowRight" }),
 			]),
 		);
+	});
+
+	test("completes screen and camera when the tab input sidecar fails", async () => {
+		test.skip(
+			process.env.CAP_EXTENSION_E2E_HEADED !== "1" ||
+				process.platform !== "darwin",
+			"Headed current-tab capture is available on macOS",
+		);
+		test.setTimeout(120_000);
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		const worker = await getServiceWorker(extension.context);
+		const { capturePage, messengerPage } = await startRecording(
+			extension.context,
+			worker,
+			mockServer.origin,
+			"tab",
+			8_000,
+		);
+		await capturePage.mouse.click(400, 300);
+		await capturePage.keyboard.press("Escape");
+		mockServer.state.failInputCompletion = true;
+		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		});
+		expect(stopResponse).toMatchObject({ ok: true });
+		await expect
+			.poll(async () => {
+				const response = await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "get-recording-status",
+				});
+				return response.ok ? response.status?.phase : response.error;
+			})
+			.toBe("completed");
+		expect(mockServer.state.completeBodies).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ subpath: "camera-upload.webm" }),
+				expect.objectContaining({ subpath: "input-events-upload.ndjson" }),
+				expect.objectContaining({ subpath: "raw-upload.webm" }),
+			]),
+		);
+		expect(mockServer.state.completeBodies.at(-1)).toMatchObject({
+			subpath: "raw-upload.webm",
+		});
+		const failed = await worker.evaluate(async () => {
+			const items = await chrome.storage.local.get([
+				"cap-extension-failed-recordings",
+			]);
+			return items["cap-extension-failed-recordings"];
+		});
+		expect(Array.isArray(failed) ? failed : []).toEqual([]);
+		const tabInputSession = await worker.evaluate(async () => {
+			const key = "cap-extension-tab-input-capture";
+			const saved = await chrome.storage.session.get([key]);
+			return saved[key] ?? null;
+		});
+		expect(tabInputSession).toBeNull();
 	});
 
 	test("recovers a tab input sidecar before retrying the screen upload", async () => {
@@ -1574,8 +1652,9 @@ test.describe("extension recording upload", () => {
 			8_000,
 		);
 		await capturePage.mouse.click(400, 300);
-		await capturePage.keyboard.press("r");
+		await capturePage.keyboard.press("Escape");
 		mockServer.state.failInputCompletion = true;
+		mockServer.state.failScreenCompletion = true;
 		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
 			target: "service-worker",
 			type: "stop-recording",
@@ -1605,6 +1684,7 @@ test.describe("extension recording upload", () => {
 		expect(failed.inputEventsSessionId).toEqual(expect.any(String));
 		expect(failed.inputEventsTotalBytes).toBeGreaterThan(0);
 		mockServer.state.failInputCompletion = false;
+		mockServer.state.failScreenCompletion = false;
 		const retryResponse = await sendServiceWorkerMessage(messengerPage, {
 			target: "service-worker",
 			type: "retry-upload",
@@ -1632,6 +1712,112 @@ test.describe("extension recording upload", () => {
 		expect(mockServer.state.completeBodies.at(-1)).toMatchObject({
 			subpath: "raw-upload.webm",
 		});
+	});
+
+	test("retries intact screen media when tab input metadata is unavailable", async () => {
+		test.skip(
+			process.env.CAP_EXTENSION_E2E_HEADED !== "1" ||
+				process.platform !== "darwin",
+			"Headed current-tab capture is available on macOS",
+		);
+		test.setTimeout(120_000);
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		const worker = await getServiceWorker(extension.context);
+		const { capturePage, messengerPage } = await startRecording(
+			extension.context,
+			worker,
+			mockServer.origin,
+			"tab",
+			8_000,
+		);
+		await capturePage.mouse.click(400, 300);
+		await capturePage.keyboard.press("Escape");
+		mockServer.state.failInputCompletion = true;
+		mockServer.state.failScreenCompletion = true;
+		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		});
+		expect(stopResponse).toMatchObject({ ok: true });
+		await expect
+			.poll(async () => {
+				const response = await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "get-recording-status",
+				});
+				return response.ok ? response.status?.phase : response.error;
+			})
+			.toBe("error");
+		const recovery = await worker.evaluate(async () => {
+			const items = await chrome.storage.local.get([
+				"cap-extension-failed-recordings",
+			]);
+			const failed = items["cap-extension-failed-recordings"];
+			return Array.isArray(failed) ? failed[0] : null;
+		});
+		if (!recovery || typeof recovery !== "object")
+			throw new Error("The failed screen recording is missing");
+		expect(recovery).toMatchObject({
+			videoId: mockServer.state.videoId,
+			inputEventsSessionId: expect.any(String),
+		});
+		expect(
+			await worker.evaluate(async (videoId) => {
+				const key = "cap-extension-failed-recordings";
+				const items = await chrome.storage.local.get([key]);
+				const failed: unknown = items[key];
+				if (!Array.isArray(failed)) return false;
+				const updated = failed.map((entry: unknown) => {
+					if (
+						!entry ||
+						typeof entry !== "object" ||
+						!("videoId" in entry) ||
+						entry.videoId !== videoId
+					)
+						return entry;
+					return { ...entry, inputEventsRetryUnavailable: true };
+				});
+				await chrome.storage.local.set({ [key]: updated });
+				return true;
+			}, mockServer.state.videoId),
+		).toBe(true);
+		const inputAttempts = mockServer.state.completeBodies.filter(
+			(body) =>
+				body &&
+				typeof body === "object" &&
+				"subpath" in body &&
+				body.subpath === "input-events-upload.ndjson",
+		).length;
+		mockServer.state.failInputCompletion = false;
+		mockServer.state.failScreenCompletion = false;
+		const retryResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "retry-upload",
+			videoId: mockServer.state.videoId,
+		});
+		expect(retryResponse).toMatchObject({ ok: true });
+		await expect
+			.poll(async () => {
+				const response = await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "get-recording-status",
+				});
+				return response.ok ? response.status?.phase : response.error;
+			})
+			.toBe("completed");
+		expect(mockServer.state.completeBodies.at(-1)).toMatchObject({
+			subpath: "raw-upload.webm",
+		});
+		expect(
+			mockServer.state.completeBodies.filter(
+				(body) =>
+					body &&
+					typeof body === "object" &&
+					"subpath" in body &&
+					body.subpath === "input-events-upload.ndjson",
+			).length,
+		).toBe(inputAttempts);
 	});
 
 	test("can complete two consecutive recording uploads without stale state", async () => {

@@ -28,6 +28,34 @@ describe("tab input batches", () => {
 		expect(parseCapturedTabInputBatch(batch)).toEqual(batch);
 	});
 
+	it("accepts only non-printable keyboard keys and matching codes", () => {
+		const safeEvent = {
+			kind: "keyDown",
+			epochMs: 1_000,
+			key: "Escape",
+			code: "Escape",
+			modifiers: [],
+		};
+		expect(
+			parseCapturedTabInputBatch({ ...batch, events: [safeEvent] }),
+		).toEqual({
+			...batch,
+			events: [safeEvent],
+		});
+		expect(
+			parseCapturedTabInputBatch({
+				...batch,
+				events: [{ ...safeEvent, key: "k", code: "KeyK" }],
+			}),
+		).toBeNull();
+		expect(
+			parseCapturedTabInputBatch({
+				...batch,
+				events: [{ ...safeEvent, code: "KeyK" }],
+			}),
+		).toBeNull();
+	});
+
 	it("rejects overflow and invalid cursor coordinates", () => {
 		expect(
 			parseCapturedTabInputBatch({
