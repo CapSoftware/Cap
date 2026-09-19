@@ -1197,29 +1197,6 @@ export const useWebRecorder = ({
 			const recorder = new MediaRecorder(mixedStream, {
 				mimeType: pipeline.mimeType,
 			});
-			let screenStartedAt = performance.now();
-			let cameraStartedAt = screenStartedAt;
-			let screenStartConfirmed = false;
-			let cameraStartConfirmed = false;
-			const confirmCameraOffset = () => {
-				if (!screenStartConfirmed || !cameraStartConfirmed) return;
-				cameraOffsetMsRef.current = Math.round(
-					cameraStartedAt - screenStartedAt,
-				);
-				const cameraApi = cameraUploadApiRef.current;
-				if (cameraApi) {
-					cameraApi.extraBody = {
-						...cameraApi.extraBody,
-						cameraOffsetMs: cameraOffsetMsRef.current,
-					};
-				}
-			};
-			recorder.addEventListener("start", () => {
-				if (mediaRecorderRef.current !== recorder) return;
-				screenStartedAt = performance.now();
-				screenStartConfirmed = true;
-				confirmCameraOffset();
-			});
 			let cameraRecorder: MediaRecorder | null = null;
 			if (cameraRecordingStream && cameraPipeline) {
 				const cameraVideoStream = new MediaStream(
@@ -1227,12 +1204,6 @@ export const useWebRecorder = ({
 				);
 				cameraRecorder = new MediaRecorder(cameraVideoStream, {
 					mimeType: cameraPipeline.mimeType,
-				});
-				cameraRecorder.addEventListener("start", () => {
-					if (cameraMediaRecorderRef.current !== cameraRecorder) return;
-					cameraStartedAt = performance.now();
-					cameraStartConfirmed = true;
-					confirmCameraOffset();
 				});
 				cameraRecorder.addEventListener("dataavailable", (event) => {
 					if (
@@ -1285,7 +1256,7 @@ export const useWebRecorder = ({
 			lastInstantChunkAtRef.current = null;
 			clearInstantChunkGuard();
 			stopInstantChunkInterval();
-			screenStartedAt = performance.now();
+			let screenStartRequestedAt = performance.now();
 			if (pipeline.mode === "streaming-webm") {
 				let startedWithTimeslice = false;
 				try {
@@ -1302,6 +1273,7 @@ export const useWebRecorder = ({
 				if (startedWithTimeslice) {
 					scheduleInstantChunkGuard();
 				} else {
+					screenStartRequestedAt = performance.now();
 					recorder.start();
 					beginManualInstantChunking();
 				}
@@ -1309,10 +1281,10 @@ export const useWebRecorder = ({
 				recorder.start(200);
 			}
 			if (cameraRecorder) {
-				cameraStartedAt = performance.now();
+				const cameraStartRequestedAt = performance.now();
 				cameraRecorder.start(1000);
 				cameraOffsetMsRef.current = Math.round(
-					cameraStartedAt - screenStartedAt,
+					cameraStartRequestedAt - screenStartRequestedAt,
 				);
 				const cameraApi = cameraUploadApiRef.current;
 				if (cameraApi) {

@@ -66,7 +66,6 @@ import {
 	waitForIceGatheringComplete,
 } from "../shared/webrtc";
 import { captureDisplayStream } from "./display-capture";
-import { observePairedRecorderStarts } from "./recorder-start-sync";
 
 const RECORDING_TIMESLICE_MS = 1000;
 const RECORDING_TIMESLICE_GUARD_MS = RECORDING_TIMESLICE_MS * 3;
@@ -1335,42 +1334,31 @@ const startRecording = async (request: StartRecordingRequest) => {
 				fps,
 				startedAt,
 			});
-		if (cameraRecorder) {
-			observePairedRecorderStarts(recorder, cameraRecorder, (offsetMs) => {
-				if (
-					activeRecording !== recording ||
-					recording.finalizePromise ||
-					recording.cleanedUp
-				) {
-					return;
-				}
-				recording.cameraOffsetMs = offsetMs;
-				void saveCameraManifest().catch(() => undefined);
-			});
-		}
-		const screenStartRequestedAt = performance.now();
+		let screenStartRequestedAt = performance.now();
 
 		try {
 			recorder.start(RECORDING_TIMESLICE_MS);
 			recording.chunkingMode = "timeslice";
 			scheduleTimesliceGuard(recording);
 		} catch {
+			screenStartRequestedAt = performance.now();
 			recorder.start();
 			beginManualChunking(recording);
 		}
 		if (cameraRecorder) {
-			const cameraStartRequestedAt = performance.now();
-			recording.cameraOffsetMs = Math.round(
-				cameraStartRequestedAt - screenStartRequestedAt,
-			);
+			let cameraStartRequestedAt = performance.now();
 			try {
 				cameraRecorder.start(RECORDING_TIMESLICE_MS);
 			} catch {
+				cameraStartRequestedAt = performance.now();
 				cameraRecorder.start();
 				recording.cameraDataRequestInterval = window.setInterval(() => {
 					requestCameraRecorderData(recording);
 				}, RECORDING_TIMESLICE_MS);
 			}
+			recording.cameraOffsetMs = Math.round(
+				cameraStartRequestedAt - screenStartRequestedAt,
+			);
 			await saveCameraManifest().catch(() => undefined);
 		}
 		playRecordingSound("start-recording", request.settings);
