@@ -114,6 +114,12 @@ export const MODE_THEME: Record<ModeKey, ModeTheme> = {
 	},
 };
 
+export const PLATFORM_SURFACE: Record<string, string> = {
+	macos: "linear-gradient(180deg, #FAFCFE 0%, #F0F5FB 100%)",
+	windows: "linear-gradient(180deg, #FAFAFE 0%, #F1F0FA 100%)",
+	linux: "linear-gradient(180deg, #FAFCFB 0%, #EFF6F1 100%)",
+};
+
 export const SANS =
 	"[font-family:var(--font-ht-sans),ui-sans-serif,system-ui,sans-serif]";
 
