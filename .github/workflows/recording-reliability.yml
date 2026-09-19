@@ -88,6 +88,7 @@ jobs:
         working-directory: apps/web
         run: |
           bun run vitest run \
+            __tests__/editor-image-file.test.ts \
             __tests__/unit/audio-level-publication.test.ts \
             __tests__/unit/recording-output.test.ts \
             __tests__/unit/recording-storage-lifecycle.test.ts \
