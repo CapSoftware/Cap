@@ -223,6 +223,27 @@ test("screen capture ending during camera permission never starts an encoder", a
 	expect(cameraTrack.stop).toHaveBeenCalled();
 });
 
+test("closing the editor during camera permission stops tracks before encoders start", async () => {
+	const { screenTrack, cameraTrack } = setup();
+	const controller = new AbortController();
+	capture.camera.mockImplementation(async () => {
+		controller.abort();
+		return new FakeStream([cameraTrack]);
+	});
+	await expect(
+		startEditorClipCapture({
+			cameraEnabled: true,
+			micEnabled: false,
+			systemAudioEnabled: false,
+			signal: controller.signal,
+		}),
+	).rejects.toThrow("Editor clip capture was canceled");
+	expect(FakeRecorder.instances).toHaveLength(0);
+	expect(screenTrack.stop).toHaveBeenCalled();
+	expect(cameraTrack.stop).toHaveBeenCalled();
+	expect(capture.spoolCreate).not.toHaveBeenCalled();
+});
+
 test("a browser encoder error stops both tracks and keeps a downloadable backup", async () => {
 	const { screenTrack, cameraTrack, spools } = setup();
 	const onError = vi.fn();

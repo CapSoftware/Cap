@@ -42,6 +42,8 @@ export function EditorClipRecorder(props: {
 		camera: string | null;
 	} | null>(null);
 	const sessionRef = useRef<EditorClipCaptureSession | null>(null);
+	const disposedRef = useRef(false);
+	const captureAbortRef = useRef<AbortController | null>(null);
 	const previewRef = useRef<HTMLVideoElement>(null);
 	const stopRef = useRef<() => Promise<void>>(async () => undefined);
 	const stoppingRef = useRef(false);
@@ -84,12 +86,18 @@ export function EditorClipRecorder(props: {
 		};
 	}, [captured]);
 
-	useEffect(
-		() => () => {
-			void sessionRef.current?.stop().catch(() => undefined);
-		},
-		[],
-	);
+	useEffect(() => {
+		disposedRef.current = false;
+		captureAbortRef.current = new AbortController();
+		return () => {
+			disposedRef.current = true;
+			captureAbortRef.current?.abort();
+			captureAbortRef.current = null;
+			const session = sessionRef.current;
+			sessionRef.current = null;
+			void session?.stop().catch(() => undefined);
+		};
+	}, []);
 
 	const importCapture = useCallback(
 		async (clip: EditorClipCapture) => {
@@ -97,10 +105,13 @@ export function EditorClipRecorder(props: {
 			setError(null);
 			try {
 				await props.onCaptured(clip);
+				if (disposedRef.current) return;
 				await sessionRef.current?.release().catch(() => undefined);
+				if (disposedRef.current) return;
 				sessionRef.current = null;
 				props.onClose(true);
 			} catch (cause) {
+				if (disposedRef.current) return;
 				setError(
 					cause instanceof Error ? cause.message : "Could not add the clip",
 				);
@@ -112,18 +123,22 @@ export function EditorClipRecorder(props: {
 	);
 
 	const handleStop = useCallback(async () => {
-		if (stoppingRef.current || !sessionRef.current) return;
+		const session = sessionRef.current;
+		if (stoppingRef.current || !session) return;
 		stoppingRef.current = true;
 		setPhase("uploading");
 		try {
-			const clip = await sessionRef.current.stop();
+			const clip = await session.stop();
+			if (disposedRef.current) return;
 			setPreviewStream(null);
 			setCaptured(clip);
 			setCapturedCanImport(true);
 			await importCapture(clip);
 		} catch (cause) {
+			if (disposedRef.current) return;
 			setPreviewStream(null);
-			const recovered = await sessionRef.current.recover().catch(() => null);
+			const recovered = await session.recover().catch(() => null);
+			if (disposedRef.current) return;
 			setCaptured(recovered);
 			setCapturedCanImport(false);
 			setError(
@@ -137,9 +152,10 @@ export function EditorClipRecorder(props: {
 	stopRef.current = handleStop;
 
 	const handleStart = async () => {
-		if (phase !== "idle" && phase !== "error") return;
+		if (disposedRef.current || (phase !== "idle" && phase !== "error")) return;
 		if (sessionRef.current) {
 			await sessionRef.current.discard().catch(() => undefined);
+			if (disposedRef.current) return;
 			sessionRef.current = null;
 		}
 		setCaptured(null);
@@ -151,12 +167,18 @@ export function EditorClipRecorder(props: {
 				cameraEnabled,
 				micEnabled,
 				systemAudioEnabled,
+				signal: captureAbortRef.current?.signal,
 				onDisplayEnded: () => void stopRef.current(),
 				onError: (cause) => {
+					if (disposedRef.current) return;
 					setError(cause.message);
 					void stopRef.current();
 				},
 			});
+			if (disposedRef.current) {
+				await session.stop().catch(() => undefined);
+				return;
+			}
 			sessionRef.current = session;
 			setPreviewStream(session.cameraPreviewStream);
 			startedAtRef.current = performance.now();
@@ -165,6 +187,7 @@ export function EditorClipRecorder(props: {
 			setElapsedMs(0);
 			setPhase("recording");
 		} catch (cause) {
+			if (disposedRef.current) return;
 			setError(
 				cause instanceof Error ? cause.message : "Could not start recording",
 			);
@@ -190,6 +213,7 @@ export function EditorClipRecorder(props: {
 	const handleDiscard = async () => {
 		if (phase === "uploading" || phase === "starting") return;
 		await sessionRef.current?.discard();
+		if (disposedRef.current) return;
 		sessionRef.current = null;
 		props.onClose(false);
 	};

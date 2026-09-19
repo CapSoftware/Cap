@@ -17,6 +17,7 @@ export type EditorClipCaptureOptions = {
 	cameraEnabled: boolean;
 	micEnabled: boolean;
 	systemAudioEnabled: boolean;
+	signal?: AbortSignal;
 	onDisplayEnded?: () => void;
 	onError?: (error: Error) => void;
 };
@@ -76,6 +77,10 @@ function capturedFile(blob: Blob | null, role: "screen" | "camera") {
 export async function startEditorClipCapture(
 	options: EditorClipCaptureOptions,
 ): Promise<EditorClipCaptureSession> {
+	const ensureActive = () => {
+		if (options.signal?.aborted)
+			throw new Error("Editor clip capture was canceled");
+	};
 	if (
 		typeof MediaRecorder === "undefined" ||
 		!navigator.mediaDevices?.getDisplayMedia ||
@@ -92,13 +97,21 @@ export async function startEditorClipCapture(
 	let activeDisplayRecorder: MediaRecorder | null = null;
 	let activeCameraRecorder: MediaRecorder | null = null;
 	try {
+		ensureActive();
 		displayStream = await acquireDisplayStream({
 			systemAudioEnabled: options.systemAudioEnabled,
 		});
+		ensureActive();
 		const displayTrack = displayStream.getVideoTracks()[0];
 		if (!displayTrack) throw new Error("Screen picker returned no video track");
-		if (options.cameraEnabled) cameraStream = await acquireCameraStream();
-		if (options.micEnabled) micStream = await acquireMicStream();
+		if (options.cameraEnabled) {
+			cameraStream = await acquireCameraStream();
+			ensureActive();
+		}
+		if (options.micEnabled) {
+			micStream = await acquireMicStream();
+			ensureActive();
+		}
 		if (displayTrack.readyState !== "live")
 			throw new Error("Screen sharing ended before recording started");
 		if (cameraStream?.getVideoTracks()[0]?.readyState === "ended")
@@ -108,6 +121,7 @@ export async function startEditorClipCapture(
 			: [];
 		if (systemAudioTracks.length > 0 || micStream) {
 			mixer = await createAudioMixer({ systemAudioTracks, micStream });
+			ensureActive();
 		}
 		const displayInput = new MediaStream([
 			displayTrack,
@@ -121,11 +135,13 @@ export async function startEditorClipCapture(
 			mimeType: displayFormat.mimeType,
 			sessionId: `editor-screen-${crypto.randomUUID()}`,
 		});
+		ensureActive();
 		if (cameraFormat) {
 			cameraSpool = await RecordingSpool.create({
 				mimeType: cameraFormat.mimeType,
 				sessionId: `editor-camera-${crypto.randomUUID()}`,
 			});
+			ensureActive();
 		}
 		const displayRecorder = new MediaRecorder(displayInput, {
 			mimeType: displayFormat.mimeType,
@@ -254,8 +270,11 @@ export async function startEditorClipCapture(
 			},
 			{ once: true },
 		);
+		ensureActive();
 		displayRecorder.start(1000);
+		ensureActive();
 		cameraRecorder?.start(1000);
+		ensureActive();
 		captureStarted = true;
 		if (displayTrack.readyState !== "live")
 			throw new Error("Screen sharing ended before recording started");
