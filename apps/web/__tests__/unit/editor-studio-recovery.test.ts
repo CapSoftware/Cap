@@ -319,3 +319,138 @@ test("preparation keeps the shared editor shell open and connects once when read
 	await act(async () => iframe.dispatchEvent(new Event("load")));
 	expect(mocks.connect).toHaveBeenCalledTimes(1);
 });
+
+test("a Free editor lets its owner restore non-caption edits from a Pro browser draft", async () => {
+	const config = {
+		camera: { mirror: true },
+		captions: {
+			segments: [{ id: "word", start: 0, end: 1, text: "Hello" }],
+			settings: { enabled: true, exportWithSubtitles: true, font: "Geist" },
+		},
+		timeline: {
+			segments: [{ start: 0, end: 10 }],
+			captionSegments: [{ id: "word", start: 0, end: 1 }],
+		},
+	};
+	expect(
+		captureEditorLocalDraft(
+			window.localStorage,
+			"owner",
+			"video",
+			"newer",
+			JSON.stringify(config),
+		),
+	).toBe(true);
+	await act(async () => {
+		root.render(
+			createElement(StudioEditorClient, {
+				videoId: "video",
+				userId: "owner",
+				captionsEnabled: false,
+				savedAt: "newer",
+				preparingTitle: "Paired replay",
+				preparingDuration: 900,
+				preparingTracks: ["display", "camera"],
+			}),
+		);
+	});
+	await waitFor(() => {
+		expect(
+			container.querySelector('[role="alert"]')?.textContent ?? "",
+		).toContain("Cap Pro");
+	});
+	expect(
+		requests.filter(
+			(request) => request.url === "/api/editor/sessions/session/config",
+		),
+	).toHaveLength(0);
+	expect(
+		readEditorLocalDraft(window.localStorage, "owner", "video")?.config,
+	).toEqual(config);
+	const restore = Array.from(container.querySelectorAll("button")).find(
+		(button) => button.textContent === "Restore browser edits",
+	);
+	if (!restore) throw new Error("Recovery choice was not shown");
+	await act(async () => restore.click());
+	await waitFor(() => {
+		expect(
+			container.querySelector('iframe[title="Cap editor"]'),
+		).not.toBeNull();
+	});
+	expect(
+		requests.filter(
+			(request) => request.url === "/api/editor/sessions/session/config",
+		)[0]?.body,
+	).toEqual({
+		videoId: "video",
+		config: {
+			camera: { mirror: true },
+			captions: {
+				segments: [],
+				settings: {
+					enabled: false,
+					exportWithSubtitles: false,
+					font: "Geist",
+				},
+			},
+			timeline: {
+				segments: [{ start: 0, end: 10 }],
+				captionSegments: [],
+			},
+		},
+		expectedSavedAt: "newer",
+	});
+	expect(
+		readEditorLocalDraft(window.localStorage, "owner", "video"),
+	).toBeNull();
+});
+
+test("a Pro editor automatically restores a caption browser draft", async () => {
+	const config = {
+		camera: { mirror: true },
+		captions: {
+			segments: [{ id: "word", start: 0, end: 1, text: "Hello" }],
+			settings: { enabled: true, exportWithSubtitles: true },
+		},
+	};
+	expect(
+		captureEditorLocalDraft(
+			window.localStorage,
+			"owner",
+			"video",
+			"newer",
+			JSON.stringify(config),
+		),
+	).toBe(true);
+	await act(async () => {
+		root.render(
+			createElement(StudioEditorClient, {
+				videoId: "video",
+				userId: "owner",
+				captionsEnabled: true,
+				savedAt: "newer",
+				preparingTitle: "Paired replay",
+				preparingDuration: 900,
+				preparingTracks: ["display", "camera"],
+			}),
+		);
+	});
+	await waitFor(() => {
+		expect(
+			requests.filter(
+				(request) => request.url === "/api/editor/sessions/session/config",
+			),
+		).toHaveLength(1);
+		expect(
+			readEditorLocalDraft(window.localStorage, "owner", "video"),
+		).toBeNull();
+	});
+	expect(
+		requests.filter(
+			(request) => request.url === "/api/editor/sessions/session/config",
+		)[0]?.body,
+	).toEqual({ videoId: "video", config, expectedSavedAt: "newer" });
+	expect(
+		readEditorLocalDraft(window.localStorage, "owner", "video"),
+	).toBeNull();
+});

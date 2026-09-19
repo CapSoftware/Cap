@@ -4,6 +4,10 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { WebEditorCapImportProgress } from "@/lib/editor-cap-import-client";
+import {
+	hasEditorCaptionContent,
+	stripEditorCaptionContent,
+} from "@/lib/editor-caption-access";
 import type { EditorClipCapture } from "@/lib/editor-clip-recorder";
 import {
 	captureEditorLocalDraft,
@@ -254,6 +258,13 @@ export function StudioEditorClient(props: {
 							videoId,
 						);
 						if (draft) {
+							if (!captionsEnabled && hasEditorCaptionContent(draft.config)) {
+								setRecoveryConflict(draft);
+								setError(
+									"Browser edits include captions, which require Cap Pro. Restore your other edits without captions, or open the latest saved version.",
+								);
+								return;
+							}
 							const recovered = await fetch(
 								`/api/editor/sessions/${encodeURIComponent(status.sessionId)}/config`,
 								{
@@ -319,12 +330,16 @@ export function StudioEditorClient(props: {
 			close();
 			captureDraftRef.current = () => true;
 		};
-	}, [savedAt, userId, videoId]);
+	}, [captionsEnabled, savedAt, userId, videoId]);
 
 	const restoreBrowserDraft = useCallback(async () => {
 		const activeSession = sessionRef.current;
 		const draft = recoveryConflict;
 		if (!activeSession || !draft || restoreInProgressRef.current) return;
+		const config =
+			!captionsEnabled && hasEditorCaptionContent(draft.config)
+				? stripEditorCaptionContent(draft.config)
+				: draft.config;
 		restoreInProgressRef.current = true;
 		setRestoringBrowserDraft(true);
 		try {
@@ -352,7 +367,7 @@ export function StudioEditorClient(props: {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					videoId,
-					config: draft.config,
+					config,
 					expectedSavedAt: revision.savedAt,
 				}),
 			}).catch(() => null);
@@ -388,7 +403,7 @@ export function StudioEditorClient(props: {
 			restoreInProgressRef.current = false;
 			setRestoringBrowserDraft(false);
 		}
-	}, [recoveryConflict, userId, videoId]);
+	}, [captionsEnabled, recoveryConflict, userId, videoId]);
 
 	const sendErrorToFrame = useCallback(
 		(iframe: HTMLIFrameElement) => {
