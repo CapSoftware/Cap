@@ -4,6 +4,7 @@ use cap_recording::{
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tracing::trace;
 
 use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
@@ -208,6 +209,37 @@ impl DeepLinkAction {
                 capture_system_audio,
                 mode,
             } => {
+                // SECURITY (P1 finding): External cap-desktop:// deep links must not
+                // silently initiate screen capture. Require explicit user confirmation.
+                let display_hint = match &capture_mode {
+                    CaptureMode::Screen(name) if name.is_empty() || name == "default" => {
+                        "primary display".to_string()
+                    }
+                    CaptureMode::Screen(name) => format!("display: {name}"),
+                    CaptureMode::Window(name) => format!("window: {name}"),
+                    #[cfg(debug_assertions)]
+                    CaptureMode::Area(_) => "selected area".to_string(),
+                    #[cfg(debug_assertions)]
+                    CaptureMode::CameraOnly => "camera only".to_string(),
+                };
+
+                let confirmed = app
+                    .dialog()
+                    .message(format!(
+                        "An external application requested to start a screen recording ({display_hint}). Allow?"
+                    ))
+                    .title("Screen Recording Request")
+                    .kind(MessageDialogKind::Warning)
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Allow".to_string(),
+                        "Deny".to_string(),
+                    ))
+                    .blocking_show();
+
+                if !confirmed {
+                    return Err("Screen capture denied by user.".to_string());
+                }
+
                 let state = app.state::<ArcLock<App>>();
 
                 crate::set_camera_input(app.clone(), state.clone(), camera, None).await?;
@@ -222,7 +254,14 @@ impl DeepLinkAction {
                             None
                         };
 
+                        let primary_display = app.primary_monitor().ok().flatten().and_then(|primary| {
+                            primary.name().and_then(|primary_name| {
+                                displays.iter().find(|(s, _)| s.name == *primary_name)
+                            })
+                        });
+
                         let (display, _) = target_display
+                            .or_else(|| primary_display)
                             .or_else(|| displays.first())
                             .ok_or_else(|| "No display available".to_string())?;
 
