@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import {
 	createServer,
@@ -718,20 +717,22 @@ const startRecording = async (
 		});
 	}
 	if (mode === "tab") {
-		const injected = spawnSync("osascript", [
-			"-e",
-			String.raw`tell application "System Events" to keystroke "y" using {command down, shift down}`,
-		]);
-		if (injected.status !== 0) {
-			throw new Error(injected.stderr.toString());
-		}
 		await expect
-			.poll(() =>
-				worker.evaluate(
-					() =>
-						(globalThis as typeof globalThis & { capE2eActionClicks?: number })
-							.capE2eActionClicks ?? 0,
-				),
+			.poll(
+				() =>
+					worker.evaluate(
+						() =>
+							(
+								globalThis as typeof globalThis & {
+									capE2eActionClicks?: number;
+								}
+							).capE2eActionClicks ?? 0,
+					),
+				{
+					message:
+						"Click the Cap extension action icon in the test Chromium window",
+					timeout: 60_000,
+				},
 			)
 			.toBeGreaterThan(0);
 	}
@@ -873,9 +874,11 @@ test.describe("extension recording upload", () => {
 	test("keeps camera sidecar separate in current-tab capture", async () => {
 		test.skip(
 			process.env.CAP_EXTENSION_E2E_HEADED !== "1" ||
+				process.env.CAP_EXTENSION_E2E_NATIVE_GESTURE !== "1" ||
 				process.platform !== "darwin",
-			"Tab capture needs a native Chrome action gesture in headed macOS Chromium",
+			"Headed current-tab capture needs a manual Cap action click in the isolated test Chromium profile",
 		);
+		test.setTimeout(120_000);
 		if (!extension || !mockServer)
 			throw new Error("Test harness did not start");
 		const worker = await getServiceWorker(extension.context);
