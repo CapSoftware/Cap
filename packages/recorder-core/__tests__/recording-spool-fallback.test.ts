@@ -11,16 +11,19 @@ describe("moveRecordingSpoolToInMemoryBackup", () => {
 
 		const replaceLocalRecording = vi.fn((chunks: Blob[]) => {
 			retainedChunks = chunks;
+			return false;
 		});
 
 		const transitionPromise = moveRecordingSpoolToInMemoryBackup({
 			spool: {
+				totalBytes: 9,
 				recoverBlob: () =>
 					new Promise<Blob>((resolve) => {
 						releaseRecovery = () =>
 							resolve(new Blob(["persisted"], { type: "video/webm" }));
 					}),
 			},
+			strategy: { mode: "full" },
 			setLocalRecordingStrategy: () => {
 				retainedChunks = [];
 			},
@@ -39,5 +42,23 @@ describe("moveRecordingSpoolToInMemoryBackup", () => {
 		expect(replaceLocalRecording).toHaveBeenCalledTimes(1);
 		expect(retainedChunks).toHaveLength(2);
 		expect(await blobToText(new Blob(retainedChunks))).toBe("persistedlater");
+	});
+
+	it("skips a large persisted backup before it can be reconstructed in memory", async () => {
+		const recoverBlob = vi.fn(async () => new Blob(["large"]));
+		const replaceLocalRecording = vi.fn(() => true);
+		const strategy = { mode: "capped" as const, maxBytes: 10 };
+
+		const overflowed = await moveRecordingSpoolToInMemoryBackup({
+			spool: { totalBytes: 11, recoverBlob },
+			strategy,
+			setLocalRecordingStrategy: vi.fn(),
+			getRetainedChunks: () => [],
+			replaceLocalRecording,
+		});
+
+		expect(overflowed).toBe(true);
+		expect(recoverBlob).not.toHaveBeenCalled();
+		expect(replaceLocalRecording).toHaveBeenCalledWith([], strategy, true);
 	});
 });

@@ -13,6 +13,11 @@ import {
 	MultipartCompletionUncertainError,
 	type RecorderApiOptions,
 } from "@cap/recorder-core/instant-mp4-uploader";
+import {
+	appendLocalRecordingChunk,
+	initialLocalRecordingState,
+	type LocalRecordingState,
+} from "@cap/recorder-core/local-recording-backup";
 import type {
 	ChunkUploadState,
 	RecorderPhase,
@@ -86,6 +91,7 @@ interface UseWebRecorderOptions {
 
 const INSTANT_UPLOAD_REQUEST_INTERVAL_MS = 1000;
 const INSTANT_CHUNK_GUARD_DELAY_MS = INSTANT_UPLOAD_REQUEST_INTERVAL_MS * 3;
+const MEMORY_BACKUP_MAX_BYTES = 256 * 1024 * 1024;
 
 type InstantChunkingMode = "manual" | "timeslice";
 type InstantVideoCreation = {
@@ -253,7 +259,9 @@ export const useWebRecorder = ({
 	const cameraRecorderFailedRef = useRef(false);
 	const cameraSpoolRef = useRef<RecordingSpool | null>(null);
 	const cameraSpoolFailedRef = useRef(false);
-	const cameraFallbackChunksRef = useRef<Blob[]>([]);
+	const cameraFallbackRef = useRef<LocalRecordingState>(
+		initialLocalRecordingState(),
+	);
 	const recordingPairIdRef = useRef<string | null>(null);
 	const cameraSettingsRef = useRef<MediaTrackSettings | undefined>(undefined);
 	const cameraUploadApiRef = useRef<RecorderApiOptions | null>(null);
@@ -538,7 +546,7 @@ export const useWebRecorder = ({
 		const spool = cameraSpoolRef.current;
 		cameraSpoolRef.current = null;
 		cameraSpoolFailedRef.current = false;
-		cameraFallbackChunksRef.current = [];
+		cameraFallbackRef.current = initialLocalRecordingState();
 		stopCameraSpoolHeartbeat();
 		if (!spool) return;
 		try {
@@ -608,8 +616,13 @@ export const useWebRecorder = ({
 	const persistCameraChunk = useCallback((chunk: Blob) => {
 		const spool = cameraSpoolRef.current;
 		if (!spool || cameraSpoolFailedRef.current) {
-			cameraFallbackChunksRef.current.push(chunk);
-			return;
+			const previous = cameraFallbackRef.current;
+			const next = appendLocalRecordingChunk(previous, chunk, {
+				mode: "capped",
+				maxBytes: MEMORY_BACKUP_MAX_BYTES,
+			});
+			cameraFallbackRef.current = next;
+			return !previous.overflowed && next.overflowed;
 		}
 		void spool.appendChunk(chunk).catch((error) => {
 			if (cameraSpoolRef.current !== spool || cameraSpoolFailedRef.current) {
@@ -622,6 +635,7 @@ export const useWebRecorder = ({
 			);
 			void stopRecordingRef.current?.();
 		});
+		return false;
 	}, []);
 
 	const persistChunkToRecordingSpool = useCallback(
@@ -640,8 +654,12 @@ export const useWebRecorder = ({
 				recordingSpoolDegradingRef.current = true;
 				recordingSpoolRef.current = null;
 				stopRecordingSpoolHeartbeat();
-				await moveRecordingSpoolToInMemoryBackup({
+				const backupOverflowed = await moveRecordingSpoolToInMemoryBackup({
 					spool,
+					strategy: {
+						mode: "capped",
+						maxBytes: MEMORY_BACKUP_MAX_BYTES,
+					},
 					setLocalRecordingStrategy,
 					getRetainedChunks: () => [...recordedChunksRef.current],
 					replaceLocalRecording,
@@ -657,13 +675,21 @@ export const useWebRecorder = ({
 					);
 				}
 
+				if (backupOverflowed) {
+					recordingSpoolWarningShownRef.current = true;
+					toast.warning(
+						"Recording memory backup reached its limit. Finishing now.",
+					);
+					void stopRecordingRef.current?.();
+				}
+
 				if (recordingSpoolWarningShownRef.current) {
 					return;
 				}
 
 				recordingSpoolWarningShownRef.current = true;
 				toast.warning(
-					"Local recovery switched to in-memory backup. Upload will continue, but large recordings may use more memory.",
+					"Local recovery switched to a bounded memory backup. Recording will finish if it fills.",
 				);
 			});
 		},
@@ -695,19 +721,25 @@ export const useWebRecorder = ({
 
 	const resolveCameraFailureBlob = useCallback(async () => {
 		const spool = cameraSpoolRef.current;
-		const remainingChunks = cameraFallbackChunksRef.current;
+		const fallback = cameraFallbackRef.current;
+		if (fallback.overflowed) return null;
+		const remainingChunks = fallback.chunks;
 		try {
 			const persisted = await spool?.recoverBlob();
 			if (!persisted && remainingChunks.length === 0) return null;
+			if (
+				(persisted?.size ?? 0) + fallback.retainedBytes !==
+				cameraRecorderBytesRef.current
+			) {
+				return null;
+			}
 			return new Blob(
 				persisted ? [persisted, ...remainingChunks] : remainingChunks,
 				{ type: spool ? persisted?.type : remainingChunks[0]?.type },
 			);
 		} catch (error) {
 			console.error("Failed to reconstruct camera recording", error);
-			return remainingChunks.length > 0
-				? new Blob(remainingChunks, { type: remainingChunks[0]?.type })
-				: null;
+			return null;
 		}
 	}, []);
 
@@ -893,25 +925,36 @@ export const useWebRecorder = ({
 
 	const handleRecorderDataAvailable = useCallback(
 		(event: BlobEvent) => {
-			onRecorderDataAvailable(event, (chunk: Blob, totalBytes: number) => {
-				if (isStreamingPipelineActive() && chunk.size > 0) {
-					lastInstantChunkAtRef.current =
-						typeof performance !== "undefined" ? performance.now() : Date.now();
-					if (instantChunkModeRef.current === "timeslice") {
-						clearInstantChunkGuard();
+			const backupLimitReached = onRecorderDataAvailable(
+				event,
+				(chunk: Blob, totalBytes: number) => {
+					if (isStreamingPipelineActive() && chunk.size > 0) {
+						lastInstantChunkAtRef.current =
+							typeof performance !== "undefined"
+								? performance.now()
+								: Date.now();
+						if (instantChunkModeRef.current === "timeslice") {
+							clearInstantChunkGuard();
+						}
 					}
-				}
-				persistChunkToRecordingSpool(chunk);
-				try {
-					instantUploaderRef.current?.handleChunk(chunk, totalBytes);
-				} catch (error) {
-					console.error("Failed to upload recording chunk", error);
-					toast.error(
-						"Upload could not keep up with recording. Stopping to protect the recording.",
-					);
-					void stopRecordingRef.current?.();
-				}
-			});
+					persistChunkToRecordingSpool(chunk);
+					try {
+						instantUploaderRef.current?.handleChunk(chunk, totalBytes);
+					} catch (error) {
+						console.error("Failed to upload recording chunk", error);
+						toast.error(
+							"Upload could not keep up with recording. Stopping to protect the recording.",
+						);
+						void stopRecordingRef.current?.();
+					}
+				},
+			);
+			if (backupLimitReached) {
+				toast.warning(
+					"Recording memory backup reached its limit. Finishing now.",
+				);
+				void stopRecordingRef.current?.();
+			}
 		},
 		[
 			onRecorderDataAvailable,
@@ -956,7 +999,7 @@ export const useWebRecorder = ({
 		cameraRecorderBytesRef.current = 0;
 		cameraRecorderFailedRef.current = false;
 		cameraSpoolFailedRef.current = false;
-		cameraFallbackChunksRef.current = [];
+		cameraFallbackRef.current = initialLocalRecordingState();
 		cameraSettingsRef.current = undefined;
 		cameraOffsetMsRef.current = 0;
 		cameraUploadApiRef.current = null;
@@ -1095,9 +1138,12 @@ export const useWebRecorder = ({
 				if (spool) {
 					setLocalRecordingStrategy({ mode: "off" });
 				} else {
-					setLocalRecordingStrategy({ mode: "full" });
+					setLocalRecordingStrategy({
+						mode: "capped",
+						maxBytes: MEMORY_BACKUP_MAX_BYTES,
+					});
 					toast.warning(
-						"Durable local backup is unavailable. This recording will use in-memory recovery.",
+						"Durable local backup is unavailable. This recording will use bounded memory recovery.",
 					);
 				}
 			} else {
@@ -1108,7 +1154,7 @@ export const useWebRecorder = ({
 				!(await createCameraSpool(cameraPipeline.mimeType))
 			) {
 				toast.warning(
-					"Durable camera backup is unavailable. Camera recovery will use memory.",
+					"Durable camera backup is unavailable. Camera recovery will use bounded memory.",
 				);
 			}
 			instantUploaderRef.current = null;
@@ -1213,12 +1259,18 @@ export const useWebRecorder = ({
 						return;
 					}
 					cameraRecorderBytesRef.current += event.data.size;
-					persistCameraChunk(event.data);
+					const cameraBackupLimitReached = persistCameraChunk(event.data);
 					try {
 						cameraUploaderRef.current?.handleChunk(
 							event.data,
 							cameraRecorderBytesRef.current,
 						);
+						if (cameraBackupLimitReached) {
+							toast.warning(
+								"Camera memory backup reached its limit. Finishing both clips now.",
+							);
+							void stopRecordingRef.current?.();
+						}
 					} catch (error) {
 						cameraRecorderFailedRef.current = true;
 						console.error("Failed to upload camera recording chunk", error);
