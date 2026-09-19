@@ -124,6 +124,7 @@ vi.mock(
 	}),
 );
 
+import { useMediaRecorderSetup } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/useMediaRecorderSetup";
 import { useWebRecorder } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/useWebRecorder";
 
 class FakeTrack extends EventTarget {
@@ -375,4 +376,39 @@ test("an upload failure after overflow never offers a truncated camera download"
 		mocks.uploaders.find((uploader) => uploader.subpath === "raw-upload.webm")
 			?.cancel,
 	).toHaveBeenCalledOnce();
+});
+
+test("screen fallback overflow remains visible after the recorder stops", async () => {
+	const setupRef = {
+		current: null as ReturnType<typeof useMediaRecorderSetup> | null,
+	};
+	function SetupHarness() {
+		setupRef.current = useMediaRecorderSetup();
+		return null;
+	}
+	const setupContainer = document.createElement("div");
+	document.body.append(setupContainer);
+	const setupRoot = createRoot(setupContainer);
+	try {
+		await act(async () => setupRoot.render(createElement(SetupHarness)));
+		const setup = setupRef.current;
+		if (!setup) throw new Error("Recorder setup did not mount");
+		const strategy = { mode: "capped" as const, maxBytes: 5 };
+		setup.setLocalRecordingStrategy(strategy);
+		const data = new Event("dataavailable") as BlobEvent;
+		Object.defineProperty(data, "data", { value: new Blob(["overflow"]) });
+		expect(setup.onRecorderDataAvailable(data)).toBe(true);
+		setup.onRecorderStop();
+		expect(setup.localRecordingOverflowedRef.current).toBe(true);
+		expect(
+			setup.replaceLocalRecording(
+				[],
+				strategy,
+				setup.localRecordingOverflowedRef.current,
+			),
+		).toBe(true);
+	} finally {
+		await act(async () => setupRoot.unmount());
+		setupContainer.remove();
+	}
 });

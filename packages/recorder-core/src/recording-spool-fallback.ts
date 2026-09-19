@@ -6,12 +6,14 @@ export const moveRecordingSpoolToInMemoryBackup = async ({
 	strategy,
 	setLocalRecordingStrategy,
 	getRetainedChunks,
+	getLocalRecordingOverflowed,
 	replaceLocalRecording,
 }: {
 	spool: Pick<RecordingSpool, "recoverBlob" | "totalBytes">;
 	strategy: LocalRecordingStrategy;
 	setLocalRecordingStrategy: (strategy: LocalRecordingStrategy) => void;
 	getRetainedChunks: () => Blob[];
+	getLocalRecordingOverflowed: () => boolean;
 	replaceLocalRecording: (
 		chunks: Blob[],
 		strategy: LocalRecordingStrategy,
@@ -32,9 +34,14 @@ export const moveRecordingSpoolToInMemoryBackup = async ({
 		}
 	}
 
-	const retainedChunks = getRetainedChunks();
+	alreadyOverflowed ||= getLocalRecordingOverflowed();
+	const retainedChunks = alreadyOverflowed ? [] : getRetainedChunks();
 	return replaceLocalRecording(
-		recoveredBlob ? [recoveredBlob, ...retainedChunks] : retainedChunks,
+		alreadyOverflowed
+			? []
+			: recoveredBlob
+				? [recoveredBlob, ...retainedChunks]
+				: retainedChunks,
 		strategy,
 		alreadyOverflowed,
 	);

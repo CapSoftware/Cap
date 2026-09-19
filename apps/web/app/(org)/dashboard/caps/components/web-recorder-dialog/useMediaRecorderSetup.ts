@@ -118,7 +118,6 @@ export const useMediaRecorderSetup = () => {
 
 		recordedChunksRef.current = [];
 		retainedRecordingBytesRef.current = 0;
-		localRecordingOverflowedRef.current = false;
 		const resolver = stopPromiseResolverRef.current;
 		stopPromiseResolverRef.current = null;
 		stopPromiseRejectRef.current = null;
@@ -170,6 +169,7 @@ export const useMediaRecorderSetup = () => {
 		mediaRecorderRef,
 		recordedChunksRef,
 		totalRecordedBytesRef,
+		localRecordingOverflowedRef,
 		setLocalRecordingStrategy,
 		replaceLocalRecording,
 		appendToLocalRecording,

@@ -201,6 +201,7 @@ export const useWebRecorder = ({
 		mediaRecorderRef,
 		recordedChunksRef,
 		totalRecordedBytesRef,
+		localRecordingOverflowedRef,
 		setLocalRecordingStrategy,
 		replaceLocalRecording,
 		onRecorderDataAvailable,
@@ -662,6 +663,8 @@ export const useWebRecorder = ({
 					},
 					setLocalRecordingStrategy,
 					getRetainedChunks: () => [...recordedChunksRef.current],
+					getLocalRecordingOverflowed: () =>
+						localRecordingOverflowedRef.current,
 					replaceLocalRecording,
 				});
 				recordingSpoolDegradingRef.current = false;
@@ -695,6 +698,7 @@ export const useWebRecorder = ({
 		},
 		[
 			recordedChunksRef,
+			localRecordingOverflowedRef,
 			replaceLocalRecording,
 			setLocalRecordingStrategy,
 			stopRecordingSpoolHeartbeat,
