@@ -158,6 +158,10 @@ const LANGUAGE_OPTIONS: LanguageOption[] = [
 	{ code: "ta", label: "Tamil" },
 ];
 
+const WEB_LANGUAGE_OPTIONS = LANGUAGE_OPTIONS.filter(
+	(option) => option.code !== "pa",
+);
+
 const STYLE_PRESET_KEYS = new Set<keyof EditorCaptionSettings>([
 	"font",
 	"fontWeight",
@@ -571,7 +575,7 @@ export function CaptionsTab(props: {
 			);
 			if (
 				savedLanguage &&
-				LANGUAGE_OPTIONS.some((option) => option.code === savedLanguage)
+				WEB_LANGUAGE_OPTIONS.some((option) => option.code === savedLanguage)
 			) {
 				setSelectedLanguage(savedLanguage);
 			}
@@ -819,7 +823,7 @@ export function CaptionsTab(props: {
 					<Show when={webCaptionsEnabled() && hasAudio()}>
 						<Field name="Language" inline>
 							<KSelect<string>
-								options={LANGUAGE_OPTIONS.map((option) => option.code)}
+								options={WEB_LANGUAGE_OPTIONS.map((option) => option.code)}
 								value={selectedLanguage()}
 								onChange={(value: string | null) => {
 									if (value) setSelectedLanguage(value);
@@ -831,7 +835,7 @@ export function CaptionsTab(props: {
 									>
 										<KSelect.ItemLabel class="flex-1">
 											{
-												LANGUAGE_OPTIONS.find(
+												WEB_LANGUAGE_OPTIONS.find(
 													(option) => option.code === props.item.rawValue,
 												)?.label
 											}
@@ -842,7 +846,7 @@ export function CaptionsTab(props: {
 								<KSelect.Trigger class={selectTriggerClass}>
 									<KSelect.Value<string> class="truncate">
 										{(state) => {
-											const language = LANGUAGE_OPTIONS.find(
+											const language = WEB_LANGUAGE_OPTIONS.find(
 												(option) => option.code === state.selectedOption(),
 											);
 											return (
