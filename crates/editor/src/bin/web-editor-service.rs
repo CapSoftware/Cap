@@ -195,6 +195,17 @@ fn validate_preview(request: &PreviewRequest) -> ApiResult<()> {
     Ok(())
 }
 
+fn preview_frame_number(request: &PreviewRequest, editor: &EditorInstance) -> ApiResult<u32> {
+    validate_preview(request)?;
+    let total_frames = editor.get_total_frames(request.fps);
+    if total_frames == 0 || request.frame_number > total_frames {
+        return Err(invalid_request(
+            "Preview frame is outside the project timeline",
+        ));
+    }
+    Ok(request.frame_number.min(total_frames - 1))
+}
+
 fn pack_frame(
     frame: RenderedFrame,
     layout: FrameLayout,
@@ -562,14 +573,14 @@ async fn preview(
     headers: HeaderMap,
     Json(request): Json<PreviewRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    validate_preview(&request)?;
+    let frame_number = preview_frame_number(&request, &state.editor)?;
     let _guard = state.preview_lock.lock().await;
     state.force_png.store(true, Ordering::Relaxed);
     let _png_guard = PreviewPngGuard(state.force_png.clone());
     let mut frame_rx = state.frame_rx.clone();
     drop(frame_rx.borrow_and_update());
     state.editor.preview_tx.send_modify(|current| {
-        *current = Some((request.frame_number, request.fps, request.resolution_base));
+        *current = Some((frame_number, request.fps, request.resolution_base));
     });
     let packet = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -579,7 +590,7 @@ async fn preview(
                 .map_err(|error| internal_error(error.to_string()))?;
             let packet = frame_rx.borrow_and_update().clone();
             if let Some(packet) = packet
-                && packet.frame_number == request.frame_number
+                && packet.frame_number == frame_number
             {
                 return Ok::<_, ApiError>(packet);
             }
@@ -610,11 +621,11 @@ async fn start_playback(
     State(state): State<Arc<ServiceState>>,
     Json(request): Json<PreviewRequest>,
 ) -> ApiResult<StatusCode> {
-    validate_preview(&request)?;
+    let frame_number = preview_frame_number(&request, &state.editor)?;
     state
         .editor
         .modify_and_emit_state(|editor_state| {
-            editor_state.playhead_position = request.frame_number;
+            editor_state.playhead_position = frame_number;
         })
         .await;
     state
@@ -658,12 +669,12 @@ async fn seek(
     State(state): State<Arc<ServiceState>>,
     Json(request): Json<PreviewRequest>,
 ) -> ApiResult<StatusCode> {
-    validate_preview(&request)?;
-    if !state.editor.seek_playback(request.frame_number).await {
+    let frame_number = preview_frame_number(&request, &state.editor)?;
+    if !state.editor.seek_playback(frame_number).await {
         state
             .editor
             .modify_and_emit_state(|editor_state| {
-                editor_state.playhead_position = request.frame_number;
+                editor_state.playhead_position = frame_number;
             })
             .await;
     }

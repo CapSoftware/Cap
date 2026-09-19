@@ -459,6 +459,7 @@ try {
 	);
 	assert.equal(instanceResponse.status, 200);
 	const instance = (await instanceResponse.json()) as {
+		recordingDuration: number;
 		recordings: { segments: unknown[] };
 	};
 	assert.equal(instance.recordings.segments.length, 2);
@@ -466,6 +467,47 @@ try {
 	const seeks = [];
 	for (const seconds of [1, 10, 23, 24.5, 90, 450, 800, 900, 922]) {
 		seeks.push({ seconds, ms: await seekPreview(sessionId, seconds, headers) });
+	}
+	const endpointFrame = Math.ceil(instance.recordingDuration * 30);
+	const endpointResponse = await app.request(
+		`/editor/sessions/${sessionId}/preview`,
+		{
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				frameNumber: endpointFrame,
+				fps: 30,
+				resolutionBase: { x: 1920, y: 1080 },
+			}),
+		},
+	);
+	assert.equal(endpointResponse.status, 200);
+	const placement = endpointResponse.headers.get("x-cap-frame-placement");
+	assert.ok(placement);
+	assert.equal(
+		(JSON.parse(placement) as { frameNumber: number }).frameNumber,
+		endpointFrame - 1,
+	);
+	for (const [path, method] of [
+		["preview", "POST"],
+		["playback", "POST"],
+		["seek", "PUT"],
+	] as const) {
+		const rejectedStarted = performance.now();
+		const rejected = await app.request(
+			`/editor/sessions/${sessionId}/${path}`,
+			{
+				method,
+				headers,
+				body: JSON.stringify({
+					frameNumber: endpointFrame + 30,
+					fps: 30,
+					resolutionBase: { x: 1920, y: 1080 },
+				}),
+			},
+		);
+		assert.equal(rejected.status, 400);
+		assert.ok(performance.now() - rejectedStarted < 1000);
 	}
 	const sorted = seeks.map((seek) => seek.ms).sort((a, b) => a - b);
 	const rssAfterSeeksMb = await nativeRssMb(native.pid);
