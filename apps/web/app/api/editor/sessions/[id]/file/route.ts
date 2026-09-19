@@ -1,4 +1,5 @@
 import { Storage } from "@cap/web-backend";
+import { getRecordingObjectIdentity } from "@cap/web-backend/src/Storage/recording-object-identity";
 import { HttpAuthMiddleware, Video } from "@cap/web-domain";
 import {
 	HttpApi,
@@ -64,7 +65,11 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					if (
 						!asset ||
 						asset.key !== expectedKey ||
-						asset.contentType !== IMAGE_CONTENT_TYPES[match[2] ?? ""]
+						asset.contentType !== IMAGE_CONTENT_TYPES[match[2] ?? ""] ||
+						!Number.isSafeInteger(asset.size) ||
+						asset.size < 1 ||
+						asset.size > 64 * 1024 * 1024 ||
+						!asset.objectIdentity
 					) {
 						return yield* new HttpApiError.NotFound();
 					}
@@ -76,6 +81,20 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							Effect.fail(new HttpApiError.ServiceUnavailable()),
 						),
 					);
+					const head = yield* bucket
+						.headObject(asset.key)
+						.pipe(
+							Effect.catchTag("StorageError", () =>
+								Effect.fail(new HttpApiError.ServiceUnavailable()),
+							),
+						);
+					if (
+						head.ContentLength !== asset.size ||
+						getRecordingObjectIdentity(head, asset.objectIdentity) !==
+							asset.objectIdentity
+					) {
+						return yield* new HttpApiError.ServiceUnavailable();
+					}
 					const signed = yield* bucket
 						.getSignedObjectUrl(asset.key, { expiresIn: 5 * 60 })
 						.pipe(
