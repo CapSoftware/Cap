@@ -34,12 +34,14 @@ type MockState = {
 	presignBodies: unknown[];
 	uploadBytes: number[];
 	uploadBytesBySubpath: Record<string, number>;
+	inputParts: Record<number, Buffer>;
 	completedPartsBySubpath: Record<string, number>;
 	uploadHeaders: Record<string, string | string[] | undefined>[];
 	videoId: string;
 	simulateSlowCameraUpload: boolean;
 	failCameraCompletion: boolean;
 	failAudioCompletion: boolean;
+	failInputCompletion: boolean;
 	failScreenCompletion: boolean;
 	cameraInitiateDelayMs: number;
 };
@@ -113,50 +115,13 @@ const sendHtml = (response: ServerResponse, html: string) => {
 
 const animatedCapturePage = () => `<!doctype html>
 <html>
-	<head>
-		<title>Cap E2E Capture Target</title>
-		<style>
-			html,
-			body {
-				margin: 0;
-				width: 100%;
-				height: 100%;
-				overflow: hidden;
-				background: #0b0f13;
-			}
-
-			canvas {
-				display: block;
-				width: 100vw;
-				height: 100vh;
-			}
-		</style>
-	</head>
+	<head><title>Cap E2E Capture Target</title><style>html,body{margin:0;width:100%;height:100%;background:#303030}</style></head>
 	<body>
-		<canvas id="scene" width="1280" height="720"></canvas>
-		<script>
-			const canvas = document.getElementById("scene");
-			const context = canvas.getContext("2d");
-			let frame = 0;
-
-			function draw() {
-				frame += 1;
-				context.fillStyle = "#0b0f13";
-				context.fillRect(0, 0, canvas.width, canvas.height);
-				for (let index = 0; index < 64; index += 1) {
-					const x = (frame * 9 + index * 47) % canvas.width;
-					const y = (frame * 5 + index * 31) % canvas.height;
-					context.fillStyle = "hsl(" + ((frame * 3 + index * 17) % 360) + " 90% 58%)";
-					context.fillRect(x - 80, y - 32, 160, 64);
-				}
-				context.fillStyle = "#ffffff";
-				context.font = "48px sans-serif";
-				context.fillText("Cap extension recording E2E " + frame, 48, 96);
-				requestAnimationFrame(draw);
-			}
-
-			draw();
-		</script>
+		<div style="position:fixed;top:0;left:0;width:32px;height:32px;background:#ff0000"></div>
+		<div style="position:fixed;top:50%;left:50%;width:32px;height:32px;transform:translate(-50%,-50%);background:#00ff00"></div>
+		<div style="position:fixed;bottom:0;right:0;width:32px;height:32px;background:#0000ff"></div>
+		<input type="password" aria-label="Password test" style="position:fixed;top:40px;left:40px">
+		<div role="textbox" aria-label="Custom private field" tabindex="0" style="position:fixed;top:80px;left:40px">Custom input</div>
 	</body>
 </html>`;
 
@@ -169,12 +134,14 @@ const createMockCapServer = async () => {
 		presignBodies: [],
 		uploadBytes: [],
 		uploadBytesBySubpath: {},
+		inputParts: {},
 		completedPartsBySubpath: {},
 		uploadHeaders: [],
 		videoId: `e2e-${Date.now()}`,
 		simulateSlowCameraUpload: false,
 		failCameraCompletion: false,
 		failAudioCompletion: false,
+		failInputCompletion: false,
 		failScreenCompletion: false,
 		cameraInitiateDelayMs: 0,
 	};
@@ -286,6 +253,13 @@ const createMockCapServer = async () => {
 				const body = await readRequestBody(request);
 				state.uploadBytes.push(body.byteLength);
 				const subpath = url.searchParams.get("subpath") ?? "unknown";
+				const partNumber = Number(url.pathname.slice("/mock-s3/part-".length));
+				if (
+					subpath === "input-events-upload.ndjson" &&
+					Number.isSafeInteger(partNumber)
+				) {
+					state.inputParts[partNumber] = body;
+				}
 				state.uploadBytesBySubpath[subpath] =
 					(state.uploadBytesBySubpath[subpath] ?? 0) + body.byteLength;
 				state.uploadHeaders.push(request.headers);
@@ -332,6 +306,18 @@ const createMockCapServer = async () => {
 					body.subpath === "mic-upload.webm"
 				) {
 					sendJson(response, 400, { error: "Microphone completion rejected" });
+					return;
+				}
+				if (
+					state.failInputCompletion &&
+					!!body &&
+					typeof body === "object" &&
+					"subpath" in body &&
+					body.subpath === "input-events-upload.ndjson"
+				) {
+					sendJson(response, 400, {
+						error: "Input events completion rejected",
+					});
 					return;
 				}
 				if (
@@ -646,7 +632,11 @@ const sendServiceWorkerMessage = async (
 		});
 	}, message);
 
-const expectSuccessfulUpload = async (page: Page, state: MockState) => {
+const expectSuccessfulUpload = async (
+	page: Page,
+	state: MockState,
+	inputSidecar = false,
+) => {
 	await expect
 		.poll(async () => {
 			const response = await sendServiceWorkerMessage(page, {
@@ -658,17 +648,22 @@ const expectSuccessfulUpload = async (page: Page, state: MockState) => {
 		})
 		.toBe("completed");
 
-	expect(state.initiateBodies).toHaveLength(2);
+	expect(state.initiateBodies).toHaveLength(inputSidecar ? 3 : 2);
 	expect(state.initiateBodies[0]).toMatchObject({ subpath: "raw-upload.webm" });
 	expect(state.initiateBodies[1]).toMatchObject({
 		subpath: "camera-upload.webm",
 	});
+	if (inputSidecar) {
+		expect(state.initiateBodies[2]).toMatchObject({
+			subpath: "input-events-upload.ndjson",
+		});
+	}
 	expect(state.presignBodies.length).toBeGreaterThanOrEqual(1);
 	expect(state.uploadBytes.length).toBeGreaterThanOrEqual(1);
 	expect(
 		state.uploadBytes.reduce((total, bytes) => total + bytes, 0),
 	).toBeGreaterThan(0);
-	expect(state.completeBodies).toHaveLength(2);
+	expect(state.completeBodies).toHaveLength(inputSidecar ? 3 : 2);
 	expect(state.progressBodies.length).toBeGreaterThanOrEqual(1);
 
 	const completeBody = state.completeBodies[0];
@@ -695,7 +690,16 @@ const expectSuccessfulUpload = async (page: Page, state: MockState) => {
 	expect(
 		typeof cameraOffsetMs === "number" && Number.isFinite(cameraOffsetMs),
 	).toBe(true);
-	expect(state.completeBodies[1]).toMatchObject({
+	if (inputSidecar) {
+		expect(state.completeBodies[1]).toMatchObject({
+			subpath: "input-events-upload.ndjson",
+			screenSubpath: "raw-upload.webm",
+		});
+		expect(
+			state.uploadBytesBySubpath["input-events-upload.ndjson"],
+		).toBeGreaterThan(0);
+	}
+	expect(state.completeBodies[inputSidecar ? 2 : 1]).toMatchObject({
 		subpath: "raw-upload.webm",
 		uploadId: "upload-e2e-1",
 	});
@@ -1494,9 +1498,8 @@ test.describe("extension recording upload", () => {
 	test("keeps camera sidecar separate in current-tab capture", async () => {
 		test.skip(
 			process.env.CAP_EXTENSION_E2E_HEADED !== "1" ||
-				process.env.CAP_EXTENSION_E2E_NATIVE_GESTURE !== "1" ||
 				process.platform !== "darwin",
-			"Headed current-tab capture needs a manual Cap action click in the isolated test Chromium profile",
+			"Headed current-tab capture is available on macOS",
 		);
 		test.setTimeout(120_000);
 		if (!extension || !mockServer)
@@ -1507,14 +1510,128 @@ test.describe("extension recording upload", () => {
 			worker,
 			mockServer.origin,
 			"tab",
+			20_000,
 		);
 		await expectCameraPreviewOutOfCapture(capturePage);
+		await capturePage.locator('input[type="password"]').click();
+		await capturePage.keyboard.type("secret");
+		await capturePage
+			.getByRole("textbox", { name: "Custom private field" })
+			.click();
+		await capturePage.keyboard.type("private");
+		await capturePage.mouse.click(500, 400);
+		await capturePage.keyboard.press("k");
+		await capturePage.goto(`${mockServer.origin}/capture.html?step=2`);
+		await capturePage.bringToFront();
+		await capturePage.mouse.click(600, 500);
+		await capturePage.keyboard.press("n");
+		await capturePage.waitForTimeout(500);
 		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
 			target: "service-worker",
 			type: "stop-recording",
 		});
 		expect(stopResponse).toMatchObject({ ok: true });
-		await expectSuccessfulUpload(messengerPage, mockServer.state);
+		await expectSuccessfulUpload(messengerPage, mockServer.state, true);
+		const inputText = Buffer.concat(
+			Object.entries(mockServer.state.inputParts)
+				.sort(([a], [b]) => Number(a) - Number(b))
+				.map(([, bytes]) => bytes),
+		).toString("utf8");
+		const inputLines = inputText
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+		expect(inputLines[0]).toMatchObject({ version: 1 });
+		const recordedKeys = inputLines
+			.filter((line) => line.kind === "keyDown")
+			.map((line) => line.key);
+		expect(recordedKeys).not.toContain("s");
+		expect(recordedKeys).not.toContain("p");
+		expect(inputLines).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ kind: "down" }),
+				expect.objectContaining({ kind: "keyDown", key: "k" }),
+				expect.objectContaining({ kind: "keyDown", key: "n" }),
+			]),
+		);
+	});
+
+	test("recovers a tab input sidecar before retrying the screen upload", async () => {
+		test.skip(
+			process.env.CAP_EXTENSION_E2E_HEADED !== "1" ||
+				process.platform !== "darwin",
+			"Headed current-tab capture is available on macOS",
+		);
+		test.setTimeout(120_000);
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		const worker = await getServiceWorker(extension.context);
+		const { capturePage, messengerPage } = await startRecording(
+			extension.context,
+			worker,
+			mockServer.origin,
+			"tab",
+			8_000,
+		);
+		await capturePage.mouse.click(400, 300);
+		await capturePage.keyboard.press("r");
+		mockServer.state.failInputCompletion = true;
+		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		});
+		expect(stopResponse).toMatchObject({ ok: true });
+		await expect
+			.poll(async () => {
+				const response = await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "get-recording-status",
+				});
+				return response.ok ? response.status?.phase : response.error;
+			})
+			.toBe("error");
+		const recovery = await worker.evaluate(async () => {
+			const items = await chrome.storage.local.get([
+				"cap-extension-failed-recordings",
+			]);
+			const failed = items["cap-extension-failed-recordings"];
+			return Array.isArray(failed) ? failed[0] : null;
+		});
+		if (!recovery || typeof recovery !== "object")
+			throw new Error("The input sidecar recovery record is missing");
+		const failed = recovery as Record<string, unknown>;
+		expect(failed.videoId).toBe(mockServer.state.videoId);
+		expect(failed.inputEventsRetryUnavailable).not.toBe(true);
+		expect(failed.inputEventsSessionId).toEqual(expect.any(String));
+		expect(failed.inputEventsTotalBytes).toBeGreaterThan(0);
+		mockServer.state.failInputCompletion = false;
+		const retryResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "retry-upload",
+			videoId: mockServer.state.videoId,
+		});
+		expect(retryResponse).toMatchObject({ ok: true });
+		await expect
+			.poll(async () => {
+				const response = await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "get-recording-status",
+				});
+				return response.ok ? response.status?.phase : response.error;
+			})
+			.toBe("completed");
+		expect(
+			mockServer.state.completeBodies.filter(
+				(body) =>
+					body &&
+					typeof body === "object" &&
+					"subpath" in body &&
+					body.subpath === "input-events-upload.ndjson",
+			).length,
+		).toBeGreaterThanOrEqual(2);
+		expect(mockServer.state.completeBodies.at(-1)).toMatchObject({
+			subpath: "raw-upload.webm",
+		});
 	});
 
 	test("can complete two consecutive recording uploads without stale state", async () => {

@@ -111,6 +111,12 @@ export interface VideoMetadata {
 			objectIdentity: string | null;
 			offsetMs: number;
 		};
+		inputEvents?: {
+			key: string;
+			contentType: "application/x-ndjson";
+			size: number;
+			objectIdentity: string | null;
+		};
 	};
 	editProcessing?: {
 		token: string;

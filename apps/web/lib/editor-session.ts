@@ -26,6 +26,7 @@ import { getEditSourceKey } from "./video-edit-processing";
 import { decodeStorageVideo } from "./video-storage";
 
 const MAX_SOURCE_BYTES = 12 * 1024 * 1024 * 1024;
+const MAX_INPUT_EVENTS_BYTES = 64 * 1024 * 1024;
 const SOURCE_URL_TTL_SECONDS = 20 * 60;
 const AUDIO_ASSET_PATH =
 	/^assets\/audio\/import-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(ogg|m4a|mp3|wav|aac|flac)$/;
@@ -192,6 +193,19 @@ function validAudioSource(
 	);
 }
 
+function validInputEventsSource(
+	source: { key: string; size: number; contentType: string },
+	video: DbVideo,
+) {
+	return (
+		source.key === `${video.ownerId}/${video.id}/input-events-upload.ndjson` &&
+		source.contentType === "application/x-ndjson" &&
+		Number.isSafeInteger(source.size) &&
+		source.size > 0 &&
+		source.size <= MAX_INPUT_EVENTS_BYTES
+	);
+}
+
 function validSavedAsset(asset: unknown, video: DbVideo) {
 	if (typeof asset !== "object" || asset === null) return false;
 	if (!("path" in asset) || typeof asset.path !== "string") return false;
@@ -279,6 +293,7 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 		const cameraSource = legacySource ? undefined : sources.camera;
 		const micSource = legacySource ? undefined : sources.mic;
 		const systemAudioSource = legacySource ? undefined : sources.systemAudio;
+		const inputEventsSource = legacySource ? undefined : sources.inputEvents;
 		if (
 			(!legacySource && sources.version !== 1) ||
 			!displaySource ||
@@ -289,7 +304,8 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 					Math.abs(cameraSource.offsetMs) > 30_000)) ||
 			(micSource && !validAudioSource(micSource, video, "mic")) ||
 			(systemAudioSource &&
-				!validAudioSource(systemAudioSource, video, "system-audio"))
+				!validAudioSource(systemAudioSource, video, "system-audio")) ||
+			(inputEventsSource && !validInputEventsSource(inputEventsSource, video))
 		) {
 			return yield* new HttpApiError.NotFound();
 		}
@@ -370,7 +386,7 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 				Effect.fail(new HttpApiError.ServiceUnavailable()),
 			),
 		);
-		const [displayHead, cameraHead, micHead, systemAudioHead] =
+		const [displayHead, cameraHead, micHead, systemAudioHead, inputEventsHead] =
 			yield* Effect.all([
 				storage.headObject(displaySource.key),
 				cameraSource
@@ -379,6 +395,9 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 				micSource ? storage.headObject(micSource.key) : Effect.succeed(null),
 				systemAudioSource
 					? storage.headObject(systemAudioSource.key)
+					: Effect.succeed(null),
+				inputEventsSource
+					? storage.headObject(inputEventsSource.key)
 					: Effect.succeed(null),
 			]).pipe(
 				Effect.catchTag("StorageError", () =>
@@ -410,6 +429,13 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 						systemAudioSource.objectIdentity ?? undefined,
 					)
 				: null;
+		const inputEventsIdentity =
+			inputEventsHead && inputEventsSource
+				? getRecordingObjectIdentity(
+						inputEventsHead,
+						inputEventsSource.objectIdentity ?? undefined,
+					)
+				: null;
 		const displaySize = legacySource
 			? displayHead.ContentLength
 			: displaySource.size;
@@ -436,34 +462,46 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 				(systemAudioHead?.ContentLength !== systemAudioSource.size ||
 					!systemAudioIdentity ||
 					(systemAudioSource.objectIdentity &&
-						systemAudioIdentity !== systemAudioSource.objectIdentity)))
+						systemAudioIdentity !== systemAudioSource.objectIdentity))) ||
+			(inputEventsSource &&
+				(inputEventsHead?.ContentLength !== inputEventsSource.size ||
+					inputEventsHead.ContentType !== "application/x-ndjson" ||
+					!inputEventsIdentity ||
+					(inputEventsSource.objectIdentity &&
+						inputEventsIdentity !== inputEventsSource.objectIdentity)))
 		) {
 			return yield* new HttpApiError.ServiceUnavailable();
 		}
-		const [displayUrl, cameraUrl, micUrl, systemAudioUrl] = yield* Effect.all([
-			storage.getInternalSignedObjectUrl(displaySource.key, {
-				expiresIn: SOURCE_URL_TTL_SECONDS,
-			}),
-			cameraSource
-				? storage.getInternalSignedObjectUrl(cameraSource.key, {
-						expiresIn: SOURCE_URL_TTL_SECONDS,
-					})
-				: Effect.succeed(null),
-			micSource
-				? storage.getInternalSignedObjectUrl(micSource.key, {
-						expiresIn: SOURCE_URL_TTL_SECONDS,
-					})
-				: Effect.succeed(null),
-			systemAudioSource
-				? storage.getInternalSignedObjectUrl(systemAudioSource.key, {
-						expiresIn: SOURCE_URL_TTL_SECONDS,
-					})
-				: Effect.succeed(null),
-		]).pipe(
-			Effect.catchTag("StorageError", () =>
-				Effect.fail(new HttpApiError.ServiceUnavailable()),
-			),
-		);
+		const [displayUrl, cameraUrl, micUrl, systemAudioUrl, inputEventsUrl] =
+			yield* Effect.all([
+				storage.getInternalSignedObjectUrl(displaySource.key, {
+					expiresIn: SOURCE_URL_TTL_SECONDS,
+				}),
+				cameraSource
+					? storage.getInternalSignedObjectUrl(cameraSource.key, {
+							expiresIn: SOURCE_URL_TTL_SECONDS,
+						})
+					: Effect.succeed(null),
+				micSource
+					? storage.getInternalSignedObjectUrl(micSource.key, {
+							expiresIn: SOURCE_URL_TTL_SECONDS,
+						})
+					: Effect.succeed(null),
+				systemAudioSource
+					? storage.getInternalSignedObjectUrl(systemAudioSource.key, {
+							expiresIn: SOURCE_URL_TTL_SECONDS,
+						})
+					: Effect.succeed(null),
+				inputEventsSource
+					? storage.getInternalSignedObjectUrl(inputEventsSource.key, {
+							expiresIn: SOURCE_URL_TTL_SECONDS,
+						})
+					: Effect.succeed(null),
+			]).pipe(
+				Effect.catchTag("StorageError", () =>
+					Effect.fail(new HttpApiError.ServiceUnavailable()),
+				),
+			);
 		const assetHeads = yield* Effect.all(
 			assets.map((asset) => storage.headObject(asset.key)),
 			{ concurrency: 4 },
@@ -619,6 +657,16 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 							size: systemAudioSource.size,
 							objectIdentity: systemAudioIdentity,
 							offsetMs: systemAudioSource.offsetMs,
+						},
+					}
+				: {}),
+			...(inputEventsSource && inputEventsUrl && inputEventsIdentity
+				? {
+						inputEvents: {
+							url: inputEventsUrl,
+							contentType: inputEventsSource.contentType,
+							size: inputEventsSource.size,
+							objectIdentity: inputEventsIdentity,
 						},
 					}
 				: {}),

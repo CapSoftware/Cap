@@ -6,12 +6,18 @@ import { promisify } from "node:util";
 import { fetchMedia } from "./media-transfer";
 
 const MAX_SOURCE_BYTES = 12 * 1024 * 1024 * 1024;
+const MAX_INPUT_EVENTS_BYTES = 64 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const runFile = promisify(execFile);
 
 export type EditorMediaSource = {
 	url: string;
-	contentType: "video/webm" | "video/mp4" | "audio/webm" | "audio/mp4";
+	contentType:
+		| "video/webm"
+		| "video/mp4"
+		| "audio/webm"
+		| "audio/mp4"
+		| "application/x-ndjson";
 	size: number;
 	objectIdentity?: string | null;
 };
@@ -26,12 +32,21 @@ function validateSource(source: EditorMediaSource) {
 			)) ||
 		url.username ||
 		url.password ||
-		!(["video/webm", "video/mp4", "audio/webm", "audio/mp4"] as const).some(
-			(type) => type === source.contentType,
-		) ||
+		!(
+			[
+				"video/webm",
+				"video/mp4",
+				"audio/webm",
+				"audio/mp4",
+				"application/x-ndjson",
+			] as const
+		).some((type) => type === source.contentType) ||
 		!Number.isSafeInteger(source.size) ||
 		source.size < 1 ||
-		source.size > MAX_SOURCE_BYTES
+		source.size >
+			(source.contentType === "application/x-ndjson"
+				? MAX_INPUT_EVENTS_BYTES
+				: MAX_SOURCE_BYTES)
 	) {
 		throw new Error("Invalid editor media source");
 	}
@@ -50,7 +65,12 @@ export async function downloadEditorMedia(
 	validateSource(source);
 	const root = await mkdtemp(join(tmpdir(), "cap-editor-source-"));
 	await chmod(root, 0o700);
-	const extension = source.contentType.endsWith("/mp4") ? ".mp4" : ".webm";
+	const extension =
+		source.contentType === "application/x-ndjson"
+			? ".ndjson"
+			: source.contentType.endsWith("/mp4")
+				? ".mp4"
+				: ".webm";
 	const path = join(root, `source${extension}`);
 	const cleanup = () => rm(root, { recursive: true, force: true });
 	const handle = await open(path, "wx", 0o600);

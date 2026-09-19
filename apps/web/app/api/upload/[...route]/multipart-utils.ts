@@ -51,6 +51,9 @@ export const isDisplayRecorderUpload = (subpath: string) =>
 export const isCameraRecorderUpload = (subpath: string) =>
 	/^camera-upload\.(webm|mp4)$/.test(subpath);
 
+export const isInputEventsRecorderUpload = (subpath: string) =>
+	subpath === "input-events-upload.ndjson";
+
 export const getAudioRecorderUploadKind = (
 	subpath: string,
 ): "mic" | "systemAudio" | null => {

@@ -83,6 +83,29 @@ const mediaSchema = z.object({
 	objectIdentity: z.string().min(1).max(256).nullable().optional(),
 });
 
+const audioMediaSchema = z.object({
+	url: z.string().url(),
+	contentType: z.enum(["audio/webm", "audio/mp4"]),
+	size: z
+		.number()
+		.int()
+		.positive()
+		.max(12 * 1024 * 1024 * 1024),
+	objectIdentity: z.string().min(1).max(256).nullable().optional(),
+	offsetMs: z.number().int().min(-30_000).max(30_000),
+});
+
+const inputEventsMediaSchema = z.object({
+	url: z.string().url(),
+	contentType: z.literal("application/x-ndjson"),
+	size: z
+		.number()
+		.int()
+		.positive()
+		.max(64 * 1024 * 1024),
+	objectIdentity: z.string().min(1).max(256).nullable().optional(),
+});
+
 const audioAssetSchema = z.object({
 	path: z
 		.string()
@@ -213,6 +236,9 @@ const sessionSchema = z
 		camera: mediaSchema
 			.extend({ offsetMs: z.number().int().min(-30_000).max(30_000) })
 			.optional(),
+		mic: audioMediaSchema.optional(),
+		systemAudio: audioMediaSchema.optional(),
+		inputEvents: inputEventsMediaSchema.optional(),
 		projectConfig: z
 			.record(z.unknown())
 			.refine(

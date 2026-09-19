@@ -56,6 +56,9 @@ export type FailedRecording = {
 	sessionId: string;
 	cameraSessionId?: string;
 	cameraRetryUnavailable?: boolean;
+	inputEventsSessionId?: string;
+	inputEventsTotalBytes?: number;
+	inputEventsRetryUnavailable?: boolean;
 	audioSources?: RecordingAudioSource[];
 	audioRetryUnavailable?: boolean;
 	videoId: string | null;
@@ -371,6 +374,21 @@ const isFailedRecording = (value: unknown): value is FailedRecording => {
 		typeof candidate.createdAt === "number" &&
 		(candidate.cameraSessionId === undefined ||
 			typeof candidate.cameraSessionId === "string") &&
+		(candidate.inputEventsSessionId === undefined ||
+			(typeof candidate.inputEventsSessionId === "string" &&
+				candidate.inputEventsSessionId.length > 0 &&
+				candidate.inputEventsSessionId !== candidate.sessionId &&
+				candidate.inputEventsSessionId !== candidate.cameraSessionId &&
+				(!Array.isArray(candidate.audioSources) ||
+					!candidate.audioSources.some(
+						(source) => source.sessionId === candidate.inputEventsSessionId,
+					)))) &&
+		(candidate.inputEventsTotalBytes === undefined ||
+			(Number.isSafeInteger(candidate.inputEventsTotalBytes) &&
+				candidate.inputEventsTotalBytes >= 0 &&
+				candidate.inputEventsTotalBytes <= 64 * 1024 * 1024)) &&
+		(candidate.inputEventsRetryUnavailable === undefined ||
+			typeof candidate.inputEventsRetryUnavailable === "boolean") &&
 		(candidate.cameraRetryUnavailable === undefined ||
 			typeof candidate.cameraRetryUnavailable === "boolean") &&
 		validAudioSources(
@@ -445,6 +463,7 @@ export const removeFailedRecording = (sessionId: string) =>
 export type LiveRecordingManifest = {
 	sessionId: string;
 	cameraSessionId?: string;
+	inputEventsSessionId?: string;
 	audioSources?: RecordingAudioSource[];
 	videoId: string;
 	shareUrl: string;
@@ -481,6 +500,15 @@ const isLiveRecordingManifest = (
 		typeof candidate.startedAt === "number" &&
 		(candidate.cameraSessionId === undefined ||
 			typeof candidate.cameraSessionId === "string") &&
+		(candidate.inputEventsSessionId === undefined ||
+			(typeof candidate.inputEventsSessionId === "string" &&
+				candidate.inputEventsSessionId.length > 0 &&
+				candidate.inputEventsSessionId !== candidate.sessionId &&
+				candidate.inputEventsSessionId !== candidate.cameraSessionId &&
+				(!Array.isArray(candidate.audioSources) ||
+					!candidate.audioSources.some(
+						(source) => source.sessionId === candidate.inputEventsSessionId,
+					)))) &&
 		validAudioSources(
 			candidate.audioSources,
 			candidate.sessionId,
@@ -611,6 +639,34 @@ export const saveUploadProgressTabId = (tabId: number | null) =>
 	tabId === null
 		? removeSession(UPLOAD_PROGRESS_TAB_KEY)
 		: setSession({ [UPLOAD_PROGRESS_TAB_KEY]: tabId });
+
+const TAB_INPUT_CAPTURE_KEY = "cap-extension-tab-input-capture";
+
+export type TabInputCaptureSession = {
+	tabId: number;
+	recordingId: string;
+};
+
+export const loadTabInputCaptureSession =
+	async (): Promise<TabInputCaptureSession | null> => {
+		const result = await getSession([TAB_INPUT_CAPTURE_KEY]);
+		const saved = result[TAB_INPUT_CAPTURE_KEY];
+		if (!saved || typeof saved !== "object" || Array.isArray(saved))
+			return null;
+		const candidate = saved as Partial<TabInputCaptureSession>;
+		return Number.isSafeInteger(candidate.tabId) &&
+			typeof candidate.recordingId === "string" &&
+			candidate.recordingId.length > 0
+			? { tabId: candidate.tabId as number, recordingId: candidate.recordingId }
+			: null;
+	};
+
+export const saveTabInputCaptureSession = (
+	session: TabInputCaptureSession | null,
+) =>
+	session === null
+		? removeSession(TAB_INPUT_CAPTURE_KEY)
+		: setSession({ [TAB_INPUT_CAPTURE_KEY]: session });
 
 export const loadSharedRecordingState =
 	async (): Promise<SharedRecordingState | null> => {

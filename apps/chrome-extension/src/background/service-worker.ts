@@ -23,6 +23,7 @@ import {
 	loadSettings,
 	loadSharedRecordingState,
 	loadSharedUiState,
+	loadTabInputCaptureSession,
 	loadUploadProgressTabId,
 	loadWebcamPreviewDismissed,
 	registerOverlayToken,
@@ -32,6 +33,7 @@ import {
 	savePendingAuth,
 	saveSettings,
 	saveSharedRecordingState,
+	saveTabInputCaptureSession,
 	saveUploadProgressTabId,
 	saveWebcamPreviewDismissed,
 	updateSharedUiState,
@@ -1275,9 +1277,30 @@ const performRecordingStart = async (mode: RecordingMode) => {
 			tabId,
 			tabStreamId,
 		};
-		return await (tabStreamId
+		const response = await (tabStreamId
 			? sendOffscreenRuntimeMessage(request)
 			: sendOffscreen(request));
+		if (
+			tabStreamId &&
+			tabId !== undefined &&
+			response.ok &&
+			response.status?.phase === "recording" &&
+			response.status.videoId
+		) {
+			await saveTabInputCaptureSession({
+				tabId,
+				recordingId: response.status.videoId,
+			});
+			await chrome.tabs
+				.sendMessage(tabId, {
+					type: "input-capture-start",
+					recordingId: response.status.videoId,
+				})
+				.catch((error: unknown) => {
+					console.warn("Tab input capture could not start", error);
+				});
+		}
+		return response;
 	} catch (error) {
 		// The recorder panel closes as soon as the status leaves "idle", so a
 		// silent reset would leave the user with no feedback at all. Broadcast
@@ -1821,6 +1844,50 @@ const handleRequest = async (
 };
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+	if (
+		message?.target === "service-worker" &&
+		message.type === "input-capture-stop"
+	) {
+		if (
+			!isTrustedOffscreenStorageSender(
+				sender,
+				chrome.runtime.id,
+				chrome.runtime.getURL(OFFSCREEN_URL),
+			) ||
+			!Number.isSafeInteger(message.tabId) ||
+			typeof message.recordingId !== "string"
+		) {
+			sendResponse({ ok: false, error: "Tab input stop denied" });
+			return false;
+		}
+		void Promise.all([syncRecordingStatus(), loadTabInputCaptureSession()])
+			.then(async ([currentStatus, session]) => {
+				if (
+					!session ||
+					session.tabId !== message.tabId ||
+					session.recordingId !== message.recordingId ||
+					!("videoId" in currentStatus) ||
+					currentStatus.videoId !== message.recordingId
+				) {
+					return { ok: false, error: "Tab input stop denied" };
+				}
+				try {
+					return await chrome.tabs.sendMessage(message.tabId, {
+						type: "input-capture-stop",
+					});
+				} finally {
+					await saveTabInputCaptureSession(null);
+				}
+			})
+			.then(sendResponse)
+			.catch((error: unknown) =>
+				sendResponse({
+					ok: false,
+					error: error instanceof Error ? error.message : String(error),
+				}),
+			);
+		return true;
+	}
 	if (isStorageBridgeRequest(message)) {
 		if (
 			!isTrustedOffscreenStorageSender(
@@ -1913,6 +1980,31 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+	if (changeInfo.status === "complete") {
+		void loadTabInputCaptureSession()
+			.then(async (session) => {
+				if (!session || session.tabId !== tabId) return;
+				const currentStatus = await syncRecordingStatus();
+				if (
+					!isCapturingRecordingStatus(currentStatus) ||
+					!("videoId" in currentStatus) ||
+					currentStatus.videoId !== session.recordingId
+				) {
+					if (!isActiveRecordingStatus(currentStatus)) {
+						await saveTabInputCaptureSession(null);
+					}
+					return;
+				}
+				if (!canInjectIntoTab(tab)) return;
+				await chrome.tabs.sendMessage(tabId, {
+					type: "input-capture-start",
+					recordingId: session.recordingId,
+				});
+			})
+			.catch((error: unknown) => {
+				console.warn("Tab input capture could not resume", error);
+			});
+	}
 	if (changeInfo.status === "complete" && tab.active) {
 		void syncActivePreview(tabId).catch(() => undefined);
 	}
@@ -1932,6 +2024,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 	if (activePreviewTabId === tabId) {
 		activePreviewTabId = null;
 	}
+	void loadTabInputCaptureSession()
+		.then((session) =>
+			session?.tabId === tabId ? saveTabInputCaptureSession(null) : undefined,
+		)
+		.catch(() => undefined);
 	if (pendingPreviewTabId === tabId) {
 		pendingPreviewTabId = null;
 	}

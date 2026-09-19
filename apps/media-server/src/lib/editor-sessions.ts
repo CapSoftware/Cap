@@ -45,6 +45,10 @@ type AudioSource = EditorMediaSource & {
 	offsetMs: number;
 };
 
+type InputEventsSource = EditorMediaSource & {
+	contentType: "application/x-ndjson";
+};
+
 export type EditorSessionInput = {
 	videoId: string;
 	title: string;
@@ -53,6 +57,7 @@ export type EditorSessionInput = {
 	camera?: VideoSource & { offsetMs: number };
 	mic?: AudioSource;
 	systemAudio?: AudioSource;
+	inputEvents?: InputEventsSource;
 	projectConfig?: Record<string, unknown>;
 	legacyEditSpec?: LegacyEditorEditSpec;
 	audioAssets?: EditorAudioAsset[];
@@ -121,24 +126,33 @@ export async function createEditorSession(
 	}
 	starting++;
 	try {
-		const [displayResult, cameraResult, micResult, systemAudioResult] =
-			await Promise.allSettled([
-				downloadEditorMedia(input.display, abortSignal),
-				input.camera
-					? downloadEditorMedia(input.camera, abortSignal)
-					: Promise.resolve(null),
-				input.mic
-					? downloadEditorMedia(input.mic, abortSignal)
-					: Promise.resolve(null),
-				input.systemAudio
-					? downloadEditorMedia(input.systemAudio, abortSignal)
-					: Promise.resolve(null),
-			]);
+		const [
+			displayResult,
+			cameraResult,
+			micResult,
+			systemAudioResult,
+			inputEventsResult,
+		] = await Promise.allSettled([
+			downloadEditorMedia(input.display, abortSignal),
+			input.camera
+				? downloadEditorMedia(input.camera, abortSignal)
+				: Promise.resolve(null),
+			input.mic
+				? downloadEditorMedia(input.mic, abortSignal)
+				: Promise.resolve(null),
+			input.systemAudio
+				? downloadEditorMedia(input.systemAudio, abortSignal)
+				: Promise.resolve(null),
+			input.inputEvents
+				? downloadEditorMedia(input.inputEvents, abortSignal)
+				: Promise.resolve(null),
+		]);
 		if (
 			displayResult.status === "rejected" ||
 			cameraResult.status === "rejected" ||
 			micResult.status === "rejected" ||
-			systemAudioResult.status === "rejected"
+			systemAudioResult.status === "rejected" ||
+			inputEventsResult.status === "rejected"
 		) {
 			await Promise.all([
 				displayResult.status === "fulfilled"
@@ -153,6 +167,9 @@ export async function createEditorSession(
 				systemAudioResult.status === "fulfilled" && systemAudioResult.value
 					? systemAudioResult.value.cleanup()
 					: Promise.resolve(),
+				inputEventsResult.status === "fulfilled" && inputEventsResult.value
+					? inputEventsResult.value.cleanup()
+					: Promise.resolve(),
 			]);
 			throw displayResult.status === "rejected"
 				? displayResult.reason
@@ -162,12 +179,15 @@ export async function createEditorSession(
 						? micResult.reason
 						: systemAudioResult.status === "rejected"
 							? systemAudioResult.reason
-							: new Error("Editor source unavailable");
+							: inputEventsResult.status === "rejected"
+								? inputEventsResult.reason
+								: new Error("Editor source unavailable");
 		}
 		const display = displayResult.value;
 		const camera = cameraResult.value;
 		const mic = micResult.value;
 		const systemAudio = systemAudioResult.value;
+		const inputEvents = inputEventsResult.value;
 		let project: Awaited<ReturnType<typeof prepareNativeEditorProject>>;
 		try {
 			const [displayMedia, cameraFps] = await Promise.all([
@@ -226,6 +246,15 @@ export async function createEditorSession(
 							},
 						}
 					: {}),
+				...(inputEvents && input.inputEvents
+					? {
+							inputEvents: {
+								path: inputEvents.path,
+								contentType: input.inputEvents.contentType,
+								size: inputEvents.size,
+							},
+						}
+					: {}),
 				mixedAudioInDisplay: displayMedia.hasAudio && !mic && !systemAudio,
 				...(input.legacyEditSpec
 					? { legacyEditSpec: input.legacyEditSpec }
@@ -251,6 +280,7 @@ export async function createEditorSession(
 				camera?.cleanup() ?? Promise.resolve(),
 				mic?.cleanup() ?? Promise.resolve(),
 				systemAudio?.cleanup() ?? Promise.resolve(),
+				inputEvents?.cleanup() ?? Promise.resolve(),
 			]);
 		}
 		if (abortSignal?.aborted) {

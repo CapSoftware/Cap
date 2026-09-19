@@ -45,6 +45,12 @@ type AudioMediaInput = {
 	offsetMs: number;
 };
 
+type InputEventsInput = {
+	path: string;
+	contentType: "application/x-ndjson";
+	size: number;
+};
+
 export type NativeEditorClipInput = {
 	displayPath: string;
 	duration: number;
@@ -71,6 +77,7 @@ export type NativeEditorInputs = {
 	camera?: MediaInput & { offsetMs: number };
 	mic?: AudioMediaInput;
 	systemAudio?: AudioMediaInput;
+	inputEvents?: InputEventsInput;
 	mixedAudioInDisplay: boolean;
 	projectConfig?: Record<string, unknown>;
 	legacyEditSpec?: LegacyEditorEditSpec;
@@ -134,6 +141,22 @@ async function validateAudioInput(input: AudioMediaInput) {
 	}
 }
 
+async function validateInputEvents(input: InputEventsInput) {
+	if (
+		input.contentType !== "application/x-ndjson" ||
+		!Number.isSafeInteger(input.size) ||
+		input.size <= 0 ||
+		input.size > 64 * 1024 * 1024 ||
+		extname(input.path).toLowerCase() !== ".ndjson"
+	) {
+		throw new Error("Invalid editor input event source");
+	}
+	const metadata = await lstat(input.path);
+	if (!metadata.isFile() || metadata.size !== input.size) {
+		throw new Error("Editor input events changed before project preparation");
+	}
+}
+
 export async function prepareNativeEditorProject(
 	inputs: NativeEditorInputs,
 	abortSignal?: AbortSignal,
@@ -143,6 +166,7 @@ export async function prepareNativeEditorProject(
 		...(inputs.camera ? [validateInput(inputs.camera)] : []),
 		...(inputs.mic ? [validateAudioInput(inputs.mic)] : []),
 		...(inputs.systemAudio ? [validateAudioInput(inputs.systemAudio)] : []),
+		...(inputs.inputEvents ? [validateInputEvents(inputs.inputEvents)] : []),
 	]);
 	if (
 		inputs.mixedAudioInDisplay &&
@@ -232,6 +256,7 @@ export async function prepareNativeEditorProject(
 				micOffsetMs: inputs.mic?.offsetMs ?? null,
 				systemAudioPath: inputs.systemAudio?.path ?? null,
 				systemAudioOffsetMs: inputs.systemAudio?.offsetMs ?? null,
+				inputEventsPath: inputs.inputEvents?.path ?? null,
 				mixedAudioInDisplay: inputs.mixedAudioInDisplay,
 				initialProjectConfig:
 					inputs.projectConfig && capImports.length === 0

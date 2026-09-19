@@ -40,6 +40,7 @@ import {
 	getSubpath,
 	isCameraRecorderUpload,
 	isDisplayRecorderUpload,
+	isInputEventsRecorderUpload,
 	isRawRecorderUpload,
 } from "./multipart-utils";
 
@@ -184,9 +185,16 @@ app.post(
 		}
 
 		const subpath = getSubpath(body) ?? "";
+		if (
+			isInputEventsRecorderUpload(subpath) &&
+			contentType !== "application/x-ndjson"
+		) {
+			return c.json({ error: "Invalid input event content type" }, 400);
+		}
 		const sourceSidecarUpload =
 			isCameraRecorderUpload(subpath) ||
-			getAudioRecorderUploadKind(subpath) !== null;
+			getAudioRecorderUploadKind(subpath) !== null ||
+			isInputEventsRecorderUpload(subpath);
 		const resp = await Effect.gen(function* () {
 			const policy = yield* VideosPolicy;
 			const db = yield* Database;
@@ -496,7 +504,8 @@ app.post(
 				typeof body.durationInSecs === "number" ? body.durationInSecs : null;
 			const sourceSidecarUpload =
 				isCameraRecorderUpload(subpath) ||
-				getAudioRecorderUploadKind(subpath) !== null;
+				getAudioRecorderUploadKind(subpath) !== null ||
+				isInputEventsRecorderUpload(subpath);
 			const missingRequiredDuration =
 				(isRawRecorderUpload(subpath) || sourceSidecarUpload) &&
 				reportedDuration === null;
@@ -584,21 +593,31 @@ app.post(
 
 			const cameraSourceUpload = isCameraRecorderUpload(subpath);
 			const audioSourceKind = getAudioRecorderUploadKind(subpath);
-			if (cameraSourceUpload || audioSourceKind) {
-				const sourceKind = cameraSourceUpload ? "camera" : audioSourceKind;
+			const inputEventsUpload = isInputEventsRecorderUpload(subpath);
+			if (cameraSourceUpload || audioSourceKind || inputEventsUpload) {
+				const sourceKind = inputEventsUpload
+					? "inputEvents"
+					: cameraSourceUpload
+						? "camera"
+						: audioSourceKind;
 				if (sourceKind === null) {
 					return c.json({ error: "Invalid editor recording source" }, 400);
 				}
 				const screenSubpath = body.screenSubpath;
-				const sourceOffsetMs = cameraSourceUpload
-					? body.cameraOffsetMs
-					: body.audioOffsetMs;
+				const sourceOffsetMs = inputEventsUpload
+					? null
+					: cameraSourceUpload
+						? body.cameraOffsetMs
+						: body.audioOffsetMs;
 				if (
 					body.replaceExisting ||
 					!screenSubpath ||
 					!isDisplayRecorderUpload(screenSubpath) ||
-					typeof sourceOffsetMs !== "number" ||
-					Math.abs(sourceOffsetMs) > 30_000
+					(inputEventsUpload
+						? body.cameraOffsetMs !== undefined ||
+							body.audioOffsetMs !== undefined
+						: typeof sourceOffsetMs !== "number" ||
+							Math.abs(sourceOffsetMs) > 30_000)
 				) {
 					return c.json({ error: "Invalid editor recording source" }, 400);
 				}
@@ -616,6 +635,7 @@ app.post(
 					);
 					if (
 						totalSize <= 0 ||
+						(inputEventsUpload && totalSize > 64 * 1024 * 1024) ||
 						!orderedParts.every(
 							(part, index) => part.partNumber === index + 1 && part.size > 0,
 						)
@@ -657,7 +677,15 @@ app.post(
 							),
 						);
 					const head = yield* verifyObject;
-					const contentType = `${cameraSourceUpload ? "video" : "audio"}/${subpath.endsWith(".webm") ? "webm" : "mp4"}`;
+					if (
+						inputEventsUpload &&
+						head.ContentType !== "application/x-ndjson"
+					) {
+						return c.json({ error: "Input event content type changed" }, 400);
+					}
+					const contentType = inputEventsUpload
+						? "application/x-ndjson"
+						: `${cameraSourceUpload ? "video" : "audio"}/${subpath.endsWith(".webm") ? "webm" : "mp4"}`;
 					const cameraFps = Number(body.fps);
 					const screenContentType = screenSubpath.endsWith(".webm")
 						? "video/webm"
@@ -680,7 +708,7 @@ app.post(
 									? { fps: cameraFps }
 									: {}),
 								objectIdentity: head.ETag ?? result.ETag ?? null,
-								offsetMs: sourceOffsetMs,
+								...(!inputEventsUpload ? { offsetMs: sourceOffsetMs } : {}),
 							},
 						},
 					});
