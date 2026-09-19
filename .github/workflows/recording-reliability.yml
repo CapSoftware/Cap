@@ -49,17 +49,29 @@ jobs:
         run: bun run --filter @cap/media-server test:browser-cap-import
 
   browser-paired-recording:
-    name: Web recorder paired capture (Chromium/WebKit)
-    runs-on: ubuntu-24.04
+    name: Web recorder paired capture (${{ matrix.browser }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            runner: ubuntu-24.04
+          - browser: webkit
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: ./.github/actions/setup-js
-      - name: Install Playwright browsers
-        run: bunx playwright install --with-deps chromium webkit
+      - name: Install Chromium
+        if: matrix.browser == 'chromium'
+        run: bunx playwright install --with-deps chromium
+      - name: Install WebKit
+        if: matrix.browser == 'webkit'
+        run: bunx playwright install webkit
       - name: Replay paired web recorder capture
         working-directory: apps/web
-        run: bun __tests__/web-recorder-paired-browser-replay.mjs
+        run: bun __tests__/web-recorder-paired-browser-replay.mjs ${{ matrix.browser }}
 
   recording-contract:
     name: Recording ownership, preservation, and recovery

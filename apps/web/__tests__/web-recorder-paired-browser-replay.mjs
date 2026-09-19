@@ -464,10 +464,14 @@ async function replayPairedCapture(
 }
 
 const bundle = await readFile(artifact, "utf8");
+const requestedEngine = process.argv[2]?.toLowerCase();
 const engines = [
 	{ name: "Chromium", browserType: chromium, extension: "webm" },
 	{ name: "WebKit", browserType: webkit, extension: "mp4" },
-];
+].filter(
+	(engine) => !requestedEngine || engine.name.toLowerCase() === requestedEngine,
+);
+assert.ok(engines.length > 0, `Unknown browser engine: ${requestedEngine}`);
 try {
 	const results = [];
 	for (const engine of engines) {
