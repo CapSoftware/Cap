@@ -1671,6 +1671,31 @@ test.skipIf(!hasNativeBinaries)(
 			expect((await screenPreview.arrayBuffer()).byteLength).toBeGreaterThan(
 				1_000,
 			);
+			const backgroundExport = await app.request(
+				`/editor/sessions/${sessionId}/exports`,
+				{
+					method: "POST",
+					headers,
+					body: JSON.stringify(mp4Settings),
+				},
+			);
+			expect(backgroundExport.status).toBe(202);
+			const backgroundExportId = (
+				(await backgroundExport.json()) as { id: string }
+			).id;
+			await waitForExport(backgroundExportId);
+			const laterTime = Date.now() + 3 * 60 * 1000;
+			const laterClock = spyOn(Date, "now").mockReturnValue(laterTime);
+			try {
+				const stillAvailable = await app.request(
+					`/editor/sessions/${sessionId}/exports/${backgroundExportId}`,
+					{ headers },
+				);
+				expect(stillAvailable.status).toBe(200);
+				expect(getEditorSession(sessionId)).not.toBeNull();
+			} finally {
+				laterClock.mockRestore();
+			}
 			const screenClose = await app.request(`/editor/sessions/${sessionId}`, {
 				method: "DELETE",
 				headers,

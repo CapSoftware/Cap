@@ -38,6 +38,7 @@ import {
 	editorProjectBundleResponse,
 } from "../lib/editor-project-bundles";
 import {
+	attachEditorSession,
 	beginEditorPreparation,
 	cancelEditorPreparation,
 	closeEditorSession,
@@ -730,6 +731,7 @@ editor.post("/sessions/:id/exports", async (c) => {
 	if (!native) return c.json({ error: "Not found" }, 404);
 	try {
 		const id = await beginEditorExport(sessionId, native, settings.data);
+		attachEditorSession(sessionId);
 		return c.json({ id, status: "running" as const }, 202);
 	} catch (cause) {
 		if (cause instanceof EditorExportBusyError) {
