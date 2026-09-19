@@ -27,14 +27,18 @@ type ChromeRuntimeResponse =
 	  };
 
 type MockState = {
+	abortBodies: unknown[];
 	completeBodies: unknown[];
 	progressBodies: unknown[];
 	initiateBodies: unknown[];
 	presignBodies: unknown[];
 	uploadBytes: number[];
 	uploadBytesBySubpath: Record<string, number>;
+	completedPartsBySubpath: Record<string, number>;
 	uploadHeaders: Record<string, string | string[] | undefined>[];
 	videoId: string;
+	simulateSlowCameraUpload: boolean;
+	cameraInitiateDelayMs: number;
 };
 
 type ChromeGlobal = typeof globalThis & {
@@ -155,14 +159,18 @@ const animatedCapturePage = () => `<!doctype html>
 
 const createMockCapServer = async () => {
 	const state: MockState = {
+		abortBodies: [],
 		completeBodies: [],
 		progressBodies: [],
 		initiateBodies: [],
 		presignBodies: [],
 		uploadBytes: [],
 		uploadBytesBySubpath: {},
+		completedPartsBySubpath: {},
 		uploadHeaders: [],
 		videoId: `e2e-${Date.now()}`,
+		simulateSlowCameraUpload: false,
+		cameraInitiateDelayMs: 0,
 	};
 
 	const server = createServer(async (request, response) => {
@@ -219,11 +227,32 @@ const createMockCapServer = async () => {
 				request.method === "POST" &&
 				url.pathname === "/api/upload/multipart/initiate"
 			) {
-				state.initiateBodies.push(await parseJsonBody(request));
+				const body = await parseJsonBody(request);
+				state.initiateBodies.push(body);
+				if (
+					state.cameraInitiateDelayMs > 0 &&
+					body &&
+					typeof body === "object" &&
+					"subpath" in body &&
+					body.subpath === "camera-upload.webm"
+				) {
+					await new Promise((resolve) =>
+						setTimeout(resolve, state.cameraInitiateDelayMs),
+					);
+				}
 				sendJson(response, 200, {
 					uploadId: `upload-e2e-${state.initiateBodies.length}`,
 					provider: "s3",
 				});
+				return;
+			}
+
+			if (
+				request.method === "POST" &&
+				url.pathname === "/api/upload/multipart/abort"
+			) {
+				state.abortBodies.push(await parseJsonBody(request));
+				sendJson(response, 200, { success: true });
 				return;
 			}
 
@@ -254,12 +283,22 @@ const createMockCapServer = async () => {
 				state.uploadBytesBySubpath[subpath] =
 					(state.uploadBytesBySubpath[subpath] ?? 0) + body.byteLength;
 				state.uploadHeaders.push(request.headers);
+				if (
+					state.simulateSlowCameraUpload &&
+					subpath === "camera-upload.webm"
+				) {
+					await new Promise((resolve) =>
+						setTimeout(resolve, Math.ceil(body.byteLength / 1_250)),
+					);
+				}
 				response.writeHead(200, {
 					"Access-Control-Allow-Origin": "*",
 					"Access-Control-Expose-Headers": "ETag",
 					ETag: `"etag-${state.uploadBytes.length}"`,
 				});
 				response.end();
+				state.completedPartsBySubpath[subpath] =
+					(state.completedPartsBySubpath[subpath] ?? 0) + 1;
 				return;
 			}
 
@@ -691,6 +730,7 @@ const startRecording = async (
 	worker: Awaited<ReturnType<typeof getServiceWorker>>,
 	apiBaseUrl: string,
 	mode: "fullscreen" | "tab" = RECORDING_MODE,
+	recordingMs = RECORDING_MS,
 ) => {
 	await configureExtension(worker, apiBaseUrl);
 	const messengerPage = await openExtensionMessengerPage(context, worker);
@@ -765,7 +805,7 @@ const startRecording = async (
 		})
 		.toBe("recording");
 
-	await capturePage.waitForTimeout(RECORDING_MS);
+	await capturePage.waitForTimeout(recordingMs);
 	return {
 		capturePage,
 		messengerPage,
@@ -800,12 +840,50 @@ test.describe("extension recording upload", () => {
 		const persistedCameraOffsetMs = await readLiveCameraOffset(worker);
 		expect(typeof persistedCameraOffsetMs).toBe("number");
 
+		expect(mockServer.state.initiateBodies).toHaveLength(2);
 		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
 			target: "service-worker",
 			type: "stop-recording",
 		});
 		expect(stopResponse).toMatchObject({ ok: true });
 
+		await expectSuccessfulUpload(messengerPage, mockServer.state);
+		expect(mockServer.state.completeBodies[0]).toMatchObject({
+			cameraOffsetMs: persistedCameraOffsetMs,
+		});
+	});
+
+	test("uploads a camera multipart part during a long recording on a constrained network", async () => {
+		test.setTimeout(180_000);
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		mockServer.state.simulateSlowCameraUpload = true;
+		const worker = await getServiceWorker(extension.context);
+		const { messengerPage } = await startRecording(
+			extension.context,
+			worker,
+			mockServer.origin,
+			"fullscreen",
+			0,
+		);
+		const persistedCameraOffsetMs = await readLiveCameraOffset(worker);
+		expect(mockServer.state.initiateBodies).toHaveLength(2);
+		await expect
+			.poll(
+				() =>
+					mockServer?.state.completedPartsBySubpath["camera-upload.webm"] ?? 0,
+				{ timeout: 120_000 },
+			)
+			.toBeGreaterThan(0);
+		expect(
+			mockServer.state.uploadBytesBySubpath["camera-upload.webm"],
+		).toBeGreaterThanOrEqual(5 * 1024 * 1024);
+
+		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		});
+		expect(stopResponse).toMatchObject({ ok: true });
 		await expectSuccessfulUpload(messengerPage, mockServer.state);
 		expect(mockServer.state.completeBodies[0]).toMatchObject({
 			cameraOffsetMs: persistedCameraOffsetMs,
@@ -871,6 +949,45 @@ test.describe("extension recording upload", () => {
 		expect(await hasLiveRecordingManifest(worker)).toBe(false);
 	});
 
+	test("aborts both multipart sessions when Stop cancels camera upload setup", async () => {
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		mockServer.state.cameraInitiateDelayMs = 1_500;
+		const worker = await getServiceWorker(extension.context);
+		await configureExtension(worker, mockServer.origin);
+		const startPage = await openExtensionMessengerPage(
+			extension.context,
+			worker,
+		);
+		const stopPage = await openExtensionMessengerPage(
+			extension.context,
+			worker,
+		);
+		const capturePage = await extension.context.newPage();
+		await capturePage.goto(`${mockServer.origin}/capture.html`);
+		await capturePage.bringToFront();
+		const startPromise = sendServiceWorkerMessage(startPage, {
+			target: "service-worker",
+			type: "start-recording",
+			mode: "fullscreen",
+		});
+		await expect.poll(() => mockServer?.state.initiateBodies.length).toBe(2);
+		const stopResponse = await sendServiceWorkerMessage(stopPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		});
+		expect(stopResponse).toMatchObject({ ok: true });
+		const startResponse = await startPromise;
+		expect(startResponse).toMatchObject({ ok: false });
+		expect(mockServer.state.abortBodies).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ subpath: "raw-upload.webm" }),
+				expect.objectContaining({ subpath: "camera-upload.webm" }),
+			]),
+		);
+		expect(mockServer.state.completeBodies).toHaveLength(0);
+	});
+
 	test("keeps camera sidecar separate in current-tab capture", async () => {
 		test.skip(
 			process.env.CAP_EXTENSION_E2E_HEADED !== "1" ||
@@ -928,6 +1045,7 @@ test.describe("extension recording upload", () => {
 		mockServer.state.presignBodies = [];
 		mockServer.state.uploadBytes = [];
 		mockServer.state.uploadBytesBySubpath = {};
+		mockServer.state.completedPartsBySubpath = {};
 		mockServer.state.uploadHeaders = [];
 		mockServer.state.videoId = `e2e-${Date.now()}-second`;
 

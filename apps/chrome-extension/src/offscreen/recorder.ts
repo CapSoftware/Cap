@@ -94,8 +94,6 @@ type RecordingSound = "start-recording" | "stop-recording";
 type ActiveRecording = {
 	recorder: MediaRecorder;
 	cameraRecorder: MediaRecorder | null;
-	settings: ExtensionSettings;
-	authToken: string;
 	stopPromise: Promise<void>;
 	cameraStopPromise: Promise<void> | null;
 	streams: MediaStream[];
@@ -104,6 +102,7 @@ type ActiveRecording = {
 	spool: RecordingSpool;
 	cameraSpool: RecordingSpool | null;
 	uploader: InstantRecordingUploader;
+	cameraUploader: InstantRecordingUploader | null;
 	startedAt: number;
 	cameraOffsetMs: number | null;
 	durationMs: number;
@@ -932,6 +931,8 @@ const startRecording = async (request: StartRecordingRequest) => {
 	let ownedVideoId: string | null = null;
 	let ownedSpool: RecordingSpool | null = null;
 	let ownedCameraSpool: RecordingSpool | null = null;
+	let ownedCameraUploader: InstantRecordingUploader | null = null;
+	let ownedUploader: InstantRecordingUploader | null = null;
 	let ownedRecording: ActiveRecording | null = null;
 	let countdownPromise: Promise<void> | null = null;
 
@@ -1037,15 +1038,6 @@ const startRecording = async (request: StartRecordingRequest) => {
 			subpath,
 			api,
 		});
-		throwIfStartCanceled();
-		const spool = await RecordingSpool.create({ mimeType: pipeline.mimeType });
-		ownedSpool = spool;
-		throwIfStartCanceled();
-		const cameraSpool = cameraPipeline
-			? await RecordingSpool.create({ mimeType: cameraPipeline.mimeType })
-			: null;
-		ownedCameraSpool = cameraSpool;
-		throwIfStartCanceled();
 		const uploader = new InstantRecordingUploader({
 			videoId: creation.id,
 			uploadId: uploadSession.uploadId,
@@ -1099,6 +1091,58 @@ const startRecording = async (request: StartRecordingRequest) => {
 				}
 			},
 		});
+		ownedUploader = uploader;
+		throwIfStartCanceled();
+		const spool = await RecordingSpool.create({ mimeType: pipeline.mimeType });
+		ownedSpool = spool;
+		throwIfStartCanceled();
+		const cameraSpool = cameraPipeline
+			? await RecordingSpool.create({ mimeType: cameraPipeline.mimeType })
+			: null;
+		ownedCameraSpool = cameraSpool;
+		throwIfStartCanceled();
+		const cameraSubpath = cameraPipeline
+			? `camera-upload.${cameraPipeline.fileExtension}`
+			: null;
+		const cameraUploadApi = cameraSubpath
+			? {
+					...api,
+					extraBody: { screenSubpath: subpath, cameraOffsetMs: 0 },
+				}
+			: null;
+		const cameraUploadSession =
+			cameraPipeline && cameraSubpath && cameraUploadApi
+				? await initiateMultipartUpload({
+						videoId: creation.id,
+						contentType: cameraPipeline.mimeType,
+						subpath: cameraSubpath,
+						api: cameraUploadApi,
+					})
+				: null;
+		const cameraUploader =
+			cameraPipeline && cameraSubpath && cameraUploadApi && cameraUploadSession
+				? new InstantRecordingUploader({
+						videoId: creation.id,
+						uploadId: cameraUploadSession.uploadId,
+						provider: cameraUploadSession.provider,
+						mimeType: cameraPipeline.mimeType,
+						subpath: cameraSubpath,
+						api: cameraUploadApi,
+						setUploadStatus: () => undefined,
+						sendProgressUpdate: async () => undefined,
+						onFatalError: (error) => {
+							status = {
+								phase: "error",
+								message: error.message,
+								videoId: creation.id,
+							};
+							broadcastStatus();
+							void stopRecording();
+						},
+					})
+				: null;
+		ownedCameraUploader = cameraUploader;
+		throwIfStartCanceled();
 
 		const recorder = new MediaRecorder(recordingStream, {
 			mimeType: pipeline.mimeType,
@@ -1123,8 +1167,6 @@ const startRecording = async (request: StartRecordingRequest) => {
 		const recording: ActiveRecording = {
 			recorder,
 			cameraRecorder,
-			settings: request.settings,
-			authToken: request.auth.authApiKey,
 			stopPromise: Promise.resolve(),
 			cameraStopPromise: null,
 			streams,
@@ -1133,6 +1175,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 			spool,
 			cameraSpool,
 			uploader,
+			cameraUploader,
 			startedAt,
 			cameraOffsetMs: null,
 			durationMs: 0,
@@ -1147,9 +1190,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 			cameraFps: cameraDimensions?.fps ?? null,
 			subpath,
 			mimeType: pipeline.mimeType,
-			cameraSubpath: cameraPipeline
-				? `camera-upload.${cameraPipeline.fileExtension}`
-				: null,
+			cameraSubpath,
 			cameraMimeType: cameraPipeline?.mimeType ?? null,
 			maxDurationMs,
 			audioContext,
@@ -1278,6 +1319,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 			cameraRecorder.ondataavailable = (event) => {
 				if (event.data.size === 0) return;
 				recording.cameraRecordedBytes += event.data.size;
+				const cameraRecordedBytes = recording.cameraRecordedBytes;
 				recording.cameraChunkChain = recording.cameraChunkChain.then(
 					async () => {
 						if (recording.cameraSpoolFailed) {
@@ -1295,6 +1337,17 @@ const startRecording = async (request: StartRecordingRequest) => {
 						}
 					},
 				);
+				try {
+					cameraUploader?.handleChunk(event.data, cameraRecordedBytes);
+				} catch (error) {
+					status = {
+						phase: "error",
+						message: error instanceof Error ? error.message : String(error),
+						videoId: creation.id,
+					};
+					broadcastStatus();
+					void stopRecording();
+				}
 			};
 			recording.cameraStopPromise?.catch(() => {
 				if (activeRecording !== recording || recording.finalizePromise) return;
@@ -1304,7 +1357,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 					videoId: creation.id,
 				};
 				broadcastStatus();
-				stopRecorderAfterError(cameraRecorder);
+				void stopRecording();
 			});
 		}
 
@@ -1359,6 +1412,9 @@ const startRecording = async (request: StartRecordingRequest) => {
 			recording.cameraOffsetMs = Math.round(
 				cameraStartRequestedAt - screenStartRequestedAt,
 			);
+			if (cameraUploadApi) {
+				cameraUploadApi.extraBody.cameraOffsetMs = recording.cameraOffsetMs;
+			}
 			await saveCameraManifest().catch(() => undefined);
 		}
 		playRecordingSound("start-recording", request.settings);
@@ -1403,6 +1459,10 @@ const startRecording = async (request: StartRecordingRequest) => {
 		for (const stream of ownedStreams) {
 			stopTracks(stream);
 		}
+		await Promise.all([
+			ownedUploader?.cancel().catch(() => undefined),
+			ownedCameraUploader?.cancel().catch(() => undefined),
+		]);
 		if (ownedVideoId) {
 			await deleteInstantRecording(
 				request.settings,
@@ -1668,34 +1728,28 @@ const finalizeRecording = async (recording: ActiveRecording) => {
 		if ((!finalBlob || finalBlob.size === 0) && recording.recordedBytes === 0) {
 			throw new Error("No recording data was captured");
 		}
-		if (
-			recording.cameraSpool &&
-			recording.cameraRecordedBytes > 0 &&
-			(!recording.cameraSubpath ||
+		if (recording.cameraRecordedBytes > 0) {
+			const cameraUploader = recording.cameraUploader;
+			const cameraSubpath = recording.cameraSubpath;
+			if (
+				!recording.cameraSpool ||
+				!cameraUploader ||
+				!cameraSubpath ||
 				!recording.cameraMimeType ||
-				recording.cameraOffsetMs === null)
-		) {
-			throw new Error("The separate camera recording metadata is incomplete");
-		}
-		if (recording.cameraSpool && recording.cameraRecordedBytes > 0) {
-			const cameraBlob = await recoverCameraRecordingBlob(recording);
-			if (!cameraBlob || cameraBlob.size < recording.cameraRecordedBytes) {
-				throw new Error("The separate camera recording could not be recovered");
+				recording.cameraOffsetMs === null
+			) {
+				throw new Error("The separate camera recording metadata is incomplete");
 			}
-			await uploadCameraSidecar({
-				videoId: recording.videoId,
-				settings: recording.settings,
-				authToken: recording.authToken,
-				blob: cameraBlob,
-				mimeType: recording.cameraMimeType ?? cameraBlob.type,
-				subpath: recording.cameraSubpath ?? "camera-upload.webm",
-				screenSubpath: recording.subpath,
-				cameraOffsetMs: recording.cameraOffsetMs ?? 0,
-				durationMs: recording.durationMs,
+			await cameraUploader.finalize({
+				finalBlob: null,
+				durationSeconds: Math.max(1, Math.round(recording.durationMs / 1000)),
 				width: recording.cameraWidth ?? DEFAULT_WIDTH,
 				height: recording.cameraHeight ?? DEFAULT_HEIGHT,
 				fps: recording.cameraFps ?? DEFAULT_FPS,
+				subpath: cameraSubpath,
 			});
+		} else {
+			await recording.cameraUploader?.cancel();
 		}
 		await recording.uploader.finalize({
 			finalBlob: finalBlob && finalBlob.size > 0 ? finalBlob : null,
