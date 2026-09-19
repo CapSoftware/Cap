@@ -53,7 +53,7 @@ const Hero = () => (
 		<HeroSky className="rounded-[24px] rounded-b-[28px]" />
 		<div className="relative mx-auto flex max-w-[860px] flex-col items-center text-center">
 			<h1 className={`${H_HERO} text-balance text-[clamp(42px,6.2vw,80px)]`}>
-				Simple, honest pricing
+				Simple pricing
 			</h1>
 			<p
 				className={`${BODY_TEXT} mt-7 max-w-[600px] text-balance text-[16.5px] leading-[1.5] text-[rgba(17,17,17,0.78)] sm:text-[19px]`}
