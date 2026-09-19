@@ -341,11 +341,33 @@ async function replayPairedCapture(
 		}
 		await page.waitForTimeout(1700);
 		await page.evaluate(() => window.capRecorderHarness.stopRecording());
-		await page.waitForFunction(
-			(expectedPhase) => window.capRecorderHarness?.phase === expectedPhase,
-			failCameraCompletion ? "error" : "completed",
-			{ timeout: 30000 },
-		);
+		try {
+			await page.waitForFunction(
+				(expectedPhase) => window.capRecorderHarness?.phase === expectedPhase,
+				failCameraCompletion ? "error" : "completed",
+				{ timeout: 30000 },
+			);
+		} catch (error) {
+			const state = await page.evaluate(() => ({
+				phase: window.capRecorderHarness?.phase,
+				videoId: window.capRecorderHarness?.videoId,
+				cameraDownload: Boolean(window.capRecorderHarness?.cameraErrorDownload),
+				displayDownload: Boolean(window.capRecorderHarness?.errorDownload),
+			}));
+			throw new Error(
+				"Paired capture did not reach its terminal phase: " +
+					JSON.stringify({
+						engine: engine.name,
+						pauseResume,
+						failCameraCompletion,
+						browserErrors,
+						state,
+						requests: requests.map((request) => request.path),
+						partBytes: parts.map((part) => part.bytes),
+					}),
+				{ cause: error },
+			);
+		}
 		if (failCameraCompletion) {
 			const evidence = await page.evaluate(async () => {
 				const readBytes = async (download) =>
