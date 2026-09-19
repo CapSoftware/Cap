@@ -146,7 +146,9 @@ try {
 			cameraFps: 25,
 			cameraOffsetMs: 125,
 			micPath: mic,
+			micOffsetMs: 0,
 			systemAudioPath: systemAudio,
+			systemAudioOffsetMs: 0,
 			mixedAudioInDisplay: false,
 		}),
 	);

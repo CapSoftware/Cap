@@ -91,3 +91,8 @@ jobs:
             src/__tests__/lib/editor-wallpapers.test.ts \
             src/__tests__/routes/editor-clips.test.ts \
             src/__tests__/routes/editor.test.ts
+      - name: Verify cursor-only MOV export
+        run: |
+          docker run --rm --network none --cpus 4 --memory 4g \
+            --entrypoint bun cap-editor-worker:verification \
+            src/__tests__/routes/editor-cursor-mov-replay.ts
