@@ -524,20 +524,15 @@ try {
 	) => WebSocket;
 	const nativeFrameUrl = new URL("/frames-h264", native.origin);
 	nativeFrameUrl.protocol = "ws:";
-	frameSocket = new BunWebSocket(
-		nativeH264 ? nativeFrameUrl.toString() : tickets.sockets.frames.url,
-		{
-			...(nativeH264
-				? {}
-				: {
-						protocols: [
-							"cap-editor-v1",
-							`cap-editor-ticket.${tickets.sockets.frames.ticket}`,
-						],
-						headers: { Origin: "http://127.0.0.1:3000" },
-					}),
-		},
-	);
+	frameSocket = nativeH264
+		? native.connectSocket(nativeFrameUrl.toString())
+		: new BunWebSocket(tickets.sockets.frames.url, {
+				protocols: [
+					"cap-editor-v1",
+					`cap-editor-ticket.${tickets.sockets.frames.ticket}`,
+				],
+				headers: { Origin: "http://127.0.0.1:3000" },
+			});
 	frameSocket.binaryType = "arraybuffer";
 	const frameTimes: number[] = [];
 	let frameBytes = 0;
