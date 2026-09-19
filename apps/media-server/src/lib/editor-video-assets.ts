@@ -1,11 +1,9 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { runEditorFile as runFile } from "./editor-process";
 import {
 	type SignedEditorAsset,
 	stageSignedEditorAsset,
 } from "./editor-signed-assets";
 
-const runFile = promisify(execFile);
 const MAX_VIDEO_BYTES = 12 * 1024 * 1024 * 1024;
 const MAX_VIDEO_PIXELS = 33_554_432;
 const VIDEO_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;

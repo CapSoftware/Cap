@@ -1,10 +1,9 @@
-import { type ChildProcessByStdio, execFile, spawn } from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { chmod, lstat, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import type { Readable } from "node:stream";
-import { promisify } from "node:util";
 import {
 	type EditorAudioAsset,
 	stageSignedEditorAudioAsset,
@@ -20,12 +19,12 @@ import {
 	type EditorImageAsset,
 	stageSignedEditorImageAsset,
 } from "./editor-image-assets";
+import { editorProcessEnv, runEditorFile } from "./editor-process";
 import {
 	type EditorVideoAsset,
 	stageSignedEditorVideoAsset,
 } from "./editor-video-assets";
 
-const runFile = promisify(execFile);
 const STARTUP_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 5_000;
 const CLIP_VIDEO_PATH =
@@ -268,7 +267,7 @@ export async function prepareNativeEditorProject(
 			}),
 			{ flag: "wx", mode: 0o600 },
 		);
-		await runFile(
+		await runEditorFile(
 			nativeEditorBinary("prepare"),
 			["prepare", projectPath, manifestPath],
 			{
@@ -307,7 +306,7 @@ export async function prepareNativeEditorProject(
 						}),
 						{ flag: "wx", mode: 0o600 },
 					);
-					await runFile(
+					await runEditorFile(
 						nativeEditorBinary("prepare"),
 						["append-clip", projectPath, clipManifestPath],
 						{ timeout: 60_000, maxBuffer: 64 * 1024, signal: abortSignal },
@@ -319,7 +318,7 @@ export async function prepareNativeEditorProject(
 						abortSignal,
 					);
 					try {
-						const { stdout } = await runFile(
+						const { stdout } = await runEditorFile(
 							nativeEditorBinary("prepare"),
 							["append-cap", projectPath, staged.path],
 							{
@@ -372,7 +371,7 @@ export async function prepareNativeEditorProject(
 				}),
 				{ flag: "wx", mode: 0o600 },
 			);
-			await runFile(
+			await runEditorFile(
 				nativeEditorBinary("prepare"),
 				["append-clips", projectPath, clipManifestPath],
 				{
@@ -475,7 +474,7 @@ export async function startNativeEditorSession(project: NativeEditorProject) {
 	const internalToken = randomBytes(32).toString("base64url");
 	const child = spawn(nativeEditorBinary("service"), [project.path], {
 		stdio: ["ignore", "pipe", "pipe"],
-		env: { ...process.env, CAP_WEB_EDITOR_INTERNAL_TOKEN: internalToken },
+		env: editorProcessEnv(internalToken),
 	});
 	let stderr = "";
 	child.stderr.on("data", (chunk: Buffer) => {

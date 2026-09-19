@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import {
 	type EditorCapAsset,
 	stageSignedEditorCapAsset,
@@ -10,8 +8,8 @@ import {
 } from "./editor-cap-assets";
 import { mapEditorConfigPaths } from "./editor-config-paths";
 import { nativeEditorBinary } from "./editor-native";
+import { runEditorFile as runFile } from "./editor-process";
 
-const runFile = promisify(execFile);
 const IMPORT_TIMEOUT_MS = 30 * 60 * 1000;
 
 type ImportStatus = "staging" | "ready" | "error" | "canceled";

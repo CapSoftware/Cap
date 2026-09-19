@@ -17,6 +17,7 @@ import {
 	nativeEditorBinary,
 	type startNativeEditorSession,
 } from "./editor-native";
+import { editorProcessEnv } from "./editor-process";
 import { publicEditorOrigin } from "./editor-socket-tickets";
 import { probeVideo } from "./editor-video-assets";
 
@@ -176,7 +177,7 @@ export async function beginEditorExport(
 				settingsPath,
 				outputPath,
 			],
-			{ stdio: ["pipe", "pipe", "pipe"] },
+			{ stdio: ["pipe", "pipe", "pipe"], env: editorProcessEnv() },
 		);
 	} catch (cause) {
 		starting.delete(sessionId);

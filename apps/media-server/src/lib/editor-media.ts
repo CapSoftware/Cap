@@ -1,14 +1,12 @@
-import { execFile } from "node:child_process";
 import { chmod, mkdtemp, open, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
+import { runEditorFile as runFile } from "./editor-process";
 import { fetchMedia } from "./media-transfer";
 
 const MAX_SOURCE_BYTES = 12 * 1024 * 1024 * 1024;
 const MAX_INPUT_EVENTS_BYTES = 64 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
-const runFile = promisify(execFile);
 
 export type EditorMediaSource = {
 	url: string;
@@ -86,6 +84,7 @@ export async function downloadEditorMedia(
 						AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
 					])
 				: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+			redirect: "manual",
 		});
 		if (!response.ok || !response.body) {
 			throw new Error(`Editor source download failed: ${response.status}`);
@@ -99,11 +98,7 @@ export async function downloadEditorMedia(
 			throw new Error("Editor source size changed before download");
 		}
 		const responseIdentity = response.headers.get("etag");
-		if (
-			source.objectIdentity &&
-			responseIdentity &&
-			responseIdentity !== source.objectIdentity
-		) {
+		if (source.objectIdentity && responseIdentity !== source.objectIdentity) {
 			throw new Error("Editor source identity changed before download");
 		}
 		let received = 0;

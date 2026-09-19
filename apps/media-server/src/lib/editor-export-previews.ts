@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmod,
@@ -10,14 +9,13 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { z } from "zod";
 import {
 	nativeEditorBinary,
 	type startNativeEditorSession,
 } from "./editor-native";
+import { runEditorFile as runFile } from "./editor-process";
 
-const runFile = promisify(execFile);
 const MAX_PREVIEW_BYTES = 8 * 1024 * 1024;
 const PREVIEW_TIMEOUT_MS = 30_000;
 const CACHE_TTL_MS = 60_000;

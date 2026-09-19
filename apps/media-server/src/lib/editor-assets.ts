@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { runEditorFile as runFile } from "./editor-process";
 import { stageSignedEditorAsset } from "./editor-signed-assets";
 
-const runFile = promisify(execFile);
 const MAX_AUDIO_BYTES = 32 * 1024 * 1024;
 const ASSET_PATH =
 	/^assets\/audio\/import-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(ogg|m4a|mp3|wav|aac|flac)$/;

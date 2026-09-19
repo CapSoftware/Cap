@@ -9,6 +9,7 @@ import {
 	nativeEditorBinary,
 	type startNativeEditorSession,
 } from "./editor-native";
+import { editorProcessEnv } from "./editor-process";
 
 type NativeSession = Awaited<ReturnType<typeof startNativeEditorSession>>;
 export type EditorExportEstimate = {
@@ -131,7 +132,7 @@ export async function getEditorExportEstimate(
 		const child = spawn(
 			nativeEditorBinary("prepare"),
 			["estimate", native.projectPath, configPath, settingsPath],
-			{ stdio: ["pipe", "pipe", "pipe"] },
+			{ stdio: ["pipe", "pipe", "pipe"], env: editorProcessEnv() },
 		);
 		child.stdin.end();
 		const abort = () => child.kill("SIGTERM");

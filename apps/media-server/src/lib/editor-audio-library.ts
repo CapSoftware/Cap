@@ -1,12 +1,10 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { copyFile, lstat, mkdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
+import { runEditorFile as runFile } from "./editor-process";
 
-const runFile = promisify(execFile);
 const MAX_TRACK_BYTES = 32 * 1024 * 1024;
 const LOCAL_MUSIC_DIR = fileURLToPath(
 	new URL("../../../../apps/desktop/src/assets/music/", import.meta.url),

@@ -88,9 +88,17 @@ jobs:
             src/__tests__/lib/editor-clip-thumbnails.test.ts \
             src/__tests__/lib/editor-config-paths.test.ts \
             src/__tests__/lib/editor-image-assets.test.ts \
+            src/__tests__/lib/editor-security.test.ts \
             src/__tests__/lib/editor-wallpapers.test.ts \
             src/__tests__/routes/editor-clips.test.ts \
             src/__tests__/routes/editor.test.ts
+      - name: Verify editor subprocess credential isolation
+        run: |
+          docker run --rm --network none \
+            -e MEDIA_SERVER_WEBHOOK_SECRET=test \
+            -e AWS_SECRET_ACCESS_KEY=test \
+            --entrypoint bun cap-editor-worker:verification \
+            src/__tests__/lib/editor-process-env-replay.ts
       - name: Verify cursor-only MOV export
         run: |
           docker run --rm --network none --cpus 4 --memory 4g \

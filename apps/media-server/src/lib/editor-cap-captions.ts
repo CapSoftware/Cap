@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
 import { chmod, lstat, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
-import { promisify } from "node:util";
 import { validCapBundlePath } from "@cap/editor-cap-bundle";
 import {
 	type EditorCapAsset,
@@ -10,8 +8,8 @@ import {
 	validateEditorCapAsset,
 } from "./editor-cap-assets";
 import { nativeEditorBinary } from "./editor-native";
+import { runEditorFile as runFile } from "./editor-process";
 
-const runFile = promisify(execFile);
 const MAX_AUDIO_GENERATION_MS = 30 * 60 * 1000;
 const AUDIO_EXTENSIONS = new Set([
 	".aac",

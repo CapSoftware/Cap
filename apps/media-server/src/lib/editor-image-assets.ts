@@ -1,12 +1,10 @@
-import { execFile } from "node:child_process";
 import { extname } from "node:path";
-import { promisify } from "node:util";
+import { runEditorFile as runFile } from "./editor-process";
 import {
 	type SignedEditorAsset,
 	stageSignedEditorAsset,
 } from "./editor-signed-assets";
 
-const runFile = promisify(execFile);
 const MAX_IMAGE_BYTES = 64 * 1024 * 1024;
 const MAX_IMAGE_PIXELS = 16_777_216;
 const ASSET_PATH =
