@@ -689,6 +689,13 @@ try {
 	const h264Preview = measureH264
 		? await h264PreviewProbe(deltaPackets, temporary)
 		: null;
+	const beforeBrowserMetricsResponse = await native.request("/metrics");
+	assert.equal(beforeBrowserMetricsResponse.status, 200);
+	const beforeBrowserFrameMetrics =
+		(await beforeBrowserMetricsResponse.json()) as {
+			h264Bytes: number;
+			h264Frames: number;
+		};
 	browser = await browserEngine.launch({
 		headless: true,
 		...(browserEngine === chromium
@@ -1188,6 +1195,17 @@ try {
 						100_000,
 				) / 10
 			: null;
+	const browserH264Bytes =
+		frameMetrics.h264Bytes - beforeBrowserFrameMetrics.h264Bytes;
+	const browserH264Frames =
+		frameMetrics.h264Frames - beforeBrowserFrameMetrics.h264Frames;
+	assert.ok(browserH264Bytes >= 0 && browserH264Frames >= 0);
+	const estimatedBrowserH264Mbps =
+		browserH264Frames > 0
+			? Math.round(
+					((browserH264Bytes / browserH264Frames) * playbackFps * 8) / 100_000,
+				) / 10
+			: null;
 	process.stdout.write(
 		`${JSON.stringify({
 			resolution: "1920x1080",
@@ -1224,6 +1242,9 @@ try {
 			frameMetrics,
 			estimatedRequestedFpsCompressedMbps,
 			estimatedH264Mbps,
+			estimatedBrowserH264Mbps,
+			browserH264Bytes,
+			browserH264Frames,
 			losslessDelta,
 			h264Preview,
 			browserLongTasks: browserResult.longTasks,

@@ -37,7 +37,7 @@ impl PreviewH264Encoder {
             || !width.is_multiple_of(2)
             || !height.is_multiple_of(2)
             || !(1..=60).contains(&fps)
-            || !(0.05..=0.18).contains(&bpp)
+            || !(0.04..=0.18).contains(&bpp)
         {
             return Err("Unsupported H.264 preview dimensions or frame rate".to_string());
         }

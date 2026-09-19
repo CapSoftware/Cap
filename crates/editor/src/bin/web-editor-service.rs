@@ -1026,7 +1026,7 @@ async fn h264_frame_socket(mut socket: WebSocket, state: Arc<ServiceState>) {
                         fallback_png = true;
                     }
                     Some(Ok(Message::Text(value))) if value == "{\"bitrate\":\"low\"}" && !fallback_png => {
-                        target_bpp_hundredths.store(5, Ordering::Relaxed);
+                        target_bpp_hundredths.store(4, Ordering::Relaxed);
                     }
                     Some(Ok(Message::Text(value))) if value == "{\"bitrate\":\"high\"}" && !fallback_png => {
                         target_bpp_hundredths.store(18, Ordering::Relaxed);
