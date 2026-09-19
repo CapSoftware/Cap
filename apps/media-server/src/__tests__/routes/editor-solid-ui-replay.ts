@@ -715,6 +715,12 @@ try {
 			await editor
 				.getByRole("button", { name: "Regenerate Captions" })
 				.waitFor({ state: "visible", timeout: 20_000 });
+			await editor.locator("[data-caption-segment]").first().waitFor({
+				state: "visible",
+			});
+			await editor.getByText("Font settings", { exact: true }).waitFor({
+				state: "visible",
+			});
 			assert.equal(captionRequests, 1);
 			await editor.getByText("Captions", { exact: true }).last().waitFor({
 				state: "visible",
@@ -750,6 +756,9 @@ try {
 				0,
 			);
 			assert.equal(captionRequests, 0);
+			await editor.getByText("Font settings", { exact: true }).waitFor({
+				state: "hidden",
+			});
 		}
 		currentCaptionPlan = !proCaptions;
 		await editor
@@ -758,6 +767,12 @@ try {
 		if (proCaptions) {
 			await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
 				state: "visible",
+			});
+			await editor.locator("[data-caption-segment]").first().waitFor({
+				state: "hidden",
+			});
+			await editor.getByText("Font settings", { exact: true }).waitFor({
+				state: "hidden",
 			});
 			assert.equal(
 				await editor
@@ -768,6 +783,9 @@ try {
 		} else {
 			await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
 				state: "hidden",
+			});
+			await editor.getByText("Font settings", { exact: true }).waitFor({
+				state: "visible",
 			});
 		}
 		currentCaptionPlan = proCaptions;
@@ -780,9 +798,18 @@ try {
 				.waitFor({
 					state: "visible",
 				});
+			await editor.locator("[data-caption-segment]").first().waitFor({
+				state: "visible",
+			});
+			await editor.getByText("Font settings", { exact: true }).waitFor({
+				state: "visible",
+			});
 		} else {
 			await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
 				state: "visible",
+			});
+			await editor.getByText("Font settings", { exact: true }).waitFor({
+				state: "hidden",
 			});
 		}
 		assert.equal(

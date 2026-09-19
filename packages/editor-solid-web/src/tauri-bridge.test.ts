@@ -59,6 +59,56 @@ test("closing the editor port rejects unfinished commands", async () => {
 	channel.port2.close();
 });
 
+test("late plan replies cannot reopen paid caption controls", async () => {
+	const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+	const browserWindow = Object.assign(new EventTarget(), {
+		capWebEditorCaptionsEnabled: true,
+	});
+	Object.defineProperty(globalThis, "window", {
+		configurable: true,
+		value: browserWindow,
+	});
+	let planEvents = 0;
+	browserWindow.addEventListener("cap-web-editor-captions-plan", () => {
+		planEvents++;
+	});
+	const channel = new MessageChannel();
+	const transport = new PortEditorTransport(channel.port1);
+	const requestIds: number[] = [];
+	channel.port2.onmessage = (event: MessageEvent<unknown>) => {
+		const request = event.data as { id: number };
+		requestIds.push(request.id);
+	};
+	channel.port2.start();
+	try {
+		const first = transport.invoke("checkUpgradedAndUpdate", []);
+		const second = transport.invoke("checkUpgradedAndUpdate", []);
+		await Bun.sleep(0);
+		expect(requestIds).toHaveLength(2);
+		channel.port2.postMessage({
+			kind: "result",
+			id: requestIds[1],
+			value: false,
+		});
+		expect(await second).toBe(false);
+		expect(browserWindow.capWebEditorCaptionsEnabled).toBe(false);
+		channel.port2.postMessage({
+			kind: "result",
+			id: requestIds[0],
+			value: true,
+		});
+		expect(await first).toBe(true);
+		expect(browserWindow.capWebEditorCaptionsEnabled).toBe(false);
+		expect(planEvents).toBe(1);
+	} finally {
+		transport.dispose();
+		channel.port2.close();
+		if (previousWindow)
+			Object.defineProperty(globalThis, "window", previousWindow);
+		else Reflect.deleteProperty(globalThis, "window");
+	}
+});
+
 test("crop frames cross the editor port as compact JPEG bytes", async () => {
 	const channel = new MessageChannel();
 	const transport = new PortEditorTransport(channel.port1);

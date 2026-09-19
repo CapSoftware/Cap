@@ -294,12 +294,20 @@ export function Timeline(props: {
 	};
 
 	const trackState = () => editorState.timeline.tracks;
+	const [captionPlanAllowed, setCaptionPlanAllowed] = createSignal(
+		captionsAllowed(),
+	);
+	if (isWebEditor)
+		createEventListener(window, "cap-web-editor-captions-plan", () =>
+			setCaptionPlanAllowed(captionsAllowed()),
+		);
 	const sceneAvailable = () =>
 		meta().hasCamera &&
 		(!project.camera.hide ||
 			stylesRevealCamera(project.timeline?.styleSegments ?? []) ||
 			!!project.timeline?.sceneSegments?.length);
-	const captionTrackVisible = () => captionsAllowed() && trackState().caption;
+	const captionTrackVisible = () =>
+		captionPlanAllowed() && trackState().caption;
 	const keyboardTrackVisible = () => trackState().keyboard;
 	const threeDTrackVisible = () => trackState()["3d"];
 	const trackOptions = createMemo(() =>
@@ -325,7 +333,7 @@ export function Timeline(props: {
 												: true,
 			available:
 				definition.type === "caption"
-					? captionsAllowed()
+					? captionPlanAllowed()
 					: definition.type === "scene"
 						? sceneAvailable()
 						: true,

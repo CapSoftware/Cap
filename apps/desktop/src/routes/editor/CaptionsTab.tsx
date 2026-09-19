@@ -1177,12 +1177,18 @@ export function CaptionsTab(props: {
 				</div>
 			</Show>
 
-			<div class="w-full border-t border-ed-line" />
+			<div
+				class={cx(
+					"w-full border-t border-ed-line",
+					isWebEditor && !webCaptionsProEnabled() && "hidden",
+				)}
+			/>
 
 			<div
 				class={cx(
 					"flex flex-col gap-3.5",
 					!hasCaptions() && "opacity-50 pointer-events-none",
+					isWebEditor && !webCaptionsProEnabled() && "hidden",
 				)}
 			>
 				<Section name="Style">
@@ -1614,6 +1620,7 @@ export function CaptionsTab(props: {
 
 			<Show
 				when={
+					(!isWebEditor || webCaptionsProEnabled()) &&
 					editorState.timeline.selection?.type === "caption" &&
 					editorState.timeline.selection.indices.length === 1
 				}

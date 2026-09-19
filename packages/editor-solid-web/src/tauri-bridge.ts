@@ -65,6 +65,7 @@ export class PortEditorTransport {
 	private readonly pending = new Map<number, PendingRequest>();
 	private nativeCaptionCache: EditorCaptionCache | null = null;
 	private savedCaptionCache: EditorCaptionCache | null = null;
+	private planRequestSequence = 0;
 	private readonly listeners = new Map<
 		string,
 		Set<(payload: unknown) => void>
@@ -163,6 +164,8 @@ export class PortEditorTransport {
 	}
 
 	async invoke(name: string, args: unknown[]) {
+		const planRequestSequence =
+			name === "checkUpgradedAndUpdate" ? ++this.planRequestSequence : 0;
 		if (name === "performHapticFeedback") return null;
 		if (name === "saveFileDialog") {
 			const fileName = args[0];
@@ -265,6 +268,16 @@ export class PortEditorTransport {
 			if (isConfigCommand) {
 				if (name === "setProjectConfig") this.savedCaptionCache = captionCache;
 				else this.nativeCaptionCache = captionCache;
+			}
+			if (
+				planRequestSequence > 0 &&
+				planRequestSequence === this.planRequestSequence &&
+				typeof value === "boolean"
+			) {
+				const previous = window.capWebEditorCaptionsEnabled;
+				window.capWebEditorCaptionsEnabled = value;
+				if (previous !== value)
+					window.dispatchEvent(new Event("cap-web-editor-captions-plan"));
 			}
 			if (name === "getDisplayFrameForCropping") {
 				if (
