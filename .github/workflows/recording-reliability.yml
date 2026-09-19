@@ -6,6 +6,8 @@ on:
     paths:
       - "apps/web/**"
       - "apps/media-server/**"
+      - "packages/editor-solid-web/**"
+      - "packages/editor-cap-bundle/**"
       - "packages/database/**"
       - "packages/web-*/**"
       - "crates/recording/**"
@@ -16,6 +18,8 @@ on:
     paths:
       - "apps/web/**"
       - "apps/media-server/**"
+      - "packages/editor-solid-web/**"
+      - "packages/editor-cap-bundle/**"
       - "packages/database/**"
       - "packages/web-*/**"
       - "crates/recording/**"
@@ -30,6 +34,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  browser-cap-import:
+    name: Web editor recording folder import (Chromium/WebKit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-js
+      - name: Install Playwright browsers
+        run: bunx playwright install --with-deps chromium webkit
+      - name: Replay browser recording import
+        run: bun run --filter @cap/media-server test:browser-cap-import
+
   recording-contract:
     name: Recording ownership, preservation, and recovery
     runs-on: ubuntu-24.04

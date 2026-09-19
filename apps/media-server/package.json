@@ -7,6 +7,7 @@
 		"start": "bun src/index.ts",
 		"build": "echo 'No build step needed for Bun'",
 		"test": "bun test",
+		"test:browser-cap-import": "bun src/__tests__/routes/editor-browser-cap-directory-replay.ts",
 		"test:native-editor-clips": "bun src/__tests__/routes/editor-clips-replay.ts",
 		"test:native-editor-ui": "bun src/__tests__/routes/editor-solid-ui-replay.ts",
 		"bench:native-editor-clips": "bun src/__tests__/routes/editor-clips-benchmark.ts",
