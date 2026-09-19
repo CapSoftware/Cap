@@ -46,6 +46,19 @@ jobs:
       - name: Replay browser recording import
         run: bun run --filter @cap/media-server test:browser-cap-import
 
+  browser-paired-recording:
+    name: Web recorder paired capture (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./.github/actions/setup-js
+      - name: Install Playwright Chromium
+        run: bunx playwright install --with-deps chromium
+      - name: Replay paired web recorder capture
+        working-directory: apps/web
+        run: bun __tests__/web-recorder-paired-browser-replay.mjs
+
   recording-contract:
     name: Recording ownership, preservation, and recovery
     runs-on: ubuntu-24.04
