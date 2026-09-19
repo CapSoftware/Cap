@@ -35,6 +35,7 @@ import { runPromise } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { stringOrNumberOptional } from "@/utils/zod";
 import {
+	getAudioRecorderUploadKind,
 	getMultipartFileKey,
 	getSubpath,
 	isCameraRecorderUpload,
@@ -182,7 +183,10 @@ app.post(
 			);
 		}
 
-		const cameraSourceUpload = isCameraRecorderUpload(getSubpath(body) ?? "");
+		const subpath = getSubpath(body) ?? "";
+		const sourceSidecarUpload =
+			isCameraRecorderUpload(subpath) ||
+			getAudioRecorderUploadKind(subpath) !== null;
 		const resp = await Effect.gen(function* () {
 			const policy = yield* VideosPolicy;
 			const db = yield* Database;
@@ -190,7 +194,7 @@ app.post(
 			const video = yield* policy.getOwnedById(videoId);
 			if (Option.isNone(video)) return yield* new Video.NotFoundError();
 
-			if (!cameraSourceUpload) {
+			if (!sourceSidecarUpload) {
 				yield* db.use((db) =>
 					db
 						.insert(Db.videoUploads)
@@ -428,6 +432,7 @@ app.post(
 				fps: stringOrNumberOptional,
 				screenSubpath: z.string().optional(),
 				cameraOffsetMs: z.number().finite().optional(),
+				audioOffsetMs: z.number().finite().optional(),
 				replaceExisting: z.boolean().optional(),
 			})
 			.and(
@@ -489,8 +494,11 @@ app.post(
 			// match the recorder bootstrap.
 			const reportedDuration =
 				typeof body.durationInSecs === "number" ? body.durationInSecs : null;
+			const sourceSidecarUpload =
+				isCameraRecorderUpload(subpath) ||
+				getAudioRecorderUploadKind(subpath) !== null;
 			const missingRequiredDuration =
-				(isRawRecorderUpload(subpath) || isCameraRecorderUpload(subpath)) &&
+				(isRawRecorderUpload(subpath) || sourceSidecarUpload) &&
 				reportedDuration === null;
 			const exceedsFreePlanLimit =
 				reportedDuration !== null &&
@@ -549,7 +557,7 @@ app.post(
 								);
 						} else {
 							yield* bucket.multipart.abort(fileKey, uploadId);
-							if (!isCameraRecorderUpload(subpath)) {
+							if (!sourceSidecarUpload) {
 								yield* db.use((db) =>
 									db
 										.delete(Db.videoUploads)
@@ -574,15 +582,23 @@ app.post(
 				}
 			}
 
-			if (isCameraRecorderUpload(subpath)) {
+			const cameraSourceUpload = isCameraRecorderUpload(subpath);
+			const audioSourceKind = getAudioRecorderUploadKind(subpath);
+			if (cameraSourceUpload || audioSourceKind) {
+				const sourceKind = cameraSourceUpload ? "camera" : audioSourceKind;
+				if (sourceKind === null) {
+					return c.json({ error: "Invalid editor recording source" }, 400);
+				}
 				const screenSubpath = body.screenSubpath;
-				const cameraOffsetMs = body.cameraOffsetMs;
+				const sourceOffsetMs = cameraSourceUpload
+					? body.cameraOffsetMs
+					: body.audioOffsetMs;
 				if (
 					body.replaceExisting ||
 					!screenSubpath ||
 					!isDisplayRecorderUpload(screenSubpath) ||
-					typeof cameraOffsetMs !== "number" ||
-					Math.abs(cameraOffsetMs) > 30_000
+					typeof sourceOffsetMs !== "number" ||
+					Math.abs(sourceOffsetMs) > 30_000
 				) {
 					return c.json({ error: "Invalid editor recording source" }, 400);
 				}
@@ -604,14 +620,19 @@ app.post(
 							(part, index) => part.partNumber === index + 1 && part.size > 0,
 						)
 					) {
-						return c.json({ error: "Invalid camera upload parts" }, 400);
+						return c.json(
+							{ error: "Invalid recording source upload parts" },
+							400,
+						);
 					}
 
 					const verifyObject = bucket.headObject(fileKey).pipe(
 						Effect.filterOrFail(
 							(head) => head.ContentLength === totalSize,
 							() =>
-								new Error("Camera source size does not match uploaded parts"),
+								new Error(
+									"Recording source size does not match uploaded parts",
+								),
 						),
 						Effect.retry({
 							times: 3,
@@ -636,9 +657,7 @@ app.post(
 							),
 						);
 					const head = yield* verifyObject;
-					const contentType = subpath.endsWith(".webm")
-						? "video/webm"
-						: "video/mp4";
+					const contentType = `${cameraSourceUpload ? "video" : "audio"}/${subpath.endsWith(".webm") ? "webm" : "mp4"}`;
 					const cameraFps = Number(body.fps);
 					const screenContentType = screenSubpath.endsWith(".webm")
 						? "video/webm"
@@ -650,17 +669,18 @@ app.post(
 								key: `${user.id}/${videoId}/${screenSubpath}`,
 								contentType: screenContentType,
 							},
-							camera: {
+							[sourceKind]: {
 								key: fileKey,
 								contentType,
 								size: totalSize,
-								...(Number.isInteger(cameraFps) &&
+								...(cameraSourceUpload &&
+								Number.isInteger(cameraFps) &&
 								cameraFps > 0 &&
 								cameraFps <= 120
 									? { fps: cameraFps }
 									: {}),
 								objectIdentity: head.ETag ?? result.ETag ?? null,
-								offsetMs: cameraOffsetMs,
+								offsetMs: sourceOffsetMs,
 							},
 						},
 					});
@@ -683,12 +703,12 @@ app.post(
 				}).pipe(
 					Effect.catchAll((error) =>
 						Effect.logError(
-							"Could not complete camera source upload",
+							"Could not complete recording source upload",
 							error,
 						).pipe(
 							Effect.map(() =>
 								c.json(
-									{ error: "Could not complete camera source upload" },
+									{ error: "Could not complete recording source upload" },
 									500,
 								),
 							),

@@ -39,6 +39,8 @@ type MockState = {
 	videoId: string;
 	simulateSlowCameraUpload: boolean;
 	failCameraCompletion: boolean;
+	failAudioCompletion: boolean;
+	failScreenCompletion: boolean;
 	cameraInitiateDelayMs: number;
 };
 
@@ -172,6 +174,8 @@ const createMockCapServer = async () => {
 		videoId: `e2e-${Date.now()}`,
 		simulateSlowCameraUpload: false,
 		failCameraCompletion: false,
+		failAudioCompletion: false,
+		failScreenCompletion: false,
 		cameraInitiateDelayMs: 0,
 	};
 
@@ -318,6 +322,26 @@ const createMockCapServer = async () => {
 					body.subpath === "camera-upload.webm"
 				) {
 					sendJson(response, 400, { error: "Camera completion rejected" });
+					return;
+				}
+				if (
+					state.failAudioCompletion &&
+					!!body &&
+					typeof body === "object" &&
+					"subpath" in body &&
+					body.subpath === "mic-upload.webm"
+				) {
+					sendJson(response, 400, { error: "Microphone completion rejected" });
+					return;
+				}
+				if (
+					state.failScreenCompletion &&
+					!!body &&
+					typeof body === "object" &&
+					"subpath" in body &&
+					body.subpath === "raw-upload.webm"
+				) {
+					sendJson(response, 400, { error: "Screen completion rejected" });
 					return;
 				}
 				sendJson(response, 200, {
@@ -502,6 +526,7 @@ const openExtensionMessengerPage = async (
 const configureExtension = async (
 	worker: Awaited<ReturnType<typeof getServiceWorker>>,
 	apiBaseUrl: string,
+	microphoneEnabled = false,
 ) => {
 	await worker.evaluate(
 		async ({
@@ -510,6 +535,7 @@ const configureExtension = async (
 			recordingMode,
 			settingsKey,
 			apiBaseUrl,
+			microphoneEnabled,
 		}) => {
 			const chromeApi = (globalThis as ChromeGlobal).chrome;
 			await new Promise<void>((resolve, reject) => {
@@ -562,7 +588,7 @@ const configureExtension = async (
 								mirror: false,
 							},
 							microphone: {
-								enabled: false,
+								enabled: microphoneEnabled,
 								deviceId: null,
 							},
 							systemAudio: {
@@ -597,6 +623,7 @@ const configureExtension = async (
 			bootstrapKey: BOOTSTRAP_CACHE_KEY,
 			recordingMode: RECORDING_MODE,
 			settingsKey: SETTINGS_KEY,
+			microphoneEnabled,
 		},
 	);
 };
@@ -694,6 +721,29 @@ const readLiveCameraOffset = async (
 			throw new Error(
 				`Live manifests: ${manifests.length}; first camera offset: ${typeof offset}`,
 			);
+		}
+		return offset;
+	});
+
+const readLiveMicrophoneOffset = async (
+	worker: Awaited<ReturnType<typeof getServiceWorker>>,
+) =>
+	worker.evaluate(async () => {
+		const key = "cap-extension-live-recordings";
+		const items = await new Promise<Record<string, unknown>>((resolve) =>
+			chrome.storage.local.get([key], (result) => resolve(result)),
+		);
+		const manifests = items[key];
+		const sources = Array.isArray(manifests)
+			? (
+					manifests[0] as {
+						audioSources?: Array<{ kind: string; offsetMs: number }>;
+					}
+				)?.audioSources
+			: undefined;
+		const offset = sources?.find((source) => source.kind === "mic")?.offsetMs;
+		if (typeof offset !== "number") {
+			throw new Error("The live microphone offset is unavailable");
 		}
 		return offset;
 	});
@@ -796,8 +846,9 @@ const startRecording = async (
 	apiBaseUrl: string,
 	mode: "fullscreen" | "tab" = RECORDING_MODE,
 	recordingMs = RECORDING_MS,
+	microphoneEnabled = false,
 ) => {
-	await configureExtension(worker, apiBaseUrl);
+	await configureExtension(worker, apiBaseUrl, microphoneEnabled);
 	const messengerPage = await openExtensionMessengerPage(context, worker);
 	const capturePage = await context.newPage();
 	await capturePage.goto(`${apiBaseUrl}/capture.html`);
@@ -918,6 +969,210 @@ test.describe("extension recording upload", () => {
 		});
 	});
 
+	test("uploads microphone audio independently of screen and camera in Chromium", async () => {
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		const worker = await getServiceWorker(extension.context);
+		const { messengerPage } = await startRecording(
+			extension.context,
+			worker,
+			mockServer.origin,
+			"fullscreen",
+			RECORDING_MS,
+			true,
+		);
+		const persistedAudioOffsetMs = await readLiveMicrophoneOffset(worker);
+		expect(mockServer.state.initiateBodies).toHaveLength(3);
+		expect(mockServer.state.initiateBodies).toContainEqual(
+			expect.objectContaining({
+				subpath: "mic-upload.webm",
+				contentType: "audio/webm",
+			}),
+		);
+
+		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		});
+		expect(stopResponse).toMatchObject({ ok: true });
+		await expect
+			.poll(async () => {
+				const response = await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "get-recording-status",
+				});
+				return response.ok ? response.status?.phase : response.error;
+			})
+			.toBe("completed");
+		expect(mockServer.state.completeBodies).toHaveLength(3);
+		const audioCompletion = mockServer.state.completeBodies.find(
+			(body) =>
+				!!body &&
+				typeof body === "object" &&
+				"subpath" in body &&
+				body.subpath === "mic-upload.webm",
+		);
+		expect(audioCompletion).toMatchObject({
+			videoId: mockServer.state.videoId,
+			subpath: "mic-upload.webm",
+			screenSubpath: "raw-upload.webm",
+			audioOffsetMs: persistedAudioOffsetMs,
+		});
+		expect(
+			mockServer.state.uploadBytesBySubpath["mic-upload.webm"],
+		).toBeGreaterThan(0);
+		expect(
+			mockServer.state.uploadBytesBySubpath["camera-upload.webm"],
+		).toBeGreaterThan(0);
+		expect(
+			mockServer.state.uploadBytesBySubpath["raw-upload.webm"],
+		).toBeGreaterThan(0);
+	});
+
+	test("keeps the microphone spool downloadable and retries all sources after audio upload failure", async () => {
+		test.setTimeout(120_000);
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		mockServer.state.failAudioCompletion = true;
+		const worker = await getServiceWorker(extension.context);
+		const { messengerPage } = await startRecording(
+			extension.context,
+			worker,
+			mockServer.origin,
+			"fullscreen",
+			RECORDING_MS,
+			true,
+		);
+		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		});
+		expect(stopResponse).toMatchObject({ ok: true });
+		await expect
+			.poll(async () => {
+				const response = await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "get-recording-status",
+				});
+				return response.ok ? response.status?.phase : response.error;
+			})
+			.toBe("error");
+
+		const uploadPage = await extension.context.newPage();
+		await uploadPage.goto(
+			`chrome-extension://${getExtensionId(worker)}/uploading.html?videoId=${mockServer.state.videoId}`,
+		);
+		await expect(
+			uploadPage.getByRole("button", { name: "Download microphone" }),
+		).toBeVisible();
+		const micDownload = uploadPage.waitForEvent("download");
+		await uploadPage
+			.getByRole("button", { name: "Download microphone" })
+			.click();
+		expect((await micDownload).suggestedFilename()).toContain("-mic.webm");
+		const screenDownload = uploadPage.waitForEvent("download");
+		await uploadPage.getByRole("button", { name: "Download screen" }).click();
+		expect((await screenDownload).suggestedFilename()).toContain(
+			"-screen.webm",
+		);
+
+		mockServer.state.failAudioCompletion = false;
+		const retryResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "retry-upload",
+			videoId: mockServer.state.videoId,
+		});
+		expect(retryResponse).toMatchObject({ ok: true });
+		await expect
+			.poll(async () => {
+				const response = await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "get-recording-status",
+				});
+				return response.ok ? response.status?.phase : response.error;
+			})
+			.toBe("completed");
+		expect(
+			mockServer.state.completeBodies.filter(
+				(body) =>
+					!!body &&
+					typeof body === "object" &&
+					"subpath" in body &&
+					body.subpath === "mic-upload.webm",
+			),
+		).toHaveLength(2);
+	});
+
+	test("keeps uploaded microphone audio downloadable when screen completion fails", async () => {
+		test.setTimeout(120_000);
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		mockServer.state.failScreenCompletion = true;
+		const worker = await getServiceWorker(extension.context);
+		const { messengerPage } = await startRecording(
+			extension.context,
+			worker,
+			mockServer.origin,
+			"fullscreen",
+			RECORDING_MS,
+			true,
+		);
+		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		});
+		expect(stopResponse).toMatchObject({ ok: true });
+		await expect
+			.poll(async () => {
+				const response = await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "get-recording-status",
+				});
+				return response.ok ? response.status?.phase : response.error;
+			})
+			.toBe("error");
+		expect(mockServer.state.completeBodies).toContainEqual(
+			expect.objectContaining({ subpath: "mic-upload.webm" }),
+		);
+		const uploadPage = await extension.context.newPage();
+		await uploadPage.goto(
+			`chrome-extension://${getExtensionId(worker)}/uploading.html?videoId=${mockServer.state.videoId}`,
+		);
+		const downloadButton = uploadPage.getByRole("button", {
+			name: "Download microphone",
+		});
+		await expect(downloadButton).toBeVisible();
+		const micDownload = uploadPage.waitForEvent("download");
+		await downloadButton.click();
+		expect((await micDownload).suggestedFilename()).toContain("-mic.webm");
+
+		mockServer.state.failScreenCompletion = false;
+		const retryResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "retry-upload",
+			videoId: mockServer.state.videoId,
+		});
+		expect(retryResponse).toMatchObject({ ok: true });
+		await expect
+			.poll(async () => {
+				const response = await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "get-recording-status",
+				});
+				return response.ok ? response.status?.phase : response.error;
+			})
+			.toBe("completed");
+		expect(
+			mockServer.state.completeBodies.filter(
+				(body) =>
+					!!body &&
+					typeof body === "object" &&
+					"subpath" in body &&
+					body.subpath === "mic-upload.webm",
+			),
+		).toHaveLength(2);
+	});
+
 	test("uploads a camera multipart part during a long recording on a constrained network", async () => {
 		test.setTimeout(180_000);
 		if (!extension || !mockServer)
@@ -1030,7 +1285,7 @@ test.describe("extension recording upload", () => {
 		]);
 	});
 
-	test("recovers both camera and screen spools after the offscreen recorder closes", async () => {
+	test("recovers camera, microphone and screen spools after the offscreen recorder closes", async () => {
 		if (!extension || !mockServer)
 			throw new Error("Test harness did not start");
 		const worker = await getServiceWorker(extension.context);
@@ -1038,8 +1293,12 @@ test.describe("extension recording upload", () => {
 			extension.context,
 			worker,
 			mockServer.origin,
+			"fullscreen",
+			RECORDING_MS,
+			true,
 		);
 		const persistedCameraOffsetMs = await readLiveCameraOffset(worker);
+		const persistedAudioOffsetMs = await readLiveMicrophoneOffset(worker);
 		await worker.evaluate(() => chrome.offscreen.closeDocument());
 
 		const refreshResponse = await sendServiceWorkerMessage(messengerPage, {
@@ -1091,13 +1350,18 @@ test.describe("extension recording upload", () => {
 		expect((await cameraDownload).suggestedFilename()).toContain(
 			"-camera.webm",
 		);
+		const micDownload = optionsPage.waitForEvent("download");
+		await optionsPage
+			.getByRole("button", { name: "Download microphone" })
+			.click();
+		expect((await micDownload).suggestedFilename()).toContain("-mic.webm");
 		expect(
 			await optionsPage.evaluate(
 				() =>
 					(globalThis as typeof globalThis & { capE2eChunkReads?: number })
 						.capE2eChunkReads ?? 0,
 			),
-		).toBeGreaterThanOrEqual(2);
+		).toBeGreaterThanOrEqual(3);
 
 		const retryResponse = await sendServiceWorkerMessage(messengerPage, {
 			target: "service-worker",
@@ -1120,11 +1384,18 @@ test.describe("extension recording upload", () => {
 					subpath: "camera-upload.webm",
 					cameraOffsetMs: persistedCameraOffsetMs,
 				}),
+				expect.objectContaining({
+					subpath: "mic-upload.webm",
+					audioOffsetMs: persistedAudioOffsetMs,
+				}),
 				expect.objectContaining({ subpath: "raw-upload.webm" }),
 			]),
 		);
 		expect(
 			mockServer.state.uploadBytesBySubpath["camera-upload.webm"],
+		).toBeGreaterThan(0);
+		expect(
+			mockServer.state.uploadBytesBySubpath["mic-upload.webm"],
 		).toBeGreaterThan(0);
 		expect(
 			mockServer.state.uploadBytesBySubpath["raw-upload.webm"],

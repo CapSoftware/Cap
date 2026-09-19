@@ -153,6 +153,7 @@ export const WebRecorderDialog = () => {
 		chunkUploads,
 		errorDownload,
 		cameraErrorDownload,
+		audioErrorDownloads,
 		completedShareUrl,
 		recoveredDownloads,
 		isSettingUp,
@@ -459,6 +460,7 @@ export const WebRecorderDialog = () => {
 					chunkUploads={chunkUploads}
 					errorDownload={errorDownload}
 					cameraErrorDownload={cameraErrorDownload}
+					audioErrorDownloads={audioErrorDownloads}
 					onStop={handleStopClick}
 					onPause={pauseRecording}
 					onResume={resumeRecording}

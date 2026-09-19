@@ -35,14 +35,24 @@ function newEditorSessionId() {
 	return `${workerId}.${randomUUID()}`;
 }
 
-type Source = EditorMediaSource & { fps?: number };
+type VideoSource = EditorMediaSource & {
+	contentType: "video/webm" | "video/mp4";
+	fps?: number;
+};
+
+type AudioSource = EditorMediaSource & {
+	contentType: "audio/webm" | "audio/mp4";
+	offsetMs: number;
+};
 
 export type EditorSessionInput = {
 	videoId: string;
 	title: string;
 	captionsEnabled: boolean;
-	display: Source;
-	camera?: Source & { offsetMs: number };
+	display: VideoSource;
+	camera?: VideoSource & { offsetMs: number };
+	mic?: AudioSource;
+	systemAudio?: AudioSource;
 	projectConfig?: Record<string, unknown>;
 	legacyEditSpec?: LegacyEditorEditSpec;
 	audioAssets?: EditorAudioAsset[];
@@ -111,15 +121,24 @@ export async function createEditorSession(
 	}
 	starting++;
 	try {
-		const [displayResult, cameraResult] = await Promise.allSettled([
-			downloadEditorMedia(input.display, abortSignal),
-			input.camera
-				? downloadEditorMedia(input.camera, abortSignal)
-				: Promise.resolve(null),
-		]);
+		const [displayResult, cameraResult, micResult, systemAudioResult] =
+			await Promise.allSettled([
+				downloadEditorMedia(input.display, abortSignal),
+				input.camera
+					? downloadEditorMedia(input.camera, abortSignal)
+					: Promise.resolve(null),
+				input.mic
+					? downloadEditorMedia(input.mic, abortSignal)
+					: Promise.resolve(null),
+				input.systemAudio
+					? downloadEditorMedia(input.systemAudio, abortSignal)
+					: Promise.resolve(null),
+			]);
 		if (
 			displayResult.status === "rejected" ||
-			cameraResult.status === "rejected"
+			cameraResult.status === "rejected" ||
+			micResult.status === "rejected" ||
+			systemAudioResult.status === "rejected"
 		) {
 			await Promise.all([
 				displayResult.status === "fulfilled"
@@ -128,15 +147,27 @@ export async function createEditorSession(
 				cameraResult.status === "fulfilled" && cameraResult.value
 					? cameraResult.value.cleanup()
 					: Promise.resolve(),
+				micResult.status === "fulfilled" && micResult.value
+					? micResult.value.cleanup()
+					: Promise.resolve(),
+				systemAudioResult.status === "fulfilled" && systemAudioResult.value
+					? systemAudioResult.value.cleanup()
+					: Promise.resolve(),
 			]);
 			throw displayResult.status === "rejected"
 				? displayResult.reason
 				: cameraResult.status === "rejected"
 					? cameraResult.reason
-					: new Error("Editor source unavailable");
+					: micResult.status === "rejected"
+						? micResult.reason
+						: systemAudioResult.status === "rejected"
+							? systemAudioResult.reason
+							: new Error("Editor source unavailable");
 		}
 		const display = displayResult.value;
 		const camera = cameraResult.value;
+		const mic = micResult.value;
+		const systemAudio = systemAudioResult.value;
 		let project: Awaited<ReturnType<typeof prepareNativeEditorProject>>;
 		try {
 			const [displayMedia, cameraFps] = await Promise.all([
@@ -175,7 +206,27 @@ export async function createEditorSession(
 							},
 						}
 					: {}),
-				mixedAudioInDisplay: displayMedia.hasAudio,
+				...(mic && input.mic
+					? {
+							mic: {
+								path: mic.path,
+								contentType: input.mic.contentType,
+								size: mic.size,
+								offsetMs: input.mic.offsetMs,
+							},
+						}
+					: {}),
+				...(systemAudio && input.systemAudio
+					? {
+							systemAudio: {
+								path: systemAudio.path,
+								contentType: input.systemAudio.contentType,
+								size: systemAudio.size,
+								offsetMs: input.systemAudio.offsetMs,
+							},
+						}
+					: {}),
+				mixedAudioInDisplay: displayMedia.hasAudio && !mic && !systemAudio,
 				...(input.legacyEditSpec
 					? { legacyEditSpec: input.legacyEditSpec }
 					: {}),
@@ -198,6 +249,8 @@ export async function createEditorSession(
 			await Promise.all([
 				display.cleanup(),
 				camera?.cleanup() ?? Promise.resolve(),
+				mic?.cleanup() ?? Promise.resolve(),
+				systemAudio?.cleanup() ?? Promise.resolve(),
 			]);
 		}
 		if (abortSignal?.aborted) {

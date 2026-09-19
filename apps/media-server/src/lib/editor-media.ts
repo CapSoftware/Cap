@@ -11,7 +11,7 @@ const runFile = promisify(execFile);
 
 export type EditorMediaSource = {
 	url: string;
-	contentType: "video/webm" | "video/mp4";
+	contentType: "video/webm" | "video/mp4" | "audio/webm" | "audio/mp4";
 	size: number;
 	objectIdentity?: string | null;
 };
@@ -26,6 +26,9 @@ function validateSource(source: EditorMediaSource) {
 			)) ||
 		url.username ||
 		url.password ||
+		!(["video/webm", "video/mp4", "audio/webm", "audio/mp4"] as const).some(
+			(type) => type === source.contentType,
+		) ||
 		!Number.isSafeInteger(source.size) ||
 		source.size < 1 ||
 		source.size > MAX_SOURCE_BYTES
@@ -47,7 +50,7 @@ export async function downloadEditorMedia(
 	validateSource(source);
 	const root = await mkdtemp(join(tmpdir(), "cap-editor-source-"));
 	await chmod(root, 0o700);
-	const extension = source.contentType === "video/mp4" ? ".mp4" : ".webm";
+	const extension = source.contentType.endsWith("/mp4") ? ".mp4" : ".webm";
 	const path = join(root, `source${extension}`);
 	const cleanup = () => rm(root, { recursive: true, force: true });
 	const handle = await open(path, "wx", 0o600);

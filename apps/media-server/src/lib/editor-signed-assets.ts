@@ -198,7 +198,7 @@ export async function stageSignedEditorAsset<T extends Record<string, unknown>>(
 	}
 	const destination = join(projectPath, asset.path);
 	const previous = pendingStages.get(destination);
-	let release = () => undefined;
+	let release: () => void = () => undefined;
 	const turn = new Promise<void>((resolve) => {
 		release = () => resolve();
 	});

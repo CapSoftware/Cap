@@ -38,6 +38,13 @@ type MediaInput = {
 	fps: number;
 };
 
+type AudioMediaInput = {
+	path: string;
+	contentType: "audio/webm" | "audio/mp4";
+	size: number;
+	offsetMs: number;
+};
+
 export type NativeEditorClipInput = {
 	displayPath: string;
 	duration: number;
@@ -62,6 +69,8 @@ export type NativeEditorInputs = {
 	title: string;
 	display: MediaInput;
 	camera?: MediaInput & { offsetMs: number };
+	mic?: AudioMediaInput;
+	systemAudio?: AudioMediaInput;
 	mixedAudioInDisplay: boolean;
 	projectConfig?: Record<string, unknown>;
 	legacyEditSpec?: LegacyEditorEditSpec;
@@ -106,6 +115,25 @@ async function validateInput(input: MediaInput) {
 	}
 }
 
+async function validateAudioInput(input: AudioMediaInput) {
+	if (
+		!Number.isSafeInteger(input.size) ||
+		input.size <= 0 ||
+		!Number.isSafeInteger(input.offsetMs) ||
+		Math.abs(input.offsetMs) > 30_000
+	) {
+		throw new Error("Invalid editor audio source");
+	}
+	const extension = input.contentType === "audio/mp4" ? ".mp4" : ".webm";
+	if (extname(input.path).toLowerCase() !== extension) {
+		throw new Error("Editor audio extension does not match its content type");
+	}
+	const metadata = await lstat(input.path);
+	if (!metadata.isFile() || metadata.size !== input.size) {
+		throw new Error("Editor audio file changed before project preparation");
+	}
+}
+
 export async function prepareNativeEditorProject(
 	inputs: NativeEditorInputs,
 	abortSignal?: AbortSignal,
@@ -113,7 +141,15 @@ export async function prepareNativeEditorProject(
 	await Promise.all([
 		validateInput(inputs.display),
 		...(inputs.camera ? [validateInput(inputs.camera)] : []),
+		...(inputs.mic ? [validateAudioInput(inputs.mic)] : []),
+		...(inputs.systemAudio ? [validateAudioInput(inputs.systemAudio)] : []),
 	]);
+	if (
+		inputs.mixedAudioInDisplay &&
+		(inputs.mic !== undefined || inputs.systemAudio !== undefined)
+	) {
+		throw new Error("Mixed display audio cannot be added twice");
+	}
 	if (
 		inputs.camera &&
 		(!Number.isSafeInteger(inputs.camera.offsetMs) ||
@@ -192,8 +228,10 @@ export async function prepareNativeEditorProject(
 				cameraPath: inputs.camera?.path ?? null,
 				cameraFps: inputs.camera?.fps ?? null,
 				cameraOffsetMs: inputs.camera?.offsetMs ?? null,
-				micPath: null,
-				systemAudioPath: null,
+				micPath: inputs.mic?.path ?? null,
+				micOffsetMs: inputs.mic?.offsetMs ?? null,
+				systemAudioPath: inputs.systemAudio?.path ?? null,
+				systemAudioOffsetMs: inputs.systemAudio?.offsetMs ?? null,
 				mixedAudioInDisplay: inputs.mixedAudioInDisplay,
 				initialProjectConfig:
 					inputs.projectConfig && capImports.length === 0

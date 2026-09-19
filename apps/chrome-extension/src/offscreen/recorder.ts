@@ -1,4 +1,5 @@
 import {
+	AudioRecordingSidecar,
 	appendLocalRecordingChunk,
 	type ChunkUploadState,
 	DEFAULT_API_REQUEST_TIMEOUT_MS,
@@ -17,6 +18,7 @@ import {
 	RecordingSpool,
 	recoverRecordingSpoolSession,
 	selectRecordingPipeline,
+	uploadRecoveredAudioSidecar,
 	type VideoId,
 } from "@cap/recorder-core";
 
@@ -94,9 +96,11 @@ type RecordingSound = "start-recording" | "stop-recording";
 type ActiveRecording = {
 	recorder: MediaRecorder;
 	cameraRecorder: MediaRecorder | null;
+	audioSidecars: AudioRecordingSidecar[];
 	stopPromise: Promise<void>;
 	cameraStopPromise: Promise<void> | null;
 	streams: MediaStream[];
+	microphoneStream: MediaStream | null;
 	recordingStream: MediaStream;
 	statusTimer: number | null;
 	spool: RecordingSpool;
@@ -672,6 +676,11 @@ const cleanupActiveRecording = async (recording: ActiveRecording) => {
 	) {
 		recording.cameraRecorder.stop();
 	}
+	await Promise.all(
+		recording.audioSidecars.map((sidecar) =>
+			sidecar.stop().catch(() => undefined),
+		),
+	);
 	for (const stream of recording.streams) {
 		stopTracks(stream);
 	}
@@ -694,11 +703,11 @@ const sweepOrphanedRecordingSpools = async () => {
 		]);
 		const now = Date.now();
 		const knownSessions = new Set(
-			failed.flatMap((entry) =>
-				entry.cameraSessionId
-					? [entry.sessionId, entry.cameraSessionId]
-					: [entry.sessionId],
-			),
+			failed.flatMap((entry) => [
+				entry.sessionId,
+				...(entry.cameraSessionId ? [entry.cameraSessionId] : []),
+				...(entry.audioSources ?? []).map((source) => source.sessionId),
+			]),
 		);
 		const sessionsById = new Map(
 			sessions.map((session) => [session.sessionId, session]),
@@ -712,13 +721,23 @@ const sweepOrphanedRecordingSpools = async () => {
 				return sessionId ? [[sessionId, manifest] as const] : [];
 			}),
 		);
+		const manifestsByAudioSession = new Map(
+			manifests.flatMap((manifest) =>
+				(manifest.audioSources ?? []).map(
+					(source) => [source.sessionId, manifest] as const,
+				),
+			),
+		);
 		const remainingSessions = new Set<string>();
 		let entries = [...failed];
 
 		for (const orphan of sessions) {
 			if (
 				activeRecording?.spool.sessionId === orphan.sessionId ||
-				activeRecording?.cameraSpool?.sessionId === orphan.sessionId
+				activeRecording?.cameraSpool?.sessionId === orphan.sessionId ||
+				activeRecording?.audioSidecars.some(
+					(sidecar) => sidecar.metadata.sessionId === orphan.sessionId,
+				)
 			) {
 				remainingSessions.add(orphan.sessionId);
 				continue;
@@ -748,15 +767,25 @@ const sweepOrphanedRecordingSpools = async () => {
 						entry.sessionId !== orphan.sessionId &&
 						entry.cameraSessionId !== orphan.sessionId,
 				);
+				entries = entries.map((entry) => {
+					const audioSources = (entry.audioSources ?? []).filter(
+						(source) => source.sessionId !== orphan.sessionId,
+					);
+					return audioSources.length === (entry.audioSources ?? []).length
+						? entry
+						: { ...entry, audioSources, audioRetryUnavailable: true };
+				});
 				continue;
 			}
 
 			remainingSessions.add(orphan.sessionId);
 			const cameraOwner = manifestsByCameraSession.get(orphan.sessionId);
+			const audioOwner = manifestsByAudioSession.get(orphan.sessionId);
+			const sourceOwner = cameraOwner ?? audioOwner;
 			if (
-				cameraOwner &&
-				(sessionsById.has(cameraOwner.sessionId) ||
-					knownSessions.has(cameraOwner.sessionId))
+				sourceOwner &&
+				(sessionsById.has(sourceOwner.sessionId) ||
+					knownSessions.has(sourceOwner.sessionId))
 			) {
 				continue;
 			}
@@ -782,9 +811,21 @@ const sweepOrphanedRecordingSpools = async () => {
 								cameraTotalBytes: cameraSession.totalBytes,
 							}
 						: {};
+				const audioSources = (manifest?.audioSources ?? []).flatMap(
+					(source) => {
+						const session = sessionsById.get(source.sessionId);
+						return session?.totalBytes
+							? [{ ...source, recordedBytes: session.totalBytes }]
+							: [];
+					},
+				);
 				entries.push({
 					sessionId: orphan.sessionId,
 					...cameraMetadata,
+					...(audioSources.length > 0 ? { audioSources } : {}),
+					...(audioSources.length !== (manifest?.audioSources ?? []).length
+						? { audioRetryUnavailable: true }
+						: {}),
 					...(manifest?.cameraSessionId && !cameraSession?.totalBytes
 						? { cameraRetryUnavailable: true }
 						: {}),
@@ -806,6 +847,10 @@ const sweepOrphanedRecordingSpools = async () => {
 					knownSessions.add(manifest.cameraSessionId);
 					remainingSessions.add(manifest.cameraSessionId);
 				}
+				for (const source of audioSources) {
+					knownSessions.add(source.sessionId);
+					remainingSessions.add(source.sessionId);
+				}
 			}
 		}
 
@@ -826,10 +871,22 @@ const sweepOrphanedRecordingSpools = async () => {
 					() => undefined,
 				);
 			}
+			for (const source of entry.audioSources ?? []) {
+				survivingSessions.delete(source.sessionId);
+				await deleteRecoveredRecordingSpool(source.sessionId).catch(
+					() => undefined,
+				);
+			}
 		}
 		if (startInProgress && !activeRecording) return;
 		if (activeRecording) {
 			survivingSessions.add(activeRecording.spool.sessionId);
+			if (activeRecording.cameraSpool) {
+				survivingSessions.add(activeRecording.cameraSpool.sessionId);
+			}
+			for (const sidecar of activeRecording.audioSidecars) {
+				survivingSessions.add(sidecar.metadata.sessionId);
+			}
 		}
 		await pruneLiveRecordingManifests(survivingSessions).catch(() => undefined);
 	} catch {
@@ -936,6 +993,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 	let ownedSpool: RecordingSpool | null = null;
 	let ownedCameraSpool: RecordingSpool | null = null;
 	let ownedCameraUploader: InstantRecordingUploader | null = null;
+	const ownedAudioSidecars: AudioRecordingSidecar[] = [];
 	let ownedUploader: InstantRecordingUploader | null = null;
 	let ownedRecording: ActiveRecording | null = null;
 	let countdownPromise: Promise<void> | null = null;
@@ -1147,6 +1205,53 @@ const startRecording = async (request: StartRecordingRequest) => {
 				: null;
 		ownedCameraUploader = cameraUploader;
 		throwIfStartCanceled();
+		if (microphoneStream?.getAudioTracks().length) {
+			ownedAudioSidecars.push(
+				await AudioRecordingSidecar.create({
+					kind: "mic",
+					stream: new MediaStream(microphoneStream.getAudioTracks()),
+					videoId: creation.id,
+					screenSubpath: subpath,
+					api,
+					onFatalError: (error) => {
+						status = {
+							phase: "error",
+							message: error.message,
+							videoId: creation.id,
+						};
+						broadcastStatus();
+						void stopRecording();
+					},
+					onBackupFallback: (error) => {
+						console.warn("Microphone backup moved to memory", error);
+					},
+				}),
+			);
+		}
+		if (mainStream.getAudioTracks().length > 0) {
+			ownedAudioSidecars.push(
+				await AudioRecordingSidecar.create({
+					kind: "systemAudio",
+					stream: new MediaStream(mainStream.getAudioTracks()),
+					videoId: creation.id,
+					screenSubpath: subpath,
+					api,
+					onFatalError: (error) => {
+						status = {
+							phase: "error",
+							message: error.message,
+							videoId: creation.id,
+						};
+						broadcastStatus();
+						void stopRecording();
+					},
+					onBackupFallback: (error) => {
+						console.warn("System audio backup moved to memory", error);
+					},
+				}),
+			);
+		}
+		throwIfStartCanceled();
 
 		const recorder = new MediaRecorder(recordingStream, {
 			mimeType: pipeline.mimeType,
@@ -1171,9 +1276,11 @@ const startRecording = async (request: StartRecordingRequest) => {
 		const recording: ActiveRecording = {
 			recorder,
 			cameraRecorder,
+			audioSidecars: ownedAudioSidecars,
 			stopPromise: Promise.resolve(),
 			cameraStopPromise: null,
 			streams,
+			microphoneStream,
 			recordingStream,
 			statusTimer: null,
 			spool,
@@ -1228,6 +1335,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 		// failed-recording entry (videoId, subpath) instead of download-only.
 		await saveLiveRecordingManifest({
 			sessionId: spool.sessionId,
+			audioSources: ownedAudioSidecars.map((sidecar) => sidecar.metadata),
 			...(cameraSpool
 				? {
 						cameraSessionId: cameraSpool.sessionId,
@@ -1373,9 +1481,10 @@ const startRecording = async (request: StartRecordingRequest) => {
 			durationMs: 0,
 			updatedAt: startedAt,
 		};
-		const saveCameraManifest = () =>
+		const saveSourceManifest = () =>
 			saveLiveRecordingManifest({
 				sessionId: spool.sessionId,
+				audioSources: ownedAudioSidecars.map((sidecar) => sidecar.metadata),
 				cameraSessionId: cameraSpool?.sessionId,
 				cameraMimeType: recording.cameraMimeType ?? undefined,
 				cameraSubpath: recording.cameraSubpath ?? undefined,
@@ -1420,7 +1529,12 @@ const startRecording = async (request: StartRecordingRequest) => {
 			if (cameraUploadApi) {
 				cameraUploadApi.extraBody.cameraOffsetMs = recording.cameraOffsetMs;
 			}
-			await saveCameraManifest().catch(() => undefined);
+		}
+		for (const audioSidecar of ownedAudioSidecars) {
+			audioSidecar.start(screenStartRequestedAt);
+		}
+		if (cameraRecorder || ownedAudioSidecars.length > 0) {
+			await saveSourceManifest().catch(() => undefined);
 		}
 		playRecordingSound("start-recording", request.settings);
 		// The service worker that sent start-recording may have been killed
@@ -1458,6 +1572,11 @@ const startRecording = async (request: StartRecordingRequest) => {
 				ownedRecording.cameraChunkChain,
 			]);
 		}
+		await Promise.all(
+			ownedAudioSidecars.map((sidecar) =>
+				sidecar.cancel().catch(() => undefined),
+			),
+		);
 		// Release only what this attempt acquired. No chunk can have been
 		// captured yet — chunks only flow once recorder.start() succeeds, after
 		// which nothing here throws — so the spool holds no recoverable data.
@@ -1673,9 +1792,25 @@ const rememberFailedRecording = async (
 		await recording.cameraSpool.dispose().catch(() => undefined);
 		cameraSessionId = replacement?.sessionId;
 	}
+	const audioSources = await Promise.all(
+		recording.audioSidecars.map((sidecar) =>
+			sidecar.prepareRetryMetadata().catch(() => null),
+		),
+	);
+	const retryableAudioSources = audioSources.filter(
+		(source) => source !== null,
+	);
+	const audioRetryUnavailable = audioSources.some(
+		(source, index) =>
+			!recording.audioSidecars[index]?.isUploadCompleted && source === null,
+	);
 
 	const saved = await upsertFailedRecording({
 		sessionId,
+		...(retryableAudioSources.length > 0
+			? { audioSources: retryableAudioSources }
+			: {}),
+		...(audioRetryUnavailable ? { audioRetryUnavailable: true } : {}),
 		...(recording.cameraRecorder &&
 		!recording.cameraUploadCompleted &&
 		!(cameraSessionId && recording.cameraRecordedBytes > 0)
@@ -1715,6 +1850,11 @@ const rememberFailedRecording = async (
 		);
 		if (dropped.cameraSessionId) {
 			await deleteRecoveredRecordingSpool(dropped.cameraSessionId).catch(
+				() => undefined,
+			);
+		}
+		for (const source of dropped.audioSources ?? []) {
+			await deleteRecoveredRecordingSpool(source.sessionId).catch(
 				() => undefined,
 			);
 		}
@@ -1765,6 +1905,11 @@ const finalizeRecording = async (recording: ActiveRecording) => {
 		} else {
 			await recording.cameraUploader?.cancel();
 		}
+		for (const audioSidecar of recording.audioSidecars) {
+			await audioSidecar.finalize(
+				Math.max(1, Math.round(recording.durationMs / 1000)),
+			);
+		}
 		await recording.uploader.finalize({
 			finalBlob: finalBlob && finalBlob.size > 0 ? finalBlob : null,
 			durationSeconds: Math.max(1, Math.round(recording.durationMs / 1000)),
@@ -1775,6 +1920,11 @@ const finalizeRecording = async (recording: ActiveRecording) => {
 		});
 		await recording.spool.dispose();
 		await recording.cameraSpool?.dispose();
+		await Promise.all(
+			recording.audioSidecars.map((sidecar) =>
+				sidecar.disposeBackup().catch(() => undefined),
+			),
+		);
 		await removeFailedRecording(recording.spool.sessionId).catch(
 			() => undefined,
 		);
@@ -1880,6 +2030,9 @@ async function stopRecording() {
 	) {
 		recording.cameraRecorder.stop();
 	}
+	for (const audioSidecar of recording.audioSidecars) {
+		void audioSidecar.stop().catch(() => undefined);
+	}
 
 	if (status.phase !== "error") {
 		const snapshot = getCurrentUploadSnapshot();
@@ -1918,6 +2071,9 @@ const pauseRecording = () => {
 	if (recording.cameraRecorder?.state === "recording") {
 		recording.cameraRecorder.pause();
 	}
+	for (const audioSidecar of recording.audioSidecars) {
+		audioSidecar.pause();
+	}
 	if (status.phase === "recording") {
 		status = {
 			...status,
@@ -1938,6 +2094,9 @@ const resumeRecording = () => {
 	recording.recorder.resume();
 	if (recording.cameraRecorder?.state === "paused") {
 		recording.cameraRecorder.resume();
+	}
+	for (const audioSidecar of recording.audioSidecars) {
+		audioSidecar.resume();
 	}
 	recording.lastResumedAt = now;
 	if (status.phase === "paused") {
@@ -1978,6 +2137,11 @@ const runFailedUploadRetry = async (
 	if (failed.cameraRetryUnavailable) {
 		throw new Error(
 			"The separate camera recording is unavailable to retry. Download the screen recording or check your Cap.",
+		);
+	}
+	if (failed.audioRetryUnavailable) {
+		throw new Error(
+			"A separate audio source is unavailable to retry. Download the saved sources or check your Cap.",
 		);
 	}
 
@@ -2057,6 +2221,24 @@ const runFailedUploadRetry = async (
 				fps: failed.cameraFps ?? failed.fps ?? DEFAULT_FPS,
 			});
 		}
+		for (const source of failed.audioSources ?? []) {
+			const audioOrphan = await recoverRecordingSpoolSession(source.sessionId);
+			if (
+				!audioOrphan ||
+				audioOrphan.blob.size !== source.recordedBytes ||
+				audioOrphan.blob.size === 0
+			) {
+				throw new Error(`The separate ${source.kind} audio is unavailable`);
+			}
+			await uploadRecoveredAudioSidecar({
+				videoId: typedVideoId,
+				source,
+				blob: audioOrphan.blob,
+				screenSubpath: subpath,
+				durationSeconds: Math.max(1, Math.round(failed.durationMs / 1000)),
+				api,
+			});
+		}
 		const uploadSession = await initiateMultipartUpload({
 			videoId: typedVideoId,
 			contentType: failed.mimeType,
@@ -2105,6 +2287,11 @@ const runFailedUploadRetry = async (
 		);
 		if (failed.cameraSessionId) {
 			await deleteRecoveredRecordingSpool(failed.cameraSessionId).catch(
+				() => undefined,
+			);
+		}
+		for (const source of failed.audioSources ?? []) {
+			await deleteRecoveredRecordingSpool(source.sessionId).catch(
 				() => undefined,
 			);
 		}
@@ -2274,12 +2461,7 @@ const handleRequest = async (
 	if (message.type === "toggle-microphone-mute") {
 		const recording = activeRecording;
 		if (recording) {
-			for (const stream of recording.streams) {
-				for (const track of stream.getAudioTracks()) {
-					track.enabled = !message.muted;
-				}
-			}
-			for (const track of recording.recordingStream.getAudioTracks()) {
+			for (const track of recording.microphoneStream?.getAudioTracks() ?? []) {
 				track.enabled = !message.muted;
 			}
 		}

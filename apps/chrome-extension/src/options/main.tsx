@@ -16,9 +16,11 @@ import {
 	type FailedRecording,
 	loadAuth,
 	loadFailedRecordings,
+	loadLiveRecordingManifests,
 	loadSettings,
 	loadSharedRecordingState,
 	removeFailedRecording,
+	removeLiveRecordingManifest,
 	saveSettings,
 } from "../shared/storage";
 import type { ExtensionAuth, ExtensionSettings } from "../shared/types";
@@ -52,23 +54,31 @@ const isActiveRecordingPhase = (phase: string | undefined) =>
 // hold bytes, and also surfaces spools stranded by a crash before the
 // offscreen sweep could record them (those have no metadata yet).
 const loadRecoveredRecordings = async (): Promise<FailedRecording[]> => {
-	const [failed, spools, recordingState] = await Promise.all([
+	const [failed, spools, manifests, recordingState] = await Promise.all([
 		loadFailedRecordings(),
 		listRecordingSpoolSessions(),
+		loadLiveRecordingManifests(),
 		loadSharedRecordingState().catch(() => null),
 	]);
 	const spoolSessions = new Set(
 		spools
-			.filter((spool) => spool.chunkCount > 0)
+			.filter((spool) => spool.totalBytes > 0)
 			.map((spool) => spool.sessionId),
 	);
 	const knownSessions = new Set(
-		failed.flatMap((entry) =>
-			entry.cameraSessionId
-				? [entry.sessionId, entry.cameraSessionId]
-				: [entry.sessionId],
-		),
+		failed.flatMap((entry) => [
+			entry.sessionId,
+			...(entry.cameraSessionId ? [entry.cameraSessionId] : []),
+			...(entry.audioSources ?? []).map((source) => source.sessionId),
+		]),
 	);
+	for (const manifest of manifests) {
+		if (!spoolSessions.has(manifest.sessionId)) continue;
+		if (manifest.cameraSessionId) knownSessions.add(manifest.cameraSessionId);
+		for (const source of manifest.audioSources ?? []) {
+			knownSessions.add(source.sessionId);
+		}
+	}
 	const entries = failed.filter((entry) => spoolSessions.has(entry.sessionId));
 
 	// Skip unknown spools while a recording is live anywhere: an in-flight
@@ -77,7 +87,7 @@ const loadRecoveredRecordings = async (): Promise<FailedRecording[]> => {
 		const now = Date.now();
 		for (const spool of spools) {
 			if (knownSessions.has(spool.sessionId)) continue;
-			if (spool.totalBytes <= 0 || spool.chunkCount === 0) continue;
+			if (spool.totalBytes <= 0) continue;
 			if (now - spool.updatedAt < SPOOL_MIN_IDLE_MS) continue;
 			entries.push({
 				sessionId: spool.sessionId,
@@ -150,11 +160,29 @@ function RecoveredRecordingsSection() {
 		}
 	};
 
-	const download = (entry: FailedRecording, camera = false) =>
+	const download = (
+		entry: FailedRecording,
+		kind: "screen" | "camera" | "mic" | "systemAudio",
+	) =>
 		runAction(entry.sessionId, async () => {
-			const sessionId = camera ? entry.cameraSessionId : entry.sessionId;
-			if (!sessionId) throw new Error("The camera recording is unavailable.");
-			const spool = await recoverRecordingSpoolSession(sessionId);
+			const audioSource = entry.audioSources?.find(
+				(source) => source.kind === kind,
+			);
+			const sessionId =
+				kind === "screen"
+					? entry.sessionId
+					: kind === "camera"
+						? entry.cameraSessionId
+						: audioSource?.sessionId;
+			const mimeType =
+				kind === "screen"
+					? entry.mimeType
+					: kind === "camera"
+						? entry.cameraMimeType
+						: audioSource?.mimeType;
+			const spool = sessionId
+				? await recoverRecordingSpoolSession(sessionId)
+				: null;
 			if (!spool || spool.blob.size === 0) {
 				refresh();
 				throw new Error("The recorded data is no longer available.");
@@ -165,13 +193,18 @@ function RecoveredRecordingsSection() {
 			const recordingName =
 				entry.videoId ??
 				new Date(entry.createdAt).toISOString().replace(/[:.]/g, "-");
+			const separateSources =
+				!!entry.cameraSessionId ||
+				entry.cameraRetryUnavailable === true ||
+				(entry.audioSources?.length ?? 0) > 0 ||
+				entry.audioRetryUnavailable === true;
 			const label =
-				entry.cameraSessionId || entry.cameraRetryUnavailable
-					? camera
-						? "-camera"
-						: "-screen"
-					: "";
-			anchor.download = `cap-recording-${recordingName}${label}.${fileExtensionForMimeType(spool.mimeType)}`;
+				kind === "screen"
+					? separateSources
+						? "-screen"
+						: ""
+					: `-${kind === "systemAudio" ? "system-audio" : kind}`;
+			anchor.download = `cap-recording-${recordingName}${label}.${fileExtensionForMimeType(mimeType ?? spool.mimeType)}`;
 			anchor.click();
 			window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 			return null;
@@ -179,11 +212,15 @@ function RecoveredRecordingsSection() {
 
 	const remove = (entry: FailedRecording) =>
 		runAction(entry.sessionId, async () => {
-			await deleteRecoveredRecordingSpool(entry.sessionId);
-			if (entry.cameraSessionId) {
-				await deleteRecoveredRecordingSpool(entry.cameraSessionId);
-			}
+			await Promise.all(
+				[
+					entry.sessionId,
+					...(entry.cameraSessionId ? [entry.cameraSessionId] : []),
+					...(entry.audioSources ?? []).map((source) => source.sessionId),
+				].map((sessionId) => deleteRecoveredRecordingSpool(sessionId)),
+			);
 			await removeFailedRecording(entry.sessionId).catch(() => undefined);
+			await removeLiveRecordingManifest(entry.sessionId).catch(() => undefined);
 			refresh();
 			return null;
 		});
@@ -222,8 +259,8 @@ function RecoveredRecordingsSection() {
 		<section className="card card-3">
 			<h2>Recovered recordings</h2>
 			<p className="recovery-lede">
-				These recordings never finished uploading. Download the saved clips or
-				retry when every required clip is available.
+				These recordings never finished uploading. Their captured data is still
+				on this device, so you can download it or retry the upload.
 			</p>
 			<ul className="recovery-list">
 				{entries.map((entry) => (
@@ -238,44 +275,59 @@ function RecoveredRecordingsSection() {
 									? ` · ${formatRecordedDuration(entry.durationMs)}`
 									: ""}
 								{entry.videoId ? "" : " · interrupted before upload"}
-								{entry.cameraRetryUnavailable
-									? " · camera unavailable to retry"
-									: ""}
 							</span>
 						</div>
 						<div className="recovery-actions">
-							{entry.videoId && !entry.cameraRetryUnavailable && (
-								<button
-									type="button"
-									className="cta small"
-									disabled={busySession !== null}
-									onClick={() => retry(entry)}
-								>
-									{retryingSession === entry.sessionId
-										? "Uploading…"
-										: "Retry upload"}
-								</button>
+							{entry.videoId &&
+								!entry.cameraRetryUnavailable &&
+								!entry.audioRetryUnavailable && (
+									<button
+										type="button"
+										className="cta small"
+										disabled={busySession !== null}
+										onClick={() => retry(entry)}
+									>
+										{retryingSession === entry.sessionId
+											? "Uploading…"
+											: "Retry upload"}
+									</button>
+								)}
+							{(entry.cameraRetryUnavailable ||
+								entry.audioRetryUnavailable) && (
+								<span className="recovery-detail">
+									A separate source is missing. Download available sources.
+								</span>
 							)}
 							<button
 								type="button"
 								className="cta small ghost"
 								disabled={busySession !== null}
-								onClick={() => void download(entry)}
+								onClick={() => void download(entry, "screen")}
 							>
-								{entry.cameraSessionId || entry.cameraRetryUnavailable
-									? "Download screen"
-									: "Download"}
+								Download screen
 							</button>
-							{entry.cameraSessionId && (
+							{entry.cameraSessionId && !entry.cameraRetryUnavailable && (
 								<button
 									type="button"
 									className="cta small ghost"
 									disabled={busySession !== null}
-									onClick={() => void download(entry, true)}
+									onClick={() => void download(entry, "camera")}
 								>
 									Download camera
 								</button>
 							)}
+							{entry.audioSources?.map((source) => (
+								<button
+									key={source.sessionId}
+									type="button"
+									className="cta small ghost"
+									disabled={busySession !== null}
+									onClick={() => void download(entry, source.kind)}
+								>
+									Download{" "}
+									{source.kind === "mic" ? "microphone" : "system audio"}
+								</button>
+							))}
 							<button
 								type="button"
 								className="cta small ghost"

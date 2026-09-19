@@ -97,6 +97,20 @@ export interface VideoMetadata {
 			objectIdentity: string | null;
 			offsetMs: number;
 		};
+		mic?: {
+			key: string;
+			contentType: "audio/webm" | "audio/mp4";
+			size: number;
+			objectIdentity: string | null;
+			offsetMs: number;
+		};
+		systemAudio?: {
+			key: string;
+			contentType: "audio/webm" | "audio/mp4";
+			size: number;
+			objectIdentity: string | null;
+			offsetMs: number;
+		};
 	};
 	editProcessing?: {
 		token: string;

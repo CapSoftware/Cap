@@ -165,6 +165,33 @@ function validSource(
 	);
 }
 
+function validAudioSource(
+	source: {
+		key: string;
+		size: number;
+		contentType: string;
+		offsetMs: number;
+	},
+	video: DbVideo,
+	kind: "mic" | "system-audio",
+) {
+	const extension =
+		source.contentType === "audio/webm"
+			? "webm"
+			: source.contentType === "audio/mp4"
+				? "mp4"
+				: null;
+	return (
+		extension !== null &&
+		source.key === `${video.ownerId}/${video.id}/${kind}-upload.${extension}` &&
+		Number.isSafeInteger(source.size) &&
+		source.size > 0 &&
+		source.size <= MAX_SOURCE_BYTES &&
+		Number.isSafeInteger(source.offsetMs) &&
+		Math.abs(source.offsetMs) <= 30_000
+	);
+}
+
 function validSavedAsset(asset: unknown, video: DbVideo) {
 	if (typeof asset !== "object" || asset === null) return false;
 	if (!("path" in asset) || typeof asset.path !== "string") return false;
@@ -250,6 +277,8 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 				}
 			: sources.display;
 		const cameraSource = legacySource ? undefined : sources.camera;
+		const micSource = legacySource ? undefined : sources.mic;
+		const systemAudioSource = legacySource ? undefined : sources.systemAudio;
 		if (
 			(!legacySource && sources.version !== 1) ||
 			!displaySource ||
@@ -257,7 +286,10 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 			(cameraSource &&
 				(!validSource(cameraSource, video) ||
 					!Number.isSafeInteger(cameraSource.offsetMs) ||
-					Math.abs(cameraSource.offsetMs) > 30_000))
+					Math.abs(cameraSource.offsetMs) > 30_000)) ||
+			(micSource && !validAudioSource(micSource, video, "mic")) ||
+			(systemAudioSource &&
+				!validAudioSource(systemAudioSource, video, "system-audio"))
 		) {
 			return yield* new HttpApiError.NotFound();
 		}
@@ -338,14 +370,21 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 				Effect.fail(new HttpApiError.ServiceUnavailable()),
 			),
 		);
-		const [displayHead, cameraHead] = yield* Effect.all([
-			storage.headObject(displaySource.key),
-			...(cameraSource ? [storage.headObject(cameraSource.key)] : []),
-		]).pipe(
-			Effect.catchTag("StorageError", () =>
-				Effect.fail(new HttpApiError.ServiceUnavailable()),
-			),
-		);
+		const [displayHead, cameraHead, micHead, systemAudioHead] =
+			yield* Effect.all([
+				storage.headObject(displaySource.key),
+				cameraSource
+					? storage.headObject(cameraSource.key)
+					: Effect.succeed(null),
+				micSource ? storage.headObject(micSource.key) : Effect.succeed(null),
+				systemAudioSource
+					? storage.headObject(systemAudioSource.key)
+					: Effect.succeed(null),
+			]).pipe(
+				Effect.catchTag("StorageError", () =>
+					Effect.fail(new HttpApiError.ServiceUnavailable()),
+				),
+			);
 		const displayIdentity = getRecordingObjectIdentity(
 			displayHead,
 			displaySource.objectIdentity ?? undefined,
@@ -355,6 +394,20 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 				? getRecordingObjectIdentity(
 						cameraHead,
 						cameraSource.objectIdentity ?? undefined,
+					)
+				: null;
+		const micIdentity =
+			micHead && micSource
+				? getRecordingObjectIdentity(
+						micHead,
+						micSource.objectIdentity ?? undefined,
+					)
+				: null;
+		const systemAudioIdentity =
+			systemAudioHead && systemAudioSource
+				? getRecordingObjectIdentity(
+						systemAudioHead,
+						systemAudioSource.objectIdentity ?? undefined,
 					)
 				: null;
 		const displaySize = legacySource
@@ -373,21 +426,39 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 				(cameraHead?.ContentLength !== cameraSource.size ||
 					!cameraIdentity ||
 					(cameraSource.objectIdentity &&
-						cameraIdentity !== cameraSource.objectIdentity)))
+						cameraIdentity !== cameraSource.objectIdentity))) ||
+			(micSource &&
+				(micHead?.ContentLength !== micSource.size ||
+					!micIdentity ||
+					(micSource.objectIdentity &&
+						micIdentity !== micSource.objectIdentity))) ||
+			(systemAudioSource &&
+				(systemAudioHead?.ContentLength !== systemAudioSource.size ||
+					!systemAudioIdentity ||
+					(systemAudioSource.objectIdentity &&
+						systemAudioIdentity !== systemAudioSource.objectIdentity)))
 		) {
 			return yield* new HttpApiError.ServiceUnavailable();
 		}
-		const [displayUrl, cameraUrl] = yield* Effect.all([
+		const [displayUrl, cameraUrl, micUrl, systemAudioUrl] = yield* Effect.all([
 			storage.getInternalSignedObjectUrl(displaySource.key, {
 				expiresIn: SOURCE_URL_TTL_SECONDS,
 			}),
-			...(cameraSource
-				? [
-						storage.getInternalSignedObjectUrl(cameraSource.key, {
-							expiresIn: SOURCE_URL_TTL_SECONDS,
-						}),
-					]
-				: []),
+			cameraSource
+				? storage.getInternalSignedObjectUrl(cameraSource.key, {
+						expiresIn: SOURCE_URL_TTL_SECONDS,
+					})
+				: Effect.succeed(null),
+			micSource
+				? storage.getInternalSignedObjectUrl(micSource.key, {
+						expiresIn: SOURCE_URL_TTL_SECONDS,
+					})
+				: Effect.succeed(null),
+			systemAudioSource
+				? storage.getInternalSignedObjectUrl(systemAudioSource.key, {
+						expiresIn: SOURCE_URL_TTL_SECONDS,
+					})
+				: Effect.succeed(null),
 		]).pipe(
 			Effect.catchTag("StorageError", () =>
 				Effect.fail(new HttpApiError.ServiceUnavailable()),
@@ -526,6 +597,28 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 							fps: cameraSource.fps,
 							objectIdentity: cameraIdentity,
 							offsetMs: cameraSource.offsetMs,
+						},
+					}
+				: {}),
+			...(micSource && micUrl && micIdentity
+				? {
+						mic: {
+							url: micUrl,
+							contentType: micSource.contentType,
+							size: micSource.size,
+							objectIdentity: micIdentity,
+							offsetMs: micSource.offsetMs,
+						},
+					}
+				: {}),
+			...(systemAudioSource && systemAudioUrl && systemAudioIdentity
+				? {
+						systemAudio: {
+							url: systemAudioUrl,
+							contentType: systemAudioSource.contentType,
+							size: systemAudioSource.size,
+							objectIdentity: systemAudioIdentity,
+							offsetMs: systemAudioSource.offsetMs,
 						},
 					}
 				: {}),

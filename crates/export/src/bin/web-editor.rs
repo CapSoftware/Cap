@@ -37,7 +37,9 @@ struct WebEditorSourceManifest {
     camera_fps: Option<u32>,
     camera_offset_ms: Option<i64>,
     mic_path: Option<PathBuf>,
+    mic_offset_ms: Option<i64>,
     system_audio_path: Option<PathBuf>,
+    system_audio_offset_ms: Option<i64>,
     mixed_audio_in_display: bool,
     initial_project_config: Option<ProjectConfiguration>,
     legacy_edit_spec: Option<LegacyEditSpec>,
@@ -119,13 +121,18 @@ fn stage_media(source: &Path, destination: &Path) -> io::Result<()> {
     output.sync_all()
 }
 
-fn stage_audio(source: &Path, segment_dir: &Path, name: &str) -> io::Result<AudioMeta> {
+fn stage_audio(
+    source: &Path,
+    segment_dir: &Path,
+    name: &str,
+    offset_ms: i64,
+) -> io::Result<AudioMeta> {
     let extension = media_extension(source, &["webm", "mp4", "wav", "ogg", "m4a", "mp3"])?;
     let file_name = format!("{name}.{extension}");
     stage_media(source, &segment_dir.join(&file_name))?;
     Ok(AudioMeta {
         path: format!("content/segments/segment-0/{file_name}").into(),
-        start_time: Some(0.0),
+        start_time: Some(offset_ms as f64 / 1000.0),
         device_id: None,
         gap_summary: None,
     })
@@ -150,6 +157,19 @@ fn prepare(project_path: &Path, manifest_path: &Path) -> Result<(), Box<dyn Erro
         .is_some_and(|offset| !(-30_000..=30_000).contains(&offset))
     {
         return Err(invalid_input("Camera offset exceeds the supported range").into());
+    }
+    if manifest.mic_path.is_some() != manifest.mic_offset_ms.is_some()
+        || manifest.system_audio_path.is_some() != manifest.system_audio_offset_ms.is_some()
+    {
+        return Err(invalid_input("Audio source and offset must be paired").into());
+    }
+    if manifest
+        .mic_offset_ms
+        .into_iter()
+        .chain(manifest.system_audio_offset_ms)
+        .any(|offset| !(-30_000..=30_000).contains(&offset))
+    {
+        return Err(invalid_input("Audio offset exceeds the supported range").into());
     }
     if manifest.mixed_audio_in_display
         && (manifest.mic_path.is_some() || manifest.system_audio_path.is_some())
@@ -194,7 +214,14 @@ fn prepare(project_path: &Path, manifest_path: &Path) -> Result<(), Box<dyn Erro
     let mic = manifest
         .mic_path
         .as_ref()
-        .map(|source| stage_audio(source, &segment_dir, "mic"))
+        .map(|source| {
+            stage_audio(
+                source,
+                &segment_dir,
+                "mic",
+                manifest.mic_offset_ms.unwrap_or(0),
+            )
+        })
         .transpose()?;
     let system_audio = if manifest.mixed_audio_in_display {
         Some(AudioMeta {
@@ -207,7 +234,14 @@ fn prepare(project_path: &Path, manifest_path: &Path) -> Result<(), Box<dyn Erro
         manifest
             .system_audio_path
             .as_ref()
-            .map(|source| stage_audio(source, &segment_dir, "system-audio"))
+            .map(|source| {
+                stage_audio(
+                    source,
+                    &segment_dir,
+                    "system-audio",
+                    manifest.system_audio_offset_ms.unwrap_or(0),
+                )
+            })
             .transpose()?
     };
 

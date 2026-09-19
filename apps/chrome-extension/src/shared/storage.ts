@@ -40,6 +40,15 @@ export type MediaAccessState = {
 	updatedAt: number;
 };
 
+export type RecordingAudioSource = {
+	kind: "mic" | "systemAudio";
+	sessionId: string;
+	mimeType: string;
+	subpath: string;
+	offsetMs: number;
+	recordedBytes: number;
+};
+
 // Metadata for a recording whose upload did not complete. The captured bytes
 // stay in the IndexedDB recording spool under sessionId until the upload is
 // retried successfully or the entry is pruned.
@@ -47,6 +56,8 @@ export type FailedRecording = {
 	sessionId: string;
 	cameraSessionId?: string;
 	cameraRetryUnavailable?: boolean;
+	audioSources?: RecordingAudioSource[];
+	audioRetryUnavailable?: boolean;
 	videoId: string | null;
 	shareUrl: string | null;
 	mimeType: string;
@@ -310,6 +321,46 @@ export const saveWebcamPreviewDismissed = (dismissed: boolean) =>
 
 const MAX_FAILED_RECORDINGS = 5;
 
+const isRecordingAudioSource = (
+	value: unknown,
+): value is RecordingAudioSource => {
+	if (!value || typeof value !== "object") return false;
+	const source = value as Partial<RecordingAudioSource>;
+	return (
+		(source.kind === "mic" || source.kind === "systemAudio") &&
+		typeof source.sessionId === "string" &&
+		source.sessionId.length > 0 &&
+		typeof source.mimeType === "string" &&
+		/^audio\/(webm|mp4)(;|$)/.test(source.mimeType) &&
+		typeof source.subpath === "string" &&
+		source.subpath ===
+			`${source.kind === "mic" ? "mic" : "system-audio"}-upload.${source.mimeType.includes("webm") ? "webm" : "mp4"}` &&
+		typeof source.offsetMs === "number" &&
+		Number.isSafeInteger(source.offsetMs) &&
+		Math.abs(source.offsetMs) <= 30_000 &&
+		typeof source.recordedBytes === "number" &&
+		Number.isSafeInteger(source.recordedBytes) &&
+		source.recordedBytes >= 0
+	);
+};
+
+const validAudioSources = (
+	value: unknown,
+	screenSessionId: string,
+	cameraSessionId?: string,
+) =>
+	value === undefined ||
+	(Array.isArray(value) &&
+		value.length <= 2 &&
+		value.every(isRecordingAudioSource) &&
+		new Set(value.map((source) => source.kind)).size === value.length &&
+		new Set(value.map((source) => source.sessionId)).size === value.length &&
+		value.every(
+			(source) =>
+				source.sessionId !== screenSessionId &&
+				source.sessionId !== cameraSessionId,
+		));
+
 const isFailedRecording = (value: unknown): value is FailedRecording => {
 	if (!value || typeof value !== "object") return false;
 	const candidate = value as Partial<FailedRecording>;
@@ -322,6 +373,13 @@ const isFailedRecording = (value: unknown): value is FailedRecording => {
 			typeof candidate.cameraSessionId === "string") &&
 		(candidate.cameraRetryUnavailable === undefined ||
 			typeof candidate.cameraRetryUnavailable === "boolean") &&
+		validAudioSources(
+			candidate.audioSources,
+			candidate.sessionId,
+			candidate.cameraSessionId,
+		) &&
+		(candidate.audioRetryUnavailable === undefined ||
+			typeof candidate.audioRetryUnavailable === "boolean") &&
 		(candidate.cameraMimeType === undefined ||
 			typeof candidate.cameraMimeType === "string") &&
 		(candidate.cameraSubpath === undefined ||
@@ -387,6 +445,7 @@ export const removeFailedRecording = (sessionId: string) =>
 export type LiveRecordingManifest = {
 	sessionId: string;
 	cameraSessionId?: string;
+	audioSources?: RecordingAudioSource[];
 	videoId: string;
 	shareUrl: string;
 	mimeType: string;
@@ -422,6 +481,11 @@ const isLiveRecordingManifest = (
 		typeof candidate.startedAt === "number" &&
 		(candidate.cameraSessionId === undefined ||
 			typeof candidate.cameraSessionId === "string") &&
+		validAudioSources(
+			candidate.audioSources,
+			candidate.sessionId,
+			candidate.cameraSessionId,
+		) &&
 		(candidate.cameraMimeType === undefined ||
 			typeof candidate.cameraMimeType === "string") &&
 		(candidate.cameraSubpath === undefined ||

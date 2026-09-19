@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	getAudioRecorderUploadKind,
 	getMultipartFileKey,
 	getSubpath,
 	isCameraRecorderUpload,
@@ -61,6 +62,25 @@ describe("multipart upload utils", () => {
 		]) {
 			expect(isDisplayRecorderUpload(subpath)).toBe(false);
 			expect(isCameraRecorderUpload(subpath)).toBe(false);
+		}
+	});
+
+	it("accepts only canonical microphone and system-audio sidecar paths", () => {
+		for (const extension of ["webm", "mp4"]) {
+			expect(getAudioRecorderUploadKind(`mic-upload.${extension}`)).toBe("mic");
+			expect(
+				getAudioRecorderUploadKind(`system-audio-upload.${extension}`),
+			).toBe("systemAudio");
+		}
+		for (const subpath of [
+			"../mic-upload.webm",
+			"mic-upload.webm/extra",
+			"mic-upload.webm.bak",
+			"system-audio-upload.wav",
+			"system-audio-upload.webm/extra",
+			"audio-upload.webm",
+		]) {
+			expect(getAudioRecorderUploadKind(subpath)).toBeNull();
 		}
 	});
 

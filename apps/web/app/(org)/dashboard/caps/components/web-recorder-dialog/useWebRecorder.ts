@@ -1,5 +1,6 @@
 "use client";
 
+import { AudioRecordingSidecar } from "@cap/recorder-core";
 import {
 	acquireCameraStream,
 	acquireDisplayStream,
@@ -122,7 +123,7 @@ const getFileExtensionFromMime = (mime?: string | null) => {
 const createRecordingDownloadName = (
 	createdAt: number,
 	mime?: string | null,
-	role?: "screen" | "camera",
+	role?: "screen" | "camera" | "microphone" | "system-audio",
 ) => {
 	const timestamp = new Date(createdAt).toISOString().replace(/[:.]/g, "-");
 	const extension = getFileExtensionFromMime(mime);
@@ -165,6 +166,12 @@ export const useWebRecorder = ({
 		useState<RecordingFailureDownload | null>(null);
 	const [cameraErrorDownload, setCameraErrorDownload] =
 		useState<RecordingFailureDownload | null>(null);
+	const [audioErrorDownloads, setAudioErrorDownloads] = useState<
+		Array<{
+			kind: "mic" | "systemAudio";
+			download: RecordingFailureDownload;
+		}>
+	>([]);
 	const [completedShareUrl, setCompletedShareUrl] = useState<string | null>(
 		null,
 	);
@@ -256,6 +263,7 @@ export const useWebRecorder = ({
 	const instantUploaderRef = useRef<InstantRecordingUploader | null>(null);
 	const cameraUploaderRef = useRef<InstantRecordingUploader | null>(null);
 	const cameraMediaRecorderRef = useRef<MediaRecorder | null>(null);
+	const audioSidecarsRef = useRef<AudioRecordingSidecar[]>([]);
 	const cameraRecorderBytesRef = useRef(0);
 	const cameraRecorderFailedRef = useRef(false);
 	const cameraSpoolRef = useRef<RecordingSpool | null>(null);
@@ -283,6 +291,7 @@ export const useWebRecorder = ({
 	const shareUrlOpenedRef = useRef(false);
 	const errorDownloadUrlRef = useRef<string | null>(null);
 	const cameraErrorDownloadUrlRef = useRef<string | null>(null);
+	const audioErrorDownloadUrlsRef = useRef<string[]>([]);
 	const stopInFlightRef = useRef(false);
 	const recordingSpoolRef = useRef<RecordingSpool | null>(null);
 	const recordingSpoolDegradingRef = useRef(false);
@@ -393,6 +402,39 @@ export const useWebRecorder = ({
 		});
 	}, []);
 
+	const replaceAudioErrorDownloads = useCallback(
+		(sources: Array<{ kind: "mic" | "systemAudio"; blob: Blob | null }>) => {
+			for (const url of audioErrorDownloadUrlsRef.current) {
+				URL.revokeObjectURL(url);
+			}
+			audioErrorDownloadUrlsRef.current = [];
+			if (typeof window === "undefined") {
+				setAudioErrorDownloads([]);
+				return;
+			}
+			const downloads = sources.flatMap(({ kind, blob }) => {
+				if (!blob) return [];
+				const url = URL.createObjectURL(blob);
+				audioErrorDownloadUrlsRef.current.push(url);
+				return [
+					{
+						kind,
+						download: {
+							url,
+							fileName: createRecordingDownloadName(
+								Date.now(),
+								blob.type,
+								kind === "mic" ? "microphone" : "system-audio",
+							),
+						},
+					},
+				];
+			});
+			setAudioErrorDownloads(downloads);
+		},
+		[],
+	);
+
 	const dismissRecoveredDownload = useCallback((id: string) => {
 		toast.dismiss(recoveredToastId(id));
 		const url = recoveredDownloadUrlsRef.current.get(id);
@@ -419,6 +461,10 @@ export const useWebRecorder = ({
 				URL.revokeObjectURL(cameraErrorDownloadUrlRef.current);
 				cameraErrorDownloadUrlRef.current = null;
 			}
+			for (const url of audioErrorDownloadUrlsRef.current) {
+				URL.revokeObjectURL(url);
+			}
+			audioErrorDownloadUrlsRef.current = [];
 			recoveredDownloadUrlsRef.current.forEach((url) => {
 				URL.revokeObjectURL(url);
 			});
@@ -831,6 +877,15 @@ export const useWebRecorder = ({
 	);
 
 	const cleanupRecordingState = useCallback(async () => {
+		const audioSidecars = audioSidecarsRef.current;
+		audioSidecarsRef.current = [];
+		await Promise.all(
+			audioSidecars.map((sidecar) =>
+				sidecar.cancel().catch((error) => {
+					console.error("Failed to cancel audio sidecar", error);
+				}),
+			),
+		);
 		try {
 			await stopCameraRecorder();
 		} catch {
@@ -870,6 +925,7 @@ export const useWebRecorder = ({
 		}
 		cameraUploadApiRef.current = null;
 		cameraUploadSubpathRef.current = null;
+		audioSidecarsRef.current = [];
 		cameraRecorderBytesRef.current = 0;
 		cameraRecorderFailedRef.current = false;
 		cameraSettingsRef.current = undefined;
@@ -880,6 +936,7 @@ export const useWebRecorder = ({
 		setHasAudioTrack(false);
 		replaceErrorDownload(null);
 		replaceCameraErrorDownload(null);
+		replaceAudioErrorDownloads([]);
 		setCompletedShareUrl(null);
 		shareUrlOpenedRef.current = false;
 
@@ -904,6 +961,7 @@ export const useWebRecorder = ({
 		setUploadStatus,
 		replaceErrorDownload,
 		replaceCameraErrorDownload,
+		replaceAudioErrorDownloads,
 	]);
 
 	const resetState = useCallback(async () => {
@@ -993,6 +1051,7 @@ export const useWebRecorder = ({
 
 		replaceErrorDownload(null);
 		replaceCameraErrorDownload(null);
+		replaceAudioErrorDownloads([]);
 		shareUrlOpenedRef.current = false;
 		recordingPairIdRef.current =
 			globalThis.crypto?.randomUUID?.() ??
@@ -1086,7 +1145,7 @@ export const useWebRecorder = ({
 
 			let audioTracks: MediaStreamTrack[] = [];
 			const hasSystemAudio = systemAudioTracks.length > 0;
-			const hasMicAudio = micStream !== null;
+			const hasMicAudio = (micStream?.getAudioTracks().length ?? 0) > 0;
 
 			if (hasSystemAudio && hasMicAudio) {
 				const mixer = await createAudioMixer({ systemAudioTracks, micStream });
@@ -1164,7 +1223,12 @@ export const useWebRecorder = ({
 			instantUploaderRef.current = null;
 			recordingPipelineRef.current = pipeline;
 
-			if (pipeline.mode === "streaming-webm" || cameraPipeline) {
+			if (
+				pipeline.mode === "streaming-webm" ||
+				cameraPipeline ||
+				hasMicAudio ||
+				hasSystemAudio
+			) {
 				const width = dimensionsRef.current.width;
 				const height = dimensionsRef.current.height;
 				const resolution = width && height ? `${width}x${height}` : undefined;
@@ -1241,6 +1305,44 @@ export const useWebRecorder = ({
 							void stopRecordingRef.current?.();
 						},
 					});
+				}
+				if (hasMicAudio && micStream) {
+					audioSidecarsRef.current.push(
+						await AudioRecordingSidecar.create({
+							kind: "mic",
+							stream: new MediaStream(micStream.getAudioTracks()),
+							videoId: creationResult.id,
+							screenSubpath: rawSubpath,
+							onFatalError: () => {
+								void stopRecordingRef.current?.();
+							},
+							onBackupFallback: (error) => {
+								console.warn("Microphone backup moved to memory", error);
+								toast.warning(
+									"Durable microphone backup is unavailable. Recovery will use bounded memory.",
+								);
+							},
+						}),
+					);
+				}
+				if (hasSystemAudio) {
+					audioSidecarsRef.current.push(
+						await AudioRecordingSidecar.create({
+							kind: "systemAudio",
+							stream: new MediaStream(systemAudioTracks),
+							videoId: creationResult.id,
+							screenSubpath: rawSubpath,
+							onFatalError: () => {
+								void stopRecordingRef.current?.();
+							},
+							onBackupFallback: (error) => {
+								console.warn("System audio backup moved to memory", error);
+								toast.warning(
+									"Durable system audio backup is unavailable. Recovery will use bounded memory.",
+								);
+							},
+						}),
+					);
 				}
 			}
 
@@ -1350,6 +1452,9 @@ export const useWebRecorder = ({
 					};
 				}
 			}
+			for (const audioSidecar of audioSidecarsRef.current) {
+				audioSidecar.start(screenStartRequestedAt);
+			}
 			onRecordingStart?.();
 
 			startTimer();
@@ -1370,6 +1475,15 @@ export const useWebRecorder = ({
 				}
 				cameraUploaderRef.current = null;
 			}
+			const audioSidecars = audioSidecarsRef.current;
+			audioSidecarsRef.current = [];
+			await Promise.all(
+				audioSidecars.map((sidecar) =>
+					sidecar.cancel().catch((error) => {
+						console.error("Failed to cancel audio sidecar during setup", error);
+					}),
+				),
+			);
 			await disposeRecordingSpool();
 			if (orphanVideoId) {
 				instantUploaderRef.current = null;
@@ -1400,6 +1514,7 @@ export const useWebRecorder = ({
 		if (!recorder || recorder.state !== "recording") return;
 
 		const cameraRecorder = cameraMediaRecorderRef.current;
+		const audioSidecars = audioSidecarsRef.current;
 		let cameraPaused = false;
 		try {
 			const timestamp = performance.now();
@@ -1407,6 +1522,7 @@ export const useWebRecorder = ({
 				cameraRecorder.pause();
 				cameraPaused = true;
 			}
+			for (const audioSidecar of audioSidecars) audioSidecar.pause();
 			recorder.pause();
 			pauseTimer(timestamp);
 			updatePhase("paused");
@@ -1414,6 +1530,7 @@ export const useWebRecorder = ({
 			if (cameraPaused && cameraRecorder?.state === "paused") {
 				cameraRecorder.resume();
 			}
+			for (const audioSidecar of audioSidecars) audioSidecar.resume();
 			console.error("Failed to pause recording", error);
 			toast.error("Could not pause recording.");
 		}
@@ -1425,6 +1542,7 @@ export const useWebRecorder = ({
 		if (!recorder || recorder.state !== "paused") return;
 
 		const cameraRecorder = cameraMediaRecorderRef.current;
+		const audioSidecars = audioSidecarsRef.current;
 		let screenResumed = false;
 		try {
 			const timestamp = performance.now();
@@ -1433,6 +1551,7 @@ export const useWebRecorder = ({
 			if (cameraRecorder?.state === "paused") {
 				cameraRecorder.resume();
 			}
+			for (const audioSidecar of audioSidecars) audioSidecar.resume();
 			resumeTimer(timestamp);
 			if (isStreamingPipelineActive()) {
 				startInstantChunkInterval();
@@ -1446,6 +1565,7 @@ export const useWebRecorder = ({
 					console.error("Failed to restore screen pause", pauseError);
 				}
 			}
+			for (const audioSidecar of audioSidecars) audioSidecar.pause();
 			console.error("Failed to resume recording", error);
 			toast.error("Could not resume recording.");
 		}
@@ -1469,7 +1589,10 @@ export const useWebRecorder = ({
 		stopInFlightRef.current = true;
 		let createdVideoId: VideoId | null = videoCreationRef.current?.id ?? null;
 		let rawRecordingBlob: Blob | null = null;
+		const audioSidecars = [...audioSidecarsRef.current];
 		const pairedCameraCapture = cameraUploadApiRef.current !== null;
+		const editorSidecarCapture =
+			pairedCameraCapture || audioSidecars.length > 0;
 		let cameraRecordedBytes = 0;
 		const cameraSettings = cameraSettingsRef.current;
 
@@ -1502,8 +1625,17 @@ export const useWebRecorder = ({
 					console.warn("Failed to stop camera recording", cameraError);
 				}
 			}
+			const audioStopResults = await Promise.allSettled(
+				audioSidecars.map((sidecar) => sidecar.stop()),
+			);
 
 			rawRecordingBlob = await stopRecordingInternalWrapper();
+			const failedAudioStop = audioStopResults.find(
+				(result) => result.status === "rejected",
+			);
+			if (failedAudioStop?.status === "rejected") {
+				throw failedAudioStop.reason;
+			}
 			if (pairedCameraCapture) {
 				await cameraSpoolRef.current?.flush();
 				if (cameraSpoolFailedRef.current || cameraRecorderFailedRef.current) {
@@ -1595,8 +1727,12 @@ export const useWebRecorder = ({
 				}
 				cameraUploaderRef.current = null;
 			}
+			for (const audioSidecar of audioSidecars) {
+				await audioSidecar.finalize(durationSeconds);
+			}
+			audioSidecarsRef.current = [];
 
-			if (pairedCameraCapture) {
+			if (editorSidecarCapture) {
 				let uploader = instantUploader;
 				const rawSubpath = `raw-upload.${pipeline.fileExtension}`;
 				if (!uploader) {
@@ -1848,6 +1984,13 @@ export const useWebRecorder = ({
 			pendingInstantVideoIdRef.current = null;
 			await disposeRecordingSpool();
 			await disposeCameraSpool();
+			await Promise.all(
+				audioSidecars.map((sidecar) =>
+					sidecar.disposeBackup().catch((error) => {
+						console.error("Failed to remove uploaded audio backup", error);
+					}),
+				),
+			);
 
 			setUploadStatus(undefined);
 			setCompletedShareUrl(creationResult.shareUrl);
@@ -1866,15 +2009,23 @@ export const useWebRecorder = ({
 			const cameraFailureBlob = pairedCameraCapture
 				? await resolveCameraFailureBlob()
 				: null;
+			const audioFailureSources = await Promise.all(
+				audioSidecars.map(async (sidecar) => ({
+					kind: sidecar.metadata.kind,
+					blob: await sidecar.recoverBlob(),
+				})),
+			);
 			if (err instanceof MultipartCompletionUncertainError) {
 				instantUploaderRef.current = null;
 				cameraUploaderRef.current = null;
+				audioSidecarsRef.current = [];
 				cameraUploadApiRef.current = null;
 				cameraUploadSubpathRef.current = null;
 				recordingPipelineRef.current = null;
 				pendingInstantVideoIdRef.current = null;
 				replaceErrorDownload(failureBlob);
 				replaceCameraErrorDownload(cameraFailureBlob);
+				replaceAudioErrorDownloads(audioFailureSources);
 				retainFailedRecordingSpools();
 				updatePhase("error");
 				toast.error(
@@ -1888,6 +2039,7 @@ export const useWebRecorder = ({
 			updatePhase("error");
 			replaceErrorDownload(failureBlob);
 			replaceCameraErrorDownload(cameraFailureBlob);
+			replaceAudioErrorDownloads(audioFailureSources);
 			if (instantUploaderRef.current) {
 				await instantUploaderRef.current.cancel();
 				instantUploaderRef.current = null;
@@ -1900,6 +2052,14 @@ export const useWebRecorder = ({
 				}
 				cameraUploaderRef.current = null;
 			}
+			await Promise.all(
+				audioSidecars.map((sidecar) =>
+					sidecar.abortUploadRetainSpool().catch((error) => {
+						console.error("Failed to abort audio sidecar upload", error);
+					}),
+				),
+			);
+			audioSidecarsRef.current = [];
 			retainFailedRecordingSpools();
 
 			const idToDelete = createdVideoId ?? videoId;
@@ -1938,6 +2098,7 @@ export const useWebRecorder = ({
 		clearInstantChunkGuard,
 		stopCameraRecorder,
 		replaceCameraErrorDownload,
+		replaceAudioErrorDownloads,
 	]);
 
 	useEffect(() => {
@@ -2036,6 +2197,7 @@ export const useWebRecorder = ({
 		chunkUploads,
 		errorDownload,
 		cameraErrorDownload,
+		audioErrorDownloads,
 		completedShareUrl,
 		recoveredDownloads,
 		isSettingUp,

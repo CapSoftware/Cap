@@ -8,6 +8,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	displayStream: vi.fn(),
 	cameraStream: vi.fn(),
+	micStream: vi.fn(),
 	createVideo: vi.fn(),
 	deleteVideo: vi.fn(),
 	initiateMultipart: vi.fn(),
@@ -21,12 +22,50 @@ const mocks = vi.hoisted(() => ({
 		cancel: ReturnType<typeof vi.fn>;
 	}>,
 	failedScreenUpload: false,
+	sidecars: [] as Array<{
+		kind: "mic" | "systemAudio";
+		start: ReturnType<typeof vi.fn>;
+		pause: ReturnType<typeof vi.fn>;
+		resume: ReturnType<typeof vi.fn>;
+		stop: ReturnType<typeof vi.fn>;
+		finalize: ReturnType<typeof vi.fn>;
+		disposeBackup: ReturnType<typeof vi.fn>;
+		recoverBlob: ReturnType<typeof vi.fn>;
+		abortUploadRetainSpool: ReturnType<typeof vi.fn>;
+	}>,
+}));
+
+vi.mock("@cap/recorder-core", () => ({
+	AudioRecordingSidecar: {
+		async create(options: { kind: "mic" | "systemAudio" }) {
+			let backupAvailable = true;
+			const sidecar = {
+				kind: options.kind,
+				start: vi.fn(),
+				pause: vi.fn(),
+				resume: vi.fn(),
+				stop: vi.fn(async () => 8),
+				finalize: vi.fn(async () => undefined),
+				disposeBackup: vi.fn(async () => {
+					backupAvailable = false;
+				}),
+				recoverBlob: vi.fn(async () =>
+					backupAvailable ? new Blob(["mic body"]) : null,
+				),
+				abortUploadRetainSpool: vi.fn(async () => undefined),
+				cancel: vi.fn(async () => undefined),
+				metadata: { kind: options.kind },
+			};
+			mocks.sidecars.push(sidecar);
+			return sidecar;
+		},
+	},
 }));
 
 vi.mock("@cap/recorder-core/capture-streams", () => ({
 	acquireDisplayStream: mocks.displayStream,
 	acquireCameraStream: mocks.cameraStream,
-	acquireMicStream: vi.fn(),
+	acquireMicStream: mocks.micStream,
 	createAudioMixer: vi.fn(),
 	getCaptureErrorMessage: (error: unknown) => String(error),
 }));
@@ -128,7 +167,9 @@ import { useMediaRecorderSetup } from "@/app/(org)/dashboard/caps/components/web
 import { useWebRecorder } from "@/app/(org)/dashboard/caps/components/web-recorder-dialog/useWebRecorder";
 
 class FakeTrack extends EventTarget {
-	readonly kind = "video";
+	constructor(readonly kind: "video" | "audio" = "video") {
+		super();
+	}
 	readonly readyState = "live";
 	readonly stop = vi.fn();
 	getSettings() {
@@ -142,10 +183,10 @@ class FakeStream {
 		return this.tracks;
 	}
 	getVideoTracks() {
-		return this.tracks;
+		return this.tracks.filter((track) => track.kind === "video");
 	}
 	getAudioTracks() {
-		return [];
+		return this.tracks.filter((track) => track.kind === "audio");
 	}
 }
 
@@ -164,6 +205,14 @@ class FakeRecorder extends EventTarget {
 		FakeRecorder.instances.push(this);
 	}
 	start() {
+		this.state = "recording";
+	}
+	pause() {
+		if (this.state !== "recording") throw new Error("Recorder is not active");
+		this.state = "paused";
+	}
+	resume() {
+		if (this.state !== "paused") throw new Error("Recorder is not paused");
 		this.state = "recording";
 	}
 	stop() {
@@ -187,12 +236,14 @@ let container: HTMLDivElement;
 let latest: ReturnType<typeof useWebRecorder>;
 let displayTrack: FakeTrack;
 let cameraTrack: FakeTrack;
+let micTrack: FakeTrack;
+let enableMic = false;
 
 function Harness() {
 	latest = useWebRecorder({
 		organisationId: "organisation",
-		selectedMicId: null,
-		micEnabled: false,
+		selectedMicId: enableMic ? "mic" : null,
+		micEnabled: enableMic,
 		systemAudioEnabled: false,
 		recordingMode: "fullscreen",
 		selectedCameraId: "camera",
@@ -228,12 +279,16 @@ beforeEach(async () => {
 	});
 	FakeRecorder.instances = [];
 	mocks.uploaders.length = 0;
+	mocks.sidecars.length = 0;
 	mocks.failedScreenUpload = false;
 	mocks.warning.mockClear();
+	enableMic = false;
 	displayTrack = new FakeTrack();
 	cameraTrack = new FakeTrack();
+	micTrack = new FakeTrack("audio");
 	mocks.displayStream.mockResolvedValue(new FakeStream([displayTrack]));
 	mocks.cameraStream.mockResolvedValue(new FakeStream([cameraTrack]));
+	mocks.micStream.mockResolvedValue(new FakeStream([micTrack]));
 	mocks.createVideo.mockResolvedValue(
 		Exit.succeed({
 			id: "video",
@@ -258,6 +313,59 @@ afterEach(async () => {
 	await act(async () => root.unmount());
 	container.remove();
 	vi.unstubAllGlobals();
+});
+
+async function restartWithMicAudio() {
+	await act(async () => latest.stopRecording());
+	await act(async () => root.unmount());
+	mocks.uploaders.length = 0;
+	mocks.sidecars.length = 0;
+	FakeRecorder.instances = [];
+	enableMic = true;
+	root = createRoot(container);
+	await act(async () => root.render(createElement(Harness)));
+	await act(async () => latest.startRecording());
+	await waitFor(() => expect(latest.phase).toBe("recording"));
+	const sidecar = mocks.sidecars[0];
+	if (!sidecar) throw new Error("Microphone sidecar did not start");
+	return sidecar;
+}
+
+test("microphone capture stays paired with screen and camera through stop", async () => {
+	const sidecar = await restartWithMicAudio();
+	await act(async () => latest.pauseRecording());
+	await waitFor(() => expect(latest.phase).toBe("paused"));
+	expect(sidecar.pause).toHaveBeenCalledOnce();
+	await act(async () => latest.resumeRecording());
+	await waitFor(() => expect(latest.phase).toBe("recording"));
+	expect(sidecar.resume).toHaveBeenCalledOnce();
+	await act(async () => latest.stopRecording());
+	await waitFor(() => expect(latest.phase).toBe("completed"));
+	expect(sidecar.kind).toBe("mic");
+	expect(sidecar.start).toHaveBeenCalledOnce();
+	expect(sidecar.stop).toHaveBeenCalledOnce();
+	expect(sidecar.finalize).toHaveBeenCalledOnce();
+	expect(sidecar.disposeBackup).toHaveBeenCalledOnce();
+	expect(
+		FakeRecorder.instances.map(
+			(recorder) => recorder.stopCalled.mock.calls.length,
+		),
+	).toEqual([1, 1]);
+	expect(micTrack.stop).toHaveBeenCalled();
+});
+
+test("failed screen upload offers the separate microphone recording for recovery", async () => {
+	const sidecar = await restartWithMicAudio();
+	mocks.failedScreenUpload = true;
+	await act(async () => latest.stopRecording());
+	await waitFor(() => expect(latest.phase).toBe("error"));
+	expect(latest.audioErrorDownloads.map((source) => source.kind)).toEqual([
+		"mic",
+	]);
+	expect(latest.audioErrorDownloads[0]?.download).toBeDefined();
+	expect(sidecar.recoverBlob).toHaveBeenCalled();
+	expect(sidecar.disposeBackup).not.toHaveBeenCalled();
+	expect(sidecar.abortUploadRetainSpool).toHaveBeenCalledOnce();
 });
 
 async function overflowCameraBackup() {
