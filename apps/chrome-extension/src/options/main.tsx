@@ -1,6 +1,7 @@
 import {
 	deleteRecoveredRecordingSpool,
-	recoverOrphanedRecordingSpools,
+	listRecordingSpoolSessions,
+	recoverRecordingSpoolSession,
 } from "@cap/recorder-core";
 import { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -53,11 +54,21 @@ const isActiveRecordingPhase = (phase: string | undefined) =>
 const loadRecoveredRecordings = async (): Promise<FailedRecording[]> => {
 	const [failed, spools, recordingState] = await Promise.all([
 		loadFailedRecordings(),
-		recoverOrphanedRecordingSpools(),
+		listRecordingSpoolSessions(),
 		loadSharedRecordingState().catch(() => null),
 	]);
-	const spoolSessions = new Set(spools.map((spool) => spool.sessionId));
-	const knownSessions = new Set(failed.map((entry) => entry.sessionId));
+	const spoolSessions = new Set(
+		spools
+			.filter((spool) => spool.chunkCount > 0)
+			.map((spool) => spool.sessionId),
+	);
+	const knownSessions = new Set(
+		failed.flatMap((entry) =>
+			entry.cameraSessionId
+				? [entry.sessionId, entry.cameraSessionId]
+				: [entry.sessionId],
+		),
+	);
 	const entries = failed.filter((entry) => spoolSessions.has(entry.sessionId));
 
 	// Skip unknown spools while a recording is live anywhere: an in-flight
@@ -66,7 +77,7 @@ const loadRecoveredRecordings = async (): Promise<FailedRecording[]> => {
 		const now = Date.now();
 		for (const spool of spools) {
 			if (knownSessions.has(spool.sessionId)) continue;
-			if (spool.totalBytes <= 0) continue;
+			if (spool.totalBytes <= 0 || spool.chunkCount === 0) continue;
 			if (now - spool.updatedAt < SPOOL_MIN_IDLE_MS) continue;
 			entries.push({
 				sessionId: spool.sessionId,
@@ -139,12 +150,11 @@ function RecoveredRecordingsSection() {
 		}
 	};
 
-	const download = (entry: FailedRecording) =>
+	const download = (entry: FailedRecording, camera = false) =>
 		runAction(entry.sessionId, async () => {
-			const spools = await recoverOrphanedRecordingSpools();
-			const spool = spools.find(
-				(candidate) => candidate.sessionId === entry.sessionId,
-			);
+			const sessionId = camera ? entry.cameraSessionId : entry.sessionId;
+			if (!sessionId) throw new Error("The camera recording is unavailable.");
+			const spool = await recoverRecordingSpoolSession(sessionId);
 			if (!spool || spool.blob.size === 0) {
 				refresh();
 				throw new Error("The recorded data is no longer available.");
@@ -152,10 +162,16 @@ function RecoveredRecordingsSection() {
 			const url = URL.createObjectURL(spool.blob);
 			const anchor = document.createElement("a");
 			anchor.href = url;
-			anchor.download = `cap-recording-${
+			const recordingName =
 				entry.videoId ??
-				new Date(entry.createdAt).toISOString().replace(/[:.]/g, "-")
-			}.${fileExtensionForMimeType(entry.mimeType)}`;
+				new Date(entry.createdAt).toISOString().replace(/[:.]/g, "-");
+			const label =
+				entry.cameraSessionId || entry.cameraRetryUnavailable
+					? camera
+						? "-camera"
+						: "-screen"
+					: "";
+			anchor.download = `cap-recording-${recordingName}${label}.${fileExtensionForMimeType(spool.mimeType)}`;
 			anchor.click();
 			window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 			return null;
@@ -164,6 +180,9 @@ function RecoveredRecordingsSection() {
 	const remove = (entry: FailedRecording) =>
 		runAction(entry.sessionId, async () => {
 			await deleteRecoveredRecordingSpool(entry.sessionId);
+			if (entry.cameraSessionId) {
+				await deleteRecoveredRecordingSpool(entry.cameraSessionId);
+			}
 			await removeFailedRecording(entry.sessionId).catch(() => undefined);
 			refresh();
 			return null;
@@ -203,8 +222,8 @@ function RecoveredRecordingsSection() {
 		<section className="card card-3">
 			<h2>Recovered recordings</h2>
 			<p className="recovery-lede">
-				These recordings never finished uploading. Their captured data is still
-				on this device, so you can download it or retry the upload.
+				These recordings never finished uploading. Download the saved clips or
+				retry when every required clip is available.
 			</p>
 			<ul className="recovery-list">
 				{entries.map((entry) => (
@@ -219,10 +238,13 @@ function RecoveredRecordingsSection() {
 									? ` · ${formatRecordedDuration(entry.durationMs)}`
 									: ""}
 								{entry.videoId ? "" : " · interrupted before upload"}
+								{entry.cameraRetryUnavailable
+									? " · camera unavailable to retry"
+									: ""}
 							</span>
 						</div>
 						<div className="recovery-actions">
-							{entry.videoId && (
+							{entry.videoId && !entry.cameraRetryUnavailable && (
 								<button
 									type="button"
 									className="cta small"
@@ -240,8 +262,20 @@ function RecoveredRecordingsSection() {
 								disabled={busySession !== null}
 								onClick={() => void download(entry)}
 							>
-								Download
+								{entry.cameraSessionId || entry.cameraRetryUnavailable
+									? "Download screen"
+									: "Download"}
 							</button>
+							{entry.cameraSessionId && (
+								<button
+									type="button"
+									className="cta small ghost"
+									disabled={busySession !== null}
+									onClick={() => void download(entry, true)}
+								>
+									Download camera
+								</button>
+							)}
 							<button
 								type="button"
 								className="cta small ghost"

@@ -46,6 +46,7 @@ export type MediaAccessState = {
 export type FailedRecording = {
 	sessionId: string;
 	cameraSessionId?: string;
+	cameraRetryUnavailable?: boolean;
 	videoId: string | null;
 	shareUrl: string | null;
 	mimeType: string;
@@ -319,6 +320,8 @@ const isFailedRecording = (value: unknown): value is FailedRecording => {
 		typeof candidate.createdAt === "number" &&
 		(candidate.cameraSessionId === undefined ||
 			typeof candidate.cameraSessionId === "string") &&
+		(candidate.cameraRetryUnavailable === undefined ||
+			typeof candidate.cameraRetryUnavailable === "boolean") &&
 		(candidate.cameraMimeType === undefined ||
 			typeof candidate.cameraMimeType === "string") &&
 		(candidate.cameraSubpath === undefined ||

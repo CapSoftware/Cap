@@ -38,6 +38,7 @@ type MockState = {
 	uploadHeaders: Record<string, string | string[] | undefined>[];
 	videoId: string;
 	simulateSlowCameraUpload: boolean;
+	failCameraCompletion: boolean;
 	cameraInitiateDelayMs: number;
 };
 
@@ -170,6 +171,7 @@ const createMockCapServer = async () => {
 		uploadHeaders: [],
 		videoId: `e2e-${Date.now()}`,
 		simulateSlowCameraUpload: false,
+		failCameraCompletion: false,
 		cameraInitiateDelayMs: 0,
 	};
 
@@ -308,6 +310,16 @@ const createMockCapServer = async () => {
 			) {
 				const body = await parseJsonBody(request);
 				state.completeBodies.push(body);
+				if (
+					state.failCameraCompletion &&
+					!!body &&
+					typeof body === "object" &&
+					"subpath" in body &&
+					body.subpath === "camera-upload.webm"
+				) {
+					sendJson(response, 400, { error: "Camera completion rejected" });
+					return;
+				}
 				sendJson(response, 200, {
 					success: true,
 					processingStarted:
@@ -686,6 +698,57 @@ const readLiveCameraOffset = async (
 		return offset;
 	});
 
+const readLiveCameraSessionId = async (
+	worker: Awaited<ReturnType<typeof getServiceWorker>>,
+) =>
+	worker.evaluate(async () => {
+		const key = "cap-extension-live-recordings";
+		const items = await new Promise<Record<string, unknown>>((resolve) =>
+			chrome.storage.local.get([key], (result) => resolve(result)),
+		);
+		const manifests = items[key];
+		const sessionId = Array.isArray(manifests)
+			? (manifests[0] as { cameraSessionId?: unknown } | undefined)
+					?.cameraSessionId
+			: null;
+		if (typeof sessionId !== "string") {
+			throw new Error("The live camera spool session is unavailable");
+		}
+		return sessionId;
+	});
+
+const deleteCameraSpoolSession = async (
+	worker: Awaited<ReturnType<typeof getServiceWorker>>,
+	sessionId: string,
+) =>
+	worker.evaluate(async (sessionId) => {
+		const request = indexedDB.open("cap-recording-spool", 1);
+		const database = await new Promise<IDBDatabase>((resolve, reject) => {
+			request.onsuccess = () => resolve(request.result);
+			request.onerror = () => reject(request.error);
+		});
+		const read = database.transaction("chunks", "readonly");
+		const keysRequest = read
+			.objectStore("chunks")
+			.index("by-session")
+			.getAllKeys(IDBKeyRange.only(sessionId));
+		const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+			keysRequest.onsuccess = () => resolve(keysRequest.result);
+			keysRequest.onerror = () => reject(keysRequest.error);
+		});
+		const write = database.transaction(["sessions", "chunks"], "readwrite");
+		const finished = new Promise<void>((resolve, reject) => {
+			write.oncomplete = () => resolve();
+			write.onerror = () => reject(write.error);
+			write.onabort = () => reject(write.error);
+		});
+		write.objectStore("sessions").delete(sessionId);
+		const chunks = write.objectStore("chunks");
+		for (const key of keys) chunks.delete(key);
+		await finished;
+		database.close();
+	}, sessionId);
+
 const readFailedCameraRecovery = async (
 	worker: Awaited<ReturnType<typeof getServiceWorker>>,
 ) =>
@@ -702,6 +765,7 @@ const readFailedCameraRecovery = async (
 					cameraSessionId?: unknown;
 					cameraSubpath?: unknown;
 					cameraOffsetMs?: unknown;
+					cameraRetryUnavailable?: unknown;
 			  }
 			| undefined;
 		return failed
@@ -710,6 +774,7 @@ const readFailedCameraRecovery = async (
 					cameraSessionId: failed.cameraSessionId,
 					cameraSubpath: failed.cameraSubpath,
 					cameraOffsetMs: failed.cameraOffsetMs,
+					cameraRetryUnavailable: failed.cameraRetryUnavailable,
 				}
 			: null;
 	});
@@ -890,6 +955,81 @@ test.describe("extension recording upload", () => {
 		});
 	});
 
+	test("offers separate clip downloads after a camera upload failure", async () => {
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		mockServer.state.failCameraCompletion = true;
+		const worker = await getServiceWorker(extension.context);
+		const { messengerPage } = await startRecording(
+			extension.context,
+			worker,
+			mockServer.origin,
+		);
+		const stopResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "stop-recording",
+		});
+		expect(stopResponse).toMatchObject({ ok: true });
+		await expect
+			.poll(async () => {
+				const response = await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "get-recording-status",
+				});
+				return response.ok ? response.status?.phase : response.error;
+			})
+			.toBe("error");
+		await expect
+			.poll(() => readFailedCameraRecovery(worker))
+			.toMatchObject({ videoId: mockServer.state.videoId });
+		const uploadPage = await extension.context.newPage();
+		await uploadPage.goto(
+			`chrome-extension://${getExtensionId(worker)}/uploading.html?videoId=${mockServer.state.videoId}`,
+		);
+		await expect(
+			uploadPage.getByRole("button", { name: "Try again" }),
+		).toBeVisible();
+		const screenDownload = uploadPage.waitForEvent("download");
+		await uploadPage.getByRole("button", { name: "Download screen" }).click();
+		expect((await screenDownload).suggestedFilename()).toContain(
+			"-screen.webm",
+		);
+		const cameraDownload = uploadPage.waitForEvent("download");
+		await uploadPage.getByRole("button", { name: "Download camera" }).click();
+		expect((await cameraDownload).suggestedFilename()).toContain(
+			"-camera.webm",
+		);
+		await worker.evaluate(async () => {
+			const key = "cap-extension-failed-recordings";
+			const data = await new Promise<Record<string, unknown>>((resolve) =>
+				chrome.storage.local.get([key], (items) => resolve(items)),
+			);
+			const recordings = data[key];
+			if (!Array.isArray(recordings) || !recordings[0]) {
+				throw new Error("The failed paired recording is unavailable");
+			}
+			const failed = { ...(recordings[0] as Record<string, unknown>) };
+			delete failed.cameraSessionId;
+			failed.cameraRetryUnavailable = true;
+			await new Promise<void>((resolve) =>
+				chrome.storage.local.set({ [key]: [failed] }, () => resolve()),
+			);
+		});
+		await uploadPage.reload();
+		await expect(
+			uploadPage.getByRole("button", { name: "Try again" }),
+		).toHaveCount(0);
+		await expect(
+			uploadPage.getByRole("button", { name: "Download camera" }),
+		).toHaveCount(0);
+		await expect(
+			uploadPage.getByRole("button", { name: "Download screen" }),
+		).toBeVisible();
+		expect(mockServer.state.completeBodies).toEqual([
+			expect.objectContaining({ subpath: "camera-upload.webm" }),
+		]);
+	});
+
 	test("recovers both camera and screen spools after the offscreen recorder closes", async () => {
 		if (!extension || !mockServer)
 			throw new Error("Test harness did not start");
@@ -914,6 +1054,50 @@ test.describe("extension recording upload", () => {
 				cameraSubpath: "camera-upload.webm",
 				cameraOffsetMs: persistedCameraOffsetMs,
 			});
+		const optionsPage = await extension.context.newPage();
+		await optionsPage.addInitScript(() => {
+			const target = globalThis as typeof globalThis & {
+				capE2eChunkReads?: number;
+			};
+			target.capE2eChunkReads = 0;
+			const originalGetAll = IDBIndex.prototype.getAll;
+			IDBIndex.prototype.getAll = function (
+				...args: Parameters<typeof originalGetAll>
+			) {
+				if (this.name === "by-session") {
+					target.capE2eChunkReads = (target.capE2eChunkReads ?? 0) + 1;
+				}
+				return originalGetAll.apply(this, args);
+			};
+		});
+		await optionsPage.goto(
+			`chrome-extension://${getExtensionId(worker)}/options.html`,
+		);
+		await expect(optionsPage.locator(".recovery-item")).toHaveCount(1);
+		expect(
+			await optionsPage.evaluate(
+				() =>
+					(globalThis as typeof globalThis & { capE2eChunkReads?: number })
+						.capE2eChunkReads ?? 0,
+			),
+		).toBe(0);
+		const screenDownload = optionsPage.waitForEvent("download");
+		await optionsPage.getByRole("button", { name: "Download screen" }).click();
+		expect((await screenDownload).suggestedFilename()).toContain(
+			"-screen.webm",
+		);
+		const cameraDownload = optionsPage.waitForEvent("download");
+		await optionsPage.getByRole("button", { name: "Download camera" }).click();
+		expect((await cameraDownload).suggestedFilename()).toContain(
+			"-camera.webm",
+		);
+		expect(
+			await optionsPage.evaluate(
+				() =>
+					(globalThis as typeof globalThis & { capE2eChunkReads?: number })
+						.capE2eChunkReads ?? 0,
+			),
+		).toBeGreaterThanOrEqual(2);
 
 		const retryResponse = await sendServiceWorkerMessage(messengerPage, {
 			target: "service-worker",
@@ -947,6 +1131,54 @@ test.describe("extension recording upload", () => {
 		).toBeGreaterThan(0);
 		expect(await readFailedCameraRecovery(worker)).toBeNull();
 		expect(await hasLiveRecordingManifest(worker)).toBe(false);
+	});
+
+	test("never retries a screen-only upload after a crash loses the camera spool", async () => {
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		const worker = await getServiceWorker(extension.context);
+		const { messengerPage } = await startRecording(
+			extension.context,
+			worker,
+			mockServer.origin,
+		);
+		const cameraSessionId = await readLiveCameraSessionId(worker);
+		await worker.evaluate(() => chrome.offscreen.closeDocument());
+		await deleteCameraSpoolSession(worker, cameraSessionId);
+		const refreshResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "get-media-devices",
+		});
+		expect(refreshResponse).toMatchObject({ ok: true });
+		await expect
+			.poll(() => readFailedCameraRecovery(worker))
+			.toMatchObject({
+				videoId: mockServer.state.videoId,
+				cameraRetryUnavailable: true,
+			});
+		const optionsPage = await extension.context.newPage();
+		await optionsPage.goto(
+			`chrome-extension://${getExtensionId(worker)}/options.html`,
+		);
+		await expect(optionsPage.locator(".recovery-item")).toHaveCount(1);
+		await expect(
+			optionsPage.getByRole("button", { name: "Retry upload" }),
+		).toHaveCount(0);
+		await expect(
+			optionsPage.getByRole("button", { name: "Download screen" }),
+		).toBeVisible();
+		const retryResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "retry-upload",
+			videoId: mockServer.state.videoId,
+		});
+		expect(retryResponse).toMatchObject({
+			ok: false,
+			error: expect.stringContaining(
+				"camera recording is unavailable to retry",
+			),
+		});
+		expect(mockServer.state.completeBodies).toHaveLength(0);
 	});
 
 	test("aborts both multipart sessions when Stop cancels camera upload setup", async () => {

@@ -45,6 +45,9 @@ const shareLink = byId<HTMLAnchorElement>("share-link");
 const errorActions = byId<HTMLElement>("error-actions");
 const retryButton = byId<HTMLButtonElement>("retry-upload");
 const downloadButton = byId<HTMLButtonElement>("download-recording");
+const cameraDownloadButton = byId<HTMLButtonElement>(
+	"download-camera-recording",
+);
 
 const urlVideoId = new URL(window.location.href).searchParams.get("videoId");
 
@@ -257,6 +260,12 @@ const syncErrorActions = (status: ErrorStatus, videoId: string | null) => {
 	void findFailedRecording(videoId).then((entry) => {
 		if (mode !== "error" || currentErrorVideoId !== videoId) return;
 		errorActions.hidden = !entry;
+		retryButton.hidden = entry?.cameraRetryUnavailable === true;
+		cameraDownloadButton.hidden = !entry?.cameraSessionId;
+		downloadButton.textContent =
+			entry?.cameraSessionId || entry?.cameraRetryUnavailable
+				? "Download screen"
+				: "Download recording";
 	});
 };
 
@@ -356,6 +365,7 @@ const retryUpload = async () => {
 	retrying = true;
 	retryButton.disabled = true;
 	downloadButton.disabled = true;
+	cameraDownloadButton.disabled = true;
 	// Reset the displayed progress for the new attempt; the live broadcasts
 	// and the session-storage mirror drive the UI from here, exactly as
 	// during the original upload.
@@ -387,26 +397,34 @@ const retryUpload = async () => {
 		retrying = false;
 		retryButton.disabled = false;
 		downloadButton.disabled = false;
+		cameraDownloadButton.disabled = false;
 	}
 };
 
-const downloadRecording = async () => {
+const downloadRecording = async (camera = false) => {
 	const videoId = currentErrorVideoId;
 	if (!videoId) return;
 	downloadButton.disabled = true;
+	cameraDownloadButton.disabled = true;
 	try {
 		const entry = await findFailedRecording(videoId);
 		if (!entry) throw new Error("The recorded data is no longer available.");
-		// The spool lives in the extension-origin IndexedDB, which this page
-		// shares with the offscreen recorder.
-		const orphan = await recoverRecordingSpoolSession(entry.sessionId);
+		const sessionId = camera ? entry.cameraSessionId : entry.sessionId;
+		if (!sessionId) throw new Error("The camera recording is unavailable.");
+		const orphan = await recoverRecordingSpoolSession(sessionId);
 		if (!orphan || orphan.blob.size === 0) {
 			throw new Error("The recorded data is no longer available.");
 		}
 		const url = URL.createObjectURL(orphan.blob);
 		const anchor = document.createElement("a");
 		anchor.href = url;
-		anchor.download = `cap-recording-${videoId}.${fileExtensionForMimeType(entry.mimeType)}`;
+		const label =
+			entry.cameraSessionId || entry.cameraRetryUnavailable
+				? camera
+					? "-camera"
+					: "-screen"
+				: "";
+		anchor.download = `cap-recording-${videoId}${label}.${fileExtensionForMimeType(orphan.mimeType)}`;
 		anchor.click();
 		window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 	} catch (error) {
@@ -415,11 +433,16 @@ const downloadRecording = async () => {
 		activeStateKey = `error:${message}`;
 	} finally {
 		downloadButton.disabled = false;
+		cameraDownloadButton.disabled = false;
 	}
 };
 
 retryButton.addEventListener("click", () => void retryUpload());
 downloadButton.addEventListener("click", () => void downloadRecording());
+cameraDownloadButton.addEventListener(
+	"click",
+	() => void downloadRecording(true),
+);
 
 const pollStatus = async () => {
 	try {

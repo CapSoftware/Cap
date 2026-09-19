@@ -130,6 +130,7 @@ type ActiveRecording = {
 	lastChunkAt: number | null;
 	recordedBytes: number;
 	cameraRecordedBytes: number;
+	cameraUploadCompleted: boolean;
 	finalizePromise: Promise<RecordingStatus> | null;
 	cleanedUp: boolean;
 	// A spool write failure (IndexedDB quota, backpressure) must not end an
@@ -784,6 +785,9 @@ const sweepOrphanedRecordingSpools = async () => {
 				entries.push({
 					sessionId: orphan.sessionId,
 					...cameraMetadata,
+					...(manifest?.cameraSessionId && !cameraSession?.totalBytes
+						? { cameraRetryUnavailable: true }
+						: {}),
 					videoId: manifest?.videoId ?? null,
 					shareUrl: manifest?.shareUrl ?? null,
 					mimeType: orphan.mimeType,
@@ -1203,6 +1207,7 @@ const startRecording = async (request: StartRecordingRequest) => {
 			lastChunkAt: null,
 			recordedBytes: 0,
 			cameraRecordedBytes: 0,
+			cameraUploadCompleted: false,
 			finalizePromise: null,
 			cleanedUp: false,
 			spoolFailed: false,
@@ -1671,6 +1676,11 @@ const rememberFailedRecording = async (
 
 	const saved = await upsertFailedRecording({
 		sessionId,
+		...(recording.cameraRecorder &&
+		!recording.cameraUploadCompleted &&
+		!(cameraSessionId && recording.cameraRecordedBytes > 0)
+			? { cameraRetryUnavailable: true }
+			: {}),
 		...(cameraSessionId && recording.cameraRecordedBytes > 0
 			? {
 					cameraSessionId,
@@ -1728,6 +1738,9 @@ const finalizeRecording = async (recording: ActiveRecording) => {
 		if ((!finalBlob || finalBlob.size === 0) && recording.recordedBytes === 0) {
 			throw new Error("No recording data was captured");
 		}
+		if (recording.cameraRecorder && recording.cameraRecordedBytes === 0) {
+			throw new Error("The separate camera recording captured no data");
+		}
 		if (recording.cameraRecordedBytes > 0) {
 			const cameraUploader = recording.cameraUploader;
 			const cameraSubpath = recording.cameraSubpath;
@@ -1748,6 +1761,7 @@ const finalizeRecording = async (recording: ActiveRecording) => {
 				fps: recording.cameraFps ?? DEFAULT_FPS,
 				subpath: cameraSubpath,
 			});
+			recording.cameraUploadCompleted = true;
 		} else {
 			await recording.cameraUploader?.cancel();
 		}
@@ -1960,6 +1974,11 @@ const runFailedUploadRetry = async (
 	);
 	if (!failed?.videoId) {
 		throw new Error("This recording is no longer available to retry.");
+	}
+	if (failed.cameraRetryUnavailable) {
+		throw new Error(
+			"The separate camera recording is unavailable to retry. Download the screen recording or check your Cap.",
+		);
 	}
 
 	const orphan = await recoverRecordingSpoolSession(failed.sessionId);
