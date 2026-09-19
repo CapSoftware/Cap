@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { stripEditorCaptionContent } from "../../../web/lib/editor-caption-access";
 import type { EditorAudioAsset } from "./editor-assets";
 import { closeEditorCapImports } from "./editor-cap-imports";
-import { closeEditorExports } from "./editor-exports";
+import { closeEditorExports, editorExportActivityAt } from "./editor-exports";
 import type { EditorImageAsset } from "./editor-image-assets";
 import {
 	downloadEditorMedia,
@@ -67,8 +67,12 @@ const sessions = new Map<string, Session>();
 const closingSessions = new Map<string, Promise<boolean>>();
 
 function editorSessionExpired(session: Session, now: number) {
+	const lastActive = Math.max(
+		session.lastActive,
+		editorExportActivityAt(session.id, now) ?? 0,
+	);
 	return (
-		now - session.lastActive > IDLE_TIMEOUT_MS ||
+		now - lastActive > IDLE_TIMEOUT_MS ||
 		(!session.attached && now - session.readyAt > SESSION_ATTACH_TIMEOUT_MS)
 	);
 }

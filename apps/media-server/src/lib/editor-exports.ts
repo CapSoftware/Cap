@@ -77,6 +77,7 @@ type ExportJob = {
 	child: ChildProcessWithoutNullStreams;
 	task: Promise<void>;
 	startedAt: number;
+	finishedAt: number | null;
 };
 
 const jobs = new Map<string, ExportJob>();
@@ -198,6 +199,7 @@ export async function beginEditorExport(
 		child,
 		task: Promise.resolve(),
 		startedAt: Date.now(),
+		finishedAt: null,
 	};
 	jobs.set(id, job);
 	child.stdin.end();
@@ -224,6 +226,7 @@ export async function beginEditorExport(
 			clearTimeout(timer);
 			stdout.close();
 			if (job.status === "canceled") {
+				job.finishedAt = Date.now();
 				resolve();
 				return;
 			}
@@ -231,6 +234,7 @@ export async function beginEditorExport(
 				job.status = "error";
 				job.error = failure?.message || stderr || "Editor export failed";
 				await rm(job.outputPath, { force: true });
+				job.finishedAt = Date.now();
 				resolve();
 				return;
 			}
@@ -259,6 +263,7 @@ export async function beginEditorExport(
 					cause instanceof Error ? cause.message : "Editor export failed";
 				await rm(job.outputPath, { force: true });
 			}
+			job.finishedAt = Date.now();
 			resolve();
 		});
 	});
@@ -281,6 +286,16 @@ export function getEditorExport(sessionId: string, id: string) {
 		mediaMetadata: job.mediaMetadata,
 		startedAt: job.startedAt,
 	};
+}
+
+export function editorExportActivityAt(sessionId: string, now: number) {
+	const job = [...jobs.values()].find(
+		(candidate) => candidate.sessionId === sessionId,
+	);
+	if (!job) return null;
+	return job.status === "running" || job.finishedAt === null
+		? now
+		: job.finishedAt;
 }
 
 export function getEditorExportFile(sessionId: string, id: string) {

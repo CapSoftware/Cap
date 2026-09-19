@@ -10,6 +10,7 @@ import {
 	readCapBundleManifestLength,
 } from "@cap/editor-cap-bundle";
 import app from "../../editor-worker-app";
+import { getEditorExport } from "../../lib/editor-exports";
 import { getEditorSession } from "../../lib/editor-sessions";
 import { editorWallpaperDirectory } from "../../lib/editor-wallpapers";
 import {
@@ -1683,10 +1684,35 @@ test.skipIf(!hasNativeBinaries)(
 			const backgroundExportId = (
 				(await backgroundExport.json()) as { id: string }
 			).id;
-			await waitForExport(backgroundExportId);
-			const laterTime = Date.now() + 3 * 60 * 1000;
-			const laterClock = spyOn(Date, "now").mockReturnValue(laterTime);
+			expect(getEditorExport(sessionId, backgroundExportId)?.status).toBe(
+				"running",
+			);
+			const exportStartedAt = Date.now();
+			const laterClock = spyOn(Date, "now").mockReturnValue(
+				exportStartedAt + 11 * 60 * 1000,
+			);
 			try {
+				const runningAfterIdle = await app.request(
+					`/editor/sessions/${sessionId}/exports/${backgroundExportId}`,
+					{ headers },
+				);
+				expect(runningAfterIdle.status).toBe(200);
+				laterClock.mockReturnValue(exportStartedAt + 12 * 60 * 1000);
+				const exportDeadline = performance.now() + 10_000;
+				let completedExport = false;
+				while (performance.now() < exportDeadline) {
+					const state = getEditorExport(sessionId, backgroundExportId);
+					if (state?.status === "ready") {
+						completedExport = true;
+						break;
+					}
+					if (state?.status === "error") {
+						throw new Error(state.error || "Background editor export failed");
+					}
+					await Bun.sleep(50);
+				}
+				expect(completedExport).toBe(true);
+				laterClock.mockReturnValue(exportStartedAt + 21 * 60 * 1000 + 30_000);
 				const stillAvailable = await app.request(
 					`/editor/sessions/${sessionId}/exports/${backgroundExportId}`,
 					{ headers },
