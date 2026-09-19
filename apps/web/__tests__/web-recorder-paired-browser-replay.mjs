@@ -339,7 +339,7 @@ async function replayPairedCapture(
 				() => window.capRecorderHarness?.phase === "recording",
 			);
 		}
-		await page.waitForTimeout(1700);
+		await page.waitForTimeout(engine.name === "WebKit" ? 5000 : 1700);
 		await page.evaluate(() => window.capRecorderHarness.stopRecording());
 		try {
 			await page.waitForFunction(
