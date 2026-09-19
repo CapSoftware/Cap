@@ -1,6 +1,7 @@
 import {
 	describeRecordingCodecs,
 	openShareUrlInNewTab,
+	selectAudioRecordingPipelineFromSupport,
 	selectRecordingPipelineFromSupport,
 	shouldPreferStreamingUpload,
 } from "@cap/recorder-core/recorder-utils";
@@ -98,6 +99,36 @@ describe("selectRecordingPipelineFromSupport", () => {
 
 	it("returns null when no supported recorder mime type is available", () => {
 		expect(selectRecordingPipelineFromSupport(true, () => false)).toBeNull();
+	});
+});
+
+describe("selectAudioRecordingPipelineFromSupport", () => {
+	it("prefers Opus WebM for a separate audio source", () => {
+		const supported = new Set([
+			"audio/webm;codecs=opus",
+			"audio/mp4;codecs=mp4a.40.2",
+		]);
+		expect(
+			selectAudioRecordingPipelineFromSupport((type) => supported.has(type)),
+		).toEqual({
+			mimeType: "audio/webm;codecs=opus",
+			fileExtension: "webm",
+		});
+	});
+
+	it("uses AAC MP4 when WebM audio is unavailable", () => {
+		expect(
+			selectAudioRecordingPipelineFromSupport(
+				(type) => type === "audio/mp4;codecs=mp4a.40.2",
+			),
+		).toEqual({
+			mimeType: "audio/mp4;codecs=mp4a.40.2",
+			fileExtension: "mp4",
+		});
+	});
+
+	it("reports when no audio-only recorder format is supported", () => {
+		expect(selectAudioRecordingPipelineFromSupport(() => false)).toBeNull();
 	});
 });
 

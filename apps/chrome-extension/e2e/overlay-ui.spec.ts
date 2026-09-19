@@ -202,7 +202,7 @@ const launchExtensionContext = async () => {
 	const userDataDir = await mkdtemp(path.join(tmpdir(), "cap-close-e2e-"));
 	const context = await chromium.launchPersistentContext(userDataDir, {
 		channel: "chromium",
-		headless: true,
+		headless: process.env.CAP_EXTENSION_E2E_HEADED !== "1",
 		args: [
 			`--disable-extensions-except=${extensionPath}`,
 			`--load-extension=${extensionPath}`,
@@ -379,9 +379,9 @@ const getClosedShadowNodeId = async (
 			for (let index = 0; index < attributes.length; index += 2) {
 				if (attributes[index] !== attribute) continue;
 				if (!classToken) return true;
-				return (
-					attributes[index + 1]?.split(/\s+/).includes(classToken) === true
-				);
+				return attribute === "class"
+					? attributes[index + 1]?.split(/\s+/).includes(classToken) === true
+					: attributes[index + 1] === classToken;
 			}
 			return false;
 		})?.nodeId ?? null
@@ -484,7 +484,7 @@ test("idle bootstrap and tab activation never open the camera preview", async ()
 	}
 });
 
-test("dismissing or closing the panel also closes the idle camera preview", async () => {
+test("closing extension UI removes the ready bar and camera preview", async () => {
 	test.setTimeout(120_000);
 	const mockServer = await createMockCapServer();
 	const extension = await launchExtensionContext();
@@ -502,30 +502,63 @@ test("dismissing or closing the panel also closes the idle camera preview", asyn
 		await targetPage.goto(`${mockServer.origin}/capture.html`);
 		await targetPage.bringToFront();
 
-		await sendServiceWorkerMessage(messengerPage, {
+		const openResponse = await sendServiceWorkerMessage(messengerPage, {
 			target: "service-worker",
 			type: "open-recorder-panel",
 		});
-
+		expect(openResponse).toMatchObject({ ok: true });
+		const activeTabUrl = await worker.evaluate(async () => {
+			const tabs = await chrome.tabs.query({
+				active: true,
+				currentWindow: true,
+			});
+			return tabs[0]?.url;
+		});
+		expect(activeTabUrl).toBe(targetPage.url());
 		await expect
-			.poll(() => frameWithUrl(targetPage, "popup.html") !== null, {
-				timeout: 15_000,
-			})
+			.poll(() =>
+				worker.evaluate(async () => {
+					const items = await chrome.storage.session.get(
+						"cap-extension-shared-ui-state",
+					);
+					const state = items["cap-extension-shared-ui-state"] as
+						| { panelOpen?: boolean }
+						| undefined;
+					return state?.panelOpen ?? false;
+				}),
+			)
 			.toBe(true);
+
+		const devtools = await extension.context.newCDPSession(targetPage);
+		await expect
+			.poll(() =>
+				getClosedShadowElementBox(
+					devtools,
+					"class",
+					"cap-extension-control-bar",
+				),
+			)
+			.not.toBeNull();
 		await expect
 			.poll(() => frameWithUrl(targetPage, "camera-preview.html") !== null, {
 				timeout: 15_000,
 			})
 			.toBe(true);
 
-		await targetPage.screenshot({ path: "test-results/close-ui-before.png" });
-		await targetPage.mouse.click(400, 300);
-
+		const closeResponse = await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "close-extension-ui",
+		});
+		expect(closeResponse).toMatchObject({ ok: true });
 		await expect
-			.poll(() => frameWithUrl(targetPage, "popup.html") === null, {
-				timeout: 10_000,
-			})
-			.toBe(true);
+			.poll(() =>
+				getClosedShadowElementBox(
+					devtools,
+					"class",
+					"cap-extension-control-bar",
+				),
+			)
+			.toBeNull();
 		await expect
 			.poll(() => frameWithUrl(targetPage, "camera-preview.html") === null, {
 				timeout: 10_000,
@@ -537,36 +570,52 @@ test("dismissing or closing the panel also closes the idle camera preview", asyn
 			type: "open-recorder-panel",
 		});
 		await expect
-			.poll(() => frameWithUrl(targetPage, "popup.html") !== null, {
-				timeout: 15_000,
-			})
-			.toBe(true);
+			.poll(() =>
+				getClosedShadowElementBox(
+					devtools,
+					"class",
+					"cap-extension-control-bar",
+				),
+			)
+			.not.toBeNull();
 		await expect
 			.poll(() => frameWithUrl(targetPage, "camera-preview.html") !== null, {
 				timeout: 15_000,
 			})
 			.toBe(true);
 
-		const panelFrame = frameWithUrl(targetPage, "popup.html");
-		if (!panelFrame) throw new Error("panel frame missing");
-		await panelFrame
-			.locator('button[aria-label="Close Cap and hide all recorder UI"]')
-			.click();
+		const hideButton = await getClosedShadowElementBox(
+			devtools,
+			"aria-label",
+			"Hide recording bar",
+		);
+		if (!hideButton) throw new Error("Hide recording bar button missing");
+		await targetPage.mouse.click(
+			hideButton.x + hideButton.width / 2,
+			hideButton.y + hideButton.height / 2,
+		);
 
 		await expect
-			.poll(() => frameWithUrl(targetPage, "popup.html") === null, {
-				timeout: 10_000,
-			})
-			.toBe(true);
+			.poll(() =>
+				getClosedShadowElementBox(
+					devtools,
+					"class",
+					"cap-extension-control-bar",
+				),
+			)
+			.toBeNull();
+		expect(frameWithUrl(targetPage, "camera-preview.html")).not.toBeNull();
+		await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "close-extension-ui",
+		});
 		await expect
 			.poll(() => frameWithUrl(targetPage, "camera-preview.html") === null, {
 				timeout: 10_000,
 			})
 			.toBe(true);
 
-		await targetPage.waitForTimeout(2_500);
 		expect(frameWithUrl(targetPage, "camera-preview.html")).toBeNull();
-		await targetPage.screenshot({ path: "test-results/close-ui-after.png" });
 	} finally {
 		await extension.cleanup();
 		await mockServer.close();
@@ -594,13 +643,17 @@ test("an abandoned recording start clears without leaving controls behind", asyn
 			target: "service-worker",
 			type: "open-recorder-panel",
 		});
-		await expect
-			.poll(() => frameWithUrl(targetPage, "popup.html") !== null, {
-				timeout: 15_000,
-			})
-			.toBe(true);
-
 		const devtools = await extension.context.newCDPSession(targetPage);
+		await expect
+			.poll(() =>
+				getClosedShadowElementBox(
+					devtools,
+					"class",
+					"cap-extension-control-bar",
+				),
+			)
+			.not.toBeNull();
+
 		await writeStaleCreatingState(worker);
 		await expect.poll(() => readSessionRecordingPhase(worker)).toBe("creating");
 		await targetPage.waitForTimeout(500);
@@ -608,7 +661,7 @@ test("an abandoned recording start clears without leaving controls behind", asyn
 			await getClosedShadowElementBox(
 				devtools,
 				"class",
-				"cap-extension-recording-rail",
+				"cap-extension-active-recording-container",
 			),
 		).toBeNull();
 
@@ -623,15 +676,19 @@ test("an abandoned recording start clears without leaving controls behind", asyn
 		expect(statusResponse.status?.phase).toBe("idle");
 		await expect.poll(() => readSessionRecordingPhase(worker)).toBe("idle");
 		await expect
-			.poll(() => frameWithUrl(targetPage, "popup.html") === null, {
-				timeout: 10_000,
-			})
-			.toBe(true);
+			.poll(() =>
+				getClosedShadowElementBox(
+					devtools,
+					"class",
+					"cap-extension-control-bar",
+				),
+			)
+			.toBeNull();
 		expect(
 			await getClosedShadowElementBox(
 				devtools,
 				"class",
-				"cap-extension-recording-rail",
+				"cap-extension-active-recording-container",
 			),
 		).toBeNull();
 	} finally {
@@ -640,7 +697,7 @@ test("an abandoned recording start clears without leaving controls behind", asyn
 	}
 });
 
-test("a failed recording start reopens the panel with the error", async () => {
+test("a failed recording start shows the error on the recorded tab", async () => {
 	test.setTimeout(120_000);
 	const mockServer = await createMockCapServer({ failInstantRecordings: true });
 	const extension = await launchExtensionContext();
@@ -676,22 +733,32 @@ test("a failed recording start reopens the panel with the error", async () => {
 		const statusResponse = (await sendServiceWorkerMessage(messengerPage, {
 			target: "service-worker",
 			type: "get-recording-status",
-		})) as { status?: { phase?: string } };
+		})) as { status?: { phase?: string; message?: string } };
 		expect(statusResponse.status?.phase).toBe("error");
 
-		// The panel should reopen in the page to show the failure.
+		const devtools = await extension.context.newCDPSession(targetPage);
 		await expect
-			.poll(() => frameWithUrl(targetPage, "popup.html") !== null, {
-				timeout: 10_000,
-			})
-			.toBe(true);
-		const panelFrame = frameWithUrl(targetPage, "popup.html");
-		if (!panelFrame) throw new Error("panel frame missing");
-		await expect(panelFrame.getByText("Recording failed.")).toBeVisible({
-			timeout: 10_000,
-		});
+			.poll(() =>
+				getClosedShadowElementBox(
+					devtools,
+					"class",
+					"cap-extension-recording-error-toast",
+				),
+			)
+			.not.toBeNull();
+		const toastNodeId = await getClosedShadowNodeId(
+			devtools,
+			"class",
+			"cap-extension-recording-error-toast",
+		);
+		if (!toastNodeId) throw new Error("recording error toast missing");
+		const { outerHTML } = (await devtools.send("DOM.getOuterHTML", {
+			nodeId: toastNodeId,
+		})) as { outerHTML: string };
+		expect(outerHTML).toContain("Recording failed.");
+		expect(outerHTML).toContain(statusResponse.status?.message);
 		await targetPage.screenshot({
-			path: "test-results/start-error-panel.png",
+			path: "test-results/start-error-toast.png",
 		});
 	} finally {
 		await extension.cleanup();
@@ -724,9 +791,7 @@ test("the countdown appears while recording setup is still pending", async () =>
 			type: "start-recording",
 			mode: "fullscreen",
 		});
-		await expect
-			.poll(mockServer.isInstantRecordingRequested, { timeout: 10_000 })
-			.toBe(true);
+		void startPromise.catch(() => undefined);
 
 		const devtools = await extension.context.newCDPSession(targetPage);
 		await expect
@@ -737,8 +802,11 @@ test("the countdown appears while recording setup is still pending", async () =>
 						"class",
 						"cap-extension-countdown",
 					)) !== null,
-				{ timeout: 1_000 },
+				{ timeout: 5_000 },
 			)
+			.toBe(true);
+		await expect
+			.poll(mockServer.isInstantRecordingRequested, { timeout: 10_000 })
 			.toBe(true);
 		await targetPage.screenshot({
 			path: "test-results/countdown-during-setup.png",
@@ -869,24 +937,6 @@ test("recording controls stay stable and the camera resizes directly", async () 
 			target: "service-worker",
 			type: "open-recorder-panel",
 		});
-		await expect
-			.poll(() => frameWithUrl(targetPage, "popup.html") !== null, {
-				timeout: 15_000,
-			})
-			.toBe(true);
-
-		const startResponse = (await sendServiceWorkerMessage(messengerPage, {
-			target: "service-worker",
-			type: "start-recording",
-			mode: "fullscreen",
-		})) as { ok: boolean };
-		expect(startResponse.ok).toBe(true);
-		await expect
-			.poll(() => frameWithUrl(targetPage, "camera-preview.html") !== null, {
-				timeout: 10_000,
-			})
-			.toBe(true);
-
 		const devtools = await extension.context.newCDPSession(targetPage);
 		await expect
 			.poll(
@@ -894,191 +944,16 @@ test("recording controls stay stable and the camera resizes directly", async () 
 					(await getClosedShadowElementBox(
 						devtools,
 						"class",
-						"cap-extension-recording-rail",
+						"cap-extension-control-bar",
 					)) !== null,
-				{ timeout: 10_000 },
+				{ timeout: 15_000 },
 			)
 			.toBe(true);
-		const initialBox = await getClosedShadowElementBox(
-			devtools,
-			"class",
-			"cap-extension-recording-rail",
-		);
-		if (!initialBox) throw new Error("recording bar missing");
-		expect(initialBox.x).toBeLessThanOrEqual(20);
-		expect(initialBox.width).toBeGreaterThan(100);
-		expect(initialBox.width).toBeLessThanOrEqual(128);
-		expect(initialBox.height).toBeLessThanOrEqual(44);
-		const handleBox = await getClosedShadowElementBox(
-			devtools,
-			"data-drag-handle",
-		);
-		if (!handleBox) throw new Error("recording bar drag handle missing");
-		const timeBox = await getClosedShadowElementBox(
-			devtools,
-			"data-recording-time",
-		);
-		if (!timeBox || timeBox.width < 30) {
-			throw new Error("recording time is not visible at rest");
-		}
-		expect(
-			await getClosedShadowComputedStyle(
-				devtools,
-				"data-recording-actions",
-				"opacity",
-			),
-		).toBe("0");
-
-		await targetPage.mouse.move(
-			handleBox.x + handleBox.width / 2,
-			handleBox.y + handleBox.height / 2,
-		);
 		await expect
-			.poll(() =>
-				getClosedShadowComputedStyle(
-					devtools,
-					"data-recording-actions",
-					"opacity",
-				),
-			)
-			.toBe("1");
-		const actionsBox = await getClosedShadowElementBox(
-			devtools,
-			"data-recording-actions",
-		);
-		if (!actionsBox) throw new Error("recording action capsule missing");
-		const actionGap = actionsBox.x - (initialBox.x + initialBox.width);
-		expect(actionGap).toBeGreaterThanOrEqual(4);
-		expect(actionGap).toBeLessThanOrEqual(8);
-		expect(
-			await getClosedShadowComputedStyle(
-				devtools,
-				"data-recording-actions",
-				"border-top-left-radius",
-			),
-		).toBe("14px");
-		const pauseBox = await getClosedShadowElementBox(
-			devtools,
-			"data-recording-pause",
-		);
-		if (!pauseBox) throw new Error("pause action missing on hover");
-		await targetPage.mouse.move(
-			pauseBox.x + pauseBox.width / 2,
-			pauseBox.y + pauseBox.height / 2,
-		);
-		await targetPage.waitForTimeout(300);
-		expect(
-			await getClosedShadowComputedStyle(
-				devtools,
-				"data-recording-actions",
-				"opacity",
-			),
-		).toBe("1");
-		await targetPage.screenshot({
-			path: "test-results/recording-bar-expanded.png",
-		});
-		await targetPage.mouse.click(
-			pauseBox.x + pauseBox.width / 2,
-			pauseBox.y + pauseBox.height / 2,
-		);
-		await expect
-			.poll(async () => {
-				const response = (await sendServiceWorkerMessage(messengerPage, {
-					target: "service-worker",
-					type: "get-recording-status",
-				})) as { status?: { phase?: string } };
-				return response.status?.phase;
-			})
-			.toBe("paused");
-		expect(
-			await getClosedShadowComputedStyle(
-				devtools,
-				"data-recording-actions",
-				"opacity",
-			),
-		).toBe("1");
-		await targetPage.mouse.click(
-			pauseBox.x + pauseBox.width / 2,
-			pauseBox.y + pauseBox.height / 2,
-		);
-		await expect
-			.poll(async () => {
-				const response = (await sendServiceWorkerMessage(messengerPage, {
-					target: "service-worker",
-					type: "get-recording-status",
-				})) as { status?: { phase?: string } };
-				return response.status?.phase;
-			})
-			.toBe("recording");
-		await targetPage.mouse.move(
-			handleBox.x + handleBox.width / 2,
-			handleBox.y + handleBox.height / 2,
-		);
-		await targetPage.mouse.down();
-		await targetPage.mouse.move(
-			handleBox.x + handleBox.width / 2 + 120,
-			handleBox.y + handleBox.height / 2 - 80,
-			{ steps: 8 },
-		);
-		await targetPage.mouse.up();
-
-		await expect
-			.poll(async () => {
-				const movedBox = await getClosedShadowElementBox(
-					devtools,
-					"class",
-					"cap-extension-recording-rail",
-				);
-				return (
-					movedBox !== null &&
-					movedBox.x - initialBox.x > 80 &&
-					initialBox.y - movedBox.y > 50
-				);
+			.poll(() => frameWithUrl(targetPage, "camera-preview.html") !== null, {
+				timeout: 10_000,
 			})
 			.toBe(true);
-		await expect
-			.poll(() =>
-				worker.evaluate(
-					() =>
-						new Promise<boolean>((resolve) => {
-							const chromeApi = (globalThis as ChromeGlobal).chrome;
-							chromeApi.storage.local.get(
-								"cap-extension-overlay-ui-state",
-								(items) => {
-									const state = items["cap-extension-overlay-ui-state"] as
-										| {
-												recordingBarPosition?: {
-													x?: number;
-													y?: number;
-												};
-										  }
-										| undefined;
-									resolve(
-										typeof state?.recordingBarPosition?.x === "number" &&
-											typeof state.recordingBarPosition.y === "number",
-									);
-								},
-							);
-						}),
-				),
-			)
-			.toBe(true);
-
-		await targetPage.mouse.move(760, 40);
-		await expect
-			.poll(() =>
-				getClosedShadowComputedStyle(
-					devtools,
-					"data-recording-actions",
-					"opacity",
-				),
-			)
-			.toBe("0");
-		await targetPage.waitForTimeout(500);
-		await targetPage.screenshot({
-			path: "test-results/recording-bar-visible.png",
-		});
-
 		const initialCameraBox = await getClosedShadowElementBox(
 			devtools,
 			"data-camera-preview",
@@ -1132,6 +1007,201 @@ test("recording controls stay stable and the camera resizes directly", async () 
 		await expect.poll(() => readStoredWebcamSize(worker)).toBeGreaterThan(230);
 		await targetPage.screenshot({
 			path: "test-results/camera-resized.png",
+		});
+
+		const startResponse = (await sendServiceWorkerMessage(messengerPage, {
+			target: "service-worker",
+			type: "start-recording",
+			mode: "fullscreen",
+		})) as { ok: boolean };
+		expect(startResponse.ok).toBe(true);
+		await expect
+			.poll(() => frameWithUrl(targetPage, "camera-preview.html") === null, {
+				timeout: 10_000,
+			})
+			.toBe(true);
+
+		await expect
+			.poll(
+				async () =>
+					(await getClosedShadowElementBox(
+						devtools,
+						"class",
+						"cap-extension-active-recording-container",
+					)) !== null,
+				{ timeout: 10_000 },
+			)
+			.toBe(true);
+		await expect
+			.poll(async () => {
+				const box = await getClosedShadowElementBox(
+					devtools,
+					"class",
+					"cap-extension-active-recording-container",
+				);
+				return box?.height ?? 0;
+			})
+			.toBeGreaterThanOrEqual(47);
+		const initialBox = await getClosedShadowElementBox(
+			devtools,
+			"class",
+			"cap-extension-active-recording-container",
+		);
+		if (!initialBox) throw new Error("recording bar missing");
+		expect(initialBox.x).toBeLessThanOrEqual(20);
+		expect(initialBox.width).toBeGreaterThan(70);
+		expect(initialBox.height).toBeGreaterThanOrEqual(47);
+		const timeBox = await getClosedShadowElementBox(
+			devtools,
+			"class",
+			"cap-extension-recording-badge-time",
+		);
+		if (!timeBox || timeBox.width < 20) {
+			throw new Error("recording time is not visible at rest");
+		}
+		await targetPage.mouse.move(
+			initialBox.x + initialBox.width / 2,
+			initialBox.y + initialBox.height / 2,
+		);
+		await expect
+			.poll(
+				async () =>
+					(await getClosedShadowElementBox(
+						devtools,
+						"class",
+						"cap-extension-vertical-dock",
+					)) !== null,
+			)
+			.toBe(true);
+		const pauseBox = await getClosedShadowElementBox(
+			devtools,
+			"aria-label",
+			"Pause recording",
+		);
+		if (!pauseBox) throw new Error("pause control missing on hover");
+		await targetPage.mouse.move(
+			pauseBox.x + pauseBox.width / 2,
+			pauseBox.y + pauseBox.height / 2,
+		);
+		await targetPage.screenshot({
+			path: "test-results/recording-bar-expanded.png",
+		});
+		const pauseClickBox = await getClosedShadowElementBox(
+			devtools,
+			"aria-label",
+			"Pause recording",
+		);
+		if (!pauseClickBox)
+			throw new Error("pause control disappeared before click");
+		await targetPage.mouse.click(
+			pauseClickBox.x + pauseClickBox.width / 2,
+			pauseClickBox.y + pauseClickBox.height / 2,
+		);
+		await expect
+			.poll(async () => {
+				const response = (await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "get-recording-status",
+				})) as { status?: { phase?: string } };
+				return response.status?.phase;
+			})
+			.toBe("paused");
+		await expect
+			.poll(
+				async () =>
+					(await getClosedShadowElementBox(
+						devtools,
+						"aria-label",
+						"Resume recording",
+					)) !== null,
+			)
+			.toBe(true);
+		const resumeBox = await getClosedShadowElementBox(
+			devtools,
+			"aria-label",
+			"Resume recording",
+		);
+		if (!resumeBox) throw new Error("resume control missing");
+		await targetPage.mouse.click(
+			resumeBox.x + resumeBox.width / 2,
+			resumeBox.y + resumeBox.height / 2,
+		);
+		await expect
+			.poll(async () => {
+				const response = (await sendServiceWorkerMessage(messengerPage, {
+					target: "service-worker",
+					type: "get-recording-status",
+				})) as { status?: { phase?: string } };
+				return response.status?.phase;
+			})
+			.toBe("recording");
+		await targetPage.mouse.move(
+			initialBox.x + initialBox.width / 2,
+			initialBox.y + initialBox.height / 2,
+		);
+		await targetPage.mouse.down();
+		await targetPage.mouse.move(
+			initialBox.x + initialBox.width / 2 + 120,
+			initialBox.y + initialBox.height / 2 - 80,
+			{ steps: 8 },
+		);
+		await targetPage.mouse.up();
+
+		await expect
+			.poll(async () => {
+				const movedBox = await getClosedShadowElementBox(
+					devtools,
+					"class",
+					"cap-extension-active-recording-container",
+				);
+				return (
+					movedBox !== null &&
+					movedBox.x - initialBox.x > 80 &&
+					initialBox.y - movedBox.y > 50
+				);
+			})
+			.toBe(true);
+		await expect
+			.poll(() =>
+				worker.evaluate(
+					() =>
+						new Promise<boolean>((resolve) => {
+							const chromeApi = (globalThis as ChromeGlobal).chrome;
+							chromeApi.storage.local.get(
+								"cap-extension-overlay-ui-state",
+								(items) => {
+									const state = items["cap-extension-overlay-ui-state"] as
+										| {
+												recordingBarPosition?: {
+													x?: number;
+													y?: number;
+												};
+										  }
+										| undefined;
+									resolve(
+										typeof state?.recordingBarPosition?.x === "number" &&
+											typeof state.recordingBarPosition.y === "number",
+									);
+								},
+							);
+						}),
+				),
+			)
+			.toBe(true);
+
+		await targetPage.mouse.move(760, 40);
+		await expect
+			.poll(
+				async () =>
+					(await getClosedShadowElementBox(
+						devtools,
+						"class",
+						"cap-extension-vertical-dock",
+					)) === null,
+			)
+			.toBe(true);
+		await targetPage.screenshot({
+			path: "test-results/recording-bar-visible.png",
 		});
 
 		const stopResponse = (await sendServiceWorkerMessage(messengerPage, {

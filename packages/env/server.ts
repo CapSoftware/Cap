@@ -178,6 +178,15 @@ function createServerEnv() {
 				.string()
 				.optional()
 				.describe("URL of the media server for FFmpeg processing"),
+			CAP_WEB_EDITOR_WORKER_URL: z
+				.string()
+				.url()
+				.optional()
+				.describe("Private URL of the dedicated web editor worker"),
+			CAP_WEB_EDITOR_WORKER_POOL: z
+				.string()
+				.optional()
+				.describe("JSON array of named, individually addressed editor workers"),
 			MEDIA_SERVER_WEBHOOK_SECRET: z
 				.string()
 				.optional()

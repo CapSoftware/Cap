@@ -3,6 +3,9 @@ name = "cap-export"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+web-editor-camera-removal = ["cap-editor/web-editor-camera-removal"]
+
 [dependencies]
 cap-utils = { path = "../utils" }
 cap-project = { path = "../project" }

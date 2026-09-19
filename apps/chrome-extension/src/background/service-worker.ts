@@ -23,6 +23,7 @@ import {
 	loadSettings,
 	loadSharedRecordingState,
 	loadSharedUiState,
+	loadTabInputCaptureSession,
 	loadUploadProgressTabId,
 	loadWebcamPreviewDismissed,
 	registerOverlayToken,
@@ -32,10 +33,16 @@ import {
 	savePendingAuth,
 	saveSettings,
 	saveSharedRecordingState,
+	saveTabInputCaptureSession,
 	saveUploadProgressTabId,
 	saveWebcamPreviewDismissed,
 	updateSharedUiState,
 } from "../shared/storage";
+import {
+	executeStorageBridgeRequest,
+	isStorageBridgeRequest,
+	isTrustedOffscreenStorageSender,
+} from "../shared/storage-bridge";
 import type {
 	BootstrapData,
 	CameraDevice,
@@ -83,7 +90,6 @@ let activePreviewTabId: number | null = null;
 let pendingPreviewTabId: number | null = null;
 let offscreenDocumentCreation: Promise<void> | null = null;
 let browserWindowFocused = true;
-let externalCaptureAutoPipPending = false;
 let recordingStartInFlight: Promise<OffscreenResponse> | null = null;
 
 // Content scripts read the webcam "dismissed" flag and the cached preview
@@ -314,10 +320,22 @@ const getTabStreamId = (tabId: number) =>
 		});
 	});
 
+const canUseDisplayPickerForTabCapture = (error: unknown) =>
+	error instanceof Error &&
+	/has not been invoked|activeTab permission/i.test(error.message);
+
 const sendOverlayMessage = (tabId: number, message: OverlayMessage) =>
 	new Promise<boolean>((resolve) => {
-		chrome.tabs.sendMessage(tabId, message, () => {
-			resolve(!chrome.runtime.lastError);
+		chrome.tabs.sendMessage(tabId, message, (response: unknown) => {
+			resolve(
+				!chrome.runtime.lastError &&
+					!(
+						response &&
+						typeof response === "object" &&
+						"ok" in response &&
+						response.ok === false
+					),
+			);
 		});
 	});
 
@@ -484,21 +502,6 @@ const isBrowserCaptureSource = (source: RecordingCaptureSource) =>
 	source.detectedMode === "tab" ||
 	source.displaySurface === "browser" ||
 	source.displaySurface === "tab";
-
-const isWindowCaptureSource = (source: RecordingCaptureSource) =>
-	source.detectedMode === "window" ||
-	source.displaySurface === "window" ||
-	source.displaySurface === "application";
-
-const isLikelyBrowserWindow = (source: RecordingCaptureSource) => {
-	if (!source.label) return false;
-	return /\b(google chrome|chrome|chromium|microsoft edge|edge|brave|arc|opera|vivaldi)\b/i.test(
-		source.label,
-	);
-};
-
-const shouldAutoPipCaptureSource = (source: RecordingCaptureSource) =>
-	isWindowCaptureSource(source) && !isLikelyBrowserWindow(source);
 
 const isWebcamPreviewEnabled = (settings: ExtensionSettings) =>
 	Boolean(settings.webcam.enabled);
@@ -777,6 +780,7 @@ const getPreviewTabIdForPip = async () => {
 };
 
 const enterActivePreviewAutoPip = async () => {
+	if (isRecordingPreviewStatus(recordingStatus)) return false;
 	const tabId = await getPreviewTabIdForPip();
 	if (tabId === null) return false;
 	return sendOverlay(tabId, { type: "overlay-enter-auto-pip" }, false).catch(
@@ -827,15 +831,11 @@ const broadcastOverlayCountdown = async (
 			if (!canInjectIntoTab(tab) || tab.id === undefined) {
 				return undefined;
 			}
-			return sendOverlay(
-				tab.id,
-				{
-					type: "overlay-countdown",
-					seconds,
-					durationMs,
-				},
-				false,
-			).catch(() => undefined);
+			return sendOverlay(tab.id, {
+				type: "overlay-countdown",
+				seconds,
+				durationMs,
+			}).catch(() => undefined);
 		}),
 	);
 };
@@ -1182,7 +1182,6 @@ const resolveMicWarning = async (
 
 const performRecordingStart = async (mode: RecordingMode) => {
 	const { settings, auth, bootstrap } = await requireSignedInState();
-	externalCaptureAutoPipPending = false;
 	const recordingSettings =
 		settings.capture.recordingMode === mode
 			? settings
@@ -1206,7 +1205,6 @@ const performRecordingStart = async (mode: RecordingMode) => {
 	if (micWarning) {
 		const confirmed = await requestRecordingConfirmation(tabId, micWarning);
 		if (!confirmed) {
-			externalCaptureAutoPipPending = false;
 			return {
 				ok: false,
 				canceled: true,
@@ -1215,20 +1213,61 @@ const performRecordingStart = async (mode: RecordingMode) => {
 		}
 	}
 
-	const tabStreamId =
-		mode === "tab" && tabId !== undefined
-			? await getTabStreamId(tabId)
-			: undefined;
-	await showOverlayInTab(tab ?? null, recordingSettings, true);
+	if (activePreviewTabId !== null && activePreviewTabId !== tabId) {
+		const previousPreviewTab = await getTab(activePreviewTabId);
+		if (previousPreviewTab && canInjectIntoTab(previousPreviewTab)) {
+			const previousPrepared = await sendOverlay(
+				activePreviewTabId,
+				{
+					type: "overlay-settings",
+					settings: recordingSettings.webcam,
+					recording: true,
+				},
+				false,
+			);
+			if (!previousPrepared) {
+				return {
+					ok: false,
+					error: "The camera preview could not be closed before recording",
+				} satisfies OffscreenResponse;
+			}
+		}
+	}
+	const previewPrepared = await showOverlayInTab(
+		tab ?? null,
+		recordingSettings,
+		true,
+	);
+	if (
+		isWebcamPreviewEnabled(recordingSettings) &&
+		tab &&
+		canInjectIntoTab(tab) &&
+		!previewPrepared
+	) {
+		return {
+			ok: false,
+			error: "The camera preview could not be closed before recording",
+		} satisfies OffscreenResponse;
+	}
 
 	const creatingStatus = { phase: "creating" } satisfies RecordingStatus;
 	setRecordingStatusAndBroadcast(creatingStatus);
+	let tabStreamId: string | undefined;
+	if (mode === "tab" && tabId !== undefined) {
+		await ensureOffscreenDocument();
+		try {
+			tabStreamId = await getTabStreamId(tabId);
+		} catch (error) {
+			console.warn("Tab capture stream ID unavailable", error);
+			if (!canUseDisplayPickerForTabCapture(error)) throw error;
+		}
+	}
 	// The manifest injects the bootstrap content script into every page at
 	// document_idle and onInstalled covers tabs that predate the extension, so
 	// no blanket re-injection is needed here; sendOverlay still injects
 	// per-tab on demand and the bootstrap lazy-loads the overlay UI.
 	try {
-		return await sendOffscreen({
+		const request: OffscreenRequest = {
 			target: "offscreen",
 			type: "start-recording",
 			mode,
@@ -1237,7 +1276,31 @@ const performRecordingStart = async (mode: RecordingMode) => {
 			bootstrap,
 			tabId,
 			tabStreamId,
-		});
+		};
+		const response = await (tabStreamId
+			? sendOffscreenRuntimeMessage(request)
+			: sendOffscreen(request));
+		if (
+			tabStreamId &&
+			tabId !== undefined &&
+			response.ok &&
+			response.status?.phase === "recording" &&
+			response.status.videoId
+		) {
+			await saveTabInputCaptureSession({
+				tabId,
+				recordingId: response.status.videoId,
+			});
+			await chrome.tabs
+				.sendMessage(tabId, {
+					type: "input-capture-start",
+					recordingId: response.status.videoId,
+				})
+				.catch((error: unknown) => {
+					console.warn("Tab input capture could not start", error);
+				});
+		}
+		return response;
 	} catch (error) {
 		// The recorder panel closes as soon as the status leaves "idle", so a
 		// silent reset would leave the user with no feedback at all. Broadcast
@@ -1246,7 +1309,6 @@ const performRecordingStart = async (mode: RecordingMode) => {
 			phase: "error",
 			message: error instanceof Error ? error.message : String(error),
 		});
-		externalCaptureAutoPipPending = false;
 		throw error;
 	}
 };
@@ -1317,7 +1379,6 @@ const stopRecordingAndOpenDestination = async () => {
 	if (response.ok && response.status) {
 		setRecordingStatus(response.status);
 		if (!isCapturingRecordingStatus(response.status)) {
-			externalCaptureAutoPipPending = false;
 			await saveWebcamPreviewDismissed(true);
 			await broadcastOverlayHide();
 		}
@@ -1431,7 +1492,7 @@ const handlePreviewReady = async (tabId?: number) => {
 	activePreviewTabId = tabId;
 	pendingPreviewTabId = null;
 	await hidePreviewTabsExcept(tabId);
-	if (!browserWindowFocused || externalCaptureAutoPipPending) {
+	if (!browserWindowFocused) {
 		await enterActivePreviewAutoPip();
 	}
 };
@@ -1458,7 +1519,6 @@ const handlePreviewError = async (
 
 const handleCaptureSource = async (source: RecordingCaptureSource) => {
 	if (isBrowserCaptureSource(source)) {
-		externalCaptureAutoPipPending = false;
 		const tabId = await findCapturedBrowserTabId(source);
 		if (tabId !== null) {
 			await focusTab(tabId);
@@ -1467,14 +1527,6 @@ const handleCaptureSource = async (source: RecordingCaptureSource) => {
 		await exitActivePreviewAutoPip();
 		return;
 	}
-
-	if (!shouldAutoPipCaptureSource(source)) {
-		externalCaptureAutoPipPending = false;
-		return;
-	}
-
-	externalCaptureAutoPipPending = true;
-	await enterActivePreviewAutoPip();
 };
 
 const handleRequest = async (
@@ -1791,12 +1843,76 @@ const handleRequest = async (
 	return { ok: false, error: "Unknown request" };
 };
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+	if (
+		message?.target === "service-worker" &&
+		message.type === "input-capture-stop"
+	) {
+		if (
+			!isTrustedOffscreenStorageSender(
+				sender,
+				chrome.runtime.id,
+				chrome.runtime.getURL(OFFSCREEN_URL),
+			) ||
+			!Number.isSafeInteger(message.tabId) ||
+			typeof message.recordingId !== "string"
+		) {
+			sendResponse({ ok: false, error: "Tab input stop denied" });
+			return false;
+		}
+		void Promise.all([syncRecordingStatus(), loadTabInputCaptureSession()])
+			.then(async ([currentStatus, session]) => {
+				if (
+					!session ||
+					session.tabId !== message.tabId ||
+					session.recordingId !== message.recordingId ||
+					!("videoId" in currentStatus) ||
+					currentStatus.videoId !== message.recordingId
+				) {
+					return { ok: false, error: "Tab input stop denied" };
+				}
+				try {
+					return await chrome.tabs.sendMessage(message.tabId, {
+						type: "input-capture-stop",
+					});
+				} finally {
+					await saveTabInputCaptureSession(null);
+				}
+			})
+			.then(sendResponse)
+			.catch((error: unknown) =>
+				sendResponse({
+					ok: false,
+					error: error instanceof Error ? error.message : String(error),
+				}),
+			);
+		return true;
+	}
+	if (isStorageBridgeRequest(message)) {
+		if (
+			!isTrustedOffscreenStorageSender(
+				sender,
+				chrome.runtime.id,
+				chrome.runtime.getURL(OFFSCREEN_URL),
+			)
+		) {
+			sendResponse({ ok: false, error: "Storage request denied" });
+			return false;
+		}
+		executeStorageBridgeRequest(message)
+			.then(sendResponse)
+			.catch((error: unknown) =>
+				sendResponse({
+					ok: false,
+					error: error instanceof Error ? error.message : String(error),
+				}),
+			);
+		return true;
+	}
 	if (isRecordingStatusBroadcast(message)) {
 		setRecordingStatusAndBroadcast(message.status);
 		if (isCapturingRecordingStatus(message.status)) return false;
 
-		externalCaptureAutoPipPending = false;
 		void (async () => {
 			await saveWebcamPreviewDismissed(true);
 			await broadcastOverlayHide();
@@ -1813,7 +1929,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 	if (!isServiceWorkerRequest(message)) return false;
 
-	handleRequest(message, _sender)
+	handleRequest(message, sender)
 		.then(sendResponse)
 		.catch((error: unknown) => {
 			sendResponse({
@@ -1858,13 +1974,37 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
 		return;
 	}
 	browserWindowFocused = true;
-	externalCaptureAutoPipPending = false;
 	void exitActivePreviewAutoPip()
 		.then(() => syncActivePreview())
 		.catch(() => undefined);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+	if (changeInfo.status === "complete") {
+		void loadTabInputCaptureSession()
+			.then(async (session) => {
+				if (!session || session.tabId !== tabId) return;
+				const currentStatus = await syncRecordingStatus();
+				if (
+					!isCapturingRecordingStatus(currentStatus) ||
+					!("videoId" in currentStatus) ||
+					currentStatus.videoId !== session.recordingId
+				) {
+					if (!isActiveRecordingStatus(currentStatus)) {
+						await saveTabInputCaptureSession(null);
+					}
+					return;
+				}
+				if (!canInjectIntoTab(tab)) return;
+				await chrome.tabs.sendMessage(tabId, {
+					type: "input-capture-start",
+					recordingId: session.recordingId,
+				});
+			})
+			.catch((error: unknown) => {
+				console.warn("Tab input capture could not resume", error);
+			});
+	}
 	if (changeInfo.status === "complete" && tab.active) {
 		void syncActivePreview(tabId).catch(() => undefined);
 	}
@@ -1884,6 +2024,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 	if (activePreviewTabId === tabId) {
 		activePreviewTabId = null;
 	}
+	void loadTabInputCaptureSession()
+		.then((session) =>
+			session?.tabId === tabId ? saveTabInputCaptureSession(null) : undefined,
+		)
+		.catch(() => undefined);
 	if (pendingPreviewTabId === tabId) {
 		pendingPreviewTabId = null;
 	}

@@ -1,0 +1,87 @@
+FROM rust:1.90-trixie@sha256:e227f20ec42af3ea9a3c9c1dd1b2012aa15f12279b5e9d5fb890ca1c2bb5726c AS native-builder
+
+ARG TARGETARCH
+
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends \
+		clang libclang-dev libssl-dev libasound2-dev libx11-dev libvulkan-dev \
+		ca-certificates curl \
+		pkg-config ffmpeg libavcodec-dev libavformat-dev libavfilter-dev \
+		libavdevice-dev libavutil-dev libswscale-dev libswresample-dev libpostproc-dev \
+	&& rm -rf /var/lib/apt/lists/*
+
+WORKDIR /source
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY vendor ./vendor
+COPY apps/cli/Cargo.toml ./apps/cli/Cargo.toml
+COPY apps/cli/src ./apps/cli/src
+COPY apps/desktop/src-tauri/Cargo.toml ./apps/desktop/src-tauri/Cargo.toml
+COPY apps/desktop/src-tauri/src ./apps/desktop/src-tauri/src
+
+ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=3 \
+	CARGO_PROFILE_RELEASE_DEBUG=0 \
+	CARGO_PROFILE_RELEASE_CODEGEN_UNITS=4
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+	--mount=type=cache,target=/source/target \
+	cargo build --release --locked -p cap-export --bin web-editor -p cap-editor --bin web-editor-service --features cap-export/web-editor-camera-removal,cap-editor/web-editor-camera-removal \
+	&& install -Dm755 target/release/web-editor /out/web-editor \
+	&& install -Dm755 target/release/web-editor-service /out/web-editor-service
+
+RUN set -eu; \
+	case "${TARGETARCH}" in \
+		amd64) ort_arch=x64; ort_digest=4c436a280d650f8bf32c921a2bf4de7c42cc32884c51c90e47de991708bbb5a4 ;; \
+		arm64) ort_arch=aarch64; ort_digest=15100fb88b4c692cdd6bf2cca5f4a26a3806cebca8136de6681e2aba4b2ea033 ;; \
+		*) exit 1 ;; \
+	esac; \
+	ort_asset="onnxruntime-linux-${ort_arch}-1.24.3"; \
+	ort_archive=/tmp/onnxruntime.tgz; \
+	curl --fail --location --retry 3 "https://github.com/microsoft/onnxruntime/releases/download/v1.24.3/${ort_asset}.tgz" --output "${ort_archive}"; \
+	printf '%s  %s\n' "${ort_digest}" "${ort_archive}" | sha256sum --check; \
+	tar -xzf "${ort_archive}" -C /tmp; \
+	install -Dm755 "/tmp/${ort_asset}/lib/libonnxruntime.so" /out/libonnxruntime.so; \
+	install -Dm755 "/tmp/${ort_asset}/lib/libonnxruntime_providers_shared.so" /out/libonnxruntime_providers_shared.so; \
+	install -Dm644 "/tmp/${ort_asset}/LICENSE" /out/onnxruntime/LICENSE; \
+	install -Dm644 "/tmp/${ort_asset}/ThirdPartyNotices.txt" /out/onnxruntime/ThirdPartyNotices.txt
+
+FROM oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6 AS worker-runtime
+
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends \
+		ffmpeg libasound2t64 libvulkan1 mesa-vulkan-drivers fontconfig fonts-dejavu-core \
+	&& rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY package.json bun.lock bunfig.toml ./
+COPY apps/media-server/package.json ./apps/media-server/package.json
+COPY packages/editor-cap-bundle/package.json ./packages/editor-cap-bundle/package.json
+RUN bun install --frozen-lockfile --production --filter=@cap/media-server
+COPY packages/editor-cap-bundle/src ./packages/editor-cap-bundle/src
+COPY apps/media-server/src ./apps/media-server/src
+COPY apps/web/lib/editor-caption-access.ts apps/web/lib/editor-caption-transport.ts apps/web/lib/editor-recording-title.ts ./apps/web/lib/
+COPY apps/desktop/src/assets/music /opt/cap/music
+COPY apps/desktop/src-tauri/assets/backgrounds /opt/cap/backgrounds
+
+WORKDIR /app/apps/media-server
+
+ENV CAP_WEB_EDITOR_PREPARE_BIN=/opt/cap/bin/web-editor \
+	CAP_WEB_EDITOR_SERVICE_BIN=/opt/cap/bin/web-editor-service \
+	CAP_WEB_EDITOR_ENABLE_CAMERA_REMOVAL=1 \
+	CAP_WEB_EDITOR_MUSIC_DIR=/opt/cap/music \
+	CAP_WEB_EDITOR_WALLPAPER_DIR=/opt/cap/backgrounds \
+	ORT_DYLIB_PATH=/opt/cap/bin/libonnxruntime.so \
+	PORT=3457
+EXPOSE 3457
+
+FROM worker-runtime
+COPY --from=native-builder /out/web-editor /opt/cap/bin/web-editor
+COPY --from=native-builder /out/web-editor-service /opt/cap/bin/web-editor-service
+COPY --from=native-builder /out/libonnxruntime.so /opt/cap/bin/libonnxruntime.so
+COPY --from=native-builder /out/libonnxruntime_providers_shared.so /opt/cap/bin/libonnxruntime_providers_shared.so
+COPY --from=native-builder /out/onnxruntime /opt/cap/licenses/onnxruntime
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+	CMD ["bun", "-e", "fetch(`http://127.0.0.1:${process.env.PORT || 3457}/health`).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+
+CMD ["bun", "run", "src/editor-worker.ts"]

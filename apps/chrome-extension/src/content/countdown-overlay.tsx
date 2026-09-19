@@ -1,6 +1,7 @@
 import { type CSSProperties, useCallback, useEffect, useState } from "react";
 import { isOverlayMessage } from "../shared/messages";
 import { sendServiceWorkerMessage } from "../shared/runtime";
+import { replayStartupMessages } from "./startup-messages";
 
 type ActiveCountdown = {
 	seconds: number;
@@ -69,6 +70,7 @@ export function CountdownOverlay() {
 		};
 
 		chrome.runtime.onMessage.addListener(handleMessage);
+		replayStartupMessages(handleMessage);
 		return () => chrome.runtime.onMessage.removeListener(handleMessage);
 	}, [dismiss]);
 

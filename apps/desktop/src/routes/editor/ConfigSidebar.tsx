@@ -12,8 +12,9 @@ import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { createQuery } from "@tanstack/solid-query";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { appDataDir, resolveResource } from "@tauri-apps/api/path";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
 	BaseDirectory,
 	exists,
@@ -87,6 +88,7 @@ import {
 	AnimatedGradientEditor,
 	copyAnimatedGradientConfig,
 } from "./AnimatedGradientEditor";
+
 import { AudioLibraryPanel } from "./AudioLibrary";
 import {
 	AUDIO_TRACK_BG_CLASS,
@@ -152,6 +154,8 @@ import {
 } from "./ui";
 import { formatTime } from "./utils";
 import { ZoomModeHelper } from "./ZoomModeHelper";
+
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
 
 // Split out of the sidebar chunk: the captions tab is not visible at first
 // paint (Kobalte only mounts the selected tab), and its code is heavy. The
@@ -302,6 +306,13 @@ type WallpaperOption = {
 
 const isCurrentDesktopBackgroundPath = (path: string | null | undefined) => {
 	if (!path) return false;
+	if (
+		isWebEditor &&
+		/^content\/images\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|webp|gif|bmp|tiff)$/.test(
+			path,
+		)
+	)
+		return true;
 	const filename = path.split(/[\\/]/).pop();
 	if (!filename) return false;
 	return (
@@ -1998,6 +2009,8 @@ function BackgroundConfig(props: {
 		const assetsDir = `${editorInstance.path}/assets`;
 
 		try {
+			if (isWebEditor)
+				return await invoke<string | null>("webEditorStoredDesktopBackground");
 			const importedPrefix = `${CURRENT_DESKTOP_BACKGROUND_BASENAME}-`;
 			let newest: { path: string; timestamp: number } | null = null;
 			for (const entry of await readDir(assetsDir)) {
@@ -2180,9 +2193,20 @@ function BackgroundConfig(props: {
 		if (importingDesktopBackground()) return;
 		setImportingDesktopBackground(true);
 		try {
-			const path = await commands.importCurrentDesktopBackground(
-				editorInstance.path,
-			);
+			let source = editorInstance.path;
+			if (isWebEditor) {
+				const selected = await open({
+					filters: [
+						{
+							name: "Images",
+							extensions: [...BACKGROUND_IMAGE_EXTENSIONS, "jpeg"],
+						},
+					],
+				});
+				if (typeof selected !== "string") return;
+				source = selected;
+			}
+			const path = await commands.importCurrentDesktopBackground(source);
 			const addingFromBlankBackground = isNoneBackground();
 			batch(() => {
 				setCurrentDesktopBackgroundPath(path);
@@ -2435,7 +2459,9 @@ function BackgroundConfig(props: {
 									<div class="flex flex-col gap-3 items-center justify-center p-6 w-full rounded-xl border border-dashed bg-ed-card-2 border-ed-line-strong">
 										<IconLucideMonitor class="size-6 text-ed-text-3" />
 										<span class="text-[13px] text-center text-ed-text-1">
-											Use the wallpaper from your desktop
+											{isWebEditor
+												? "Choose your desktop wallpaper"
+												: "Use the wallpaper from your desktop"}
 										</span>
 										<EditorButton
 											onClick={importDesktopBackground}
@@ -2444,7 +2470,9 @@ function BackgroundConfig(props: {
 										>
 											{importingDesktopBackground()
 												? "Importing..."
-												: "Import desktop background"}
+												: isWebEditor
+													? "Choose desktop wallpaper"
+													: "Import desktop background"}
 										</EditorButton>
 									</div>
 								}
@@ -3273,11 +3301,15 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 						</Subfield>
 						<Subfield name="Background">
 							<KSelect<{ name: string; value: BackgroundBlurMode }>
-								options={cameraBackgroundOptions(ostype() === "macos")}
+								options={cameraBackgroundOptions(
+									isWebEditor || ostype() === "macos",
+								)}
 								optionValue="value"
 								optionTextValue="name"
 								value={
-									cameraBackgroundOptions(ostype() === "macos").find(
+									cameraBackgroundOptions(
+										isWebEditor || ostype() === "macos",
+									).find(
 										(option) =>
 											option.value ===
 											(project.camera.backgroundBlur?.mode ?? "off"),

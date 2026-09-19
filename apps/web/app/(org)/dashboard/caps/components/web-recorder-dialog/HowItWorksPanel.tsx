@@ -25,9 +25,9 @@ const HOW_IT_WORKS_ITEMS = [
 		accent: "bg-green-3 text-green-11 dark:bg-green-4 dark:text-green-10",
 	},
 	{
-		title: "Keep your webcam visible",
+		title: "Edit your webcam separately",
 		description:
-			"On compatible browsers, selecting a camera opens a picture‑in‑picture window that's captured when you record fullscreen. We recommend fullscreen to keep it on top. If PiP capture isn't supported, your camera is limited to the Cap recorder page.",
+			"Cap records your webcam as a separate clip, so you can move, resize, or remove it in the editor. The camera preview closes during screen capture to keep it out of the screen clip.",
 		Icon: PictureInPictureIcon,
 		accent: "bg-purple-3 text-purple-11 dark:bg-purple-4 dark:text-purple-10",
 	},

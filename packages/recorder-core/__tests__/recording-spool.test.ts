@@ -261,8 +261,13 @@ describe("RecordingSpool", () => {
 		).rejects.toThrow("Failed to persist chunk 1");
 
 		const blob = await spool.recoverBlob();
+		const persisted = await spool.recoverPersistedBlob();
 
 		expect(await blobToText(blob as Blob)).toBe("chunk-1chunk-2");
+		expect(await blobToText(persisted as Blob)).toBe("chunk-1");
+		expect(
+			await Promise.all(spool.getUnwrittenChunks().map(blobToText)),
+		).toEqual(["chunk-2"]);
 	});
 
 	it("keeps queued in-memory chunks available after a write failure", async () => {
@@ -292,6 +297,9 @@ describe("RecordingSpool", () => {
 		const blob = await spool.recoverBlob();
 
 		expect(await blobToText(blob as Blob)).toBe("chunk-1|chunk-2|chunk-3");
+		expect(
+			await Promise.all(spool.getUnwrittenChunks().map(blobToText)),
+		).toEqual(["chunk-2|", "chunk-3"]);
 	});
 
 	it("cleans up persisted state after a write failure", async () => {

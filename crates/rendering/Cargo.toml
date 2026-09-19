@@ -6,6 +6,9 @@ edition = "2024"
 [lints]
 workspace = true
 
+[features]
+web-editor-camera-removal = ["cap-project/web-editor-camera-removal"]
+
 [dependencies]
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 anyhow.workspace = true

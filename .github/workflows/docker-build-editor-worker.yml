@@ -1,0 +1,106 @@
+name: Docker Build Editor Worker
+
+on:
+  pull_request:
+    paths:
+      - "apps/media-server/**"
+      - "apps/web/lib/editor-caption-access.ts"
+      - "apps/web/lib/editor-caption-transport.ts"
+      - "apps/web/lib/editor-recording-title.ts"
+      - "apps/desktop/src/assets/music/**"
+      - "apps/desktop/src-tauri/assets/backgrounds/**"
+      - "crates/**"
+      - "packages/editor-cap-bundle/**"
+      - "vendor/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "bun.lock"
+      - "bunfig.toml"
+      - ".github/workflows/docker-build-editor-worker.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/media-server/**"
+      - "apps/web/lib/editor-caption-access.ts"
+      - "apps/web/lib/editor-caption-transport.ts"
+      - "apps/web/lib/editor-recording-title.ts"
+      - "apps/desktop/src/assets/music/**"
+      - "apps/desktop/src-tauri/assets/backgrounds/**"
+      - "crates/**"
+      - "packages/editor-cap-bundle/**"
+      - "vendor/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "bun.lock"
+      - "bunfig.toml"
+      - ".github/workflows/docker-build-editor-worker.yml"
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build and test editor worker (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: amd64
+            runner: ubuntu-24.04
+          - platform: arm64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx v3.12.0
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - name: Build editor worker image with Docker v6.19.2
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: apps/media-server/Dockerfile.editor
+          platforms: linux/${{ matrix.platform }}
+          load: true
+          tags: cap-editor-worker:verification
+          cache-from: type=gha,scope=editor-worker-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=editor-worker-${{ matrix.platform }}
+      - name: Check native worker readiness
+        run: |
+          docker run --rm --network none \
+            -e CAP_WEB_EDITOR_PUBLIC_ORIGIN=http://127.0.0.1:3457 \
+            -e MEDIA_SERVER_WEBHOOK_SECRET=test \
+            --entrypoint bun cap-editor-worker:verification \
+            -e 'import app from "./src/editor-worker-app.ts"; const response = await app.request("/health"); if (!response.ok) process.exit(1)'
+      - name: Exercise paired native editor routes
+        run: |
+          docker run --rm --network none --cpus 4 --memory 4g \
+            -e MEDIA_SERVER_WEBHOOK_SECRET=test \
+            --entrypoint bun cap-editor-worker:verification test \
+            src/__tests__/editor-worker-app.test.ts \
+            src/__tests__/lib/editor-assets.test.ts \
+            src/__tests__/lib/editor-clip-thumbnails.test.ts \
+            src/__tests__/lib/editor-config-paths.test.ts \
+            src/__tests__/lib/editor-image-assets.test.ts \
+            src/__tests__/lib/editor-security.test.ts \
+            src/__tests__/lib/editor-wallpapers.test.ts \
+            src/__tests__/routes/editor-clips.test.ts \
+            src/__tests__/routes/editor.test.ts
+      - name: Verify editor subprocess credential isolation
+        run: |
+          docker run --rm --network none \
+            -e MEDIA_SERVER_WEBHOOK_SECRET=test \
+            -e AWS_SECRET_ACCESS_KEY=test \
+            --entrypoint bun cap-editor-worker:verification \
+            src/__tests__/lib/editor-process-env-replay.ts
+      - name: Verify cursor-only MOV export
+        run: |
+          docker run --rm --network none --cpus 4 --memory 4g \
+            --entrypoint bun cap-editor-worker:verification \
+            src/__tests__/routes/editor-cursor-mov-replay.ts

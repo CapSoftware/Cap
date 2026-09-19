@@ -44,7 +44,7 @@ const canRetryWithoutShowingAnotherPicker = (attempt: CaptureAttempt) =>
 	shouldRetryDisplayMediaWithoutPreferences(attempt.error);
 
 export const captureDisplayStream = async (
-	mode: Exclude<RecordingMode, "tab" | "camera">,
+	mode: Exclude<RecordingMode, "camera">,
 	includeAudio: boolean,
 	requestDisplayMedia: DisplayMediaRequester,
 ) => {

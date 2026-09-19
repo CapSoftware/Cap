@@ -6,6 +6,9 @@ edition = "2024"
 [lints]
 workspace = true
 
+[features]
+web-editor-camera-removal = []
+
 [dependencies]
 cap-cursor-info = { path = "../cursor-info" }
 

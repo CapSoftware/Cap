@@ -4,8 +4,8 @@
 	"private": true,
 	"scripts": {
 		"dev": "cross-env NODE_OPTIONS=--disable-warning=DEP0169 dotenv -e ../../.env -- next dev",
-		"build": "next build --turbopack",
-		"build:web": "next build --turbopack",
+		"build": "bun run --cwd ../../packages/editor-solid-web build && next build --turbopack",
+		"build:web": "bun run --cwd ../../packages/editor-solid-web build && next build --turbopack",
 		"build:docker": "cd ../.. && docker build -t cap-web-docker . --no-cache --progress=plain",
 		"start": "cross-env NODE_OPTIONS=--disable-warning=DEP0169 next start",
 		"compress-images": "bash tools/compress-images.sh",
@@ -27,6 +27,7 @@
 		"@aws-sdk/s3-presigned-post": "^3.485.0",
 		"@aws-sdk/s3-request-presigner": "^3.485.0",
 		"@cap/database": "workspace:*",
+		"@cap/editor-cap-bundle": "workspace:*",
 		"@cap/env": "workspace:*",
 		"@cap/recorder-core": "workspace:*",
 		"@cap/ui": "workspace:*",
@@ -101,6 +102,7 @@
 		"drizzle-orm": "0.44.6",
 		"dub": "^0.64.0",
 		"effect": "^3.18.4",
+		"fflate": "0.8.3",
 		"ffmpeg-static": "^5.3.0",
 		"file-saver": "^2.0.5",
 		"framer-motion": "^11.13.1",
@@ -151,6 +153,7 @@
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
+		"@cap/editor-solid-web": "workspace:*",
 		"@smithy/types": "^4.3.1",
 		"@types/canvas-confetti": "^1.9.0",
 		"@types/file-saver": "^2.0.7",

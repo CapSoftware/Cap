@@ -308,6 +308,10 @@ export async function pickImage(
 		],
 	});
 	if (typeof source !== "string") return null;
+	if (import.meta.env.VITE_CAP_WEB_EDITOR === "true") {
+		const { invoke } = await import("@tauri-apps/api/core");
+		return invoke<ImageAsset>("webEditorImportImage", { source });
+	}
 	return importImagePath(projectPath, source, {
 		read: async (path) => readBoundedImage(await fs.open(path, { read: true })),
 		mkdir: (path) => fs.mkdir(path, { recursive: true }),

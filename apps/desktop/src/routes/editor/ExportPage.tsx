@@ -54,6 +54,7 @@ import { RESOLUTION_OPTIONS } from "./Header";
 import { Dialog } from "./ui";
 
 class SilentError extends Error {}
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
 
 const EXPORT_CTA_CLASS =
 	"flex w-full h-10 items-center justify-center gap-2 rounded-[10px] text-[13px] font-medium transition-colors outline-hidden focus-visible:ring-2 focus-visible:ring-ed-accent/40 disabled:opacity-50 disabled:cursor-not-allowed";
@@ -268,6 +269,8 @@ export function ExportPage() {
 		}
 
 		if (disablesLinkExport() && _settings.exportTo === "link")
+			ret.exportTo = "file";
+		if (isWebEditor && _settings.exportTo === "clipboard")
 			ret.exportTo = "file";
 
 		if (shouldUseGifMode()) {
@@ -842,8 +845,10 @@ export function ExportPage() {
 				await refetchMeta();
 				setReuploading(!!meta().sharing);
 
-				const existingAuth = await authStore.get();
-				if (!existingAuth) createSignInMutation();
+				const existingAuth = isWebEditor
+					? { user_id: "web" }
+					: await authStore.get();
+				if (!existingAuth && !isWebEditor) createSignInMutation();
 				trackEvent("create_shareable_link_clicked", {
 					resolution: settings.resolution,
 					fps: settings.fps,
@@ -962,13 +967,21 @@ export function ExportPage() {
 			label:
 				option.value === "link" && meta().sharing ? "Reupload" : option.label,
 			icon: option.icon,
-			disabled: option.value === "link" && disablesLinkExport(),
+			disabled:
+				(option.value === "link" && disablesLinkExport()) ||
+				(isWebEditor && option.value === "clipboard"),
 			disabledReason:
-				option.value === "link" && disablesLinkExport()
-					? cursorOnly()
-						? "Cursor-only exports can only be saved to a file or clipboard"
-						: "Transparent exports can only be saved to a file or clipboard"
-					: undefined,
+				isWebEditor && option.value === "clipboard"
+					? "Use File to download. Browser clipboard cannot paste exports as files"
+					: option.value === "link" && disablesLinkExport()
+						? cursorOnly()
+							? isWebEditor
+								? "Cursor-only exports can only be saved to a file"
+								: "Cursor-only exports can only be saved to a file or clipboard"
+							: isWebEditor
+								? "Transparent exports can only be saved to a file"
+								: "Transparent exports can only be saved to a file or clipboard"
+						: undefined,
 		}));
 
 	const formatOptions = () =>
@@ -1446,7 +1459,7 @@ export function ExportPage() {
 					</div>
 
 					<div class="px-4 pt-3 pb-4 border-t border-ed-line">
-						{settings.exportTo === "link" && !auth.data ? (
+						{settings.exportTo === "link" && !auth.data && !isWebEditor ? (
 							<button
 								type="button"
 								class={cx(
@@ -1751,7 +1764,7 @@ export function ExportPage() {
 										)}
 									</Show>
 
-									<Show when={exportState.action === "save"}>
+									<Show when={exportState.action === "save" && !isWebEditor}>
 										<div class="flex gap-3">
 											<Button
 												variant="dark"

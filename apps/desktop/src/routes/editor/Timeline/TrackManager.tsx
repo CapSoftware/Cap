@@ -39,7 +39,7 @@ const TRACK_META: Record<TimelineTrackType, TrackMeta> = {
 	},
 	caption: {
 		description: "Auto-transcribe your recording into on-screen subtitles.",
-		unavailableHint: "",
+		unavailableHint: "Cap Pro is required for captions.",
 	},
 	keyboard: {
 		description: "Display key presses on screen as you type.",
