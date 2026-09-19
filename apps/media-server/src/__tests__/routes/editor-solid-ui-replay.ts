@@ -586,6 +586,64 @@ try {
 			await editor.getByRole("tab", { name: "Camera" }).isDisabled(),
 			false,
 		);
+		const cropStartedAt = Date.now();
+		await editor.getByRole("button", { name: "Crop", exact: true }).click();
+		await editor.getByText("Loading frame…").waitFor({
+			state: "hidden",
+			timeout: 30_000,
+		});
+		const cropFrameLoadMs = Date.now() - cropStartedAt;
+		const cropFrameSize = await editor
+			.getByRole("img", { name: "Current frame" })
+			.evaluate((frame) => {
+				const image = frame as HTMLImageElement;
+				return { width: image.naturalWidth, height: image.naturalHeight };
+			});
+		assert.ok(cropFrameSize.width > 0 && cropFrameSize.width <= 1440);
+		assert.ok(cropFrameSize.height > 0 && cropFrameSize.height <= 1440);
+		const cropSurface = editor.locator(".cropper-editor");
+		await cropSurface.click({ button: "right" });
+		const cropMenu = editor.getByRole("menu", { name: "Editor actions" });
+		await cropMenu.waitFor({ state: "visible" });
+		assert.equal(
+			await cropMenu.evaluate((menu) => getComputedStyle(menu).backgroundColor),
+			"rgb(246, 246, 247)",
+		);
+		const checkedCropItem = cropMenu.locator(
+			'[role="menuitemcheckbox"][aria-checked="true"]',
+		);
+		assert.ok((await checkedCropItem.count()) > 0);
+		assert.equal(
+			await checkedCropItem
+				.first()
+				.locator('span[aria-hidden="true"]')
+				.innerText(),
+			"✓",
+		);
+		await cropMenu.getByRole("menuitemcheckbox", { name: "16:9" }).click();
+		await cropSurface.click({ button: "right" });
+		const selectedRatio = cropMenu.getByRole("menuitemcheckbox", {
+			name: "16:9",
+		});
+		assert.equal(await selectedRatio.getAttribute("aria-checked"), "true");
+		assert.equal(
+			await selectedRatio.locator('span[aria-hidden="true"]').innerText(),
+			"✓",
+		);
+		await page.keyboard.press("Escape");
+		assert.equal(await cropSurface.count(), 1);
+		await editor.locator("html").evaluate((root) => root.classList.add("dark"));
+		await cropSurface.click({ button: "right" });
+		assert.equal(
+			await cropMenu.evaluate((menu) => getComputedStyle(menu).backgroundColor),
+			"rgb(32, 32, 36)",
+		);
+		await page.keyboard.press("Escape");
+		assert.equal(await cropSurface.count(), 1);
+		await editor
+			.locator("html")
+			.evaluate((root) => root.classList.remove("dark"));
+		await editor.getByRole("button", { name: "Cancel", exact: true }).click();
 		const bundleDownload = page.waitForEvent("download");
 		await editor
 			.getByRole("button", { name: "Download recording bundle" })
@@ -635,6 +693,19 @@ try {
 				state: "visible",
 				timeout: 20_000,
 			});
+			const languageField = editor
+				.getByText("Language", { exact: true })
+				.last()
+				.locator("..");
+			await languageField.getByRole("button").click();
+			await editor
+				.getByRole("option", { name: "English" })
+				.waitFor({ state: "visible" });
+			assert.equal(
+				await editor.getByRole("option", { name: "Punjabi" }).count(),
+				0,
+			);
+			await page.keyboard.press("Escape");
 			assert.equal(
 				await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).count(),
 				0,
@@ -647,6 +718,27 @@ try {
 			await editor.getByText("Captions", { exact: true }).last().waitFor({
 				state: "visible",
 			});
+			await editor
+				.getByRole("button", { name: "Captions", exact: true })
+				.click();
+			await editor.getByRole("button", { name: "SRT", exact: true }).waitFor({
+				state: "visible",
+			});
+			const srtDownload = page.waitForEvent("download");
+			await editor.getByRole("button", { name: "SRT", exact: true }).click();
+			const srt = await srtDownload;
+			assert.ok(srt.suggestedFilename().endsWith(".srt"));
+			assert.match(await Bun.file(await srt.path()).text(), /Hello Cap/);
+			const vttDownload = page.waitForEvent("download");
+			await editor.getByRole("button", { name: "VTT", exact: true }).click();
+			const vtt = await vttDownload;
+			assert.ok(vtt.suggestedFilename().endsWith(".vtt"));
+			assert.match(
+				await Bun.file(await vtt.path()).text(),
+				/WEBVTT[\s\S]*Hello Cap/,
+			);
+			await editor.getByRole("button", { name: "Back to editor" }).click();
+			await editor.getByRole("tab", { name: "Captions" }).click();
 		} else {
 			await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
 				state: "visible",
@@ -758,6 +850,9 @@ try {
 				delayedSkeletonRequests,
 				delayedEditorRequests,
 				separateCameraTabEnabled: true,
+				cropFrameSize,
+				cropFrameLoadMs,
+				cropRatiosAndThemesVerified: true,
 				recordingBundleDownloaded: bundleTicketRequests === 1,
 				freeCaptionsUpgradeVisible: !proCaptions,
 				proCaptionGenerationVisible: proCaptions,

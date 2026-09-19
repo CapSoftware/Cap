@@ -163,6 +163,7 @@ export class PortEditorTransport {
 	}
 
 	async invoke(name: string, args: unknown[]) {
+		if (name === "performHapticFeedback") return null;
 		if (name === "saveFileDialog") {
 			const fileName = args[0];
 			const fileType = args[1];
@@ -264,6 +265,24 @@ export class PortEditorTransport {
 			if (isConfigCommand) {
 				if (name === "setProjectConfig") this.savedCaptionCache = captionCache;
 				else this.nativeCaptionCache = captionCache;
+			}
+			if (name === "getDisplayFrameForCropping") {
+				if (
+					typeof value !== "object" ||
+					value === null ||
+					!("jpegBase64" in value) ||
+					typeof value.jpegBase64 !== "string" ||
+					value.jpegBase64.length > 2_800_000
+				) {
+					throw new Error("Crop frame response is invalid");
+				}
+				const jpeg = Uint8Array.from(atob(value.jpegBase64), (byte) =>
+					byte.charCodeAt(0),
+				);
+				if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) {
+					throw new Error("Crop frame response is not a JPEG");
+				}
+				return jpeg;
 			}
 			return value;
 		} catch (error) {

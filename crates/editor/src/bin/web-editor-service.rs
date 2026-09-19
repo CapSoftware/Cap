@@ -14,7 +14,7 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{
-        DefaultBodyLimit, Path, Request, State,
+        DefaultBodyLimit, Path, Query, Request, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::{
@@ -34,9 +34,10 @@ use cap_project::{
     KeyboardSettings, KeyboardTrackSegment, ProjectConfiguration, RecordingMeta,
     RecordingMetaInner, StudioRecordingMeta, XY, generate_project_keyboard_segments,
 };
-use cap_rendering::RenderedFrame;
+use cap_rendering::{PixelFormat, RenderedFrame, cpu_yuv};
 use image::{
     ImageEncoder,
+    codecs::jpeg::JpegEncoder,
     codecs::png::{CompressionType, FilterType, PngEncoder},
 };
 use serde::{Deserialize, Serialize};
@@ -139,6 +140,11 @@ struct PreviewRequest {
     frame_number: u32,
     fps: u32,
     resolution_base: XY<u32>,
+}
+
+#[derive(Deserialize)]
+struct CropFrameRequest {
+    fps: u32,
 }
 
 #[derive(Deserialize)]
@@ -664,6 +670,129 @@ async fn seek(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn crop_frame(
+    State(state): State<Arc<ServiceState>>,
+    Query(request): Query<CropFrameRequest>,
+) -> ApiResult<Response> {
+    if !(1..=60).contains(&request.fps) {
+        return Err(invalid_request("Invalid crop frame rate"));
+    }
+
+    let frame_number = state.editor.state.lock().await.playhead_position;
+    let time_secs = f64::from(frame_number) / f64::from(request.fps);
+    let project = state.editor.project_config.1.borrow().clone();
+    let (segment_time, segment) = project
+        .get_segment_time(time_secs)
+        .ok_or_else(|| invalid_request("No segment found for current time"))?;
+    let segment_media = state
+        .editor
+        .segment_medias
+        .get(segment.recording_clip as usize)
+        .ok_or_else(|| internal_error("Segment media not found"))?;
+    let clip_offsets = project
+        .clips
+        .iter()
+        .find(|clip| clip.index == segment.recording_clip)
+        .map(|clip| clip.offsets)
+        .unwrap_or_default();
+    let segment_frames = segment_media
+        .decoders
+        .get_frames(segment_time as f32, false, true, clip_offsets)
+        .await
+        .ok_or_else(|| internal_error("Failed to decode crop frame"))?;
+    let screen_frame = segment_frames
+        .screen_frame
+        .ok_or_else(|| internal_error("Screen frame is unavailable"))?;
+    let width = screen_frame.width();
+    let height = screen_frame.height();
+    let rgba_len = usize::try_from(width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| internal_error("Crop frame dimensions are invalid"))?;
+    let rgba_data = match screen_frame.format() {
+        PixelFormat::Rgba => screen_frame.data().to_vec(),
+        PixelFormat::Nv12 => {
+            let y_plane = screen_frame
+                .y_plane()
+                .ok_or_else(|| internal_error("Crop frame Y plane is unavailable"))?;
+            let uv_plane = screen_frame
+                .uv_plane()
+                .ok_or_else(|| internal_error("Crop frame UV plane is unavailable"))?;
+            let mut rgba = vec![0; rgba_len];
+            cpu_yuv::nv12_to_rgba(
+                y_plane,
+                uv_plane,
+                width,
+                height,
+                screen_frame.y_stride(),
+                screen_frame.uv_stride(),
+                &mut rgba,
+            );
+            rgba
+        }
+        PixelFormat::Yuv420p => {
+            let y_plane = screen_frame
+                .y_plane()
+                .ok_or_else(|| internal_error("Crop frame Y plane is unavailable"))?;
+            let u_plane = screen_frame
+                .u_plane()
+                .ok_or_else(|| internal_error("Crop frame U plane is unavailable"))?;
+            let v_plane = screen_frame
+                .v_plane()
+                .ok_or_else(|| internal_error("Crop frame V plane is unavailable"))?;
+            let mut rgba = vec![0; rgba_len];
+            cpu_yuv::yuv420p_to_rgba(
+                y_plane,
+                u_plane,
+                v_plane,
+                width,
+                height,
+                screen_frame.y_stride(),
+                screen_frame.uv_stride(),
+                &mut rgba,
+            );
+            rgba
+        }
+    };
+    let jpeg = tokio::task::spawn_blocking(move || -> ApiResult<Vec<u8>> {
+        let rgba = image::RgbaImage::from_raw(width, height, rgba_data)
+            .ok_or_else(|| internal_error("Failed to build crop frame image"))?;
+        let longest_side = width.max(height);
+        let resized = if longest_side > 1440 {
+            let scale = 1440.0 / longest_side as f32;
+            let target_width = (width as f32 * scale).round() as u32;
+            let target_height = (height as f32 * scale).round() as u32;
+            image::imageops::resize(
+                &rgba,
+                target_width.max(1),
+                target_height.max(1),
+                image::imageops::FilterType::Triangle,
+            )
+        } else {
+            rgba
+        };
+        let rgb = image::DynamicImage::ImageRgba8(resized).into_rgb8();
+        let mut jpeg = Vec::new();
+        JpegEncoder::new_with_quality(&mut jpeg, 82)
+            .write_image(
+                rgb.as_raw(),
+                rgb.width(),
+                rgb.height(),
+                image::ExtendedColorType::Rgb8,
+            )
+            .map_err(|error| internal_error(format!("Failed to encode crop frame: {error}")))?;
+        Ok(jpeg)
+    })
+    .await
+    .map_err(|error| internal_error(format!("Crop frame task failed: {error}")))??;
+    Ok(([(CONTENT_TYPE, "image/jpeg")], Bytes::from(jpeg)).into_response())
+}
+
 async fn frames(ws: WebSocketUpgrade, State(state): State<Arc<ServiceState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| frame_socket(socket, state))
 }
@@ -1114,6 +1243,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/preview", post(preview))
         .route("/playback", post(start_playback).delete(stop_playback))
         .route("/seek", put(seek))
+        .route("/crop-frame", get(crop_frame))
         .route("/frames", get(frames))
         .route("/frames-h264", get(h264_frames))
         .route("/audio", get(audio))

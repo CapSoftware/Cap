@@ -40,6 +40,7 @@ const SOCKET_PATH =
 	/^\/editor\/sessions\/((?:[a-z][a-z0-9-]{0,23}\.)?[0-9a-f-]{36})\/(frames|audio|events|commands)$/;
 const FRAME_BACKPRESSURE_BYTES = 4 * 1024 * 1024;
 const MAX_COMMAND_BYTES = 8 * 1024 * 1024 + 64 * 1024;
+const MAX_CROP_JPEG_BYTES = 2 * 1024 * 1024;
 const MAX_PENDING_COMMANDS = 64;
 const BANDWIDTH_PROBE = Buffer.concat([
 	Buffer.from("CAPBAND1"),
@@ -274,6 +275,50 @@ export const editorWebSocketHandler: Bun.WebSocketHandler<EditorSocketConnection
 									command.args[1],
 									ws.data.abort.signal,
 								),
+							};
+						} else if (
+							command.kind === "invoke" &&
+							command.name === "getDisplayFrameForCropping"
+						) {
+							const fps = command.args[0];
+							if (
+								command.args.length !== 1 ||
+								typeof fps !== "number" ||
+								!Number.isInteger(fps) ||
+								fps < 1 ||
+								fps > 60
+							) {
+								throw new Error("Invalid crop frame rate");
+							}
+							const response = await native.request(`/crop-frame?fps=${fps}`, {
+								signal: AbortSignal.any([
+									ws.data.abort.signal,
+									AbortSignal.timeout(30_000),
+								]),
+							});
+							if (
+								!response.ok ||
+								response.headers.get("content-type") !== "image/jpeg"
+							) {
+								throw new Error(
+									`Crop frame request failed: ${response.status}`,
+								);
+							}
+							const contentLength = response.headers.get("content-length");
+							if (
+								contentLength &&
+								Number(contentLength) > MAX_CROP_JPEG_BYTES
+							) {
+								throw new Error("Crop frame is too large");
+							}
+							const jpeg = Buffer.from(await response.arrayBuffer());
+							if (jpeg.length < 4 || jpeg.length > MAX_CROP_JPEG_BYTES) {
+								throw new Error("Crop frame is unavailable or too large");
+							}
+							reply = {
+								kind: "result",
+								id: command.id,
+								value: { jpegBase64: jpeg.toString("base64") },
 							};
 						} else if (
 							command.kind === "invoke" &&

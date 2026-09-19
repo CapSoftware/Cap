@@ -59,6 +59,44 @@ test("closing the editor port rejects unfinished commands", async () => {
 	channel.port2.close();
 });
 
+test("crop frames cross the editor port as compact JPEG bytes", async () => {
+	const channel = new MessageChannel();
+	const transport = new PortEditorTransport(channel.port1);
+	let valid = true;
+	const requests: Array<{ name: string; args: unknown[] }> = [];
+	channel.port2.onmessage = (event: MessageEvent<unknown>) => {
+		const request = event.data as { id: number; name: string; args: unknown[] };
+		requests.push({ name: request.name, args: request.args });
+		channel.port2.postMessage({
+			kind: "result",
+			id: request.id,
+			value: { jpegBase64: valid ? "/9j/2Q==" : "bm90IGEganBlZw==" },
+		});
+	};
+	channel.port2.start();
+	try {
+		expect(
+			await transport.invoke("performHapticFeedback", ["alignment", null]),
+		).toBeNull();
+		expect(requests).toEqual([]);
+		const jpeg = await transport.invoke("getDisplayFrameForCropping", [60]);
+		expect(jpeg).toBeInstanceOf(Uint8Array);
+		expect(Array.from(jpeg as Uint8Array)).toEqual([255, 216, 255, 217]);
+		await Bun.sleep(0);
+		valid = false;
+		await expect(
+			transport.invoke("getDisplayFrameForCropping", [60]),
+		).rejects.toThrow("Crop frame response is not a JPEG");
+		expect(requests).toEqual([
+			{ name: "getDisplayFrameForCropping", args: [60] },
+			{ name: "getDisplayFrameForCropping", args: [60] },
+		]);
+	} finally {
+		transport.dispose();
+		channel.port2.close();
+	}
+});
+
 test("reactive Solid project values are serialized before crossing the port", async () => {
 	const channel = new MessageChannel();
 	const transport = new PortEditorTransport(channel.port1);
