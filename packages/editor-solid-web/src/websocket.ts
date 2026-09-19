@@ -9,6 +9,74 @@ const bandwidthProbeMagic = new Uint8Array([67, 65, 80, 66, 65, 78, 68, 49]);
 const pngMagic = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 const rgbaCopyOptions = { format: "RGBA" as const };
 
+type PixelCanvas = OffscreenCanvas | HTMLCanvasElement;
+type PixelContext =
+	| OffscreenCanvasRenderingContext2D
+	| CanvasRenderingContext2D;
+
+function createPixelCanvas(width: number, height: number) {
+	if (typeof OffscreenCanvas !== "undefined") {
+		try {
+			const canvas = new OffscreenCanvas(width, height);
+			const context = canvas.getContext("2d", { willReadFrequently: true });
+			if (context) return { canvas, context };
+		} catch {}
+	}
+	if (typeof document === "undefined") {
+		throw new Error("Editor frame canvas is unavailable");
+	}
+	const canvas = document.createElement("canvas");
+	canvas.width = width;
+	canvas.height = height;
+	const context = canvas.getContext("2d", { willReadFrequently: true });
+	if (!context) throw new Error("Editor frame canvas is unavailable");
+	return {
+		canvas,
+		context,
+	};
+}
+
+async function decodePngImage(bytes: Uint8Array<ArrayBuffer>) {
+	const blob = new Blob([bytes], { type: "image/png" });
+	if (typeof createImageBitmap === "function") {
+		const bitmap = await createImageBitmap(blob, {
+			colorSpaceConversion: "none",
+			premultiplyAlpha: "none",
+		});
+		return {
+			image: bitmap as CanvasImageSource,
+			width: bitmap.width,
+			height: bitmap.height,
+			dispose: () => bitmap.close(),
+		};
+	}
+	if (
+		typeof Image === "undefined" ||
+		typeof URL.createObjectURL !== "function"
+	) {
+		throw new Error("Editor PNG frame decoder is unavailable");
+	}
+	const objectUrl = URL.createObjectURL(blob);
+	try {
+		const image = new Image();
+		await new Promise<void>((resolve, reject) => {
+			image.onload = () => resolve();
+			image.onerror = () =>
+				reject(new Error("Editor PNG frame could not load"));
+			image.src = objectUrl;
+		});
+		return {
+			image: image as CanvasImageSource,
+			width: image.naturalWidth,
+			height: image.naturalHeight,
+			dispose: () => URL.revokeObjectURL(objectUrl),
+		};
+	} catch (error) {
+		URL.revokeObjectURL(objectUrl);
+		throw error;
+	}
+}
+
 type H264FramePacket = {
 	sequence: number;
 	isKeyframe: boolean;
@@ -103,8 +171,8 @@ export function createWS(url: string) {
 		`cap-editor-ticket.${ticket}`,
 	]);
 	socket.binaryType = "arraybuffer";
-	let canvas: OffscreenCanvas | null = null;
-	let context: OffscreenCanvasRenderingContext2D | null = null;
+	let canvas: PixelCanvas | null = null;
+	let context: PixelContext | null = null;
 	let latest: ArrayBuffer | null = null;
 	let decoding = false;
 	let h264Requested =
@@ -126,8 +194,8 @@ export function createWS(url: string) {
 	let latestDecoded: { frame: VideoFrame; packet: H264FramePacket } | null =
 		null;
 	let copyingDecoded = false;
-	let h264Canvas: OffscreenCanvas | null = null;
-	let h264Context: OffscreenCanvasRenderingContext2D | null = null;
+	let h264Canvas: PixelCanvas | null = null;
+	let h264Context: PixelContext | null = null;
 	const copyDecodedFrameWithCanvas = (
 		frame: VideoFrame,
 		packet: H264FramePacket,
@@ -138,10 +206,9 @@ export function createWS(url: string) {
 			h264Canvas.width !== packet.width ||
 			h264Canvas.height !== packet.height
 		) {
-			h264Canvas = new OffscreenCanvas(packet.width, packet.height);
-			h264Context = h264Canvas.getContext("2d", {
-				willReadFrequently: true,
-			});
+			const surface = createPixelCanvas(packet.width, packet.height);
+			h264Canvas = surface.canvas;
+			h264Context = surface.context;
 		}
 		if (!h264Context)
 			throw new Error("Editor H.264 frame conversion is unavailable");
@@ -172,21 +239,19 @@ export function createWS(url: string) {
 		) {
 			throw new Error("Editor frame was invalid");
 		}
-		const bitmap = await createImageBitmap(
-			new Blob([pngBytes], { type: "image/png" }),
-			{ colorSpaceConversion: "none", premultiplyAlpha: "none" },
-		);
+		const decoded = await decodePngImage(pngBytes);
 		try {
-			if (bitmap.width !== width || bitmap.height !== height) {
+			if (decoded.width !== width || decoded.height !== height) {
 				throw new Error("Editor frame dimensions changed");
 			}
 			if (!canvas || canvas.width !== width || canvas.height !== height) {
-				canvas = new OffscreenCanvas(width, height);
-				context = canvas.getContext("2d", { willReadFrequently: true });
+				const surface = createPixelCanvas(width, height);
+				canvas = surface.canvas;
+				context = surface.context;
 			}
 			if (!context) throw new Error("Editor frame decoder is unavailable");
 			context.clearRect(0, 0, width, height);
-			context.drawImage(bitmap, 0, 0);
+			context.drawImage(decoded.image, 0, 0);
 			const pixels = context.getImageData(0, 0, width, height).data;
 			const raw = new ArrayBuffer(pixels.length + 24);
 			const rawBytes = new Uint8Array(raw);
@@ -195,7 +260,7 @@ export function createWS(url: string) {
 			new DataView(raw, pixels.length, 24).setUint32(0, rowBytes, true);
 			return raw;
 		} finally {
-			bitmap.close();
+			decoded.dispose();
 		}
 	};
 	const drain = async () => {
@@ -507,6 +572,10 @@ export function createWS(url: string) {
 		h264Requested = false;
 		h264Decoder?.close();
 		latestDecoded?.frame.close();
+		canvas = null;
+		context = null;
+		h264Canvas = null;
+		h264Context = null;
 		socket.close();
 	});
 	return socket;
