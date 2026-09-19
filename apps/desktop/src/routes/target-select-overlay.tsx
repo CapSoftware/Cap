@@ -57,6 +57,7 @@ import {
 	type Ratio,
 } from "~/components/Cropper";
 import ModeSelect from "~/components/ModeSelect";
+import ScreenSelector from "~/components/record-modal/screen-selector";
 import SelectionHint from "~/components/selection-hint";
 import {
 	authStore,
@@ -2402,6 +2403,9 @@ function RecordingControls(props: {
 				</Show>
 			</div>
 			<div class="flex justify-center items-center w-full">
+				<Show when={props.target.variant === "display"}>
+					<ScreenSelector class="justify-center" />
+				</Show>
 				<div
 					onClick={() => props.setToggleModeSelect?.(true)}
 					class="flex gap-1 justify-center items-center self-center mb-5 transition-opacity duration-200 w-fit hover:opacity-60"
