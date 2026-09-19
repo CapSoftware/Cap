@@ -58,7 +58,7 @@ jobs:
             runner: ubuntu-24.04
             headed: false
           - browser: webkit
-            runner: macos-latest
+            runner: macos-15
             headed: true
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
