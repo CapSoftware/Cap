@@ -28,7 +28,8 @@ export const ScreenSelector: Component<ScreenSelectorProps> = (props) => {
 				{(display) => (
 					<button
 						type="button"
-						class={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+						aria-pressed={selectedId() === display.id}
+						class={`px-2.5 py-1 rounded text-xs font-medium transition-colors inline-flex items-center gap-1 ${
 							selectedId() === display.id
 								? "bg-blue-600 text-white"
 								: "bg-gray-800 text-gray-300 hover:bg-gray-700"
@@ -38,7 +39,8 @@ export const ScreenSelector: Component<ScreenSelectorProps> = (props) => {
 							props.onSelect?.(display);
 						}}
 					>
-						{display.name}
+						{selectedId() === display.id && <span class="text-xs">✓</span>}
+						<span>{display.name}</span>
 					</button>
 				)}
 			</For>
