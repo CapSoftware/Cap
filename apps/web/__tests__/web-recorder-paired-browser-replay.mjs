@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { chromium } from "@playwright/test";
+import { chromium, webkit } from "@playwright/test";
 import { build } from "esbuild";
 
 const root = resolve(import.meta.dirname, "../../..");
@@ -110,36 +110,109 @@ await build({
 	],
 });
 
-async function replayPairedCapture(browser, bundle, pauseResume) {
+async function replayPairedCapture(
+	browser,
+	bundle,
+	pauseResume,
+	engine,
+	failCameraSpool = false,
+	failCameraCompletion = false,
+) {
 	const requests = [];
 	const parts = [];
 	const browserErrors = [];
+	const cameraSubpath = `camera-upload.${engine.extension}`;
+	const screenSubpath = `raw-upload.${engine.extension}`;
 	const context = await browser.newContext();
 	try {
-		await context.addInitScript(() => {
-			const createCanvasStream = (width, height, color) => {
-				const canvas = document.createElement("canvas");
-				canvas.width = width;
-				canvas.height = height;
-				const canvasContext = canvas.getContext("2d");
-				if (!canvasContext) throw new Error("Canvas capture is unavailable");
-				let frame = 0;
-				const paint = () => {
-					canvasContext.fillStyle = color;
-					canvasContext.fillRect(0, 0, width, height);
-					canvasContext.fillStyle = "white";
-					canvasContext.font = "24px sans-serif";
-					canvasContext.fillText(String(frame++), 20, 40);
+		await context.addInitScript(
+			(options) => {
+				if (options.failCameraSpool) {
+					const put = IDBObjectStore.prototype.put;
+					IDBObjectStore.prototype.put = function (value, ...rest) {
+						if (
+							this.name === "chunks" &&
+							value?.sessionId?.endsWith("-camera")
+						) {
+							window.capRecorderCameraSpoolFailures =
+								(window.capRecorderCameraSpoolFailures ?? 0) + 1;
+							throw new DOMException(
+								"Simulated camera Blob store failure",
+								"UnknownError",
+							);
+						}
+						return put.call(this, value, ...rest);
+					};
+				}
+				const createCanvasStream = (width, height, color) => {
+					const canvas = document.createElement("canvas");
+					canvas.width = width;
+					canvas.height = height;
+					const canvasContext = canvas.getContext("2d");
+					if (!canvasContext) throw new Error("Canvas capture is unavailable");
+					let frame = 0;
+					const paint = () => {
+						canvasContext.fillStyle = color;
+						canvasContext.fillRect(0, 0, width, height);
+						canvasContext.fillStyle = "white";
+						canvasContext.font = "24px sans-serif";
+						canvasContext.fillText(String(frame++), 20, 40);
+					};
+					paint();
+					setInterval(paint, 33);
+					return canvas.captureStream(30);
 				};
-				paint();
-				setInterval(paint, 33);
-				return canvas.captureStream(30);
-			};
-			const display = createCanvasStream(640, 360, "#203060");
-			const camera = createCanvasStream(320, 180, "#b02040");
-			navigator.mediaDevices.getDisplayMedia = async () => display;
-			navigator.mediaDevices.getUserMedia = async () => camera;
-		});
+				let display;
+				let camera;
+				const mediaDevices = navigator.mediaDevices;
+				window.capRecorderMediaDevices = mediaDevices;
+				const getDisplayMedia = async () => {
+					display ??= createCanvasStream(640, 360, "#203060");
+					return display;
+				};
+				const getUserMedia = async () => {
+					camera ??= createCanvasStream(320, 180, "#b02040");
+					return camera;
+				};
+				Object.defineProperty(mediaDevices, "getDisplayMedia", {
+					configurable: true,
+					value: getDisplayMedia,
+				});
+				Object.defineProperty(mediaDevices, "getUserMedia", {
+					configurable: true,
+					value: getUserMedia,
+				});
+				window.capRecorderPutBodies = [];
+				const open = XMLHttpRequest.prototype.open;
+				XMLHttpRequest.prototype.open = function (method, url, ...options) {
+					this.capRecorderUploadUrl = method === "PUT" ? String(url) : null;
+					return open.call(this, method, url, ...options);
+				};
+				const send = XMLHttpRequest.prototype.send;
+				XMLHttpRequest.prototype.send = function (body) {
+					if (
+						this.capRecorderUploadUrl?.includes("/part/") &&
+						body instanceof Blob
+					) {
+						const url = this.capRecorderUploadUrl;
+						window.capRecorderPutBodies.push(
+							body
+								.arrayBuffer()
+								.then((buffer) => crypto.subtle.digest("SHA-256", buffer))
+								.then((digest) => ({
+									url,
+									bytes: body.size,
+									sha256: Array.from(new Uint8Array(digest), (byte) =>
+										byte.toString(16).padStart(2, "0"),
+									).join(""),
+								})),
+						);
+					}
+					return send.call(this, body);
+				};
+			},
+			{ failCameraSpool },
+		);
 		const page = await context.newPage();
 		page.on("console", (message) => {
 			if (message.type() === "error") browserErrors.push(message.text());
@@ -202,9 +275,16 @@ async function replayPairedCapture(browser, bundle, pauseResume) {
 				}
 				if (path.endsWith("/complete")) {
 					await route.fulfill({
-						status: 200,
+						status:
+							failCameraCompletion && body.subpath === cameraSubpath
+								? 400
+								: 200,
 						contentType: "application/json",
-						body: JSON.stringify({ success: true, processingStarted: true }),
+						body: JSON.stringify(
+							failCameraCompletion && body.subpath === cameraSubpath
+								? { error: "Simulated camera completion rejection" }
+								: { success: true, processingStarted: true },
+						),
 					});
 					return;
 				}
@@ -243,35 +323,104 @@ async function replayPairedCapture(browser, bundle, pauseResume) {
 		await page.waitForTimeout(1700);
 		await page.evaluate(() => window.capRecorderHarness.stopRecording());
 		await page.waitForFunction(
-			() => window.capRecorderHarness?.phase === "completed",
-			null,
+			(expectedPhase) => window.capRecorderHarness?.phase === expectedPhase,
+			failCameraCompletion ? "error" : "completed",
 			{ timeout: 30000 },
 		);
+		if (failCameraCompletion) {
+			const evidence = await page.evaluate(async () => {
+				const readBytes = async (download) =>
+					download ? (await (await fetch(download.url)).blob()).size : 0;
+				return {
+					cameraBackupBytes: await readBytes(
+						window.capRecorderHarness?.cameraErrorDownload,
+					),
+					displayBackupBytes: await readBytes(
+						window.capRecorderHarness?.errorDownload,
+					),
+				};
+			});
+			const sentParts = await page.evaluate(() =>
+				Promise.all(window.capRecorderPutBodies),
+			);
+			const cameraBytes = sentParts
+				.filter((part) => part.url.includes(cameraSubpath))
+				.reduce((total, part) => total + part.bytes, 0);
+			assert.ok(cameraBytes > 0);
+			assert.equal(evidence.cameraBackupBytes, cameraBytes);
+			assert.ok(evidence.displayBackupBytes > 0);
+			assert.ok(
+				browserErrors.some((error) =>
+					error.includes("Failed to upload camera recording"),
+				),
+			);
+			return {
+				engine: engine.name,
+				pauseResume,
+				failCameraCompletion,
+				...evidence,
+			};
+		}
 		assert.deepEqual(browserErrors, []);
+		if (failCameraSpool) {
+			assert.ok(
+				(await page.evaluate(() => window.capRecorderCameraSpoolFailures)) > 0,
+			);
+		}
 		const completions = requests.filter((request) =>
 			request.path.endsWith("/complete"),
 		);
 		assert.equal(completions.length, 2);
 		assert.deepEqual(
 			completions.map((request) => request.body.subpath).sort(),
-			["camera-upload.webm", "raw-upload.webm"],
+			[cameraSubpath, screenSubpath],
 		);
-		const cameraPart = parts.find((part) =>
-			part.path.includes("camera-upload.webm"),
+		const sentParts = await page.evaluate(() =>
+			Promise.all(window.capRecorderPutBodies),
 		);
-		const screenPart = parts.find((part) =>
-			part.path.includes("raw-upload.webm"),
+		const cameraParts = sentParts.filter((part) =>
+			part.url.includes(cameraSubpath),
 		);
-		assert.ok(cameraPart?.bytes > 0);
-		assert.ok(screenPart?.bytes > 0);
-		assert.notEqual(cameraPart.sha256, screenPart.sha256);
+		const screenParts = sentParts.filter((part) =>
+			part.url.includes(screenSubpath),
+		);
+		const cameraBytes = cameraParts.reduce(
+			(total, part) => total + part.bytes,
+			0,
+		);
+		const screenBytes = screenParts.reduce(
+			(total, part) => total + part.bytes,
+			0,
+		);
+		assert.ok(cameraBytes > 0);
+		assert.ok(screenBytes > 0);
+		assert.notEqual(cameraParts[0].sha256, screenParts[0].sha256);
+		if (engine.extension === "webm") {
+			const cameraPart = parts.find((part) =>
+				part.path.includes(cameraSubpath),
+			);
+			const screenPart = parts.find((part) =>
+				part.path.includes(screenSubpath),
+			);
+			assert.ok(cameraPart?.bytes > 0);
+			assert.ok(screenPart?.bytes > 0);
+			assert.notEqual(cameraPart.sha256, screenPart.sha256);
+		}
 		const cameraComplete = completions.find(
-			(request) => request.body.subpath === "camera-upload.webm",
+			(request) => request.body.subpath === cameraSubpath,
 		);
 		const screenComplete = completions.find(
-			(request) => request.body.subpath === "raw-upload.webm",
+			(request) => request.body.subpath === screenSubpath,
 		);
-		assert.equal(cameraComplete.body.screenSubpath, "raw-upload.webm");
+		assert.equal(cameraComplete.body.screenSubpath, screenSubpath);
+		assert.equal(
+			cameraComplete.body.parts.reduce((total, part) => total + part.size, 0),
+			cameraBytes,
+		);
+		assert.equal(
+			screenComplete.body.parts.reduce((total, part) => total + part.size, 0),
+			screenBytes,
+		);
 		assert.ok(Number.isInteger(cameraComplete.body.cameraOffsetMs));
 		assert.ok(Math.abs(cameraComplete.body.cameraOffsetMs) < 500);
 		assert.deepEqual(
@@ -283,9 +432,11 @@ async function replayPairedCapture(browser, bundle, pauseResume) {
 			[640, 360],
 		);
 		return {
+			engine: engine.name,
 			pauseResume,
-			cameraBytes: cameraPart.bytes,
-			screenBytes: screenPart.bytes,
+			failCameraSpool,
+			cameraBytes,
+			screenBytes,
 			cameraOffsetMs: cameraComplete.body.cameraOffsetMs,
 		};
 	} finally {
@@ -294,14 +445,42 @@ async function replayPairedCapture(browser, bundle, pauseResume) {
 }
 
 const bundle = await readFile(artifact, "utf8");
-const browser = await chromium.launch({ headless: true });
+const engines = [
+	{ name: "Chromium", browserType: chromium, extension: "webm" },
+	{ name: "WebKit", browserType: webkit, extension: "mp4" },
+];
 try {
 	const results = [];
-	for (const pauseResume of [false, true]) {
-		results.push(await replayPairedCapture(browser, bundle, pauseResume));
+	for (const engine of engines) {
+		const browser = await engine.browserType.launch({ headless: true });
+		try {
+			for (const pauseResume of [false, true]) {
+				results.push(
+					await replayPairedCapture(browser, bundle, pauseResume, engine),
+				);
+			}
+			if (engine.name === "Chromium") {
+				results.push(
+					await replayPairedCapture(browser, bundle, false, engine, true),
+				);
+			}
+			if (engine.name === "WebKit") {
+				results.push(
+					await replayPairedCapture(
+						browser,
+						bundle,
+						false,
+						engine,
+						false,
+						true,
+					),
+				);
+			}
+		} finally {
+			await browser.close();
+		}
 	}
 	process.stdout.write(`${JSON.stringify(results)}\n`);
 } finally {
-	await browser.close();
 	await rm(artifactDirectory, { recursive: true });
 }

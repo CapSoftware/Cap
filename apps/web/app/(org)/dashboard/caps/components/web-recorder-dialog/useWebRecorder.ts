@@ -591,16 +591,24 @@ export const useWebRecorder = ({
 
 	const disposeCameraSpool = useCallback(async () => {
 		const spool = cameraSpoolRef.current;
+		const failed = cameraSpoolFailedRef.current;
 		cameraSpoolRef.current = null;
 		cameraSpoolFailedRef.current = false;
 		cameraFallbackRef.current = initialLocalRecordingState();
 		stopCameraSpoolHeartbeat();
 		if (!spool) return;
-		try {
-			await spool.dispose();
-		} catch (error) {
-			console.error("Failed to dispose camera recording spool", error);
+		const dispose = async () => {
+			try {
+				await spool.dispose();
+			} catch (error) {
+				console.error("Failed to dispose camera recording spool", error);
+			}
+		};
+		if (failed) {
+			void dispose();
+			return;
 		}
+		await dispose();
 	}, [stopCameraSpoolHeartbeat]);
 
 	const retainFailedRecordingSpools = useCallback(() => {
@@ -660,30 +668,62 @@ export const useWebRecorder = ({
 		[stopCameraSpoolHeartbeat],
 	);
 
-	const persistCameraChunk = useCallback((chunk: Blob) => {
-		const spool = cameraSpoolRef.current;
-		if (!spool || cameraSpoolFailedRef.current) {
-			const previous = cameraFallbackRef.current;
-			const next = appendLocalRecordingChunk(previous, chunk, {
-				mode: "capped",
-				maxBytes: MEMORY_BACKUP_MAX_BYTES,
-			});
-			cameraFallbackRef.current = next;
-			return !previous.overflowed && next.overflowed;
-		}
-		void spool.appendChunk(chunk).catch((error) => {
-			if (cameraSpoolRef.current !== spool || cameraSpoolFailedRef.current) {
-				return;
-			}
+	const switchCameraBackupToMemory = useCallback(
+		(error: unknown) => {
+			if (cameraSpoolFailedRef.current) return;
+			const unwrittenChunks =
+				cameraSpoolRef.current?.getUnwrittenChunks() ?? [];
+			const fallback = cameraFallbackRef.current;
+			const retainedBytes =
+				unwrittenChunks.reduce((total, chunk) => total + chunk.size, 0) +
+				fallback.retainedBytes;
+			const overflowed =
+				fallback.overflowed || retainedBytes > MEMORY_BACKUP_MAX_BYTES;
+			cameraFallbackRef.current = overflowed
+				? { chunks: [], retainedBytes: 0, overflowed: true }
+				: {
+						chunks: [...unwrittenChunks, ...fallback.chunks],
+						retainedBytes,
+						overflowed: false,
+					};
 			cameraSpoolFailedRef.current = true;
-			console.error("Failed to persist camera recording chunk", error);
-			toast.error(
-				"Camera backup could not keep up. Stopping to protect both recording clips.",
+			stopCameraSpoolHeartbeat();
+			console.warn("Camera backup moved to bounded memory", error);
+			toast.warning(
+				"Durable camera backup is unavailable. Camera recovery will use bounded memory.",
 			);
-			void stopRecordingRef.current?.();
-		});
-		return false;
-	}, []);
+			if (overflowed) {
+				toast.warning(
+					"Camera memory backup reached its limit. Finishing both clips now.",
+				);
+				void stopRecordingRef.current?.();
+			}
+		},
+		[stopCameraSpoolHeartbeat],
+	);
+
+	const persistCameraChunk = useCallback(
+		(chunk: Blob) => {
+			const spool = cameraSpoolRef.current;
+			if (!spool || cameraSpoolFailedRef.current) {
+				const previous = cameraFallbackRef.current;
+				const next = appendLocalRecordingChunk(previous, chunk, {
+					mode: "capped",
+					maxBytes: MEMORY_BACKUP_MAX_BYTES,
+				});
+				cameraFallbackRef.current = next;
+				return !previous.overflowed && next.overflowed;
+			}
+			void spool.appendChunk(chunk).catch((error) => {
+				if (cameraSpoolRef.current !== spool || cameraSpoolFailedRef.current) {
+					return;
+				}
+				switchCameraBackupToMemory(error);
+			});
+			return false;
+		},
+		[switchCameraBackupToMemory],
+	);
 
 	const persistChunkToRecordingSpool = useCallback(
 		(chunk: Blob) => {
@@ -773,10 +813,25 @@ export const useWebRecorder = ({
 		const spool = cameraSpoolRef.current;
 		const fallback = cameraFallbackRef.current;
 		if (fallback.overflowed) return null;
-		const remainingChunks = fallback.chunks;
+		if (fallback.retainedBytes === cameraRecorderBytesRef.current) {
+			return fallback.chunks.length > 0
+				? new Blob(fallback.chunks, { type: fallback.chunks[0]?.type })
+				: null;
+		}
+		let timeoutId: number | null = null;
 		try {
-			const persisted = await spool?.recoverBlob();
-			if (!persisted && remainingChunks.length === 0) return null;
+			const persisted = spool
+				? await Promise.race([
+						spool.recoverPersistedBlob(),
+						new Promise<never>((_, reject) => {
+							timeoutId = window.setTimeout(
+								() => reject(new Error("Camera backup read timed out")),
+								5000,
+							);
+						}),
+					])
+				: null;
+			if (!persisted && fallback.chunks.length === 0) return null;
 			if (
 				(persisted?.size ?? 0) + fallback.retainedBytes !==
 				cameraRecorderBytesRef.current
@@ -784,12 +839,14 @@ export const useWebRecorder = ({
 				return null;
 			}
 			return new Blob(
-				persisted ? [persisted, ...remainingChunks] : remainingChunks,
-				{ type: spool ? persisted?.type : remainingChunks[0]?.type },
+				persisted ? [persisted, ...fallback.chunks] : fallback.chunks,
+				{ type: persisted?.type ?? fallback.chunks[0]?.type },
 			);
 		} catch (error) {
 			console.error("Failed to reconstruct camera recording", error);
 			return null;
+		} finally {
+			if (timeoutId !== null) window.clearTimeout(timeoutId);
 		}
 	}, []);
 
@@ -1637,8 +1694,15 @@ export const useWebRecorder = ({
 				throw failedAudioStop.reason;
 			}
 			if (pairedCameraCapture) {
-				await cameraSpoolRef.current?.flush();
-				if (cameraSpoolFailedRef.current || cameraRecorderFailedRef.current) {
+				try {
+					await cameraSpoolRef.current?.flush();
+				} catch (error) {
+					switchCameraBackupToMemory(error);
+				}
+				if (
+					cameraFallbackRef.current.overflowed ||
+					cameraRecorderFailedRef.current
+				) {
 					throw new Error(
 						"Camera recording ended before both clips were saved",
 					);
@@ -2097,6 +2161,7 @@ export const useWebRecorder = ({
 		retainFailedRecordingSpools,
 		clearInstantChunkGuard,
 		stopCameraRecorder,
+		switchCameraBackupToMemory,
 		replaceCameraErrorDownload,
 		replaceAudioErrorDownloads,
 	]);

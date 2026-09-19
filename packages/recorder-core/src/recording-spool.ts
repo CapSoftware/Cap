@@ -63,7 +63,17 @@ const transactionToPromise = (transaction: IDBTransaction) =>
 	new Promise<void>((resolve, reject) => {
 		transaction.oncomplete = () => resolve();
 		transaction.onabort = () => reject(normalizeError(transaction.error));
-		transaction.onerror = () => reject(normalizeError(transaction.error));
+		transaction.onerror = (event) => {
+			const request = event.target;
+			const requestError = request instanceof IDBRequest ? request.error : null;
+			reject(
+				normalizeError(
+					requestError ??
+						transaction.error ??
+						new Error("IndexedDB transaction failed"),
+				),
+			);
+		};
 	});
 
 const createSessionId = () => {
@@ -121,30 +131,30 @@ class IndexedDbRecordingSpoolBackend implements RecordingSpoolBackend {
 		const database = await this.openDatabase();
 		const transaction = database.transaction(CHUNKS_STORE, "readonly");
 		const index = transaction.objectStore(CHUNKS_STORE).index("by-session");
-		const records = await requestToPromise(
-			index.getAll(IDBKeyRange.only(sessionId)),
-		);
-		await transactionToPromise(transaction);
+		const [records] = await Promise.all([
+			requestToPromise(index.getAll(IDBKeyRange.only(sessionId))),
+			transactionToPromise(transaction),
+		]);
 		return (records as RecordingSpoolChunk[]).map((record) => record.blob);
 	}
 
 	async listSessions() {
 		const database = await this.openDatabase();
 		const transaction = database.transaction(SESSIONS_STORE, "readonly");
-		const records = await requestToPromise(
-			transaction.objectStore(SESSIONS_STORE).getAll(),
-		);
-		await transactionToPromise(transaction);
+		const [records] = await Promise.all([
+			requestToPromise(transaction.objectStore(SESSIONS_STORE).getAll()),
+			transactionToPromise(transaction),
+		]);
 		return records as RecordingSpoolSessionRecord[];
 	}
 
 	async getSession(sessionId: string) {
 		const database = await this.openDatabase();
 		const transaction = database.transaction(SESSIONS_STORE, "readonly");
-		const record = await requestToPromise(
-			transaction.objectStore(SESSIONS_STORE).get(sessionId),
-		);
-		await transactionToPromise(transaction);
+		const [record] = await Promise.all([
+			requestToPromise(transaction.objectStore(SESSIONS_STORE).get(sessionId)),
+			transactionToPromise(transaction),
+		]);
 		return (record as RecordingSpoolSessionRecord | undefined) ?? null;
 	}
 
@@ -200,10 +210,10 @@ class IndexedDbRecordingSpoolBackend implements RecordingSpoolBackend {
 		const database = await this.openDatabase();
 		const transaction = database.transaction(CHUNKS_STORE, "readonly");
 		const index = transaction.objectStore(CHUNKS_STORE).index("by-session");
-		const keys = await requestToPromise(
-			index.getAllKeys(IDBKeyRange.only(sessionId)),
-		);
-		await transactionToPromise(transaction);
+		const [keys] = await Promise.all([
+			requestToPromise(index.getAllKeys(IDBKeyRange.only(sessionId))),
+			transactionToPromise(transaction),
+		]);
 		return keys;
 	}
 }
@@ -263,6 +273,10 @@ export class RecordingSpool {
 
 	get chunkCount() {
 		return this.session.chunkCount;
+	}
+
+	getUnwrittenChunks() {
+		return [...this.pendingChunks];
 	}
 
 	appendChunk(chunk: Blob) {
@@ -355,6 +369,11 @@ export class RecordingSpool {
 				: [...this.pendingChunks],
 			{ type: this.session.mimeType },
 		);
+	}
+
+	async recoverPersistedBlob() {
+		await this.pendingWrite;
+		return this.readPersistedBlob();
 	}
 
 	private async readPersistedBlob() {
