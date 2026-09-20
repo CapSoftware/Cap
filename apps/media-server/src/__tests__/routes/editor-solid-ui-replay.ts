@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { stat, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import {
 	CAP_BUNDLE_HEADER_BYTES,
@@ -22,6 +23,8 @@ const videoId = "editor-solid-ui-replay";
 const userId = "editor-solid-ui-user";
 const proCaptions = process.env.CAP_EDITOR_UI_PRO_CAPTIONS === "1";
 const shareReplay = process.env.CAP_EDITOR_UI_SHARE_REPLAY === "1";
+const cursorMovReplay = process.env.CAP_EDITOR_UI_CURSOR_MOV === "1";
+assert.ok(!(shareReplay && cursorMovReplay));
 const coldMount = process.env.CAP_EDITOR_UI_COLD_MOUNT === "1";
 const recoveryFault = process.env.CAP_EDITOR_UI_RUNTIME_RECOVERY_FAULT === "1";
 const runtimeFault =
@@ -47,6 +50,29 @@ const camera = join(
 );
 const image = join(import.meta.dir, "../fixtures/exif-orientation-6.jpg");
 const imagePath = "content/images/3d82ac0f-c24a-4c21-aa3c-e1749c23b24b.jpg";
+const cursorInputEvents = `${[
+	{ version: 1, platform: "MacOS" },
+	{
+		kind: "move",
+		timeMs: 200,
+		x: 0.3,
+		y: 0.4,
+		cursor: "default",
+		button: 0,
+		modifiers: [],
+	},
+	{
+		kind: "move",
+		timeMs: 1000,
+		x: 0.7,
+		y: 0.6,
+		cursor: "pointer",
+		button: 0,
+		modifiers: [],
+	},
+]
+	.map((event) => JSON.stringify(event))
+	.join("\n")}\n`;
 const imageKey = `${userId}/${videoId}/editor-assets/images/${imagePath.slice("content/images/".length)}`;
 
 async function readySession(id: string, headers: Record<string, string>) {
@@ -134,6 +160,21 @@ let imageImports = 0;
 let imagePreviewRequests = 0;
 let uploadedImage: Uint8Array<ArrayBuffer> | null = null;
 let renderedExportId: string | null = null;
+let cursorMovTicketRequests = 0;
+let cursorMovDownloadUrl: string | null = null;
+let cursorMovWorkerDigest: { sha256: string; size: number } | null = null;
+function requireCursorMovWorkerDigest() {
+	const digest = cursorMovWorkerDigest;
+	if (!digest) throw new Error("Cursor-only MOV worker file is unavailable");
+	return digest;
+}
+let cursorMovVerification: {
+	sha256: string;
+	size: number;
+	visibleFrames: number;
+} | null = null;
+let cursorMovExpectedStatus404 = 0;
+let cursorMovExpectedConsole404 = 0;
 let multipartInitiations = 0;
 let exportChunkRequests = 0;
 const uploadedParts = new Map<number, Buffer>();
@@ -154,6 +195,10 @@ try {
 				return new Response(Bun.file(display));
 			if (url.pathname === "/camera.webm")
 				return new Response(Bun.file(camera));
+			if (url.pathname === "/input-events.ndjson")
+				return new Response(cursorInputEvents, {
+					headers: { "Content-Type": "application/x-ndjson" },
+				});
 			if (
 				url.pathname === "/api/upload/multipart/initiate" &&
 				request.method === "POST"
@@ -336,6 +381,16 @@ try {
 						payload.settings === null
 					)
 						return new Response("Invalid editor export", { status: 400 });
+					if (
+						cursorMovReplay &&
+						(!("format" in payload.settings) ||
+							payload.settings.format !== "Mov" ||
+							!("cursor_only" in payload.settings) ||
+							payload.settings.cursor_only !== true)
+					)
+						return new Response("Invalid cursor-only MOV settings", {
+							status: 400,
+						});
 					const started = await app.request(
 						`/editor/sessions/${sessionId}/exports`,
 						{
@@ -356,8 +411,9 @@ try {
 					if (
 						!exportId ||
 						extra ||
-						url.searchParams.get("videoId") !== videoId ||
-						(action && action !== "chunk")
+						(action !== "download-ticket" &&
+							url.searchParams.get("videoId") !== videoId) ||
+						(action && action !== "chunk" && action !== "download-ticket")
 					)
 						return new Response("Invalid editor export request", {
 							status: 400,
@@ -381,6 +437,41 @@ try {
 						);
 						if (chunk.status === 206) exportChunkRequests++;
 						return chunk;
+					}
+					if (action === "download-ticket" && request.method === "POST") {
+						const payload = (await request.json()) as {
+							videoId?: string;
+							fileName?: string;
+						};
+						if (
+							!cursorMovReplay ||
+							payload.videoId !== videoId ||
+							!payload.fileName?.endsWith(".mov")
+						)
+							return new Response("Invalid cursor-only MOV ticket", {
+								status: 400,
+							});
+						const ticket = await app.request(`${workerPath}/download-ticket`, {
+							method: "POST",
+							headers,
+							body: JSON.stringify({ fileName: payload.fileName }),
+						});
+						if (ticket.ok) {
+							const file = await app.request(`${workerPath}/file`, {
+								headers,
+							});
+							assert.equal(file.status, 200);
+							assert.equal(file.headers.get("Content-Type"), "video/quicktime");
+							const bytes = Buffer.from(await file.arrayBuffer());
+							cursorMovWorkerDigest = {
+								sha256: createHash("sha256").update(bytes).digest("hex"),
+								size: bytes.length,
+							};
+							const value = (await ticket.clone().json()) as { url: string };
+							cursorMovDownloadUrl = value.url;
+							cursorMovTicketRequests++;
+						}
+						return ticket;
 					}
 				}
 				if (
@@ -598,6 +689,15 @@ try {
 				fps: 25,
 				offsetMs: 125,
 			},
+			...(cursorMovReplay
+				? {
+						inputEvents: {
+							url: `${base}/input-events.ndjson`,
+							contentType: "application/x-ndjson",
+							size: Buffer.byteLength(cursorInputEvents),
+						},
+					}
+				: {}),
 		}),
 	});
 	assert.equal(preparation.status, 202);
@@ -709,6 +809,18 @@ try {
 				)
 		) {
 			rendererFallbacks.push(message.text());
+			return;
+		}
+		if (
+			cursorMovReplay &&
+			cursorMovTicketRequests === 1 &&
+			sessionId &&
+			renderedExportId &&
+			message.text().includes("404") &&
+			message.location().url ===
+				`${base}/api/editor/sessions/${encodeURIComponent(sessionId)}/exports/${encodeURIComponent(renderedExportId)}?videoId=${videoId}`
+		) {
+			cursorMovExpectedConsole404++;
 			return;
 		}
 		pageErrors.push(message.text());
@@ -849,7 +961,7 @@ try {
 		);
 		let cropFrameLoadMs = 0;
 		let cropFrameSize = { width: 0, height: 0 };
-		if (!shareReplay) {
+		if (!shareReplay && !cursorMovReplay) {
 			const cropStartedAt = Date.now();
 			await editor.getByRole("button", { name: "Crop", exact: true }).click();
 			await editor.getByText("Loading frame…").waitFor({
@@ -1221,6 +1333,102 @@ try {
 				process.env.CAP_EDITOR_UI_EXPORT_SCREENSHOT_PATH,
 				exportScreenshot,
 			);
+		if (cursorMovReplay) {
+			await editor.getByRole("button", { name: "Advanced" }).click();
+			const cursorOnly = editor.getByRole("group", {
+				name: "Export cursor only",
+			});
+			await cursorOnly.locator(".cap-toggle").click();
+			assert.equal(
+				await cursorOnly.getByRole("switch").getAttribute("aria-checked"),
+				"true",
+			);
+			await editor
+				.getByText("Exports as a transparent MOV.", { exact: false })
+				.waitFor({ state: "visible" });
+			const destination = editor.getByRole("radio", {
+				name: "File",
+				exact: true,
+			});
+			await destination.click();
+			assert.equal(await destination.getAttribute("aria-checked"), "true");
+			const downloading = page.waitForEvent("download", {
+				timeout: 120_000,
+			});
+			await editor.getByRole("button", { name: "Export to File" }).click();
+			const download = await downloading;
+			await editor
+				.getByText("Cursor track exported to file", { exact: false })
+				.waitFor({ state: "visible" });
+			assert.ok(download.suggestedFilename().endsWith(".mov"));
+			const downloadPath = await download.path();
+			assert.ok(downloadPath);
+			const downloadedBytes = await readFile(downloadPath);
+			assert.ok(downloadedBytes.length > 20_000);
+			assert.equal(cursorMovTicketRequests, 1);
+			const workerDigest = requireCursorMovWorkerDigest();
+			const digest = createHash("sha256").update(downloadedBytes).digest("hex");
+			assert.equal(downloadedBytes.length, workerDigest.size);
+			assert.equal(digest, workerDigest.sha256);
+			const probe = spawnSync("ffprobe", [
+				"-v",
+				"error",
+				"-show_entries",
+				"stream=codec_name,pix_fmt",
+				"-of",
+				"json",
+				downloadPath,
+			]);
+			assert.equal(probe.status, 0);
+			const streams = JSON.parse(probe.stdout.toString()) as {
+				streams: Array<{ codec_name?: string; pix_fmt?: string }>;
+			};
+			assert.equal(streams.streams[0]?.codec_name, "prores");
+			assert.ok(streams.streams[0]?.pix_fmt?.startsWith("yuva"));
+			const decoder = spawnSync(
+				"ffmpeg",
+				[
+					"-v",
+					"error",
+					"-i",
+					downloadPath,
+					"-vf",
+					"fps=2,scale=320:180",
+					"-pix_fmt",
+					"rgba",
+					"-f",
+					"rawvideo",
+					"-",
+				],
+				{ maxBuffer: 4 * 1024 * 1024 },
+			);
+			assert.equal(decoder.status, 0);
+			const pixelsPerFrame = 320 * 180;
+			const frameBytes = pixelsPerFrame * 4;
+			assert.equal(decoder.stdout.length % frameBytes, 0);
+			let visibleFrames = 0;
+			for (let frame = 0; frame < decoder.stdout.length / frameBytes; frame++) {
+				let visiblePixels = 0;
+				for (let pixel = 0; pixel < pixelsPerFrame; pixel++) {
+					if (decoder.stdout[frame * frameBytes + pixel * 4 + 3] > 0)
+						visiblePixels++;
+				}
+				if (visiblePixels > 0) visibleFrames++;
+				assert.ok(visiblePixels < pixelsPerFrame / 20);
+			}
+			assert.ok(visibleFrames >= 2);
+			assert.ok(cursorMovDownloadUrl);
+			const consumedUrl = new URL(cursorMovDownloadUrl);
+			assert.equal(
+				(await app.request(consumedUrl.pathname + consumedUrl.search)).status,
+				404,
+			);
+			cursorMovVerification = {
+				sha256: digest,
+				size: downloadedBytes.length,
+				visibleFrames,
+			};
+		}
 		if (shareReplay) {
 			const destination = editor.getByRole("radio", {
 				name: "Reupload",
@@ -1259,6 +1467,17 @@ try {
 		assert.equal(bridgeError, null);
 		assert.equal(invalidFrameCloses, 0);
 		await Promise.all(failedResponseReads);
+		if (cursorMovReplay) {
+			assert.ok(sessionId);
+			assert.ok(renderedExportId);
+			const expectedStatus = `404 ${base}/api/editor/sessions/${encodeURIComponent(sessionId)}/exports/${encodeURIComponent(renderedExportId)}?videoId=${videoId}:`;
+			for (let index = failedResponses.length - 1; index >= 0; index--) {
+				if (failedResponses[index]?.startsWith(expectedStatus)) {
+					failedResponses.splice(index, 1);
+					cursorMovExpectedStatus404++;
+				}
+			}
+		}
 		assert.deepEqual(failedResponses, []);
 		assert.deepEqual(pageErrors, []);
 		process.stdout.write(
@@ -1272,7 +1491,7 @@ try {
 				separateCameraTabEnabled: true,
 				cropFrameSize,
 				cropFrameLoadMs,
-				cropRatiosAndThemesVerified: !shareReplay,
+				cropRatiosAndThemesVerified: !shareReplay && !cursorMovReplay,
 				recordingBundleDownloaded: bundleTicketRequests === 1,
 				freeCaptionsUpgradeVisible: !proCaptions,
 				proCaptionGenerationVisible: proCaptions,
@@ -1284,6 +1503,10 @@ try {
 				cameraControlsVisible: true,
 				cameraBackgroundRemovalSelectable: !shareReplay,
 				exportPreviewVisible: true,
+				cursorMovReplay,
+				cursorMovVerification,
+				cursorMovExpectedStatus404,
+				cursorMovExpectedConsole404,
 				shareReplay,
 				multipartInitiations,
 				exportChunkRequests,

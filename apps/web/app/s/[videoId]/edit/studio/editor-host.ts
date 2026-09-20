@@ -612,7 +612,14 @@ export class EditorHostBridge {
 				const response = await fetch(
 					`${this.exportPath(active.jobId)}?videoId=${encodeURIComponent(this.videoId)}`,
 					{ signal: active.controller.signal, cache: "no-store" },
-				);
+				).catch((cause: unknown) => {
+					if (active.controller.signal.aborted) throw cause;
+					return null;
+				});
+				if (!response) {
+					await waitForExportPoll(active.controller.signal);
+					continue;
+				}
 				if (response.status === 404) {
 					downloaded = true;
 					break;
