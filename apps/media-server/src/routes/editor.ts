@@ -919,7 +919,7 @@ editor.get("/sessions/:id/exports/:exportId/download", (c) => {
 			? "video/mp4"
 			: ticket.format === "Gif"
 				? "image/gif"
-				: "video/quicktime";
+				: "application/octet-stream";
 	const file = Bun.file(ticket.path);
 	const asciiName = ticket.fileName.replace(/[^\x20-\x7e]|["\\]/g, "_");
 	const encodedName = encodeURIComponent(ticket.fileName).replace(
@@ -961,6 +961,7 @@ editor.get("/sessions/:id/exports/:exportId/download", (c) => {
 			"Content-Type": contentType,
 			"Content-Length": String(file.size),
 			"Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodedName}`,
+			"X-Content-Type-Options": "nosniff",
 			"Cache-Control": "private, no-store",
 			"Referrer-Policy": "no-referrer",
 		},
