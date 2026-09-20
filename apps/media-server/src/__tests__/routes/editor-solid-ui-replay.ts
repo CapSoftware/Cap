@@ -1019,8 +1019,6 @@ try {
 				await Bun.file(await vtt.path()).text(),
 				/WEBVTT[\s\S]*Hello Cap/,
 			);
-			await editor.getByRole("button", { name: "Back to editor" }).click();
-			await editor.getByRole("tab", { name: "Captions" }).click();
 		} else {
 			await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
 				state: "visible",
@@ -1036,11 +1034,31 @@ try {
 			});
 			await waitForWorkerCaptionContent(false);
 		}
+		if (proCaptions)
+			await editor
+				.getByRole("button", { name: "Back to editor" })
+				.waitFor({ state: "visible" });
 		currentCaptionPlan = !proCaptions;
 		await editor
 			.locator("body")
 			.evaluate(() => window.dispatchEvent(new Event("focus")));
 		if (proCaptions) {
+			await editor
+				.getByRole("button", { name: "Back to editor" })
+				.waitFor({ state: "hidden" });
+			await editor
+				.getByRole("button", { name: "SRT", exact: true })
+				.waitFor({ state: "hidden" });
+			await editor
+				.getByRole("button", { name: "VTT", exact: true })
+				.waitFor({ state: "hidden" });
+			assert.equal(
+				await editor
+					.getByRole("button", { name: "Captions", exact: true })
+					.count(),
+				0,
+			);
+			await editor.getByRole("tab", { name: "Captions" }).click();
 			await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
 				state: "visible",
 			});
@@ -1103,6 +1121,9 @@ try {
 			.locator("body")
 			.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
 		if (proCaptions) {
+			await editor
+				.getByRole("button", { name: "Captions", exact: true })
+				.waitFor({ state: "visible" });
 			await editor
 				.getByRole("button", { name: "Regenerate Captions" })
 				.waitFor({
