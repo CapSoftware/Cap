@@ -38,6 +38,34 @@ const SESSIONS_STORE = "sessions";
 const CHUNKS_STORE = "chunks";
 const DEFAULT_MAX_PENDING_CHUNK_BYTES = 32 * 1024 * 1024;
 const TRANSACTION_TIMEOUT_MS = 15_000;
+const UPLOADED_SESSION_KEY_PREFIX = "cap-recording-spool-uploaded:";
+
+const uploadedSessionKey = (sessionId: string) =>
+	`${UPLOADED_SESSION_KEY_PREFIX}${sessionId}`;
+
+const isUploadedSession = (sessionId: string) => {
+	try {
+		return (
+			globalThis.localStorage?.getItem(uploadedSessionKey(sessionId)) === "1"
+		);
+	} catch {
+		return false;
+	}
+};
+
+export const isRecordingSpoolUploaded = isUploadedSession;
+
+const markUploadedSession = (sessionId: string) => {
+	try {
+		globalThis.localStorage?.setItem(uploadedSessionKey(sessionId), "1");
+	} catch {}
+};
+
+const clearUploadedSession = (sessionId: string) => {
+	try {
+		globalThis.localStorage?.removeItem(uploadedSessionKey(sessionId));
+	} catch {}
+};
 
 // Liveness contract between live recorders and recovery sweeps: a spool whose
 // session was updated within this window must be treated as live and never
@@ -296,6 +324,10 @@ export class RecordingSpool {
 		return [...this.pendingChunks];
 	}
 
+	markUploaded() {
+		markUploadedSession(this.session.sessionId);
+	}
+
 	appendChunk(chunk: Blob) {
 		if (this.disposed) {
 			return Promise.reject(new Error("Recording spool has been disposed"));
@@ -414,6 +446,7 @@ export class RecordingSpool {
 			await this.pendingWrite;
 		} catch {}
 		await this.backend.deleteSession(this.session.sessionId);
+		clearUploadedSession(this.session.sessionId);
 	}
 
 	private enqueue(task: () => Promise<void>) {
@@ -455,6 +488,19 @@ export const recoverOrphanedRecordingSpools = async (
 		// would offer the user a "recovered" copy whose dismissal deletes the
 		// live session's crash backup out from under it.
 		if (minIdleMs > 0 && now - session.updatedAt < minIdleMs) {
+			continue;
+		}
+		if (isUploadedSession(session.sessionId)) {
+			void backend
+				.deleteSession(session.sessionId)
+				.then(() => clearUploadedSession(session.sessionId))
+				.catch((error) => {
+					console.error(
+						"Failed to remove uploaded recording backup",
+						session.sessionId,
+						error,
+					);
+				});
 			continue;
 		}
 
@@ -527,4 +573,5 @@ export const deleteRecoveredRecordingSpool = async (
 ) => {
 	await backend.initialize();
 	await backend.deleteSession(sessionId);
+	clearUploadedSession(sessionId);
 };

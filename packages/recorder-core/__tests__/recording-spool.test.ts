@@ -242,6 +242,51 @@ describe("RecordingSpool", () => {
 		expect(backend.getChunkCount("session-2")).toBe(0);
 	});
 
+	it("hides uploaded backups until a stalled deletion can finish", async () => {
+		const values = new Map<string, string>();
+		vi.stubGlobal("localStorage", {
+			getItem: (key: string) => values.get(key) ?? null,
+			setItem: (key: string, value: string) => values.set(key, value),
+			removeItem: (key: string) => values.delete(key),
+		});
+		const consoleError = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => {});
+		try {
+			const backend = new MemoryRecordingSpoolBackend();
+			const spool = await RecordingSpool.create(
+				{ mimeType: "video/webm", sessionId: "uploaded-backup" },
+				backend,
+			);
+			await spool.appendChunk(new Blob(["uploaded"], { type: "video/webm" }));
+			spool.markUploaded();
+			const key = "cap-recording-spool-uploaded:uploaded-backup";
+			expect(values.get(key)).toBe("1");
+
+			const originalDeleteSession = backend.deleteSession.bind(backend);
+			backend.deleteSession = async () => {
+				throw new Error("Backup deletion stalled");
+			};
+			await expect(spool.dispose()).rejects.toThrow("Backup deletion stalled");
+			const readChunks = vi.spyOn(backend, "readChunks");
+			expect(await recoverOrphanedRecordingSpools(backend)).toEqual([]);
+			expect(readChunks).not.toHaveBeenCalled();
+			expect(backend.getSessionCount()).toBe(1);
+			expect(values.get(key)).toBe("1");
+			await vi.waitFor(() => expect(consoleError).toHaveBeenCalled());
+
+			backend.deleteSession = originalDeleteSession;
+			expect(await recoverOrphanedRecordingSpools(backend)).toEqual([]);
+			await vi.waitFor(() => {
+				expect(backend.getSessionCount()).toBe(0);
+				expect(values.has(key)).toBe(false);
+			});
+		} finally {
+			consoleError.mockRestore();
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it("fails fast when the pending spool backlog grows beyond its limit", async () => {
 		const backend = new DelayedRecordingSpoolBackend();
 		const spool = await RecordingSpool.create(

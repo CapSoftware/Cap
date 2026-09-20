@@ -10,6 +10,7 @@ import {
 	InstantRecordingUploader,
 	initialLocalRecordingState,
 	initiateMultipartUpload,
+	isRecordingSpoolUploaded,
 	isUserCancellationError,
 	type LocalRecordingState,
 	listRecordingSpoolSessions,
@@ -756,6 +757,12 @@ const sweepOrphanedRecordingSpools = async () => {
 				)
 			) {
 				remainingSessions.add(orphan.sessionId);
+				continue;
+			}
+			if (isRecordingSpoolUploaded(orphan.sessionId)) {
+				void deleteRecoveredRecordingSpool(orphan.sessionId).catch(
+					() => undefined,
+				);
 				continue;
 			}
 			const manifest = manifestsBySession.get(orphan.sessionId);
@@ -2037,14 +2044,30 @@ const finalizeRecording = async (recording: ActiveRecording) => {
 			fps: recording.fps,
 			subpath: recording.subpath,
 		});
-		await recording.spool.dispose();
-		await recording.cameraSpool?.dispose();
-		await recording.inputSidecar?.dispose().catch(() => undefined);
-		await Promise.all(
-			recording.audioSidecars.map((sidecar) =>
-				sidecar.disposeBackup().catch(() => undefined),
+		recording.spool.markUploaded();
+		recording.cameraSpool?.markUploaded();
+		if (recording.inputSidecar?.isUploadCompleted) {
+			recording.inputSidecar.spool.markUploaded();
+		}
+		for (const sidecar of recording.audioSidecars) {
+			sidecar.markUploadedBackup();
+		}
+		void Promise.all([
+			recording.spool.dispose().catch((error) => {
+				console.error("Failed to remove uploaded screen backup", error);
+			}),
+			recording.cameraSpool?.dispose().catch((error) => {
+				console.error("Failed to remove uploaded camera backup", error);
+			}),
+			recording.inputSidecar?.dispose().catch((error) => {
+				console.error("Failed to remove uploaded input backup", error);
+			}),
+			...recording.audioSidecars.map((sidecar) =>
+				sidecar.disposeBackup().catch((error) => {
+					console.error("Failed to remove uploaded audio backup", error);
+				}),
 			),
-		);
+		]);
 		await removeFailedRecording(recording.spool.sessionId).catch(
 			() => undefined,
 		);

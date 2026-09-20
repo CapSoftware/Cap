@@ -1,3 +1,7 @@
+import {
+	RecordingSpool,
+	recoverOrphanedRecordingSpools,
+} from "@cap/recorder-core/recording-spool";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { useWebRecorder } from "../app/(org)/dashboard/caps/components/web-recorder-dialog/useWebRecorder";
@@ -5,8 +9,13 @@ import { useWebRecorder } from "../app/(org)/dashboard/caps/components/web-recor
 declare global {
 	interface Window {
 		capRecorderHarness?: ReturnType<typeof useWebRecorder>;
+		capRecorderSpool?: typeof RecordingSpool;
+		capRecorderRecoverOrphans?: typeof recoverOrphanedRecordingSpools;
 	}
 }
+
+window.capRecorderSpool = RecordingSpool;
+window.capRecorderRecoverOrphans = recoverOrphanedRecordingSpools;
 
 function RecorderHarness() {
 	const captureMic = new URLSearchParams(location.search).get("mic") === "1";

@@ -306,6 +306,10 @@ export class AudioRecordingSidecar {
 		this.memoryBackup = initialLocalRecordingState();
 	}
 
+	markUploadedBackup() {
+		this.spool?.markUploaded();
+	}
+
 	async prepareRetryMetadata(): Promise<AudioSidecarMetadata | null> {
 		await this.stop().catch(() => undefined);
 		if (this.bytes === 0) return null;

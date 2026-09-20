@@ -118,6 +118,7 @@ async function replayPairedCapture(
 	failCameraSpool = false,
 	failCameraCompletion = false,
 	failAudioResume = false,
+	failBackupDeletion = false,
 ) {
 	const requests = [];
 	const parts = [];
@@ -413,6 +414,13 @@ async function replayPairedCapture(
 			);
 		}
 		await page.waitForTimeout(engine.name === "WebKit" ? 5000 : 1700);
+		if (failBackupDeletion) {
+			await page.evaluate(() => {
+				window.capRecorderSpool.prototype.dispose = async () => {
+					throw new Error("Simulated backup deletion failure");
+				};
+			});
+		}
 		await page.evaluate(() => window.capRecorderHarness.stopRecording());
 		try {
 			await page.waitForFunction(
@@ -482,6 +490,12 @@ async function replayPairedCapture(
 		if (failAudioResume) {
 			assert.equal(browserErrors.length, 1);
 			assert.ok(browserErrors[0].includes("Failed to resume recording"));
+		} else if (failBackupDeletion) {
+			assert.ok(
+				browserErrors.some((error) =>
+					error.includes("Failed to dispose camera recording spool"),
+				),
+			);
 		} else {
 			assert.deepEqual(browserErrors, []);
 		}
@@ -567,10 +581,33 @@ async function replayPairedCapture(
 			[screenComplete.body.width, screenComplete.body.height],
 			[640, 360],
 		);
+		if (failBackupDeletion) {
+			const markers = await page.evaluate(() =>
+				Object.keys(localStorage).filter((key) =>
+					key.startsWith("cap-recording-spool-uploaded:"),
+				),
+			);
+			assert.equal(markers.length, engine.extension === "webm" ? 2 : 1);
+			if (engine.extension === "webm") {
+				assert.deepEqual(
+					await page.evaluate(() => window.capRecorderRecoverOrphans()),
+					[],
+				);
+				await page.waitForFunction(
+					() =>
+						Object.keys(localStorage).every(
+							(key) => !key.startsWith("cap-recording-spool-uploaded:"),
+						),
+					null,
+					{ timeout: 5000 },
+				);
+			}
+		}
 		return {
 			engine: engine.name,
 			pauseResume,
 			failAudioResume,
+			failBackupDeletion,
 			failCameraSpool,
 			cameraBytes,
 			screenBytes,
@@ -630,6 +667,18 @@ try {
 					),
 				);
 			}
+			results.push(
+				await replayPairedCapture(
+					browser,
+					bundle,
+					false,
+					engine,
+					false,
+					false,
+					false,
+					true,
+				),
+			);
 		} finally {
 			await browser.close();
 		}

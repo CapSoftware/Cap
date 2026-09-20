@@ -297,6 +297,7 @@ export const useWebRecorder = ({
 	const audioErrorDownloadUrlsRef = useRef<string[]>([]);
 	const stopInFlightRef = useRef(false);
 	const recordingSpoolRef = useRef<RecordingSpool | null>(null);
+	const degradedRecordingSpoolRef = useRef<RecordingSpool | null>(null);
 	const recordingSpoolDegradingRef = useRef(false);
 	const recordingSpoolWarningShownRef = useRef(false);
 	const recordingSpoolHeartbeatRef = useRef<number | null>(null);
@@ -580,6 +581,7 @@ export const useWebRecorder = ({
 	const disposeRecordingSpool = useCallback(async () => {
 		const spool = recordingSpoolRef.current;
 		recordingSpoolRef.current = null;
+		degradedRecordingSpoolRef.current = null;
 		recordingSpoolDegradingRef.current = false;
 		recordingSpoolWarningShownRef.current = false;
 		stopRecordingSpoolHeartbeat();
@@ -743,6 +745,7 @@ export const useWebRecorder = ({
 
 				recordingSpoolDegradingRef.current = true;
 				recordingSpoolRef.current = null;
+				degradedRecordingSpoolRef.current = spool;
 				stopRecordingSpoolHeartbeat();
 				const backupOverflowed = await moveRecordingSpoolToInMemoryBackup({
 					spool,
@@ -760,6 +763,9 @@ export const useWebRecorder = ({
 
 				try {
 					await spool.dispose();
+					if (degradedRecordingSpoolRef.current === spool) {
+						degradedRecordingSpoolRef.current = null;
+					}
 				} catch (disposeError) {
 					console.error(
 						"Failed to dispose degraded recording spool",
@@ -2102,6 +2108,11 @@ export const useWebRecorder = ({
 			cameraSettingsRef.current = undefined;
 			recordingPipelineRef.current = null;
 			pendingInstantVideoIdRef.current = null;
+			recordingSpoolRef.current?.markUploaded();
+			degradedRecordingSpoolRef.current?.markUploaded();
+			degradedRecordingSpoolRef.current = null;
+			cameraSpoolRef.current?.markUploaded();
+			for (const sidecar of audioSidecars) sidecar.markUploadedBackup();
 			void Promise.all([
 				disposeRecordingSpool(),
 				disposeCameraSpool(),
