@@ -4,6 +4,7 @@ import type { VideoId } from "../src/recorder-types";
 
 const mocks = vi.hoisted(() => ({
 	createSpool: vi.fn(),
+	secureSessionId: vi.fn(),
 	initiate: vi.fn(),
 	uploaders: [] as Array<{
 		handleChunk: ReturnType<typeof vi.fn>;
@@ -20,6 +21,7 @@ vi.mock("../src/recorder-utils", () => ({
 }));
 
 vi.mock("../src/recording-spool", () => ({
+	createRecordingSessionId: mocks.secureSessionId,
 	RecordingSpool: { create: mocks.createSpool },
 }));
 
@@ -66,6 +68,8 @@ const backupFallback = vi.fn();
 
 beforeEach(() => {
 	mocks.createSpool.mockReset();
+	mocks.secureSessionId.mockReset();
+	mocks.secureSessionId.mockReturnValue("secure-audio-session");
 	mocks.initiate.mockResolvedValue({ uploadId: "upload", provider: "s3" });
 	mocks.uploaders.length = 0;
 	FakeAudioRecorder.instances = [];
@@ -96,6 +100,7 @@ async function createSidecar() {
 test("audio upload keeps a bounded backup when browser storage is unavailable", async () => {
 	mocks.createSpool.mockRejectedValue(new Error("IndexedDB quota unavailable"));
 	const sidecar = await createSidecar();
+	expect(sidecar.metadata.sessionId).toBe("secure-audio-session");
 	sidecar.start(performance.now());
 	FakeAudioRecorder.instances[0]?.emitData(new Blob(["microphone"]));
 	await sidecar.finalize(2);
@@ -106,6 +111,19 @@ test("audio upload keeps a bounded backup when browser storage is unavailable", 
 	expect(await (await sidecar.recoverBlob())?.text()).toBe("microphone");
 	await sidecar.disposeBackup();
 	expect(await sidecar.recoverBlob()).toBeNull();
+});
+
+test("a missing secure random source cancels the unused audio upload", async () => {
+	mocks.createSpool.mockRejectedValue(new Error("IndexedDB unavailable"));
+	mocks.secureSessionId.mockImplementationOnce(() => {
+		throw new Error("Secure random source is unavailable");
+	});
+
+	await expect(createSidecar()).rejects.toThrow(
+		"Secure random source is unavailable",
+	);
+	expect(mocks.uploaders[0]?.cancel).toHaveBeenCalledOnce();
+	expect(FakeAudioRecorder.instances[0]?.state).toBe("inactive");
 });
 
 test("a mid-capture spool write failure keeps the streamed audio and its recovery copy", async () => {

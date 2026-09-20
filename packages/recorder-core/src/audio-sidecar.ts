@@ -10,7 +10,7 @@ import {
 } from "./local-recording-backup";
 import type { VideoId } from "./recorder-types";
 import { selectAudioRecordingPipeline } from "./recorder-utils";
-import { RecordingSpool } from "./recording-spool";
+import { createRecordingSessionId, RecordingSpool } from "./recording-spool";
 
 const RECORDING_TIMESLICE_MS = 1000;
 const DATA_REQUEST_GUARD_MS = 2500;
@@ -122,9 +122,7 @@ export class AudioRecordingSidecar {
 		this.api = api;
 		this.onFatalError = options.onFatalError;
 		this.onBackupFallback = options.onBackupFallback;
-		this.fallbackSessionId =
-			globalThis.crypto?.randomUUID?.() ??
-			`audio-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		this.fallbackSessionId = createRecordingSessionId();
 		this.mimeType = mimeType;
 		this.subpath = subpath;
 		this.recorder.addEventListener("dataavailable", (event) => {

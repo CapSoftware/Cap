@@ -1,4 +1,5 @@
 import {
+	createRecordingSessionId,
 	deleteRecoveredRecordingSpool,
 	RecordingSpool,
 	type RecordingSpoolBackend,
@@ -6,7 +7,7 @@ import {
 	type RecordingSpoolSessionRecord,
 	recoverOrphanedRecordingSpools,
 } from "@cap/recorder-core/recording-spool";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 class MemoryRecordingSpoolBackend implements RecordingSpoolBackend {
 	private readonly sessions = new Map<string, RecordingSpoolSessionRecord>();
@@ -133,6 +134,46 @@ class DelayedRecordingSpoolBackend implements RecordingSpoolBackend {
 		this.pendingAppend = null;
 	}
 }
+
+describe("createRecordingSessionId", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("uses the browser UUID generator when available", () => {
+		const randomUUID = vi.fn(() => "secure-uuid");
+		const getRandomValues = vi.fn();
+		vi.stubGlobal("crypto", { randomUUID, getRandomValues });
+
+		expect(createRecordingSessionId()).toBe("secure-uuid");
+		expect(randomUUID).toHaveBeenCalledOnce();
+		expect(getRandomValues).not.toHaveBeenCalled();
+	});
+
+	it("uses cryptographic bytes in browsers without randomUUID", () => {
+		let seed = 0;
+		const getRandomValues = vi.fn((bytes: Uint8Array) => {
+			for (let index = 0; index < bytes.length; index++) {
+				bytes[index] = (seed + index) & 0xff;
+			}
+			seed++;
+			return bytes;
+		});
+		vi.stubGlobal("crypto", { getRandomValues });
+
+		const first = createRecordingSessionId();
+		const second = createRecordingSessionId();
+		expect(first).toMatch(/^[0-9a-f]{32}$/);
+		expect(second).toMatch(/^[0-9a-f]{32}$/);
+		expect(second).not.toBe(first);
+		expect(getRandomValues).toHaveBeenCalledTimes(2);
+	});
+
+	it("fails if no cryptographic random source is available", () => {
+		vi.stubGlobal("crypto", undefined);
+		expect(createRecordingSessionId).toThrow(
+			"Secure random source is unavailable",
+		);
+	});
+});
 
 describe("RecordingSpool", () => {
 	it("persists chunks in order and rebuilds the recording blob", async () => {

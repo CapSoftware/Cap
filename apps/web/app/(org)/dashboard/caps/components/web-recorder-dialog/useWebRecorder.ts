@@ -36,6 +36,7 @@ import {
 } from "@cap/recorder-core/recorder-utils";
 import {
 	canUseRecordingSpool,
+	createRecordingSessionId,
 	deleteRecoveredRecordingSpool,
 	RECORDING_SPOOL_HEARTBEAT_INTERVAL_MS,
 	RecordingSpool,
@@ -1110,10 +1111,6 @@ export const useWebRecorder = ({
 		replaceCameraErrorDownload(null);
 		replaceAudioErrorDownloads([]);
 		shareUrlOpenedRef.current = false;
-		recordingPairIdRef.current =
-			globalThis.crypto?.randomUUID?.() ??
-			`recording-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
 		setChunkUploads([]);
 		setIsSettingUp(true);
 		cameraRecorderBytesRef.current = 0;
@@ -1126,6 +1123,7 @@ export const useWebRecorder = ({
 		cameraUploadSubpathRef.current = null;
 
 		try {
+			recordingPairIdRef.current = createRecordingSessionId();
 			let videoStream: MediaStream | null = null;
 			let cameraRecordingStream: MediaStream | null = null;
 			let cameraPipeline: RecordingPipeline | null = null;

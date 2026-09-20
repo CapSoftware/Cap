@@ -76,15 +76,18 @@ const transactionToPromise = (transaction: IDBTransaction) =>
 		};
 	});
 
-const createSessionId = () => {
-	if (
-		typeof crypto !== "undefined" &&
-		typeof crypto.randomUUID === "function"
-	) {
-		return crypto.randomUUID();
+export const createRecordingSessionId = () => {
+	const secureRandom = globalThis.crypto;
+	if (typeof secureRandom?.randomUUID === "function") {
+		return secureRandom.randomUUID();
 	}
-
-	return `recording-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+	if (typeof secureRandom?.getRandomValues !== "function") {
+		throw new Error("Secure random source is unavailable");
+	}
+	const bytes = secureRandom.getRandomValues(new Uint8Array(16));
+	return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+		"",
+	);
 };
 
 export class RecordingSpoolBackpressureError extends Error {
@@ -245,7 +248,7 @@ export class RecordingSpool {
 	) {
 		const now = Date.now();
 		const session = {
-			sessionId: options.sessionId ?? createSessionId(),
+			sessionId: options.sessionId ?? createRecordingSessionId(),
 			mimeType: options.mimeType,
 			totalBytes: 0,
 			chunkCount: 0,
