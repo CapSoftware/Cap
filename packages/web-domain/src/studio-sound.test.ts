@@ -3,7 +3,7 @@ import {
 	defaultPreference,
 	fromUserPreferences,
 	parsePreference,
-} from "./StudioSound";
+} from "./studio-sound";
 
 test("Studio Sound uses the desktop default until a valid web preference is saved", () => {
 	expect(fromUserPreferences(null)).toEqual(defaultPreference);
