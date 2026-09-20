@@ -2,6 +2,7 @@ export * as Agent from "./Agent.ts";
 export * from "./Authentication.ts";
 export * as Comment from "./Comment.ts";
 export * from "./Database.ts";
+export * as Desktop from "./Desktop.ts";
 export * from "./Errors.ts";
 export * as Extension from "./Extension.ts";
 export * as Folder from "./Folder.ts";

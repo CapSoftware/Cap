@@ -184,13 +184,6 @@ fn monitor<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::State<'_, UploadHeal
     app.try_state::<UploadHealthMonitor>()
 }
 
-async fn recording_in_progress<R: Runtime>(app: &AppHandle<R>) -> bool {
-    match app.try_state::<ArcLock<crate::App>>() {
-        Some(state) => state.read().await.is_recording_active_or_pending(),
-        None => false,
-    }
-}
-
 fn unix_now() -> u32 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -202,7 +195,15 @@ async fn begin_probe<R: Runtime>(app: &AppHandle<R>) -> bool {
     let Some(monitor) = monitor(app) else {
         return false;
     };
-    if recording_in_progress(app).await {
+    let Some(state) = app.try_state::<ArcLock<crate::App>>() else {
+        return monitor.start_probe(app);
+    };
+    // recording_started runs while the App write lock is held, so keeping the
+    // read guard across both the check and the install makes them atomic: a
+    // pending transition can no longer slip in between and leave the probe
+    // running into a recording.
+    let app_state = state.read().await;
+    if app_state.is_recording_active_or_pending() {
         return false;
     }
     match crate::auth::AuthStore::get(app) {
@@ -310,12 +311,7 @@ pub fn recommended_max_width(upload_mbps: f64) -> Option<u32> {
     }
 }
 
-/// Resolution cap for an Instant recording about to start. Only a fresh
-/// measurement applies; this never starts a probe because recording is already
-/// beginning.
-pub(crate) fn instant_resolution_cap<R: Runtime>(app: &AppHandle<R>) -> Option<u32> {
-    let monitor = monitor(app)?;
-    let inner = monitor.inner.lock().unwrap_or_else(|e| e.into_inner());
+fn resolution_cap(inner: &MonitorInner) -> Option<u32> {
     if inner.probe.is_some()
         || inner
             .checked_at
@@ -323,12 +319,23 @@ pub(crate) fn instant_resolution_cap<R: Runtime>(app: &AppHandle<R>) -> Option<u
     {
         return None;
     }
+    // A failed recheck still carries the last measured speed; a transient
+    // error is not evidence the link recovered, so it keeps enforcing the cap.
     match inner.status.state {
-        UploadHealthState::Healthy | UploadHealthState::Degraded => {
+        UploadHealthState::Healthy | UploadHealthState::Degraded | UploadHealthState::Failed => {
             inner.status.upload_mbps.and_then(recommended_max_width)
         }
         _ => None,
     }
+}
+
+/// Resolution cap for an Instant recording about to start. Only a fresh
+/// measurement applies; this never starts a probe because recording is already
+/// beginning.
+pub(crate) fn instant_resolution_cap<R: Runtime>(app: &AppHandle<R>) -> Option<u32> {
+    let monitor = monitor(app)?;
+    let inner = monitor.inner.lock().unwrap_or_else(|e| e.into_inner());
+    resolution_cap(&inner)
 }
 
 /// Called when any recording starts: an in-flight probe must not keep running
@@ -417,5 +424,14 @@ mod tests {
         assert_eq!(snapshot.state, UploadHealthState::Failed);
         assert_eq!(snapshot.upload_mbps, Some(8.0));
         assert_eq!(snapshot.error.as_deref(), Some("offline"));
+    }
+
+    #[test]
+    fn failed_recheck_still_caps_instant_resolution() {
+        let monitor = UploadHealthMonitor::default();
+        monitor.apply_outcome(0, ProbeOutcome::Measured(3.0));
+        monitor.apply_outcome(0, ProbeOutcome::Failed("offline".into()));
+        let inner = monitor.inner.lock().unwrap();
+        assert_eq!(resolution_cap(&inner), Some(1280));
     }
 }

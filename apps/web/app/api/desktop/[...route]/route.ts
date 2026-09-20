@@ -7,7 +7,6 @@ import * as root from "./root";
 import * as s3Config from "./s3Config";
 import * as session from "./session";
 import * as storage from "./storage";
-import * as uploadHealth from "./upload-health";
 import * as video from "./video";
 
 const app = new Hono()
@@ -16,7 +15,6 @@ const app = new Hono()
 	.route("/s3/config", s3Config.app)
 	.route("/session", session.app)
 	.route("/storage", storage.app)
-	.route("/upload-health", uploadHealth.app)
 	.route("/video", video.app)
 	.route("/", root.app);
 

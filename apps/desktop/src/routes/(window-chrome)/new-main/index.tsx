@@ -39,7 +39,7 @@ import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
 import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
-import { UploadHealthIndicator } from "~/components/UploadHealthIndicator";
+import { UploadHealthIndicator } from "~/components/upload-health-indicator";
 import { Input } from "~/routes/editor/ui";
 import {
 	authStore,
