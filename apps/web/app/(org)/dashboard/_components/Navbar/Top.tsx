@@ -108,6 +108,7 @@ const Top = () => {
 			className={clsx(
 				"flex fixed z-40 justify-between items-center py-3 pr-2 pl-5 w-full md:relative mt-[60px] lg:mt-0 lg:py-[19px] lg:pl-0 lg:pr-5",
 				"top-0 bg-gray-1",
+				toggleNotifications && "lg:z-[60]",
 			)}
 		>
 			<div className="flex flex-col gap-0.5 min-w-0 shrink">
