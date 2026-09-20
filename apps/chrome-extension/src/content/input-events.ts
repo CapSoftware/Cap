@@ -23,6 +23,23 @@ const ALLOWED_CURSORS = new Set([
 	"ns-resize",
 ]);
 
+export const createTabInputCollectorId = () => {
+	const secureRandom = globalThis.crypto;
+	if (typeof secureRandom?.randomUUID === "function") {
+		return secureRandom.randomUUID();
+	}
+	if (typeof secureRandom?.getRandomValues !== "function") {
+		throw new Error("Secure random source is unavailable");
+	}
+	const bytes = secureRandom.getRandomValues(new Uint8Array(16));
+	bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+	bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+	const hex = Array.from(bytes, (byte) =>
+		byte.toString(16).padStart(2, "0"),
+	).join("");
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
+
 const modifiersOf = (event: MouseEvent | KeyboardEvent) => {
 	const modifiers: string[] = [];
 	if (event.metaKey) modifiers.push("Meta");
@@ -223,7 +240,7 @@ export function initTabInputCapture() {
 		if (recordingId === nextRecordingId) return { ok: true };
 		if (recordingId) await stop();
 		recordingId = nextRecordingId;
-		collectorId = crypto.randomUUID();
+		collectorId = createTabInputCollectorId();
 		batch = [];
 		pendingBatches = 0;
 		sendChain = Promise.resolve();
