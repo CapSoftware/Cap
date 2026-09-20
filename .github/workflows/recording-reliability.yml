@@ -90,6 +90,9 @@ jobs:
         run: bunx playwright install --with-deps chromium
       - name: Build Chrome extension
         run: bun run --filter @cap/chrome-extension build
+      - name: Verify private tab input is omitted
+        working-directory: apps/chrome-extension
+        run: bun src/content/input-events-browser-replay.ts
       - name: Replay paired capture and recovery in the built extension
         working-directory: apps/chrome-extension
         run: |

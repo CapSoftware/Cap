@@ -10,6 +10,9 @@ const MAX_BATCH_EVENTS = 128;
 const MAX_PENDING_BATCHES = 8;
 const OVERLAY_ROOT_ID = "cap-extension-recorder-overlay";
 const EDITABLE_ROLES = new Set(["textbox", "searchbox", "combobox"]);
+const SENSITIVE_CONTROL_NAME =
+	/\b(?:password|passcode|pin|otp|one[- ]time(?:[- ]code)?|cvv|cvc|credit card|card number|security code|secret)\b/i;
+const SENSITIVE_FORM_FIELDS = `input[type="password"], input[autocomplete*="cc-"], input[autocomplete*="one-time-code"], input[name*="password" i], input[name="pin" i], input[name$="-pin" i], input[name$="_pin" i], input[name*="cvv" i], input[name*="cvc" i]`;
 const ALLOWED_CURSORS = new Set([
 	"auto",
 	"default",
@@ -49,7 +52,7 @@ const modifiersOf = (event: MouseEvent | KeyboardEvent) => {
 	return modifiers;
 };
 
-const isEditableTarget = (event: KeyboardEvent) =>
+const isEditableTarget = (event: Event) =>
 	event.composedPath().some((target) => {
 		if (!(target instanceof HTMLElement)) return false;
 		return (
@@ -59,6 +62,32 @@ const isEditableTarget = (event: KeyboardEvent) =>
 			target instanceof HTMLSelectElement ||
 			EDITABLE_ROLES.has(target.getAttribute("role") ?? "") ||
 			target.hasAttribute("aria-multiline")
+		);
+	});
+
+const isSensitivePointerTarget = (event: PointerEvent) =>
+	isEditableTarget(event) ||
+	event.composedPath().some((target) => {
+		if (!(target instanceof HTMLElement)) return false;
+		if (
+			target instanceof HTMLIFrameElement ||
+			target.hasAttribute("data-private") ||
+			target.hasAttribute("data-sensitive") ||
+			SENSITIVE_CONTROL_NAME.test(
+				`${target.getAttribute("aria-label") ?? ""} ${target.getAttribute("title") ?? ""} ${target.getAttribute("name") ?? ""}`,
+			)
+		)
+			return true;
+		if (target instanceof HTMLLabelElement && target.control) {
+			return (
+				target.control instanceof HTMLInputElement ||
+				target.control instanceof HTMLTextAreaElement ||
+				target.control instanceof HTMLSelectElement
+			);
+		}
+		return (
+			target instanceof HTMLFormElement &&
+			target.querySelector(SENSITIVE_FORM_FIELDS) !== null
 		);
 	});
 
@@ -180,6 +209,7 @@ export function initTabInputCapture() {
 			!recordingId ||
 			!event.isTrusted ||
 			isExtensionUiEvent(event) ||
+			isSensitivePointerTarget(event) ||
 			window.innerWidth <= 0 ||
 			window.innerHeight <= 0
 		)
