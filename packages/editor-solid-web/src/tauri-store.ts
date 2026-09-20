@@ -12,10 +12,14 @@ const DEFAULT_STUDIO_SOUND = {
 	isolation: "balanced",
 } as const;
 
-function isStudioSoundPreference(value: unknown): value is {
+type StudioSoundPreference = {
 	enabledByDefault: boolean;
 	isolation: "light" | "balanced" | "strong";
-} {
+};
+
+function isStudioSoundPreference(
+	value: unknown,
+): value is StudioSoundPreference {
 	if (typeof value !== "object" || value === null) return false;
 	const record = value as Record<string, unknown>;
 	return (
@@ -110,7 +114,13 @@ export class Store {
 
 	async set(key: string, value: unknown) {
 		if (key === STUDIO_SOUND_KEY) {
-			const stored = await requestStudioSound("PUT", value);
+			if (typeof value !== "object" || value === null || Array.isArray(value))
+				throw new Error("Studio Sound preference is invalid");
+			const current = await this.get<StudioSoundPreference>(key);
+			const stored = await requestStudioSound("PUT", {
+				...(current ?? DEFAULT_STUDIO_SOUND),
+				...value,
+			});
 			this.state.set(key, stored);
 			this.emit(key, stored);
 			return;

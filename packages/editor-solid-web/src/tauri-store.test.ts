@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Store, setEditorStoreNamespace } from "./tauri-store";
 
-test("Studio Sound survives an editor reload and failed saves keep the last value", async () => {
+test("Studio Sound persists partial isolation updates across reloads and failed saves", async () => {
 	setEditorStoreNamespace("studio-sound-store-test");
 	const store = await Store.load("store");
 	const originalFetch = globalThis.fetch;
@@ -25,6 +25,8 @@ test("Studio Sound survives an editor reload and failed saves keep the last valu
 			enabledByDefault: false,
 			isolation: "strong",
 		});
+		await store.set("audio_enhancement", { isolation: "light" });
+		expect(saved).toEqual({ enabledByDefault: false, isolation: "light" });
 		failSave = true;
 		await expect(
 			store.set("audio_enhancement", {
@@ -34,7 +36,7 @@ test("Studio Sound survives an editor reload and failed saves keep the last valu
 		).rejects.toThrow();
 		expect(await store.get("audio_enhancement")).toEqual({
 			enabledByDefault: false,
-			isolation: "strong",
+			isolation: "light",
 		});
 	} finally {
 		globalThis.fetch = originalFetch;
