@@ -127,6 +127,8 @@ let captionRequests = 0;
 let currentCaptionPlan = proCaptions;
 let freeCaptionlessSaves = 0;
 let proCaptionSaves = 0;
+let savedPaidCaptions = false;
+let preservingFreeSaves = 0;
 let bundleTicketRequests = 0;
 let imageImports = 0;
 let imagePreviewRequests = 0;
@@ -535,11 +537,11 @@ try {
 								status: 403,
 							});
 						if (
-							!currentCaptionPlan &&
-							payload.preserveExistingPaidCaptions !== true
+							payload.preserveExistingPaidCaptions === true &&
+							hasEditorCaptionContent(payload.config)
 						)
-							return new Response("Free caption save intent is missing", {
-								status: 400,
+							return new Response("Preserved captions must be absent", {
+								status: 403,
 							});
 						const worker = await app.request(
 							`/editor/sessions/${sessionId}/config`,
@@ -550,8 +552,19 @@ try {
 							},
 						);
 						if (!worker.ok) return worker;
-						if (!currentCaptionPlan) freeCaptionlessSaves++;
-						else if (hasEditorCaptionContent(payload.config)) proCaptionSaves++;
+						if (!currentCaptionPlan) {
+							freeCaptionlessSaves++;
+							if (
+								savedPaidCaptions &&
+								payload.preserveExistingPaidCaptions === true
+							)
+								preservingFreeSaves++;
+						} else if (hasEditorCaptionContent(payload.config)) {
+							proCaptionSaves++;
+							savedPaidCaptions = true;
+						} else if (payload.preserveExistingPaidCaptions !== true) {
+							savedPaidCaptions = false;
+						}
 						savedAt = new Date().toISOString();
 						return Response.json({ saved: true, savedAt });
 					}
@@ -1039,6 +1052,7 @@ try {
 			});
 			await waitForWorkerCaptionContent(false);
 			const previousFreeSaves = freeCaptionlessSaves;
+			const previousPreservingFreeSaves = preservingFreeSaves;
 			await editor.getByRole("tab", { name: "Camera" }).click();
 			await editor
 				.getByText("Mirror Camera", { exact: true })
@@ -1052,6 +1066,8 @@ try {
 			)
 				await Bun.sleep(100);
 			assert.ok(freeCaptionlessSaves > previousFreeSaves);
+			assert.ok(preservingFreeSaves > previousPreservingFreeSaves);
+			assert.equal(savedPaidCaptions, true);
 			let unsavedSnapshot: string | null | undefined;
 			const receiptDeadline = Date.now() + 10_000;
 			while (Date.now() < receiptDeadline) {
