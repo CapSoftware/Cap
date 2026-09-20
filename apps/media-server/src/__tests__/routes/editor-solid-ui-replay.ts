@@ -654,6 +654,7 @@ try {
 	const pageErrors: string[] = [];
 	const rendererFallbacks: string[] = [];
 	const failedResponses: string[] = [];
+	const failedResponseReads: Promise<void>[] = [];
 	let delayedSkeletonRequests = 0;
 	let delayedEditorRequests = 0;
 	if (coldMount) {
@@ -700,8 +701,19 @@ try {
 		pageErrors.push(message.text());
 	});
 	page.on("response", (response) => {
-		if (response.status() >= 400)
-			failedResponses.push(`${response.status()} ${response.url()}`);
+		if (response.status() < 400) return;
+		const index =
+			failedResponses.push(`${response.status()} ${response.url()}`) - 1;
+		failedResponseReads.push(
+			response.text().then(
+				(body) => {
+					failedResponses[index] += `: ${body.slice(0, 500)}`;
+				},
+				(error: unknown) => {
+					failedResponses[index] += `: ${String(error)}`;
+				},
+			),
+		);
 	});
 	await page.goto(`${base}/test-editor`);
 	await page.locator("#editor").evaluate(async (frame) => {
@@ -1209,8 +1221,9 @@ try {
 			);
 		assert.equal(bridgeError, null);
 		assert.equal(invalidFrameCloses, 0);
-		assert.deepEqual(pageErrors, []);
+		await Promise.all(failedResponseReads);
 		assert.deepEqual(failedResponses, []);
+		assert.deepEqual(pageErrors, []);
 		process.stdout.write(
 			`${JSON.stringify({
 				videoId,

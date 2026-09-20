@@ -122,4 +122,8 @@ jobs:
                   CAP_EDITOR_UI_SHARE_REPLAY=1 CAP_EDITOR_UI_BROWSER="$browser" CAP_EDITOR_UI_PRO_CAPTIONS="$pro" bun run test:native-editor-ui
                 done
               done
+              for repeat in 2 3; do
+                printf "WebKit Free replay %s\n" "$repeat"
+                CAP_EDITOR_UI_SHARE_REPLAY=1 CAP_EDITOR_UI_BROWSER=webkit CAP_EDITOR_UI_PRO_CAPTIONS=0 bun run test:native-editor-ui
+              done
             '
