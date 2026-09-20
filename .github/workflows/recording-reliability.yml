@@ -97,7 +97,7 @@ jobs:
         working-directory: apps/chrome-extension
         run: |
           bunx playwright test e2e/recording-upload.spec.ts \
-            --grep 'records a separate camera sidecar|offers separate clip downloads|recovers camera, microphone and screen spools|uploads a camera multipart part during a long recording on a constrained network'
+            --grep 'records a separate camera sidecar|offers separate clip downloads|recovers camera, microphone and screen spools|uploads a camera multipart part during a long recording on a constrained network|hides confirmed uploaded backups from the options recovery list'
 
   recording-contract:
     name: Recording ownership, preservation, and recovery
