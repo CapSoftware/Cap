@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager, Runtime};
@@ -127,6 +128,15 @@ impl UploadHealthMonitor {
         }
         match outcome {
             ProbeOutcome::Skipped => {}
+            ProbeOutcome::Unsupported => {
+                inner.status = UploadHealthStatus {
+                    state: UploadHealthState::Unknown,
+                    upload_mbps: None,
+                    checked_at: Some(unix_now()),
+                    error: None,
+                };
+                inner.checked_at = Some(Instant::now());
+            }
             ProbeOutcome::Measured(mbps) => {
                 inner.status = UploadHealthStatus {
                     state: if mbps < DEGRADED_THRESHOLD_MBPS {
@@ -166,6 +176,7 @@ impl UploadHealthMonitor {
 enum ProbeOutcome {
     Measured(f64),
     Skipped,
+    Unsupported,
     Failed(String),
 }
 
@@ -209,6 +220,11 @@ async fn run_probe<R: Runtime>(app: &AppHandle<R>) -> ProbeOutcome {
 
     match liveness {
         Ok(response) if response.status().is_success() => {}
+        // Self-hosted servers running older web builds lack this route; hiding
+        // the indicator beats a false 'uploads unavailable' alarm.
+        Ok(response) if response.status() == StatusCode::NOT_FOUND => {
+            return ProbeOutcome::Unsupported;
+        }
         Ok(response) => {
             return ProbeOutcome::Failed(format!(
                 "Upload health check failed ({})",
@@ -233,6 +249,9 @@ async fn run_probe<R: Runtime>(app: &AppHandle<R>) -> ProbeOutcome {
 
     let response = match upload {
         Ok(response) if response.status().is_success() => response,
+        Ok(response) if response.status() == StatusCode::NOT_FOUND => {
+            return ProbeOutcome::Unsupported;
+        }
         Ok(response) => {
             return ProbeOutcome::Failed(format!("Upload probe failed ({})", response.status()));
         }
@@ -268,6 +287,7 @@ async fn probe_task<R: Runtime>(app: AppHandle<R>, probe_id: u64) {
     match &outcome {
         ProbeOutcome::Measured(mbps) => debug!(mbps, "Upload health probe complete"),
         ProbeOutcome::Skipped => debug!("Upload health probe skipped: not signed in"),
+        ProbeOutcome::Unsupported => debug!("Upload health endpoint not deployed"),
         ProbeOutcome::Failed(error) => warn!(%error, "Upload health probe failed"),
     }
 

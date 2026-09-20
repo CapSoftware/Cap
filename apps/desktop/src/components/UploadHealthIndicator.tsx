@@ -4,6 +4,7 @@ import Tooltip from "~/components/Tooltip";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands, events, type UploadHealthStatus } from "~/utils/tauri";
 import IconLucideLoader2 from "~icons/lucide/loader-2";
+import IconLucideRefreshCw from "~icons/lucide/refresh-cw";
 import IconLucideTriangleAlert from "~icons/lucide/triangle-alert";
 import IconLucideWifi from "~icons/lucide/wifi";
 
@@ -15,6 +16,13 @@ function formatMbps(mbps: number) {
 
 export function UploadHealthIndicator() {
 	const [status, setStatus] = createSignal<UploadHealthStatus | null>(null);
+
+	const retry = () => {
+		void commands
+			.refreshUploadHealth()
+			.then(setStatus)
+			.catch(() => {});
+	};
 
 	onMount(() => {
 		const refresh = () => {
@@ -75,7 +83,19 @@ export function UploadHealthIndicator() {
 	return (
 		<Show when={label()}>
 			{(item) => (
-				<div class="absolute bottom-[10px] right-[13px]">
+				<div class="absolute bottom-[10px] right-[13px] flex items-center gap-1">
+					<Show when={status()?.state === "failed"}>
+						<Tooltip content={<span>Check again</span>}>
+							<button
+								type="button"
+								onClick={retry}
+								aria-label="Retry upload health check"
+								class="flex items-center rounded-full bg-gray-2/80 p-1 text-gray-11 backdrop-blur-xs hover:text-gray-12"
+							>
+								<IconLucideRefreshCw class="size-3" />
+							</button>
+						</Tooltip>
+					</Show>
 					<Tooltip content={<span>{tooltip()}</span>}>
 						<button
 							type="button"
