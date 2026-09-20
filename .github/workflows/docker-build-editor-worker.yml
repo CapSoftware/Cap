@@ -104,3 +104,22 @@ jobs:
           docker run --rm --network none --cpus 4 --memory 4g \
             --entrypoint bun cap-editor-worker:verification \
             src/__tests__/routes/editor-cursor-mov-replay.ts
+      - name: Replay Reupload from the Solid editor through native export
+        if: matrix.platform == 'amd64'
+        run: |
+          docker run --rm --cpus 4 --memory 8g --ipc host \
+            -v "${{ github.workspace }}:/source" \
+            -w /source/apps/media-server \
+            cap-editor-worker:verification \
+            bash -e -u -o pipefail -c '
+              cd /source
+              bun install --frozen-lockfile
+              bunx playwright install --with-deps chromium webkit
+              bun run --filter @cap/editor-solid-web build
+              cd /source/apps/media-server
+              for browser in chromium webkit; do
+                for pro in 0 1; do
+                  CAP_EDITOR_UI_SHARE_REPLAY=1 CAP_EDITOR_UI_BROWSER="$browser" CAP_EDITOR_UI_PRO_CAPTIONS="$pro" bun run test:native-editor-ui
+                done
+              done
+            '
