@@ -37,6 +37,7 @@ const DATABASE_VERSION = 1;
 const SESSIONS_STORE = "sessions";
 const CHUNKS_STORE = "chunks";
 const DEFAULT_MAX_PENDING_CHUNK_BYTES = 32 * 1024 * 1024;
+const TRANSACTION_TIMEOUT_MS = 15_000;
 
 // Liveness contract between live recorders and recovery sweeps: a spool whose
 // session was updated within this window must be treated as live and never
@@ -61,9 +62,22 @@ const requestToPromise = <T>(request: IDBRequest<T>) =>
 
 const transactionToPromise = (transaction: IDBTransaction) =>
 	new Promise<void>((resolve, reject) => {
-		transaction.oncomplete = () => resolve();
-		transaction.onabort = () => reject(normalizeError(transaction.error));
+		const timeoutId = setTimeout(() => {
+			try {
+				transaction.abort();
+			} catch {}
+			reject(new Error("IndexedDB transaction timed out"));
+		}, TRANSACTION_TIMEOUT_MS);
+		transaction.oncomplete = () => {
+			clearTimeout(timeoutId);
+			resolve();
+		};
+		transaction.onabort = () => {
+			clearTimeout(timeoutId);
+			reject(normalizeError(transaction.error));
+		};
 		transaction.onerror = (event) => {
+			clearTimeout(timeoutId);
 			const request = event.target;
 			const requestError = request instanceof IDBRequest ? request.error : null;
 			reject(

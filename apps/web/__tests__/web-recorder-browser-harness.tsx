@@ -9,10 +9,11 @@ declare global {
 }
 
 function RecorderHarness() {
+	const captureMic = new URLSearchParams(location.search).get("mic") === "1";
 	const recorder = useWebRecorder({
 		organisationId: "test-org",
-		selectedMicId: null,
-		micEnabled: false,
+		selectedMicId: captureMic ? "test-mic" : null,
+		micEnabled: captureMic,
 		systemAudioEnabled: false,
 		recordingMode: "fullscreen",
 		selectedCameraId: "test-camera",

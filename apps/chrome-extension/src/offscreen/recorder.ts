@@ -2211,16 +2211,22 @@ const pauseRecording = () => {
 		return status;
 	}
 	const now = Date.now();
-	recording.durationMs = getRecordingDuration(recording, now);
+	const durationMs = getRecordingDuration(recording, now);
+	try {
+		recording.recorder.pause();
+		recording.inputSidecar?.pause(performance.timeOrigin + performance.now());
+		if (recording.cameraRecorder?.state === "recording") {
+			recording.cameraRecorder.pause();
+		}
+		for (const audioSidecar of recording.audioSidecars) {
+			audioSidecar.pause();
+		}
+	} catch (error) {
+		void stopRecording();
+		throw error;
+	}
+	recording.durationMs = durationMs;
 	recording.lastResumedAt = null;
-	recording.recorder.pause();
-	recording.inputSidecar?.pause(performance.timeOrigin + performance.now());
-	if (recording.cameraRecorder?.state === "recording") {
-		recording.cameraRecorder.pause();
-	}
-	for (const audioSidecar of recording.audioSidecars) {
-		audioSidecar.pause();
-	}
 	if (status.phase === "recording") {
 		status = {
 			...status,
@@ -2238,13 +2244,18 @@ const resumeRecording = () => {
 		return status;
 	}
 	const now = Date.now();
-	recording.recorder.resume();
-	recording.inputSidecar?.resume(performance.timeOrigin + performance.now());
-	if (recording.cameraRecorder?.state === "paused") {
-		recording.cameraRecorder.resume();
-	}
-	for (const audioSidecar of recording.audioSidecars) {
-		audioSidecar.resume();
+	try {
+		recording.recorder.resume();
+		recording.inputSidecar?.resume(performance.timeOrigin + performance.now());
+		if (recording.cameraRecorder?.state === "paused") {
+			recording.cameraRecorder.resume();
+		}
+		for (const audioSidecar of recording.audioSidecars) {
+			audioSidecar.resume();
+		}
+	} catch (error) {
+		void stopRecording();
+		throw error;
 	}
 	recording.lastResumedAt = now;
 	if (status.phase === "paused") {

@@ -94,6 +94,8 @@ interface UseWebRecorderOptions {
 const INSTANT_UPLOAD_REQUEST_INTERVAL_MS = 1000;
 const INSTANT_CHUNK_GUARD_DELAY_MS = INSTANT_UPLOAD_REQUEST_INTERVAL_MS * 3;
 const MEMORY_BACKUP_MAX_BYTES = 256 * 1024 * 1024;
+const CAMERA_BACKUP_TIMEOUT_MS = 5000;
+const readMediaRecorderState = (recorder: MediaRecorder) => recorder.state;
 
 type InstantChunkingMode = "manual" | "timeslice";
 type InstantVideoCreation = {
@@ -827,7 +829,7 @@ export const useWebRecorder = ({
 						new Promise<never>((_, reject) => {
 							timeoutId = window.setTimeout(
 								() => reject(new Error("Camera backup read timed out")),
-								5000,
+								CAMERA_BACKUP_TIMEOUT_MS,
 							);
 						}),
 					])
@@ -1582,10 +1584,32 @@ export const useWebRecorder = ({
 			pauseTimer(timestamp);
 			updatePhase("paused");
 		} catch (error) {
-			if (cameraPaused && cameraRecorder?.state === "paused") {
-				cameraRecorder.resume();
+			let rollbackFailed = false;
+			if (readMediaRecorderState(recorder) === "paused") {
+				try {
+					recorder.resume();
+				} catch (rollbackError) {
+					rollbackFailed = true;
+					console.error("Failed to restore screen recording", rollbackError);
+				}
 			}
-			for (const audioSidecar of audioSidecars) audioSidecar.resume();
+			if (cameraPaused && cameraRecorder?.state === "paused") {
+				try {
+					cameraRecorder.resume();
+				} catch (rollbackError) {
+					rollbackFailed = true;
+					console.error("Failed to restore camera recording", rollbackError);
+				}
+			}
+			for (const audioSidecar of audioSidecars) {
+				try {
+					audioSidecar.resume();
+				} catch (rollbackError) {
+					rollbackFailed = true;
+					console.error("Failed to restore audio recording", rollbackError);
+				}
+			}
+			if (rollbackFailed) void stopRecordingRef.current?.();
 			console.error("Failed to pause recording", error);
 			toast.error("Could not pause recording.");
 		}
@@ -1613,14 +1637,32 @@ export const useWebRecorder = ({
 			}
 			updatePhase("recording");
 		} catch (error) {
-			if (screenResumed) {
+			let rollbackFailed = false;
+			if (cameraRecorder?.state === "recording") {
+				try {
+					cameraRecorder.pause();
+				} catch (rollbackError) {
+					rollbackFailed = true;
+					console.error("Failed to restore camera pause", rollbackError);
+				}
+			}
+			if (screenResumed && readMediaRecorderState(recorder) === "recording") {
 				try {
 					recorder.pause();
 				} catch (pauseError) {
+					rollbackFailed = true;
 					console.error("Failed to restore screen pause", pauseError);
 				}
 			}
-			for (const audioSidecar of audioSidecars) audioSidecar.pause();
+			for (const audioSidecar of audioSidecars) {
+				try {
+					audioSidecar.pause();
+				} catch (rollbackError) {
+					rollbackFailed = true;
+					console.error("Failed to restore audio pause", rollbackError);
+				}
+			}
+			if (rollbackFailed) void stopRecordingRef.current?.();
 			console.error("Failed to resume recording", error);
 			toast.error("Could not resume recording.");
 		}
@@ -1692,10 +1734,26 @@ export const useWebRecorder = ({
 				throw failedAudioStop.reason;
 			}
 			if (pairedCameraCapture) {
+				let cameraFlushTimeoutId: number | null = null;
 				try {
-					await cameraSpoolRef.current?.flush();
+					const cameraSpool = cameraSpoolRef.current;
+					if (cameraSpool) {
+						await Promise.race([
+							cameraSpool.flush(),
+							new Promise<never>((_, reject) => {
+								cameraFlushTimeoutId = window.setTimeout(
+									() => reject(new Error("Camera backup write timed out")),
+									CAMERA_BACKUP_TIMEOUT_MS,
+								);
+							}),
+						]);
+					}
 				} catch (error) {
 					switchCameraBackupToMemory(error);
+				} finally {
+					if (cameraFlushTimeoutId !== null) {
+						window.clearTimeout(cameraFlushTimeoutId);
+					}
 				}
 				if (
 					cameraFallbackRef.current.overflowed ||
@@ -2044,15 +2102,15 @@ export const useWebRecorder = ({
 			cameraSettingsRef.current = undefined;
 			recordingPipelineRef.current = null;
 			pendingInstantVideoIdRef.current = null;
-			await disposeRecordingSpool();
-			await disposeCameraSpool();
-			await Promise.all(
-				audioSidecars.map((sidecar) =>
+			void Promise.all([
+				disposeRecordingSpool(),
+				disposeCameraSpool(),
+				...audioSidecars.map((sidecar) =>
 					sidecar.disposeBackup().catch((error) => {
 						console.error("Failed to remove uploaded audio backup", error);
 					}),
 				),
-			);
+			]);
 
 			setUploadStatus(undefined);
 			setCompletedShareUrl(creationResult.shareUrl);

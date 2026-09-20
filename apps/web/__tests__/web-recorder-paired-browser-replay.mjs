@@ -117,6 +117,7 @@ async function replayPairedCapture(
 	engine,
 	failCameraSpool = false,
 	failCameraCompletion = false,
+	failAudioResume = false,
 ) {
 	const requests = [];
 	const parts = [];
@@ -170,7 +171,15 @@ async function replayPairedCapture(
 					display ??= createCanvasStream(640, 360, "#203060");
 					return display;
 				};
-				const getUserMedia = async () => {
+				const getUserMedia = async (constraints) => {
+					if (constraints?.audio) {
+						const context = new AudioContext();
+						const oscillator = context.createOscillator();
+						const output = context.createMediaStreamDestination();
+						oscillator.connect(output);
+						oscillator.start();
+						return output.stream;
+					}
 					camera ??= createCanvasStream(320, 180, "#b02040");
 					return camera;
 				};
@@ -300,7 +309,9 @@ async function replayPairedCapture(
 			await route.fulfill({ status: 404, body: `Unexpected request: ${path}` });
 		});
 
-		await page.goto("https://capture.test/harness");
+		await page.goto(
+			`https://capture.test/harness${failAudioResume ? "?mic=1" : ""}`,
+		);
 		try {
 			await page.waitForFunction(
 				() => window.capRecorderHarness?.canStartRecording === true,
@@ -328,13 +339,75 @@ async function replayPairedCapture(
 			() => window.capRecorderHarness?.phase === "recording",
 		);
 		if (pauseResume) {
+			if (failAudioResume) {
+				await page.evaluate(() => {
+					window.capRecorderPauseInstances = [];
+					const pause = MediaRecorder.prototype.pause;
+					MediaRecorder.prototype.pause = function () {
+						window.capRecorderPauseInstances.push(this);
+						return pause.call(this);
+					};
+					const resume = MediaRecorder.prototype.resume;
+					MediaRecorder.prototype.resume = function () {
+						if (
+							window.capRecorderFailAudioResume &&
+							this.stream.getVideoTracks().length === 0 &&
+							this.stream.getAudioTracks().length > 0
+						) {
+							window.capRecorderFailAudioResume = false;
+							throw new DOMException(
+								"Simulated audio sidecar resume failure",
+								"InvalidStateError",
+							);
+						}
+						return resume.call(this);
+					};
+				});
+			}
 			await page.waitForTimeout(600);
 			await page.evaluate(() => window.capRecorderHarness.pauseRecording());
 			await page.waitForFunction(
 				() => window.capRecorderHarness?.phase === "paused",
 			);
 			await page.waitForTimeout(350);
+			if (failAudioResume) {
+				await page.evaluate(() => {
+					window.capRecorderFailAudioResume = true;
+				});
+			}
 			await page.evaluate(() => window.capRecorderHarness.resumeRecording());
+			if (failAudioResume) {
+				const pausedStates = await page.evaluate(() =>
+					Array.from(new Set(window.capRecorderPauseInstances)).map(
+						(recorder) => ({
+							state: recorder.state,
+							videoTracks: recorder.stream.getVideoTracks().length,
+							audioTracks: recorder.stream.getAudioTracks().length,
+						}),
+					),
+				);
+				assert.equal(pausedStates.length, 3);
+				assert.deepEqual(
+					pausedStates.map((recorder) => recorder.state),
+					["paused", "paused", "paused"],
+				);
+				assert.deepEqual(
+					pausedStates.map((recorder) => [
+						recorder.videoTracks,
+						recorder.audioTracks,
+					]),
+					[
+						[1, 0],
+						[0, 1],
+						[1, 1],
+					],
+				);
+				assert.equal(
+					await page.evaluate(() => window.capRecorderHarness.phase),
+					"paused",
+				);
+				await page.evaluate(() => window.capRecorderHarness.resumeRecording());
+			}
 			await page.waitForFunction(
 				() => window.capRecorderHarness?.phase === "recording",
 			);
@@ -406,7 +479,12 @@ async function replayPairedCapture(
 				...evidence,
 			};
 		}
-		assert.deepEqual(browserErrors, []);
+		if (failAudioResume) {
+			assert.equal(browserErrors.length, 1);
+			assert.ok(browserErrors[0].includes("Failed to resume recording"));
+		} else {
+			assert.deepEqual(browserErrors, []);
+		}
 		if (failCameraSpool) {
 			assert.ok(
 				(await page.evaluate(() => window.capRecorderCameraSpoolFailures)) > 0,
@@ -415,10 +493,16 @@ async function replayPairedCapture(
 		const completions = requests.filter((request) =>
 			request.path.endsWith("/complete"),
 		);
-		assert.equal(completions.length, 2);
+		assert.equal(completions.length, failAudioResume ? 3 : 2);
+		const micComplete = completions.find((request) =>
+			request.body.subpath.startsWith("mic-upload."),
+		);
+		if (failAudioResume) assert.ok(micComplete);
 		assert.deepEqual(
 			completions.map((request) => request.body.subpath).sort(),
-			[cameraSubpath, screenSubpath],
+			failAudioResume
+				? [cameraSubpath, micComplete?.body.subpath, screenSubpath].sort()
+				: [cameraSubpath, screenSubpath],
 		);
 		const sentParts = await page.evaluate(() =>
 			Promise.all(window.capRecorderPutBodies),
@@ -439,6 +523,13 @@ async function replayPairedCapture(
 		);
 		assert.ok(cameraBytes > 0);
 		assert.ok(screenBytes > 0);
+		if (failAudioResume) {
+			const micParts = sentParts.filter((part) =>
+				part.url.includes(micComplete.body.subpath),
+			);
+			assert.ok(micParts.reduce((total, part) => total + part.bytes, 0) > 0);
+			assert.ok(Number.isInteger(micComplete.body.audioOffsetMs));
+		}
 		assert.notEqual(cameraParts[0].sha256, screenParts[0].sha256);
 		if (engine.extension === "webm") {
 			const cameraPart = parts.find((part) =>
@@ -479,6 +570,7 @@ async function replayPairedCapture(
 		return {
 			engine: engine.name,
 			pauseResume,
+			failAudioResume,
 			failCameraSpool,
 			cameraBytes,
 			screenBytes,
@@ -510,6 +602,17 @@ try {
 					await replayPairedCapture(browser, bundle, pauseResume, engine),
 				);
 			}
+			results.push(
+				await replayPairedCapture(
+					browser,
+					bundle,
+					true,
+					engine,
+					false,
+					false,
+					true,
+				),
+			);
 			if (engine.name === "Chromium") {
 				results.push(
 					await replayPairedCapture(browser, bundle, false, engine, true),
