@@ -109,6 +109,69 @@ test("late plan replies cannot reopen paid caption controls", async () => {
 	}
 });
 
+test("Free preview updates and saves omit paid captions but keep video edits", async () => {
+	const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+	Object.defineProperty(globalThis, "window", {
+		configurable: true,
+		value: { capWebEditorCaptionsEnabled: false },
+	});
+	const channel = new MessageChannel();
+	const transport = new PortEditorTransport(channel.port1);
+	const requests: Array<{ name: string; args: unknown[] }> = [];
+	channel.port2.onmessage = (event: MessageEvent<unknown>) => {
+		const request = event.data as {
+			id: number;
+			name: string;
+			args: unknown[];
+		};
+		requests.push({ name: request.name, args: request.args });
+		channel.port2.postMessage({ kind: "result", id: request.id, value: null });
+	};
+	channel.port2.start();
+	const source = {
+		camera: { mirror: true },
+		captions: {
+			segments: [{ id: "word", text: "Paid" }],
+			settings: { enabled: true, exportWithSubtitles: true },
+		},
+		timeline: {
+			segments: [{ start: 2, end: 8 }],
+			captionSegments: [{ id: "word" }],
+		},
+	};
+	try {
+		await transport.invoke("updateProjectConfigInMemory", [
+			source,
+			null,
+			null,
+			null,
+		]);
+		await transport.invoke("setProjectConfig", [source]);
+		for (const request of requests) {
+			expect(request.args[0]).toMatchObject({
+				camera: { mirror: true },
+				captions: {
+					segments: [],
+					settings: { enabled: false, exportWithSubtitles: false },
+				},
+				timeline: { segments: [{ start: 2, end: 8 }], captionSegments: [] },
+			});
+		}
+		expect(source.captions.segments).toHaveLength(1);
+		expect(requests.map((request) => request.name)).toEqual([
+			"updateProjectConfigInMemory",
+			"setProjectConfig",
+		]);
+		expect(requests[1]?.args[1]).toBe(true);
+	} finally {
+		transport.dispose();
+		channel.port2.close();
+		if (previousWindow)
+			Object.defineProperty(globalThis, "window", previousWindow);
+		else Reflect.deleteProperty(globalThis, "window");
+	}
+});
+
 test("crop frames cross the editor port as compact JPEG bytes", async () => {
 	const channel = new MessageChannel();
 	const transport = new PortEditorTransport(channel.port1);

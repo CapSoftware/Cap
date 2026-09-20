@@ -8,6 +8,7 @@ import {
 	readCapBundleManifestLength,
 } from "@cap/editor-cap-bundle";
 import { type Browser, chromium, webkit } from "@playwright/test";
+import { hasEditorCaptionContent } from "../../../../../apps/web/lib/editor-caption-access";
 import app from "../../editor-worker-app";
 import { parseEditorSocketRequest } from "../../lib/editor-command-socket";
 import {
@@ -70,6 +71,23 @@ async function readySession(id: string, headers: Record<string, string>) {
 	throw new Error("Editor UI fixture preparation timed out");
 }
 
+async function waitForWorkerCaptionContent(expected: boolean) {
+	if (!sessionId) throw new Error("Editor session is unavailable");
+	const deadline = Date.now() + 10_000;
+	while (Date.now() < deadline) {
+		const response = await app.request(`/editor/sessions/${sessionId}/config`, {
+			headers,
+		});
+		if (
+			response.ok &&
+			hasEditorCaptionContent(await response.json()) === expected
+		)
+			return;
+		await Bun.sleep(100);
+	}
+	throw new Error(`Worker caption access did not become ${expected}`);
+}
+
 assert.ok(process.env.CAP_WEB_EDITOR_PREPARE_BIN);
 assert.ok(process.env.CAP_WEB_EDITOR_SERVICE_BIN);
 assert.ok(await Bun.file(join(editorPublic, "index.html")).exists());
@@ -106,6 +124,8 @@ let sessionId: string | null = null;
 let savedAt: string | null = null;
 let captionRequests = 0;
 let currentCaptionPlan = proCaptions;
+let freeCaptionlessSaves = 0;
+let proCaptionSaves = 0;
 let bundleTicketRequests = 0;
 let imageImports = 0;
 let imagePreviewRequests = 0;
@@ -302,12 +322,24 @@ try {
 							videoId?: string;
 							config?: unknown;
 							expectedSavedAt?: string | null;
+							preserveExistingPaidCaptions?: boolean;
 						};
 						if (
 							payload.videoId !== videoId ||
 							payload.expectedSavedAt !== savedAt
 						)
 							return new Response("Editor revision changed", { status: 409 });
+						if (!currentCaptionPlan && hasEditorCaptionContent(payload.config))
+							return new Response("Cap Pro is required for captions", {
+								status: 403,
+							});
+						if (
+							!currentCaptionPlan &&
+							payload.preserveExistingPaidCaptions !== true
+						)
+							return new Response("Free caption save intent is missing", {
+								status: 400,
+							});
 						const worker = await app.request(
 							`/editor/sessions/${sessionId}/config`,
 							{
@@ -317,6 +349,8 @@ try {
 							},
 						);
 						if (!worker.ok) return worker;
+						if (!currentCaptionPlan) freeCaptionlessSaves++;
+						else if (hasEditorCaptionContent(payload.config)) proCaptionSaves++;
 						savedAt = new Date().toISOString();
 						return Response.json({ saved: true, savedAt });
 					}
@@ -721,6 +755,11 @@ try {
 			await editor.getByText("Font settings", { exact: true }).waitFor({
 				state: "visible",
 			});
+			await waitForWorkerCaptionContent(true);
+			const proSaveDeadline = Date.now() + 10_000;
+			while (proCaptionSaves === 0 && Date.now() < proSaveDeadline)
+				await Bun.sleep(100);
+			assert.ok(proCaptionSaves > 0);
 			assert.equal(captionRequests, 1);
 			await editor.getByText("Captions", { exact: true }).last().waitFor({
 				state: "visible",
@@ -759,6 +798,7 @@ try {
 			await editor.getByText("Font settings", { exact: true }).waitFor({
 				state: "hidden",
 			});
+			await waitForWorkerCaptionContent(false);
 		}
 		currentCaptionPlan = !proCaptions;
 		await editor
@@ -774,6 +814,36 @@ try {
 			await editor.getByText("Font settings", { exact: true }).waitFor({
 				state: "hidden",
 			});
+			await waitForWorkerCaptionContent(false);
+			const previousFreeSaves = freeCaptionlessSaves;
+			await editor.getByRole("tab", { name: "Camera" }).click();
+			await editor
+				.getByText("Mirror Camera", { exact: true })
+				.locator("..")
+				.locator(".cap-toggle")
+				.click();
+			const saveDeadline = Date.now() + 10_000;
+			while (
+				freeCaptionlessSaves === previousFreeSaves &&
+				Date.now() < saveDeadline
+			)
+				await Bun.sleep(100);
+			assert.ok(freeCaptionlessSaves > previousFreeSaves);
+			let unsavedSnapshot: string | null | undefined;
+			const receiptDeadline = Date.now() + 10_000;
+			while (Date.now() < receiptDeadline) {
+				unsavedSnapshot = await editor.locator("body").evaluate(() =>
+					(
+						window as Window & {
+							capWebEditorUnsavedProjectSnapshot?: () => string | null;
+						}
+					).capWebEditorUnsavedProjectSnapshot?.(),
+				);
+				if (unsavedSnapshot === null) break;
+				await Bun.sleep(100);
+			}
+			assert.equal(unsavedSnapshot, null);
+			await editor.getByRole("tab", { name: "Captions" }).click();
 			assert.equal(
 				await editor
 					.getByRole("button", { name: "Regenerate Captions" })
@@ -787,6 +857,7 @@ try {
 			await editor.getByText("Font settings", { exact: true }).waitFor({
 				state: "visible",
 			});
+			await waitForWorkerCaptionContent(false);
 		}
 		currentCaptionPlan = proCaptions;
 		await editor
@@ -804,6 +875,7 @@ try {
 			await editor.getByText("Font settings", { exact: true }).waitFor({
 				state: "visible",
 			});
+			await waitForWorkerCaptionContent(true);
 		} else {
 			await editor.getByRole("link", { name: "Upgrade to Cap Pro" }).waitFor({
 				state: "visible",

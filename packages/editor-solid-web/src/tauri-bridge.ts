@@ -2,6 +2,7 @@ import type {
 	commands as desktopCommands,
 	events as desktopEvents,
 } from "../../../apps/desktop/src/utils/tauri";
+import { stripEditorCaptionContent } from "../../../apps/web/lib/editor-caption-access";
 import {
 	compactEditorCaptionConfig,
 	createEditorCaptionCache,
@@ -204,7 +205,20 @@ export class PortEditorTransport {
 		let fullConfigArgs: unknown[] | null = null;
 		let compacted = false;
 		if (isConfigCommand && args.length > 0) {
-			args = [mapEditorImportedImages(args[0]), ...args.slice(1)];
+			const mapped = mapEditorImportedImages(args[0]);
+			const stripForFree =
+				typeof window !== "undefined" &&
+				window.capWebEditorCaptionsEnabled === false &&
+				typeof mapped === "object" &&
+				mapped !== null &&
+				!Array.isArray(mapped);
+			const config = stripForFree
+				? stripEditorCaptionContent(mapped as Record<string, unknown>)
+				: mapped;
+			args =
+				name === "setProjectConfig" && stripForFree
+					? [config, true]
+					: [config, ...args.slice(1)];
 			fullConfigArgs = args;
 			captionCache = await createEditorCaptionCache(args[0]);
 			const previous =

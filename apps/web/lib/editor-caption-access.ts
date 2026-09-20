@@ -69,3 +69,23 @@ export function preserveEditorCaptionContent(
 	}
 	return preserved;
 }
+
+export function savedEditorProjectAfterFreeEdit(
+	config: Record<string, unknown>,
+	prior: Record<string, unknown>,
+) {
+	return preserveEditorCaptionContent(stripEditorCaptionContent(config), prior);
+}
+
+export function shouldKeepPriorEditorCaptions(
+	config: unknown,
+	prior: unknown,
+	currentlyPro: boolean,
+	preserveExisting: boolean,
+) {
+	return (
+		!hasEditorCaptionContent(config) &&
+		hasEditorCaptionContent(prior) &&
+		(!currentlyPro || preserveExisting)
+	);
+}

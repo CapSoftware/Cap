@@ -2,6 +2,8 @@ import { expect, test } from "vitest";
 import {
 	hasEditorCaptionContent,
 	preserveEditorCaptionContent,
+	savedEditorProjectAfterFreeEdit,
+	shouldKeepPriorEditorCaptions,
 	stripEditorCaptionContent,
 } from "../lib/editor-caption-access";
 
@@ -81,4 +83,54 @@ test("Free edits keep hidden source captions and overrides for a later Pro reope
 		},
 	});
 	expect(prior.camera.mirror).toBe(false);
+});
+
+test("a Free save receipt retains only previously saved paid caption edits", () => {
+	const prior = {
+		camera: { mirror: false },
+		captions: {
+			segments: [{ id: "word", text: "Saved caption" }],
+			settings: { enabled: true, exportWithSubtitles: true },
+		},
+		timeline: {
+			segments: [{ start: 0, end: 10 }],
+			captionSegments: [{ id: "word", text: "Saved caption" }],
+		},
+	};
+	const local = {
+		camera: { mirror: true },
+		captions: {
+			segments: [{ id: "word", text: "Unsaved caption" }],
+			settings: { enabled: true, exportWithSubtitles: true },
+		},
+		timeline: {
+			segments: [{ start: 2, end: 8 }],
+			captionSegments: [{ id: "word", text: "Unsaved caption" }],
+		},
+	};
+	const receipt = savedEditorProjectAfterFreeEdit(local, prior);
+	expect(receipt).toMatchObject({
+		camera: { mirror: true },
+		captions: prior.captions,
+		timeline: {
+			segments: [{ start: 2, end: 8 }],
+			captionSegments: prior.timeline.captionSegments,
+		},
+	});
+	expect(receipt).not.toEqual(local);
+	expect(local.captions.segments[0]?.text).toBe("Unsaved caption");
+});
+
+test("a Free-origin save keeps prior captions across an upgrade while a Pro deletion removes them", () => {
+	const prior = {
+		captions: { segments: [{ id: "paid", text: "Saved" }] },
+	};
+	const empty = {
+		captions: { segments: [], settings: { enabled: false } },
+		timeline: { captionSegments: [] },
+	};
+	expect(shouldKeepPriorEditorCaptions(empty, prior, false, false)).toBe(true);
+	expect(shouldKeepPriorEditorCaptions(empty, prior, true, true)).toBe(true);
+	expect(shouldKeepPriorEditorCaptions(empty, prior, true, false)).toBe(false);
+	expect(shouldKeepPriorEditorCaptions(prior, prior, true, true)).toBe(false);
 });

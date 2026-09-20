@@ -13,6 +13,7 @@ import { Effect, Layer, Schema } from "effect";
 import {
 	hasEditorCaptionContent,
 	preserveEditorCaptionContent,
+	shouldKeepPriorEditorCaptions,
 } from "@/lib/editor-caption-access";
 import {
 	createEditorCaptionCache,
@@ -62,6 +63,7 @@ class Api extends HttpApi.make("WebEditorProjectSaveApi").add(
 						videoId: Video.VideoId,
 						config: Schema.Unknown,
 						expectedSavedAt: Schema.optional(Schema.NullOr(Schema.String)),
+						preserveExistingPaidCaptions: Schema.optional(Schema.Boolean),
 					}),
 				)
 				.addSuccess(
@@ -124,14 +126,23 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						if (!video.captionsEnabled && hasEditorCaptionContent(restored)) {
 							return yield* new HttpApiError.Forbidden();
 						}
+						if (
+							payload.preserveExistingPaidCaptions === true &&
+							hasEditorCaptionContent(restored)
+						)
+							return yield* new HttpApiError.Forbidden();
 						const { serialized, project } = yield* Effect.try({
 							try: () => encodeWebEditorProject(restored),
 							catch: () => new HttpApiError.ServiceUnavailable(),
 						});
 						const storedProject =
-							!video.captionsEnabled &&
 							priorConfig &&
-							hasEditorCaptionContent(priorConfig)
+							shouldKeepPriorEditorCaptions(
+								restored,
+								priorConfig,
+								video.captionsEnabled,
+								payload.preserveExistingPaidCaptions === true,
+							)
 								? yield* Effect.try({
 										try: () =>
 											encodeWebEditorProject(

@@ -58,6 +58,7 @@ import {
 	type TimelineSegment,
 	type XY,
 } from "~/utils/tauri";
+import { savedEditorProjectAfterFreeEdit } from "../../../../web/lib/editor-caption-access";
 import {
 	type AudioTrackSegment,
 	createAudioTrackSegment,
@@ -1701,8 +1702,27 @@ export const [EditorContextProvider, useBaseEditorContext] =
 				},
 				getConfig: () => serializeProjectConfiguration(project),
 				save: async (config) => {
+					const preservePaidCaptions =
+						isWebEditor &&
+						(
+							window as Window & {
+								capWebEditorCaptionsEnabled?: boolean;
+							}
+						).capWebEditorCaptionsEnabled === false;
 					await commands.setProjectConfig(config);
-					if (isWebEditor) lastPersistedWebConfig = JSON.stringify(config);
+					if (isWebEditor) {
+						const prior = JSON.parse(
+							lastPersistedWebConfig ?? initialWebConfig ?? "{}",
+						) as Record<string, unknown>;
+						lastPersistedWebConfig = JSON.stringify(
+							preservePaidCaptions
+								? savedEditorProjectAfterFreeEdit(
+										config as unknown as Record<string, unknown>,
+										prior,
+									)
+								: config,
+						);
+					}
 				},
 				onError: (error) => {
 					console.error("Failed to persist project config", error);

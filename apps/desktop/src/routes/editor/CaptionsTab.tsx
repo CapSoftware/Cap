@@ -261,20 +261,8 @@ export function CaptionsTab(props: {
 	const [webCaptionsProEnabled, setWebCaptionsProEnabled] = createSignal(
 		isWebEditor && webCaptionsEnabled(),
 	);
-	let planRequestSequence = 0;
-	const refreshWebCaptionPlan = async () => {
-		const requestSequence = ++planRequestSequence;
-		try {
-			const enabled = await commands.checkUpgradedAndUpdate();
-			if (requestSequence === planRequestSequence)
-				setWebCaptionsProEnabled(enabled);
-		} catch {
-			return;
-		}
-	};
-	const refreshWebCaptionPlanOnVisibility = () => {
-		if (!document.hidden) void refreshWebCaptionPlan();
-	};
+	const syncWebCaptionPlan = () =>
+		setWebCaptionsProEnabled(webCaptionsEnabled());
 
 	const selectedCaptionIndex = () =>
 		editorState.timeline.selection?.type === "caption" &&
@@ -587,12 +575,11 @@ export function CaptionsTab(props: {
 
 	onMount(async () => {
 		if (isWebEditor) {
-			window.addEventListener("focus", refreshWebCaptionPlan);
-			document.addEventListener(
-				"visibilitychange",
-				refreshWebCaptionPlanOnVisibility,
+			window.addEventListener(
+				"cap-web-editor-captions-plan",
+				syncWebCaptionPlan,
 			);
-			void refreshWebCaptionPlan();
+			syncWebCaptionPlan();
 			const savedLanguage = localStorage.getItem(
 				"selectedTranscriptionLanguage",
 			);
@@ -672,11 +659,9 @@ export function CaptionsTab(props: {
 
 	onCleanup(() => {
 		if (isWebEditor) {
-			planRequestSequence++;
-			window.removeEventListener("focus", refreshWebCaptionPlan);
-			document.removeEventListener(
-				"visibilitychange",
-				refreshWebCaptionPlanOnVisibility,
+			window.removeEventListener(
+				"cap-web-editor-captions-plan",
+				syncWebCaptionPlan,
 			);
 		}
 		if (unlistenDownloadProgress) unlistenDownloadProgress();

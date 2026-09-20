@@ -207,12 +207,15 @@ test("desktop autosave is acknowledged only after the persistent web API saves i
 		kind: "invoke",
 		id: 8,
 		name: "setProjectConfig",
-		args: [{ camera: { mirror: false } }],
+		args: [{ camera: { mirror: false } }, true],
 	});
 	expect(await nextReply).toEqual({ kind: "result", id: 8, value: null });
-	expect(JSON.parse(String(requests[2]?.init?.body)).expectedSavedAt).toBe(
-		"second-revision",
-	);
+	expect(JSON.parse(String(requests[2]?.init?.body))).toEqual({
+		videoId: "video",
+		config: { camera: { mirror: false } },
+		expectedSavedAt: "second-revision",
+		preserveExistingPaidCaptions: true,
+	});
 	port.close();
 	bridge.dispose();
 });

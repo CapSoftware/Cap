@@ -1691,7 +1691,10 @@ export class EditorHostBridge {
 		if (message.kind === "invoke" && message.name === "setProjectConfig") {
 			try {
 				const config = message.args[0];
+				const preserveExistingPaidCaptions =
+					message.args.length === 2 && message.args[1] === true;
 				if (
+					(message.args.length !== 1 && !preserveExistingPaidCaptions) ||
 					typeof config !== "object" ||
 					config === null ||
 					Array.isArray(config)
@@ -1701,6 +1704,9 @@ export class EditorHostBridge {
 				const body = JSON.stringify({
 					videoId: this.videoId,
 					config,
+					...(preserveExistingPaidCaptions
+						? { preserveExistingPaidCaptions: true }
+						: {}),
 					...(this.getProjectSavedAt
 						? { expectedSavedAt: this.getProjectSavedAt() }
 						: {}),

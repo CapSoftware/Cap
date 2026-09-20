@@ -91,6 +91,7 @@ const DEFAULT_TIMELINE_CONTENT_HEIGHT = 124;
 // Vertical gutter between the player row and the timeline card, plus the
 // gutter below the timeline card; both live inside the measured layout box.
 const LAYOUT_GUTTERS = 16;
+const isWebEditor = import.meta.env.VITE_CAP_WEB_EDITOR === "true";
 
 const scheduleIdleWork = (callback: () => void) => {
 	const win = window as Window & {
@@ -790,6 +791,19 @@ function Inner(props: {
 		throttledConfigUpdate(time);
 		trailingConfigUpdate(time);
 	};
+	if (isWebEditor) {
+		const refreshCaptionPlan = () => {
+			void commands.checkUpgradedAndUpdate().catch(() => undefined);
+		};
+		onMount(refreshCaptionPlan);
+		createEventListener(window, "focus", refreshCaptionPlan);
+		createEventListener(document, "visibilitychange", () => {
+			if (!document.hidden) refreshCaptionPlan();
+		});
+		createEventListener(window, "cap-web-editor-captions-plan", () =>
+			doConfigUpdate(frameNumberToRender()),
+		);
+	}
 
 	createEffect(
 		on(
