@@ -29,7 +29,10 @@ const EDITOR_PROCESS_ENV_KEYS = [
 	"CAP_DISABLE_ENCODER_SELF_TEST",
 ] as const;
 
-export function editorProcessEnv(internalToken?: string): NodeJS.ProcessEnv {
+export function editorProcessEnv(
+	internalToken?: string,
+	projectRoot?: string,
+): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = {};
 	for (const name of EDITOR_PROCESS_ENV_KEYS) {
 		const value = process.env[name];
@@ -37,6 +40,9 @@ export function editorProcessEnv(internalToken?: string): NodeJS.ProcessEnv {
 	}
 	if (internalToken !== undefined) {
 		env.CAP_WEB_EDITOR_INTERNAL_TOKEN = internalToken;
+	}
+	if (projectRoot !== undefined) {
+		env.CAP_WEB_EDITOR_PROJECT_ROOT = projectRoot;
 	}
 	return env;
 }

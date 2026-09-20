@@ -76,6 +76,24 @@ test("native editor process environment excludes worker credentials", () => {
 	}
 });
 
+test("native editor project root is passed explicitly, not inherited", () => {
+	const previousRoot = process.env.CAP_WEB_EDITOR_PROJECT_ROOT;
+	process.env.CAP_WEB_EDITOR_PROJECT_ROOT = "/untrusted-worker-root";
+	try {
+		expect(editorProcessEnv().CAP_WEB_EDITOR_PROJECT_ROOT).toBeUndefined();
+		expect(
+			editorProcessEnv("internal-token", "/trusted-worker-root")
+				.CAP_WEB_EDITOR_PROJECT_ROOT,
+		).toBe("/trusted-worker-root");
+	} finally {
+		if (previousRoot === undefined) {
+			delete process.env.CAP_WEB_EDITOR_PROJECT_ROOT;
+		} else {
+			process.env.CAP_WEB_EDITOR_PROJECT_ROOT = previousRoot;
+		}
+	}
+});
+
 test("rejects a source when its pinned object identity is missing", async () => {
 	await expect(downloadEditorMedia(source("/missing"))).rejects.toThrow(
 		"Editor source identity changed before download",

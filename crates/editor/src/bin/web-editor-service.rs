@@ -1,8 +1,9 @@
 use std::{
     env,
     error::Error,
+    ffi::OsStr,
     io,
-    path::PathBuf,
+    path::{Path as FilePath, PathBuf},
     sync::{
         Arc, LazyLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -457,6 +458,14 @@ async fn clip_thumbnail(
             meta.path(&segment.display.path)
         }
     };
+    let display_path = tokio::fs::canonicalize(display_path)
+        .await
+        .map_err(|error| internal_error(error.to_string()))?;
+    if !display_path.starts_with(&state.editor.project_path) {
+        return Err(invalid_request(
+            "Thumbnail source escapes the editor project",
+        ));
+    }
     let cache_path = state
         .editor
         .project_path
@@ -1105,6 +1114,90 @@ async fn event_socket(
     }
 }
 
+fn checked_project_path(requested: &FilePath, trusted_root: &FilePath) -> io::Result<PathBuf> {
+    if requested.parent() != Some(trusted_root) || requested.extension() != Some(OsStr::new("cap"))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Editor project is outside its worker-owned root",
+        ));
+    }
+    let root_metadata = std::fs::symlink_metadata(trusted_root)?;
+    let project_metadata = std::fs::symlink_metadata(requested)?;
+    if !root_metadata.is_dir() || !project_metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Editor project and root must be ordinary directories",
+        ));
+    }
+    let root = trusted_root.canonicalize()?;
+    let project = requested.canonicalize()?;
+    if project.parent() != Some(root.as_path()) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Editor project escapes its worker-owned root",
+        ));
+    }
+    Ok(project)
+}
+
+#[cfg(test)]
+mod project_path_tests {
+    use super::checked_project_path;
+    use std::fs;
+
+    #[test]
+    fn accepts_only_direct_cap_directories_under_the_worker_root() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path().join("worker-root");
+        fs::create_dir(&root).unwrap();
+        let valid = root.join("recording.cap");
+        fs::create_dir(&valid).unwrap();
+        assert_eq!(
+            checked_project_path(&valid, &root).unwrap(),
+            valid.canonicalize().unwrap()
+        );
+
+        let outside = workspace.path().join("outside.cap");
+        fs::create_dir(&outside).unwrap();
+        assert!(checked_project_path(&outside, &root).is_err());
+        assert!(checked_project_path(&root.join("../outside.cap"), &root).is_err());
+
+        let nested = root.join("nested");
+        fs::create_dir(&nested).unwrap();
+        let nested_project = nested.join("recording.cap");
+        fs::create_dir(&nested_project).unwrap();
+        assert!(checked_project_path(&nested_project, &root).is_err());
+
+        let wrong_extension = root.join("recording.txt");
+        fs::create_dir(&wrong_extension).unwrap();
+        assert!(checked_project_path(&wrong_extension, &root).is_err());
+
+        let ordinary_file = root.join("file.cap");
+        fs::write(&ordinary_file, b"not a directory").unwrap();
+        assert!(checked_project_path(&ordinary_file, &root).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_projects_and_roots() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path().join("worker-root");
+        fs::create_dir(&root).unwrap();
+        let valid = root.join("recording.cap");
+        fs::create_dir(&valid).unwrap();
+        let symlinked_project = root.join("linked.cap");
+        std::os::unix::fs::symlink(&valid, &symlinked_project).unwrap();
+        assert!(checked_project_path(&symlinked_project, &root).is_err());
+
+        let symlinked_root = workspace.path().join("linked-root");
+        std::os::unix::fs::symlink(&root, &symlinked_root).unwrap();
+        assert!(
+            checked_project_path(&symlinked_root.join("recording.cap"), &symlinked_root).is_err()
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let internal_token = env::var("CAP_WEB_EDITOR_INTERNAL_TOKEN")?;
@@ -1117,10 +1210,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             io::Error::new(io::ErrorKind::InvalidInput, "Invalid internal editor token").into(),
         );
     }
-    let project_path = env::args_os()
+    let requested_project_path = env::args_os()
         .nth(1)
         .map(PathBuf::from)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Missing project path"))?;
+    let trusted_root = env::var_os("CAP_WEB_EDITOR_PROJECT_ROOT")
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "Missing editor project root")
+        })?;
+    let project_path = checked_project_path(&requested_project_path, &trusted_root)?;
     let (frame_tx, frame_rx) = watch::channel(None);
     let (frame_input_tx, mut frame_input_rx) =
         watch::channel::<Option<Arc<(RenderedFrame, FrameLayout)>>>(None);
