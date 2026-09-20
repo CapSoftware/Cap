@@ -5,6 +5,47 @@ const PERSISTED_EDITOR_KEYS = new Set([
 	"hotkeys",
 	"recording_settings",
 ]);
+const STUDIO_SOUND_KEY = "audio_enhancement";
+const STUDIO_SOUND_URL = "/api/editor/preferences/studio-sound";
+const DEFAULT_STUDIO_SOUND = {
+	enabledByDefault: true,
+	isolation: "balanced",
+} as const;
+
+function isStudioSoundPreference(value: unknown): value is {
+	enabledByDefault: boolean;
+	isolation: "light" | "balanced" | "strong";
+} {
+	if (typeof value !== "object" || value === null) return false;
+	const record = value as Record<string, unknown>;
+	return (
+		typeof record.enabledByDefault === "boolean" &&
+		(record.isolation === "light" ||
+			record.isolation === "balanced" ||
+			record.isolation === "strong")
+	);
+}
+
+async function requestStudioSound(method: "GET" | "PUT", value?: unknown) {
+	if (method === "PUT" && !isStudioSoundPreference(value))
+		throw new Error("Studio Sound preference is invalid");
+	const response = await fetch(STUDIO_SOUND_URL, {
+		method,
+		credentials: "same-origin",
+		cache: "no-store",
+		...(method === "PUT"
+			? {
+					body: JSON.stringify(value),
+					headers: { "Content-Type": "application/json" },
+				}
+			: {}),
+	});
+	if (!response.ok) throw new Error("Could not save or load Studio Sound");
+	const stored: unknown = await response.json();
+	if (!isStudioSoundPreference(stored))
+		throw new Error("Studio Sound response is invalid");
+	return stored;
+}
 
 let namespace = "anonymous";
 const stores = new Map<string, Store>();
@@ -45,6 +86,11 @@ export class Store {
 
 	async get<T>(key: string): Promise<T | undefined> {
 		if (this.state.has(key)) return this.state.get(key) as T;
+		if (key === STUDIO_SOUND_KEY) {
+			const value = await requestStudioSound("GET");
+			this.state.set(key, value);
+			return value as T;
+		}
 		if (!PERSISTED_EDITOR_KEYS.has(key)) return undefined;
 		let stored: string | null;
 		try {
@@ -63,6 +109,12 @@ export class Store {
 	}
 
 	async set(key: string, value: unknown) {
+		if (key === STUDIO_SOUND_KEY) {
+			const stored = await requestStudioSound("PUT", value);
+			this.state.set(key, stored);
+			this.emit(key, stored);
+			return;
+		}
 		if (PERSISTED_EDITOR_KEYS.has(key)) {
 			localStorage.setItem(
 				storageKey(this.scope, this.path, key),
@@ -79,6 +131,12 @@ export class Store {
 
 	async delete(key: string) {
 		const existed = await this.has(key);
+		if (key === STUDIO_SOUND_KEY) {
+			await requestStudioSound("PUT", DEFAULT_STUDIO_SOUND);
+			this.state.delete(key);
+			this.emit(key, undefined);
+			return existed;
+		}
 		if (PERSISTED_EDITOR_KEYS.has(key)) {
 			localStorage.removeItem(storageKey(this.scope, this.path, key));
 		}

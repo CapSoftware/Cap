@@ -90,6 +90,25 @@ test("the editor session endpoint rejects incomplete paired sources", async () =
 		}),
 	});
 	expect(duplicatedCamera.status).toBe(400);
+	const invalidStudioSound = await app.request("/editor/preparations", {
+		method: "POST",
+		headers: {
+			"x-media-server-secret": secret,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({
+			videoId: "test",
+			title: "Test",
+			display: {
+				url: "https://cap.so/display.webm",
+				contentType: "video/webm",
+				size: 100,
+				fps: 30,
+			},
+			audioDefault: { enabledByDefault: true, isolation: "invalid" },
+		}),
+	});
+	expect(invalidStudioSound.status).toBe(400);
 });
 
 const hasNativeBinaries =
@@ -235,6 +254,10 @@ test.skipIf(!hasNativeBinaries)(
 			const sources = {
 				videoId: "test-paired",
 				title: "Paired test",
+				audioDefault: {
+					enabledByDefault: true,
+					isolation: "strong",
+				},
 				display: {
 					url: `http://127.0.0.1:${server.port}/display.webm`,
 					contentType: "video/webm",
@@ -327,6 +350,7 @@ test.skipIf(!hasNativeBinaries)(
 				recordingDuration: number;
 				path: string;
 				savedProjectConfig: {
+					audio: { improve: boolean; isolation: string };
 					camera: {
 						mirror: boolean;
 						backgroundBlur: { mode: "off" | "light" | "heavy" | "remove" };
@@ -367,6 +391,10 @@ test.skipIf(!hasNativeBinaries)(
 				};
 			};
 			expect(data.recordingDuration).toBeGreaterThan(2.8);
+			expect(data.savedProjectConfig.audio).toMatchObject({
+				improve: true,
+				isolation: "strong",
+			});
 			const titlePath = `/editor/sessions/${sessionId}/meta`;
 			const initialTitle = await app.request(titlePath, { headers });
 			expect(initialTitle.status).toBe(200);

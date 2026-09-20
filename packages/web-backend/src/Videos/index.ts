@@ -7,6 +7,7 @@ import {
 	type Folder,
 	Policy,
 	Storage as StorageDomain,
+	StudioSound,
 	Video,
 } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
@@ -599,6 +600,16 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					);
 					const duration: RepoCreateVideoInput["duration"] =
 						Option.fromNullable(input.durationSeconds);
+					const [preferences] = yield* db.use((client) =>
+						client
+							.select({ preferences: Db.users.preferences })
+							.from(Db.users)
+							.where(Dz.eq(Db.users.id, user.id))
+							.limit(1),
+					);
+					const audioDefault = StudioSound.fromUserPreferences(
+						preferences?.preferences,
+					);
 
 					const now = new Date();
 					const formattedDate = `${now.getDate()} ${now.toLocaleString(
@@ -620,7 +631,9 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						width,
 						height,
 						duration,
-						metadata: Option.none<RepoMetadataValue>(),
+						metadata: Option.some<RepoMetadataValue>({
+							webEditorAudioDefault: audioDefault,
+						}),
 						transcriptionStatus: Option.none<RepoTranscriptionStatusValue>(),
 					};
 					const videoId = yield* repo.create(createData);

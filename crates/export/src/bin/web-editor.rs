@@ -22,7 +22,8 @@ use cap_project::{
     AudioMeta, ClipConfiguration, CursorClickEvent, CursorEvents, CursorMeta, CursorMoveEvent,
     Cursors, InstantRecordingMeta, KeyPressEvent, KeyboardEvents, MultipleSegment,
     MultipleSegments, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
-    StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, VideoMeta, XY,
+    StudioRecordingMeta, StudioRecordingStatus, TimelineConfiguration, VideoMeta, VoiceIsolation,
+    XY,
 };
 use image::ImageDecoder;
 use serde::Deserialize;
@@ -43,8 +44,16 @@ struct WebEditorSourceManifest {
     system_audio_offset_ms: Option<i64>,
     input_events_path: Option<PathBuf>,
     mixed_audio_in_display: bool,
+    audio_default: Option<WebEditorAudioDefault>,
     initial_project_config: Option<ProjectConfiguration>,
     legacy_edit_spec: Option<LegacyEditSpec>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebEditorAudioDefault {
+    enabled_by_default: bool,
+    isolation: VoiceIsolation,
 }
 
 #[derive(Deserialize)]
@@ -625,9 +634,14 @@ fn prepare(project_path: &Path, manifest_path: &Path) -> Result<(), Box<dyn Erro
     if manifest.initial_project_config.is_some() && manifest.legacy_edit_spec.is_some() {
         return Err(invalid_input("Legacy edits cannot replace a saved editor project").into());
     }
+    let saved_config = manifest.initial_project_config.is_some();
     let mut config = manifest
         .initial_project_config
         .unwrap_or_else(default_screen_recording_project_config);
+    if !saved_config && let Some(audio_default) = manifest.audio_default {
+        config.audio.improve = audio_default.enabled_by_default;
+        config.audio.isolation = audio_default.isolation;
+    }
     if let Some(spec) = manifest.legacy_edit_spec {
         if spec.version != 1
             || !spec.source_duration.is_finite()

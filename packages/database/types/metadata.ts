@@ -6,6 +6,10 @@
  * Video metadata structure
  */
 export interface VideoMetadata {
+	webEditorAudioDefault?: {
+		enabledByDefault: boolean;
+		isolation: "light" | "balanced" | "strong";
+	};
 	webEditorProject?:
 		| {
 				version: 1;

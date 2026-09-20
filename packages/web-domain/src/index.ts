@@ -21,6 +21,7 @@ export * as Space from "./Space.ts";
 export { SpaceMemberId, SpaceMemberRole } from "./Space.ts";
 export * as Storage from "./Storage.ts";
 export { StorageError } from "./Storage.ts";
+export * as StudioSound from "./StudioSound.ts";
 export * as User from "./User.ts";
 export { UserId } from "./User.ts";
 export * as Video from "./Video.ts";

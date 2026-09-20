@@ -5,7 +5,7 @@ import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { Database, Storage } from "@cap/web-backend";
 import { getRecordingObjectIdentity } from "@cap/web-backend/src/Storage/recording-object-identity";
-import { CurrentUser, type Video } from "@cap/web-domain";
+import { CurrentUser, StudioSound, type Video } from "@cap/web-domain";
 import { HttpApiError } from "@effect/platform";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
@@ -675,6 +675,13 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 						projectConfig: captionsEnabled
 							? restoredProject
 							: stripEditorCaptionContent(restoredProject),
+					}
+				: {}),
+			...(!restoredProject && video.metadata?.webEditorAudioDefault
+				? {
+						audioDefault: StudioSound.parsePreference(
+							video.metadata.webEditorAudioDefault,
+						),
 					}
 				: {}),
 			...(legacyEdit

@@ -239,6 +239,13 @@ const sessionSchema = z
 		mic: audioMediaSchema.optional(),
 		systemAudio: audioMediaSchema.optional(),
 		inputEvents: inputEventsMediaSchema.optional(),
+		audioDefault: z
+			.object({
+				enabledByDefault: z.boolean(),
+				isolation: z.enum(["light", "balanced", "strong"]),
+			})
+			.nullable()
+			.optional(),
 		projectConfig: z
 			.record(z.unknown())
 			.refine(

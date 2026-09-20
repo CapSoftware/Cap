@@ -115,6 +115,7 @@ test.skipIf(!hasNativeBinary)(
 			cleanup = project.cleanup;
 			const configPath = join(project.path, "project-config.json");
 			const config = JSON.parse(await readFile(configPath, "utf8")) as {
+				audio: { improve: boolean; isolation: string };
 				timeline: { segments: Array<{ start: number; end: number }> };
 			};
 			expect(
@@ -153,6 +154,7 @@ test.skipIf(!hasNativeBinary)(
 			expect(await readFile(sourcePath)).toEqual(originalBytes);
 			const reopened = await prepareNativeEditorProject({
 				...input,
+				audioDefault: { enabledByDefault: true, isolation: "strong" },
 				projectConfig: config as unknown as Record<string, unknown>,
 			});
 			try {
@@ -160,6 +162,7 @@ test.skipIf(!hasNativeBinary)(
 					await readFile(join(reopened.path, "project-config.json"), "utf8"),
 				) as typeof config;
 				expect(restored.timeline.segments).toEqual(config.timeline.segments);
+				expect(restored.audio).toEqual(config.audio);
 			} finally {
 				await reopened.cleanup();
 			}

@@ -58,6 +58,10 @@ export type EditorSessionInput = {
 	mic?: AudioSource;
 	systemAudio?: AudioSource;
 	inputEvents?: InputEventsSource;
+	audioDefault?: {
+		enabledByDefault: boolean;
+		isolation: "light" | "balanced" | "strong";
+	} | null;
 	projectConfig?: Record<string, unknown>;
 	legacyEditSpec?: LegacyEditorEditSpec;
 	audioAssets?: EditorAudioAsset[];
@@ -256,6 +260,7 @@ export async function createEditorSession(
 						}
 					: {}),
 				mixedAudioInDisplay: displayMedia.hasAudio && !mic && !systemAudio,
+				...(input.audioDefault ? { audioDefault: input.audioDefault } : {}),
 				...(input.legacyEditSpec
 					? { legacyEditSpec: input.legacyEditSpec }
 					: {}),

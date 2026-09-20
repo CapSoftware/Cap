@@ -86,6 +86,10 @@ export type NativeEditorInputs = {
 	systemAudio?: AudioMediaInput;
 	inputEvents?: InputEventsInput;
 	mixedAudioInDisplay: boolean;
+	audioDefault?: {
+		enabledByDefault: boolean;
+		isolation: "light" | "balanced" | "strong";
+	};
 	projectConfig?: Record<string, unknown>;
 	legacyEditSpec?: LegacyEditorEditSpec;
 	audioAssets?: EditorAudioAsset[];
@@ -265,6 +269,7 @@ export async function prepareNativeEditorProject(
 				systemAudioOffsetMs: inputs.systemAudio?.offsetMs ?? null,
 				inputEventsPath: inputs.inputEvents?.path ?? null,
 				mixedAudioInDisplay: inputs.mixedAudioInDisplay,
+				audioDefault: inputs.audioDefault ?? null,
 				initialProjectConfig:
 					inputs.projectConfig && capImports.length === 0
 						? mapEditorConfigPaths(inputs.projectConfig, "native", projectPath)
