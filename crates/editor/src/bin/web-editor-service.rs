@@ -1132,6 +1132,12 @@ fn checked_project_path(requested: &FilePath, trusted_root: &FilePath) -> io::Re
     }
     let root = trusted_root.canonicalize()?;
     let project = requested.canonicalize()?;
+    if !project.starts_with(&root) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Editor project escapes its worker-owned root",
+        ));
+    }
     if project.parent() != Some(root.as_path()) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
