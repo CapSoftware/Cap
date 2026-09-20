@@ -30,6 +30,8 @@ const proCaptions = process.env.CAP_EDITOR_UI_PRO_CAPTIONS === "1";
 const shareReplay = process.env.CAP_EDITOR_UI_SHARE_REPLAY === "1";
 const cursorMovReplay = process.env.CAP_EDITOR_UI_CURSOR_MOV === "1";
 assert.ok(!(shareReplay && cursorMovReplay));
+const canvasFallbackReplay = process.env.CAP_EDITOR_UI_CANVAS_FALLBACK === "1";
+assert.ok(!(canvasFallbackReplay && (shareReplay || cursorMovReplay)));
 const coldMount = process.env.CAP_EDITOR_UI_COLD_MOUNT === "1";
 const recoveryFault = process.env.CAP_EDITOR_UI_RUNTIME_RECOVERY_FAULT === "1";
 const runtimeFault =
@@ -754,6 +756,26 @@ try {
 	const page = await browser.newPage({
 		viewport: { width: 1440, height: 900 },
 	});
+	if (canvasFallbackReplay) {
+		await page.addInitScript(() => {
+			for (const name of [
+				"OffscreenCanvas",
+				"createImageBitmap",
+				"VideoDecoder",
+				"EncodedVideoChunk",
+				"VideoFrame",
+			]) {
+				Object.defineProperty(window, name, {
+					value: undefined,
+					configurable: true,
+				});
+			}
+			Object.defineProperty(navigator, "gpu", {
+				value: undefined,
+				configurable: true,
+			});
+		});
+	}
 	await page.addInitScript(() => {
 		const nativeClose = WebSocket.prototype.close;
 		WebSocket.prototype.close = function (code?: number, reason?: string) {
@@ -912,6 +934,18 @@ try {
 		},
 	);
 	const editor = page.frameLocator("#editor");
+	if (canvasFallbackReplay) {
+		assert.deepEqual(
+			await editor
+				.locator("body")
+				.evaluate(() => [
+					typeof OffscreenCanvas,
+					typeof createImageBitmap,
+					typeof VideoDecoder,
+				]),
+			["undefined", "undefined", "undefined"],
+		);
+	}
 	if (runtimeFault) {
 		await connecting;
 		await editor
@@ -1296,6 +1330,25 @@ try {
 		assert.equal(imageImports, 1);
 		assert.ok(imagePreviewRequests > 0);
 		const screenshot = await page.screenshot();
+		let canvasFallbackPreviewPixel: number[] | null = null;
+		if (canvasFallbackReplay) {
+			canvasFallbackPreviewPixel = await editor
+				.locator("#canvas")
+				.evaluate((node) => {
+					const canvas = node as HTMLCanvasElement;
+					const context = canvas.getContext("2d");
+					if (!context) return null;
+					const sample = context.getImageData(
+						Math.floor(canvas.width / 2),
+						Math.floor(canvas.height / 2),
+						1,
+						1,
+					).data;
+					return Array.from(sample);
+				});
+			assert.ok(canvasFallbackPreviewPixel);
+			assert.ok(Math.max(...canvasFallbackPreviewPixel.slice(0, 3)) > 20);
+		}
 		if (process.env.CAP_EDITOR_UI_SCREENSHOT_PATH)
 			await writeFile(process.env.CAP_EDITOR_UI_SCREENSHOT_PATH, screenshot);
 		let playbackAdvanced = false;
@@ -1567,6 +1620,8 @@ try {
 				cameraBackgroundRemovalSelectable: !shareReplay,
 				exportPreviewVisible: true,
 				cursorMovReplay,
+				canvasFallbackReplay,
+				canvasFallbackPreviewPixel,
 				cursorMovVerification,
 				cursorMovExpectedStatus404,
 				cursorMovExpectedConsole404,
