@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - "apps/chrome-extension/**"
       - "apps/web/**"
       - "apps/media-server/**"
       - "packages/editor-solid-web/**"
@@ -17,6 +18,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "apps/chrome-extension/**"
       - "apps/web/**"
       - "apps/media-server/**"
       - "packages/editor-solid-web/**"
@@ -76,6 +78,23 @@ jobs:
         run: bun __tests__/web-recorder-paired-browser-replay.mjs ${{ matrix.browser }}
         env:
           CAP_REPLAY_HEADED: ${{ matrix.headed }}
+
+  extension-paired-recording:
+    name: Chrome extension paired capture and recovery (Chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./.github/actions/setup-js
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
+      - name: Build Chrome extension
+        run: bun run --filter @cap/chrome-extension build
+      - name: Replay paired capture and recovery in the built extension
+        working-directory: apps/chrome-extension
+        run: |
+          bunx playwright test e2e/recording-upload.spec.ts \
+            --grep 'records a separate camera sidecar|offers separate clip downloads|recovers camera, microphone and screen spools|uploads a camera multipart part during a long recording on a constrained network'
 
   recording-contract:
     name: Recording ownership, preservation, and recovery
