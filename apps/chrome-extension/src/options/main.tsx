@@ -1,5 +1,6 @@
 import {
 	deleteRecoveredRecordingSpool,
+	isRecordingSpoolUploaded,
 	listRecordingSpoolSessions,
 	recoverRecordingSpoolSession,
 } from "@cap/recorder-core";
@@ -54,12 +55,15 @@ const isActiveRecordingPhase = (phase: string | undefined) =>
 // hold bytes, and also surfaces spools stranded by a crash before the
 // offscreen sweep could record them (those have no metadata yet).
 const loadRecoveredRecordings = async (): Promise<FailedRecording[]> => {
-	const [failed, spools, manifests, recordingState] = await Promise.all([
+	const [failed, storedSpools, manifests, recordingState] = await Promise.all([
 		loadFailedRecordings(),
 		listRecordingSpoolSessions(),
 		loadLiveRecordingManifests(),
 		loadSharedRecordingState().catch(() => null),
 	]);
+	const spools = storedSpools.filter(
+		(spool) => !isRecordingSpoolUploaded(spool.sessionId),
+	);
 	const spoolSessions = new Set(
 		spools
 			.filter((spool) => spool.totalBytes > 0)
@@ -69,12 +73,15 @@ const loadRecoveredRecordings = async (): Promise<FailedRecording[]> => {
 		failed.flatMap((entry) => [
 			entry.sessionId,
 			...(entry.cameraSessionId ? [entry.cameraSessionId] : []),
+			...(entry.inputEventsSessionId ? [entry.inputEventsSessionId] : []),
 			...(entry.audioSources ?? []).map((source) => source.sessionId),
 		]),
 	);
 	for (const manifest of manifests) {
 		if (!spoolSessions.has(manifest.sessionId)) continue;
 		if (manifest.cameraSessionId) knownSessions.add(manifest.cameraSessionId);
+		if (manifest.inputEventsSessionId)
+			knownSessions.add(manifest.inputEventsSessionId);
 		for (const source of manifest.audioSources ?? []) {
 			knownSessions.add(source.sessionId);
 		}
@@ -216,6 +223,7 @@ function RecoveredRecordingsSection() {
 				[
 					entry.sessionId,
 					...(entry.cameraSessionId ? [entry.cameraSessionId] : []),
+					...(entry.inputEventsSessionId ? [entry.inputEventsSessionId] : []),
 					...(entry.audioSources ?? []).map((source) => source.sessionId),
 				].map((sessionId) => deleteRecoveredRecordingSpool(sessionId)),
 			);

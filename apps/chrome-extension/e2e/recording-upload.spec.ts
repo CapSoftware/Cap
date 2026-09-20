@@ -950,6 +950,76 @@ test.describe("extension recording upload", () => {
 		await mockServer?.close();
 	});
 
+	test("hides confirmed uploaded backups from the options recovery list", async () => {
+		if (!extension) throw new Error("Test harness did not start");
+		const worker = await getServiceWorker(extension.context);
+		const optionsPage = await extension.context.newPage();
+		await optionsPage.goto(
+			`chrome-extension://${getExtensionId(worker)}/options.html`,
+		);
+		await optionsPage.evaluate(async () => {
+			const sessionId = "uploaded-options-backup-e2e";
+			const request = indexedDB.open("cap-recording-spool", 1);
+			request.onupgradeneeded = () => {
+				const database = request.result;
+				if (!database.objectStoreNames.contains("sessions")) {
+					database.createObjectStore("sessions", { keyPath: "sessionId" });
+				}
+				if (!database.objectStoreNames.contains("chunks")) {
+					const chunks = database.createObjectStore("chunks", {
+						keyPath: ["sessionId", "index"],
+					});
+					chunks.createIndex("by-session", "sessionId", { unique: false });
+				}
+			};
+			const database = await new Promise<IDBDatabase>((resolve, reject) => {
+				request.onsuccess = () => resolve(request.result);
+				request.onerror = () => reject(request.error);
+			});
+			const transaction = database.transaction(
+				["sessions", "chunks"],
+				"readwrite",
+			);
+			const oldTime = Date.now() - 120_000;
+			transaction.objectStore("sessions").put({
+				sessionId,
+				mimeType: "video/webm",
+				totalBytes: 5,
+				chunkCount: 1,
+				createdAt: oldTime,
+				updatedAt: oldTime,
+			});
+			transaction.objectStore("chunks").put({
+				sessionId,
+				index: 0,
+				blob: new Blob(["hello"], { type: "video/webm" }),
+			});
+			await new Promise<void>((resolve, reject) => {
+				transaction.oncomplete = () => resolve();
+				transaction.onerror = () => reject(transaction.error);
+				transaction.onabort = () => reject(transaction.error);
+			});
+			database.close();
+			localStorage.setItem(`cap-recording-spool-uploaded:${sessionId}`, "1");
+		});
+		await optionsPage.reload();
+		await expect(optionsPage.locator(".recovery-item")).toHaveCount(0);
+		expect(
+			await optionsPage.evaluate(() =>
+				localStorage.getItem(
+					"cap-recording-spool-uploaded:uploaded-options-backup-e2e",
+				),
+			),
+		).toBe("1");
+		await optionsPage.evaluate(() =>
+			localStorage.removeItem(
+				"cap-recording-spool-uploaded:uploaded-options-backup-e2e",
+			),
+		);
+		await optionsPage.reload();
+		await expect(optionsPage.locator(".recovery-item")).toHaveCount(1);
+	});
+
 	test("records a separate camera sidecar and hides its page overlay during display capture", async () => {
 		if (!extension || !mockServer)
 			throw new Error("Test harness did not start");
