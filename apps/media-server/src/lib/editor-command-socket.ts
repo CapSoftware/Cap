@@ -164,6 +164,8 @@ async function executeEditorCommand(
 			return asInstance(await native("/instance", "GET"), sessionId);
 		case "getDefaultProjectConfig":
 			return native("/default-config", "GET");
+		case "tauri:list_system_fonts":
+			return native("/fonts", "GET");
 		case "animatedGradientCatalog":
 			return native("/animated-gradients", "GET");
 		case "randomAnimatedGradient":

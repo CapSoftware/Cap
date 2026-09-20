@@ -365,6 +365,14 @@ async fn instance(State(state): State<Arc<ServiceState>>) -> Json<serde_json::Va
     }))
 }
 
+async fn fonts() -> Json<Vec<String>> {
+    Json(
+        tokio::task::spawn_blocking(cap_rendering::system_font_families)
+            .await
+            .unwrap_or_default(),
+    )
+}
+
 async fn meta() -> ApiResult<Json<RecordingMeta>> {
     RecordingMeta::load_for_project(validated_project_path()?)
         .map(Json)
@@ -1342,6 +1350,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/health", get(health))
         .route("/metrics", get(metrics))
         .route("/instance", get(instance))
+        .route("/fonts", get(fonts))
         .route("/keyboard-segments", post(generate_keyboard_segments))
         .route("/auto-zoom-segments", post(generate_auto_zoom_segments))
         .route(

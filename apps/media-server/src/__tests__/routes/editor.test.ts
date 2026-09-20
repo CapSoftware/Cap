@@ -816,6 +816,17 @@ test.skipIf(!hasNativeBinaries)(
 					background: { source: { path: wallpaperId } },
 				},
 			});
+			const fonts = await sendCommand(18, "tauri:list_system_fonts", [null]);
+			expect(fonts.kind).toBe("result");
+			expect(Array.isArray(fonts.value)).toBe(true);
+			const families = fonts.value as string[];
+			expect(families.length).toBeGreaterThan(0);
+			expect(families).toEqual([...new Set(families)].sort());
+			expect(
+				families.every(
+					(family) => family.length > 0 && !family.startsWith("."),
+				),
+			).toBe(true);
 			const musicCatalog = await sendCommand(14, "listAudioLibrary", []);
 			expect(musicCatalog.kind).toBe("result");
 			expect(musicCatalog.value).toHaveLength(10);

@@ -4,6 +4,35 @@ import { PortEditorTransport, setEditorTransport } from "./tauri-bridge";
 import { convertFileSrc, invoke, setEditorAssetBase } from "./tauri-core";
 import { open } from "./tauri-dialog";
 
+test("the font picker receives renderable families from the worker", async () => {
+	const channel = new MessageChannel();
+	setEditorTransport(new PortEditorTransport(channel.port1));
+	channel.port2.onmessage = (event: MessageEvent<unknown>) => {
+		const request = event.data as {
+			id: number;
+			name: string;
+			args: unknown[];
+		};
+		expect(request.name).toBe("tauri:list_system_fonts");
+		expect(request.args).toHaveLength(1);
+		channel.port2.postMessage({
+			kind: "result",
+			id: request.id,
+			value: ["DejaVu Sans", "Liberation Serif"],
+		});
+	};
+	channel.port2.start();
+	try {
+		await expect(invoke<string[]>("list_system_fonts")).resolves.toEqual([
+			"DejaVu Sans",
+			"Liberation Serif",
+		]);
+	} finally {
+		setEditorTransport(null);
+		channel.port2.close();
+	}
+});
+
 test("an image chosen in the browser reaches the worker as a timeline asset", async () => {
 	const file = new File([new Uint8Array([1, 2, 3, 4])], "logo.png", {
 		type: "image/png",
