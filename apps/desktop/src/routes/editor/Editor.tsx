@@ -403,6 +403,7 @@ function Inner(props: {
 		setEditorState,
 		previewResolutionBase,
 		dialog,
+		setDialog,
 		exportState,
 		requestHandoffPlayback,
 		handoffPlaybackPending,
@@ -800,9 +801,17 @@ function Inner(props: {
 		createEventListener(document, "visibilitychange", () => {
 			if (!document.hidden) refreshCaptionPlan();
 		});
-		createEventListener(window, "cap-web-editor-captions-plan", () =>
-			doConfigUpdate(frameNumberToRender()),
-		);
+		createEventListener(window, "cap-web-editor-captions-plan", () => {
+			if (
+				(window as Window & { capWebEditorCaptionsEnabled?: boolean })
+					.capWebEditorCaptionsEnabled !== true
+			) {
+				if (isTranscriptMode()) setDialog((d) => ({ ...d, open: false }));
+				if (editorState.timeline.selection?.type === "caption")
+					setEditorState("timeline", "selection", null);
+			}
+			doConfigUpdate(frameNumberToRender());
+		});
 	}
 
 	createEffect(
