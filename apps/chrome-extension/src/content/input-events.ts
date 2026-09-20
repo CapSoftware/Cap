@@ -9,7 +9,12 @@ const BATCH_INTERVAL_MS = 250;
 const MAX_BATCH_EVENTS = 128;
 const MAX_PENDING_BATCHES = 8;
 const OVERLAY_ROOT_ID = "cap-extension-recorder-overlay";
-const EDITABLE_ROLES = new Set(["textbox", "searchbox", "combobox"]);
+const EDITABLE_ROLES = new Set([
+	"textbox",
+	"searchbox",
+	"combobox",
+	"spinbutton",
+]);
 const SENSITIVE_CONTROL_NAME =
 	/\b(?:password|passcode|pin|otp|one[- ]time(?:[- ]code)?|cvv|cvc|credit card|card number|security code|secret)\b/i;
 const SENSITIVE_FORM_FIELDS = `input[type="password"], input[autocomplete*="cc-"], input[autocomplete*="one-time-code"], input[name*="password" i], input[name="pin" i], input[name$="-pin" i], input[name$="_pin" i], input[name*="cvv" i], input[name*="cvc" i]`;
@@ -68,14 +73,22 @@ const isEditableTarget = (event: Event) =>
 const isSensitivePointerTarget = (event: PointerEvent) =>
 	isEditableTarget(event) ||
 	event.composedPath().some((target) => {
-		if (!(target instanceof HTMLElement)) return false;
+		if (!(target instanceof Element)) return false;
 		if (
 			target instanceof HTMLIFrameElement ||
+			target.hasAttribute("inputmode") ||
 			target.hasAttribute("data-private") ||
 			target.hasAttribute("data-sensitive") ||
 			SENSITIVE_CONTROL_NAME.test(
-				`${target.getAttribute("aria-label") ?? ""} ${target.getAttribute("title") ?? ""} ${target.getAttribute("name") ?? ""}`,
+				`${target.getAttribute("aria-label") ?? ""} ${target.getAttribute("title") ?? ""} ${target.getAttribute("name") ?? ""} ${target.localName.replaceAll("-", " ")}`,
 			)
+		)
+			return true;
+		if (
+			target instanceof HTMLElement &&
+			target.tabIndex >= 0 &&
+			!(target instanceof HTMLButtonElement) &&
+			!(target instanceof HTMLAnchorElement)
 		)
 			return true;
 		if (target instanceof HTMLLabelElement && target.control) {

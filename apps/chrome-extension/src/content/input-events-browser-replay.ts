@@ -21,6 +21,11 @@ const html = `<!doctype html>
 		<button id="secret" class="control" aria-label="Secret button" style="top: 200px">Secret</button>
 		<label id="email-label" class="control" for="email" style="top: 240px">Email address</label>
 		<input id="email" class="control" type="email" style="top: 280px">
+		<input id="otp-code" class="control" inputmode="numeric" name="code" style="top: 520px">
+		<div id="custom-code" class="control" inputmode="numeric" style="top: 600px">Custom code field</div>
+		<svg id="svg-pin" class="control" aria-label="PIN keypad" style="top: 640px"><rect width="220" height="30" fill="gray"></rect></svg>
+		<x-widget id="closed-widget" class="control" tabindex="0" style="top: 680px"></x-widget>
+		<div id="focusable-secret" class="control" tabindex="0" style="top: 720px">Unlabelled private widget</div>
 		<form id="payment" class="control" style="top: 320px; height: 80px">
 			<input id="card" autocomplete="cc-number" style="width: 210px; height: 30px">
 			<button id="pay" type="button" style="position: absolute; top: 40px; left: 0; width: 210px; height: 30px">Confirm payment</button>
@@ -39,6 +44,9 @@ const html = `<!doctype html>
 			shadowInput.setAttribute("aria-label", "Shadow private field");
 			shadowInput.style.cssText = "width: 210px; height: 30px";
 			document.getElementById("shadow-host").attachShadow({ mode: "open" }).append(shadowInput);
+			const closedInput = document.createElement("input");
+			closedInput.style.cssText = "width: 210px; height: 30px";
+			document.getElementById("closed-widget").attachShadow({ mode: "closed" }).append(closedInput);
 		</script>
 	</body>
 </html>`;
@@ -73,7 +81,7 @@ const browser = await chromium.launch({ headless: true });
 
 try {
 	const page = await browser.newPage({
-		viewport: { width: 900, height: 600 },
+		viewport: { width: 900, height: 800 },
 	});
 	const pageErrors: string[] = [];
 	page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -158,6 +166,11 @@ try {
 		"#secret",
 		"#email-label",
 		"#email",
+		"#otp-code",
+		"#custom-code",
+		"#svg-pin",
+		"#closed-widget",
+		"#focusable-secret",
 		"#card",
 		"#pay",
 		"#shadow-host input",
