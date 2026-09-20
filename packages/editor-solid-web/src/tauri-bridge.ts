@@ -5,10 +5,10 @@ import type {
 import { stripEditorCaptionContent } from "../../../apps/web/lib/editor-caption-access";
 import {
 	compactEditorCaptionConfig,
-	createEditorCaptionCache,
 	type EditorCaptionCache,
 } from "../../../apps/web/lib/editor-caption-transport";
 import { WebEditorAudio } from "./audio-player";
+import { EditorCaptionCacheMemo } from "./caption-cache-memo";
 import {
 	editorChannelId,
 	emitEditorChannel,
@@ -66,6 +66,7 @@ export class PortEditorTransport {
 	private readonly pending = new Map<number, PendingRequest>();
 	private nativeCaptionCache: EditorCaptionCache | null = null;
 	private savedCaptionCache: EditorCaptionCache | null = null;
+	private readonly captionCacheMemo = new EditorCaptionCacheMemo();
 	private planRequestSequence = 0;
 	private readonly listeners = new Map<
 		string,
@@ -220,7 +221,7 @@ export class PortEditorTransport {
 					? [config, true]
 					: [config, ...args.slice(1)];
 			fullConfigArgs = args;
-			captionCache = await createEditorCaptionCache(args[0]);
+			captionCache = await this.captionCacheMemo.get(args[0]);
 			const previous =
 				name === "setProjectConfig"
 					? this.savedCaptionCache
@@ -355,6 +356,9 @@ export class PortEditorTransport {
 		this.listeners.clear();
 		this.audioPlaying = false;
 		this.audio.dispose();
+		this.captionCacheMemo.dispose();
+		this.nativeCaptionCache = null;
+		this.savedCaptionCache = null;
 		this.port.close();
 	}
 }

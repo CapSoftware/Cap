@@ -49,6 +49,8 @@ jobs:
         run: bunx playwright install --with-deps chromium webkit
       - name: Replay browser recording import
         run: bun run --filter @cap/media-server test:browser-cap-import
+      - name: Replay long captions in Chromium and WebKit
+        run: bun apps/media-server/src/__tests__/routes/editor-caption-cache-browser-replay.ts
 
   browser-paired-recording:
     name: Web recorder paired capture (${{ matrix.browser }})
@@ -127,3 +129,5 @@ jobs:
             __tests__/unit/upload-progress-playback.test.ts \
             __tests__/unit/recording-prepare.test.ts \
             __tests__/unit/s3-bucket-connections.test.ts
+      - name: Verify browser Solid caption cache
+        run: bun --conditions=browser test packages/editor-solid-web/src/tauri-bridge.test.ts
