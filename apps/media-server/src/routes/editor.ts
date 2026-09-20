@@ -437,6 +437,27 @@ editor.get("/sessions/:id", (c) => {
 	return videoId ? c.json({ videoId }) : c.json({ error: "Not found" }, 404);
 });
 
+editor.put("/sessions/:id/caption-access", async (c) => {
+	const session = getEditorSession(c.req.param("id"));
+	if (!session) return c.json({ error: "Not found" }, 404);
+	const text = await c.req.text();
+	if (Buffer.byteLength(text, "utf8") > 256)
+		return c.json({ error: "Invalid caption access" }, 413);
+	let body: unknown;
+	try {
+		body = JSON.parse(text);
+	} catch {
+		return c.json({ error: "Invalid caption access" }, 400);
+	}
+	const parsed = z
+		.object({ captionsEnabled: z.boolean() })
+		.strict()
+		.safeParse(body);
+	if (!parsed.success) return c.json({ error: "Invalid caption access" }, 400);
+	session.captionsEnabled = parsed.data.captionsEnabled;
+	return c.body(null, 204);
+});
+
 editor.post("/sessions/:id/sockets", async (c) => {
 	let body: unknown;
 	try {

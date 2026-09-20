@@ -807,6 +807,119 @@ test.skipIf(!hasNativeBinaries)(
 						JSON.stringify({ kind: "invoke", id, name, args }),
 					);
 				});
+			const captionAccessPath = `/editor/sessions/${sessionId}/caption-access`;
+			const unauthenticatedAccess = await app.request(captionAccessPath, {
+				method: "PUT",
+				body: JSON.stringify({ captionsEnabled: true }),
+			});
+			expect(unauthenticatedAccess.status).toBe(401);
+			const invalidAccess = await app.request(captionAccessPath, {
+				method: "PUT",
+				headers,
+				body: JSON.stringify({ captionsEnabled: "true" }),
+			});
+			expect(invalidAccess.status).toBe(400);
+			const grantAccess = await app.request(captionAccessPath, {
+				method: "PUT",
+				headers,
+				body: JSON.stringify({ captionsEnabled: true }),
+			});
+			expect(grantAccess.status).toBe(204);
+			const liveBefore = await app.request(
+				`/editor/sessions/${sessionId}/config`,
+				{ headers },
+			);
+			expect(liveBefore.status).toBe(200);
+			const captionLiveConfig = (await liveBefore.json()) as Record<
+				string,
+				unknown
+			>;
+			const paidLiveConfig = {
+				...captionLiveConfig,
+				captions: paidConfig.captions,
+			};
+			expect(
+				await sendCommand(100, "checkUpgradedAndUpdate", []),
+			).toMatchObject({
+				kind: "result",
+				value: true,
+			});
+			for (const suffix of ["config", "config/memory"]) {
+				const paidWrite = await app.request(
+					`/editor/sessions/${sessionId}/${suffix}`,
+					{
+						method: "PUT",
+						headers,
+						body: JSON.stringify(paidLiveConfig),
+					},
+				);
+				expect(paidWrite.status).toBe(204);
+			}
+			expect(await sendCommand(101, "loadCaptions", [])).toMatchObject({
+				kind: "result",
+				value: paidLiveConfig.captions,
+			});
+			expect(
+				await sendCommand(102, "updateProjectConfigInMemory", [
+					paidLiveConfig,
+					null,
+					null,
+					null,
+				]),
+			).toMatchObject({ kind: "result" });
+			const nativeBeforeRevoke = getEditorSession(sessionId);
+			if (!nativeBeforeRevoke) throw new Error("Missing native editor session");
+			const restoreConfig = await nativeBeforeRevoke.request("/config", {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: diskBefore,
+			});
+			expect(restoreConfig.status).toBe(204);
+			expect(await Bun.file(configPath).text()).toBe(diskBefore);
+			const restoreMemory = await app.request(
+				`/editor/sessions/${sessionId}/config/memory`,
+				{
+					method: "PUT",
+					headers,
+					body: JSON.stringify(captionLiveConfig),
+				},
+			);
+			expect(restoreMemory.status).toBe(204);
+			const revokeAccess = await app.request(captionAccessPath, {
+				method: "PUT",
+				headers,
+				body: JSON.stringify({ captionsEnabled: false }),
+			});
+			expect(revokeAccess.status).toBe(204);
+			expect(
+				await sendCommand(103, "checkUpgradedAndUpdate", []),
+			).toMatchObject({
+				kind: "result",
+				value: false,
+			});
+			expect(await sendCommand(104, "loadCaptions", [])).toMatchObject({
+				kind: "result",
+				value: null,
+			});
+			for (const suffix of ["config", "config/memory"]) {
+				const paidWrite = await app.request(
+					`/editor/sessions/${sessionId}/${suffix}`,
+					{
+						method: "PUT",
+						headers,
+						body: JSON.stringify(paidLiveConfig),
+					},
+				);
+				expect(paidWrite.status).toBe(403);
+			}
+			expect(
+				await sendCommand(105, "updateProjectConfigInMemory", [
+					paidLiveConfig,
+					null,
+					null,
+					null,
+				]),
+			).toMatchObject({ kind: "error" });
 			const browserInstance = await sendCommand(1, "createEditorInstance", []);
 			expect(browserInstance.kind).toBe("result");
 			expect(browserInstance.value).toMatchObject({

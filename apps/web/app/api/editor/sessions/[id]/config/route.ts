@@ -169,6 +169,20 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						) {
 							return yield* new HttpApiError.NotFound();
 						}
+						const access = yield* requestMediaEditor(
+							`${sessionPath}/caption-access`,
+							{
+								method: "PUT",
+								headers: { "Content-Type": "application/json" },
+								body: JSON.stringify({
+									captionsEnabled: video.captionsEnabled,
+								}),
+							},
+						);
+						if (access.status === 404)
+							return yield* new HttpApiError.NotFound();
+						if (access.status !== 204)
+							return yield* new HttpApiError.ServiceUnavailable();
 						const native = yield* requestMediaEditor(`${sessionPath}/config`, {
 							method: "PUT",
 							headers: { "Content-Type": "application/json" },

@@ -268,6 +268,7 @@ export const editorWebSocketHandler: Bun.WebSocketHandler<EditorSocketConnection
 						ws.close(1011, "Editor session closed");
 						return;
 					}
+					ws.data.commandState.captionsEnabled = native.captionsEnabled;
 					let reply: EditorSocketReply;
 					try {
 						if (
