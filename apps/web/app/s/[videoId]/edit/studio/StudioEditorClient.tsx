@@ -15,6 +15,7 @@ import {
 	type EditorLocalDraft,
 	readEditorLocalDraft,
 } from "@/lib/editor-local-draft";
+import { startWebEditorPreparation } from "@/lib/editor-preparation-client";
 import type { WebEditorVideoImportProgress } from "@/lib/editor-video-import-client";
 import { EditorClipRecorder } from "./EditorClipRecorder";
 import { EditorHostBridge } from "./editor-host";
@@ -25,22 +26,10 @@ const UpgradeModal = dynamic(
 	{ ssr: false },
 );
 
-type Preparation = { id: string; status: "preparing" };
 type PreparationStatus = {
 	status: "preparing" | "ready" | "error" | "canceled" | "closed";
 	sessionId?: string;
 };
-
-function isPreparation(value: unknown): value is Preparation {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		"id" in value &&
-		typeof value.id === "string" &&
-		"status" in value &&
-		value.status === "preparing"
-	);
-}
 
 function isPreparationStatus(value: unknown): value is PreparationStatus {
 	return (
@@ -91,6 +80,7 @@ export function StudioEditorClient(props: {
 	} = props;
 	const router = useRouter();
 	const [sessionId, setSessionId] = useState<string | null>(null);
+	const [waitingForCapacity, setWaitingForCapacity] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [errorFrameReady, setErrorFrameReady] = useState(false);
 	const [recoveryConflict, setRecoveryConflict] =
@@ -136,6 +126,7 @@ export function StudioEditorClient(props: {
 		savedAtRef.current = savedAt;
 		closedRef.current = false;
 		setSessionId(null);
+		setWaitingForCapacity(false);
 		setError(null);
 		setRecoveryConflict(null);
 		setRestoringBrowserDraft(false);
@@ -207,16 +198,11 @@ export function StudioEditorClient(props: {
 		};
 		const prepare = async () => {
 			try {
-				const response = await fetch("/api/editor/preparations", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ videoId }),
-				});
-				if (!response.ok) throw new Error("Editor preparation could not start");
-				const created: unknown = await response.json();
-				if (!isPreparation(created)) {
-					throw new Error("Editor preparation response was invalid");
-				}
+				const created = await startWebEditorPreparation(
+					videoId,
+					controller.signal,
+					setWaitingForCapacity,
+				);
 				preparationRef.current = created.id;
 				if (controller.signal.aborted) {
 					void fetch(
@@ -637,6 +623,11 @@ export function StudioEditorClient(props: {
 				className="h-full w-full border-0"
 				onLoad={(event) => onFrameLoad(event.currentTarget)}
 			/>
+			{waitingForCapacity && !sessionId && (
+				<output className="pointer-events-none absolute bottom-6 right-6 z-50 max-w-xs rounded-xl border border-white/10 bg-neutral-950/95 px-4 py-3 text-sm text-white shadow-xl">
+					Editors are busy. Waiting for one to become available…
+				</output>
+			)}
 			{recordClipOpen && (
 				<EditorClipRecorder
 					onCaptured={async (clip: EditorClipCapture) => {

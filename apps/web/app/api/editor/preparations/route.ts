@@ -23,6 +23,11 @@ import { apiToHandler } from "@/lib/server";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
+class EditorCapacityBusy extends Schema.TaggedError<EditorCapacityBusy>()(
+	"EditorCapacityBusy",
+	{ retryAfterMs: Schema.Number },
+) {}
+
 class Api extends HttpApi.make("WebEditorPreparationApi").add(
 	HttpApiGroup.make("root").add(
 		HttpApiEndpoint.post("prepare")`/api/editor/preparations`
@@ -36,6 +41,7 @@ class Api extends HttpApi.make("WebEditorPreparationApi").add(
 			.addError(HttpApiError.NotFound)
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.ServiceUnavailable)
+			.addError(EditorCapacityBusy, { status: 503 })
 			.addError(HttpApiError.InternalServerError)
 			.middleware(HttpAuthMiddleware),
 	),
@@ -63,6 +69,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					if (workers.length === 0) {
 						return yield* new HttpApiError.ServiceUnavailable();
 					}
+					let occupiedWorkers = 0;
 					for (const worker of workers) {
 						const attempt = yield* requestMediaEditor(
 							"/editor/preparations",
@@ -76,7 +83,24 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						).pipe(Effect.either);
 						if (attempt._tag === "Left") continue;
 						const response = attempt.right;
-						if (response.status >= 500) continue;
+						if (response.status >= 500) {
+							if (response.status === 503) {
+								const detail = yield* Effect.tryPromise({
+									try: async (): Promise<unknown> => await response.json(),
+									catch: () => new HttpApiError.ServiceUnavailable(),
+								}).pipe(Effect.either);
+								if (
+									detail._tag === "Right" &&
+									typeof detail.right === "object" &&
+									detail.right !== null &&
+									"error" in detail.right &&
+									detail.right.error === "Editor render capacity is busy"
+								) {
+									occupiedWorkers++;
+								}
+							}
+							continue;
+						}
 						if (response.status !== 202) {
 							return yield* new HttpApiError.ServiceUnavailable();
 						}
@@ -109,6 +133,9 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							).pipe(Effect.either);
 						}
 						return yield* new HttpApiError.ServiceUnavailable();
+					}
+					if (occupiedWorkers === workers.length) {
+						return yield* new EditorCapacityBusy({ retryAfterMs: 8_000 });
 					}
 					return yield* new HttpApiError.ServiceUnavailable();
 				}),

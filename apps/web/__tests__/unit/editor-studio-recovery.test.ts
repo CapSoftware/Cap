@@ -36,6 +36,7 @@ const requests: Array<{ url: string; method: string; body: unknown }> = [];
 let currentRevision: string;
 let rejectNextRestore: boolean;
 let preparationReady: boolean;
+let busyResponses: number;
 
 function browserStorage(): Storage {
 	const items = new Map<string, string>();
@@ -61,6 +62,7 @@ beforeEach(() => {
 	currentRevision = "newer";
 	rejectNextRestore = false;
 	preparationReady = true;
+	busyResponses = 0;
 	mocks.connect.mockClear();
 	container = document.createElement("div");
 	document.body.append(container);
@@ -73,6 +75,13 @@ beforeEach(() => {
 			const body = init?.body ? JSON.parse(String(init.body)) : null;
 			requests.push({ url, method, body });
 			if (url === "/api/editor/preparations" && method === "POST") {
+				if (busyResponses > 0) {
+					busyResponses--;
+					return Response.json(
+						{ _tag: "EditorCapacityBusy", retryAfterMs: 1_000 },
+						{ status: 503 },
+					);
+				}
 				return Response.json(
 					{ id: "preparation", status: "preparing" },
 					{ status: 202 },
@@ -123,6 +132,7 @@ afterEach(async () => {
 	container.remove();
 	Reflect.deleteProperty(window, "localStorage");
 	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
 });
 
 async function waitFor(assertion: () => void) {
@@ -318,6 +328,45 @@ test("preparation keeps the shared editor shell open and connects once when read
 	});
 	await act(async () => iframe.dispatchEvent(new Event("load")));
 	expect(mocks.connect).toHaveBeenCalledTimes(1);
+});
+
+test("occupied workers show a waiting message in the shared editor shell until one opens", async () => {
+	vi.spyOn(Math, "random").mockReturnValue(0);
+	busyResponses = 1;
+	await act(async () => {
+		root.render(
+			createElement(StudioEditorClient, {
+				videoId: "video",
+				userId: "owner",
+				captionsEnabled: true,
+				savedAt: null,
+				preparingTitle: "Paired replay",
+				preparingDuration: 900,
+				preparingTracks: ["display", "camera"],
+			}),
+		);
+	});
+	const iframe = container.querySelector('iframe[title="Cap editor"]');
+	expect(iframe).not.toBeNull();
+	await waitFor(() => {
+		expect(container.querySelector("output")?.textContent).toContain(
+			"Editors are busy. Waiting for one to become available",
+		);
+	});
+	expect(
+		requests.filter((request) => request.url === "/api/editor/preparations"),
+	).toHaveLength(1);
+	expect(container.querySelector('[role="alert"]')).toBeNull();
+	await act(async () => {
+		await new Promise((resolve) => setTimeout(resolve, 1_100));
+	});
+	await waitFor(() => {
+		expect(
+			requests.filter((request) => request.url === "/api/editor/preparations"),
+		).toHaveLength(2);
+		expect(container.querySelector("output")).toBeNull();
+	});
+	expect(container.querySelector('iframe[title="Cap editor"]')).toBe(iframe);
 });
 
 test("a Free editor lets its owner restore non-caption edits from a Pro browser draft", async () => {
