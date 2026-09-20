@@ -21,6 +21,7 @@ const secret = "editor-solid-ui-replay-secret";
 const videoId = "editor-solid-ui-replay";
 const userId = "editor-solid-ui-user";
 const proCaptions = process.env.CAP_EDITOR_UI_PRO_CAPTIONS === "1";
+const shareReplay = process.env.CAP_EDITOR_UI_SHARE_REPLAY === "1";
 const coldMount = process.env.CAP_EDITOR_UI_COLD_MOUNT === "1";
 const recoveryFault = process.env.CAP_EDITOR_UI_RUNTIME_RECOVERY_FAULT === "1";
 const runtimeFault =
@@ -130,6 +131,16 @@ let bundleTicketRequests = 0;
 let imageImports = 0;
 let imagePreviewRequests = 0;
 let uploadedImage: Uint8Array<ArrayBuffer> | null = null;
+let renderedExportId: string | null = null;
+let multipartInitiations = 0;
+let exportChunkRequests = 0;
+const uploadedParts = new Map<number, Buffer>();
+let completedShare: {
+	sha256: string;
+	size: number;
+	parts: number;
+	duration: number;
+} | null = null;
 let base = "";
 try {
 	server = Bun.serve({
@@ -141,6 +152,137 @@ try {
 				return new Response(Bun.file(display));
 			if (url.pathname === "/camera.webm")
 				return new Response(Bun.file(camera));
+			if (
+				url.pathname === "/api/upload/multipart/initiate" &&
+				request.method === "POST"
+			) {
+				const payload = (await request.json()) as {
+					videoId?: string;
+					contentType?: string;
+					subpath?: string;
+					replaceExisting?: boolean;
+				};
+				if (
+					payload.videoId !== videoId ||
+					payload.contentType !== "video/mp4" ||
+					payload.subpath !== "result.mp4" ||
+					payload.replaceExisting !== true
+				)
+					return new Response("Invalid replacement upload", { status: 400 });
+				multipartInitiations++;
+				return Response.json({ uploadId: "ui-reupload", provider: "s3" });
+			}
+			if (
+				url.pathname === "/api/upload/multipart/presign-part" &&
+				request.method === "POST"
+			) {
+				const payload = (await request.json()) as {
+					videoId?: string;
+					uploadId?: string;
+					partNumber?: number;
+					subpath?: string;
+					replaceExisting?: boolean;
+				};
+				if (
+					payload.videoId !== videoId ||
+					payload.uploadId !== "ui-reupload" ||
+					!Number.isSafeInteger(payload.partNumber) ||
+					!payload.partNumber ||
+					payload.partNumber < 1 ||
+					payload.subpath !== "result.mp4" ||
+					payload.replaceExisting !== true
+				)
+					return new Response("Invalid upload part", { status: 400 });
+				return Response.json({
+					presignedUrl: `${base}/test-multipart-part/${payload.partNumber}`,
+					provider: "s3",
+				});
+			}
+			const uploadPart = /^\/test-multipart-part\/([1-9][0-9]*)$/.exec(
+				url.pathname,
+			);
+			if (uploadPart && request.method === "PUT") {
+				const partNumber = Number(uploadPart[1]);
+				uploadedParts.set(partNumber, Buffer.from(await request.arrayBuffer()));
+				return new Response(null, {
+					status: 200,
+					headers: { ETag: `"ui-etag-${partNumber}"` },
+				});
+			}
+			if (
+				url.pathname === "/api/upload/multipart/complete" &&
+				request.method === "POST"
+			) {
+				const payload = (await request.json()) as {
+					videoId?: string;
+					uploadId?: string;
+					subpath?: string;
+					replaceExisting?: boolean;
+					durationInSecs?: number;
+					width?: number;
+					height?: number;
+					fps?: number;
+					parts?: Array<{ partNumber: number; etag: string; size: number }>;
+				};
+				if (
+					payload.videoId !== videoId ||
+					payload.uploadId !== "ui-reupload" ||
+					payload.subpath !== "result.mp4" ||
+					payload.replaceExisting !== true ||
+					!payload.parts?.length ||
+					!sessionId ||
+					!renderedExportId
+				)
+					return new Response("Invalid upload completion", { status: 400 });
+				const exportRoot = `/editor/sessions/${sessionId}/exports/${renderedExportId}`;
+				const status = await app.request(exportRoot, { headers });
+				const file = await app.request(`${exportRoot}/file`, { headers });
+				if (!status.ok || !file.ok)
+					return new Response("Rendered MP4 is unavailable", { status: 503 });
+				const source = (await status.json()) as {
+					mediaMetadata?: {
+						duration: number;
+						width: number;
+						height: number;
+						fps: number;
+					} | null;
+				};
+				const sourceBytes = Buffer.from(await file.arrayBuffer());
+				const parts = [...payload.parts].sort(
+					(left, right) => left.partNumber - right.partNumber,
+				);
+				for (const part of parts) {
+					assert.equal(part.etag, `ui-etag-${part.partNumber}`);
+					assert.equal(part.size, uploadedParts.get(part.partNumber)?.length);
+				}
+				const uploaded = Buffer.concat(
+					parts.map(
+						(part) => uploadedParts.get(part.partNumber) ?? Buffer.alloc(0),
+					),
+				);
+				assert.deepEqual(uploaded, sourceBytes);
+				assert.ok(source.mediaMetadata);
+				assert.equal(payload.width, source.mediaMetadata.width);
+				assert.equal(payload.height, source.mediaMetadata.height);
+				assert.equal(payload.fps, source.mediaMetadata.fps);
+				assert.ok(payload.durationInSecs);
+				assert.ok(
+					Math.abs(payload.durationInSecs - source.mediaMetadata.duration) <
+						0.001,
+				);
+				completedShare = {
+					sha256: createHash("sha256").update(uploaded).digest("hex"),
+					size: uploaded.byteLength,
+					parts: parts.length,
+					duration: source.mediaMetadata.duration,
+				};
+				return Response.json({ success: true, processingStarted: true });
+			}
+			if (
+				url.pathname === "/api/upload/multipart/abort" &&
+				request.method === "POST"
+			)
+				return Response.json({ success: true });
 			if (url.pathname === "/test-image-upload" && request.method === "PUT") {
 				uploadedImage = new Uint8Array(await request.arrayBuffer());
 				return new Response(null, { status: 200 });
@@ -180,6 +322,65 @@ try {
 			}
 			if (sessionId) {
 				const apiRoot = `/api/editor/sessions/${encodeURIComponent(sessionId)}`;
+				const exportRoot = `${apiRoot}/exports`;
+				if (url.pathname === exportRoot && request.method === "POST") {
+					const payload = (await request.json()) as {
+						videoId?: string;
+						settings?: unknown;
+					};
+					if (
+						payload.videoId !== videoId ||
+						typeof payload.settings !== "object" ||
+						payload.settings === null
+					)
+						return new Response("Invalid editor export", { status: 400 });
+					const started = await app.request(
+						`/editor/sessions/${sessionId}/exports`,
+						{
+							method: "POST",
+							headers,
+							body: JSON.stringify(payload.settings),
+						},
+					);
+					if (started.ok) {
+						const state = (await started.clone().json()) as { id: string };
+						renderedExportId = state.id;
+					}
+					return started;
+				}
+				if (url.pathname.startsWith(`${exportRoot}/`)) {
+					const relative = url.pathname.slice(exportRoot.length + 1);
+					const [exportId, action, extra] = relative.split("/");
+					if (
+						!exportId ||
+						extra ||
+						url.searchParams.get("videoId") !== videoId ||
+						(action && action !== "chunk")
+					)
+						return new Response("Invalid editor export request", {
+							status: 400,
+						});
+					const workerPath = `/editor/sessions/${sessionId}/exports/${encodeURIComponent(exportId)}`;
+					if (
+						!action &&
+						(request.method === "GET" || request.method === "DELETE")
+					)
+						return app.request(workerPath, { method: request.method, headers });
+					if (action === "chunk" && request.method === "GET") {
+						const offset = url.searchParams.get("offset");
+						const length = url.searchParams.get("length");
+						if (!offset || !length)
+							return new Response("Invalid editor export chunk", {
+								status: 400,
+							});
+						const chunk = await app.request(
+							`${workerPath}/chunk?offset=${offset}&length=${length}`,
+							{ headers },
+						);
+						if (chunk.status === 206) exportChunkRequests++;
+						return chunk;
+					}
+				}
 				if (
 					url.pathname === `${apiRoot}/project-bundle/download-ticket` &&
 					request.method === "POST"
@@ -621,64 +822,74 @@ try {
 			await editor.getByRole("tab", { name: "Camera" }).isDisabled(),
 			false,
 		);
-		const cropStartedAt = Date.now();
-		await editor.getByRole("button", { name: "Crop", exact: true }).click();
-		await editor.getByText("Loading frame…").waitFor({
-			state: "hidden",
-			timeout: 30_000,
-		});
-		const cropFrameLoadMs = Date.now() - cropStartedAt;
-		const cropFrameSize = await editor
-			.getByRole("img", { name: "Current frame" })
-			.evaluate((frame) => {
-				const image = frame as HTMLImageElement;
-				return { width: image.naturalWidth, height: image.naturalHeight };
+		let cropFrameLoadMs = 0;
+		let cropFrameSize = { width: 0, height: 0 };
+		if (!shareReplay) {
+			const cropStartedAt = Date.now();
+			await editor.getByRole("button", { name: "Crop", exact: true }).click();
+			await editor.getByText("Loading frame…").waitFor({
+				state: "hidden",
+				timeout: 30_000,
 			});
-		assert.ok(cropFrameSize.width > 0 && cropFrameSize.width <= 1440);
-		assert.ok(cropFrameSize.height > 0 && cropFrameSize.height <= 1440);
-		const cropSurface = editor.locator(".cropper-editor");
-		await cropSurface.click({ button: "right" });
-		const cropMenu = editor.getByRole("menu", { name: "Editor actions" });
-		await cropMenu.waitFor({ state: "visible" });
-		assert.equal(
-			await cropMenu.evaluate((menu) => getComputedStyle(menu).backgroundColor),
-			"rgb(246, 246, 247)",
-		);
-		const checkedCropItem = cropMenu.locator(
-			'[role="menuitemcheckbox"][aria-checked="true"]',
-		);
-		assert.ok((await checkedCropItem.count()) > 0);
-		assert.equal(
-			await checkedCropItem
-				.first()
-				.locator('span[aria-hidden="true"]')
-				.innerText(),
-			"✓",
-		);
-		await cropMenu.getByRole("menuitemcheckbox", { name: "16:9" }).click();
-		await cropSurface.click({ button: "right" });
-		const selectedRatio = cropMenu.getByRole("menuitemcheckbox", {
-			name: "16:9",
-		});
-		assert.equal(await selectedRatio.getAttribute("aria-checked"), "true");
-		assert.equal(
-			await selectedRatio.locator('span[aria-hidden="true"]').innerText(),
-			"✓",
-		);
-		await page.keyboard.press("Escape");
-		assert.equal(await cropSurface.count(), 1);
-		await editor.locator("html").evaluate((root) => root.classList.add("dark"));
-		await cropSurface.click({ button: "right" });
-		assert.equal(
-			await cropMenu.evaluate((menu) => getComputedStyle(menu).backgroundColor),
-			"rgb(32, 32, 36)",
-		);
-		await page.keyboard.press("Escape");
-		assert.equal(await cropSurface.count(), 1);
-		await editor
-			.locator("html")
-			.evaluate((root) => root.classList.remove("dark"));
-		await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+			cropFrameLoadMs = Date.now() - cropStartedAt;
+			cropFrameSize = await editor
+				.getByRole("img", { name: "Current frame" })
+				.evaluate((frame) => {
+					const image = frame as HTMLImageElement;
+					return { width: image.naturalWidth, height: image.naturalHeight };
+				});
+			assert.ok(cropFrameSize.width > 0 && cropFrameSize.width <= 1440);
+			assert.ok(cropFrameSize.height > 0 && cropFrameSize.height <= 1440);
+			const cropSurface = editor.locator(".cropper-editor");
+			await cropSurface.click({ button: "right" });
+			const cropMenu = editor.getByRole("menu", { name: "Editor actions" });
+			await cropMenu.waitFor({ state: "visible" });
+			assert.equal(
+				await cropMenu.evaluate(
+					(menu) => getComputedStyle(menu).backgroundColor,
+				),
+				"rgb(246, 246, 247)",
+			);
+			const checkedCropItem = cropMenu.locator(
+				'[role="menuitemcheckbox"][aria-checked="true"]',
+			);
+			assert.ok((await checkedCropItem.count()) > 0);
+			assert.equal(
+				await checkedCropItem
+					.first()
+					.locator('span[aria-hidden="true"]')
+					.innerText(),
+				"✓",
+			);
+			await cropMenu.getByRole("menuitemcheckbox", { name: "16:9" }).click();
+			await cropSurface.click({ button: "right" });
+			const selectedRatio = cropMenu.getByRole("menuitemcheckbox", {
+				name: "16:9",
+			});
+			assert.equal(await selectedRatio.getAttribute("aria-checked"), "true");
+			assert.equal(
+				await selectedRatio.locator('span[aria-hidden="true"]').innerText(),
+				"✓",
+			);
+			await page.keyboard.press("Escape");
+			assert.equal(await cropSurface.count(), 1);
+			await editor
+				.locator("html")
+				.evaluate((root) => root.classList.add("dark"));
+			await cropSurface.click({ button: "right" });
+			assert.equal(
+				await cropMenu.evaluate(
+					(menu) => getComputedStyle(menu).backgroundColor,
+				),
+				"rgb(32, 32, 36)",
+			);
+			await page.keyboard.press("Escape");
+			assert.equal(await cropSurface.count(), 1);
+			await editor
+				.locator("html")
+				.evaluate((root) => root.classList.remove("dark"));
+			await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+		}
 		const bundleDownload = page.waitForEvent("download");
 		await editor
 			.getByRole("button", { name: "Download recording bundle" })
@@ -925,14 +1136,16 @@ try {
 		}
 		await editor.getByRole("tab", { name: "Camera" }).click();
 		await editor.getByText("Hide Camera").waitFor({ state: "visible" });
-		const cameraBackground = editor
-			.getByText("Background", { exact: true })
-			.locator("..");
-		await cameraBackground.locator("button").click();
-		await editor.getByRole("option", { name: "Remove Background" }).click();
-		await cameraBackground.getByText("Remove Background").waitFor({
-			state: "visible",
-		});
+		if (!shareReplay) {
+			const cameraBackground = editor
+				.getByText("Background", { exact: true })
+				.locator("..");
+			await cameraBackground.locator("button").click();
+			await editor.getByRole("option", { name: "Remove Background" }).click();
+			await cameraBackground.getByText("Remove Background").waitFor({
+				state: "visible",
+			});
+		}
 		await editor.getByRole("button", { name: "Export", exact: true }).click();
 		await editor.getByRole("button", { name: "Back to editor" }).waitFor({
 			state: "visible",
@@ -959,6 +1172,29 @@ try {
 				process.env.CAP_EDITOR_UI_EXPORT_SCREENSHOT_PATH,
 				exportScreenshot,
 			);
+		if (shareReplay) {
+			const destination = editor.getByRole("radio", {
+				name: "Reupload",
+				exact: true,
+			});
+			assert.equal(await destination.isDisabled(), false);
+			await destination.click();
+			assert.equal(await destination.getAttribute("aria-checked"), "true");
+			await editor
+				.getByRole("button", { name: "Reupload to same link" })
+				.click();
+			await editor.getByText("Reupload complete", { exact: true }).waitFor({
+				state: "visible",
+				timeout: 120_000,
+			});
+			await editor.getByRole("button", { name: "Copy Link" }).waitFor({
+				state: "visible",
+			});
+			assert.equal(multipartInitiations, 1);
+			assert.ok(exportChunkRequests > 0);
+			assert.ok(uploadedParts.size > 0);
+			assert.ok(completedShare);
+		}
 		const bridgeError = await page.evaluate(
 			() =>
 				(window as typeof window & { capTestEditorError?: string })
@@ -986,7 +1222,7 @@ try {
 				separateCameraTabEnabled: true,
 				cropFrameSize,
 				cropFrameLoadMs,
-				cropRatiosAndThemesVerified: true,
+				cropRatiosAndThemesVerified: !shareReplay,
 				recordingBundleDownloaded: bundleTicketRequests === 1,
 				freeCaptionsUpgradeVisible: !proCaptions,
 				proCaptionGenerationVisible: proCaptions,
@@ -996,8 +1232,12 @@ try {
 				localModelDownloadsAbsent: true,
 				imageOverlayImported: imageImports === 1 && imagePreviewRequests > 0,
 				cameraControlsVisible: true,
-				cameraBackgroundRemovalSelectable: true,
+				cameraBackgroundRemovalSelectable: !shareReplay,
 				exportPreviewVisible: true,
+				shareReplay,
+				multipartInitiations,
+				exportChunkRequests,
+				completedShare,
 				screenshotSha256: createHash("sha256").update(screenshot).digest("hex"),
 				exportScreenshotSha256: createHash("sha256")
 					.update(exportScreenshot)
