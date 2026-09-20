@@ -8,7 +8,12 @@ import {
 	parseCapBundleManifest,
 	readCapBundleManifestLength,
 } from "@cap/editor-cap-bundle";
-import { type Browser, chromium, webkit } from "@playwright/test";
+import {
+	type Browser,
+	chromium,
+	type Download,
+	webkit,
+} from "@playwright/test";
 import { hasEditorCaptionContent } from "../../../../../apps/web/lib/editor-caption-access";
 import app from "../../editor-worker-app";
 import { parseEditorSocketRequest } from "../../lib/editor-command-socket";
@@ -765,8 +770,10 @@ try {
 		};
 	});
 	const pageErrors: string[] = [];
+	const dialogMessages: string[] = [];
 	const rendererFallbacks: string[] = [];
 	const failedResponses: string[] = [];
+	const exportResponses: string[] = [];
 	const failedResponseReads: Promise<void>[] = [];
 	let delayedSkeletonRequests = 0;
 	let delayedEditorRequests = 0;
@@ -799,6 +806,12 @@ try {
 	page.on("pageerror", (error) =>
 		pageErrors.push(error.stack ?? error.message),
 	);
+	page.on("dialog", (dialog) => {
+		dialogMessages.push(dialog.message());
+		void dialog
+			.dismiss()
+			.catch((cause: unknown) => pageErrors.push(String(cause)));
+	});
 	page.on("console", (message) => {
 		if (message.type() !== "error") return;
 		if (
@@ -826,6 +839,13 @@ try {
 		pageErrors.push(message.text());
 	});
 	page.on("response", (response) => {
+		if (
+			response.url().includes("/api/editor/sessions/") &&
+			response.url().includes("/exports/")
+		) {
+			exportResponses.push(`${response.status()} ${response.url()}`);
+			if (exportResponses.length > 12) exportResponses.shift();
+		}
 		if (response.status() < 400) return;
 		const index =
 			failedResponses.push(`${response.status()} ${response.url()}`) - 1;
@@ -1356,7 +1376,50 @@ try {
 				timeout: 120_000,
 			});
 			await editor.getByRole("button", { name: "Export to File" }).click();
-			const download = await downloading;
+			let download: Download;
+			try {
+				download = await downloading;
+			} catch (cause) {
+				let workerStatus: { status: number; body: string } | string | null =
+					null;
+				if (renderedExportId && sessionId) {
+					try {
+						const response = await app.request(
+							`/editor/sessions/${sessionId}/exports/${renderedExportId}`,
+							{ headers },
+						);
+						workerStatus = {
+							status: response.status,
+							body: (await response.text()).slice(0, 800),
+						};
+					} catch (error) {
+						workerStatus = String(error);
+					}
+				}
+				let pageText: string;
+				try {
+					pageText = (await editor.locator("body").innerText()).slice(0, 2_000);
+				} catch (error) {
+					pageText = String(error);
+				}
+				throw new Error(
+					`Cursor MOV download failed: ${JSON.stringify({
+						renderedExportId,
+						cursorMovTicketRequests,
+						workerStatus,
+						exportResponses,
+						dialogMessages,
+						pageErrors,
+						failedResponses,
+						browserPages: page
+							.context()
+							.pages()
+							.map((browserPage) => browserPage.url().split("?")[0]),
+						pageText,
+					})}`,
+					{ cause },
+				);
+			}
 			await editor
 				.getByText("Cursor track exported to file", { exact: false })
 				.waitFor({ state: "visible" });
