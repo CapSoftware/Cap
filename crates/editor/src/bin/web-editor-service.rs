@@ -5,7 +5,7 @@ use std::{
     io,
     path::{Path as FilePath, PathBuf},
     sync::{
-        Arc, LazyLock,
+        Arc, LazyLock, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -50,6 +50,7 @@ mod clip_thumbnails_shared;
 mod web_editor_preview_h264;
 
 static THUMBNAIL_SEMAPHORE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(4));
+static VALIDATED_PROJECT_PATH: OnceLock<PathBuf> = OnceLock::new();
 const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
 
 type ApiError = (StatusCode, String);
@@ -182,6 +183,13 @@ fn invalid_request(message: impl Into<String>) -> ApiError {
 
 fn internal_error(message: impl Into<String>) -> ApiError {
     (StatusCode::INTERNAL_SERVER_ERROR, message.into())
+}
+
+fn validated_project_path() -> ApiResult<&'static FilePath> {
+    VALIDATED_PROJECT_PATH
+        .get()
+        .map(PathBuf::as_path)
+        .ok_or_else(|| internal_error("Editor project path is unavailable"))
 }
 
 fn validate_preview(request: &PreviewRequest) -> ApiResult<()> {
@@ -357,8 +365,8 @@ async fn instance(State(state): State<Arc<ServiceState>>) -> Json<serde_json::Va
     }))
 }
 
-async fn meta(State(state): State<Arc<ServiceState>>) -> ApiResult<Json<RecordingMeta>> {
-    RecordingMeta::load_for_project(&state.editor.project_path)
+async fn meta() -> ApiResult<Json<RecordingMeta>> {
+    RecordingMeta::load_for_project(validated_project_path()?)
         .map(Json)
         .map_err(|error| internal_error(error.to_string()))
 }
@@ -377,7 +385,7 @@ async fn generate_keyboard_segments(
     let Some(timeline) = state.editor.project_config.1.borrow().timeline.clone() else {
         return Ok(Json(Vec::new()));
     };
-    let meta = RecordingMeta::load_for_project(&state.editor.project_path)
+    let meta = RecordingMeta::load_for_project(validated_project_path()?)
         .map_err(|error| internal_error(error.to_string()))?;
     let settings = KeyboardSettings {
         grouping_threshold_ms: request.grouping_threshold_ms,
@@ -402,7 +410,7 @@ async fn generate_auto_zoom_segments(
     if !request.zoom_amount.is_finite() || !(0.1..=10.0).contains(&request.zoom_amount) {
         return Err(invalid_request("Invalid auto zoom amount"));
     }
-    let meta = RecordingMeta::load_for_project(&state.editor.project_path)
+    let meta = RecordingMeta::load_for_project(validated_project_path()?)
         .map_err(|error| internal_error(error.to_string()))?;
     let timeline = state.editor.project_config.1.borrow().timeline.clone();
     let duration = state.editor.recordings.duration();
@@ -415,10 +423,7 @@ async fn generate_auto_zoom_segments(
     .map_err(|error| internal_error(error.to_string()))
 }
 
-async fn save_meta_name(
-    State(state): State<Arc<ServiceState>>,
-    Json(request): Json<MetaNameRequest>,
-) -> ApiResult<StatusCode> {
+async fn save_meta_name(Json(request): Json<MetaNameRequest>) -> ApiResult<StatusCode> {
     let length = request.pretty_name.encode_utf16().count();
     if !(5..=100).contains(&length)
         || request.pretty_name.trim() != request.pretty_name
@@ -426,7 +431,7 @@ async fn save_meta_name(
     {
         return Err(invalid_request("Invalid recording title"));
     }
-    let mut meta = RecordingMeta::load_for_project(&state.editor.project_path)
+    let mut meta = RecordingMeta::load_for_project(validated_project_path()?)
         .map_err(|error| internal_error(error.to_string()))?;
     meta.pretty_name = request.pretty_name;
     meta.save_for_project()
@@ -435,13 +440,13 @@ async fn save_meta_name(
 }
 
 async fn clip_thumbnail(
-    State(state): State<Arc<ServiceState>>,
     Path((recording_segment, time_ms)): Path<(u32, i64)>,
 ) -> ApiResult<impl IntoResponse> {
     if !(0..=43_200_000).contains(&time_ms) {
         return Err(invalid_request("Invalid thumbnail time"));
     }
-    let meta = RecordingMeta::load_for_project(&state.editor.project_path)
+    let project_path = validated_project_path()?;
+    let meta = RecordingMeta::load_for_project(project_path)
         .map_err(|error| internal_error(error.to_string()))?;
     let RecordingMetaInner::Studio(studio) = &meta.inner else {
         return Err(invalid_request(
@@ -461,17 +466,19 @@ async fn clip_thumbnail(
     let display_path = tokio::fs::canonicalize(display_path)
         .await
         .map_err(|error| internal_error(error.to_string()))?;
-    if !display_path.starts_with(&state.editor.project_path) {
+    if !display_path.starts_with(project_path) {
         return Err(invalid_request(
             "Thumbnail source escapes the editor project",
         ));
     }
-    let cache_path = state
-        .editor
-        .project_path
+    let cache_name = format!("seg{recording_segment}_{time_ms}.jpg");
+    if cache_name.contains("..") || cache_name.contains('/') || cache_name.contains('\\') {
+        return Err(invalid_request("Invalid thumbnail cache name"));
+    }
+    let cache_path = project_path
         .join("thumbnails")
         .join("clips-v2")
-        .join(format!("seg{recording_segment}_{time_ms}.jpg"));
+        .join(cache_name);
     if !tokio::fs::try_exists(&cache_path)
         .await
         .map_err(|error| internal_error(error.to_string()))?
@@ -555,7 +562,7 @@ async fn save_config(
     Json(config): Json<ProjectConfiguration>,
 ) -> ApiResult<StatusCode> {
     config
-        .write(&state.editor.project_path)
+        .write(validated_project_path()?)
         .map_err(|error| internal_error(error.to_string()))?;
     state
         .editor
@@ -1226,6 +1233,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             io::Error::new(io::ErrorKind::InvalidInput, "Missing editor project root")
         })?;
     let project_path = checked_project_path(&requested_project_path, &trusted_root)?;
+    VALIDATED_PROJECT_PATH
+        .set(project_path.clone())
+        .map_err(|_| io::Error::new(io::ErrorKind::AlreadyExists, "Editor project already set"))?;
     let (frame_tx, frame_rx) = watch::channel(None);
     let (frame_input_tx, mut frame_input_rx) =
         watch::channel::<Option<Arc<(RenderedFrame, FrameLayout)>>>(None);
