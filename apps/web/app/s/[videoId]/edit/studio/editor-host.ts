@@ -89,6 +89,8 @@ function createActiveExport(requestId: number): ActiveExport {
 
 const TICKET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const CHANNEL_PATTERN = /^__CHANNEL__:(\d+)$/;
+const EXPORT_START_TIMEOUT_MS = 20_000;
+const EXPORT_CANCEL_TIMEOUT_MS = 10_000;
 const AUDIO_CONTENT_TYPES: Record<string, string> = {
 	ogg: "audio/ogg",
 	m4a: "audio/mp4",
@@ -458,13 +460,26 @@ export class EditorHostBridge {
 	}
 
 	private async cancelExportJob(exportId: string) {
+		const controller = new AbortController();
+		let timeoutId = 0;
+		const deadline = new Promise<never>((_, reject) => {
+			timeoutId = window.setTimeout(() => {
+				reject(new Error("Editor export cancellation timed out"));
+				controller.abort();
+			}, EXPORT_CANCEL_TIMEOUT_MS);
+		});
 		try {
-			await fetch(
-				`${this.exportPath(exportId)}?videoId=${encodeURIComponent(this.videoId)}`,
-				{ method: "DELETE", keepalive: true },
-			);
+			await Promise.race([
+				fetch(
+					`${this.exportPath(exportId)}?videoId=${encodeURIComponent(this.videoId)}`,
+					{ method: "DELETE", keepalive: true, signal: controller.signal },
+				),
+				deadline,
+			]);
 		} catch {
 			return;
+		} finally {
+			window.clearTimeout(timeoutId);
 		}
 	}
 
@@ -486,31 +501,55 @@ export class EditorHostBridge {
 		channelId: number,
 		settings: Record<string, unknown>,
 	) {
-		const started = await fetch(this.exportPath(), {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ videoId: this.videoId, settings }),
-			signal: this.controller.signal,
+		const startupController = new AbortController();
+		const close = () => startupController.abort();
+		this.controller.signal.addEventListener("abort", close, { once: true });
+		if (this.controller.signal.aborted) close();
+		let timeoutId = 0;
+		const deadline = new Promise<never>((_, reject) => {
+			timeoutId = window.setTimeout(() => {
+				reject(new Error("Editor export creation timed out"));
+				startupController.abort();
+			}, EXPORT_START_TIMEOUT_MS);
 		});
-		if (!started.ok) {
-			throw new Error(
-				started.status === 400
-					? "Editor export settings were invalid"
-					: "Editor export could not start",
-			);
+		const start = (async () => {
+			const started = await fetch(this.exportPath(), {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ videoId: this.videoId, settings }),
+				signal: startupController.signal,
+			});
+			if (!started.ok) {
+				throw new Error(
+					started.status === 400
+						? "Editor export settings were invalid"
+						: "Editor export could not start",
+				);
+			}
+			const startValue: unknown = await started.json();
+			if (
+				typeof startValue !== "object" ||
+				startValue === null ||
+				!("id" in startValue) ||
+				typeof startValue.id !== "string" ||
+				!("status" in startValue) ||
+				startValue.status !== "running"
+			) {
+				throw new Error("Editor export response was invalid");
+			}
+			active.jobId = startValue.id;
+			if (startupController.signal.aborted) {
+				void this.cancelExportJob(active.jobId);
+				throw new Error("Editor export creation timed out");
+			}
+		})();
+		try {
+			await Promise.race([start, deadline]);
+		} finally {
+			window.clearTimeout(timeoutId);
+			this.controller.signal.removeEventListener("abort", close);
 		}
-		const startValue: unknown = await started.json();
-		if (
-			typeof startValue !== "object" ||
-			startValue === null ||
-			!("id" in startValue) ||
-			typeof startValue.id !== "string" ||
-			!("status" in startValue) ||
-			startValue.status !== "running"
-		) {
-			throw new Error("Editor export response was invalid");
-		}
-		active.jobId = startValue.id;
+		if (!active.jobId) throw new Error("Editor export job was unavailable");
 		if (active.canceled || this.disposed) throw new Error("Export cancelled");
 		let lastRendered = -1;
 		const renderDeadline = Date.now() + 20 * 60 * 1000;

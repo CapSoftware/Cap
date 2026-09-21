@@ -1302,6 +1302,205 @@ test("canceling a prepared share waits for job deletion before starting another 
 	}
 });
 
+test("a stalled export start releases a canceled retry and deletes a late native job", async () => {
+	let resolveStart: (response: Response) => void = () => undefined;
+	const pendingStart = new Promise<Response>((resolve) => {
+		resolveStart = resolve;
+	});
+	let resolveFirstStarted: () => void = () => undefined;
+	const firstStarted = new Promise<void>((resolve) => {
+		resolveFirstStarted = resolve;
+	});
+	let resolveDeleted: () => void = () => undefined;
+	const nativeDeleted = new Promise<void>((resolve) => {
+		resolveDeleted = resolve;
+	});
+	let starts = 0;
+	const startSignals: AbortSignal[] = [];
+	const deleted = vi.fn(async () => Response.json({ canceled: true }));
+	const { bridge, port } = await connectedExportHost(async (url, init) => {
+		if (url.endsWith("/exports") && init?.method === "POST") {
+			starts++;
+			if (starts === 1) {
+				if (init.signal) startSignals.push(init.signal);
+				resolveFirstStarted();
+				return pendingStart;
+			}
+			return Response.json({ id: "retry", status: "running" }, { status: 202 });
+		}
+		if (url.includes("/exports/orphan?videoId=") && init?.method === "DELETE") {
+			resolveDeleted();
+			return deleted();
+		}
+		if (url.includes("/exports/retry?videoId="))
+			return Response.json({ ...exportState("ready"), id: "retry" });
+		throw new Error(`Unexpected request ${url}`);
+	});
+	const messages: unknown[] = [];
+	let resolveCancel: () => void = () => undefined;
+	const canceled = new Promise<void>((resolve) => {
+		resolveCancel = resolve;
+	});
+	let resolveRetry: (reply: unknown) => void = () => undefined;
+	const retried = new Promise<unknown>((resolve) => {
+		resolveRetry = resolve;
+	});
+	port.onmessage = (event: MessageEvent<unknown>) => {
+		messages.push(event.data);
+		const reply = event.data;
+		if (typeof reply !== "object" || reply === null || !("id" in reply)) return;
+		if (reply.id === 8 && "kind" in reply && reply.kind === "result")
+			resolveCancel();
+		if (reply.id === 9 && "kind" in reply && reply.kind !== "channel")
+			resolveRetry(reply);
+	};
+	vi.stubGlobal("window", {
+		...window,
+		setTimeout: (handler: () => void, delay: number) =>
+			Number(globalThis.setTimeout(handler, delay)),
+		clearTimeout: (id: number) => globalThis.clearTimeout(id),
+	});
+	vi.useFakeTimers();
+	const args = [
+		"cap-web-editor://session/session",
+		"__CHANNEL__:42",
+		exportSettings,
+	];
+	try {
+		port.postMessage({ kind: "invoke", id: 7, name: "exportVideo", args });
+		await firstStarted;
+		port.postMessage({
+			kind: "invoke",
+			id: 8,
+			name: "cancelCurrentWindowExports",
+			args: [],
+		});
+		await canceled;
+		expect(messages).toContainEqual({
+			kind: "error",
+			id: 7,
+			error: "Export cancelled",
+		});
+		port.postMessage({ kind: "invoke", id: 9, name: "exportVideo", args });
+		await vi.advanceTimersByTimeAsync(20_001);
+		expect(await retried).toEqual({
+			kind: "result",
+			id: 9,
+			value: "cap-web-editor://export/retry",
+		});
+		expect(starts).toBe(2);
+		expect(startSignals[0]?.aborted).toBe(true);
+		resolveStart(
+			Response.json({ id: "orphan", status: "running" }, { status: 202 }),
+		);
+		await nativeDeleted;
+		expect(deleted).toHaveBeenCalledOnce();
+		expect(
+			messages.filter(
+				(message) =>
+					typeof message === "object" &&
+					message !== null &&
+					"id" in message &&
+					message.id === 7,
+			),
+		).toHaveLength(1);
+	} finally {
+		vi.useRealTimers();
+		port.close();
+		bridge.dispose();
+	}
+});
+
+test("a stalled native export deletion cannot hold a prepared-share retry forever", async () => {
+	let resolveDeleteRequested: () => void = () => undefined;
+	const deleteRequested = new Promise<void>((resolve) => {
+		resolveDeleteRequested = resolve;
+	});
+	const pendingDelete = new Promise<Response>(() => undefined);
+	let starts = 0;
+	const { bridge, port } = await connectedExportHost(async (url, init) => {
+		if (url.endsWith("/exports") && init?.method === "POST") {
+			starts++;
+			return Response.json(
+				{ id: starts === 1 ? "job" : "retry", status: "running" },
+				{ status: 202 },
+			);
+		}
+		if (url.includes("/exports/job?videoId=") && init?.method === "DELETE") {
+			resolveDeleteRequested();
+			return pendingDelete;
+		}
+		if (url.includes("/exports/job?videoId="))
+			return Response.json(exportState("ready"));
+		if (url.includes("/exports/retry?videoId="))
+			return Response.json({ ...exportState("ready"), id: "retry" });
+		throw new Error(`Unexpected request ${url}`);
+	});
+	const messages: unknown[] = [];
+	const awaited = new Map<number, (reply: unknown) => void>();
+	port.onmessage = (event: MessageEvent<unknown>) => {
+		messages.push(event.data);
+		const reply = event.data;
+		if (typeof reply === "object" && reply !== null && "id" in reply)
+			awaited.get(Number(reply.id))?.(reply);
+	};
+	const invoke = (id: number, name: string) => {
+		const reply = new Promise<unknown>((resolve) => awaited.set(id, resolve));
+		port.postMessage({
+			kind: "invoke",
+			id,
+			name,
+			args:
+				name === "cancelCurrentWindowExports"
+					? []
+					: [
+							"cap-web-editor://session/session",
+							"__CHANNEL__:42",
+							exportSettings,
+						],
+		});
+		return reply;
+	};
+	vi.stubGlobal("window", {
+		...window,
+		setTimeout: (handler: () => void, delay: number) =>
+			Number(globalThis.setTimeout(handler, delay)),
+		clearTimeout: (id: number) => globalThis.clearTimeout(id),
+	});
+	vi.useFakeTimers();
+	try {
+		expect(await invoke(7, "exportVideo")).toEqual({
+			kind: "result",
+			id: 7,
+			value: "cap-web-editor://export/job",
+		});
+		expect(await invoke(8, "cancelCurrentWindowExports")).toEqual({
+			kind: "result",
+			id: 8,
+			value: null,
+		});
+		const retry = invoke(9, "exportVideo");
+		await deleteRequested;
+		expect(starts).toBe(1);
+		await vi.advanceTimersByTimeAsync(10_001);
+		expect(await retry).toEqual({
+			kind: "result",
+			id: 9,
+			value: "cap-web-editor://export/retry",
+		});
+		expect(starts).toBe(2);
+		expect(messages).not.toContainEqual({
+			kind: "error",
+			id: 9,
+			error: "Finish or cancel the current editor export first",
+		});
+	} finally {
+		vi.useRealTimers();
+		port.close();
+		bridge.dispose();
+	}
+});
+
 test.each(["put", "driveResumable"] as const)(
 	"imported audio uses a %s storage target before adding a native timeline asset",
 	async (targetType) => {
