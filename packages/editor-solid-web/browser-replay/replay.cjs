@@ -78,12 +78,16 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		page.on("pageerror", (error) => pageErrors.push(error.message));
 		page.on("console", (message) => {
 			if (message.type() === "error") consoleErrors.push(message.text());
-			if (message.text().startsWith("Cap replay stage:")) {
+			if (
+				message.text().startsWith("Cap replay stage:") ||
+				message.text().startsWith("Cap renderer stage:")
+			) {
 				replayStage = message.text();
 				console.log(replayStage);
 			}
 		});
 		await page.addInitScript(() => {
+			window.CapBrowserRendererTrace = true;
 			window.CapBrowserGpuErrors = [];
 			if (typeof GPUAdapter === "undefined") return;
 			const requestDevice = GPUAdapter.prototype.requestDevice;

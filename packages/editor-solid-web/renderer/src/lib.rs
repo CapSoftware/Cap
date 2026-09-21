@@ -29,6 +29,23 @@ fn js_error(value: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&value.to_string())
 }
 
+fn trace_renderer(stage: &str) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    if js_sys::Reflect::get(
+        window.as_ref(),
+        &JsValue::from_str("CapBrowserRendererTrace"),
+    )
+    .ok()
+    .and_then(|value| value.as_bool())
+        != Some(true)
+    {
+        return;
+    }
+    web_sys::console::info_1(&JsValue::from_str(&format!("Cap renderer stage: {stage}")));
+}
+
 async fn wait_for_gpu_poll() -> Result<(), JsValue> {
     let promise = js_sys::Promise::new(&mut |resolve, reject| {
         let Some(window) = web_sys::window() else {
@@ -629,12 +646,14 @@ impl BrowserGpuRenderer {
         let width = canvas.width().max(1);
         let height = canvas.height().max(1);
         let webgpu = async {
+            trace_renderer("requesting WebGPU instance");
             let instance =
                 wgpu::util::new_instance_with_webgpu_detection(&wgpu::InstanceDescriptor {
                     backends: wgpu::Backends::BROWSER_WEBGPU,
                     ..Default::default()
                 })
                 .await;
+            trace_renderer("requesting WebGPU adapter");
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
                     power_preference: wgpu::PowerPreference::HighPerformance,
@@ -643,6 +662,7 @@ impl BrowserGpuRenderer {
                 })
                 .await
                 .map_err(js_error)?;
+            trace_renderer("requesting WebGPU device");
             let limits =
                 wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
             let (device, queue) = adapter
@@ -653,6 +673,7 @@ impl BrowserGpuRenderer {
                 })
                 .await
                 .map_err(js_error)?;
+            trace_renderer("creating WebGPU surface");
             let surface = instance
                 .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
                 .map_err(js_error)?;
@@ -665,15 +686,18 @@ impl BrowserGpuRenderer {
         let (surface, adapter, device, queue, mut surface_config) = match webgpu {
             Ok(value) => value,
             Err(_) => {
+                trace_renderer("requesting WebGL instance");
                 let instance =
                     wgpu::util::new_instance_with_webgpu_detection(&wgpu::InstanceDescriptor {
                         backends: wgpu::Backends::GL,
                         ..Default::default()
                     })
                     .await;
+                trace_renderer("creating WebGL surface");
                 let surface = instance
                     .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
                     .map_err(js_error)?;
+                trace_renderer("requesting WebGL adapter");
                 let adapter = instance
                     .request_adapter(&wgpu::RequestAdapterOptions {
                         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -682,6 +706,7 @@ impl BrowserGpuRenderer {
                     })
                     .await
                     .map_err(js_error)?;
+                trace_renderer("requesting WebGL device");
                 let limits =
                     wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
                 let (device, queue) = adapter
@@ -692,9 +717,11 @@ impl BrowserGpuRenderer {
                     })
                     .await
                     .map_err(js_error)?;
+                trace_renderer("configuring WebGL surface");
                 let surface_config = surface
                     .get_default_config(&adapter, width, height)
                     .ok_or_else(|| js_error("Browser canvas is not supported by this GPU"))?;
+                trace_renderer("WebGL surface configured");
                 (surface, adapter, device, queue, surface_config)
             }
         };

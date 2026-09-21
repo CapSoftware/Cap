@@ -409,15 +409,15 @@ export function default_layer_uniforms(output_width, output_height, source_width
     return v1;
 }
 
-function __wbg_adapter_12(arg0, arg1) {
-    wasm.wasm_bindgen__convert__closures_____invoke__hc6057b1851fd52df(arg0, arg1);
+function __wbg_adapter_6(arg0, arg1) {
+    wasm.wasm_bindgen__convert__closures_____invoke__h147cdb123ff2ae0f(arg0, arg1);
 }
 
 function __wbg_adapter_17(arg0, arg1, arg2) {
     wasm.closure375_externref_shim(arg0, arg1, arg2);
 }
 
-function __wbg_adapter_1110(arg0, arg1, arg2, arg3) {
+function __wbg_adapter_1114(arg0, arg1, arg2, arg3) {
     wasm.closure1445_externref_shim(arg0, arg1, arg2, arg3);
 }
 
@@ -1426,6 +1426,10 @@ function __wbg_get_imports() {
         const ret = arg0.getUniformLocation(arg1, getStringFromWasm0(arg2, arg3));
         return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
     };
+    imports.wbg.__wbg_get_27b4bcbec57323ca = function() { return handleError(function (arg0, arg1) {
+        const ret = Reflect.get(arg0, arg1);
+        return ret;
+    }, arguments) };
     imports.wbg.__wbg_get_59c6316d15f9f1d0 = function(arg0, arg1) {
         const ret = arg0[arg1 >>> 0];
         return ret;
@@ -1461,6 +1465,9 @@ function __wbg_get_imports() {
     imports.wbg.__wbg_includes_b049685c334daee2 = function(arg0, arg1, arg2) {
         const ret = arg0.includes(arg1, arg2);
         return ret;
+    };
+    imports.wbg.__wbg_info_ed6e390d09c09062 = function(arg0) {
+        console.info(arg0);
     };
     imports.wbg.__wbg_instanceof_GpuAdapter_331cc7dcda68de8c = function(arg0) {
         let result;
@@ -1687,7 +1694,7 @@ function __wbg_get_imports() {
                 const a = state0.a;
                 state0.a = 0;
                 try {
-                    return __wbg_adapter_1110(a, state0.b, arg0, arg1);
+                    return __wbg_adapter_1114(a, state0.b, arg0, arg1);
                 } finally {
                     state0.a = a;
                 }
@@ -2717,7 +2724,7 @@ function __wbg_get_imports() {
     };
     imports.wbg.__wbindgen_cast_aaa93aae03c115ab = function(arg0, arg1) {
         // Cast intrinsic for `Closure(Closure { dtor_idx: 1, function: Function { arguments: [], shim_idx: 2, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-        const ret = makeMutClosure(arg0, arg1, 1, __wbg_adapter_12);
+        const ret = makeMutClosure(arg0, arg1, 1, __wbg_adapter_6);
         return ret;
     };
     imports.wbg.__wbindgen_cast_bbb4883c6389f1de = function(arg0, arg1) {

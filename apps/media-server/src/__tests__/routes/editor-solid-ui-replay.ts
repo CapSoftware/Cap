@@ -14,6 +14,7 @@ import {
 	type Download,
 	webkit,
 } from "@playwright/test";
+import sharp from "sharp";
 import { hasEditorCaptionContent } from "../../../../../apps/web/lib/editor-caption-access";
 import app from "../../editor-worker-app";
 import { parseEditorSocketRequest } from "../../lib/editor-command-socket";
@@ -1415,21 +1416,18 @@ try {
 		const screenshot = await page.screenshot();
 		let canvasFallbackPreviewPixel: number[] | null = null;
 		if (canvasFallbackReplay) {
-			canvasFallbackPreviewPixel = await editor
-				.locator("#canvas")
-				.evaluate((node) => {
-					const canvas = node as HTMLCanvasElement;
-					const context = canvas.getContext("2d");
-					if (!context) return null;
-					const sample = context.getImageData(
-						Math.floor(canvas.width / 2),
-						Math.floor(canvas.height / 2),
-						1,
-						1,
-					).data;
-					return Array.from(sample);
-				});
-			assert.ok(canvasFallbackPreviewPixel);
+			const canvasImage = await editor.locator("#canvas").screenshot();
+			const { data, info } = await sharp(canvasImage)
+				.ensureAlpha()
+				.raw()
+				.toBuffer({ resolveWithObject: true });
+			const center =
+				(Math.floor(info.height / 2) * info.width +
+					Math.floor(info.width / 2)) *
+				info.channels;
+			canvasFallbackPreviewPixel = Array.from(
+				data.subarray(center, center + info.channels),
+			);
 			assert.ok(Math.max(...canvasFallbackPreviewPixel.slice(0, 3)) > 20);
 		}
 		if (process.env.CAP_EDITOR_UI_SCREENSHOT_PATH)
