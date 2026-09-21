@@ -15,7 +15,6 @@ import {
 	type EditorLocalDraft,
 	readEditorLocalDraft,
 } from "@/lib/editor-local-draft";
-import { startWebEditorPreparation } from "@/lib/editor-preparation-client";
 import type { WebEditorVideoImportProgress } from "@/lib/editor-video-import-client";
 import { EditorClipRecorder } from "./EditorClipRecorder";
 import { EditorHostBridge } from "./editor-host";
@@ -25,40 +24,6 @@ const UpgradeModal = dynamic(
 		import("@/components/UpgradeModal").then((module) => module.UpgradeModal),
 	{ ssr: false },
 );
-
-type PreparationStatus = {
-	status: "preparing" | "ready" | "error" | "canceled" | "closed";
-	sessionId?: string;
-};
-
-function isPreparationStatus(value: unknown): value is PreparationStatus {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		"status" in value &&
-		["preparing", "ready", "error", "canceled", "closed"].includes(
-			String(value.status),
-		)
-	);
-}
-
-function waitForPoll(signal: AbortSignal) {
-	return new Promise<void>((resolve, reject) => {
-		if (signal.aborted) {
-			reject(new Error("Editor preparation was canceled"));
-			return;
-		}
-		const timer = window.setTimeout(() => {
-			signal.removeEventListener("abort", canceled);
-			resolve();
-		}, 500);
-		const canceled = () => {
-			window.clearTimeout(timer);
-			reject(new Error("Editor preparation was canceled"));
-		};
-		signal.addEventListener("abort", canceled, { once: true });
-	});
-}
 
 export function StudioEditorClient(props: {
 	videoId: string;
@@ -80,7 +45,6 @@ export function StudioEditorClient(props: {
 	} = props;
 	const router = useRouter();
 	const [sessionId, setSessionId] = useState<string | null>(null);
-	const [waitingForCapacity, setWaitingForCapacity] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [errorFrameReady, setErrorFrameReady] = useState(false);
 	const [recoveryConflict, setRecoveryConflict] =
@@ -91,7 +55,6 @@ export function StudioEditorClient(props: {
 	>(null);
 	const [recordClipOpen, setRecordClipOpen] = useState(false);
 	const [upgradeOpen, setUpgradeOpen] = useState(false);
-	const preparationRef = useRef<string | null>(null);
 	const sessionRef = useRef<string | null>(null);
 	const bridgeRef = useRef<EditorHostBridge | null>(null);
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -106,7 +69,7 @@ export function StudioEditorClient(props: {
 	const closedRef = useRef(false);
 	const restartAfterImport = useCallback(async () => {
 		const activeSession = sessionRef.current;
-		if (activeSession) {
+		if (activeSession && !activeSession.startsWith("browser-")) {
 			const response = await fetch(
 				`/api/editor/sessions/${encodeURIComponent(activeSession)}?videoId=${encodeURIComponent(videoId)}`,
 				{ method: "DELETE", cache: "no-store" },
@@ -126,7 +89,6 @@ export function StudioEditorClient(props: {
 		savedAtRef.current = savedAt;
 		closedRef.current = false;
 		setSessionId(null);
-		setWaitingForCapacity(false);
 		setError(null);
 		setRecoveryConflict(null);
 		setRestoringBrowserDraft(false);
@@ -181,121 +143,67 @@ export function StudioEditorClient(props: {
 			bridgeRef.current?.dispose();
 			bridgeRef.current = null;
 			const activeSession = sessionRef.current;
-			const activePreparation = preparationRef.current;
 			sessionRef.current = null;
-			preparationRef.current = null;
-			if (activeSession) {
+			if (activeSession && !activeSession.startsWith("browser-")) {
 				void fetch(
 					`/api/editor/sessions/${encodeURIComponent(activeSession)}?videoId=${encodeURIComponent(videoId)}`,
 					{ method: "DELETE", keepalive: true },
 				).catch(() => undefined);
-			} else if (activePreparation) {
-				void fetch(
-					`/api/editor/preparations/${encodeURIComponent(activePreparation)}?videoId=${encodeURIComponent(videoId)}`,
-					{ method: "DELETE", keepalive: true },
-				).catch(() => undefined);
 			}
 		};
-		const prepare = async () => {
+		const open = async () => {
 			try {
-				const created = await startWebEditorPreparation(
+				const browserSessionId = `browser-${videoId}`;
+				sessionRef.current = browserSessionId;
+				const draft = readEditorLocalDraft(
+					window.localStorage,
+					userId,
 					videoId,
-					controller.signal,
-					setWaitingForCapacity,
 				);
-				preparationRef.current = created.id;
-				if (controller.signal.aborted) {
-					void fetch(
-						`/api/editor/preparations/${encodeURIComponent(created.id)}?videoId=${encodeURIComponent(videoId)}`,
-						{ method: "DELETE", keepalive: true },
-					);
-					preparationRef.current = null;
-					return;
-				}
-				const deadline = Date.now() + 5 * 60 * 1000;
-				while (!controller.signal.aborted && Date.now() < deadline) {
-					const statusResponse = await fetch(
-						`/api/editor/preparations/${encodeURIComponent(created.id)}?videoId=${encodeURIComponent(videoId)}`,
-						{ signal: controller.signal },
-					);
-					if (!statusResponse.ok) {
-						throw new Error("Editor preparation status is unavailable");
-					}
-					const status: unknown = await statusResponse.json();
-					if (!isPreparationStatus(status)) {
-						throw new Error("Editor preparation status was invalid");
-					}
-					if (status.status === "ready") {
-						if (!status.sessionId) {
-							throw new Error("Editor session was not returned");
-						}
-						if (controller.signal.aborted) {
-							void fetch(
-								`/api/editor/sessions/${encodeURIComponent(status.sessionId)}?videoId=${encodeURIComponent(videoId)}`,
-								{ method: "DELETE", keepalive: true },
-							);
-							return;
-						}
-						sessionRef.current = status.sessionId;
-						preparationRef.current = null;
-						const draft = readEditorLocalDraft(
-							window.localStorage,
-							userId,
-							videoId,
+				if (draft) {
+					if (!captionsEnabled && hasEditorCaptionContent(draft.config)) {
+						setRecoveryConflict(draft);
+						setError(
+							"Browser edits include captions, which require Cap Pro. Restore your other edits without captions, or open the latest saved version.",
 						);
-						if (draft) {
-							if (!captionsEnabled && hasEditorCaptionContent(draft.config)) {
-								setRecoveryConflict(draft);
-								setError(
-									"Browser edits include captions, which require Cap Pro. Restore your other edits without captions, or open the latest saved version.",
-								);
-								return;
-							}
-							const recovered = await fetch(
-								`/api/editor/sessions/${encodeURIComponent(status.sessionId)}/config`,
-								{
-									method: "PUT",
-									headers: { "Content-Type": "application/json" },
-									body: JSON.stringify({
-										videoId,
-										config: draft.config,
-										expectedSavedAt: draft.baseSavedAt,
-									}),
-									signal: controller.signal,
-								},
-							);
-							if (recovered.status === 409) {
-								setRecoveryConflict(draft);
-								setError(
-									"This recording changed after the browser saved pending edits. Choose which version to open.",
-								);
-								return;
-							}
-							if (!recovered.ok)
-								throw new Error(
-									"Pending edits are saved in this browser, but the editor could not restore them. Try again.",
-								);
-							const result: unknown = await recovered.json();
-							if (
-								typeof result === "object" &&
-								result !== null &&
-								"savedAt" in result &&
-								typeof result.savedAt === "string"
-							) {
-								savedAtRef.current = result.savedAt;
-							}
-							clearEditorLocalDraft(window.localStorage, userId, videoId);
-						}
-						if (controller.signal.aborted) return;
-						setSessionId(status.sessionId);
 						return;
 					}
-					if (status.status !== "preparing") {
-						throw new Error("Editor preparation failed");
+					const recovered = await fetch(
+						`/api/editor/videos/${encodeURIComponent(videoId)}/config`,
+						{
+							method: "PUT",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								config: draft.config,
+								expectedSavedAt: draft.baseSavedAt,
+							}),
+							signal: controller.signal,
+						},
+					);
+					if (recovered.status === 409) {
+						setRecoveryConflict(draft);
+						setError(
+							"This recording changed after the browser saved pending edits. Choose which version to open.",
+						);
+						return;
 					}
-					await waitForPoll(controller.signal);
+					if (!recovered.ok)
+						throw new Error(
+							"Pending edits are saved in this browser, but the editor could not restore them. Try again.",
+						);
+					const result: unknown = await recovered.json();
+					if (
+						typeof result === "object" &&
+						result !== null &&
+						"savedAt" in result &&
+						typeof result.savedAt === "string"
+					) {
+						savedAtRef.current = result.savedAt;
+					}
+					clearEditorLocalDraft(window.localStorage, userId, videoId);
 				}
-				throw new Error("Editor preparation timed out");
+				if (controller.signal.aborted) return;
+				setSessionId(browserSessionId);
 			} catch (cause) {
 				if (!controller.signal.aborted) {
 					close();
@@ -305,7 +213,7 @@ export function StudioEditorClient(props: {
 				}
 			}
 		};
-		const timer = window.setTimeout(() => void prepare(), 0);
+		const timer = window.setTimeout(() => void open(), 0);
 		window.addEventListener("beforeunload", beforeUnload);
 		window.addEventListener("popstate", captureDraft);
 		window.addEventListener("pagehide", close);
@@ -330,11 +238,10 @@ export function StudioEditorClient(props: {
 		restoreInProgressRef.current = true;
 		setRestoringBrowserDraft(true);
 		try {
-			const configUrl = `/api/editor/sessions/${encodeURIComponent(activeSession)}/config`;
-			const revisionResponse = await fetch(
-				`${configUrl}?videoId=${encodeURIComponent(videoId)}`,
-				{ cache: "no-store" },
-			).catch(() => null);
+			const configUrl = `/api/editor/videos/${encodeURIComponent(videoId)}/config`;
+			const revisionResponse = await fetch(configUrl, {
+				cache: "no-store",
+			}).catch(() => null);
 			const revision: unknown = await revisionResponse
 				?.json()
 				.catch(() => null);
@@ -353,7 +260,6 @@ export function StudioEditorClient(props: {
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
-					videoId,
 					config,
 					expectedSavedAt: revision.savedAt,
 				}),
@@ -531,6 +437,7 @@ export function StudioEditorClient(props: {
 					savedAtRef.current = nextSavedAt;
 				},
 				() => savedAtRef.current,
+				true,
 			);
 			bridgeRef.current = bridge;
 			void bridge.connect(iframe).catch((cause) => {
@@ -624,11 +531,6 @@ export function StudioEditorClient(props: {
 				className="h-full w-full border-0"
 				onLoad={(event) => onFrameLoad(event.currentTarget)}
 			/>
-			{waitingForCapacity && !sessionId && (
-				<output className="pointer-events-none absolute bottom-6 right-6 z-50 max-w-xs rounded-xl border border-white/10 bg-neutral-950/95 px-4 py-3 text-sm text-white shadow-xl">
-					Editors are busy. Waiting for one to become available…
-				</output>
-			)}
 			{recordClipOpen && (
 				<EditorClipRecorder
 					onCaptured={async (clip: EditorClipCapture) => {

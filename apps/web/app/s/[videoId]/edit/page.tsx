@@ -107,8 +107,7 @@ export default async function EditVideoPage(props: {
 				Number.isSafeInteger(editorSources.display.size) &&
 				(editorSources.display.size ?? 0) > 0);
 	if (
-		(process.env.CAP_WEB_EDITOR_WORKER_URL ||
-			process.env.CAP_WEB_EDITOR_WORKER_POOL) &&
+		process.env.CAP_WEB_EDITOR_STUDIO_ENABLED === "enabled" &&
 		hasStudioSource &&
 		!video.metadata?.editProcessing
 	) {

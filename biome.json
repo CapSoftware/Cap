@@ -13,6 +13,7 @@
 			"!apps/desktop/src/utils/tauri.ts",
 			"!apps/desktop/src/global.d.ts",
 			"!apps/web/public/gif.worker.js",
+			"!packages/editor-solid-web/renderer/pkg",
 			"!packages/ui-solid/src/auto-imports.d.ts"
 		],
 		"ignoreUnknown": false

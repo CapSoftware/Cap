@@ -11,6 +11,7 @@ import { StudioEditorClient } from "./StudioEditorClient";
 export default async function StudioEditorPage(props: {
 	params: Promise<{ videoId: string }>;
 }) {
+	if (process.env.CAP_WEB_EDITOR_STUDIO_ENABLED !== "enabled") notFound();
 	const { videoId: rawVideoId } = await props.params;
 	const videoId = Video.VideoId.make(rawVideoId);
 	const user = await getCurrentUser();

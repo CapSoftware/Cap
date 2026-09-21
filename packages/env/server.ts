@@ -187,6 +187,7 @@ function createServerEnv() {
 				.string()
 				.optional()
 				.describe("JSON array of named, individually addressed editor workers"),
+			CAP_WEB_EDITOR_STUDIO_ENABLED: z.literal("enabled").optional(),
 			MEDIA_SERVER_WEBHOOK_SECRET: z
 				.string()
 				.optional()

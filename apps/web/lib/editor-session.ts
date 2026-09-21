@@ -251,7 +251,10 @@ function validSavedAsset(asset: unknown, video: DbVideo) {
 }
 
 export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
-	function* (video: DbVideo & { captionsEnabled?: boolean }) {
+	function* (
+		video: DbVideo & { captionsEnabled?: boolean },
+		audience: "worker" | "browser" = "worker",
+	) {
 		const database = yield* Database;
 		const [legacyEdit] = yield* database
 			.use((client) =>
@@ -386,6 +389,15 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 				Effect.fail(new HttpApiError.ServiceUnavailable()),
 			),
 		);
+		const signedUrlExpiresAt = Date.now() + SOURCE_URL_TTL_SECONDS * 1000;
+		const signSource = (key: string) =>
+			audience === "browser"
+				? storage.getSignedObjectUrl(key, {
+						expiresIn: SOURCE_URL_TTL_SECONDS,
+					})
+				: storage.getInternalSignedObjectUrl(key, {
+						expiresIn: SOURCE_URL_TTL_SECONDS,
+					});
 		const [displayHead, cameraHead, micHead, systemAudioHead, inputEventsHead] =
 			yield* Effect.all([
 				storage.headObject(displaySource.key),
@@ -474,28 +486,14 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 		}
 		const [displayUrl, cameraUrl, micUrl, systemAudioUrl, inputEventsUrl] =
 			yield* Effect.all([
-				storage.getInternalSignedObjectUrl(displaySource.key, {
-					expiresIn: SOURCE_URL_TTL_SECONDS,
-				}),
-				cameraSource
-					? storage.getInternalSignedObjectUrl(cameraSource.key, {
-							expiresIn: SOURCE_URL_TTL_SECONDS,
-						})
-					: Effect.succeed(null),
-				micSource
-					? storage.getInternalSignedObjectUrl(micSource.key, {
-							expiresIn: SOURCE_URL_TTL_SECONDS,
-						})
-					: Effect.succeed(null),
+				signSource(displaySource.key),
+				cameraSource ? signSource(cameraSource.key) : Effect.succeed(null),
+				micSource ? signSource(micSource.key) : Effect.succeed(null),
 				systemAudioSource
-					? storage.getInternalSignedObjectUrl(systemAudioSource.key, {
-							expiresIn: SOURCE_URL_TTL_SECONDS,
-						})
+					? signSource(systemAudioSource.key)
 					: Effect.succeed(null),
 				inputEventsSource
-					? storage.getInternalSignedObjectUrl(inputEventsSource.key, {
-							expiresIn: SOURCE_URL_TTL_SECONDS,
-						})
+					? signSource(inputEventsSource.key)
 					: Effect.succeed(null),
 			]).pipe(
 				Effect.catchTag("StorageError", () =>
@@ -523,21 +521,17 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 				) {
 					return Effect.fail(new HttpApiError.ServiceUnavailable());
 				}
-				return storage
-					.getInternalSignedObjectUrl(asset.key, {
-						expiresIn: SOURCE_URL_TTL_SECONDS,
-					})
-					.pipe(
-						Effect.map((url) => ({
-							kind: asset.kind,
-							path: asset.path,
-							name: asset.name,
-							size: asset.size,
-							contentType: asset.contentType,
-							objectIdentity: identity,
-							url,
-						})),
-					);
+				return signSource(asset.key).pipe(
+					Effect.map((url) => ({
+						kind: asset.kind,
+						path: asset.path,
+						name: asset.name,
+						size: asset.size,
+						contentType: asset.contentType,
+						objectIdentity: identity,
+						url,
+					})),
+				);
 			}),
 			{ concurrency: 4 },
 		).pipe(
@@ -566,20 +560,16 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 				) {
 					return Effect.fail(new HttpApiError.ServiceUnavailable());
 				}
-				return storage
-					.getInternalSignedObjectUrl(asset.key, {
-						expiresIn: SOURCE_URL_TTL_SECONDS,
-					})
-					.pipe(
-						Effect.map((url) => ({
-							path: asset.path,
-							name: asset.name,
-							size: asset.size,
-							contentType: asset.contentType,
-							objectIdentity: identity,
-							url,
-						})),
-					);
+				return signSource(asset.key).pipe(
+					Effect.map((url) => ({
+						path: asset.path,
+						name: asset.name,
+						size: asset.size,
+						contentType: asset.contentType,
+						objectIdentity: identity,
+						url,
+					})),
+				);
 			}),
 			{ concurrency: 4 },
 		).pipe(
@@ -617,6 +607,9 @@ export const getSignedEditorSources = Effect.fn("getSignedEditorSources")(
 		const captionsEnabled = video.captionsEnabled === true;
 		return {
 			videoId: video.id,
+			...(audience === "browser"
+				? { signedUrlExpiresAt, displayHasAudio: legacySource }
+				: {}),
 			captionsEnabled,
 			title: video.name?.slice(0, 255) || "Recording",
 			display: {

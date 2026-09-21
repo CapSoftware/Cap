@@ -9,6 +9,7 @@ import { createSignal, onCleanup } from "solid-js";
 import { render } from "solid-js/web";
 import { Toaster } from "solid-toast";
 import type { PreparingEditorModel } from "../../../apps/desktop/src/routes/editor/preparing-editor-model";
+import { setBrowserEditorVideoId } from "./browser-frame-socket";
 import {
 	clearEditorImportedImages,
 	serializeEditorProjectSnapshot,
@@ -158,6 +159,7 @@ export function disposeEditor() {
 	skeletonModel = null;
 	skeletonSequence = -1;
 	setEditorTransport(null);
+	setBrowserEditorVideoId(null);
 }
 
 declare global {
@@ -220,6 +222,7 @@ if (root) {
 			skeletonModel = null;
 			skeletonSequence = -1;
 			setEditorTransport(null);
+			setBrowserEditorVideoId(null);
 			window.capWebEditorPreparePresetBackground = undefined;
 			void import("./web-editor-error-screen").then(
 				({ WebEditorErrorScreen }) => {
@@ -281,12 +284,14 @@ if (root) {
 			return;
 		}
 		if (message.kind !== "cap-editor-connect" || message.version !== 1) return;
+		if (typeof message.videoId !== "string") return;
 		const port = event.ports[0];
 		if (!port) return;
 		if (errorDispose || webErrorState().message) mountGeneration++;
 		errorDispose?.();
 		errorDispose = null;
 		window.capWebEditorCaptionsEnabled = message.captionsEnabled === true;
+		setBrowserEditorVideoId(message.videoId);
 		window.capWebEditorUserId =
 			typeof message.userId === "string" ? message.userId : "";
 		setEditorStoreNamespace(
@@ -310,7 +315,15 @@ if (root) {
 				? (frames as EditorSocketCredential)
 				: null,
 		);
-		setEditorTransport(new PortEditorTransport(port));
+		const browserSession =
+			typeof message.browserSessionId === "string" &&
+			message.browserSessionId.length > 0
+				? {
+						videoId: message.videoId,
+						sessionId: message.browserSessionId,
+					}
+				: undefined;
+		setEditorTransport(new PortEditorTransport(port, browserSession));
 		window.capWebEditorPreparePresetBackground = (config) =>
 			prepareEditorPresetBackground(
 				window.capWebEditorUserId?.trim() || "anonymous",

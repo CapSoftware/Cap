@@ -20,6 +20,7 @@
 		],
 		"paths": {
 			"~/utils/tauri": ["./src/tauri-bridge.ts"],
+			"~/utils/socket": ["./src/browser-frame-socket.ts"],
 			"~/*": ["../../apps/desktop/src/*"]
 		}
 	},

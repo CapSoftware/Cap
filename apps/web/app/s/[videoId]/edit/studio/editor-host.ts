@@ -15,6 +15,7 @@ import {
 	uploadWebEditorExport,
 	type WebEditorExportMetadata,
 } from "@/lib/editor-export-upload-client";
+import { startWebEditorPreparation } from "@/lib/editor-preparation-client";
 import { validWebEditorTitle } from "@/lib/editor-recording-title";
 import {
 	importWebEditorVideo,
@@ -367,6 +368,16 @@ async function openSocket(credential: SocketCredential, signal: AbortSignal) {
 export class EditorHostBridge {
 	private disposed = false;
 	private readonly controller = new AbortController();
+	private readonly editorPath: string;
+	private readonly browserSessionId: string;
+	private workerSessionId: string | null = null;
+	private workerProjectSavedAt: string | null = null;
+	private workerPreparationId: string | null = null;
+	private pendingWorkerPreparation: Promise<void> | null = null;
+	private pendingWorkerRelease: Promise<void> | null = null;
+	private workerIdleTimer: number | null = null;
+	private workerBundleDownloadUntil = 0;
+	private activeRecordingClipImports = 0;
 	private port: MessagePort | null = null;
 	private commands: WebSocket | null = null;
 	private events: WebSocket | null = null;
@@ -383,6 +394,7 @@ export class EditorHostBridge {
 	} | null = null;
 	private activeVideoImport: Promise<WebEditorImportedVideo> | null = null;
 	private activeCapImport: Promise<WebEditorImportedCap> | null = null;
+	private activeAssetImports = 0;
 	private readonly clipImportCache = new WeakMap<
 		File,
 		WebEditorImportedVideo
@@ -391,7 +403,7 @@ export class EditorHostBridge {
 
 	constructor(
 		private readonly videoId: string,
-		private readonly sessionId: string,
+		private sessionId: string,
 		private readonly userId: string,
 		private readonly onClose: (reason?: "deleted") => void,
 		private readonly onFailure: (error: Error) => void,
@@ -407,7 +419,11 @@ export class EditorHostBridge {
 		private readonly onUpgrade?: () => void,
 		private readonly onProjectSaved?: (savedAt: string) => void,
 		private readonly getProjectSavedAt?: () => string | null,
-	) {}
+		private readonly browserOnly = false,
+	) {
+		this.editorPath = `cap-web-editor://session/${sessionId}`;
+		this.browserSessionId = sessionId;
+	}
 
 	private fail(error: Error) {
 		if (this.disposed) return;
@@ -433,25 +449,204 @@ export class EditorHostBridge {
 		return value;
 	}
 
+	private async prepareWorkerSession() {
+		const signal = this.controller.signal;
+		const projectSavedAt = this.getProjectSavedAt?.() ?? null;
+		const created = await startWebEditorPreparation(
+			this.videoId,
+			signal,
+			() => undefined,
+		);
+		this.workerPreparationId = created.id;
+		try {
+			const deadline = Date.now() + 5 * 60 * 1000;
+			while (!signal.aborted && Date.now() < deadline) {
+				const response = await fetch(
+					`/api/editor/preparations/${encodeURIComponent(created.id)}?videoId=${encodeURIComponent(this.videoId)}`,
+					{ signal, cache: "no-store" },
+				);
+				if (!response.ok)
+					throw new Error("Editor export preparation is unavailable");
+				const status: unknown = await response.json();
+				if (
+					typeof status !== "object" ||
+					status === null ||
+					!("status" in status) ||
+					typeof status.status !== "string"
+				) {
+					throw new Error("Editor export preparation status is invalid");
+				}
+				if (status.status === "ready") {
+					if (
+						!("sessionId" in status) ||
+						typeof status.sessionId !== "string"
+					) {
+						throw new Error("Editor export session is unavailable");
+					}
+					this.sessionId = status.sessionId;
+					this.workerSessionId = status.sessionId;
+					this.workerProjectSavedAt = projectSavedAt;
+					this.workerPreparationId = null;
+					this.scheduleWorkerIdleRelease();
+					return;
+				}
+				if (status.status !== "preparing") {
+					throw new Error("Editor export preparation failed");
+				}
+				await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+			}
+			throw new Error(
+				signal.aborted
+					? "Editor export preparation was canceled"
+					: "Editor export preparation timed out",
+			);
+		} finally {
+			if (this.workerPreparationId === created.id) {
+				this.workerPreparationId = null;
+				void fetch(
+					`/api/editor/preparations/${encodeURIComponent(created.id)}?videoId=${encodeURIComponent(this.videoId)}`,
+					{ method: "DELETE", keepalive: true },
+				).catch(() => undefined);
+			}
+		}
+	}
+
+	private cancelWorkerIdleRelease() {
+		if (this.workerIdleTimer === null) return;
+		window.clearTimeout(this.workerIdleTimer);
+		this.workerIdleTimer = null;
+	}
+
+	private scheduleWorkerIdleRelease() {
+		if (!this.browserOnly || this.disposed || !this.workerSessionId) return;
+		this.cancelWorkerIdleRelease();
+		this.workerIdleTimer = window.setTimeout(() => {
+			this.workerIdleTimer = null;
+			if (
+				Date.now() < this.workerBundleDownloadUntil ||
+				this.activeExport ||
+				this.preparedExport ||
+				this.activeShare ||
+				this.activeCaptions ||
+				this.activeVideoImport ||
+				this.activeCapImport ||
+				this.activeAssetImports > 0 ||
+				this.activeRecordingClipImports > 0 ||
+				this.pendingWorkerPreparation
+			) {
+				this.scheduleWorkerIdleRelease();
+				return;
+			}
+			void this.releaseWorkerSession().catch(() =>
+				this.scheduleWorkerIdleRelease(),
+			);
+		}, 30_000);
+	}
+
+	private async releaseWorkerSession() {
+		if (this.pendingWorkerRelease) return this.pendingWorkerRelease;
+		const sessionId = this.workerSessionId;
+		if (!sessionId) return;
+		this.cancelWorkerIdleRelease();
+		const pending = (async () => {
+			const response = await fetch(
+				`/api/editor/sessions/${encodeURIComponent(sessionId)}?videoId=${encodeURIComponent(this.videoId)}`,
+				{ method: "DELETE", signal: this.controller.signal },
+			);
+			if (!response.ok && response.status !== 404) {
+				throw new Error("Previous editor export session could not close");
+			}
+			if (this.workerSessionId === sessionId) {
+				this.workerSessionId = null;
+				this.workerProjectSavedAt = null;
+				this.sessionId = this.browserSessionId;
+			}
+		})();
+		this.pendingWorkerRelease = pending;
+		try {
+			await pending;
+		} finally {
+			if (this.pendingWorkerRelease === pending) {
+				this.pendingWorkerRelease = null;
+			}
+		}
+	}
+
+	private async ensureWorkerSession() {
+		if (!this.browserOnly) return;
+		if (this.disposed) throw new Error("Editor bridge is closed");
+		this.cancelWorkerIdleRelease();
+		await this.pendingWorkerRelease;
+		const projectSavedAt = this.getProjectSavedAt?.() ?? null;
+		if (this.workerSessionId && this.workerProjectSavedAt === projectSavedAt) {
+			this.scheduleWorkerIdleRelease();
+			return;
+		}
+		if (!this.pendingWorkerPreparation) {
+			const pending = (async () => {
+				if (this.workerSessionId) {
+					if (
+						this.activeCaptions ||
+						this.activeVideoImport ||
+						this.activeCapImport ||
+						this.activeAssetImports > 0 ||
+						Date.now() < this.workerBundleDownloadUntil ||
+						this.activeRecordingClipImports > 0 ||
+						this.preparedExport ||
+						this.activeShare
+					) {
+						throw new Error(
+							"Finish the current editor operation before exporting new edits",
+						);
+					}
+					await this.releaseWorkerSession();
+				}
+				await this.prepareWorkerSession();
+				if (
+					this.workerProjectSavedAt !== (this.getProjectSavedAt?.() ?? null)
+				) {
+					await this.releaseWorkerSession();
+					throw new Error(
+						"Editor changed during export preparation. Try again.",
+					);
+				}
+			})();
+			this.pendingWorkerPreparation = pending;
+			void pending.then(
+				() => {
+					if (this.pendingWorkerPreparation === pending)
+						this.pendingWorkerPreparation = null;
+				},
+				() => {
+					if (this.pendingWorkerPreparation === pending)
+						this.pendingWorkerPreparation = null;
+				},
+			);
+		}
+		await this.pendingWorkerPreparation;
+		this.scheduleWorkerIdleRelease();
+	}
+
 	private async currentPlan() {
 		const requestSequence = ++this.planRequestSequence;
 		const response = await fetch(
-			`/api/editor/sessions/${encodeURIComponent(this.sessionId)}/plan?videoId=${encodeURIComponent(this.videoId)}`,
+			this.browserOnly
+				? `/api/editor/videos/${encodeURIComponent(this.videoId)}/plan`
+				: `/api/editor/sessions/${encodeURIComponent(this.sessionId)}/plan?videoId=${encodeURIComponent(this.videoId)}`,
 			{ cache: "no-store", signal: this.controller.signal },
 		);
 		if (!response.ok) throw new Error("Recording plan is unavailable");
 		const value: unknown = await response.json();
-		if (
-			typeof value !== "object" ||
-			value === null ||
-			!("pro" in value) ||
-			typeof value.pro !== "boolean"
-		) {
+		const plan =
+			typeof value === "object" && value !== null && "pro" in value
+				? value.pro
+				: null;
+		if (typeof plan !== "boolean") {
 			throw new Error("Recording plan response was invalid");
 		}
 		if (requestSequence === this.planRequestSequence)
-			this.captionsEnabled = value.pro;
-		return value.pro;
+			this.captionsEnabled = plan;
+		return plan;
 	}
 
 	private exportPath(exportId?: string) {
@@ -602,7 +797,7 @@ export class EditorHostBridge {
 			const [projectPath, channel, settings, fileName, fileType] = message.args;
 			const channelId = exportChannelId(channel);
 			if (
-				projectPath !== `cap-web-editor://session/${this.sessionId}` ||
+				projectPath !== this.editorPath ||
 				channelId === null ||
 				typeof settings !== "object" ||
 				settings === null ||
@@ -618,6 +813,7 @@ export class EditorHostBridge {
 			) {
 				throw new Error("Editor export request was invalid");
 			}
+			await this.ensureWorkerSession();
 			await this.renderExport(
 				active,
 				channelId,
@@ -721,7 +917,7 @@ export class EditorHostBridge {
 		let reply: CommandReply;
 		try {
 			const argument = message.args[0];
-			const projectPath = `cap-web-editor://session/${this.sessionId}`;
+			const projectPath = this.editorPath;
 			if (
 				message.args.length !== 1 ||
 				typeof argument !== "object" ||
@@ -731,6 +927,7 @@ export class EditorHostBridge {
 				(argument.path !== projectPath && argument.path !== `${projectPath}/`)
 			)
 				throw new Error("Editor bundle request was invalid");
+			await this.ensureWorkerSession();
 			const response = await fetch(
 				`/api/editor/sessions/${encodeURIComponent(this.sessionId)}/project-bundle/download-ticket`,
 				{
@@ -773,6 +970,8 @@ export class EditorHostBridge {
 			document.body.append(link);
 			link.click();
 			link.remove();
+			this.workerBundleDownloadUntil = Date.now() + 30_000;
+			this.scheduleWorkerIdleRelease();
 			reply = { kind: "result", id: message.id, value: null };
 		} catch (cause) {
 			reply = {
@@ -804,7 +1003,7 @@ export class EditorHostBridge {
 			const [projectPath, channel, settings] = message.args;
 			const channelId = exportChannelId(channel);
 			if (
-				projectPath !== `cap-web-editor://session/${this.sessionId}` ||
+				projectPath !== this.editorPath ||
 				channelId === null ||
 				typeof settings !== "object" ||
 				settings === null ||
@@ -814,6 +1013,7 @@ export class EditorHostBridge {
 			) {
 				throw new Error("Editor export request was invalid");
 			}
+			await this.ensureWorkerSession();
 			const status = await this.renderExport(
 				active,
 				channelId,
@@ -858,7 +1058,7 @@ export class EditorHostBridge {
 			!prepared ||
 			prepared.format !== "Mp4" ||
 			!prepared.mediaMetadata ||
-			projectPath !== `cap-web-editor://session/${this.sessionId}` ||
+			projectPath !== this.editorPath ||
 			channelId === null ||
 			!(
 				mode === "Reupload" ||
@@ -930,7 +1130,11 @@ export class EditorHostBridge {
 		kind: EditorAssetKind,
 		pathOnly = false,
 	) {
+		let active = false;
 		try {
+			await this.ensureWorkerSession();
+			this.activeAssetImports++;
+			active = true;
 			const file = message.args[0];
 			if (!(file instanceof File))
 				throw new Error("Selected media file is invalid");
@@ -1060,6 +1264,8 @@ export class EditorHostBridge {
 				id: message.id,
 				error: cause instanceof Error ? cause.message : "Editor import failed",
 			});
+		} finally {
+			if (active) this.activeAssetImports--;
 		}
 	}
 
@@ -1090,6 +1296,7 @@ export class EditorHostBridge {
 
 	private async handleVideoImport(message: BridgeRequest) {
 		try {
+			await this.ensureWorkerSession();
 			const file = message.args[0];
 			if (!(file instanceof File))
 				throw new Error("Selected video file is invalid");
@@ -1114,56 +1321,66 @@ export class EditorHostBridge {
 		cameraOffsetMs: number,
 	) {
 		if (this.disposed) throw new Error("Editor bridge is closed");
-		const imported =
-			this.clipImportCache.get(displayFile) ??
-			(await this.importVideoFile(displayFile));
-		this.clipImportCache.set(displayFile, imported);
-		const camera = cameraFile
-			? (this.clipImportCache.get(cameraFile) ??
-				(await this.importVideoFile(cameraFile)))
-			: null;
-		if (cameraFile && camera) this.clipImportCache.set(cameraFile, camera);
-		const response = await fetch(
-			`/api/editor/sessions/${encodeURIComponent(this.sessionId)}/clips`,
-			{
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					videoId: this.videoId,
-					path: imported.path,
-					jobId: imported.jobId,
-					...(camera
-						? {
-								camera: {
-									path: camera.path,
-									jobId: camera.jobId,
-									offsetMs: cameraOffsetMs,
-								},
-							}
-						: {}),
-				}),
-				signal: this.controller.signal,
-			},
-		);
-		if (!response.ok)
-			throw new Error(
-				response.status === 409
-					? "Editor changed while importing the clip. Try again."
-					: "Imported clip could not be added to the timeline",
+		await this.ensureWorkerSession();
+		this.activeRecordingClipImports++;
+		try {
+			const imported =
+				this.clipImportCache.get(displayFile) ??
+				(await this.importVideoFile(displayFile));
+			this.clipImportCache.set(displayFile, imported);
+			const camera = cameraFile
+				? (this.clipImportCache.get(cameraFile) ??
+					(await this.importVideoFile(cameraFile)))
+				: null;
+			if (cameraFile && camera) this.clipImportCache.set(cameraFile, camera);
+			const response = await fetch(
+				`/api/editor/sessions/${encodeURIComponent(this.sessionId)}/clips`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						videoId: this.videoId,
+						path: imported.path,
+						jobId: imported.jobId,
+						...(camera
+							? {
+									camera: {
+										path: camera.path,
+										jobId: camera.jobId,
+										offsetMs: cameraOffsetMs,
+									},
+								}
+							: {}),
+					}),
+					signal: this.controller.signal,
+				},
 			);
-		const value: unknown = await response.json();
-		if (
-			typeof value !== "object" ||
-			value === null ||
-			!("count" in value) ||
-			value.count !== 1
-		) {
-			throw new Error("Imported clip registration was invalid");
+			if (!response.ok)
+				throw new Error(
+					response.status === 409
+						? "Editor changed while importing the clip. Try again."
+						: "Imported clip could not be added to the timeline",
+				);
+			const value: unknown = await response.json();
+			if (
+				typeof value !== "object" ||
+				value === null ||
+				!("count" in value) ||
+				value.count !== 1
+			) {
+				throw new Error("Imported clip registration was invalid");
+			}
+		} finally {
+			this.activeRecordingClipImports--;
 		}
 	}
 
 	private async handleRecordingClipImport(message: BridgeRequest) {
+		let active = false;
 		try {
+			await this.ensureWorkerSession();
+			this.activeRecordingClipImports++;
+			active = true;
 			const file = message.args[0];
 			if (!(file instanceof File))
 				throw new Error("Select a Cap recording or MP4 file to import");
@@ -1237,11 +1454,13 @@ export class EditorHostBridge {
 				id: message.id,
 				error: error instanceof Error ? error.message : "Clip import failed",
 			});
+		} finally {
+			if (active) this.activeRecordingClipImports--;
 		}
 	}
 
 	private async handleCaptionTranscription(message: BridgeRequest) {
-		if (!this.captionsEnabled) {
+		if (!(await this.currentPlan())) {
 			this.port?.postMessage({
 				kind: "error",
 				id: message.id,
@@ -1250,7 +1469,7 @@ export class EditorHostBridge {
 			return;
 		}
 		if (
-			message.args[0] !== `cap-web-editor://session/${this.sessionId}` ||
+			message.args[0] !== this.editorPath ||
 			message.args.length !== 4 ||
 			message.args.slice(1).some((value) => typeof value !== "string") ||
 			!isAiGenerationLanguage(message.args[2])
@@ -1272,6 +1491,7 @@ export class EditorHostBridge {
 			return;
 		}
 		if (!this.activeCaptions) {
+			await this.ensureWorkerSession();
 			const pending = generateWebEditorCaptions(
 				this.videoId,
 				this.sessionId,
@@ -1312,31 +1532,33 @@ export class EditorHostBridge {
 	async connect(iframe: HTMLIFrameElement) {
 		if (this.disposed) throw new Error("Editor bridge is closed");
 		if (!iframe.contentWindow) throw new Error("Editor frame is unavailable");
-		const tickets = await this.tickets();
-		if (this.disposed) throw new Error("Editor bridge is closed");
-		const opened = await Promise.allSettled([
-			openSocket(tickets.commands, this.controller.signal),
-			openSocket(tickets.events, this.controller.signal),
-			openSocket(tickets.audio, this.controller.signal),
-		]);
-		if (
-			this.disposed ||
-			opened.some((result) => result.status === "rejected")
-		) {
-			for (const result of opened) {
-				if (result.status === "fulfilled") result.value.close();
+		if (!this.browserOnly) {
+			const tickets = await this.tickets();
+			if (this.disposed) throw new Error("Editor bridge is closed");
+			const opened = await Promise.allSettled([
+				openSocket(tickets.commands, this.controller.signal),
+				openSocket(tickets.events, this.controller.signal),
+				openSocket(tickets.audio, this.controller.signal),
+			]);
+			if (
+				this.disposed ||
+				opened.some((result) => result.status === "rejected")
+			) {
+				for (const result of opened) {
+					if (result.status === "fulfilled") result.value.close();
+				}
+				throw new Error(
+					this.disposed
+						? "Editor bridge is closed"
+						: "Editor sockets could not connect",
+				);
 			}
-			throw new Error(
-				this.disposed
-					? "Editor bridge is closed"
-					: "Editor sockets could not connect",
-			);
-		}
-		this.commands = opened[0].status === "fulfilled" ? opened[0].value : null;
-		this.events = opened[1].status === "fulfilled" ? opened[1].value : null;
-		this.audio = opened[2].status === "fulfilled" ? opened[2].value : null;
-		if (!this.commands || !this.events || !this.audio) {
-			throw new Error("Editor sockets are unavailable");
+			this.commands = opened[0].status === "fulfilled" ? opened[0].value : null;
+			this.events = opened[1].status === "fulfilled" ? opened[1].value : null;
+			this.audio = opened[2].status === "fulfilled" ? opened[2].value : null;
+			if (!this.commands || !this.events || !this.audio) {
+				throw new Error("Editor sockets are unavailable");
+			}
 		}
 		const channel = new MessageChannel();
 		this.port = channel.port1;
@@ -1375,116 +1597,127 @@ export class EditorHostBridge {
 			if (isBridgeRequest(event.data)) void this.handleRequest(event.data);
 		};
 		this.port.start();
-		this.commands.onmessage = (event: MessageEvent<unknown>) => {
-			if (typeof event.data !== "string") return;
-			let value: unknown;
-			try {
-				value = JSON.parse(event.data);
-			} catch {
-				this.fail(new Error("Editor command response was invalid"));
-				return;
-			}
-			if (!isCommandReply(value)) return;
-			if (value.kind === "channel") {
-				this.port?.postMessage(value);
-				return;
-			}
-			const isMeta = this.pendingMetaRequests.delete(value.id);
-			const frames = this.frameTickets.get(value.id);
-			this.frameTickets.delete(value.id);
-			if (frames && value.kind === "result") {
-				if (
-					typeof value.value !== "object" ||
-					value.value === null ||
-					Array.isArray(value.value)
-				) {
-					this.fail(new Error("Editor instance response was invalid"));
+		if (this.commands)
+			this.commands.onmessage = (event: MessageEvent<unknown>) => {
+				if (typeof event.data !== "string") return;
+				let value: unknown;
+				try {
+					value = JSON.parse(event.data);
+				} catch {
+					this.fail(new Error("Editor command response was invalid"));
 					return;
 				}
-				this.port?.postMessage({
-					kind: "result",
-					id: value.id,
-					value: {
-						...value.value,
-						framesSocketUrl: frames.url,
-						frameSocketTicket: frames.ticket,
-					},
-				});
-			} else if (
-				isMeta &&
-				value.kind === "result" &&
-				typeof value.value === "object" &&
-				value.value !== null &&
-				!Array.isArray(value.value)
-			) {
-				const link = new URL(
-					`/s/${encodeURIComponent(this.videoId)}`,
-					window.location.origin,
-				).toString();
-				this.port?.postMessage({
-					...value,
-					value: {
-						...value.value,
-						sharing: { id: this.videoId, link },
-					},
-				});
-			} else {
-				this.port?.postMessage(value);
-			}
-		};
-		this.events.onmessage = (event: MessageEvent<unknown>) => {
-			if (typeof event.data !== "string") return;
-			let value: unknown;
-			try {
-				value = JSON.parse(event.data);
-			} catch {
-				return;
-			}
-			if (
-				typeof value !== "object" ||
-				value === null ||
-				!("event" in value) ||
-				!("payload" in value) ||
-				typeof value.event !== "string"
-			) {
-				return;
-			}
-			let payload = value.payload;
-			if (
-				value.event === "frameLayoutEvent" &&
-				typeof payload === "object" &&
-				payload !== null &&
-				"outputWidth" in payload &&
-				"outputHeight" in payload
-			) {
-				payload = {
-					...payload,
-					output_width: payload.outputWidth,
-					output_height: payload.outputHeight,
-				};
-			}
-			this.port?.postMessage({ kind: "event", name: value.event, payload });
-		};
-		this.audio.binaryType = "arraybuffer";
-		this.audio.onmessage = (event: MessageEvent<unknown>) => {
-			if (event.data instanceof ArrayBuffer) {
-				this.port?.postMessage({ kind: "audio", packet: event.data }, [
-					event.data,
-				]);
-			}
-		};
+				if (!isCommandReply(value)) return;
+				if (value.kind === "channel") {
+					this.port?.postMessage(value);
+					return;
+				}
+				const isMeta = this.pendingMetaRequests.delete(value.id);
+				const frames = this.frameTickets.get(value.id);
+				this.frameTickets.delete(value.id);
+				if (frames && value.kind === "result") {
+					if (
+						typeof value.value !== "object" ||
+						value.value === null ||
+						Array.isArray(value.value)
+					) {
+						this.fail(new Error("Editor instance response was invalid"));
+						return;
+					}
+					this.port?.postMessage({
+						kind: "result",
+						id: value.id,
+						value: {
+							...value.value,
+							framesSocketUrl: frames.url,
+							frameSocketTicket: frames.ticket,
+						},
+					});
+				} else if (
+					isMeta &&
+					value.kind === "result" &&
+					typeof value.value === "object" &&
+					value.value !== null &&
+					!Array.isArray(value.value)
+				) {
+					const link = new URL(
+						`/s/${encodeURIComponent(this.videoId)}`,
+						window.location.origin,
+					).toString();
+					this.port?.postMessage({
+						...value,
+						value: {
+							...value.value,
+							sharing: { id: this.videoId, link },
+						},
+					});
+				} else {
+					this.port?.postMessage(value);
+				}
+			};
+		if (this.events)
+			this.events.onmessage = (event: MessageEvent<unknown>) => {
+				if (typeof event.data !== "string") return;
+				let value: unknown;
+				try {
+					value = JSON.parse(event.data);
+				} catch {
+					return;
+				}
+				if (
+					typeof value !== "object" ||
+					value === null ||
+					!("event" in value) ||
+					!("payload" in value) ||
+					typeof value.event !== "string"
+				) {
+					return;
+				}
+				let payload = value.payload;
+				if (
+					value.event === "frameLayoutEvent" &&
+					typeof payload === "object" &&
+					payload !== null &&
+					"outputWidth" in payload &&
+					"outputHeight" in payload
+				) {
+					payload = {
+						...payload,
+						output_width: payload.outputWidth,
+						output_height: payload.outputHeight,
+					};
+				}
+				this.port?.postMessage({ kind: "event", name: value.event, payload });
+			};
+		if (this.audio) this.audio.binaryType = "arraybuffer";
+		if (this.audio)
+			this.audio.onmessage = (event: MessageEvent<unknown>) => {
+				if (event.data instanceof ArrayBuffer) {
+					this.port?.postMessage({ kind: "audio", packet: event.data }, [
+						event.data,
+					]);
+				}
+			};
 		for (const socket of [this.commands, this.events, this.audio]) {
-			socket.onclose = () =>
-				this.fail(new Error("Editor session disconnected"));
+			if (socket) {
+				socket.onclose = () =>
+					this.fail(new Error("Editor session disconnected"));
+			}
 		}
 		try {
 			iframe.contentWindow.postMessage(
 				{
 					kind: "cap-editor-connect",
 					version: 1,
+					videoId: this.videoId,
 					userId: this.userId,
 					captionsEnabled: this.captionsEnabled,
-					assetBase: `/api/editor/sessions/${encodeURIComponent(this.sessionId)}/file?videoId=${encodeURIComponent(this.videoId)}`,
+					assetBase: this.browserOnly
+						? ""
+						: `/api/editor/sessions/${encodeURIComponent(this.sessionId)}/file?videoId=${encodeURIComponent(this.videoId)}`,
+					...(this.browserOnly
+						? { browserSessionId: this.browserSessionId }
+						: {}),
 				},
 				window.location.origin,
 				[channel.port2],
@@ -1496,7 +1729,7 @@ export class EditorHostBridge {
 	}
 
 	private async handleRequest(message: BridgeRequest) {
-		if (!this.port || !this.commands || this.disposed) return;
+		if (!this.port || this.disposed) return;
 		if (
 			message.kind === "invoke" &&
 			message.name === "tauri:webEditorStoredDesktopBackground"
@@ -1505,7 +1738,9 @@ export class EditorHostBridge {
 				if (message.args.length !== 1 || message.args[0] !== undefined)
 					throw new Error("Stored wallpaper request was invalid");
 				const response = await fetch(
-					`/api/editor/sessions/${encodeURIComponent(this.sessionId)}/assets?videoId=${encodeURIComponent(this.videoId)}`,
+					this.browserOnly
+						? `/api/editor/videos/${encodeURIComponent(this.videoId)}/assets`
+						: `/api/editor/sessions/${encodeURIComponent(this.sessionId)}/assets?videoId=${encodeURIComponent(this.videoId)}`,
 					{ cache: "no-store", signal: this.controller.signal },
 				);
 				if (!response.ok) throw new Error("Stored wallpaper is unavailable");
@@ -1617,7 +1852,7 @@ export class EditorHostBridge {
 		) {
 			if (
 				message.args.length !== 1 ||
-				message.args[0] !== `cap-web-editor://session/${this.sessionId}` ||
+				message.args[0] !== this.editorPath ||
 				!this.onOpenClipRecorder
 			) {
 				this.port.postMessage({
@@ -1641,11 +1876,16 @@ export class EditorHostBridge {
 				if (!validWebEditorTitle(prettyName))
 					throw new Error("Recording title must be 5 to 100 characters");
 				const response = await fetch(
-					`/api/editor/sessions/${encodeURIComponent(this.sessionId)}/meta`,
+					this.browserOnly
+						? `/api/editor/videos/${encodeURIComponent(this.videoId)}/title`
+						: `/api/editor/sessions/${encodeURIComponent(this.sessionId)}/meta`,
 					{
 						method: "PUT",
 						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ videoId: this.videoId, prettyName }),
+						body: JSON.stringify({
+							...(this.browserOnly ? {} : { videoId: this.videoId }),
+							prettyName,
+						}),
 					},
 				);
 				if (!response.ok)
@@ -1789,7 +2029,7 @@ export class EditorHostBridge {
 					throw new Error("Editor project configuration was invalid");
 				}
 				const body = JSON.stringify({
-					videoId: this.videoId,
+					...(this.browserOnly ? {} : { videoId: this.videoId }),
 					config,
 					...(preserveExistingPaidCaptions
 						? { preserveExistingPaidCaptions: true }
@@ -1799,7 +2039,9 @@ export class EditorHostBridge {
 						: {}),
 				});
 				const response = await fetch(
-					`/api/editor/sessions/${encodeURIComponent(this.sessionId)}/config`,
+					this.browserOnly
+						? `/api/editor/videos/${encodeURIComponent(this.videoId)}/config`
+						: `/api/editor/sessions/${encodeURIComponent(this.sessionId)}/config`,
 					{
 						method: "PUT",
 						headers: { "Content-Type": "application/json" },
@@ -1854,11 +2096,13 @@ export class EditorHostBridge {
 				return;
 			}
 		}
-		if (this.commands.readyState !== WebSocket.OPEN) {
+		if (!this.commands || this.commands.readyState !== WebSocket.OPEN) {
 			this.port.postMessage({
 				kind: "error",
 				id: message.id,
-				error: "Editor command socket is disconnected",
+				error: this.browserOnly
+					? `Browser editor command is unavailable: ${message.name}`
+					: "Editor command socket is disconnected",
 			});
 			return;
 		}
@@ -1883,11 +2127,18 @@ export class EditorHostBridge {
 	dispose() {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.cancelWorkerIdleRelease();
 		if (this.activeExport) {
 			this.activeExport.canceled = true;
 			this.activeExport.controller.abort();
 		}
 		this.controller.abort();
+		if (this.browserOnly && this.workerSessionId) {
+			void fetch(
+				`/api/editor/sessions/${encodeURIComponent(this.workerSessionId)}?videoId=${encodeURIComponent(this.videoId)}`,
+				{ method: "DELETE", keepalive: true },
+			).catch(() => undefined);
+		}
 		this.port?.close();
 		this.port = null;
 		for (const socket of [this.commands, this.events, this.audio]) {

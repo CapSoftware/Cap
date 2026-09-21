@@ -77,7 +77,7 @@ export default $config({
 									"https://dyk2p776s2gx5.cloudfront.net",
 								]
 							: ["http://localhost:*", "https://*.vercel.app", webUrl],
-					exposeHeaders: [],
+					exposeHeaders: ["Content-Range", "Accept-Ranges"],
 				},
 			],
 		});

@@ -1,27 +1,40 @@
 import { expect, test } from "bun:test";
 import { Store, setEditorStoreNamespace } from "./tauri-store";
 
+type AudioEnhancement = {
+	enabledByDefault: boolean;
+	isolation: string;
+};
+
 test("Studio Sound persists partial isolation updates across reloads and failed saves", async () => {
 	setEditorStoreNamespace("studio-sound-store-test");
 	const store = await Store.load("store");
 	const originalFetch = globalThis.fetch;
-	let saved = { enabledByDefault: true, isolation: "balanced" };
-	let failSave = false;
-	globalThis.fetch = async (_input, options) => {
-		if (options?.method === "PUT") {
-			if (failSave) return new Response(null, { status: 503 });
-			saved = JSON.parse(String(options.body));
-		}
-		return Response.json(saved);
+	let saved: AudioEnhancement = {
+		enabledByDefault: true,
+		isolation: "balanced",
 	};
+	let failSave = false;
+	globalThis.fetch = Object.assign(
+		async (_input: URL | RequestInfo, options?: RequestInit) => {
+			if (options?.method === "PUT") {
+				if (failSave) return new Response(null, { status: 503 });
+				saved = JSON.parse(String(options.body));
+			}
+			return Response.json(saved);
+		},
+		{ preconnect: originalFetch.preconnect },
+	);
 	try {
-		expect(await store.get("audio_enhancement")).toEqual(saved);
+		expect(await store.get<AudioEnhancement>("audio_enhancement")).toEqual(
+			saved,
+		);
 		await store.set("audio_enhancement", {
 			enabledByDefault: false,
 			isolation: "strong",
 		});
 		await store.reload();
-		expect(await store.get("audio_enhancement")).toEqual({
+		expect(await store.get<AudioEnhancement>("audio_enhancement")).toEqual({
 			enabledByDefault: false,
 			isolation: "strong",
 		});
@@ -34,7 +47,7 @@ test("Studio Sound persists partial isolation updates across reloads and failed 
 				isolation: "light",
 			}),
 		).rejects.toThrow();
-		expect(await store.get("audio_enhancement")).toEqual({
+		expect(await store.get<AudioEnhancement>("audio_enhancement")).toEqual({
 			enabledByDefault: false,
 			isolation: "light",
 		});

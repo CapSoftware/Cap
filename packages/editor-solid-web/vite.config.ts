@@ -28,6 +28,10 @@ const tauriFs = resolve(import.meta.dirname, "src/tauri-fs.ts");
 const tauriOpener = resolve(import.meta.dirname, "src/tauri-opener.ts");
 const tauriClipboard = resolve(import.meta.dirname, "src/tauri-clipboard.ts");
 const websocket = resolve(import.meta.dirname, "src/websocket.ts");
+const browserFrameSocket = resolve(
+	import.meta.dirname,
+	"src/browser-frame-socket.ts",
+);
 
 export default defineConfig({
 	base: "/editor-solid/",
@@ -42,6 +46,7 @@ export default defineConfig({
 			},
 		},
 		AutoImport({
+			exclude: [/[\\/]node_modules[\\/]/],
 			resolvers: [
 				IconsResolver({
 					prefix: "Icon",
@@ -80,6 +85,7 @@ export default defineConfig({
 			{ find: "@tauri-apps/api/webviewWindow", replacement: tauriWindow },
 			{ find: "@tauri-apps/plugin-os", replacement: tauriOs },
 			{ find: /^~\/utils\/tauri$/, replacement: tauriBridge },
+			{ find: /^~\/utils\/socket$/, replacement: browserFrameSocket },
 			{ find: /^\.\/tauri$/, replacement: tauriBridge },
 			{ find: /^~\//, replacement: `${desktopSource}/` },
 		],

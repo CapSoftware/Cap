@@ -8,6 +8,15 @@ import {
 	type EditorCaptionCache,
 } from "../../../apps/web/lib/editor-caption-transport";
 import { WebEditorAudio } from "./audio-player";
+import { BrowserEditorCommands } from "./browser-editor-commands";
+import {
+	browserEditorPreviewEnabled,
+	pauseBrowserEditorPreview,
+	playBrowserEditorPreview,
+	renderBrowserEditorPreview,
+	seekBrowserEditorPreview,
+	setBrowserEditorPreviewConfig,
+} from "./browser-frame-socket";
 import { EditorCaptionCacheMemo } from "./caption-cache-memo";
 import {
 	editorChannelId,
@@ -68,12 +77,22 @@ export class PortEditorTransport {
 	private savedCaptionCache: EditorCaptionCache | null = null;
 	private readonly captionCacheMemo = new EditorCaptionCacheMemo();
 	private planRequestSequence = 0;
+	private readonly browserCommands: BrowserEditorCommands | null;
 	private readonly listeners = new Map<
 		string,
 		Set<(payload: unknown) => void>
 	>();
 
-	constructor(private readonly port: MessagePort) {
+	constructor(
+		private readonly port: MessagePort,
+		browserSession?: { videoId: string; sessionId: string },
+	) {
+		this.browserCommands = browserSession
+			? new BrowserEditorCommands(
+					browserSession.videoId,
+					browserSession.sessionId,
+				)
+			: null;
 		port.onmessage = (event: MessageEvent<unknown>) => {
 			if (!isBridgeReply(event.data)) return;
 			const message = event.data;
@@ -136,6 +155,13 @@ export class PortEditorTransport {
 	private request(kind: "invoke" | "emit", name: string, args: unknown[]) {
 		if (this.disposed) {
 			return Promise.reject(new Error("Editor bridge is closed"));
+		}
+		if (
+			kind === "invoke" &&
+			this.browserCommands &&
+			BrowserEditorCommands.supports(name)
+		) {
+			return this.browserCommands.invoke(name, args);
 		}
 		const id = this.nextId++;
 		const prepared = args.map(serializeEditorChannel);
@@ -221,6 +247,20 @@ export class PortEditorTransport {
 					? [config, true]
 					: [config, ...args.slice(1)];
 			fullConfigArgs = args;
+			if (
+				name === "updateProjectConfigInMemory" &&
+				browserEditorPreviewEnabled()
+			) {
+				await setBrowserEditorPreviewConfig(config);
+				if (args[1] !== null && args[2] !== null && args[3] !== null) {
+					await renderBrowserEditorPreview({
+						frame_number: args[1],
+						fps: args[2],
+						resolution_base: args[3],
+					});
+				}
+				return null;
+			}
 			captionCache = await this.captionCacheMemo.get(args[0]);
 			const previous =
 				name === "setProjectConfig"
@@ -256,13 +296,31 @@ export class PortEditorTransport {
 			args = [file];
 		}
 		if (name === "startPlayback") {
-			await this.audio.start();
-			this.audioPlaying = true;
+			if (browserEditorPreviewEnabled()) {
+				playBrowserEditorPreview();
+				this.audioPlaying = false;
+				return null;
+			} else {
+				await this.audio.start();
+				this.audioPlaying = true;
+			}
 		} else if (name === "stopPlayback") {
 			this.audioPlaying = false;
 			this.audio.stop();
+			if (browserEditorPreviewEnabled()) {
+				pauseBrowserEditorPreview();
+				return null;
+			}
 		} else if (name === "seekTo" && this.audioPlaying) {
 			this.audio.reset();
+		}
+		if (
+			(name === "seekTo" || name === "setPlayheadPosition") &&
+			browserEditorPreviewEnabled() &&
+			typeof args[0] === "number"
+		) {
+			await seekBrowserEditorPreview(args[0]);
+			return null;
 		}
 		try {
 			let value: unknown;
@@ -283,6 +341,9 @@ export class PortEditorTransport {
 			if (isConfigCommand) {
 				if (name === "setProjectConfig") this.savedCaptionCache = captionCache;
 				else this.nativeCaptionCache = captionCache;
+				if (browserEditorPreviewEnabled()) {
+					await setBrowserEditorPreviewConfig(fullConfigArgs?.[0] ?? args[0]);
+				}
 			}
 			if (
 				planRequestSequence > 0 &&
@@ -321,12 +382,16 @@ export class PortEditorTransport {
 			if (name === "startPlayback") {
 				this.audioPlaying = false;
 				this.audio.stop();
+				if (browserEditorPreviewEnabled()) pauseBrowserEditorPreview();
 			}
 			throw error;
 		}
 	}
 
 	emit(name: string, payload: unknown) {
+		if (name === "renderFrameEvent" && browserEditorPreviewEnabled()) {
+			return renderBrowserEditorPreview(payload);
+		}
 		return this.request("emit", name, [payload]).then(() => undefined);
 	}
 
@@ -356,6 +421,7 @@ export class PortEditorTransport {
 		this.listeners.clear();
 		this.audioPlaying = false;
 		this.audio.dispose();
+		this.browserCommands?.dispose();
 		this.captionCacheMemo.dispose();
 		this.nativeCaptionCache = null;
 		this.savedCaptionCache = null;
