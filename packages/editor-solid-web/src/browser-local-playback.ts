@@ -172,6 +172,7 @@ export class BrowserLocalPlayback {
 	private previewScale: 1 | 0.75 | 0.5 = 1;
 	private averageFrameCostMs = 0;
 	private lastRenderedAt = 0;
+	private playClockAligned = false;
 	private slowFrames = 0;
 	private fastFrames = 0;
 
@@ -646,6 +647,17 @@ export class BrowserLocalPlayback {
 		if (transition && outgoingClip !== null) {
 			sync(outgoingClip, mapped[4], mapped[6], "overlap", outgoingGain);
 		}
+		if (playing && !this.playClockAligned && this.playing) {
+			this.playClockAligned = true;
+			const sourceTime = this.times.source_times(incomingClip, mapped[3])[0];
+			const drift =
+				(incomingPair.screen.video.currentTime - sourceTime) /
+				this.speed(incomingSegment);
+			if (Number.isFinite(drift)) {
+				this.playStartedAt = performance.now();
+				this.playStartedTime = time + Math.max(-0.05, Math.min(drift, 0.05));
+			}
+		}
 		this.outputTime = time;
 		return true;
 	}
@@ -691,6 +703,7 @@ export class BrowserLocalPlayback {
 		if (this.playing) {
 			this.playStartedAt = performance.now();
 			this.playStartedTime = time;
+			this.playClockAligned = false;
 		}
 		return this.renderAt(time, this.playing);
 	}
@@ -703,14 +716,20 @@ export class BrowserLocalPlayback {
 		this.playStartedAt = performance.now();
 		this.playStartedTime = this.outputTime;
 		this.lastRequestedFrame = -1;
+		this.playClockAligned = false;
 		this.averageFrameCostMs = 0;
 		this.lastRenderedAt = 0;
 		this.slowFrames = 0;
 		this.fastFrames = 0;
+		let firstTick = true;
 		const tick = () => {
 			if (!this.playing || this.disposed) return;
 			this.animationFrame = requestAnimationFrame(tick);
 			if (this.frameBusy) return;
+			if (firstTick) {
+				this.playStartedAt = performance.now();
+				firstTick = false;
+			}
 			const time =
 				this.playStartedTime + (performance.now() - this.playStartedAt) / 1000;
 			const frame = Math.floor(time * 60);
