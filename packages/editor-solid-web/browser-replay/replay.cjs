@@ -80,6 +80,39 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		});
 		await page.addInitScript(() => {
 			window.CapBrowserGpuErrors = [];
+			window.CapBrowserVideoEvents = [];
+			const createElement = Document.prototype.createElement;
+			let nextVideoId = 0;
+			Document.prototype.createElement = function (...args) {
+				const element = createElement.apply(this, args);
+				if (args[0].toLowerCase() === "video") {
+					const id = nextVideoId++;
+					for (const name of [
+						"loadedmetadata",
+						"loadeddata",
+						"seeked",
+						"resize",
+						"emptied",
+						"playing",
+						"error",
+					]) {
+						element.addEventListener(name, () => {
+							if (window.CapBrowserVideoEvents.length >= 80) return;
+							window.CapBrowserVideoEvents.push({
+								id,
+								name,
+								src: element.currentSrc || element.src,
+								readyState: element.readyState,
+								width: element.videoWidth,
+								height: element.videoHeight,
+								currentTime: element.currentTime,
+								parentStyle: element.parentElement?.style.cssText ?? null,
+							});
+						});
+					}
+				}
+				return element;
+			};
 			if (typeof GPUAdapter === "undefined") return;
 			const requestDevice = GPUAdapter.prototype.requestDevice;
 			GPUAdapter.prototype.requestDevice = async function (...args) {
@@ -197,6 +230,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					(error) => errors.push(error.message),
 				);
 			} catch (error) {
+				const videoEvents = window.CapBrowserVideoEvents.slice();
 				const probe = document.createElement("canvas");
 				const mediaProbe = await new Promise((resolve) => {
 					const video = document.createElement("video");
@@ -251,6 +285,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 						type: typeof error,
 						message: error?.message ?? null,
 						stack: error?.stack ?? null,
+						videoEvents,
 						mediaProbe,
 						capabilities: {
 							webgpu: Boolean(navigator.gpu),
