@@ -188,12 +188,12 @@ export function StudioEditorClient(props: {
 				void fetch(
 					`/api/editor/sessions/${encodeURIComponent(activeSession)}?videoId=${encodeURIComponent(videoId)}`,
 					{ method: "DELETE", keepalive: true },
-				);
+				).catch(() => undefined);
 			} else if (activePreparation) {
 				void fetch(
 					`/api/editor/preparations/${encodeURIComponent(activePreparation)}?videoId=${encodeURIComponent(videoId)}`,
 					{ method: "DELETE", keepalive: true },
-				);
+				).catch(() => undefined);
 			}
 		};
 		const prepare = async () => {
@@ -298,6 +298,7 @@ export function StudioEditorClient(props: {
 				throw new Error("Editor preparation timed out");
 			} catch (cause) {
 				if (!controller.signal.aborted) {
+					close();
 					setError(
 						cause instanceof Error ? cause.message : "Editor is unavailable",
 					);

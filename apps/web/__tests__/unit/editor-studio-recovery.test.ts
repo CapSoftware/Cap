@@ -37,6 +37,8 @@ let currentRevision: string;
 let rejectNextRestore: boolean;
 let preparationReady: boolean;
 let busyResponses: number;
+let preparationStatusFailures: number;
+let restoreUnavailable: boolean;
 
 function browserStorage(): Storage {
 	const items = new Map<string, string>();
@@ -63,6 +65,8 @@ beforeEach(() => {
 	rejectNextRestore = false;
 	preparationReady = true;
 	busyResponses = 0;
+	preparationStatusFailures = 0;
+	restoreUnavailable = false;
 	mocks.connect.mockClear();
 	container = document.createElement("div");
 	document.body.append(container);
@@ -91,17 +95,29 @@ beforeEach(() => {
 				url.startsWith("/api/editor/preparations/preparation?") &&
 				method === "GET"
 			) {
+				if (preparationStatusFailures > 0) {
+					preparationStatusFailures--;
+					return new Response("Unavailable", { status: 502 });
+				}
 				return Response.json(
 					preparationReady
 						? { status: "ready", sessionId: "session" }
 						: { status: "preparing" },
 				);
 			}
+			if (
+				url.startsWith("/api/editor/preparations/preparation?") &&
+				method === "DELETE"
+			) {
+				return Response.json({ canceled: true });
+			}
 			if (url === "/api/editor/sessions/session/config" && method === "PUT") {
 				const expectedSavedAt = (body as Record<string, unknown>)
 					.expectedSavedAt;
 				if (expectedSavedAt !== currentRevision)
 					return new Response("Changed in another tab", { status: 409 });
+				if (restoreUnavailable)
+					return new Response("Unavailable", { status: 502 });
 				if (rejectNextRestore) {
 					rejectNextRestore = false;
 					currentRevision = "latest";
@@ -202,6 +218,13 @@ test("a changed recording keeps the browser draft until its owner chooses recove
 	expect(
 		readEditorLocalDraft(window.localStorage, "owner", "video")?.config,
 	).toEqual(config);
+	expect(
+		requests.filter(
+			(request) =>
+				request.method === "DELETE" &&
+				request.url.startsWith("/api/editor/sessions/session?"),
+		),
+	).toHaveLength(0);
 	const restore = Array.from(container.querySelectorAll("button")).find(
 		(button) => button.textContent === "Restore browser edits",
 	);
@@ -267,6 +290,91 @@ test("a second tab save during chosen recovery keeps the draft for another owner
 	expect(
 		readEditorLocalDraft(window.localStorage, "owner", "video"),
 	).toBeNull();
+});
+
+test("a preparation status failure cancels its worker reservation before navigation", async () => {
+	preparationStatusFailures = 1;
+	await act(async () => {
+		root.render(
+			createElement(StudioEditorClient, {
+				videoId: "video",
+				userId: "owner",
+				captionsEnabled: true,
+				savedAt: null,
+				preparingTitle: "Paired replay",
+				preparingDuration: 900,
+				preparingTracks: ["display", "camera"],
+			}),
+		);
+	});
+	await waitFor(() => {
+		expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+			"status is unavailable",
+		);
+	});
+	expect(
+		requests.filter(
+			(request) =>
+				request.url.startsWith("/api/editor/preparations/preparation?") &&
+				request.method === "DELETE",
+		),
+	).toHaveLength(1);
+	expect(
+		requests.filter(
+			(request) =>
+				request.url.startsWith("/api/editor/sessions/session?") &&
+				request.method === "DELETE",
+		),
+	).toHaveLength(0);
+});
+
+test("an unexpected browser-draft restore failure closes the ready session and preserves the draft", async () => {
+	const config = { camera: { mirror: true } };
+	expect(
+		captureEditorLocalDraft(
+			window.localStorage,
+			"owner",
+			"video",
+			"newer",
+			JSON.stringify(config),
+		),
+	).toBe(true);
+	restoreUnavailable = true;
+	await act(async () => {
+		root.render(
+			createElement(StudioEditorClient, {
+				videoId: "video",
+				userId: "owner",
+				captionsEnabled: true,
+				savedAt: "newer",
+				preparingTitle: "Paired replay",
+				preparingDuration: 900,
+				preparingTracks: ["display", "camera"],
+			}),
+		);
+	});
+	await waitFor(() => {
+		expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+			"could not restore them",
+		);
+	});
+	expect(
+		requests.filter(
+			(request) =>
+				request.url.startsWith("/api/editor/sessions/session?") &&
+				request.method === "DELETE",
+		),
+	).toHaveLength(1);
+	expect(
+		requests.filter(
+			(request) =>
+				request.url.startsWith("/api/editor/preparations/preparation?") &&
+				request.method === "DELETE",
+		),
+	).toHaveLength(0);
+	expect(
+		readEditorLocalDraft(window.localStorage, "owner", "video")?.config,
+	).toEqual(config);
 });
 
 test("preparation keeps the shared editor shell open and connects once when ready", async () => {
