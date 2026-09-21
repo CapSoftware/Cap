@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
 	currentUser: vi.fn(),
 	startProcessing: vi.fn(),
 	setError: vi.fn(),
+	isRunning: vi.fn(),
+	restoreStartError: vi.fn(),
 }));
 
 vi.mock("@cap/database", () => ({
@@ -41,6 +43,17 @@ vi.mock("workflow/api", () => ({ start: mocks.start }));
 vi.mock("@/workflows/import-loom-video", () => ({
 	importLoomVideoWorkflow: vi.fn(),
 }));
+vi.mock("@/lib/loom-import-start", () => ({
+	isLoomImportRunning: mocks.isRunning,
+	restoreLoomImportStartError: mocks.restoreStartError,
+	startLoomImportWorkflow: (payload: unknown) =>
+		mocks.start(Symbol("workflow"), [payload]),
+	LoomImportStartError: class extends Error {
+		constructor(readonly canRetry: boolean) {
+			super("Loom import startup failed");
+		}
+	},
+}));
 vi.mock("@/lib/video-processing", () => ({
 	startVideoProcessingWorkflow: mocks.startProcessing,
 	setVideoProcessingError: mocks.setError,
@@ -64,6 +77,50 @@ describe("Loom processing retries", () => {
 		mocks.currentUser.mockResolvedValue({ id: "owner-1" });
 		mocks.set.mockReturnValue({ where: mocks.where });
 		mocks.start.mockResolvedValue({});
+		mocks.isRunning.mockResolvedValue(false);
+	});
+
+	it.each([true, false])(
+		"only restores the processing claim after a definite startup rejection: %s",
+		async (canRetry) => {
+			mocks.where
+				.mockResolvedValueOnce([video])
+				.mockResolvedValueOnce([upload])
+				.mockResolvedValueOnce([{ source: "loom", sourceId: "loom-1" }])
+				.mockResolvedValueOnce([{ affectedRows: 1 }]);
+			const { LoomImportStartError } = await import("@/lib/loom-import-start");
+			mocks.start.mockRejectedValueOnce(
+				new LoomImportStartError(canRetry, new Error()),
+			);
+			await expect(retryVideoProcessing({ videoId })).rejects.toThrow(
+				"Loom import startup failed",
+			);
+			if (canRetry)
+				expect(mocks.restoreStartError).toHaveBeenCalledWith(
+					videoId,
+					"processing",
+					mocks.set.mock.calls[0]?.[0].updatedAt,
+					"Loom import startup failed",
+				);
+			else expect(mocks.restoreStartError).not.toHaveBeenCalled();
+			expect(mocks.setError).not.toHaveBeenCalled();
+		},
+	);
+
+	it("holds a stale processing row while its workflow is still active", async () => {
+		mocks.where
+			.mockResolvedValueOnce([video])
+			.mockResolvedValueOnce([
+				{ ...upload, phase: "processing", updatedAt: new Date(0) },
+			])
+			.mockResolvedValueOnce([{ source: "loom", sourceId: "loom-1" }]);
+		mocks.isRunning.mockResolvedValueOnce(true);
+		await expect(retryVideoProcessing({ videoId })).resolves.toEqual({
+			success: true,
+			status: "already-processing",
+		});
+		expect(mocks.set).not.toHaveBeenCalled();
+		expect(mocks.start).not.toHaveBeenCalled();
 	});
 
 	it("recovers a source lookup failure that has no raw file key", async () => {

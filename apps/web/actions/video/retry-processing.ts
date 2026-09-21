@@ -5,13 +5,16 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { importedVideos, videos, videoUploads } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
-import { start } from "workflow/api";
 import {
-	setVideoProcessingError,
+	isLoomImportRunning,
+	LoomImportStartError,
+	restoreLoomImportStartError,
+	startLoomImportWorkflow,
+} from "@/lib/loom-import-start";
+import {
 	startVideoProcessingWorkflow,
 	type VideoProcessingStartStatus,
 } from "@/lib/video-processing";
-import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
@@ -78,12 +81,18 @@ export async function retryVideoProcessing({
 		);
 
 	if (importedVideo?.source === "loom") {
-		if (upload.phase === "processing" && !shouldForceRetryProcessing(upload)) {
+		if (
+			(await isLoomImportRunning(video.metadata?.loomImportRun)) ||
+			((upload.phase === "processing" ||
+				upload.phase === "generating_thumbnail") &&
+				!shouldForceRetryProcessing(upload))
+		) {
 			return { success: true, status: "already-processing" };
 		}
 
 		const rawFileKey =
 			upload.rawFileKey ?? `${video.ownerId}/${videoId}/raw-upload.mp4`;
+		const claimedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
 		const claim = await db()
 			.update(videoUploads)
 			.set({
@@ -92,7 +101,7 @@ export async function retryVideoProcessing({
 				processingMessage: "Retrying Loom import...",
 				processingError: null,
 				rawFileKey,
-				updatedAt: new Date(),
+				updatedAt: claimedAt,
 			})
 			.where(
 				and(
@@ -109,27 +118,28 @@ export async function retryVideoProcessing({
 		}
 
 		try {
-			await start(importLoomVideoWorkflow, [
-				{
-					videoId,
-					userId: user.id,
-					rawFileKey,
-					bucketId: video.bucket ?? null,
-					loomDownloadUrl: "",
-					loomVideoId: importedVideo.sourceId,
-					reuseExistingRawUpload: true,
-				},
-			]);
+			await startLoomImportWorkflow({
+				videoId,
+				userId: user.id,
+				rawFileKey,
+				bucketId: video.bucket ?? null,
+				loomDownloadUrl: "",
+				loomVideoId: importedVideo.sourceId,
+				reuseExistingRawUpload: true,
+			});
 		} catch (error) {
 			const normalizedError =
 				error instanceof Error
 					? error
 					: new Error("Loom import could not restart");
-			await setVideoProcessingError(
-				videoId,
-				"Loom import could not restart.",
-				normalizedError,
-			);
+			if (error instanceof LoomImportStartError && error.canRetry) {
+				await restoreLoomImportStartError(
+					videoId,
+					"processing",
+					claimedAt,
+					error.message,
+				);
+			}
 			throw normalizedError;
 		}
 

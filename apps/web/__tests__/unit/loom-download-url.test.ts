@@ -166,28 +166,33 @@ describe("getLoomDownloadUrl", () => {
 });
 
 describe("getReusableLoomDownloadUrl", () => {
-	it("reuses a source with enough signed URL lifetime", () => {
-		const expires = Math.floor(Date.now() / 1000) + 7200;
-		const url = `https://cdn.loom.com/video.m3u8?Expires=${expires}`;
-		expect(getReusableLoomDownloadUrl(url)).toBe(url);
-		const policy = Buffer.from(
-			JSON.stringify({
-				Statement: [
-					{ Condition: { DateLessThan: { "AWS:EpochTime": expires } } },
-				],
-			}),
-		)
-			.toString("base64")
-			.replace(/\+/g, "-")
-			.replace(/=/g, "_")
-			.replace(/\//g, "~");
-		const policyUrl = `https://cdn.loom.com/video.m3u8?Policy=${policy}`;
-		expect(getReusableLoomDownloadUrl(policyUrl)).toBe(policyUrl);
-	});
+	it.each(["cdn.loom.com", "luna.loom.com"])(
+		"reuses a source with enough signed URL lifetime on %s",
+		(hostname) => {
+			const expires = Math.floor(Date.now() / 1000) + 7200;
+			const url = `https://${hostname}/video.m3u8?Expires=${expires}`;
+			expect(getReusableLoomDownloadUrl(url)).toBe(url);
+			const policy = Buffer.from(
+				JSON.stringify({
+					Statement: [
+						{ Condition: { DateLessThan: { "AWS:EpochTime": expires } } },
+					],
+				}),
+			)
+				.toString("base64")
+				.replace(/\+/g, "-")
+				.replace(/=/g, "_")
+				.replace(/\//g, "~");
+			const policyUrl = `https://${hostname}/video.m3u8?Policy=${policy}`;
+			expect(getReusableLoomDownloadUrl(policyUrl)).toBe(policyUrl);
+		},
+	);
 
 	it.each([
 		undefined,
 		"https://cdn.loom.com/video.m3u8?Expires=1",
+		"https://luna.loom.com/video.m3u8?Expires=1",
+		"https://luna.loom.com.other.example/video.mp4",
 		"https://cdn.loom.com/video.m3u8?Policy=invalid",
 		"https://other.example/video.mp4",
 		"http://cdn.loom.com/video.mp4",

@@ -12,7 +12,7 @@ export function getReusableLoomDownloadUrl(value: string | undefined) {
 		const url = new URL(value);
 		if (
 			url.protocol !== "https:" ||
-			url.hostname !== "cdn.loom.com" ||
+			!["cdn.loom.com", "luna.loom.com"].includes(url.hostname) ||
 			url.username ||
 			url.password
 		) {

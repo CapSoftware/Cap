@@ -28,7 +28,6 @@ import {
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { Option } from "effect";
 import { revalidatePath } from "next/cache";
-import { start } from "workflow/api";
 import {
 	getOrganizationAccess,
 	requireOrganizationAccess,
@@ -40,10 +39,15 @@ import {
 	LoomDownloadTemporaryError,
 } from "@/lib/loom-download-url";
 import type { LoomImportDestination } from "@/lib/loom-import-destination";
+import {
+	isLoomImportRunning,
+	LoomImportStartError,
+	restoreLoomImportStartError,
+	startLoomImportWorkflow,
+} from "@/lib/loom-import-start";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
 import { canManageOrganizationSettings } from "@/lib/permissions/roles";
 import { runPromise } from "@/lib/server";
-import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 
 type LoomDownloadMode = "direct-download" | "browser-conversion";
 
@@ -253,6 +257,7 @@ async function importLoomVideoForOwner({
 			videoId: videos.id,
 			ownerId: videos.ownerId,
 			bucketId: videos.bucket,
+			metadata: videos.metadata,
 			phase: videoUploads.phase,
 			rawFileKey: videoUploads.rawFileKey,
 			uploadUpdatedAt: videoUploads.updatedAt,
@@ -281,9 +286,16 @@ async function importLoomVideoForOwner({
 			existingVideo.ownerId === ownerId &&
 			existingVideo.uploadUpdatedAt
 		) {
+			if (await isLoomImportRunning(existingVideo.metadata?.loomImportRun)) {
+				return {
+					success: false,
+					error: "This Loom import is already restarting.",
+				};
+			}
 			const rawFileKey =
 				existingVideo.rawFileKey ??
 				`${ownerId}/${existingVideo.videoId}/raw-upload.mp4`;
+			const claimedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
 			const claim = await db()
 				.update(videoUploads)
 				.set({
@@ -292,7 +304,7 @@ async function importLoomVideoForOwner({
 					processingMessage: "Restarting Loom import...",
 					processingError: null,
 					rawFileKey,
-					updatedAt: new Date(),
+					updatedAt: claimedAt,
 				})
 				.where(
 					and(
@@ -310,16 +322,32 @@ async function importLoomVideoForOwner({
 					error: "This Loom import is already restarting.",
 				};
 			}
-			await start(importLoomVideoWorkflow, [
-				{
+			try {
+				await startLoomImportWorkflow({
 					videoId: existingVideo.videoId,
 					userId: ownerId,
 					rawFileKey,
 					bucketId: existingVideo.bucketId,
 					loomVideoId,
 					reuseExistingRawUpload: true,
-				},
-			]);
+				});
+			} catch (error) {
+				if (error instanceof LoomImportStartError && error.canRetry) {
+					await restoreLoomImportStartError(
+						existingVideo.videoId,
+						"processing",
+						claimedAt,
+						error.message,
+					);
+				}
+				return {
+					success: false,
+					error:
+						error instanceof Error
+							? error.message
+							: "Loom import could not restart.",
+				};
+			}
 			revalidatePath("/dashboard/caps");
 			return { success: true, videoId: existingVideo.videoId };
 		}
@@ -389,6 +417,7 @@ async function importLoomVideoForOwner({
 		videoName ||
 		`Loom Import - ${new Date().toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" })}`;
 
+	const claimedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
 	await db().transaction(async (tx) => {
 		await tx.insert(videos).values({
 			id: videoId,
@@ -410,6 +439,7 @@ async function importLoomVideoForOwner({
 			phase: "uploading",
 			processingProgress: 0,
 			processingMessage: "Importing from Loom...",
+			updatedAt: claimedAt,
 		});
 
 		await tx.insert(importedVideos).values({
@@ -450,16 +480,31 @@ async function importLoomVideoForOwner({
 			.catch(() => {});
 	}
 
-	await start(importLoomVideoWorkflow, [
-		{
+	try {
+		await startLoomImportWorkflow({
 			videoId,
 			userId: ownerId,
 			rawFileKey,
 			bucketId: Option.getOrNull(writable.bucketId),
 			loomVideoId,
 			loomDownloadUrl: downloadUrl,
-		},
-	]);
+		});
+	} catch (error) {
+		if (error instanceof LoomImportStartError && error.canRetry) {
+			await restoreLoomImportStartError(
+				videoId,
+				"uploading",
+				claimedAt,
+				error.message,
+			);
+		}
+		return {
+			success: false,
+			videoId,
+			error:
+				error instanceof Error ? error.message : "Loom import could not start.",
+		};
+	}
 
 	revalidatePath("/dashboard/caps");
 	if (destination.folderId) revalidatePath("/dashboard/folder/[id]", "page");
