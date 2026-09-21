@@ -1,3 +1,4 @@
+import type { Organisation } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -111,6 +112,9 @@ vi.mock("@cap/database/schema", () => ({
 	},
 	videoUploads: {
 		videoId: "videoId",
+		phase: "phase",
+		rawFileKey: "rawFileKey",
+		updatedAt: "updatedAt",
 	},
 }));
 
@@ -254,6 +258,66 @@ describe("importFromLoom", () => {
 			id: "user-123",
 		});
 		vi.stubGlobal("fetch", vi.fn());
+	});
+
+	it("restarts a failed import without creating another video", async () => {
+		whereMock
+			.mockResolvedValueOnce([
+				{
+					videoId: "existing-video",
+					ownerId: "user-123",
+					bucketId: "bucket-1",
+					phase: "error",
+					rawFileKey: null,
+					uploadUpdatedAt: new Date("2026-09-01T00:00:00Z"),
+				},
+			])
+			.mockResolvedValueOnce([{ affectedRows: 1 }]);
+		const { importFromLoom } = await import("@/actions/loom");
+		await expect(
+			importFromLoom({
+				loomUrl: "https://www.loom.com/share/loom-abc1234567",
+				orgId: "org-1" as Organisation.OrganisationId,
+			}),
+		).resolves.toEqual({ success: true, videoId: "existing-video" });
+		expect(mockDb.insert).not.toHaveBeenCalled();
+		expect(startMock).toHaveBeenCalledWith(expect.anything(), [
+			{
+				videoId: "existing-video",
+				userId: "user-123",
+				bucketId: "bucket-1",
+				loomVideoId: "loom-abc1234567",
+				rawFileKey: "user-123/existing-video/raw-upload.mp4",
+				reuseExistingRawUpload: true,
+			},
+		]);
+	});
+
+	it.each([
+		{ ownerId: "user-123", phase: "processing", affectedRows: 1 },
+		{ ownerId: "other-user", phase: "error", affectedRows: 1 },
+		{ ownerId: "user-123", phase: "error", affectedRows: 0 },
+	])("does not restart an unclaimed or foreign import: %j", async (row) => {
+		whereMock
+			.mockResolvedValueOnce([
+				{
+					videoId: "existing-video",
+					bucketId: "bucket-1",
+					rawFileKey: null,
+					uploadUpdatedAt: new Date("2026-09-01T00:00:00Z"),
+					...row,
+				},
+			])
+			.mockResolvedValueOnce([{ affectedRows: row.affectedRows }]);
+		const { importFromLoom } = await import("@/actions/loom");
+		await expect(
+			importFromLoom({
+				loomUrl: "https://www.loom.com/share/loom-abc1234567",
+				orgId: "org-1" as Organisation.OrganisationId,
+			}),
+		).resolves.toMatchObject({ success: false });
+		expect(startMock).not.toHaveBeenCalled();
+		expect(mockDb.insert).not.toHaveBeenCalled();
 	});
 
 	it("returns direct MP4 URLs for public Loom downloads", async () => {
@@ -493,7 +557,7 @@ describe("importFromLoom", () => {
 			3,
 			expect.objectContaining({
 				id: "video-123",
-				orgId: "org-1",
+				orgId: "org-1" as Organisation.OrganisationId,
 				source: "loom",
 				sourceId: "loom-abc1234567",
 			}),

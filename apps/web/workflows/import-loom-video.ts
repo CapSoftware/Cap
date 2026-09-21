@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { agentApiOperations, videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
@@ -6,7 +5,12 @@ import { Storage } from "@cap/web-backend/src/Storage/index";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
-import { FatalError, sleep } from "workflow";
+import { FatalError, RetryableError, sleep } from "workflow";
+import {
+	getLoomDownloadUrl,
+	getReusableLoomDownloadUrl,
+	LoomDownloadTemporaryError,
+} from "@/lib/loom-download-url";
 import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
@@ -44,71 +48,31 @@ function isStreamingUrl(url: string): boolean {
 	return path.endsWith(".m3u8") || path.endsWith(".mpd");
 }
 
-async function fetchLoomCdnUrl(
-	videoId: string,
-	endpoint: string,
-	includeBody: boolean,
-): Promise<string | null> {
+async function fetchFreshLoomDownloadUrl(
+	loomVideoId: string,
+	existingUrl?: string,
+): Promise<string> {
+	"use step";
+
+	const reusableUrl = getReusableLoomDownloadUrl(existingUrl);
+	if (reusableUrl) return reusableUrl;
 	try {
-		const options: RequestInit = {
-			method: "POST",
-			signal: AbortSignal.timeout(15_000),
-		};
-		if (includeBody) {
-			options.headers = {
-				"Content-Type": "application/json",
-				Accept: "application/json",
-			};
-			options.body = JSON.stringify({
-				anonID: randomUUID(),
-				deviceID: null,
-				force_original: false,
-				password: null,
+		const url = await getLoomDownloadUrl(loomVideoId);
+		if (url) return url;
+	} catch (error) {
+		if (error instanceof LoomDownloadTemporaryError) {
+			throw new RetryableError(error.message, {
+				retryAfter: error.retryAfterMs,
 			});
 		}
-
-		const response = await fetch(
-			`https://www.loom.com/api/campaigns/sessions/${videoId}/${endpoint}`,
-			options,
-		);
-
-		if (!response.ok || response.status === 204) return null;
-
-		const text = await response.text();
-		if (!text.trim()) return null;
-
-		const data = JSON.parse(text) as { url?: string };
-		return data.url ?? null;
-	} catch {
-		return null;
+		throw error;
 	}
-}
-
-async function fetchFreshLoomDownloadUrl(loomVideoId: string): Promise<string> {
-	const requestVariants: Array<{ endpoint: string; includeBody: boolean }> = [
-		{ endpoint: "transcoded-url", includeBody: true },
-		{ endpoint: "raw-url", includeBody: true },
-		{ endpoint: "transcoded-url", includeBody: false },
-		{ endpoint: "raw-url", includeBody: false },
-	];
-
-	let fallbackStreamingUrl: string | null = null;
-
-	for (const { endpoint, includeBody } of requestVariants) {
-		const url = await fetchLoomCdnUrl(loomVideoId, endpoint, includeBody);
-		if (!url) continue;
-
-		if (!isStreamingUrl(url)) return url;
-
-		if (!fallbackStreamingUrl) fallbackStreamingUrl = url;
-	}
-
-	if (fallbackStreamingUrl) return fallbackStreamingUrl;
-
 	throw new FatalError(
 		"Could not retrieve a download URL from Loom. The video may be private, password-protected, or the link may have expired.",
 	);
 }
+
+fetchFreshLoomDownloadUrl.maxRetries = 8;
 
 interface VideoProcessingResult {
 	success: boolean;
@@ -210,7 +174,15 @@ export async function importLoomVideoWorkflow(
 			let capacityRetryCount = 0;
 			while (true) {
 				try {
-					await processVideoOnMediaServer(payload, processingInput);
+					const loomSourceUrl = processingInput.importFromLoom
+						? await fetchFreshLoomDownloadUrl(
+								payload.loomVideoId,
+								processingAttempt === 0 && capacityRetryCount === 0
+									? payload.loomDownloadUrl
+									: undefined,
+							)
+						: undefined;
+					await processVideoOnMediaServer(payload, loomSourceUrl);
 					break;
 				} catch (error) {
 					if (!isMediaServerCapacityError(error)) throw error;
@@ -374,11 +346,11 @@ async function startMediaServerProcessJob(
 
 async function processVideoOnMediaServer(
 	payload: ImportLoomPayload,
-	processingInput: LoomProcessingInput,
+	loomSourceUrl: string | undefined,
 ): Promise<void> {
 	"use step";
 
-	const { videoId, userId, rawFileKey, loomVideoId } = payload;
+	const { videoId, userId, rawFileKey } = payload;
 
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
 	if (!mediaServerUrl) {
@@ -388,9 +360,6 @@ async function processVideoOnMediaServer(
 	const webhookBaseUrl =
 		serverEnv().MEDIA_SERVER_WEBHOOK_URL || serverEnv().WEB_URL;
 
-	const loomSourceUrl = processingInput.importFromLoom
-		? await fetchFreshLoomDownloadUrl(loomVideoId)
-		: undefined;
 	const {
 		rawVideoUrl,
 		sourcePresignedUrl,

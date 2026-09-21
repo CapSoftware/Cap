@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { importedVideos, videos, videoUploads } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { start } from "workflow/api";
 import {
 	setVideoProcessingError,
@@ -63,7 +63,6 @@ export async function retryVideoProcessing({
 		.where(eq(videoUploads.videoId, videoId));
 
 	if (!upload) throw new Error("No upload record found");
-	if (!upload.rawFileKey) throw new Error("No raw file key found for retry");
 
 	const [importedVideo] = await db()
 		.select({
@@ -71,34 +70,54 @@ export async function retryVideoProcessing({
 			sourceId: importedVideos.sourceId,
 		})
 		.from(importedVideos)
-		.where(eq(importedVideos.id, videoId));
+		.where(
+			and(
+				eq(importedVideos.id, videoId),
+				eq(importedVideos.orgId, video.orgId),
+			),
+		);
 
 	if (importedVideo?.source === "loom") {
 		if (upload.phase === "processing" && !shouldForceRetryProcessing(upload)) {
 			return { success: true, status: "already-processing" };
 		}
 
-		await db()
+		const rawFileKey =
+			upload.rawFileKey ?? `${video.ownerId}/${videoId}/raw-upload.mp4`;
+		const claim = await db()
 			.update(videoUploads)
 			.set({
 				phase: "processing",
 				processingProgress: 0,
 				processingMessage: "Retrying Loom import...",
 				processingError: null,
-				rawFileKey: upload.rawFileKey,
+				rawFileKey,
 				updatedAt: new Date(),
 			})
-			.where(eq(videoUploads.videoId, videoId));
+			.where(
+				and(
+					eq(videoUploads.videoId, videoId),
+					eq(videoUploads.phase, upload.phase),
+					eq(videoUploads.updatedAt, upload.updatedAt),
+				),
+			);
+		const affectedRows = Array.isArray(claim)
+			? (claim[0] as { affectedRows?: number } | undefined)?.affectedRows
+			: (claim as { affectedRows?: number }).affectedRows;
+		if (affectedRows !== 1) {
+			return { success: true, status: "already-processing" };
+		}
 
 		try {
 			await start(importLoomVideoWorkflow, [
 				{
 					videoId,
 					userId: user.id,
-					rawFileKey: upload.rawFileKey,
+					rawFileKey,
 					bucketId: video.bucket ?? null,
 					loomDownloadUrl: "",
 					loomVideoId: importedVideo.sourceId,
+					reuseExistingRawUpload: true,
 				},
 			]);
 		} catch (error) {
@@ -117,6 +136,7 @@ export async function retryVideoProcessing({
 		return { success: true, status: "started" };
 	}
 
+	if (!upload.rawFileKey) throw new Error("No raw file key found for retry");
 	const status = await startVideoProcessingWorkflow({
 		videoId,
 		userId: user.id,
