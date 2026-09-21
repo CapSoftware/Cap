@@ -53,8 +53,12 @@ async function fulfillMedia(route, body) {
 	});
 }
 
-async function replay(forceWebGl) {
-	const browser = await browserType.launch({ headless: true, timeout: 30_000 });
+async function replay(forceWebGl, forceWebGpu = false) {
+	const browser = await browserType.launch({
+		headless: true,
+		timeout: 30_000,
+		...(forceWebGpu ? { args: ["--enable-unsafe-webgpu"] } : {}),
+	});
 	try {
 		const page = await browser.newPage({
 			viewport: { width: 1280, height: 800 },
@@ -65,6 +69,20 @@ async function replay(forceWebGl) {
 		page.on("pageerror", (error) => pageErrors.push(error.message));
 		page.on("console", (message) => {
 			if (message.type() === "error") consoleErrors.push(message.text());
+		});
+		await page.addInitScript(() => {
+			window.CapBrowserGpuErrors = [];
+			if (typeof GPUAdapter === "undefined") return;
+			const requestDevice = GPUAdapter.prototype.requestDevice;
+			GPUAdapter.prototype.requestDevice = async function (...args) {
+				const device = await requestDevice.apply(this, args);
+				device.addEventListener("uncapturederror", (event) => {
+					if (window.CapBrowserGpuErrors.length < 8) {
+						window.CapBrowserGpuErrors.push(event.error.message);
+					}
+				});
+				return device;
+			};
 		});
 		page.on("request", (request) => {
 			if (request.url().includes("/api/editor/sessions/")) {
@@ -172,12 +190,60 @@ async function replay(forceWebGl) {
 				);
 			} catch (error) {
 				const probe = document.createElement("canvas");
+				const mediaProbe = await new Promise((resolve) => {
+					const video = document.createElement("video");
+					const events = [];
+					video.muted = true;
+					video.playsInline = true;
+					video.crossOrigin = "anonymous";
+					video.src = "/screen.webm";
+					document.body.append(video);
+					const finish = () => {
+						window.clearTimeout(timer);
+						const state = {
+							events,
+							readyState: video.readyState,
+							networkState: video.networkState,
+							width: video.videoWidth,
+							height: video.videoHeight,
+							duration: video.duration,
+							error: video.error?.code ?? null,
+						};
+						video.remove();
+						resolve(state);
+					};
+					video.addEventListener("loadedmetadata", () =>
+						events.push("loadedmetadata"),
+					);
+					video.addEventListener(
+						"loadeddata",
+						() => {
+							events.push("loadeddata");
+							finish();
+						},
+						{ once: true },
+					);
+					video.addEventListener(
+						"error",
+						() => {
+							events.push("error");
+							finish();
+						},
+						{ once: true },
+					);
+					const timer = window.setTimeout(() => {
+						events.push("timeout");
+						finish();
+					}, 3_000);
+					video.load();
+				});
 				return {
 					fatal: {
 						error: String(error),
 						type: typeof error,
 						message: error?.message ?? null,
 						stack: error?.stack ?? null,
+						mediaProbe,
 						capabilities: {
 							webgpu: Boolean(navigator.gpu),
 							webgl2: Boolean(probe.getContext("webgl2")),
@@ -191,7 +257,10 @@ async function replay(forceWebGl) {
 			try {
 				const firstFrameMs = performance.now() - started;
 				const backend = playback.canvas.renderer.backend;
-				const snapshot = () => {
+				const snapshot = async () => {
+					if (/webgpu/i.test(backend)) {
+						return await playback.canvas.renderer.snapshot_rgba();
+					}
 					const target = document.createElement("canvas");
 					if (!playback.drawLatestFrameToCanvas(target)) {
 						throw new Error("GPU frame could not be inspected");
@@ -200,13 +269,13 @@ async function replay(forceWebGl) {
 					if (!context) throw new Error("GPU frame inspection is unavailable");
 					return context.getImageData(0, 0, target.width, target.height).data;
 				};
-				const withCamera = snapshot();
+				const withCamera = await snapshot();
 				const config = JSON.parse(
 					playback.module.default_project_config_json(),
 				);
 				config.camera.hide = true;
 				await playback.setConfig(config);
-				const withoutCamera = snapshot();
+				const withoutCamera = await snapshot();
 				let changedPixels = 0;
 				for (let index = 0; index < withCamera.length; index += 4) {
 					if (
@@ -249,12 +318,17 @@ async function replay(forceWebGl) {
 				JSON.stringify({
 					browser: browserName,
 					forceWebGl,
+					forceWebGpu,
 					...result.fatal,
 					pageErrors,
 					consoleErrors,
 				}),
 			);
 		}
+		const gpuErrors = await page.evaluate(
+			() => window.CapBrowserGpuErrors ?? [],
+		);
+		assert(gpuErrors.length === 0, `GPU errors: ${gpuErrors.join(", ")}`);
 		assert(
 			result.errors.length === 0,
 			`Playback errors: ${result.errors.join(", ")}`,
@@ -279,8 +353,15 @@ async function replay(forceWebGl) {
 		);
 		if (forceWebGl)
 			assert(/gl/i.test(result.backend), "WebGL fallback was not selected");
+		if (forceWebGpu)
+			assert(/webgpu/i.test(result.backend), "WebGPU path was not selected");
 		console.log(
-			JSON.stringify({ browser: browserName, forceWebGl, ...result }),
+			JSON.stringify({
+				browser: browserName,
+				forceWebGl,
+				forceWebGpu,
+				...result,
+			}),
 		);
 	} finally {
 		await browser.close();
@@ -288,8 +369,27 @@ async function replay(forceWebGl) {
 }
 
 async function main() {
-	await replay(false);
-	await replay(true);
+	const modes =
+		browserName === "chromium"
+			? [
+					[false, false],
+					[true, false],
+					[false, true],
+				]
+			: [
+					[false, false],
+					[true, false],
+				];
+	let failed = false;
+	for (const [forceWebGl, forceWebGpu] of modes) {
+		try {
+			await replay(forceWebGl, forceWebGpu);
+		} catch (error) {
+			console.error(error);
+			failed = true;
+		}
+	}
+	if (failed) throw new Error("Browser compositor replay failed");
 }
 
 main().catch((error) => {
