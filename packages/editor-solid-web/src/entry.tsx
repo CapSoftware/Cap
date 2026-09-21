@@ -9,8 +9,19 @@ import { createSignal, onCleanup } from "solid-js";
 import { render } from "solid-js/web";
 import { Toaster } from "solid-toast";
 import type { PreparingEditorModel } from "../../../apps/desktop/src/routes/editor/preparing-editor-model";
-import { serializeEditorProjectSnapshot } from "./editor-file-mapping";
-import { PortEditorTransport, setEditorTransport } from "./tauri-bridge";
+import {
+	clearEditorImportedImages,
+	serializeEditorProjectSnapshot,
+} from "./editor-file-mapping";
+import {
+	prepareEditorPresetBackground,
+	setEditorPresetAssetBase,
+} from "./preset-backgrounds";
+import {
+	importEditorBrowserImage,
+	PortEditorTransport,
+	setEditorTransport,
+} from "./tauri-bridge";
 import { setEditorAssetBase } from "./tauri-core";
 import { setEditorStoreNamespace } from "./tauri-store";
 import {
@@ -159,6 +170,7 @@ declare global {
 			unsavedProject: () => string | null;
 		};
 		capWebEditorUnsavedProjectSnapshot?: () => string | null;
+		capWebEditorPreparePresetBackground?: (config: unknown) => Promise<void>;
 	}
 }
 
@@ -208,6 +220,7 @@ if (root) {
 			skeletonModel = null;
 			skeletonSequence = -1;
 			setEditorTransport(null);
+			window.capWebEditorPreparePresetBackground = undefined;
 			void import("./web-editor-error-screen").then(
 				({ WebEditorErrorScreen }) => {
 					if (generation !== mountGeneration) return;
@@ -282,6 +295,10 @@ if (root) {
 		setEditorAssetBase(
 			typeof message.assetBase === "string" ? message.assetBase : "",
 		);
+		setEditorPresetAssetBase(
+			typeof message.assetBase === "string" ? message.assetBase : "",
+		);
+		clearEditorImportedImages();
 		const frames = message.frames;
 		setEditorFrameSocketCredential(
 			typeof frames === "object" &&
@@ -294,6 +311,13 @@ if (root) {
 				: null,
 		);
 		setEditorTransport(new PortEditorTransport(port));
+		window.capWebEditorPreparePresetBackground = (config) =>
+			prepareEditorPresetBackground(
+				window.capWebEditorUserId?.trim() || "anonymous",
+				"store",
+				config,
+				importEditorBrowserImage,
+			);
 		void mountEditor(root).then(
 			() => port.postMessage({ kind: "mount", status: "ready" }),
 			() => port.postMessage({ kind: "mount", status: "error" }),

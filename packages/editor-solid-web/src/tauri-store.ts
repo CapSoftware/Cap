@@ -1,3 +1,9 @@
+import {
+	deleteEditorPresets,
+	loadEditorPresets,
+	saveEditorPresets,
+} from "./preset-backgrounds";
+
 const PERSISTED_EDITOR_KEYS = new Set([
 	"presets",
 	"animated_gradients",
@@ -90,6 +96,13 @@ export class Store {
 
 	async get<T>(key: string): Promise<T | undefined> {
 		if (this.state.has(key)) return this.state.get(key) as T;
+		if (key === "presets") {
+			const saved = await loadEditorPresets(this.scope, this.path);
+			if (saved.found) {
+				if (saved.value !== undefined) this.state.set(key, saved.value);
+				return saved.value as T | undefined;
+			}
+		}
 		if (key === STUDIO_SOUND_KEY) {
 			const value = await requestStudioSound("GET");
 			this.state.set(key, value);
@@ -113,6 +126,18 @@ export class Store {
 	}
 
 	async set(key: string, value: unknown) {
+		if (key === "presets") {
+			await saveEditorPresets(this.scope, this.path, value);
+			try {
+				localStorage.setItem(
+					storageKey(this.scope, this.path, key),
+					JSON.stringify(value),
+				);
+			} catch {}
+			this.state.set(key, value);
+			this.emit(key, value);
+			return;
+		}
 		if (key === STUDIO_SOUND_KEY) {
 			if (typeof value !== "object" || value === null || Array.isArray(value))
 				throw new Error("Studio Sound preference is invalid");
@@ -141,6 +166,15 @@ export class Store {
 
 	async delete(key: string) {
 		const existed = await this.has(key);
+		if (key === "presets") {
+			await deleteEditorPresets(this.scope, this.path);
+			try {
+				localStorage.removeItem(storageKey(this.scope, this.path, key));
+			} catch {}
+			this.state.delete(key);
+			this.emit(key, undefined);
+			return existed;
+		}
 		if (key === STUDIO_SOUND_KEY) {
 			await requestStudioSound("PUT", DEFAULT_STUDIO_SOUND);
 			this.state.delete(key);
@@ -165,8 +199,14 @@ export class Store {
 
 	async keys() {
 		const keys = new Set(this.state.keys());
+		const presets = await loadEditorPresets(this.scope, this.path);
+		if (presets.found) {
+			if (presets.value === undefined) keys.delete("presets");
+			else keys.add("presets");
+		}
 		try {
 			for (const key of PERSISTED_EDITOR_KEYS) {
+				if (key === "presets" && presets.found) continue;
 				if (
 					localStorage.getItem(storageKey(this.scope, this.path, key)) !== null
 				)

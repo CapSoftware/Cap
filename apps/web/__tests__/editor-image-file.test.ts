@@ -1,5 +1,13 @@
 import type { HttpApi } from "@effect/platform";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 
 const videoId = "123e4567-e89b-42d3-a456-426614174000";
 const sessionId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -127,8 +135,9 @@ vi.mock("@/lib/server", async () => {
 
 import { GET } from "@/app/api/editor/sessions/[id]/file/route";
 
-function request(path = imagePath) {
+function request(path = imagePath, raw = false) {
 	const params = new URLSearchParams({ videoId, path });
+	if (raw) params.set("raw", "1");
 	return GET(
 		new Request(
 			`https://cap.so/api/editor/sessions/${sessionId}/file?${params}`,
@@ -150,6 +159,7 @@ describe("web editor image file redirect", () => {
 	});
 
 	afterAll(() => mocks.dispose());
+	afterEach(() => vi.unstubAllGlobals());
 
 	it("redirects a current owned image with a private no-store response", async () => {
 		const response = await request();
@@ -160,6 +170,56 @@ describe("web editor image file redirect", () => {
 		expect(response.headers.get("cache-control")).toBe("private, no-store");
 		expect(mocks.head).toHaveBeenCalledWith(imageKey);
 		expect(mocks.sign).toHaveBeenCalledWith(imageKey, { expiresIn: 300 });
+	});
+
+	it("streams verified image bytes to the same-origin preset store", async () => {
+		const bytes = new Uint8Array([137, 80, 78, 71]);
+		mocks.assetSize = bytes.length;
+		mocks.storedSize = bytes.length;
+		const download = vi.fn(
+			async () =>
+				new Response(bytes, {
+					headers: {
+						"Content-Type": "image/png",
+						"Content-Length": String(bytes.length),
+						ETag: imageIdentity,
+					},
+				}),
+		);
+		vi.stubGlobal("fetch", download);
+		const response = await request(imagePath, true);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Content-Type")).toBe("image/png");
+		expect(response.headers.get("Content-Length")).toBe(String(bytes.length));
+		expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+		expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+		expect(download).toHaveBeenCalledWith(
+			new URL(`https://media.example.com/${imageKey}`),
+			expect.objectContaining({
+				cache: "no-store",
+				headers: { "If-Match": imageIdentity },
+			}),
+		);
+	});
+
+	it("refuses a replaced source during preset streaming", async () => {
+		mocks.assetSize = 4;
+		mocks.storedSize = 4;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(new Uint8Array([137, 80, 78, 71]), {
+						headers: {
+							"Content-Type": "image/png",
+							"Content-Length": "4",
+							ETag: '"replacement-image"',
+						},
+					}),
+			),
+		);
+		expect((await request(imagePath, true)).status).toBe(503);
 	});
 
 	it("refuses an image replaced with different bytes of the same size", async () => {

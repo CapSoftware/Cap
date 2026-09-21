@@ -1,4 +1,6 @@
 const importedImages = new Map<string, string>();
+const projectImagePath =
+	/^content\/images\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|webp|gif|bmp|tiff)$/;
 
 function asRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -9,14 +11,17 @@ export function registerEditorImportedImage(
 	projectPath: string,
 ) {
 	if (
-		!localPath.startsWith("cap-web-editor://app-data/") ||
-		!/^content\/images\/[0-9a-f-]{36}\.(png|jpg|webp|gif|bmp|tiff)$/.test(
-			projectPath,
-		)
+		(!localPath.startsWith("cap-web-editor://app-data/") &&
+			!projectImagePath.test(localPath)) ||
+		!projectImagePath.test(projectPath)
 	) {
 		throw new Error("Invalid browser editor image mapping");
 	}
 	importedImages.set(localPath, projectPath);
+}
+
+export function clearEditorImportedImages() {
+	importedImages.clear();
 }
 
 export function resolveEditorImportedImage(path: string) {

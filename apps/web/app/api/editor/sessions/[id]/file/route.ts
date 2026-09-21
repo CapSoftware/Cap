@@ -9,7 +9,7 @@ import {
 	HttpApiGroup,
 	HttpServerResponse,
 } from "@effect/platform";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Schema, Stream } from "effect";
 import {
 	loadEligibleEditorVideo,
 	verifyOwnedEditorSession,
@@ -35,7 +35,11 @@ class Api extends HttpApi.make("WebEditorFileApi").add(
 		HttpApiEndpoint.get("file", "/api/editor/sessions/:id/file")
 			.setPath(Schema.Struct({ id: Schema.String }))
 			.setUrlParams(
-				Schema.Struct({ videoId: Video.VideoId, path: Schema.String }),
+				Schema.Struct({
+					videoId: Video.VideoId,
+					path: Schema.String,
+					raw: Schema.optional(Schema.Literal("1")),
+				}),
 			)
 			.addError(HttpApiError.NotFound)
 			.addError(HttpApiError.Forbidden)
@@ -118,6 +122,41 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						url.password
 					) {
 						return yield* new HttpApiError.ServiceUnavailable();
+					}
+					if (urlParams.raw === "1") {
+						const response = yield* Effect.tryPromise({
+							try: () =>
+								fetch(url, {
+									cache: "no-store",
+									headers: head.ETag ? { "If-Match": head.ETag } : {},
+									signal: AbortSignal.timeout(60_000),
+								}),
+							catch: () => new HttpApiError.ServiceUnavailable(),
+						});
+						if (
+							response.status !== 200 ||
+							!response.body ||
+							response.headers.get("Content-Length") !== String(asset.size) ||
+							response.headers.get("Content-Type") !==
+								IMAGE_CONTENT_TYPES[match[2] ?? ""] ||
+							(head.ETag && response.headers.get("ETag") !== head.ETag)
+						) {
+							return yield* new HttpApiError.ServiceUnavailable();
+						}
+						return HttpServerResponse.stream(
+							Stream.fromReadableStream({
+								evaluate: () => response.body as ReadableStream<Uint8Array>,
+								onError: () => new Error("Preset background transfer failed"),
+							}),
+							{
+								contentType: IMAGE_CONTENT_TYPES[match[2] ?? ""],
+								contentLength: asset.size,
+								headers: {
+									"Cache-Control": "private, no-store",
+									"X-Content-Type-Options": "nosniff",
+								},
+							},
+						);
 					}
 					return HttpServerResponse.redirect(url.toString()).pipe(
 						HttpServerResponse.setHeaders({

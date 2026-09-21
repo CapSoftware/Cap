@@ -130,4 +130,5 @@ jobs:
               CAP_EDITOR_UI_CURSOR_MOV=1 CAP_EDITOR_UI_BROWSER=webkit CAP_EDITOR_UI_PRO_CAPTIONS=1 bun run test:native-editor-ui
               CAP_EDITOR_UI_CANVAS_FALLBACK=1 CAP_EDITOR_UI_BROWSER=chromium CAP_EDITOR_UI_PRO_CAPTIONS=0 bun run test:native-editor-ui
               CAP_EDITOR_UI_CANVAS_FALLBACK=1 CAP_EDITOR_UI_BROWSER=webkit CAP_EDITOR_UI_PRO_CAPTIONS=1 bun run test:native-editor-ui
+              bun src/__tests__/routes/editor-presets-browser-replay.ts
             '
