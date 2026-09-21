@@ -55,9 +55,17 @@ async function fulfillMedia(route, body) {
 
 async function replay(forceWebGl, forceWebGpu = false) {
 	const browser = await browserType.launch({
-		headless: true,
+		headless: process.env.CAP_REPLAY_HEADED !== "1",
 		timeout: 30_000,
 		...(forceWebGpu ? { args: ["--enable-unsafe-webgpu"] } : {}),
+		...(browserName === "firefox" && process.env.CAP_REPLAY_HEADED === "1"
+			? {
+					firefoxUserPrefs: {
+						"webgl.force-enabled": true,
+						"webgl.forbid-software": false,
+					},
+				}
+			: {}),
 	});
 	try {
 		const page = await browser.newPage({
@@ -370,12 +378,8 @@ async function replay(forceWebGl, forceWebGpu = false) {
 
 async function main() {
 	const modes =
-		browserName === "chromium"
-			? [
-					[false, false],
-					[true, false],
-					[false, true],
-				]
+		process.env.CAP_REPLAY_REQUIRE_WEBGPU === "1"
+			? [[false, true]]
 			: [
 					[false, false],
 					[true, false],

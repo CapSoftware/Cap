@@ -13,6 +13,7 @@ on:
       - "packages/database/**"
       - "packages/web-*/**"
       - "crates/recording/**"
+      - "crates/rendering/src/shaders/**"
       - "bun.lock"
       - ".github/workflows/recording-reliability.yml"
   push:
@@ -27,6 +28,7 @@ on:
       - "packages/database/**"
       - "packages/web-*/**"
       - "crates/recording/**"
+      - "crates/rendering/src/shaders/**"
       - "bun.lock"
       - ".github/workflows/recording-reliability.yml"
 
@@ -78,7 +80,29 @@ jobs:
       - name: Build browser compositor replay
         run: bunx vite build --config packages/editor-solid-web/browser-replay/vite.config.ts
       - name: Replay separate screen and camera clips on the local GPU
+        if: matrix.browser != 'firefox'
         run: bun packages/editor-solid-web/browser-replay/replay.cjs ${{ matrix.browser }}
+      - name: Replay Firefox clips through software WebGL under Xvfb
+        if: matrix.browser == 'firefox'
+        run: xvfb-run -a bun packages/editor-solid-web/browser-replay/replay.cjs firefox
+        env:
+          CAP_REPLAY_HEADED: "1"
+
+  browser-studio-webgpu:
+    name: Web Studio WebGPU compositor (Chromium macOS)
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./.github/actions/setup-js
+      - name: Install Chromium on macOS
+        run: bunx playwright install chromium
+      - name: Build browser compositor replay
+        run: bunx vite build --config packages/editor-solid-web/browser-replay/vite.config.ts
+      - name: Replay paired clips through WebGPU
+        run: bun packages/editor-solid-web/browser-replay/replay.cjs chromium
+        env:
+          CAP_REPLAY_REQUIRE_WEBGPU: "1"
 
   browser-paired-recording:
     name: Web recorder paired capture (${{ matrix.browser }})

@@ -68,6 +68,58 @@ function waitForVideo(
 	});
 }
 
+function waitForVideoDimensions(
+	video: HTMLVideoElement,
+	signal: AbortSignal,
+	timeoutMs: number,
+) {
+	return new Promise<void>((resolve, reject) => {
+		if (signal.aborted) {
+			reject(signal.reason ?? new DOMException("Canceled", "AbortError"));
+			return;
+		}
+		let settled = false;
+		const done = (error?: Error) => {
+			if (settled) return;
+			settled = true;
+			window.clearInterval(interval);
+			window.clearTimeout(timer);
+			video.removeEventListener("resize", check);
+			video.removeEventListener("loadeddata", check);
+			video.removeEventListener("error", onError);
+			signal.removeEventListener("abort", onAbort);
+			if (error) reject(error);
+			else resolve();
+		};
+		const check = () => {
+			if (
+				video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+				video.videoWidth > 0 &&
+				video.videoHeight > 0
+			) {
+				done();
+			}
+		};
+		const onError = () => done(mediaError(video));
+		const onAbort = () =>
+			done(
+				signal.reason instanceof Error
+					? signal.reason
+					: new DOMException("Canceled", "AbortError"),
+			);
+		const timer = window.setTimeout(
+			() => done(new Error("Editor video dimensions timed out")),
+			timeoutMs,
+		);
+		const interval = window.setInterval(check, 25);
+		video.addEventListener("resize", check);
+		video.addEventListener("loadeddata", check);
+		video.addEventListener("error", onError, { once: true });
+		signal.addEventListener("abort", onAbort, { once: true });
+		check();
+	});
+}
+
 function sourceUrl(value: string) {
 	const url = new URL(value, window.location.href);
 	if (
@@ -263,6 +315,9 @@ export class BrowserVideoPool {
 			}
 			if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
 				throw mediaError(video);
+			}
+			if (video.videoWidth === 0 || video.videoHeight === 0) {
+				await waitForVideoDimensions(video, signal, 5_000);
 			}
 			return video;
 		} finally {

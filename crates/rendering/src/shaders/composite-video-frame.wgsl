@@ -447,7 +447,7 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
         let upscale_ratio = max(target_size.x / source_size.x, target_size.y / source_size.y);
         let is_upscaling = upscale_ratio > 1.05;
 
-		let center_sample = textureSampleLevel(frame_texture, frame_sampler, cropped_uv, 0.0);
+        let center_sample = textureSampleLevel(frame_texture, frame_sampler, cropped_uv, 0.0);
         let center_color = center_sample.rgb;
         let out_alpha = select(1.0, center_sample.a, uniforms.preserve_source_alpha > 0.5);
 
@@ -485,26 +485,26 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
             let offset_x = vec2<f32>(texel_size.x, 0.0);
             let offset_y = vec2<f32>(0.0, texel_size.y);
 
-			let left = textureSampleLevel(
-				frame_texture,
-				frame_sampler,
-				clamp(cropped_uv - offset_x, safe_min, safe_max), 0.0
-			).rgb;
-			let right = textureSampleLevel(
-				frame_texture,
-				frame_sampler,
-				clamp(cropped_uv + offset_x, safe_min, safe_max), 0.0
-			).rgb;
-			let top = textureSampleLevel(
-				frame_texture,
-				frame_sampler,
-				clamp(cropped_uv - offset_y, safe_min, safe_max), 0.0
-			).rgb;
-			let bottom = textureSampleLevel(
-				frame_texture,
-				frame_sampler,
-				clamp(cropped_uv + offset_y, safe_min, safe_max), 0.0
-			).rgb;
+            let left = textureSampleLevel(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv - offset_x, safe_min, safe_max), 0.0
+            ).rgb;
+            let right = textureSampleLevel(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv + offset_x, safe_min, safe_max), 0.0
+            ).rgb;
+            let top = textureSampleLevel(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv - offset_y, safe_min, safe_max), 0.0
+            ).rgb;
+            let bottom = textureSampleLevel(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv + offset_y, safe_min, safe_max), 0.0
+            ).rgb;
 
             let blurred = (left + right + top + bottom) * 0.25;
 
@@ -520,26 +520,26 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
             let offset_x = vec2<f32>(texel_size.x, 0.0);
             let offset_y = vec2<f32>(0.0, texel_size.y);
 
-			let left = textureSampleLevel(
-				frame_texture,
-				frame_sampler,
-				clamp(cropped_uv - offset_x, safe_min, safe_max), 0.0
-			).rgb;
-			let right = textureSampleLevel(
-				frame_texture,
-				frame_sampler,
-				clamp(cropped_uv + offset_x, safe_min, safe_max), 0.0
-			).rgb;
-			let top = textureSampleLevel(
-				frame_texture,
-				frame_sampler,
-				clamp(cropped_uv - offset_y, safe_min, safe_max), 0.0
-			).rgb;
-			let bottom = textureSampleLevel(
-				frame_texture,
-				frame_sampler,
-				clamp(cropped_uv + offset_y, safe_min, safe_max), 0.0
-			).rgb;
+            let left = textureSampleLevel(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv - offset_x, safe_min, safe_max), 0.0
+            ).rgb;
+            let right = textureSampleLevel(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv + offset_x, safe_min, safe_max), 0.0
+            ).rgb;
+            let top = textureSampleLevel(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv - offset_y, safe_min, safe_max), 0.0
+            ).rgb;
+            let bottom = textureSampleLevel(
+                frame_texture,
+                frame_sampler,
+                clamp(cropped_uv + offset_y, safe_min, safe_max), 0.0
+            ).rgb;
 
             let blurred = (left + right + top + bottom) * 0.25;
             let sharpness = min((upscale_ratio - 1.0) * 0.25, 0.45);
