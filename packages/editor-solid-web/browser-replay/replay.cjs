@@ -60,8 +60,12 @@ async function replay(forceWebGl) {
 			viewport: { width: 1280, height: 800 },
 		});
 		const pageErrors = [];
+		const consoleErrors = [];
 		const workerRequests = [];
 		page.on("pageerror", (error) => pageErrors.push(error.message));
+		page.on("console", (message) => {
+			if (message.type() === "error") consoleErrors.push(message.text());
+		});
 		page.on("request", (request) => {
 			if (request.url().includes("/api/editor/sessions/")) {
 				workerRequests.push(request.url());
@@ -156,14 +160,34 @@ async function replay(forceWebGl) {
 			document.body.append(canvas);
 			const frames = [];
 			const errors = [];
-			const playback = await window.CapBrowserLocalPlayback.create(
-				"fixture",
-				canvas,
-				0,
-				0,
-				(frame) => frames.push(frame),
-				(error) => errors.push(error.message),
-			);
+			let playback;
+			try {
+				playback = await window.CapBrowserLocalPlayback.create(
+					"fixture",
+					canvas,
+					0,
+					0,
+					(frame) => frames.push(frame),
+					(error) => errors.push(error.message),
+				);
+			} catch (error) {
+				const probe = document.createElement("canvas");
+				return {
+					fatal: {
+						error: String(error),
+						type: typeof error,
+						message: error?.message ?? null,
+						stack: error?.stack ?? null,
+						capabilities: {
+							webgpu: Boolean(navigator.gpu),
+							webgl2: Boolean(probe.getContext("webgl2")),
+							webm: document
+								.createElement("video")
+								.canPlayType('video/webm; codecs="vp8"'),
+						},
+					},
+				};
+			}
 			try {
 				const firstFrameMs = performance.now() - started;
 				const backend = playback.canvas.renderer.backend;
@@ -220,6 +244,17 @@ async function replay(forceWebGl) {
 				playback.dispose();
 			}
 		});
+		if (result.fatal) {
+			throw new Error(
+				JSON.stringify({
+					browser: browserName,
+					forceWebGl,
+					...result.fatal,
+					pageErrors,
+					consoleErrors,
+				}),
+			);
+		}
 		assert(
 			result.errors.length === 0,
 			`Playback errors: ${result.errors.join(", ")}`,
