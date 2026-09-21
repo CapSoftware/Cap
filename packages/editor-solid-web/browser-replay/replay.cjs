@@ -10,8 +10,22 @@ const output = path.join(__dirname, "out");
 const origin = "http://localhost:18999";
 const format = browserName === "firefox" ? "webm" : "mp4";
 const contentType = format === "webm" ? "video/webm" : "video/mp4";
-const screen = fs.readFileSync(path.join(__dirname, `screen.${format}`));
-const camera = fs.readFileSync(path.join(__dirname, `camera.${format}`));
+const screen = fs.readFileSync(
+	process.env.CAP_REPLAY_SCREEN_FILE ||
+		path.join(__dirname, `screen.${format}`),
+);
+const camera = fs.readFileSync(
+	process.env.CAP_REPLAY_CAMERA_FILE ||
+		path.join(__dirname, `camera.${format}`),
+);
+const expectedScreenWidth = Number(process.env.CAP_REPLAY_SCREEN_WIDTH || 640);
+const expectedScreenHeight = Number(
+	process.env.CAP_REPLAY_SCREEN_HEIGHT || 360,
+);
+const expectedCameraWidth = Number(process.env.CAP_REPLAY_CAMERA_WIDTH || 320);
+const expectedCameraHeight = Number(
+	process.env.CAP_REPLAY_CAMERA_HEIGHT || 180,
+);
 
 function assert(condition, message) {
 	if (!condition) throw new Error(message);
@@ -70,6 +84,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 	try {
 		const page = await browser.newPage({
 			viewport: { width: 1280, height: 800 },
+			deviceScaleFactor: Number(process.env.CAP_REPLAY_DPR || 1),
 		});
 		const pageErrors = [];
 		const consoleErrors = [];
@@ -463,11 +478,17 @@ async function replay(forceWebGl, forceWebGpu = false) {
 		);
 		assert(result.playedFrames >= 2, "Local playback did not advance");
 		assert(
-			result.videos.some(([width, height]) => width === 640 && height === 360),
+			result.videos.some(
+				([width, height]) =>
+					width === expectedScreenWidth && height === expectedScreenHeight,
+			),
 			"Screen clip did not decode",
 		);
 		assert(
-			result.videos.some(([width, height]) => width === 320 && height === 180),
+			result.videos.some(
+				([width, height]) =>
+					width === expectedCameraWidth && height === expectedCameraHeight,
+			),
 			"Camera clip did not decode",
 		);
 		if (forceWebGl)

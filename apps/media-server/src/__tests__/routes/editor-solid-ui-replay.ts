@@ -1413,23 +1413,56 @@ try {
 		});
 		assert.equal(imageImports, 1);
 		assert.ok(imagePreviewRequests > 0);
-		const screenshot = await page.screenshot();
 		let canvasFallbackPreviewPixel: number[] | null = null;
 		if (canvasFallbackReplay) {
-			const canvasImage = await editor.locator("#canvas").screenshot();
-			const { data, info } = await sharp(canvasImage)
-				.ensureAlpha()
-				.raw()
-				.toBuffer({ resolveWithObject: true });
-			const center =
-				(Math.floor(info.height / 2) * info.width +
-					Math.floor(info.width / 2)) *
-				info.channels;
-			canvasFallbackPreviewPixel = Array.from(
-				data.subarray(center, center + info.channels),
-			);
+			const deadline = Date.now() + 15_000;
+			do {
+				const canvasImage = await editor.locator("#canvas").screenshot();
+				const { data, info } = await sharp(canvasImage)
+					.ensureAlpha()
+					.raw()
+					.toBuffer({ resolveWithObject: true });
+				const center =
+					(Math.floor(info.height / 2) * info.width +
+						Math.floor(info.width / 2)) *
+					info.channels;
+				canvasFallbackPreviewPixel = Array.from(
+					data.subarray(center, center + info.channels),
+				);
+				if (Math.max(...canvasFallbackPreviewPixel.slice(0, 3)) > 20) break;
+				await Bun.sleep(150);
+			} while (Date.now() < deadline);
+			if (Math.max(...(canvasFallbackPreviewPixel ?? []).slice(0, 3)) <= 20) {
+				const browserState = await editor.locator("body").evaluate(() => {
+					const canvas = document.querySelector<HTMLCanvasElement>("#canvas");
+					return {
+						canvasWidth: canvas?.width ?? null,
+						canvasHeight: canvas?.height ?? null,
+						canvasConnected: canvas?.isConnected ?? false,
+						loadingFrame: document.body.textContent?.includes("Loading frame…"),
+						videos: Array.from(document.querySelectorAll("video")).map(
+							(video) => ({
+								readyState: video.readyState,
+								videoWidth: video.videoWidth,
+								videoHeight: video.videoHeight,
+								error: video.error?.message ?? null,
+							}),
+						),
+					};
+				});
+				console.error(
+					JSON.stringify({
+						canvasFallbackPreviewPixel,
+						browserState,
+						pageErrors,
+						failedResponses,
+						rendererFallbacks,
+					}),
+				);
+			}
 			assert.ok(Math.max(...canvasFallbackPreviewPixel.slice(0, 3)) > 20);
 		}
+		const screenshot = await page.screenshot();
 		if (process.env.CAP_EDITOR_UI_SCREENSHOT_PATH)
 			await writeFile(process.env.CAP_EDITOR_UI_SCREENSHOT_PATH, screenshot);
 		let playbackAdvanced = false;
