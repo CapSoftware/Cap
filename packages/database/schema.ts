@@ -1575,6 +1575,7 @@ export const loomMigrationRequests = mysqlTable(
 		expectedVideoCount: int("expectedVideoCount"),
 		importedVideoCount: int("importedVideoCount").notNull().default(0),
 		queuedVideoCount: int("queuedVideoCount").notNull().default(0),
+		activeImportCount: int("activeImportCount").notNull().default(0),
 		lastOperatorUserId:
 			nanoIdNullable("lastOperatorUserId").$type<User.UserId>(),
 		lastOperatorAt: datetime("lastOperatorAt", { mode: "date" }),
@@ -1597,6 +1598,18 @@ export const loomMigrationRequests = mysqlTable(
 			table.createdAt,
 		),
 	],
+);
+
+export const loomMigrationImports = mysqlTable(
+	"loom_migration_imports",
+	{
+		videoId: nanoId("videoId").notNull().primaryKey().$type<Video.VideoId>(),
+		requestId: nanoId("requestId").notNull(),
+		createdAt: datetime("createdAt", { mode: "date" })
+			.notNull()
+			.$defaultFn(() => new Date()),
+	},
+	(table) => [index("loom_migration_imports_request_idx").on(table.requestId)],
 );
 
 export const developerApps = mysqlTable(

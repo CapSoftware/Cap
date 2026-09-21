@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "e73cfec4-89dd-4fc2-9068-4a86b6e10171",
+	"id": "d78f7c74-5007-4c78-96c3-50bf45012ad1",
 	"prevId": "0d80e4e5-6d93-4d28-b235-bf1231baa7a9",
 	"tables": {
 		"accounts": {
@@ -1694,6 +1694,48 @@
 			"uniqueConstraints": {},
 			"checkConstraint": {}
 		},
+		"loom_migration_imports": {
+			"name": "loom_migration_imports",
+			"columns": {
+				"videoId": {
+					"name": "videoId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"requestId": {
+					"name": "requestId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"createdAt": {
+					"name": "createdAt",
+					"type": "datetime",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				}
+			},
+			"indexes": {
+				"loom_migration_imports_request_idx": {
+					"name": "loom_migration_imports_request_idx",
+					"columns": ["requestId"],
+					"isUnique": false
+				}
+			},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {
+				"loom_migration_imports_videoId": {
+					"name": "loom_migration_imports_videoId",
+					"columns": ["videoId"]
+				}
+			},
+			"uniqueConstraints": {},
+			"checkConstraint": {}
+		},
 		"loom_migration_requests": {
 			"name": "loom_migration_requests",
 			"columns": {
@@ -1785,6 +1827,14 @@
 				},
 				"queuedVideoCount": {
 					"name": "queuedVideoCount",
+					"type": "int",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": 0
+				},
+				"activeImportCount": {
+					"name": "activeImportCount",
 					"type": "int",
 					"primaryKey": false,
 					"notNull": true,

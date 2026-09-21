@@ -8,8 +8,18 @@ import {
 	users,
 } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
-import type { Organisation } from "@cap/web-domain";
-import { and, asc, desc, eq, isNull, ne } from "drizzle-orm";
+import type { Organisation, User } from "@cap/web-domain";
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	gt,
+	isNotNull,
+	isNull,
+	ne,
+	sql,
+} from "drizzle-orm";
 import { requireOrganizationSettingsManager } from "@/actions/organization/authorization";
 import { MESSENGER_ADMIN_EMAIL } from "@/lib/messenger/constants";
 import { isOrganizationOwnerPro } from "@/lib/org-pro";
@@ -29,6 +39,7 @@ export type LoomMigrationView = {
 	expectedVideoCount: number | null;
 	importedVideoCount: number;
 	queuedVideoCount: number;
+	activeImportCount: number;
 	completedAt: string | null;
 	createdAt: string;
 	updatedAt: string;
@@ -52,6 +63,7 @@ export function migrationToView(record: MigrationRecord): LoomMigrationView {
 		expectedVideoCount: record.expectedVideoCount,
 		importedVideoCount: record.importedVideoCount,
 		queuedVideoCount: record.queuedVideoCount,
+		activeImportCount: record.activeImportCount,
 		completedAt: record.completedAt?.toISOString() ?? null,
 		createdAt: record.createdAt.toISOString(),
 		updatedAt: record.updatedAt.toISOString(),
@@ -90,6 +102,57 @@ export async function requireMigrationOperator() {
 		throw new Error("Unauthorized");
 	}
 	return user;
+}
+
+function affectedRows(result: unknown) {
+	if (Array.isArray(result)) {
+		return (
+			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
+		);
+	}
+	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
+}
+
+export async function reserveConciergeImport(
+	requestId: string,
+	operatorId: User.UserId,
+) {
+	const result = await db()
+		.update(loomMigrationRequests)
+		.set({
+			activeImportCount: sql`${loomMigrationRequests.activeImportCount} + 1`,
+			status: "in_progress",
+			lastOperatorUserId: operatorId,
+			lastOperatorAt: new Date(),
+			updatedAt: new Date(),
+		})
+		.where(
+			and(
+				eq(loomMigrationRequests.id, requestId),
+				isNotNull(loomMigrationRequests.activeOrganizationId),
+			),
+		);
+	if (affectedRows(result) === 0) {
+		throw new Error("The migration request changed. Refresh and try again.");
+	}
+}
+
+export async function releaseConciergeImport(requestId: string) {
+	const result = await db()
+		.update(loomMigrationRequests)
+		.set({
+			activeImportCount: sql`${loomMigrationRequests.activeImportCount} - 1`,
+			updatedAt: new Date(),
+		})
+		.where(
+			and(
+				eq(loomMigrationRequests.id, requestId),
+				gt(loomMigrationRequests.activeImportCount, 0),
+			),
+		);
+	if (affectedRows(result) === 0) {
+		throw new Error("Could not release the migration import reservation.");
+	}
 }
 
 export async function getCustomerMigrationRequests(

@@ -8,7 +8,7 @@ import {
 } from "@cap/database/emails/loom-migration";
 import { nanoId } from "@cap/database/helpers";
 import {
-	importedVideos,
+	loomMigrationImports,
 	loomMigrationRequests,
 	organizations,
 	users,
@@ -246,12 +246,14 @@ export async function updateLoomMigrationStatus({
 	if (nextStatus === "completed") {
 		const [unfinishedImport] = await db()
 			.select({ videoId: videoUploads.videoId })
-			.from(importedVideos)
-			.innerJoin(videoUploads, eq(videoUploads.videoId, importedVideos.id))
+			.from(loomMigrationImports)
+			.innerJoin(
+				videoUploads,
+				eq(videoUploads.videoId, loomMigrationImports.videoId),
+			)
 			.where(
 				and(
-					eq(importedVideos.orgId, request.organizationId),
-					eq(importedVideos.source, "loom"),
+					eq(loomMigrationImports.requestId, requestId),
 					inArray(videoUploads.phase, [
 						"uploading",
 						"processing",
@@ -290,10 +292,16 @@ export async function updateLoomMigrationStatus({
 			and(
 				eq(loomMigrationRequests.id, requestId),
 				eq(loomMigrationRequests.status, request.status),
+				isNotNull(loomMigrationRequests.activeOrganizationId),
+				nextStatus === "completed"
+					? eq(loomMigrationRequests.activeImportCount, 0)
+					: undefined,
 			),
 		);
 	if (affectedRows(result) === 0) {
-		throw new Error("The migration request changed. Refresh and try again.");
+		throw new Error(
+			"The migration request changed or imports are starting. Refresh and try again.",
+		);
 	}
 
 	const [requester] = await db()

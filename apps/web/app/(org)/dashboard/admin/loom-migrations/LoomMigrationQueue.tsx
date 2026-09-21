@@ -195,6 +195,7 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 				</p>
 				<p>Jobs started: {request.queuedVideoCount}</p>
 				<p>Verified videos: {request.importedVideoCount}</p>
+				<p>Imports starting: {request.activeImportCount}</p>
 			</div>
 			{request.customerNote && (
 				<div className="mt-4 rounded-lg bg-gray-3 p-3 text-sm text-gray-11">
@@ -467,7 +468,8 @@ function QueueItem({ request }: { request: OperatorLoomMigrationView }) {
 					disabled={
 						statusMutation.isPending ||
 						importMutation.isPending ||
-						fileMutation.isPending
+						fileMutation.isPending ||
+						(nextStatus === "completed" && request.activeImportCount > 0)
 					}
 					size="sm"
 					type="submit"
