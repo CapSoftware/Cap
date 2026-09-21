@@ -323,6 +323,13 @@
 			"when": 1789136779085,
 			"tag": "0045_steep_forge",
 			"breakpoints": true
+		},
+		{
+			"idx": 46,
+			"version": "5",
+			"when": 1789985586222,
+			"tag": "0046_loom_concierge",
+			"breakpoints": true
 		}
 	]
 }
